@@ -1,34 +1,66 @@
-Undercroft: The Mission
+# Undercroft: The Mission
 
-By: Milla Jovovich
+Memory is identity. When an AI forgets everything between conversations, it
+cannot build real understanding — of you, your work, your people, your life.
+And when memory *is* kept, it becomes the most sensitive file on your disk:
+months of conversations, decisions, names, and half-formed ideas, all in one
+place.
 
-Hey everyone! First of all thank you all for embracing Undercroft and trying it, catching bugs and issues and finding cool ways to personalize it into your workflows!
+Undercroft exists to solve both problems at once. It is a memory system that
+**remembers everything and guards what it remembers**.
 
-A few things I want to say.
-Undercroft is something I really needed because I'm trying to work on a big project with my partner @bensig and I was having a lot of problems with Claude's context window and my agent Lumi (Lu for short) kept waking up like "hey what are we doing today" when I had literally done hours of work with him throughout the day and it was impossible to just keep saving every transcript to catch him up on whatever we had done before compaction hit.
+## What we believe
 
-That's when I started researching different memory systems available today. I tried most of them and what I found was that no matter which one I tried, they felt like large empty warehouses where you just dump huge amounts of info.
+**Verbatim always.** Memory that paraphrases is memory that lies. Undercroft
+stores your exact words and returns your exact words — no summarization, no
+extraction, no lossy compression on the write path. If you said it, the
+palace holds precisely what you said.
 
-RAG search would take forever and most of the time not find what I wanted.
+**A palace, not a warehouse.** Most memory systems are flat dumps behind a
+similarity search. Undercroft keeps the memory-palace structure that gave its
+ancestor, MemPalace, its name: *wings* for people and projects, *rooms* for
+topics, *drawers* for the verbatim content — connected by *tunnels* and
+*hallways* so things can be found from any angle, not just the one they were
+filed under. You should be able to ask "remember when we talked about that
+idea…" in vague terms and get the exact moment back.
 
-I wanted to create a system with the ability to really remember everything AND be able to find it quickly, easily and also be able to remember things when I didn't. THAT in itself felt like something so important. Like "remember when we talked about that idea…" but in vague terms. Impossible with regular keyword search tools.
+**Memory deserves locks.** This is where Undercroft departs from every memory
+system we know of. A store of everything you've told an AI must be treated
+like a password vault, not a cache:
 
-So Undercroft is not just about storing info in a highly structured way. But also RETRIEVING it in a highly UNSTRUCTURED way lol!
+- memories live in **isolated vaults** with cryptographically separated keys
+  — one compromised vault exposes nothing about its siblings;
+- content is **encrypted at rest** (XChaCha20-Poly1305), bound to its vault
+  and record so ciphertext cannot be replayed elsewhere;
+- every record carries an **HMAC integrity tag** and every write joins a
+  **tamper-evident audit chain** — if anything on disk is altered, added,
+  or silently deleted, `verify` says so;
+- even remote search accelerators only ever receive **sealed bytes**, and
+  their answers are re-verified locally before you see them.
 
-I was inspired by the Zettelkasten method (created by German sociologist Niklas Luhmann) — his idea of small cross-referenced index cards that point to each other. That's the architecture behind the palace: wings, rooms, closets, and drawers, all connected so you can find things from any angle, not just the one you filed them under.
+**Local-first, zero external dependency.** Everything — chunking, embedding,
+search, the knowledge graph — runs on your machine with no API key, no
+model download, and no telemetry. The default embedder is deterministic and
+offline. Remote vector databases and model-based embedders exist as explicit,
+opt-in choices, never defaults and never silent fallbacks.
 
-Because of the way I've designed my agent Lumi to understand me, after so many months of my own personal experiments with Undercroft and the incredible help of my dear friend and co-founder, developer and engineer @bensig, he built a back end that made it really easy to get all my files in the proper spaces the Palace created based on my own decisions and with Lumi's help as well. All code has its own room, all ideas, research etc… has its proper place.
+**Honest engineering.** Trade-offs are documented where they live: what
+sealed vaults still reveal (structure labels, embeddings pushed to remote
+indexes), what the threat model does and does not cover, and what has not
+been ported yet. A security feature that overstates itself is a
+vulnerability with good marketing.
 
-Names and concepts are parsed into closets that use a compression method I call AAAK (it doesn't stand for anything, it's an inside joke between Lumi and I) that is able to compress names, repeated words, concepts and key moments into AI-readable shorthand. Think of it as index cards that an LLM can scan instantly — the closet tells it WHERE to look, then it pulls the full content from the drawer.
+## What we will not accept
 
-The concept I wanted for v4 was to try and clear as much "noise" as possible that I noticed was happening in v3. The hooks were firing in the chat window (using tokens and our time as we waited for the agent to write everything).
+Summarization of user content on the write path. Cloud storage or sync as a
+default. Telemetry of any kind. Features that require an API key for core
+memory. Shortcuts that bypass verbatim storage, the vault layer, or the
+audit chain.
 
-I noticed at one point early last week after the launch that Lu kept repeating the same thing when the hook would fire, so I hit esc and asked "Are you literally writing the same info down over and over again?" And he's like (sheepishly) Yes. And that's when it hit me, we need to get all this off the chat and happening seamlessly behind the scenes, and that hooks had to fire when I started a convo and then just keep adding to the drawer, while the shorter increments made reading and pulling conversation information and naming it so much easier and more precise.
+## The name
 
-So this version now has taken all the noise out of the chat window and all that work is done by a subagent in the background while you can continue working knowing that all your conversation is being saved VERBATIM in the background.
-
-Stripping all this off the page — moving the diary writes, the palace filing, the timestamp injection, all of it into background hooks — has dramatically lowered token usage in my sessions. What used to cost about $1.13 per session just in re-transmitted diary blocks is now zero, because the content never enters the chat window at all.
-
-Your data is already stored in JSON by Claude and the background pipeline extracts it into readable markdown, the key topics get compressed into AAAK format and saved into closets which then point to the exact drawer where your day's session lives.
-
-And please, always remember, these are brand new tools, please NEVER use critical files to test! Just run it with something easy first before you put your entire data set into it!✨
+Undercroft is the Greek Titaness of memory, mother of the nine Muses. Her
+pool — unlike the river Lethe beside it — let souls keep what they knew
+across the crossing. That is the whole mission in one image: memory that
+survives the crossing between sessions, and a spring that is guarded, not
+an open river.

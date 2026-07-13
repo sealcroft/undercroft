@@ -12,12 +12,20 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   n-gram embedder
 - `crates/undercroft-vault` — security layer (keys.rs: master key + HKDF;
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest + chain)
-- `crates/undercroft-store` — per-vault SQLite storage, hybrid search, verify
+- `crates/undercroft-store` — per-vault SQLite storage, hybrid search, verify,
+  knowledge graph (kg.rs), management surface (manage.rs), remote-index
+  integration (remote.rs)
+- `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector)
+  as untrusted accelerators; sealed content only, results re-verified locally
+- `crates/undercroft-embed-onnx` — feature-gated ONNX embedder (tract);
+  excluded from default-members, built via the `onnx-build` compose service
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI, mcp.rs: MCP stdio
   server); integration tests in `tests/cli.rs`
-- `tests/e2e.sh` — end-to-end UI/UX suite (runs in Docker)
-- `mempalace/` + `Dockerfile.python` + `docker-compose.python.yml` — legacy
-  Python reference implementation (do not extend; port instead)
+- `tests/e2e.sh`, `tests/e2e-backends.sh` — end-to-end suites (run in Docker)
+
+The upstream Python implementation is *not* in this repo — it lives at
+https://github.com/MemPalace/mempalace. Port behavior from there when
+needed; never reintroduce Python code here.
 
 ## Build & test — Docker only
 
