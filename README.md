@@ -2,7 +2,7 @@
 
 # Undercroft
 
-**Hardened, local-first AI memory — a Rust conversion of [MemPalace](https://github.com/MemPalace/mempalace) with encrypted, integrity-verified memory vaults.**
+**Hardened, local-first AI memory: encrypted, integrity-verified memory vaults with verbatim recall.**
 
 </div>
 
@@ -235,8 +235,8 @@ use the same deterministic-recipe idea (idempotent re-mining).
 
 ## Relationship to MemPalace
 
-Undercroft is a fork of [MemPalace](https://github.com/MemPalace/mempalace)
-(MIT), fully converted to Rust — the Python implementation has been removed.
+Undercroft began as a conversion of the MemPalace project (MIT-licensed,
+Python), fully rewritten in Rust — no Python remains.
 Ported: the palace model and miners (files + conversation transcripts +
 sweep), wake-up layers, knowledge graph, tunnels/hallways navigation, agent
 diaries, drawer management, dedup/stats/backups/repair, hooks output, the

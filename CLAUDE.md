@@ -23,9 +23,9 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   server); integration tests in `tests/cli.rs`
 - `tests/e2e.sh`, `tests/e2e-backends.sh` — end-to-end suites (run in Docker)
 
-The upstream Python implementation is *not* in this repo — it lives at
-https://github.com/MemPalace/mempalace. Port behavior from there when
-needed; never reintroduce Python code here.
+The upstream Python implementation (the MemPalace project) is *not* in
+this repo and no longer linked as a fork; its behavior is documented in
+docs/PARITY.md. Never reintroduce Python code here.
 
 ## Build & test — Docker only
 
