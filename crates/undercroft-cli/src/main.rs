@@ -700,10 +700,16 @@ fn main() -> Result<()> {
         }
         Command::ServeMcp { vault } => {
             let store = open_store(&cli, vault)?;
+            if let Ok(n) = store.warm_embedding_cache() {
+                eprintln!("warmed embedding cache: {n} vector(s)");
+            }
             mcp::serve(store)?;
         }
         Command::ServeHttp { host, port, vault, read_only } => {
             let store = open_store(&cli, vault)?;
+            if let Ok(n) = store.warm_embedding_cache() {
+                eprintln!("warmed embedding cache: {n} vector(s)");
+            }
             http::serve_http(store, host, *port, *read_only)?;
         }
         Command::Daemon { action } => match action {
@@ -711,6 +717,7 @@ fn main() -> Result<()> {
                 undercroft_core::validate_name(wing, "wing")?;
                 let watch_path = expand_home(watch);
                 let mut store = open_store(&cli, vault)?;
+                let _ = store.warm_embedding_cache();
                 loop {
                     match sweep_path(&mut store, &watch_path, wing, false) {
                         Ok((files, filed, skipped)) => {

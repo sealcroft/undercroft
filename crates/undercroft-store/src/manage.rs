@@ -163,6 +163,9 @@ impl PalaceStore {
     pub fn delete_drawer(&mut self, id: &str) -> Result<bool, StoreError> {
         let n = self.conn.execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
         if n > 0 {
+            if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
+                cache.remove(id);
+            }
             let marker = format!("del\x1f{id}");
             let tag = self.vault.tag(marker.as_bytes());
             self.conn.execute(
@@ -315,6 +318,8 @@ impl PalaceStore {
     /// second half of a forced model swap), vacuum, and re-verify.
     /// Returns (report, rows_backfilled).
     pub fn repair(&mut self) -> Result<(crate::VerifyReport, u64), StoreError> {
+        // Re-embedding below bypasses upsert; drop any warmed cache.
+        *self.emb_cache.borrow_mut() = None;
         let missing: Vec<String> = self
             .conn
             .prepare("SELECT id FROM drawers WHERE fp IS NULL")?

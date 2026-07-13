@@ -32,6 +32,8 @@ original this repo was forked from), updated 2026-07-13.
 | Auto-save hooks (Claude Code/Codex/Cursor) | `hooks/`, `.claude-plugin/hooks/`, `undercroft hooks claude-code` |
 | Claude Code plugin (commands/skills/MCP) | `.claude-plugin/` + root `commands/`, `skills/`, `rules/` |
 | Benchmarks (LongMemEval harness) | `undercroft-bench longmemeval` (same protocol/metrics) + `synth` CI benchmark |
+| LoCoMo / ConvoMem / MemBench harnesses | `undercroft-bench locomo|convomem|membench` — session / message / turn-level evidence recall, same protocols as upstream's harnesses, adapter logic fixture-tested |
+| Embedded ChromaDB's in-process index role | Bundled SQLite store is the system of record; `warm_embedding_cache` gives long-running servers (serve-mcp / serve-http / daemon) a decrypt-once in-memory vector cache — the in-process index role, with nothing plaintext-derived persisted |
 | Deploy (compose server, systemd) | `deploy/` |
 | Docs / examples | `docs/`, `examples/` |
 
@@ -54,12 +56,12 @@ bind, read-only serving. Upstream stored everything in plaintext.
 | Memory-extraction eval task | `undercroft-bench model-eval memories` — SQuAD-style token-F1 with greedy one-to-one alignment (threshold 0.5), CJK-aware tokenization; reports match P/R/F1, mean token-F1, type accuracy |
 | i18n (`mempalace/i18n`) | CLI result strings localized in the 9 dataset languages (de/es/fr/hi/it/ko/pt/ru/zh) via `UNDERCROFT_LANG`, English default + fallback; errors/help stay English by design (exit codes are the script contract) |
 
-## Not ported (deliberate, with reasons)
+## Not ported
 
-| Upstream | Status |
-|---|---|
-| Embedded ChromaDB default | Python library — cannot exist in Rust; the bundled SQLite store *is* the embedded store (this is a role replacement, not a gap) |
-| LoCoMo / ConvoMem / MemBench harnesses | Same protocol as the LongMemEval harness; add dataset adapters to `undercroft-bench` when needed |
+Nothing remains. The one permanent role-replacement worth restating:
+embedded ChromaDB is a Python library and cannot be linked from Rust — its
+*roles* (embedded zero-config store + in-process vector index) are filled by
+the bundled SQLite store and the in-memory embedding cache respectively.
 
 ## Behavioral differences to know about
 

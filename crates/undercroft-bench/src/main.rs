@@ -58,6 +58,37 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// LoCoMo protocol (10 conversations, ~200 QA): session-level retrieval
+    /// recall against evidence dialog ids
+    Locomo {
+        /// Path to locomo10.json
+        dataset: std::path::PathBuf,
+        #[arg(short = 'k', long, default_value_t = 10)]
+        k: usize,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// ConvoMem protocol: message-level evidence recall
+    Convomem {
+        /// Path to a ConvoMem category JSON (array of items)
+        dataset: std::path::PathBuf,
+        #[arg(short = 'k', long, default_value_t = 10)]
+        k: usize,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// MemBench (ACL 2025) protocol: turn-level target-step recall
+    Membench {
+        /// Path to a MemBench category JSON (topic- or role-keyed)
+        dataset: std::path::PathBuf,
+        /// Topic filter for topic-keyed files
+        #[arg(long, default_value = "movie")]
+        topic: String,
+        #[arg(short = 'k', long, default_value_t = 5)]
+        k: usize,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Evaluate the configured local LLM (UNDERCROFT_LLM_URL) on the
     /// extraction tasks used by `undercroft refine`, against the labeled
     /// multilingual datasets in benchmarks/model_eval/datasets
@@ -484,6 +515,221 @@ fn run_model_eval(
 }
 
 // ---------------------------------------------------------------------------
+// LoCoMo / ConvoMem / MemBench adapters — same protocol as the upstream
+// harnesses (session/message/turn-level evidence recall)
+// ---------------------------------------------------------------------------
+
+/// LoCoMo: one item = a conversation with `session_N` dialog arrays and QA
+/// pairs whose evidence is dialog ids like "D3:12" (session 3). Session-
+/// granularity retrieval: rank sessions, score R@k against evidence
+/// sessions. Returns (recall_sum, evaluated, per_category).
+fn locomo_eval(
+    samples: &[Value],
+    k: usize,
+    limit: Option<usize>,
+) -> Result<(f32, u32, std::collections::BTreeMap<String, (f32, u32)>)> {
+    let mut recall_sum = 0f32;
+    let mut evaluated = 0u32;
+    let mut per_cat: std::collections::BTreeMap<String, (f32, u32)> = Default::default();
+    for sample in samples {
+        let conv = sample.get("conversation").context("sample missing conversation")?;
+        let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
+        // Ingest: one room per session.
+        let mut n = 1;
+        while let Some(dialogs) = conv.get(format!("session_{n}")).and_then(Value::as_array) {
+            let text: Vec<String> = dialogs
+                .iter()
+                .filter_map(|d| {
+                    Some(format!(
+                        "{} said, \"{}\"",
+                        d.get("speaker").and_then(Value::as_str).unwrap_or("?"),
+                        d.get("text").and_then(Value::as_str)?
+                    ))
+                })
+                .collect();
+            let body = undercroft_core::normalize_content(&text.join("\n"));
+            for (ci, chunk) in
+                undercroft_core::chunk_text(&body, undercroft_core::ChunkOptions::default())
+                    .into_iter()
+                    .enumerate()
+            {
+                let d = Drawer::new("locomo", &format!("session_{n}"), chunk, None, ci as u32, "bench");
+                store.upsert(&d)?;
+            }
+            n += 1;
+        }
+        let qa_pairs = sample.get("qa").and_then(Value::as_array).context("sample missing qa")?;
+        for qa in qa_pairs.iter() {
+            if let Some(cap) = limit {
+                if evaluated as usize >= cap {
+                    break;
+                }
+            }
+            let question = qa.get("question").and_then(Value::as_str).unwrap_or_default();
+            let evidence: Vec<String> = qa
+                .get("evidence")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|e| e.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            if question.is_empty() || evidence.is_empty() {
+                continue; // adversarial category has no evidence
+            }
+            // "D3:12" → session_3
+            let correct: std::collections::BTreeSet<String> = evidence
+                .iter()
+                .filter_map(|e| {
+                    let s = e.trim_start_matches('D');
+                    let sess = s.split(':').next()?;
+                    Some(format!("session_{sess}"))
+                })
+                .collect();
+            let hits = store.search(question, &SearchOptions { wing: None, room: None, limit: k * 6 })?;
+            let mut rooms: Vec<String> = Vec::new();
+            for h in &hits {
+                if !rooms.contains(&h.drawer.meta.room) {
+                    rooms.push(h.drawer.meta.room.clone());
+                }
+            }
+            let topk: Vec<&String> = rooms.iter().take(k).collect();
+            let recall = if correct.iter().any(|c| topk.contains(&c)) { 1.0 } else { 0.0 };
+            recall_sum += recall;
+            evaluated += 1;
+            let cat = qa
+                .get("category")
+                .map(|c| c.to_string().trim_matches('"').to_string())
+                .unwrap_or_else(|| "?".into());
+            let e = per_cat.entry(cat).or_insert((0.0, 0));
+            e.0 += recall;
+            e.1 += 1;
+        }
+    }
+    Ok((recall_sum, evaluated, per_cat))
+}
+
+/// ConvoMem: one item = conversations of messages + `message_evidences`
+/// (exact message texts). Message-granularity: one drawer per message;
+/// recall = any evidence text among the top-k retrieved messages.
+fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32, u32)> {
+    let total = limit.unwrap_or(items.len()).min(items.len());
+    let mut recall_sum = 0f32;
+    let mut evaluated = 0u32;
+    for item in items.iter().take(total) {
+        let question = item.get("question").and_then(Value::as_str).unwrap_or_default();
+        let evidence: std::collections::BTreeSet<String> = item
+            .get("message_evidences")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| e.get("text")?.as_str())
+                    .map(|t| t.trim().to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if question.is_empty() || evidence.is_empty() {
+            continue;
+        }
+        let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
+        let mut idx = 0u32;
+        for (ci, conv) in item
+            .get("conversations")
+            .and_then(Value::as_array)
+            .unwrap_or(&Vec::new())
+            .iter()
+            .enumerate()
+        {
+            for msg in conv.get("messages").and_then(Value::as_array).unwrap_or(&Vec::new()) {
+                let Some(text) = msg.get("text").and_then(Value::as_str) else { continue };
+                let body = undercroft_core::normalize_content(text);
+                if body.is_empty() {
+                    continue;
+                }
+                let d = Drawer::new("convomem", &format!("c{ci}"), body, None, idx, "bench");
+                store.upsert(&d)?;
+                idx += 1;
+            }
+        }
+        let hits = store.search(question, &SearchOptions { wing: None, room: None, limit: k })?;
+        let recall = if hits
+            .iter()
+            .any(|h| evidence.contains(&h.drawer.content.trim().to_lowercase()))
+        {
+            1.0
+        } else {
+            0.0
+        };
+        recall_sum += recall;
+        evaluated += 1;
+    }
+    Ok((recall_sum, evaluated))
+}
+
+/// MemBench: items with `message_list[0]` = turns `{user, assistant}` and
+/// `QA.target_step_id` = indices of the answer-relevant turns. Turn-
+/// granularity: one drawer per turn (chunk_index = step id); recall = any
+/// target step among the top-k retrieved turns.
+fn membench_eval(
+    raw: &Value,
+    topic: &str,
+    k: usize,
+    limit: Option<usize>,
+) -> Result<(f32, u32)> {
+    let mut items: Vec<&Value> = Vec::new();
+    if let Some(obj) = raw.as_object() {
+        for (t, topic_items) in obj {
+            if t == topic || t == "roles" || t == "events" {
+                if let Some(arr) = topic_items.as_array() {
+                    items.extend(arr.iter());
+                }
+            }
+        }
+    }
+    let total = limit.unwrap_or(items.len()).min(items.len());
+    let mut recall_sum = 0f32;
+    let mut evaluated = 0u32;
+    for item in items.into_iter().take(total) {
+        let turns = item
+            .pointer("/message_list/0")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let qa = item.get("QA").cloned().unwrap_or_default();
+        let question = qa.get("question").and_then(Value::as_str).unwrap_or_default();
+        let targets: std::collections::BTreeSet<u64> = qa
+            .get("target_step_id")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default();
+        if turns.is_empty() || question.is_empty() || targets.is_empty() {
+            continue;
+        }
+        let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
+        for (sid, turn) in turns.iter().enumerate() {
+            let user = turn.get("user").and_then(Value::as_str).unwrap_or_default();
+            let assistant = turn.get("assistant").and_then(Value::as_str).unwrap_or_default();
+            let body =
+                undercroft_core::normalize_content(&format!("User: {user}\nAssistant: {assistant}"));
+            if body.is_empty() {
+                continue;
+            }
+            let d = Drawer::new("membench", "turns", body, None, sid as u32, "bench");
+            store.upsert(&d)?;
+        }
+        let hits = store.search(question, &SearchOptions { wing: None, room: None, limit: k })?;
+        let recall = if hits
+            .iter()
+            .any(|h| targets.contains(&(h.drawer.meta.chunk_index as u64)))
+        {
+            1.0
+        } else {
+            0.0
+        };
+        recall_sum += recall;
+        evaluated += 1;
+    }
+    Ok((recall_sum, evaluated))
+}
+
+// ---------------------------------------------------------------------------
 // Fuzzy-match scoring for memory extraction
 // ---------------------------------------------------------------------------
 
@@ -579,6 +825,45 @@ fn main() -> Result<()> {
             run_longmemeval(&dataset, limit, k, level_of(&level))
         }
         Command::Synth { n, level } => run_synth(n, level_of(&level)),
+        Command::Locomo { dataset, k, limit } => {
+            let raw = std::fs::read_to_string(&dataset)
+                .with_context(|| format!("reading {}", dataset.display()))?;
+            let samples: Vec<Value> = serde_json::from_str(&raw)?;
+            let (recall_sum, n, per_cat) = locomo_eval(&samples, k, limit)?;
+            println!(
+                "LoCoMo — {} questions, session granularity: R@{k} {:.1}%",
+                n,
+                100.0 * recall_sum / n.max(1) as f32
+            );
+            for (cat, (sum, cnt)) in per_cat {
+                println!("  category {cat:<12} {:.1}%  ({cnt})", 100.0 * sum / cnt as f32);
+            }
+            Ok(())
+        }
+        Command::Convomem { dataset, k, limit } => {
+            let raw = std::fs::read_to_string(&dataset)
+                .with_context(|| format!("reading {}", dataset.display()))?;
+            let items: Vec<Value> = serde_json::from_str(&raw)?;
+            let (recall_sum, n) = convomem_eval(&items, k, limit)?;
+            println!(
+                "ConvoMem — {} items, message granularity: recall@{k} {:.1}%",
+                n,
+                100.0 * recall_sum / n.max(1) as f32
+            );
+            Ok(())
+        }
+        Command::Membench { dataset, topic, k, limit } => {
+            let raw = std::fs::read_to_string(&dataset)
+                .with_context(|| format!("reading {}", dataset.display()))?;
+            let value: Value = serde_json::from_str(&raw)?;
+            let (recall_sum, n) = membench_eval(&value, &topic, k, limit)?;
+            println!(
+                "MemBench ({topic}) — {} items, turn granularity: R@{k} {:.1}%",
+                n,
+                100.0 * recall_sum / n.max(1) as f32
+            );
+            Ok(())
+        }
         Command::ModelEval { task, dataset_dir, lang, limit } => {
             run_model_eval(&task, &dataset_dir, lang.as_deref(), limit)
         }
@@ -619,6 +904,76 @@ mod tests {
         let f1 = token_f1("我们决定使用新数据库", "决定使用新数据库");
         assert!(f1 > 0.8, "got {f1}");
         assert_eq!(token_f1("我们决定", "完全不同"), 0.0);
+    }
+
+    #[test]
+    fn locomo_adapter_scores_fixture() {
+        let sample = serde_json::json!({
+            "conversation": {
+                "session_1": [
+                    {"dia_id": "D1:1", "speaker": "Ana", "text": "I adopted a golden retriever puppy named Biscuit last weekend."},
+                    {"dia_id": "D1:2", "speaker": "Ben", "text": "That is wonderful news, congratulations!"}
+                ],
+                "session_1_date_time": "2024-01-05",
+                "session_2": [
+                    {"dia_id": "D2:1", "speaker": "Ana", "text": "The quarterly report deadline moved to Friday."}
+                ],
+                "session_2_date_time": "2024-02-10"
+            },
+            "qa": [
+                {"question": "What pet did Ana adopt?", "answer": "a golden retriever puppy",
+                 "category": 1, "evidence": ["D1:1"]},
+                {"question": "adversarial with no evidence", "category": 5}
+            ]
+        });
+        let (recall, n, per_cat) = locomo_eval(&[sample], 5, None).unwrap();
+        assert_eq!(n, 1, "evidence-free QA must be skipped");
+        assert_eq!(recall, 1.0, "evidence session must be retrieved");
+        assert_eq!(per_cat.get("1").unwrap().1, 1);
+    }
+
+    #[test]
+    fn convomem_adapter_scores_fixture() {
+        let item = serde_json::json!({
+            "question": "what instrument is Maya learning?",
+            "answer": "the cello",
+            "conversations": [
+                {"messages": [
+                    {"speaker": "Maya", "text": "I started learning the cello this month."},
+                    {"speaker": "Sam", "text": "The weather has been terrible lately."}
+                ]}
+            ],
+            "message_evidences": [ {"text": "I started learning the cello this month."} ]
+        });
+        let (recall, n) = convomem_eval(&[item], 5, None).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(recall, 1.0);
+    }
+
+    #[test]
+    fn membench_adapter_scores_fixture() {
+        let raw = serde_json::json!({
+            "movie": [
+                {
+                    "tid": 1,
+                    "message_list": [[
+                        {"user": "I watched Arrival yesterday and loved the linguistics angle.",
+                         "assistant": "Denis Villeneuve directed it; the score is haunting."},
+                        {"user": "Remind me to buy groceries.",
+                         "assistant": "Noted — groceries on the list."}
+                    ]],
+                    "QA": {
+                        "question": "which movie with a linguistics angle did I watch?",
+                        "ground_truth": "A",
+                        "choices": {"A": "Arrival"},
+                        "target_step_id": [0]
+                    }
+                }
+            ]
+        });
+        let (recall, n) = membench_eval(&raw, "movie", 3, None).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(recall, 1.0);
     }
 
     #[test]

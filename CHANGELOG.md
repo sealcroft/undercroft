@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 — Benchmark adapters + in-process vector cache; PARITY complete
+
+- `undercroft-bench locomo|convomem|membench`: adapters for the remaining
+  three upstream benchmarks (session / message / turn-level evidence
+  recall, same protocols as the Python harnesses), fixture-tested so the
+  scoring is trustworthy before any dataset is downloaded.
+- `PalaceStore::warm_embedding_cache`: decrypt-once in-memory vector cache
+  for long-running modes (serve-mcp / serve-http / daemon), kept coherent
+  across upsert/delete/repair — fills embedded ChromaDB's in-process index
+  role without persisting anything plaintext-derived.
+- docs/PARITY.md "not ported" list is now empty.
+
+
 ## 0.5.1 — Memory-extraction eval + CLI localization
 
 - `undercroft-bench model-eval memories`: SQuAD-style token-F1 with greedy

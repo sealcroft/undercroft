@@ -24,6 +24,22 @@ cargo run --release -p undercroft-bench -- longmemeval longmemeval_s.json --k 5
 cargo run --release -p undercroft-bench -- longmemeval longmemeval_s.json --limit 50   # quick pass
 ```
 
+## LoCoMo / ConvoMem / MemBench
+
+Adapters for the other three upstream benchmarks, same protocols
+(session / message / turn-level evidence recall). Datasets are
+user-supplied — see each benchmark's repository for downloads:
+
+```bash
+cargo run --release -p undercroft-bench -- locomo locomo10.json --k 10
+cargo run --release -p undercroft-bench -- convomem convomem_category.json --k 10
+cargo run --release -p undercroft-bench -- membench highlevel.json --topic movie --k 5
+```
+
+Adapter logic (evidence-id parsing, corpus construction, recall scoring)
+is unit-tested against fixtures, so the harness is trustworthy before a
+dataset is ever downloaded.
+
 ## model-eval (local LLM extraction quality)
 
 Scores the runtime configured via `UNDERCROFT_LLM_URL` on the tasks

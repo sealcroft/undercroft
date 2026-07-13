@@ -55,10 +55,15 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   datasets and scoring harness
 - Closets compact index (AAAK port), typo-tolerant search, mdBook site
 
+## v0.6.0 — Benchmark adapters + vector cache (done)
+
+- LoCoMo / ConvoMem / MemBench adapters (fixture-tested), in-memory
+  embedding cache for server modes; PARITY "not ported" list emptied
+
 ## Next
 
-- **v0.6 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
-  LoCoMo / ConvoMem / MemBench dataset adapters; L2 on-demand room loading
-  heuristics; memory-extraction task scoring in model-eval
-- **v0.7 — Ecosystem**: key rotation (re-seal under new derived keys);
+- **v0.7 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
+  L2 on-demand room loading heuristics; ANN index (HNSW) atop the warmed
+  cache for very large palaces
+- **v0.8 — Ecosystem**: key rotation (re-seal under new derived keys);
   export bundles with recipient encryption

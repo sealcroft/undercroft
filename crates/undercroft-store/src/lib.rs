@@ -90,6 +90,12 @@ pub struct PalaceStore {
     conn: Connection,
     vault: Vault,
     embedder: Box<dyn Embedder + Send>,
+    /// In-process decrypted-embedding cache for long-running servers
+    /// (serve-mcp / serve-http / daemon): sealed vaults pay AEAD decryption
+    /// of every embedding once instead of on every search. Never persisted
+    /// — this is the in-memory role embedded ChromaDB's index played
+    /// upstream, without writing plaintext-derived data to disk.
+    emb_cache: std::cell::RefCell<Option<std::collections::HashMap<String, Vec<f32>>>>,
 }
 
 impl PalaceStore {
@@ -187,10 +193,32 @@ impl PalaceStore {
                  at        TEXT NOT NULL
              );",
         )?;
-        let store = Self { conn, vault, embedder };
+        let store =
+            Self { conn, vault, embedder, emb_cache: std::cell::RefCell::new(None) };
         store.init_kg_schema()?;
         store.init_manage_schema()?;
         Ok(store)
+    }
+
+    /// Decrypt every drawer embedding into an in-memory map so subsequent
+    /// searches skip per-row AEAD work. Kept coherent by `upsert` /
+    /// `delete_drawer`. Returns the number of cached vectors.
+    pub fn warm_embedding_cache(&self) -> Result<usize, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT id, embedding FROM drawers")?;
+        let rows: Vec<(String, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut map = std::collections::HashMap::with_capacity(rows.len());
+        for (id, emb_rest) in rows {
+            let emb = self
+                .vault
+                .embedding_from_rest(&id, &emb_rest)
+                .map_err(|e| StoreError::CorruptRow { id: id.clone(), reason: e.to_string() })?;
+            map.insert(id, emb);
+        }
+        let n = map.len();
+        *self.emb_cache.borrow_mut() = Some(map);
+        Ok(n)
     }
 
     pub fn vault(&self) -> &Vault {
@@ -248,6 +276,9 @@ impl PalaceStore {
         )?;
         tx.commit()?;
         self.vault.commit_write(&tag)?;
+        if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
+            cache.insert(drawer.id.clone(), embedding);
+        }
         Ok(existing.is_none())
     }
 
@@ -378,10 +409,14 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
-            let emb = self
-                .vault
-                .embedding_from_rest(&id, &emb_rest)
-                .map_err(|e| StoreError::CorruptRow { id: id.clone(), reason: e.to_string() })?;
+            let cached = self.emb_cache.borrow().as_ref().and_then(|c| c.get(&id).cloned());
+            let emb = match cached {
+                Some(e) => e,
+                None => self
+                    .vault
+                    .embedding_from_rest(&id, &emb_rest)
+                    .map_err(|e| StoreError::CorruptRow { id: id.clone(), reason: e.to_string() })?,
+            };
 
             let semantic = ((cosine(&qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
             let lexical = lexical_score(&qterms, query, &drawer.content);
@@ -677,6 +712,25 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
         assert!(!s.verify().unwrap().chain_ok);
+    }
+
+    #[test]
+    fn embedding_cache_stays_coherent() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "the original cached memory about databases", 0)).unwrap();
+        assert_eq!(s.warm_embedding_cache().unwrap(), 1);
+        // Search via cache finds it.
+        let hits = s.search("cached memory databases", &SearchOptions::default()).unwrap();
+        assert_eq!(hits.len(), 1);
+        // New upsert while warm must be searchable (cache updated).
+        s.upsert(&drawer("w", "r", "a second note about kubernetes upgrades", 1)).unwrap();
+        let hits = s.search("kubernetes upgrades", &SearchOptions::default()).unwrap();
+        assert!(hits.iter().any(|h| h.drawer.content.contains("kubernetes")));
+        // Delete while warm removes it from results.
+        let id = hits[0].drawer.id.clone();
+        s.delete_drawer(&id).unwrap();
+        let hits = s.search("kubernetes upgrades", &SearchOptions::default()).unwrap();
+        assert!(hits.is_empty());
     }
 
     #[test]
