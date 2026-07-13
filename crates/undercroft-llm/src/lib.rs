@@ -141,6 +141,13 @@ pub struct ExtractedTriple {
     pub object: String,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ExtractedMemory {
+    #[serde(rename = "type", default = "unknown_type")]
+    pub memory_type: String,
+    pub content: String,
+}
+
 /// Pull the first JSON array out of possibly-chatty model output.
 pub fn extract_json_array(text: &str) -> Result<Value, LlmError> {
     let start = text.find('[').ok_or_else(|| LlmError::BadOutput("no JSON array".into()))?;
@@ -160,6 +167,12 @@ triples. Reply with ONLY a JSON array of objects: [{\"subject\": \"...\", \"pred
 \"snake_case_relation\", \"object\": \"...\"}]. Only durable facts (roles, locations, \
 ownership, preferences, decisions) — no ephemera. No prose, no markdown fences.";
 
+const MEMORY_SYSTEM: &str = "You extract the durable memories worth keeping from a note: \
+decisions made, stated preferences, plans, and stable facts. Reply with ONLY a JSON array of \
+objects: [{\"type\": \"decision|preference|plan|fact|event\", \"content\": \"one \
+self-contained sentence per memory, in the note's language\"}]. Skip small talk and \
+transient detail. No prose, no markdown fences.";
+
 impl LlmClient {
     pub fn extract_entities(&self, text: &str) -> Result<Vec<ExtractedEntity>, LlmError> {
         let out = self.complete(ENTITY_SYSTEM, text)?;
@@ -169,6 +182,12 @@ impl LlmClient {
 
     pub fn extract_triples(&self, text: &str) -> Result<Vec<ExtractedTriple>, LlmError> {
         let out = self.complete(TRIPLE_SYSTEM, text)?;
+        let arr = extract_json_array(&out)?;
+        serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
+    }
+
+    pub fn extract_memories(&self, text: &str) -> Result<Vec<ExtractedMemory>, LlmError> {
+        let out = self.complete(MEMORY_SYSTEM, text)?;
         let arr = extract_json_array(&out)?;
         serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
     }

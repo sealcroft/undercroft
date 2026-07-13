@@ -62,7 +62,7 @@ enum Command {
     /// extraction tasks used by `undercroft refine`, against the labeled
     /// multilingual datasets in benchmarks/model_eval/datasets
     ModelEval {
-        /// Task: calibration | entities
+        /// Task: calibration | entities | memories
         task: String,
         /// Dataset directory
         #[arg(long, default_value = "benchmarks/model_eval/datasets")]
@@ -341,7 +341,10 @@ fn run_model_eval(
     let (subdir, file) = match task {
         "calibration" => ("calibration", "dataset"),
         "entities" => ("entity_extraction", "dataset"),
-        other => anyhow::bail!("unknown task {other:?} (expected: calibration, entities)"),
+        "memories" => ("memory_extraction", "dataset"),
+        other => {
+            anyhow::bail!("unknown task {other:?} (expected: calibration, entities, memories)")
+        }
     };
     let suffix = lang.map(|l| format!(".{l}")).unwrap_or_default();
     let data = load_jsonl(&dataset_dir.join(subdir).join(format!("{file}{suffix}.jsonl")))?;
@@ -415,9 +418,158 @@ fn run_model_eval(
                 suffix, 100.0 * p, 100.0 * r, 100.0 * f1, total, llm.model()
             );
         }
+        "memories" => {
+            // SQuAD-style token F1 with greedy one-to-one alignment: a
+            // predicted memory matches a gold memory when their token F1 is
+            // >= 0.5. Reported: match-level P/R/F1, mean token-F1 over
+            // matched pairs, and type accuracy on matches.
+            let mut match_tp = 0f32;
+            let mut pred_total = 0f32;
+            let mut gold_total = 0f32;
+            let mut tokf1_sum = 0f32;
+            let mut type_hits = 0f32;
+            for item in data.iter().take(total) {
+                let id = item.get("id").and_then(Value::as_str).context("item id")?;
+                let text = item.get("text").and_then(Value::as_str).context("item text")?;
+                let gold: Vec<(String, String)> = label_by_id
+                    .get(id)
+                    .and_then(|l| l.get("memories"))
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|m| {
+                                Some((
+                                    m.get("type")?.as_str().unwrap_or("unknown").to_string(),
+                                    m.get("content")?.as_str()?.to_string(),
+                                ))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let pred: Vec<(String, String)> = llm
+                    .extract_memories(text)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .into_iter()
+                    .map(|m| (m.memory_type, m.content))
+                    .collect();
+                pred_total += pred.len() as f32;
+                gold_total += gold.len() as f32;
+                for (p_idx, g_idx, f1) in greedy_align(&pred, &gold, 0.5) {
+                    match_tp += 1.0;
+                    tokf1_sum += f1;
+                    if pred[p_idx].0.eq_ignore_ascii_case(&gold[g_idx].0) {
+                        type_hits += 1.0;
+                    }
+                }
+            }
+            let p = if pred_total > 0.0 { match_tp / pred_total } else { 0.0 };
+            let r = if gold_total > 0.0 { match_tp / gold_total } else { 0.0 };
+            let f1 = if p + r > 0.0 { 2.0 * p * r / (p + r) } else { 0.0 };
+            println!(
+                "memories{} — match P {:.1}%  R {:.1}%  F1 {:.1}%  | mean token-F1 {:.2}  \
+                 type-acc {:.1}%  ({} items, {})",
+                suffix,
+                100.0 * p,
+                100.0 * r,
+                100.0 * f1,
+                if match_tp > 0.0 { tokf1_sum / match_tp } else { 0.0 },
+                if match_tp > 0.0 { 100.0 * type_hits / match_tp } else { 0.0 },
+                total,
+                llm.model()
+            );
+        }
         _ => unreachable!(),
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Fuzzy-match scoring for memory extraction
+// ---------------------------------------------------------------------------
+
+/// Tokenize for F1: CJK codepoints become single-character tokens (Chinese
+/// and friends have no spaces to split on); everything else splits into
+/// lowercase alphanumeric words.
+fn f1_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut Vec<String>| {
+        if !word.is_empty() {
+            out.push(std::mem::take(word));
+        }
+    };
+    for c in text.chars() {
+        let is_cjk = matches!(c as u32,
+            0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0x3040..=0x30FF | 0xAC00..=0xD7AF);
+        if is_cjk {
+            flush(&mut word, &mut out);
+            out.push(c.to_string());
+        } else if c.is_alphanumeric() {
+            word.extend(c.to_lowercase());
+        } else {
+            flush(&mut word, &mut out);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// SQuAD-style token F1 between two strings.
+fn token_f1(a: &str, b: &str) -> f32 {
+    let ta = f1_tokens(a);
+    let tb = f1_tokens(b);
+    if ta.is_empty() || tb.is_empty() {
+        return 0.0;
+    }
+    let mut counts: std::collections::HashMap<&str, i32> = Default::default();
+    for t in &ta {
+        *counts.entry(t.as_str()).or_insert(0) += 1;
+    }
+    let mut overlap = 0f32;
+    for t in &tb {
+        if let Some(c) = counts.get_mut(t.as_str()) {
+            if *c > 0 {
+                *c -= 1;
+                overlap += 1.0;
+            }
+        }
+    }
+    if overlap == 0.0 {
+        return 0.0;
+    }
+    let p = overlap / tb.len() as f32;
+    let r = overlap / ta.len() as f32;
+    2.0 * p * r / (p + r)
+}
+
+/// Greedy one-to-one alignment of predictions to gold by descending token
+/// F1; pairs below `threshold` never match. Returns (pred_idx, gold_idx, f1).
+fn greedy_align(
+    pred: &[(String, String)],
+    gold: &[(String, String)],
+    threshold: f32,
+) -> Vec<(usize, usize, f32)> {
+    let mut scored: Vec<(usize, usize, f32)> = Vec::new();
+    for (pi, p) in pred.iter().enumerate() {
+        for (gi, g) in gold.iter().enumerate() {
+            let f1 = token_f1(&p.1, &g.1);
+            if f1 >= threshold {
+                scored.push((pi, gi, f1));
+            }
+        }
+    }
+    scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    let mut used_p = vec![false; pred.len()];
+    let mut used_g = vec![false; gold.len()];
+    let mut out = Vec::new();
+    for (pi, gi, f1) in scored {
+        if !used_p[pi] && !used_g[gi] {
+            used_p[pi] = true;
+            used_g[gi] = true;
+            out.push((pi, gi, f1));
+        }
+    }
+    out
 }
 
 fn main() -> Result<()> {
@@ -447,5 +599,42 @@ mod tests {
     #[test]
     fn synth_small_run_passes() {
         run_synth(40, SecurityLevel::Sealed).expect("synthetic benchmark must pass");
+    }
+
+    #[test]
+    fn token_f1_basics() {
+        assert!((token_f1("switching to jaccard", "switching to jaccard") - 1.0).abs() < 1e-6);
+        assert_eq!(token_f1("alpha beta", "gamma delta"), 0.0);
+        // Partial overlap scores between 0 and 1.
+        let f1 = token_f1(
+            "switch the pipeline to jaccard similarity",
+            "the pipeline switches to jaccard",
+        );
+        assert!(f1 > 0.4 && f1 < 1.0, "got {f1}");
+    }
+
+    #[test]
+    fn token_f1_cjk_characters() {
+        // Chinese has no spaces; per-character tokens still overlap.
+        let f1 = token_f1("我们决定使用新数据库", "决定使用新数据库");
+        assert!(f1 > 0.8, "got {f1}");
+        assert_eq!(token_f1("我们决定", "完全不同"), 0.0);
+    }
+
+    #[test]
+    fn greedy_alignment_is_one_to_one() {
+        let mk = |s: &str| ("fact".to_string(), s.to_string());
+        let pred = vec![mk("switching pipeline to jaccard"), mk("team lunch moved to friday")];
+        let gold = vec![
+            mk("switching the pipeline to jaccard similarity"),
+            mk("the team lunch moved to friday"),
+            mk("unrelated third gold memory about testing")
+        ];
+        let matches = greedy_align(&pred, &gold, 0.5);
+        assert_eq!(matches.len(), 2);
+        // Each side used at most once.
+        let mut gseen: Vec<usize> = matches.iter().map(|m| m.1).collect();
+        gseen.dedup();
+        assert_eq!(gseen.len(), 2);
     }
 }

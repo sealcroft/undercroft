@@ -46,18 +46,19 @@ bind, read-only serving. Upstream stored everything in plaintext.
 |---|---|
 | Milvus backend | `undercroft-index` REST v2 client (`--backend milvus`), tested against live standalone Milvus in compose |
 | LLM refinement pipeline (`llm_refine`, `llm_client`) | `undercroft-llm` crate (Ollama + OpenAI-compatible local runtimes) + `undercroft refine` — extracts entities and KG triples from drawers; never touches verbatim content; only runs when `UNDERCROFT_LLM_URL` is explicitly set |
-| `model_eval` multilingual datasets + harness | Datasets restored (10 languages × calibration / entity / memory / room tasks); `undercroft-bench model-eval calibration|entities [--lang de]` scores the configured local LLM |
+| `model_eval` multilingual datasets + harness | Datasets restored (10 languages × calibration / entity / memory / room tasks); `undercroft-bench model-eval calibration|entities|memories [--lang de]` scores the configured local LLM (accuracy, P/R/F1, and SQuAD-style greedy token-F1 alignment for memories) |
 | AAAK dialect / closets (`dialect.py`) | `undercroft closets` + `undercroft_get_closet_index` MCP tool — deterministic compact index (one scannable line per room: counts, date span, key entities, drawer ids); computed on demand, nothing persisted |
 | Spellcheck (query typo tolerance) | Levenshtein-1 fuzzy term matching built into the lexical scorer (5+ char terms) |
 | Website | Rust-native mdBook site in `website/` reusing docs/ (`docker compose run --rm site`) |
+
+| Memory-extraction eval task | `undercroft-bench model-eval memories` — SQuAD-style token-F1 with greedy one-to-one alignment (threshold 0.5), CJK-aware tokenization; reports match P/R/F1, mean token-F1, type accuracy |
+| i18n (`mempalace/i18n`) | CLI result strings localized in the 9 dataset languages (de/es/fr/hi/it/ko/pt/ru/zh) via `UNDERCROFT_LANG`, English default + fallback; errors/help stay English by design (exit codes are the script contract) |
 
 ## Not ported (deliberate, with reasons)
 
 | Upstream | Status |
 |---|---|
 | Embedded ChromaDB default | Python library — cannot exist in Rust; the bundled SQLite store *is* the embedded store (this is a role replacement, not a gap) |
-| Memory-extraction LLM task in model_eval | Dataset restored; scoring harness pending (needs a fuzzy-match metric worth trusting) |
-| i18n of CLI output | Multilingual *content* is fully supported (unicode-aware tokenization, multilingual model-eval datasets); translated CLI strings are not |
 | LoCoMo / ConvoMem / MemBench harnesses | Same protocol as the LongMemEval harness; add dataset adapters to `undercroft-bench` when needed |
 
 ## Behavioral differences to know about

@@ -24,6 +24,24 @@ cargo run --release -p undercroft-bench -- longmemeval longmemeval_s.json --k 5
 cargo run --release -p undercroft-bench -- longmemeval longmemeval_s.json --limit 50   # quick pass
 ```
 
+## model-eval (local LLM extraction quality)
+
+Scores the runtime configured via `UNDERCROFT_LLM_URL` on the tasks
+`undercroft refine` relies on, against labeled multilingual datasets
+(`model_eval/datasets`, 10 languages):
+
+```bash
+export UNDERCROFT_LLM_URL=http://localhost:11434   # e.g. Ollama
+cargo run -p undercroft-bench -- model-eval calibration            # accuracy
+cargo run -p undercroft-bench -- model-eval entities --lang de     # P/R/F1
+cargo run -p undercroft-bench -- model-eval memories               # greedy token-F1 alignment
+```
+
+The memories task uses SQuAD-style token F1 with greedy one-to-one
+alignment (a prediction matches a gold memory at F1 >= 0.5; per-character
+tokens for CJK), reporting match-level P/R/F1, mean token-F1 of matches,
+and type accuracy.
+
 ## Honesty notes
 
 - Upstream's published numbers (96.6% R@5 raw) were produced with a

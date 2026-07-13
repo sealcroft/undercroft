@@ -241,6 +241,29 @@ fi
 kill $RO_PID 2>/dev/null
 unset UNDERCROFT_MCP_HTTP_TOKEN
 
+echo "== Localization (UNDERCROFT_LANG) =="
+L_HOME="$(mktemp -d)"
+out="$(UNDERCROFT_HOME="$L_HOME" UNDERCROFT_LANG=de "$BIN" init 2>&1)"
+if grep -q "Palast initialisiert" <<<"$out"; then
+  echo "ok    german init output"; PASS=$((PASS+1))
+else
+  echo "FAIL  german init output"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+out="$(UNDERCROFT_HOME="$L_HOME" UNDERCROFT_LANG=zh "$BIN" remember "多语言测试记忆" 2>&1)"
+if grep -q "已归档到" <<<"$out"; then
+  echo "ok    chinese remember output"; PASS=$((PASS+1))
+else
+  echo "FAIL  chinese remember output"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+out="$(UNDERCROFT_HOME="$L_HOME" UNDERCROFT_LANG=ru "$BIN" verify 2>&1)"
+if grep -q "ПРОВЕРКА ПРОЙДЕНА" <<<"$out"; then
+  echo "ok    russian verify verdict"; PASS=$((PASS+1))
+else
+  echo "FAIL  russian verify verdict"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "unknown lang falls back"   0 "Palace already initialized"     -- env UNDERCROFT_HOME="$L_HOME" UNDERCROFT_LANG=tlh "$BIN" init
+check "model-eval memories gated" 1 "UNDERCROFT_LLM_URL"              -- "${BIN%/*}/undercroft-bench" model-eval memories
+
 echo "== Benchmark harness =="
 check "bench synth passes"        0 "SYNTH OK"                       -- "${BIN%/*}/undercroft-bench" synth --n 60
 

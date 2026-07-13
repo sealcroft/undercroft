@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — Memory-extraction eval + CLI localization
+
+- `undercroft-bench model-eval memories`: SQuAD-style token-F1 with greedy
+  one-to-one alignment (threshold 0.5, CJK-aware per-character tokens);
+  reports match P/R/F1, mean token-F1, and type accuracy.
+  `extract_memories` added to undercroft-llm.
+- CLI result strings localized in the 9 model_eval dataset languages
+  (de/es/fr/hi/it/ko/pt/ru/zh) via UNDERCROFT_LANG, English default and
+  fallback; placeholder-preservation enforced by tests. Errors/help stay
+  English (exit codes are the scripting contract).
+
+
 ## 0.5.0 — Final parity gaps closed
 
 - Milvus backend (RESTful v2, standalone) in undercroft-index — all four

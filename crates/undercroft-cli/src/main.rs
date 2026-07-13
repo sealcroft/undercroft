@@ -5,6 +5,7 @@
 //! encryption, and HMAC integrity verification.
 
 mod http;
+mod i18n;
 mod mcp;
 
 use anyhow::{bail, Context, Result};
@@ -12,6 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use i18n::{fill, tr};
 use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer, MAX_CONTENT_BYTES};
 use undercroft_store::{PalaceStore, SearchOptions};
 use undercroft_vault::{SecurityLevel, VaultManager};
@@ -528,11 +530,14 @@ fn main() -> Result<()> {
         Command::Init { level } => {
             let mgr = manager(&cli)?;
             if mgr.exists("default") {
-                println!("Palace already initialized at {}", mgr.root().display());
+                println!("{}", fill(tr("palace-already"), &[("path", mgr.root().display().to_string())]));
             } else {
                 mgr.create("default", (*level).into())?;
-                println!("Palace initialized at {}", mgr.root().display());
-                println!("Created vault 'default' (level: {})", SecurityLevel::from(*level));
+                println!("{}", fill(tr("palace-initialized"), &[("path", mgr.root().display().to_string())]));
+                println!("{}", fill(tr("vault-created"), &[
+                    ("name", "default".to_string()),
+                    ("level", SecurityLevel::from(*level).to_string()),
+                ]));
                 if passphrase().is_some() {
                     println!("Master key: derived from UNDERCROFT_PASSPHRASE (Argon2id)");
                 } else {
@@ -544,7 +549,10 @@ fn main() -> Result<()> {
             VaultAction::Create { name, level } => {
                 let mgr = manager(&cli)?;
                 let v = mgr.create(name, (*level).into())?;
-                println!("Created vault '{}' (level: {})", v.id(), v.level());
+                println!("{}", fill(tr("vault-created"), &[
+                    ("name", v.id().to_string()),
+                    ("level", v.level().to_string()),
+                ]));
             }
             VaultAction::List => {
                 let mgr = manager(&cli)?;
@@ -588,7 +596,12 @@ fn main() -> Result<()> {
             let count_before = store.count()?;
             let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli");
             store.upsert(&drawer)?;
-            println!("Filed drawer {} in {}/{} (vault '{}')", drawer.id, wing, room, vault);
+            println!("{}", fill(tr("drawer-filed"), &[
+                ("id", drawer.id.clone()),
+                ("wing", wing.clone()),
+                ("room", room.clone()),
+                ("vault", vault.clone()),
+            ]));
         }
         Command::Mine { path, vault, wing, mode } => {
             undercroft_core::validate_name(wing, "wing")?;
@@ -598,17 +611,22 @@ fn main() -> Result<()> {
                 "convos" => mine_convos(&mut store, path, wing)?,
                 other => bail!("unknown mine mode {other:?} (expected: files, convos)"),
             };
-            println!(
-                "Mined {files} file(s) into vault '{vault}' wing '{wing}': {drawers} drawer(s) filed",
-            );
+            println!("{}", fill(tr("mined-summary"), &[
+                ("files", files.to_string()),
+                ("vault", vault.clone()),
+                ("wing", wing.clone()),
+                ("drawers", drawers.to_string()),
+            ]));
         }
         Command::Sweep { path, vault, wing } => {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
             let (files, filed, skipped) = sweep_path(&mut store, path, wing, true)?;
-            println!(
-                "Swept {files} transcript(s): {filed} message drawer(s) filed, {skipped} already present",
-            );
+            println!("{}", fill(tr("swept-summary"), &[
+                ("files", files.to_string()),
+                ("filed", filed.to_string()),
+                ("skipped", skipped.to_string()),
+            ]));
         }
         Command::Search { query, vault, wing, room, limit, backend } => {
             let store = open_store(&cli, vault)?;
@@ -620,7 +638,7 @@ fn main() -> Result<()> {
                 store.search_with_index(index.as_mut(), query, &opts)?
             };
             if hits.is_empty() {
-                println!("No memories matched.");
+                println!("{}", tr("no-matches"));
             }
             for (i, hit) in hits.iter().enumerate() {
                 println!(
@@ -665,9 +683,9 @@ fn main() -> Result<()> {
             }
             println!("audit chain:     {}", if report.chain_ok { "ok" } else { "BROKEN" });
             if report.ok() {
-                println!("VERIFY OK");
+                println!("{}", tr("verify-ok"));
             } else {
-                println!("VERIFY FAILED");
+                println!("{}", tr("verify-failed"));
                 std::process::exit(2);
             }
         }
@@ -772,7 +790,11 @@ fn main() -> Result<()> {
                 store.upsert(&drawer)?;
                 imported += 1;
             }
-            println!("Imported {imported} drawer(s) into vault '{vault}' ({skipped} duplicates skipped)");
+            println!("{}", fill(tr("imported-summary"), &[
+                ("n", imported.to_string()),
+                ("vault", vault.clone()),
+                ("skipped", skipped.to_string()),
+            ]));
         }
         Command::Kg { action, vault } => {
             let mut store = open_store(&cli, vault)?;
