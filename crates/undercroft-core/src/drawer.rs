@@ -82,7 +82,8 @@ impl Drawer {
     /// each other.
     pub fn canonical_bytes(&self, content_at_rest: &[u8]) -> Vec<u8> {
         let meta_json = serde_json::to_vec(&self.meta).expect("meta serializes");
-        let mut out = Vec::with_capacity(self.id.len() + meta_json.len() + content_at_rest.len() + 2);
+        let mut out =
+            Vec::with_capacity(self.id.len() + meta_json.len() + content_at_rest.len() + 2);
         out.extend_from_slice(self.id.as_bytes());
         out.push(0x1f);
         out.extend_from_slice(&meta_json);
@@ -114,7 +115,14 @@ mod tests {
 
     #[test]
     fn meta_roundtrips_json() {
-        let d = Drawer::new("wing", "room", "content".into(), Some("s.md".into()), 3, "cli");
+        let d = Drawer::new(
+            "wing",
+            "room",
+            "content".into(),
+            Some("s.md".into()),
+            3,
+            "cli",
+        );
         let j = serde_json::to_string(&d.meta).unwrap();
         let back: DrawerMeta = serde_json::from_str(&j).unwrap();
         assert_eq!(back, d.meta);

@@ -95,7 +95,12 @@ impl Manifest {
     fn canonical(&self) -> Vec<u8> {
         format!(
             "{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}",
-            self.version, self.id, self.level, self.salt_hex, self.created_at, self.writes,
+            self.version,
+            self.id,
+            self.level,
+            self.salt_hex,
+            self.created_at,
+            self.writes,
             self.chain_head_hex
         )
         .into_bytes()
@@ -153,9 +158,12 @@ impl Vault {
     /// Recover plaintext content from its at-rest form.
     pub fn content_from_rest(&self, record_id: &str, blob: &[u8]) -> Result<Vec<u8>, VaultError> {
         match self.level {
-            SecurityLevel::Sealed => {
-                Ok(seal::open_content(&self.enc_key, &self.id, record_id, blob)?)
-            }
+            SecurityLevel::Sealed => Ok(seal::open_content(
+                &self.enc_key,
+                &self.id,
+                record_id,
+                blob,
+            )?),
             SecurityLevel::HmacOnly => Ok(blob.to_vec()),
         }
     }
@@ -256,7 +264,10 @@ impl VaultManager {
     pub fn open(root: &Path, passphrase: Option<&str>) -> Result<Self, VaultError> {
         let master = keys::load_or_create_master(root, passphrase)?;
         fs::create_dir_all(root.join("vaults"))?;
-        Ok(Self { root: root.to_path_buf(), master })
+        Ok(Self {
+            root: root.to_path_buf(),
+            master,
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -357,7 +368,9 @@ impl VaultManager {
 
 impl std::fmt::Debug for VaultManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VaultManager").field("root", &self.root).finish_non_exhaustive()
+        f.debug_struct("VaultManager")
+            .field("root", &self.root)
+            .finish_non_exhaustive()
     }
 }
 
@@ -408,7 +421,9 @@ mod tests {
         mgr.create("t", SecurityLevel::Sealed).unwrap();
         // Downgrade the level behind the manager's back.
         let mpath = dir.path().join("vaults/t/vault.json");
-        let text = std::fs::read_to_string(&mpath).unwrap().replace("sealed", "hmac-only");
+        let text = std::fs::read_to_string(&mpath)
+            .unwrap()
+            .replace("sealed", "hmac-only");
         std::fs::write(&mpath, text).unwrap();
         assert!(matches!(mgr.unlock("t"), Err(VaultError::ManifestTampered)));
     }

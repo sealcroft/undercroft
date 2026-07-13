@@ -48,7 +48,12 @@ fn remember_search_wakeup_flow() {
         .success()
         .stdout(predicate::str::contains("Filed drawer"));
     cmd(&home)
-        .args(["remember", "The cat prefers the sunny windowsill", "--wing", "home"])
+        .args([
+            "remember",
+            "The cat prefers the sunny windowsill",
+            "--wing",
+            "home",
+        ])
         .assert()
         .success();
 
@@ -78,9 +83,17 @@ fn remember_search_wakeup_flow() {
 fn vault_isolation_between_namespaces() {
     let home = TempDir::new().unwrap();
     cmd(&home).args(["init"]).assert().success();
-    cmd(&home).args(["vault", "create", "work"]).assert().success();
     cmd(&home)
-        .args(["remember", "quarterly revenue target is confidential", "--vault", "work"])
+        .args(["vault", "create", "work"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args([
+            "remember",
+            "quarterly revenue target is confidential",
+            "--vault",
+            "work",
+        ])
         .assert()
         .success();
     // The default vault must not see the work vault's memories.
@@ -121,8 +134,14 @@ fn mine_and_export_roundtrip() {
 #[test]
 fn verify_passes_clean_and_fails_after_tampering() {
     let home = TempDir::new().unwrap();
-    cmd(&home).args(["init", "--level", "hmac-only"]).assert().success();
-    cmd(&home).args(["remember", "the true untampered memory"]).assert().success();
+    cmd(&home)
+        .args(["init", "--level", "hmac-only"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["remember", "the true untampered memory"])
+        .assert()
+        .success();
     cmd(&home)
         .args(["verify"])
         .assert()
@@ -167,15 +186,20 @@ fn sealed_vault_leaves_no_plaintext_in_db() {
 fn wrong_passphrase_cannot_read_sealed_vault() {
     let home = TempDir::new().unwrap();
     let mut c = Command::cargo_bin("undercroft").unwrap();
-    c.env("UNDERCROFT_HOME", home.path()).env("UNDERCROFT_PASSPHRASE", "correct horse");
+    c.env("UNDERCROFT_HOME", home.path())
+        .env("UNDERCROFT_PASSPHRASE", "correct horse");
     c.args(["init"]).assert().success();
     let mut c = Command::cargo_bin("undercroft").unwrap();
-    c.env("UNDERCROFT_HOME", home.path()).env("UNDERCROFT_PASSPHRASE", "correct horse");
-    c.args(["remember", "sealed under the right passphrase"]).assert().success();
+    c.env("UNDERCROFT_HOME", home.path())
+        .env("UNDERCROFT_PASSPHRASE", "correct horse");
+    c.args(["remember", "sealed under the right passphrase"])
+        .assert()
+        .success();
 
     // Wrong passphrase: manifest MAC check fails before any data is served.
     let mut c = Command::cargo_bin("undercroft").unwrap();
-    c.env("UNDERCROFT_HOME", home.path()).env("UNDERCROFT_PASSPHRASE", "wrong staple");
+    c.env("UNDERCROFT_HOME", home.path())
+        .env("UNDERCROFT_PASSPHRASE", "wrong staple");
     c.args(["search", "sealed"]).assert().failure();
 }
 
@@ -218,12 +242,28 @@ fn kg_cli_supersede_and_time_travel() {
     let home = TempDir::new().unwrap();
     cmd(&home).args(["init"]).assert().success();
     cmd(&home)
-        .args(["kg", "add", "alice", "works_at", "acme", "--from", "2024-01-01"])
+        .args([
+            "kg",
+            "add",
+            "alice",
+            "works_at",
+            "acme",
+            "--from",
+            "2024-01-01",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("Added fact"));
     cmd(&home)
-        .args(["kg", "supersede", "alice", "works_at", "globex", "--at", "2025-06-01"])
+        .args([
+            "kg",
+            "supersede",
+            "alice",
+            "works_at",
+            "globex",
+            "--at",
+            "2025-06-01",
+        ])
         .assert()
         .success();
     cmd(&home)
@@ -251,7 +291,14 @@ fn convo_mine_and_sweep_idempotent() {
     .unwrap();
     cmd(&home).args(["init"]).assert().success();
     cmd(&home)
-        .args(["mine", convos.path().to_str().unwrap(), "--mode", "convos", "--wing", "cc"])
+        .args([
+            "mine",
+            convos.path().to_str().unwrap(),
+            "--mode",
+            "convos",
+            "--wing",
+            "cc",
+        ])
         .assert()
         .success();
     cmd(&home)
@@ -276,20 +323,33 @@ fn convo_mine_and_sweep_idempotent() {
 fn diary_and_tunnel_flow() {
     let home = TempDir::new().unwrap();
     cmd(&home).args(["init"]).assert().success();
-    cmd(&home).args(["diary", "write", "scout", "note one"]).assert().success();
+    cmd(&home)
+        .args(["diary", "write", "scout", "note one"])
+        .assert()
+        .success();
     cmd(&home)
         .args(["diary", "agents"])
         .assert()
         .success()
         .stdout(predicate::str::contains("scout"));
-    cmd(&home).args(["remember", "target wing memory", "--wing", "b"]).assert().success();
-    cmd(&home).args(["tunnel", "create", "a", "b"]).assert().success();
+    cmd(&home)
+        .args(["remember", "target wing memory", "--wing", "b"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["tunnel", "create", "a", "b"])
+        .assert()
+        .success();
     cmd(&home)
         .args(["tunnel", "traverse", "a"])
         .assert()
         .success()
         .stdout(predicate::str::contains("b"));
-    cmd(&home).args(["verify"]).assert().success().stdout(predicate::str::contains("VERIFY OK"));
+    cmd(&home)
+        .args(["verify"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("VERIFY OK"));
 }
 
 // Tiny local shim so this test file does not depend on rusqlite directly

@@ -24,7 +24,9 @@ use crate::mcp::McpHandler;
 use undercroft_store::PalaceStore;
 
 pub fn serve_http(store: PalaceStore, host: &str, port: u16, read_only: bool) -> Result<()> {
-    let token = std::env::var("UNDERCROFT_MCP_HTTP_TOKEN").ok().filter(|t| !t.is_empty());
+    let token = std::env::var("UNDERCROFT_MCP_HTTP_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
     let loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
     if !loopback && token.is_none() {
         bail!(
@@ -34,16 +36,20 @@ pub fn serve_http(store: PalaceStore, host: &str, port: u16, read_only: bool) ->
     }
 
     let mut handler = McpHandler::new(store, read_only);
-    let server = Server::http((host, port))
-        .map_err(|e| anyhow::anyhow!("binding {host}:{port}: {e}"))?;
+    let server =
+        Server::http((host, port)).map_err(|e| anyhow::anyhow!("binding {host}:{port}: {e}"))?;
     eprintln!(
         "undercroft MCP server listening on http://{host}:{port}/mcp ({}{})",
         if read_only { "read-only, " } else { "" },
-        if token.is_some() { "bearer auth" } else { "loopback, no auth" }
+        if token.is_some() {
+            "bearer auth"
+        } else {
+            "loopback, no auth"
+        }
     );
 
-    let json_header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-        .expect("static header");
+    let json_header =
+        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).expect("static header");
 
     for mut request in server.incoming_requests() {
         let url = request.url().to_string();
@@ -60,13 +66,15 @@ pub fn serve_http(store: PalaceStore, host: &str, port: u16, read_only: bool) ->
                         .map(|h| h.value.as_str() == format!("Bearer {expected}"))
                         .unwrap_or(false);
                     if !ok {
-                        let _ = request.respond(Response::from_string("unauthorized").with_status_code(401));
+                        let _ = request
+                            .respond(Response::from_string("unauthorized").with_status_code(401));
                         continue;
                     }
                 }
                 let mut body = String::new();
                 if std::io::Read::read_to_string(request.as_reader(), &mut body).is_err() {
-                    let _ = request.respond(Response::from_string("bad request").with_status_code(400));
+                    let _ =
+                        request.respond(Response::from_string("bad request").with_status_code(400));
                     continue;
                 }
                 let msg: Value = match serde_json::from_str(&body) {

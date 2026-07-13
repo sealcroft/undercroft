@@ -25,13 +25,17 @@ pub fn parse_transcript(jsonl: &str) -> Vec<Message> {
         if line.is_empty() {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         let role = match v.get("type").and_then(Value::as_str) {
             Some("user") => "user",
             Some("assistant") => "assistant",
             _ => continue,
         };
-        let Some(content) = v.pointer("/message/content") else { continue };
+        let Some(content) = v.pointer("/message/content") else {
+            continue;
+        };
         let text = extract_text(content);
         let text = text.trim();
         if text.is_empty() {
@@ -41,7 +45,11 @@ pub fn parse_transcript(jsonl: &str) -> Vec<Message> {
         if text.starts_with("<local-command") || text.starts_with("Caveat:") {
             continue;
         }
-        out.push(Message { role: role.into(), text: text.to_string(), line: (i + 1) as u32 });
+        out.push(Message {
+            role: role.into(),
+            text: text.to_string(),
+            line: (i + 1) as u32,
+        });
     }
     out
 }
@@ -72,7 +80,11 @@ pub fn chunk_exchanges(messages: &[Message], chunk_size: usize) -> Vec<String> {
     let mut chunks: Vec<String> = Vec::new();
     let mut current = String::new();
     for m in messages {
-        let prefix = if m.role == "user" { "User" } else { "Assistant" };
+        let prefix = if m.role == "user" {
+            "User"
+        } else {
+            "Assistant"
+        };
         let block = format!("{}: {}", prefix, m.text);
         if !current.is_empty() && current.len() + block.len() + 2 > chunk_size {
             chunks.push(std::mem::take(&mut current));
@@ -121,7 +133,9 @@ mod tests {
 
     #[test]
     fn handles_malformed_lines_gracefully() {
-        let msgs = parse_transcript("not json\n{\"type\":\"user\",\"message\":{\"content\":\"hi there friend\"}}");
+        let msgs = parse_transcript(
+            "not json\n{\"type\":\"user\",\"message\":{\"content\":\"hi there friend\"}}",
+        );
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].text, "hi there friend");
     }

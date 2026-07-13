@@ -49,8 +49,8 @@ impl OnnxEmbedder {
         tokenizer_path: &std::path::Path,
         model_name: &str,
     ) -> Result<Self, OnnxError> {
-        let tokenizer =
-            Tokenizer::from_file(tokenizer_path).map_err(|e| OnnxError::Tokenizer(e.to_string()))?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| OnnxError::Tokenizer(e.to_string()))?;
         let mut inference = tract_onnx::onnx()
             .model_for_path(model_path)
             .map_err(|e| OnnxError::Model(e.to_string()))?;
@@ -80,7 +80,9 @@ impl OnnxEmbedder {
             dim: 0,
             name: model_name.to_string(),
         };
-        let probe = me.embed_inner("dimension probe").map_err(|e| OnnxError::Model(e.to_string()))?;
+        let probe = me
+            .embed_inner("dimension probe")
+            .map_err(|e| OnnxError::Model(e.to_string()))?;
         me.dim = probe.len();
         Ok(me)
     }
@@ -111,8 +113,10 @@ impl OnnxEmbedder {
         if self.n_inputs >= 3 {
             inputs.push(to_tensor(&types)?.into());
         }
-        let outputs =
-            self.model.run(inputs).map_err(|e| OnnxError::Inference(e.to_string()))?;
+        let outputs = self
+            .model
+            .run(inputs)
+            .map_err(|e| OnnxError::Inference(e.to_string()))?;
         let hidden = outputs[0]
             .to_array_view::<f32>()
             .map_err(|e| OnnxError::Inference(e.to_string()))?;
@@ -159,7 +163,8 @@ impl Embedder for OnnxEmbedder {
         // cannot fail). A runtime inference failure degrades to a zero
         // vector rather than poisoning the write path; the record itself
         // (verbatim content) is unaffected and `repair` can re-embed.
-        self.embed_inner(text).unwrap_or_else(|_| vec![0.0; self.dim.max(1)])
+        self.embed_inner(text)
+            .unwrap_or_else(|_| vec![0.0; self.dim.max(1)])
     }
 }
 
@@ -171,7 +176,11 @@ pub fn from_env() -> Result<OnnxEmbedder, OnnxError> {
     let tokenizer = std::env::var("UNDERCROFT_ONNX_TOKENIZER")
         .map_err(|_| OnnxError::Tokenizer("UNDERCROFT_ONNX_TOKENIZER is not set".into()))?;
     let name = std::env::var("UNDERCROFT_ONNX_NAME").unwrap_or_else(|_| "onnx-sentence".into());
-    OnnxEmbedder::load(std::path::Path::new(&model), std::path::Path::new(&tokenizer), &name)
+    OnnxEmbedder::load(
+        std::path::Path::new(&model),
+        std::path::Path::new(&tokenizer),
+        &name,
+    )
 }
 
 #[cfg(test)]

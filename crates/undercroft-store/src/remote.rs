@@ -33,7 +33,9 @@ impl PalaceStore {
             .conn
             .prepare("SELECT id, wing, room, content, embedding FROM drawers ORDER BY seq")?;
         let rows: Vec<(String, String, String, Vec<u8>, Vec<u8>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
             .collect::<Result<_, _>>()?;
         let b64 = base64::engine::general_purpose::STANDARD;
         let mut batch = Vec::with_capacity(64);
@@ -42,7 +44,10 @@ impl PalaceStore {
             let embedding = self
                 .vault
                 .embedding_from_rest(&id, &emb_rest)
-                .map_err(|e| StoreError::CorruptRow { id: id.clone(), reason: e.to_string() })?;
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.clone(),
+                    reason: e.to_string(),
+                })?;
             batch.push(IndexRecord {
                 sealed_b64: b64.encode(&content_rest),
                 id,
@@ -76,13 +81,19 @@ impl PalaceStore {
         index.ensure(&collection, self.embedder_dimension())?;
         let qvec = self.embedder_embed(query);
         // Over-fetch so local re-ranking + relevance gating has material.
-        let candidates =
-            index.query(&collection, &qvec, opts.wing.as_deref(), (limit * 4).max(20))?;
+        let candidates = index.query(
+            &collection,
+            &qvec,
+            opts.wing.as_deref(),
+            (limit * 4).max(20),
+        )?;
         let mut hits = Vec::new();
         for c in candidates {
             // Local load = HMAC verify + decrypt. Unknown ids (index drift
             // after deletes) are skipped, not trusted.
-            let Some(drawer) = self.get(&c.id)? else { continue };
+            let Some(drawer) = self.get(&c.id)? else {
+                continue;
+            };
             if let Some(room) = &opts.room {
                 if &drawer.meta.room != room {
                     continue;
@@ -96,7 +107,11 @@ impl PalaceStore {
             hits.push(self.score_drawer(drawer, query, &qvec));
         }
         hits.retain(|h| h.lexical > 0.0 || h.semantic > 0.56);
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(limit);
         Ok(hits)
     }

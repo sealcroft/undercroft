@@ -180,14 +180,14 @@ undercroft import <file.jsonl>        # migrate from undercroft or mempalace exp
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
-undercroft serve-mcp [--vault]        # MCP stdio server (30 tools)
+undercroft serve-mcp [--vault]        # MCP stdio server (32 tools)
 undercroft serve-http [--host --port --read-only]  # shared team server (bearer auth)
 ```
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
-## MCP tools (30)
+## MCP tools (32)
 
 | Category | Tools |
 |---|---|

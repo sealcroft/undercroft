@@ -121,7 +121,9 @@ pub mod qdrant {
                 None => req.call(),
             };
             match resp {
-                Ok(r) => r.into_json().map_err(|e| IndexError::BadResponse(e.to_string())),
+                Ok(r) => r
+                    .into_json()
+                    .map_err(|e| IndexError::BadResponse(e.to_string())),
                 Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
                     "{method} {url} -> {code}: {}",
                     r.into_string().unwrap_or_default()
@@ -134,7 +136,14 @@ pub mod qdrant {
         /// UUID-shaped id from our hex record id.
         fn point_id(id: &str) -> String {
             let h = format!("{:0<32}", id.chars().take(32).collect::<String>());
-            format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+            format!(
+                "{}-{}-{}-{}-{}",
+                &h[0..8],
+                &h[8..12],
+                &h[12..16],
+                &h[16..20],
+                &h[20..32]
+            )
         }
     }
 
@@ -371,7 +380,10 @@ pub mod chroma {
                         .and_then(|ds| ds.get(i))
                         .and_then(Value::as_f64)
                         .unwrap_or(1.0) as f32;
-                    Some(Candidate { id: id.as_str()?.to_string(), score: 1.0 - d })
+                    Some(Candidate {
+                        id: id.as_str()?.to_string(),
+                        score: 1.0 - d,
+                    })
                 })
                 .collect())
         }
@@ -383,7 +395,8 @@ pub mod chroma {
                 .cloned()
                 .ok_or_else(|| IndexError::BadResponse("ensure() not called".into()))?;
             let resp = self.call("GET", &format!("/collections/{cid}/count"), None)?;
-            resp.as_u64().ok_or_else(|| IndexError::BadResponse("count not a number".into()))
+            resp.as_u64()
+                .ok_or_else(|| IndexError::BadResponse("count not a number".into()))
         }
 
         fn delete(&mut self, collection: &str, ids: &[String]) -> Result<(), IndexError> {
@@ -458,7 +471,10 @@ pub mod pgvector {
 
         fn upsert(&mut self, collection: &str, records: &[IndexRecord]) -> Result<(), IndexError> {
             let table = Self::table(collection);
-            let mut tx = self.client.transaction().map_err(|e| IndexError::Pg(e.to_string()))?;
+            let mut tx = self
+                .client
+                .transaction()
+                .map_err(|e| IndexError::Pg(e.to_string()))?;
             for r in records {
                 tx.execute(
                     &format!(
@@ -470,7 +486,13 @@ pub mod pgvector {
                              room = EXCLUDED.room,
                              embedding = EXCLUDED.embedding"
                     ),
-                    &[&r.id, &r.sealed_b64, &r.wing, &r.room, &Self::vec_literal(&r.embedding)],
+                    &[
+                        &r.id,
+                        &r.sealed_b64,
+                        &r.wing,
+                        &r.room,
+                        &Self::vec_literal(&r.embedding),
+                    ],
                 )
                 .map_err(|e| IndexError::Pg(e.to_string()))?;
             }
@@ -567,8 +589,9 @@ pub mod milvus {
                 .post(&url)
                 .send_json(body)
                 .map_err(|e| IndexError::Http(format!("POST {url}: {e}")))?;
-            let v: Value =
-                resp.into_json().map_err(|e| IndexError::BadResponse(e.to_string()))?;
+            let v: Value = resp
+                .into_json()
+                .map_err(|e| IndexError::BadResponse(e.to_string()))?;
             let code = v.get("code").and_then(Value::as_i64).unwrap_or(0);
             if code != 0 && code != 200 {
                 return Err(IndexError::BadResponse(format!("milvus code {code}: {v}")));
@@ -692,7 +715,10 @@ mod tests {
         assert_eq!(id.len(), 36);
         assert_eq!(id.matches('-').count(), 4);
         // Deterministic
-        assert_eq!(id, qdrant::QdrantIndex::point_id_for_test("a1b2c3d4e5f60718293a4b5c6d7e8f90"));
+        assert_eq!(
+            id,
+            qdrant::QdrantIndex::point_id_for_test("a1b2c3d4e5f60718293a4b5c6d7e8f90")
+        );
     }
 
     #[test]
@@ -707,7 +733,10 @@ mod tests {
 
     #[test]
     fn unknown_backend_rejected() {
-        assert!(matches!(from_env("nope"), Err(IndexError::UnknownBackend(_))));
+        assert!(matches!(
+            from_env("nope"),
+            Err(IndexError::UnknownBackend(_))
+        ));
     }
 
     // Test-only accessors for private helpers.
@@ -725,6 +754,13 @@ impl qdrant::QdrantIndex {
     #[doc(hidden)]
     pub fn point_id_for_test(id: &str) -> String {
         let h = format!("{:0<32}", id.chars().take(32).collect::<String>());
-        format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+        format!(
+            "{}-{}-{}-{}-{}",
+            &h[0..8],
+            &h[8..12],
+            &h[12..16],
+            &h[16..20],
+            &h[20..32]
+        )
     }
 }

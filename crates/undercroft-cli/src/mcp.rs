@@ -48,7 +48,10 @@ impl McpHandler {
     /// Handle one JSON-RPC message. Returns `None` for notifications.
     pub fn handle(&mut self, msg: &Value) -> Option<Value> {
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
-        let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
+        let method = msg
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
 
         // Notifications (no id) get no response.
         msg.get("id")?;
@@ -75,9 +78,14 @@ impl McpHandler {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
-                let args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+                let args = msg
+                    .pointer("/params/arguments")
+                    .cloned()
+                    .unwrap_or(json!({}));
                 let result = if self.read_only && WRITE_TOOLS.contains(&name.as_str()) {
-                    Err(anyhow::anyhow!("server is read-only: {name} is not allowed"))
+                    Err(anyhow::anyhow!(
+                        "server is read-only: {name} is not allowed"
+                    ))
                 } else {
                     call_tool(&mut self.store, &name, &args)
                 };
@@ -119,7 +127,10 @@ pub fn serve(store: PalaceStore) -> Result<()> {
         let msg: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                write_msg(&mut out, &error_response(Value::Null, -32700, &format!("parse error: {e}")))?;
+                write_msg(
+                    &mut out,
+                    &error_response(Value::Null, -32700, &format!("parse error: {e}")),
+                )?;
                 continue;
             }
         };
@@ -241,7 +252,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("missing required argument: content"))?;
-            let wing = args.get("wing").and_then(Value::as_str).unwrap_or("general");
+            let wing = args
+                .get("wing")
+                .and_then(Value::as_str)
+                .unwrap_or("general");
             let room = args.get("room").and_then(Value::as_str).unwrap_or("inbox");
             undercroft_core::validate_name(wing, "wing")?;
             undercroft_core::validate_name(room, "room")?;
@@ -300,7 +314,11 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 report.records_checked,
                 report.bad_records.len(),
                 if report.chain_ok { "ok" } else { "BROKEN" },
-                if report.ok() { "VERIFY OK" } else { "VERIFY FAILED" }
+                if report.ok() {
+                    "VERIFY OK"
+                } else {
+                    "VERIFY FAILED"
+                }
             ))
         }
         "undercroft_status" => {
@@ -396,8 +414,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             Ok(serde_json::to_string_pretty(&t)?)
         }
         "undercroft_follow_tunnel" => {
-            let drawers = store
-                .follow_tunnel(req_str(args, "id")?, opt_u64(args, "limit").unwrap_or(5) as usize)?;
+            let drawers = store.follow_tunnel(
+                req_str(args, "id")?,
+                opt_u64(args, "limit").unwrap_or(5) as usize,
+            )?;
             Ok(serde_json::to_string_pretty(&drawers)?)
         }
         "undercroft_delete_tunnel" => {
@@ -409,8 +429,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             }
         }
         "undercroft_traverse" => {
-            let reach = store
-                .traverse(req_str(args, "start")?, opt_u64(args, "depth").unwrap_or(3) as usize)?;
+            let reach = store.traverse(
+                req_str(args, "start")?,
+                opt_u64(args, "depth").unwrap_or(3) as usize,
+            )?;
             Ok(serde_json::to_string_pretty(&reach)?)
         }
         "undercroft_get_closet_index" => {
@@ -421,8 +443,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             Ok(lines.join("\n"))
         }
         "undercroft_list_hallways" => {
-            let halls = store
-                .hallways(req_str(args, "wing")?, opt_u64(args, "top").unwrap_or(20) as usize)?;
+            let halls = store.hallways(
+                req_str(args, "wing")?,
+                opt_u64(args, "top").unwrap_or(20) as usize,
+            )?;
             Ok(serde_json::to_string_pretty(&halls)?)
         }
         "undercroft_kg_add" => {
@@ -432,7 +456,9 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 req_str(args, "object")?,
                 opt_str(args, "valid_from"),
                 opt_str(args, "valid_to"),
-                args.get("confidence").and_then(Value::as_f64).unwrap_or(1.0),
+                args.get("confidence")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0),
                 None,
             )?;
             Ok(format!("fact {id} added"))
@@ -476,8 +502,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             Ok(format!("diary entry {id} written"))
         }
         "undercroft_diary_read" => {
-            let entries = store
-                .diary_read(req_str(args, "agent")?, opt_u64(args, "limit").unwrap_or(10) as usize)?;
+            let entries = store.diary_read(
+                req_str(args, "agent")?,
+                opt_u64(args, "limit").unwrap_or(10) as usize,
+            )?;
             Ok(serde_json::to_string_pretty(&entries)?)
         }
         "undercroft_list_agents" => {

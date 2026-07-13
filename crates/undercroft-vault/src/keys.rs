@@ -88,8 +88,10 @@ pub fn load_or_create_master(dir: &Path, passphrase: Option<&str>) -> Result<Sec
             let key_path = dir.join("master.key");
             if key_path.exists() {
                 let raw = fs::read(&key_path)?;
-                let arr: [u8; KEY_LEN] =
-                    raw.as_slice().try_into().map_err(|_| KeyError::CorruptKeyFile)?;
+                let arr: [u8; KEY_LEN] = raw
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| KeyError::CorruptKeyFile)?;
                 Ok(SecretKey(arr))
             } else {
                 let mut key = [0u8; KEY_LEN];

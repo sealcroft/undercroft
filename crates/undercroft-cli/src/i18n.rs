@@ -287,12 +287,15 @@ mod tests {
 
     #[test]
     fn fill_replaces_named_placeholders() {
-        let out = fill("Filed drawer {id} in {wing}/{room} (vault '{vault}')", &[
-            ("id", "abc".into()),
-            ("wing", "w".into()),
-            ("room", "r".into()),
-            ("vault", "v".into()),
-        ]);
+        let out = fill(
+            "Filed drawer {id} in {wing}/{room} (vault '{vault}')",
+            &[
+                ("id", "abc".into()),
+                ("wing", "w".into()),
+                ("room", "r".into()),
+                ("vault", "v".into()),
+            ],
+        );
         assert_eq!(out, "Filed drawer abc in w/r (vault 'v')");
     }
 }

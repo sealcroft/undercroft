@@ -14,9 +14,21 @@ fn main() -> anyhow::Result<()> {
     let mut store = PalaceStore::open(vault)?;
 
     let notes = [
-        ("backend", "decisions", "We chose GraphQL over REST because mobile needed fewer round trips."),
-        ("backend", "infra", "Postgres 16 migration completed; pgbouncer pools at 200."),
-        ("team", "rituals", "Retro every second Friday; demos on Thursdays."),
+        (
+            "backend",
+            "decisions",
+            "We chose GraphQL over REST because mobile needed fewer round trips.",
+        ),
+        (
+            "backend",
+            "infra",
+            "Postgres 16 migration completed; pgbouncer pools at 200.",
+        ),
+        (
+            "team",
+            "rituals",
+            "Retro every second Friday; demos on Thursdays.",
+        ),
     ];
     for (i, (wing, room, text)) in notes.iter().enumerate() {
         let drawer = Drawer::new(wing, room, text.to_string(), None, i as u32, "example");
@@ -24,7 +36,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     let hits = store.search("why did we pick graphql", &SearchOptions::default())?;
-    println!("top hit: [{}] {}", hits[0].drawer.meta.room, hits[0].drawer.content);
+    println!(
+        "top hit: [{}] {}",
+        hits[0].drawer.meta.room, hits[0].drawer.content
+    );
 
     let report = store.verify()?;
     println!(

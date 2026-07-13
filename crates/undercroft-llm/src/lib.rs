@@ -59,8 +59,7 @@ impl LlmClient {
     /// when the URL path contains `/v1`, else `ollama`).
     pub fn from_env() -> Result<Self, LlmError> {
         let base = std::env::var("UNDERCROFT_LLM_URL").map_err(|_| LlmError::NotConfigured)?;
-        let model =
-            std::env::var("UNDERCROFT_LLM_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+        let model = std::env::var("UNDERCROFT_LLM_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
         let kind = match std::env::var("UNDERCROFT_LLM_API").ok().as_deref() {
             Some("openai") => ApiKind::OpenAi,
             Some("ollama") => ApiKind::Ollama,
@@ -110,9 +109,9 @@ impl LlmClient {
             .map_err(|e| LlmError::BadOutput(e.to_string()))?;
         let text = match self.kind {
             ApiKind::Ollama => resp.pointer("/message/content").and_then(Value::as_str),
-            ApiKind::OpenAi => {
-                resp.pointer("/choices/0/message/content").and_then(Value::as_str)
-            }
+            ApiKind::OpenAi => resp
+                .pointer("/choices/0/message/content")
+                .and_then(Value::as_str),
         };
         text.map(str::to_string)
             .ok_or_else(|| LlmError::BadOutput(format!("no content field in {resp}")))
@@ -150,8 +149,12 @@ pub struct ExtractedMemory {
 
 /// Pull the first JSON array out of possibly-chatty model output.
 pub fn extract_json_array(text: &str) -> Result<Value, LlmError> {
-    let start = text.find('[').ok_or_else(|| LlmError::BadOutput("no JSON array".into()))?;
-    let end = text.rfind(']').ok_or_else(|| LlmError::BadOutput("unterminated array".into()))?;
+    let start = text
+        .find('[')
+        .ok_or_else(|| LlmError::BadOutput("no JSON array".into()))?;
+    let end = text
+        .rfind(']')
+        .ok_or_else(|| LlmError::BadOutput("unterminated array".into()))?;
     if end < start {
         return Err(LlmError::BadOutput("malformed array".into()));
     }
@@ -201,7 +204,10 @@ impl LlmClient {
             labels.join(", ")
         );
         let out = self.complete(&system, text)?;
-        let cleaned = out.trim().trim_matches(|c| c == '"' || c == '`' || c == '.').to_string();
+        let cleaned = out
+            .trim()
+            .trim_matches(|c| c == '"' || c == '`' || c == '.')
+            .to_string();
         // Snap to the closest provided label (models love to decorate).
         let lower = cleaned.to_lowercase();
         for l in labels {
@@ -235,8 +241,11 @@ mod tests {
                 };
                 let _ = req.respond(
                     tiny_http::Response::from_string(body.to_string()).with_header(
-                        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-                            .unwrap(),
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/json"[..],
+                        )
+                        .unwrap(),
                     ),
                 );
             }
@@ -272,8 +281,14 @@ mod tests {
     fn classify_snaps_to_label() {
         let (url, _s) = stub_server("The label is: Question.", ApiKind::Ollama);
         let client = LlmClient::new(&url, "m", ApiKind::Ollama);
-        let labels: Vec<String> = ["question", "command"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(client.classify("what time is it?", &labels).unwrap(), "question");
+        let labels: Vec<String> = ["question", "command"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            client.classify("what time is it?", &labels).unwrap(),
+            "question"
+        );
     }
 
     #[test]
@@ -286,6 +301,9 @@ mod tests {
     #[test]
     fn from_env_requires_url() {
         std::env::remove_var("UNDERCROFT_LLM_URL");
-        assert!(matches!(LlmClient::from_env(), Err(LlmError::NotConfigured)));
+        assert!(matches!(
+            LlmClient::from_env(),
+            Err(LlmError::NotConfigured)
+        ));
     }
 }

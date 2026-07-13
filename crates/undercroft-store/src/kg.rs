@@ -62,7 +62,9 @@ fn triple_id(subject: &str, predicate: &str, object: &str, valid_from: Option<&s
 }
 
 fn now_rfc3339() -> String {
-    OffsetDateTime::now_utc().format(&Rfc3339).expect("rfc3339 now")
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 now")
 }
 
 fn triple_canonical(
@@ -123,7 +125,11 @@ impl PalaceStore {
     fn ensure_entity(&mut self, name: &str) -> Result<(), StoreError> {
         let exists: Option<String> = self
             .conn
-            .query_row("SELECT id FROM kg_entities WHERE name = ?1", params![name], |r| r.get(0))
+            .query_row(
+                "SELECT id FROM kg_entities WHERE name = ?1",
+                params![name],
+                |r| r.get(0),
+            )
             .optional()?;
         if exists.is_some() {
             return Ok(());
@@ -151,17 +157,31 @@ impl PalaceStore {
         confidence: f64,
         source_drawer_id: Option<&str>,
     ) -> Result<String, StoreError> {
-        undercroft_core::validate_name(subject, "subject")
-            .map_err(|e| StoreError::CorruptRow { id: subject.into(), reason: e.to_string() })?;
-        undercroft_core::validate_name(predicate, "predicate")
-            .map_err(|e| StoreError::CorruptRow { id: predicate.into(), reason: e.to_string() })?;
+        undercroft_core::validate_name(subject, "subject").map_err(|e| StoreError::CorruptRow {
+            id: subject.into(),
+            reason: e.to_string(),
+        })?;
+        undercroft_core::validate_name(predicate, "predicate").map_err(|e| {
+            StoreError::CorruptRow {
+                id: predicate.into(),
+                reason: e.to_string(),
+            }
+        })?;
         self.ensure_entity(subject)?;
         let id = triple_id(subject, predicate, object, valid_from);
-        let object_rest = self.vault.content_at_rest(&format!("kg/{id}"), object.as_bytes());
+        let object_rest = self
+            .vault
+            .content_at_rest(&format!("kg/{id}"), object.as_bytes());
         let vf = valid_from.map(str::to_string);
         let vt = valid_to.map(str::to_string);
         let tag = self.vault.tag(&triple_canonical(
-            &id, subject, predicate, &object_rest, &vf, &vt, confidence,
+            &id,
+            subject,
+            predicate,
+            &object_rest,
+            &vf,
+            &vt,
+            confidence,
         ));
         let now = now_rfc3339();
         self.conn.execute(
@@ -213,10 +233,15 @@ impl PalaceStore {
         let object = self
             .vault
             .content_from_rest(&format!("kg/{}", row.id), &row.object)
-            .map_err(|e| StoreError::CorruptRow { id: row.id.clone(), reason: e.to_string() })?;
+            .map_err(|e| StoreError::CorruptRow {
+                id: row.id.clone(),
+                reason: e.to_string(),
+            })?;
         Ok(Triple {
-            object: String::from_utf8(object)
-                .map_err(|e| StoreError::CorruptRow { id: row.id.clone(), reason: e.to_string() })?,
+            object: String::from_utf8(object).map_err(|e| StoreError::CorruptRow {
+                id: row.id.clone(),
+                reason: e.to_string(),
+            })?,
             id: row.id,
             subject: row.subject,
             predicate: row.predicate,
@@ -299,10 +324,18 @@ impl PalaceStore {
             .collect();
         let mut count = 0u64;
         for t in matches {
-            let object_rest = self.vault.content_at_rest(&format!("kg/{}", t.id), t.object.as_bytes());
+            let object_rest = self
+                .vault
+                .content_at_rest(&format!("kg/{}", t.id), t.object.as_bytes());
             let vt = Some(ended.clone());
             let tag = self.vault.tag(&triple_canonical(
-                &t.id, &t.subject, &t.predicate, &object_rest, &t.valid_from, &vt, t.confidence,
+                &t.id,
+                &t.subject,
+                &t.predicate,
+                &object_rest,
+                &t.valid_from,
+                &vt,
+                t.confidence,
             ));
             self.conn.execute(
                 "UPDATE kg_triples SET object = ?1, valid_to = ?2, tag = ?3 WHERE id = ?4",
@@ -338,21 +371,36 @@ impl PalaceStore {
         let mut out: Vec<Triple> = self
             .all_triples()?
             .into_iter()
-            .filter(|t| entity.map(|e| t.subject == e || t.object == e).unwrap_or(true))
+            .filter(|t| {
+                entity
+                    .map(|e| t.subject == e || t.object == e)
+                    .unwrap_or(true)
+            })
             .collect();
         out.sort_by(|a, b| {
-            let ka = a.valid_from.as_deref().map(temporal_key).unwrap_or_default();
-            let kb = b.valid_from.as_deref().map(temporal_key).unwrap_or_default();
-            ka.cmp(&kb).then_with(|| a.extracted_at.cmp(&b.extracted_at))
+            let ka = a
+                .valid_from
+                .as_deref()
+                .map(temporal_key)
+                .unwrap_or_default();
+            let kb = b
+                .valid_from
+                .as_deref()
+                .map(temporal_key)
+                .unwrap_or_default();
+            ka.cmp(&kb)
+                .then_with(|| a.extracted_at.cmp(&b.extracted_at))
         });
         Ok(out)
     }
 
     pub fn kg_stats(&self) -> Result<KgStats, StoreError> {
-        let entities: i64 =
-            self.conn.query_row("SELECT COUNT(*) FROM kg_entities", [], |r| r.get(0))?;
-        let triples: i64 =
-            self.conn.query_row("SELECT COUNT(*) FROM kg_triples", [], |r| r.get(0))?;
+        let entities: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM kg_entities", [], |r| r.get(0))?;
+        let triples: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM kg_triples", [], |r| r.get(0))?;
         let closed: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM kg_triples WHERE valid_to IS NOT NULL",
             [],
@@ -396,7 +444,9 @@ impl PalaceStore {
 
     /// Number of KG rows checked by `kg_verify` (for verify reporting).
     pub(crate) fn kg_count(&self) -> Result<u64, StoreError> {
-        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM kg_triples", [], |r| r.get(0))?;
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM kg_triples", [], |r| r.get(0))?;
         Ok(n as u64)
     }
 }
@@ -465,8 +515,18 @@ mod tests {
     #[test]
     fn add_query_roundtrip() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.kg_add("alice", "works_at", "acme", Some("2024-01-01"), None, 1.0, None).unwrap();
-        s.kg_add("alice", "lives_in", "berlin", None, None, 0.9, None).unwrap();
+        s.kg_add(
+            "alice",
+            "works_at",
+            "acme",
+            Some("2024-01-01"),
+            None,
+            1.0,
+            None,
+        )
+        .unwrap();
+        s.kg_add("alice", "lives_in", "berlin", None, None, 0.9, None)
+            .unwrap();
         let facts = s.kg_query_entity("alice", None, "outgoing").unwrap();
         assert_eq!(facts.len(), 2);
         assert!(facts.iter().any(|t| t.object == "acme"));
@@ -475,8 +535,18 @@ mod tests {
     #[test]
     fn supersede_closes_and_replaces() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.kg_add("alice", "works_at", "acme", Some("2024-01-01"), None, 1.0, None).unwrap();
-        s.kg_supersede("alice", "works_at", "globex", Some("2025-06-01")).unwrap();
+        s.kg_add(
+            "alice",
+            "works_at",
+            "acme",
+            Some("2024-01-01"),
+            None,
+            1.0,
+            None,
+        )
+        .unwrap();
+        s.kg_supersede("alice", "works_at", "globex", Some("2025-06-01"))
+            .unwrap();
 
         // Now: only globex is active.
         let now = s.kg_query_entity("alice", None, "outgoing").unwrap();
@@ -484,7 +554,9 @@ mod tests {
         assert_eq!(now[0].object, "globex");
 
         // As of 2024: acme was the valid fact.
-        let then = s.kg_query_entity("alice", Some("2024-06-15"), "outgoing").unwrap();
+        let then = s
+            .kg_query_entity("alice", Some("2024-06-15"), "outgoing")
+            .unwrap();
         assert_eq!(then.len(), 1);
         assert_eq!(then[0].object, "acme");
 
@@ -498,9 +570,13 @@ mod tests {
     #[test]
     fn invalidate_specific_object() {
         let (_d, mut s) = store(SecurityLevel::HmacOnly);
-        s.kg_add("bob", "uses", "python", None, None, 1.0, None).unwrap();
-        s.kg_add("bob", "uses", "rust", None, None, 1.0, None).unwrap();
-        let n = s.kg_invalidate("bob", "uses", Some("python"), Some("2026-01-01")).unwrap();
+        s.kg_add("bob", "uses", "python", None, None, 1.0, None)
+            .unwrap();
+        s.kg_add("bob", "uses", "rust", None, None, 1.0, None)
+            .unwrap();
+        let n = s
+            .kg_invalidate("bob", "uses", Some("python"), Some("2026-01-01"))
+            .unwrap();
         assert_eq!(n, 1);
         let active = s.kg_query_entity("bob", None, "outgoing").unwrap();
         assert_eq!(active.len(), 1);
@@ -510,8 +586,16 @@ mod tests {
     #[test]
     fn sealed_kg_object_not_plaintext_on_disk() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
-        s.kg_add("alice", "secret_project", "operation-blue-heron-77", None, None, 1.0, None)
-            .unwrap();
+        s.kg_add(
+            "alice",
+            "secret_project",
+            "operation-blue-heron-77",
+            None,
+            None,
+            1.0,
+            None,
+        )
+        .unwrap();
         drop(s);
         let db = std::fs::read(dir.path().join("vaults/kg-test/palace.db")).unwrap();
         let needle = b"operation-blue-heron-77";
@@ -523,11 +607,13 @@ mod tests {
     #[test]
     fn kg_rows_covered_by_verify() {
         let (dir, mut s) = store(SecurityLevel::HmacOnly);
-        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None).unwrap();
+        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
         assert!(s.verify().unwrap().ok());
         drop(s);
         let conn = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
-        conn.execute("UPDATE kg_triples SET confidence = 0.1", []).unwrap();
+        conn.execute("UPDATE kg_triples SET confidence = 0.1", [])
+            .unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
@@ -541,7 +627,8 @@ mod tests {
         let (_d, mut s) = store(SecurityLevel::Sealed);
         let dr = undercroft_core::Drawer::new("w", "r", "content".into(), None, 0, "t");
         s.upsert(&dr).unwrap();
-        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None).unwrap();
+        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
         let report = s.verify().unwrap();
         assert!(report.ok(), "chain must cover drawer + kg writes");
         // Searching still works alongside KG data.

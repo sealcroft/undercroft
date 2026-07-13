@@ -196,14 +196,21 @@ fn run_longmemeval(
         let correct: Vec<String> = item
             .get("answer_session_ids")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Fresh palace per question, one room per haystack session
         // (upstream's session-granularity protocol).
         let (_tmp, mut store) = fresh_store(level)?;
         for (si, session) in sessions.iter().enumerate() {
-            let sid = session_ids.get(si).cloned().unwrap_or_else(|| format!("s{si}"));
+            let sid = session_ids
+                .get(si)
+                .cloned()
+                .unwrap_or_else(|| format!("s{si}"));
             let turns = session.as_array().cloned().unwrap_or_default();
             let text: Vec<String> = turns
                 .iter()
@@ -230,7 +237,11 @@ fn run_longmemeval(
         // Retrieve, dedupe hits to session (room) ranking.
         let hits = store.search(
             question,
-            &SearchOptions { wing: None, room: None, limit: k * 8 },
+            &SearchOptions {
+                wing: None,
+                room: None,
+                limit: k * 8,
+            },
         )?;
         let mut ranked_sessions: Vec<String> = Vec::new();
         for h in &hits {
@@ -240,10 +251,16 @@ fn run_longmemeval(
         }
 
         let topk: Vec<&String> = ranked_sessions.iter().take(k).collect();
-        let recall_any =
-            if correct.iter().any(|c| topk.contains(&c)) { 1.0 } else { 0.0 };
-        let recall_all =
-            if !correct.is_empty() && correct.iter().all(|c| topk.contains(&c)) { 1.0 } else { 0.0 };
+        let recall_any = if correct.iter().any(|c| topk.contains(&c)) {
+            1.0
+        } else {
+            0.0
+        };
+        let recall_all = if !correct.is_empty() && correct.iter().all(|c| topk.contains(&c)) {
+            1.0
+        } else {
+            0.0
+        };
         let n = ndcg(&ranked_sessions, &correct, k);
         recall_any_sum += recall_any;
         recall_all_sum += recall_all;
@@ -279,8 +296,15 @@ fn run_longmemeval(
 // ---------------------------------------------------------------------------
 
 const TOPICS: &[&str] = &[
-    "database migration", "kitchen renovation", "marathon training", "tax filing",
-    "guitar practice", "camping trip", "api gateway", "book club", "solar panels",
+    "database migration",
+    "kitchen renovation",
+    "marathon training",
+    "tax filing",
+    "guitar practice",
+    "camping trip",
+    "api gateway",
+    "book club",
+    "solar panels",
     "language learning",
 ];
 
@@ -305,7 +329,11 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
     let ingest_started = Instant::now();
     for i in 0..n {
         let topic = TOPICS[i % TOPICS.len()];
-        let key = format!("{}-{:04}", ["budget", "deadline", "vendor", "owner"][i % 4], i);
+        let key = format!(
+            "{}-{:04}",
+            ["budget", "deadline", "vendor", "owner"][i % 4],
+            i
+        );
         let detail = format!("the {key} is finalized as option {}", (i * 7) % 100);
         let fact = FACT_TEMPLATES[i % FACT_TEMPLATES.len()]
             .replace("{topic}", topic)
@@ -325,7 +353,14 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
             .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
         // Make the query unique to its fact via the key token.
         let query = format!("{query} {key}");
-        let hits = store.search(&query, &SearchOptions { wing: None, room: None, limit: 5 })?;
+        let hits = store.search(
+            &query,
+            &SearchOptions {
+                wing: None,
+                room: None,
+                limit: 5,
+            },
+        )?;
         if hits.first().map(|h| &h.drawer.id) == Some(id) {
             r1 += 1;
         }
@@ -338,8 +373,16 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
     println!("Synthetic benchmark — {n} facts, level={level:?}");
     println!("  Recall@1: {:.1}%", 100.0 * r1 as f32 / n as f32);
     println!("  Recall@5: {:.1}%", 100.0 * r5 as f32 / n as f32);
-    println!("  ingest:   {:.2}s ({:.1} docs/s)", ingest_secs, n as f32 / ingest_secs);
-    println!("  query:    {:.2}s ({:.1} q/s)", query_secs, n as f32 / query_secs);
+    println!(
+        "  ingest:   {:.2}s ({:.1} docs/s)",
+        ingest_secs,
+        n as f32 / ingest_secs
+    );
+    println!(
+        "  query:    {:.2}s ({:.1} q/s)",
+        query_secs,
+        n as f32 / query_secs
+    );
     let r5_pct = 100.0 * r5 as f32 / n as f32;
     if r5_pct < 95.0 {
         anyhow::bail!("regression: synthetic Recall@5 {r5_pct:.1}% (expected >= 95%)");
@@ -353,8 +396,8 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn load_jsonl(path: &std::path::Path) -> Result<Vec<Value>> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     raw.lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).map_err(Into::into))
@@ -378,7 +421,11 @@ fn run_model_eval(
         }
     };
     let suffix = lang.map(|l| format!(".{l}")).unwrap_or_default();
-    let data = load_jsonl(&dataset_dir.join(subdir).join(format!("{file}{suffix}.jsonl")))?;
+    let data = load_jsonl(
+        &dataset_dir
+            .join(subdir)
+            .join(format!("{file}{suffix}.jsonl")),
+    )?;
     let labels = load_jsonl(&dataset_dir.join(subdir).join("labels.jsonl"))?;
     let label_by_id: std::collections::HashMap<&str, &Value> = labels
         .iter()
@@ -391,7 +438,10 @@ fn run_model_eval(
             let mut correct = 0u32;
             for item in data.iter().take(total) {
                 let id = item.get("id").and_then(Value::as_str).context("item id")?;
-                let text = item.get("text").and_then(Value::as_str).context("item text")?;
+                let text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .context("item text")?;
                 let classes: Vec<String> = item
                     .get("classes")
                     .and_then(Value::as_array)
@@ -404,14 +454,18 @@ fn run_model_eval(
                     .and_then(|l| l.get("label"))
                     .and_then(Value::as_str)
                     .context("label")?;
-                let got = llm.classify(text, &classes).map_err(|e| anyhow::anyhow!("{e}"))?;
+                let got = llm
+                    .classify(text, &classes)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                 if got.eq_ignore_ascii_case(expected) {
                     correct += 1;
                 }
             }
             println!(
                 "calibration{} — {}/{} correct ({:.1}%) with {}",
-                suffix, correct, total,
+                suffix,
+                correct,
+                total,
                 100.0 * correct as f32 / total as f32,
                 llm.model()
             );
@@ -420,7 +474,10 @@ fn run_model_eval(
             let (mut tp, mut fp, mut fn_) = (0f32, 0f32, 0f32);
             for item in data.iter().take(total) {
                 let id = item.get("id").and_then(Value::as_str).context("item id")?;
-                let text = item.get("text").and_then(Value::as_str).context("item text")?;
+                let text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .context("item text")?;
                 let expected: std::collections::BTreeSet<String> = label_by_id
                     .get(id)
                     .and_then(|l| l.get("entities"))
@@ -443,10 +500,19 @@ fn run_model_eval(
             }
             let p = if tp + fp > 0.0 { tp / (tp + fp) } else { 0.0 };
             let r = if tp + fn_ > 0.0 { tp / (tp + fn_) } else { 0.0 };
-            let f1 = if p + r > 0.0 { 2.0 * p * r / (p + r) } else { 0.0 };
+            let f1 = if p + r > 0.0 {
+                2.0 * p * r / (p + r)
+            } else {
+                0.0
+            };
             println!(
                 "entities{} — P {:.1}%  R {:.1}%  F1 {:.1}%  ({} items, {})",
-                suffix, 100.0 * p, 100.0 * r, 100.0 * f1, total, llm.model()
+                suffix,
+                100.0 * p,
+                100.0 * r,
+                100.0 * f1,
+                total,
+                llm.model()
             );
         }
         "memories" => {
@@ -461,7 +527,10 @@ fn run_model_eval(
             let mut type_hits = 0f32;
             for item in data.iter().take(total) {
                 let id = item.get("id").and_then(Value::as_str).context("item id")?;
-                let text = item.get("text").and_then(Value::as_str).context("item text")?;
+                let text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .context("item text")?;
                 let gold: Vec<(String, String)> = label_by_id
                     .get(id)
                     .and_then(|l| l.get("memories"))
@@ -493,9 +562,21 @@ fn run_model_eval(
                     }
                 }
             }
-            let p = if pred_total > 0.0 { match_tp / pred_total } else { 0.0 };
-            let r = if gold_total > 0.0 { match_tp / gold_total } else { 0.0 };
-            let f1 = if p + r > 0.0 { 2.0 * p * r / (p + r) } else { 0.0 };
+            let p = if pred_total > 0.0 {
+                match_tp / pred_total
+            } else {
+                0.0
+            };
+            let r = if gold_total > 0.0 {
+                match_tp / gold_total
+            } else {
+                0.0
+            };
+            let f1 = if p + r > 0.0 {
+                2.0 * p * r / (p + r)
+            } else {
+                0.0
+            };
             println!(
                 "memories{} — match P {:.1}%  R {:.1}%  F1 {:.1}%  | mean token-F1 {:.2}  \
                  type-acc {:.1}%  ({} items, {})",
@@ -503,8 +584,16 @@ fn run_model_eval(
                 100.0 * p,
                 100.0 * r,
                 100.0 * f1,
-                if match_tp > 0.0 { tokf1_sum / match_tp } else { 0.0 },
-                if match_tp > 0.0 { 100.0 * type_hits / match_tp } else { 0.0 },
+                if match_tp > 0.0 {
+                    tokf1_sum / match_tp
+                } else {
+                    0.0
+                },
+                if match_tp > 0.0 {
+                    100.0 * type_hits / match_tp
+                } else {
+                    0.0
+                },
                 total,
                 llm.model()
             );
@@ -532,7 +621,9 @@ fn locomo_eval(
     let mut evaluated = 0u32;
     let mut per_cat: std::collections::BTreeMap<String, (f32, u32)> = Default::default();
     for sample in samples {
-        let conv = sample.get("conversation").context("sample missing conversation")?;
+        let conv = sample
+            .get("conversation")
+            .context("sample missing conversation")?;
         let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
         // Ingest: one room per session.
         let mut n = 1;
@@ -553,23 +644,40 @@ fn locomo_eval(
                     .into_iter()
                     .enumerate()
             {
-                let d = Drawer::new("locomo", &format!("session_{n}"), chunk, None, ci as u32, "bench");
+                let d = Drawer::new(
+                    "locomo",
+                    &format!("session_{n}"),
+                    chunk,
+                    None,
+                    ci as u32,
+                    "bench",
+                );
                 store.upsert(&d)?;
             }
             n += 1;
         }
-        let qa_pairs = sample.get("qa").and_then(Value::as_array).context("sample missing qa")?;
+        let qa_pairs = sample
+            .get("qa")
+            .and_then(Value::as_array)
+            .context("sample missing qa")?;
         for qa in qa_pairs.iter() {
             if let Some(cap) = limit {
                 if evaluated as usize >= cap {
                     break;
                 }
             }
-            let question = qa.get("question").and_then(Value::as_str).unwrap_or_default();
+            let question = qa
+                .get("question")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let evidence: Vec<String> = qa
                 .get("evidence")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|e| e.as_str().map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|e| e.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
             if question.is_empty() || evidence.is_empty() {
                 continue; // adversarial category has no evidence
@@ -583,7 +691,14 @@ fn locomo_eval(
                     Some(format!("session_{sess}"))
                 })
                 .collect();
-            let hits = store.search(question, &SearchOptions { wing: None, room: None, limit: k * 6 })?;
+            let hits = store.search(
+                question,
+                &SearchOptions {
+                    wing: None,
+                    room: None,
+                    limit: k * 6,
+                },
+            )?;
             let mut rooms: Vec<String> = Vec::new();
             for h in &hits {
                 if !rooms.contains(&h.drawer.meta.room) {
@@ -591,7 +706,11 @@ fn locomo_eval(
                 }
             }
             let topk: Vec<&String> = rooms.iter().take(k).collect();
-            let recall = if correct.iter().any(|c| topk.contains(&c)) { 1.0 } else { 0.0 };
+            let recall = if correct.iter().any(|c| topk.contains(&c)) {
+                1.0
+            } else {
+                0.0
+            };
             recall_sum += recall;
             evaluated += 1;
             let cat = qa
@@ -614,7 +733,10 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
     for item in items.iter().take(total) {
-        let question = item.get("question").and_then(Value::as_str).unwrap_or_default();
+        let question = item
+            .get("question")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let evidence: std::collections::BTreeSet<String> = item
             .get("message_evidences")
             .and_then(Value::as_array)
@@ -637,8 +759,14 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
             .iter()
             .enumerate()
         {
-            for msg in conv.get("messages").and_then(Value::as_array).unwrap_or(&Vec::new()) {
-                let Some(text) = msg.get("text").and_then(Value::as_str) else { continue };
+            for msg in conv
+                .get("messages")
+                .and_then(Value::as_array)
+                .unwrap_or(&Vec::new())
+            {
+                let Some(text) = msg.get("text").and_then(Value::as_str) else {
+                    continue;
+                };
                 let body = undercroft_core::normalize_content(text);
                 if body.is_empty() {
                     continue;
@@ -648,7 +776,14 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
                 idx += 1;
             }
         }
-        let hits = store.search(question, &SearchOptions { wing: None, room: None, limit: k })?;
+        let hits = store.search(
+            question,
+            &SearchOptions {
+                wing: None,
+                room: None,
+                limit: k,
+            },
+        )?;
         let recall = if hits
             .iter()
             .any(|h| evidence.contains(&h.drawer.content.trim().to_lowercase()))
@@ -667,12 +802,7 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
 /// `QA.target_step_id` = indices of the answer-relevant turns. Turn-
 /// granularity: one drawer per turn (chunk_index = step id); recall = any
 /// target step among the top-k retrieved turns.
-fn membench_eval(
-    raw: &Value,
-    topic: &str,
-    k: usize,
-    limit: Option<usize>,
-) -> Result<(f32, u32)> {
+fn membench_eval(raw: &Value, topic: &str, k: usize, limit: Option<usize>) -> Result<(f32, u32)> {
     let mut items: Vec<&Value> = Vec::new();
     if let Some(obj) = raw.as_object() {
         for (t, topic_items) in obj {
@@ -693,7 +823,10 @@ fn membench_eval(
             .cloned()
             .unwrap_or_default();
         let qa = item.get("QA").cloned().unwrap_or_default();
-        let question = qa.get("question").and_then(Value::as_str).unwrap_or_default();
+        let question = qa
+            .get("question")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let targets: std::collections::BTreeSet<u64> = qa
             .get("target_step_id")
             .and_then(Value::as_array)
@@ -705,7 +838,10 @@ fn membench_eval(
         let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
         for (sid, turn) in turns.iter().enumerate() {
             let user = turn.get("user").and_then(Value::as_str).unwrap_or_default();
-            let assistant = turn.get("assistant").and_then(Value::as_str).unwrap_or_default();
+            let assistant = turn
+                .get("assistant")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let body =
                 undercroft_core::normalize_content(&format!("User: {user}\nAssistant: {assistant}"));
             if body.is_empty() {
@@ -714,7 +850,14 @@ fn membench_eval(
             let d = Drawer::new("membench", "turns", body, None, sid as u32, "bench");
             store.upsert(&d)?;
         }
-        let hits = store.search(question, &SearchOptions { wing: None, room: None, limit: k })?;
+        let hits = store.search(
+            question,
+            &SearchOptions {
+                wing: None,
+                room: None,
+                limit: k,
+            },
+        )?;
         let recall = if hits
             .iter()
             .any(|h| targets.contains(&(h.drawer.meta.chunk_index as u64)))
@@ -821,9 +964,12 @@ fn greedy_align(
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Longmemeval { dataset, limit, k, level } => {
-            run_longmemeval(&dataset, limit, k, level_of(&level))
-        }
+        Command::Longmemeval {
+            dataset,
+            limit,
+            k,
+            level,
+        } => run_longmemeval(&dataset, limit, k, level_of(&level)),
         Command::Synth { n, level } => run_synth(n, level_of(&level)),
         Command::Locomo { dataset, k, limit } => {
             let raw = std::fs::read_to_string(&dataset)
@@ -836,7 +982,10 @@ fn main() -> Result<()> {
                 100.0 * recall_sum / n.max(1) as f32
             );
             for (cat, (sum, cnt)) in per_cat {
-                println!("  category {cat:<12} {:.1}%  ({cnt})", 100.0 * sum / cnt as f32);
+                println!(
+                    "  category {cat:<12} {:.1}%  ({cnt})",
+                    100.0 * sum / cnt as f32
+                );
             }
             Ok(())
         }
@@ -852,7 +1001,12 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Membench { dataset, topic, k, limit } => {
+        Command::Membench {
+            dataset,
+            topic,
+            k,
+            limit,
+        } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
             let value: Value = serde_json::from_str(&raw)?;
@@ -864,9 +1018,12 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::ModelEval { task, dataset_dir, lang, limit } => {
-            run_model_eval(&task, &dataset_dir, lang.as_deref(), limit)
-        }
+        Command::ModelEval {
+            task,
+            dataset_dir,
+            lang,
+            limit,
+        } => run_model_eval(&task, &dataset_dir, lang.as_deref(), limit),
     }
 }
 
@@ -979,11 +1136,14 @@ mod tests {
     #[test]
     fn greedy_alignment_is_one_to_one() {
         let mk = |s: &str| ("fact".to_string(), s.to_string());
-        let pred = vec![mk("switching pipeline to jaccard"), mk("team lunch moved to friday")];
+        let pred = vec![
+            mk("switching pipeline to jaccard"),
+            mk("team lunch moved to friday"),
+        ];
         let gold = vec![
             mk("switching the pipeline to jaccard similarity"),
             mk("the team lunch moved to friday"),
-            mk("unrelated third gold memory about testing")
+            mk("unrelated third gold memory about testing"),
         ];
         let matches = greedy_align(&pred, &gold, 0.5);
         assert_eq!(matches.len(), 2);

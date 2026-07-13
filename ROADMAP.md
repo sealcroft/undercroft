@@ -17,7 +17,7 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   traverse), computed hallways (entity co-occurrence)
 - Verified backups (create / list / restore, keeps last 10), repair
 - Auto-save hook settings output for Claude Code
-- MCP server: 30 tools across palace core, drawers, navigation, KG,
+- MCP server: 32 tools across palace core, drawers, navigation, KG,
   diaries, maintenance
 
 ## v0.1.0 — Core port + vault layer (done)

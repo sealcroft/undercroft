@@ -482,13 +482,17 @@ enum VaultAction {
 
 fn data_dir(cli: &Cli) -> PathBuf {
     cli.data_dir.clone().unwrap_or_else(|| {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| ".".into());
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| ".".into());
         home.join(".undercroft")
     })
 }
 
 fn passphrase() -> Option<String> {
-    std::env::var("UNDERCROFT_PASSPHRASE").ok().filter(|p| !p.is_empty())
+    std::env::var("UNDERCROFT_PASSPHRASE")
+        .ok()
+        .filter(|p| !p.is_empty())
 }
 
 fn manager(cli: &Cli) -> Result<VaultManager> {
@@ -530,14 +534,32 @@ fn main() -> Result<()> {
         Command::Init { level } => {
             let mgr = manager(&cli)?;
             if mgr.exists("default") {
-                println!("{}", fill(tr("palace-already"), &[("path", mgr.root().display().to_string())]));
+                println!(
+                    "{}",
+                    fill(
+                        tr("palace-already"),
+                        &[("path", mgr.root().display().to_string())]
+                    )
+                );
             } else {
                 mgr.create("default", (*level).into())?;
-                println!("{}", fill(tr("palace-initialized"), &[("path", mgr.root().display().to_string())]));
-                println!("{}", fill(tr("vault-created"), &[
-                    ("name", "default".to_string()),
-                    ("level", SecurityLevel::from(*level).to_string()),
-                ]));
+                println!(
+                    "{}",
+                    fill(
+                        tr("palace-initialized"),
+                        &[("path", mgr.root().display().to_string())]
+                    )
+                );
+                println!(
+                    "{}",
+                    fill(
+                        tr("vault-created"),
+                        &[
+                            ("name", "default".to_string()),
+                            ("level", SecurityLevel::from(*level).to_string()),
+                        ]
+                    )
+                );
                 if passphrase().is_some() {
                     println!("Master key: derived from UNDERCROFT_PASSPHRASE (Argon2id)");
                 } else {
@@ -549,10 +571,16 @@ fn main() -> Result<()> {
             VaultAction::Create { name, level } => {
                 let mgr = manager(&cli)?;
                 let v = mgr.create(name, (*level).into())?;
-                println!("{}", fill(tr("vault-created"), &[
-                    ("name", v.id().to_string()),
-                    ("level", v.level().to_string()),
-                ]));
+                println!(
+                    "{}",
+                    fill(
+                        tr("vault-created"),
+                        &[
+                            ("name", v.id().to_string()),
+                            ("level", v.level().to_string()),
+                        ]
+                    )
+                );
             }
             VaultAction::List => {
                 let mgr = manager(&cli)?;
@@ -582,9 +610,18 @@ fn main() -> Result<()> {
                 println!("db:         {}", v.db_path().display());
             }
         },
-        Command::Remember { content, vault, wing, room } => {
+        Command::Remember {
+            content,
+            vault,
+            wing,
+            room,
+        } => {
             if content.len() > MAX_CONTENT_BYTES {
-                bail!("content too large ({} bytes, max {})", content.len(), MAX_CONTENT_BYTES);
+                bail!(
+                    "content too large ({} bytes, max {})",
+                    content.len(),
+                    MAX_CONTENT_BYTES
+                );
             }
             undercroft_core::validate_name(wing, "wing")?;
             undercroft_core::validate_name(room, "room")?;
@@ -596,14 +633,25 @@ fn main() -> Result<()> {
             let count_before = store.count()?;
             let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli");
             store.upsert(&drawer)?;
-            println!("{}", fill(tr("drawer-filed"), &[
-                ("id", drawer.id.clone()),
-                ("wing", wing.clone()),
-                ("room", room.clone()),
-                ("vault", vault.clone()),
-            ]));
+            println!(
+                "{}",
+                fill(
+                    tr("drawer-filed"),
+                    &[
+                        ("id", drawer.id.clone()),
+                        ("wing", wing.clone()),
+                        ("room", room.clone()),
+                        ("vault", vault.clone()),
+                    ]
+                )
+            );
         }
-        Command::Mine { path, vault, wing, mode } => {
+        Command::Mine {
+            path,
+            vault,
+            wing,
+            mode,
+        } => {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
             let (files, drawers) = match mode.as_str() {
@@ -611,26 +659,49 @@ fn main() -> Result<()> {
                 "convos" => mine_convos(&mut store, path, wing)?,
                 other => bail!("unknown mine mode {other:?} (expected: files, convos)"),
             };
-            println!("{}", fill(tr("mined-summary"), &[
-                ("files", files.to_string()),
-                ("vault", vault.clone()),
-                ("wing", wing.clone()),
-                ("drawers", drawers.to_string()),
-            ]));
+            println!(
+                "{}",
+                fill(
+                    tr("mined-summary"),
+                    &[
+                        ("files", files.to_string()),
+                        ("vault", vault.clone()),
+                        ("wing", wing.clone()),
+                        ("drawers", drawers.to_string()),
+                    ]
+                )
+            );
         }
         Command::Sweep { path, vault, wing } => {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
             let (files, filed, skipped) = sweep_path(&mut store, path, wing, true)?;
-            println!("{}", fill(tr("swept-summary"), &[
-                ("files", files.to_string()),
-                ("filed", filed.to_string()),
-                ("skipped", skipped.to_string()),
-            ]));
+            println!(
+                "{}",
+                fill(
+                    tr("swept-summary"),
+                    &[
+                        ("files", files.to_string()),
+                        ("filed", filed.to_string()),
+                        ("skipped", skipped.to_string()),
+                    ]
+                )
+            );
         }
-        Command::Search { query, vault, wing, room, limit, backend } => {
+        Command::Search {
+            query,
+            vault,
+            wing,
+            room,
+            limit,
+            backend,
+        } => {
             let store = open_store(&cli, vault)?;
-            let opts = SearchOptions { wing: wing.clone(), room: room.clone(), limit: *limit };
+            let opts = SearchOptions {
+                wing: wing.clone(),
+                room: room.clone(),
+                limit: *limit,
+            };
             let hits = if backend == "local" {
                 store.search(query, &opts)?
             } else {
@@ -658,10 +729,7 @@ fn main() -> Result<()> {
             println!("## L0 — IDENTITY");
             match std::fs::read_to_string(&identity_path) {
                 Ok(text) => println!("{}", text.trim()),
-                Err(_) => println!(
-                    "No identity configured. Create {}",
-                    identity_path.display()
-                ),
+                Err(_) => println!("No identity configured. Create {}", identity_path.display()),
             }
             println!("\n## L1 — ESSENTIAL STORY (vault '{vault}')");
             let store = open_store(&cli, vault)?;
@@ -670,7 +738,12 @@ fn main() -> Result<()> {
                 println!("Palace is empty. File memories with: undercroft remember / mine");
             }
             for d in recent {
-                println!("- [{}/{}] {}", d.meta.wing, d.meta.room, first_line(&d.content, 120));
+                println!(
+                    "- [{}/{}] {}",
+                    d.meta.wing,
+                    d.meta.room,
+                    first_line(&d.content, 120)
+                );
             }
         }
         Command::Verify { vault } => {
@@ -681,7 +754,10 @@ fn main() -> Result<()> {
             for id in &report.bad_records {
                 println!("  TAMPERED: {id}");
             }
-            println!("audit chain:     {}", if report.chain_ok { "ok" } else { "BROKEN" });
+            println!(
+                "audit chain:     {}",
+                if report.chain_ok { "ok" } else { "BROKEN" }
+            );
             if report.ok() {
                 println!("{}", tr("verify-ok"));
             } else {
@@ -705,7 +781,12 @@ fn main() -> Result<()> {
             }
             mcp::serve(store)?;
         }
-        Command::ServeHttp { host, port, vault, read_only } => {
+        Command::ServeHttp {
+            host,
+            port,
+            vault,
+            read_only,
+        } => {
             let store = open_store(&cli, vault)?;
             if let Ok(n) = store.warm_embedding_cache() {
                 eprintln!("warmed embedding cache: {n} vector(s)");
@@ -713,7 +794,13 @@ fn main() -> Result<()> {
             http::serve_http(store, host, *port, *read_only)?;
         }
         Command::Daemon { action } => match action {
-            DaemonAction::Run { watch, interval, vault, wing, once } => {
+            DaemonAction::Run {
+                watch,
+                interval,
+                vault,
+                wing,
+                once,
+            } => {
                 undercroft_core::validate_name(wing, "wing")?;
                 let watch_path = expand_home(watch);
                 let mut store = open_store(&cli, vault)?;
@@ -742,9 +829,17 @@ fn main() -> Result<()> {
                 if messages.is_empty() {
                     bail!("no prose messages found in {}", file.display());
                 }
-                let shown = if *max == 0 { messages.len() } else { (*max).min(messages.len()) };
+                let shown = if *max == 0 {
+                    messages.len()
+                } else {
+                    (*max).min(messages.len())
+                };
                 for msg in &messages[..shown] {
-                    let who = if msg.role == "user" { "User" } else { "Assistant" };
+                    let who = if msg.role == "user" {
+                        "User"
+                    } else {
+                        "Assistant"
+                    };
                     println!("── {who} (line {}) ──", msg.line);
                     println!("{}\n", msg.text);
                 }
@@ -774,13 +869,19 @@ fn main() -> Result<()> {
                 } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
                     // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
                     let meta = v.get("metadata").cloned().unwrap_or_default();
-                    let g = |k: &str| meta.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+                    let g = |k: &str| {
+                        meta.get(k)
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    };
                     Drawer::new(
                         &g("wing").unwrap_or_else(|| wing.clone()),
                         &g("room").unwrap_or_else(|| "imported".into()),
                         normalize_content(doc),
                         g("source_file"),
-                        meta.get("chunk_index").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
+                        meta.get("chunk_index")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0) as u32,
                         "import",
                     )
                 } else {
@@ -797,16 +898,29 @@ fn main() -> Result<()> {
                 store.upsert(&drawer)?;
                 imported += 1;
             }
-            println!("{}", fill(tr("imported-summary"), &[
-                ("n", imported.to_string()),
-                ("vault", vault.clone()),
-                ("skipped", skipped.to_string()),
-            ]));
+            println!(
+                "{}",
+                fill(
+                    tr("imported-summary"),
+                    &[
+                        ("n", imported.to_string()),
+                        ("vault", vault.clone()),
+                        ("skipped", skipped.to_string()),
+                    ]
+                )
+            );
         }
         Command::Kg { action, vault } => {
             let mut store = open_store(&cli, vault)?;
             match action {
-                KgAction::Add { subject, predicate, object, from, to, confidence } => {
+                KgAction::Add {
+                    subject,
+                    predicate,
+                    object,
+                    from,
+                    to,
+                    confidence,
+                } => {
                     let id = store.kg_add(
                         subject,
                         predicate,
@@ -818,7 +932,11 @@ fn main() -> Result<()> {
                     )?;
                     println!("Added fact {id}: {subject} --{predicate}--> {object}");
                 }
-                KgAction::Query { entity, as_of, direction } => {
+                KgAction::Query {
+                    entity,
+                    as_of,
+                    direction,
+                } => {
                     let facts = store.kg_query_entity(entity, as_of.as_deref(), direction)?;
                     print_triples(&facts);
                 }
@@ -826,7 +944,12 @@ fn main() -> Result<()> {
                     let facts = store.kg_query_relationship(predicate, as_of.as_deref())?;
                     print_triples(&facts);
                 }
-                KgAction::Invalidate { subject, predicate, object, ended } => {
+                KgAction::Invalidate {
+                    subject,
+                    predicate,
+                    object,
+                    ended,
+                } => {
                     let n = store.kg_invalidate(
                         subject,
                         predicate,
@@ -835,7 +958,12 @@ fn main() -> Result<()> {
                     )?;
                     println!("Invalidated {n} fact(s)");
                 }
-                KgAction::Supersede { subject, predicate, new_object, at } => {
+                KgAction::Supersede {
+                    subject,
+                    predicate,
+                    new_object,
+                    at,
+                } => {
                     let id = store.kg_supersede(subject, predicate, new_object, at.as_deref())?;
                     println!("Superseded: {subject} --{predicate}--> {new_object} ({id})");
                 }
@@ -870,7 +998,12 @@ fn main() -> Result<()> {
                         std::process::exit(1);
                     }
                 },
-                DrawerAction::List { wing, room, limit, offset } => {
+                DrawerAction::List {
+                    wing,
+                    room,
+                    limit,
+                    offset,
+                } => {
                     let rows =
                         store.list_drawers(wing.as_deref(), room.as_deref(), *limit, *offset)?;
                     if rows.is_empty() {
@@ -955,7 +1088,12 @@ fn main() -> Result<()> {
                 TunnelAction::Follow { id, limit } => {
                     let drawers = store.follow_tunnel(id, *limit)?;
                     for d in drawers {
-                        println!("- [{}/{}] {}", d.meta.wing, d.meta.room, first_line(&d.content, 100));
+                        println!(
+                            "- [{}/{}] {}",
+                            d.meta.wing,
+                            d.meta.room,
+                            first_line(&d.content, 100)
+                        );
                     }
                 }
                 TunnelAction::Delete { id } => {
@@ -982,14 +1120,24 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
-        Command::Refine { vault, wing, limit, dry_run } => {
+        Command::Refine {
+            vault,
+            wing,
+            limit,
+            dry_run,
+        } => {
             let llm = undercroft_llm::LlmClient::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut store = open_store(&cli, vault)?;
-            let drawers = store.recent(wing.as_deref(), if *limit == 0 { 100_000 } else { *limit })?;
+            let drawers =
+                store.recent(wing.as_deref(), if *limit == 0 { 100_000 } else { *limit })?;
             if drawers.is_empty() {
                 bail!("no drawers to refine");
             }
-            println!("Refining {} drawer(s) with {} …", drawers.len(), llm.model());
+            println!(
+                "Refining {} drawer(s) with {} …",
+                drawers.len(),
+                llm.model()
+            );
             let mut entities_added = 0usize;
             let mut facts_added = 0usize;
             for d in &drawers {
@@ -1002,7 +1150,10 @@ fn main() -> Result<()> {
                                 continue;
                             }
                             if *dry_run {
-                                println!("  would add: {} --{}--> {}", t.subject, t.predicate, t.object);
+                                println!(
+                                    "  would add: {} --{}--> {}",
+                                    t.subject, t.predicate, t.object
+                                );
                             } else {
                                 store.kg_add(
                                     &t.subject.to_lowercase(),
@@ -1035,10 +1186,15 @@ fn main() -> Result<()> {
             let store = open_store(&cli, vault)?;
             let halls = store.hallways(wing, *top)?;
             if halls.is_empty() {
-                println!("No hallways in wing '{wing}' (need entities co-occurring in 2+ drawers).");
+                println!(
+                    "No hallways in wing '{wing}' (need entities co-occurring in 2+ drawers)."
+                );
             }
             for h in halls {
-                println!("{} <-> {}  (strength {})", h.entity_a, h.entity_b, h.strength);
+                println!(
+                    "{} <-> {}  (strength {})",
+                    h.entity_a, h.entity_b, h.strength
+                );
             }
         }
         Command::Stats { vault } => {
@@ -1048,7 +1204,10 @@ fn main() -> Result<()> {
             println!("records: {}", st.records);
             println!("rooms:   {}", st.rooms);
             println!("tunnels: {}", st.tunnels);
-            println!("kg:      {} triples ({} active)", st.kg.triples, st.kg.active);
+            println!(
+                "kg:      {} triples ({} active)",
+                st.kg.triples, st.kg.active
+            );
             println!("writes:  {}", st.writes);
             println!("db size: {} bytes", st.db_bytes);
             println!("wings:");
@@ -1072,7 +1231,11 @@ fn main() -> Result<()> {
                 "{} duplicate group(s), {} extra drawer(s) {}",
                 report.duplicate_groups,
                 report.removed.len(),
-                if report.applied { "removed" } else { "found (use --apply to remove)" }
+                if report.applied {
+                    "removed"
+                } else {
+                    "found (use --apply to remove)"
+                }
             );
         }
         Command::Repair { vault } => {
@@ -1082,7 +1245,11 @@ fn main() -> Result<()> {
             println!("records checked: {}", report.records_checked);
             println!(
                 "integrity: {}",
-                if report.ok() { "ok" } else { "FAILED — see verify" }
+                if report.ok() {
+                    "ok"
+                } else {
+                    "FAILED — see verify"
+                }
             );
             if !report.ok() {
                 std::process::exit(2);
@@ -1129,11 +1296,7 @@ fn main() -> Result<()> {
                     if !src.join("vault.json").exists() {
                         bail!("no backup named {name}");
                     }
-                    let vault_name = name
-                        .rsplitn(2, "-20")
-                        .last()
-                        .unwrap_or(name)
-                        .to_string();
+                    let vault_name = name.rsplitn(2, "-20").last().unwrap_or(name).to_string();
                     let dst = root.join("vaults").join(&vault_name);
                     if dst.exists() && !force {
                         bail!(
@@ -1206,10 +1369,14 @@ fn mine_files(
     }
     let mut drawers = 0usize;
     for file in &files {
-        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
         let normalized = normalize_content(&text);
         let room = room_for_file(file);
-        for (idx, chunk) in chunk_text(&normalized, ChunkOptions::default()).into_iter().enumerate()
+        for (idx, chunk) in chunk_text(&normalized, ChunkOptions::default())
+            .into_iter()
+            .enumerate()
         {
             let drawer = Drawer::new(
                 wing,
@@ -1237,7 +1404,9 @@ fn mine_convos(
     }
     let mut drawers = 0usize;
     for file in &files {
-        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
         let messages = undercroft_core::convo::parse_transcript(&text);
         if messages.is_empty() {
             continue;
@@ -1282,11 +1451,20 @@ fn sweep_path(
     let mut filed = 0usize;
     let mut skipped = 0usize;
     for file in &files {
-        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
         let room = room_for_file(file);
         for msg in undercroft_core::convo::parse_transcript(&text) {
-            let content =
-                format!("{}: {}", if msg.role == "user" { "User" } else { "Assistant" }, msg.text);
+            let content = format!(
+                "{}: {}",
+                if msg.role == "user" {
+                    "User"
+                } else {
+                    "Assistant"
+                },
+                msg.text
+            );
             let normalized = normalize_content(&content);
             // One drawer per message, keyed by (file, line) — re-sweeps
             // are no-ops for already-filed messages.
@@ -1364,7 +1542,9 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 }
 
 fn prune_backups(dir: &Path, vault: &str, keep: usize) -> Result<()> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Ok(()) };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
     let mut names: Vec<String> = rd
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().to_string())
@@ -1410,10 +1590,7 @@ fn first_line(text: &str, max: usize) -> String {
 /// One-line result preview centered on the first query-term match, so the
 /// evidence for the hit is visible even when it sits deep in the chunk.
 fn snippet(content: &str, query: &str, max: usize) -> String {
-    let flat: String = content
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let flat: String = content.split_whitespace().collect::<Vec<_>>().join(" ");
     let lower = flat.to_lowercase();
     let hit = query
         .to_lowercase()

@@ -55,7 +55,10 @@ pub fn seal_content(
     let ct = cipher
         .encrypt(
             XNonce::from_slice(&nonce),
-            Payload { msg: plaintext, aad: &aad(vault_id, record_id) },
+            Payload {
+                msg: plaintext,
+                aad: &aad(vault_id, record_id),
+            },
         )
         .expect("XChaCha20-Poly1305 encryption is infallible for in-memory buffers");
     let mut out = Vec::with_capacity(NONCE_LEN + ct.len());
@@ -79,7 +82,10 @@ pub fn open_content(
     cipher
         .decrypt(
             XNonce::from_slice(nonce),
-            Payload { msg: ct, aad: &aad(vault_id, record_id) },
+            Payload {
+                msg: ct,
+                aad: &aad(vault_id, record_id),
+            },
         )
         .map_err(|_| SealError::Decrypt)
 }
@@ -142,7 +148,10 @@ mod tests {
         let mut blob = seal_content(&enc, "v", "r1", b"secret");
         let last = blob.len() - 1;
         blob[last] ^= 0x01;
-        assert!(matches!(open_content(&enc, "v", "r1", &blob), Err(SealError::Decrypt)));
+        assert!(matches!(
+            open_content(&enc, "v", "r1", &blob),
+            Err(SealError::Decrypt)
+        ));
     }
 
     #[test]

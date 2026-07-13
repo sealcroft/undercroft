@@ -61,7 +61,9 @@ pub struct Hallway {
 }
 
 fn now_rfc3339() -> String {
-    OffsetDateTime::now_utc().format(&Rfc3339).expect("rfc3339 now")
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 now")
 }
 
 fn tunnel_canonical(id: &str, from: &str, to: &str, label: &str, created: &str) -> Vec<u8> {
@@ -89,7 +91,8 @@ impl PalaceStore {
             .query_map([], |r| r.get::<_, String>(1))?
             .collect::<Result<_, _>>()?;
         if !cols.iter().any(|c| c == "fp") {
-            self.conn.execute("ALTER TABLE drawers ADD COLUMN fp BLOB", [])?;
+            self.conn
+                .execute("ALTER TABLE drawers ADD COLUMN fp BLOB", [])?;
         }
         Ok(())
     }
@@ -108,7 +111,11 @@ impl PalaceStore {
         let fp = self.fingerprint(content);
         Ok(self
             .conn
-            .query_row("SELECT id FROM drawers WHERE fp = ?1 LIMIT 1", params![fp], |r| r.get(0))
+            .query_row(
+                "SELECT id FROM drawers WHERE fp = ?1 LIMIT 1",
+                params![fp],
+                |r| r.get(0),
+            )
             .optional()?)
     }
 
@@ -120,8 +127,7 @@ impl PalaceStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<DrawerSummary>, StoreError> {
-        let mut sql =
-            String::from("SELECT id, meta_json, content, tag FROM drawers");
+        let mut sql = String::from("SELECT id, meta_json, content, tag FROM drawers");
         let mut clauses = Vec::new();
         let mut binds: Vec<String> = Vec::new();
         if let Some(w) = wing {
@@ -161,7 +167,9 @@ impl PalaceStore {
     /// Delete one drawer. Logs a keyed tombstone in the audit chain so the
     /// deletion itself is tamper-evident. Returns whether the id existed.
     pub fn delete_drawer(&mut self, id: &str) -> Result<bool, StoreError> {
-        let n = self.conn.execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
+        let n = self
+            .conn
+            .execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
         if n > 0 {
             if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
                 cache.remove(id);
@@ -196,7 +204,9 @@ impl PalaceStore {
     /// Replace a drawer's content in place (same id/slot), re-sealed,
     /// re-embedded, re-tagged, chained.
     pub fn update_drawer(&mut self, id: &str, new_content: &str) -> Result<bool, StoreError> {
-        let Some(mut drawer) = self.get(id)? else { return Ok(false) };
+        let Some(mut drawer) = self.get(id)? else {
+            return Ok(false);
+        };
         drawer.content = undercroft_core::normalize_content(new_content);
         self.upsert(&drawer)?;
         Ok(true)
@@ -208,7 +218,9 @@ impl PalaceStore {
             "SELECT room, COUNT(*) FROM drawers WHERE wing = ?1 GROUP BY room ORDER BY room",
         )?;
         let rows = stmt
-            .query_map(params![wing], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?
+            .query_map(params![wing], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+            })?
             .collect::<Result<_, _>>()?;
         Ok(rows)
     }
@@ -229,8 +241,10 @@ impl PalaceStore {
 
     /// Append a diary entry for an agent (each agent gets its own wing).
     pub fn diary_write(&mut self, agent: &str, entry: &str) -> Result<String, StoreError> {
-        undercroft_core::validate_name(agent, "agent")
-            .map_err(|e| StoreError::CorruptRow { id: agent.into(), reason: e.to_string() })?;
+        undercroft_core::validate_name(agent, "agent").map_err(|e| StoreError::CorruptRow {
+            id: agent.into(),
+            reason: e.to_string(),
+        })?;
         let wing = format!("agent-{agent}");
         let normalized = undercroft_core::normalize_content(entry);
         let idx: i64 = self.conn.query_row(
@@ -253,13 +267,16 @@ impl PalaceStore {
 
     /// Agents discovered from diary wings (mempalace_list_agents).
     pub fn list_agents(&self) -> Result<Vec<String>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT wing FROM drawers WHERE wing LIKE 'agent-%' ORDER BY wing",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT wing FROM drawers WHERE wing LIKE 'agent-%' ORDER BY wing")?;
         let rows: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<Result<_, _>>()?;
-        Ok(rows.into_iter().map(|w| w.trim_start_matches("agent-").to_string()).collect())
+        Ok(rows
+            .into_iter()
+            .map(|w| w.trim_start_matches("agent-").to_string())
+            .collect())
     }
 
     // ------------------------------------------------------------------
@@ -272,7 +289,9 @@ impl PalaceStore {
             [],
             |r| r.get(0),
         )?;
-        let db_bytes = std::fs::metadata(self.vault.db_path()).map(|m| m.len()).unwrap_or(0);
+        let db_bytes = std::fs::metadata(self.vault.db_path())
+            .map(|m| m.len())
+            .unwrap_or(0);
         Ok(PalaceStats {
             records: self.count()?,
             wings: self.wings()?,
@@ -310,7 +329,11 @@ impl PalaceStore {
                 removed.push(id);
             }
         }
-        Ok(DedupReport { duplicate_groups: groups.len() as u64, removed, applied: apply })
+        Ok(DedupReport {
+            duplicate_groups: groups.len() as u64,
+            removed,
+            applied: apply,
+        })
     }
 
     /// Repair pass: re-fingerprint rows missing `fp`, re-embed every drawer
@@ -329,7 +352,8 @@ impl PalaceStore {
         for id in missing {
             if let Some(d) = self.get(&id)? {
                 let fp = self.fingerprint(&d.content);
-                self.conn.execute("UPDATE drawers SET fp = ?1 WHERE id = ?2", params![fp, id])?;
+                self.conn
+                    .execute("UPDATE drawers SET fp = ?1 WHERE id = ?2", params![fp, id])?;
                 fixed += 1;
             }
         }
@@ -344,8 +368,10 @@ impl PalaceStore {
             if let Some(d) = self.get(&id)? {
                 let emb = self.embedder_embed(&d.content);
                 let emb_rest = self.vault.embedding_at_rest(&id, &emb);
-                self.conn
-                    .execute("UPDATE drawers SET embedding = ?1 WHERE id = ?2", params![emb_rest, id])?;
+                self.conn.execute(
+                    "UPDATE drawers SET embedding = ?1 WHERE id = ?2",
+                    params![emb_rest, id],
+                )?;
             }
         }
         self.record_embedder_identity()?;
@@ -367,7 +393,9 @@ impl PalaceStore {
             &sha2::Sha256::digest(format!("{from_wing}\x1f{to_wing}\x1f{label}").as_bytes())[..12],
         );
         let created = now_rfc3339();
-        let tag = self.vault.tag(&tunnel_canonical(&id, from_wing, to_wing, label, &created));
+        let tag = self
+            .vault
+            .tag(&tunnel_canonical(&id, from_wing, to_wing, label, &created));
         self.conn.execute(
             "INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -388,7 +416,14 @@ impl PalaceStore {
         )?;
         let rows: Vec<(String, String, String, String, Vec<u8>, String)> = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?
             .collect::<Result<_, _>>()?;
         let mut out = Vec::new();
@@ -397,14 +432,22 @@ impl PalaceStore {
                 .verify_tag(&tunnel_canonical(&id, &from, &to, &label, &created), &tag)
                 .map_err(|_| StoreError::Integrity(format!("tunnel/{id}")))?;
             if wing.map(|w| from == w || to == w).unwrap_or(true) {
-                out.push(Tunnel { id, from_wing: from, to_wing: to, label, created_at: created });
+                out.push(Tunnel {
+                    id,
+                    from_wing: from,
+                    to_wing: to,
+                    label,
+                    created_at: created,
+                });
             }
         }
         Ok(out)
     }
 
     pub fn delete_tunnel(&mut self, id: &str) -> Result<bool, StoreError> {
-        let n = self.conn.execute("DELETE FROM tunnels WHERE id = ?1", params![id])?;
+        let n = self
+            .conn
+            .execute("DELETE FROM tunnels WHERE id = ?1", params![id])?;
         if n > 0 {
             let tag = self.vault.tag(format!("del\x1ftunnel/{id}").as_bytes());
             self.conn.execute(
@@ -420,7 +463,11 @@ impl PalaceStore {
     pub fn follow_tunnel(&self, id: &str, limit: usize) -> Result<Vec<Drawer>, StoreError> {
         let to: Option<String> = self
             .conn
-            .query_row("SELECT to_wing FROM tunnels WHERE id = ?1", params![id], |r| r.get(0))
+            .query_row(
+                "SELECT to_wing FROM tunnels WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
             .optional()?;
         match to {
             Some(wing) => self.recent(Some(&wing), limit),
@@ -429,7 +476,11 @@ impl PalaceStore {
     }
 
     /// BFS over tunnels from a starting wing (mempalace_traverse).
-    pub fn traverse(&self, start: &str, max_depth: usize) -> Result<Vec<(String, usize)>, StoreError> {
+    pub fn traverse(
+        &self,
+        start: &str,
+        max_depth: usize,
+    ) -> Result<Vec<(String, usize)>, StoreError> {
         let tunnels = self.list_tunnels(None)?;
         let mut seen = vec![(start.to_string(), 0usize)];
         let mut frontier = vec![start.to_string()];
@@ -452,7 +503,9 @@ impl PalaceStore {
     }
 
     pub(crate) fn tunnel_count(&self) -> Result<u64, StoreError> {
-        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM tunnels", [], |r| r.get(0))?;
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM tunnels", [], |r| r.get(0))?;
         Ok(n as u64)
     }
 
@@ -463,7 +516,14 @@ impl PalaceStore {
         )?;
         let rows: Vec<(String, String, String, String, Vec<u8>, String)> = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?
             .collect::<Result<_, _>>()?;
         for (id, from, to, label, tag, created) in rows {
@@ -501,9 +561,17 @@ impl PalaceStore {
         let mut out: Vec<Hallway> = pairs
             .into_iter()
             .filter(|(_, n)| *n >= 2)
-            .map(|((a, b), n)| Hallway { entity_a: a, entity_b: b, strength: n })
+            .map(|((a, b), n)| Hallway {
+                entity_a: a,
+                entity_b: b,
+                strength: n,
+            })
             .collect();
-        out.sort_by(|x, y| y.strength.cmp(&x.strength).then(x.entity_a.cmp(&y.entity_a)));
+        out.sort_by(|x, y| {
+            y.strength
+                .cmp(&x.strength)
+                .then(x.entity_a.cmp(&y.entity_a))
+        });
         out.truncate(top);
         Ok(out)
     }
@@ -535,7 +603,9 @@ impl PalaceStore {
             let mut dates: Vec<&str> = ds.iter().map(|d| d.meta.filed_at.as_str()).collect();
             dates.sort();
             let span = match (dates.first(), dates.last()) {
-                (Some(a), Some(b)) => format!("{}..{}", &a[..10.min(a.len())], &b[..10.min(b.len())]),
+                (Some(a), Some(b)) => {
+                    format!("{}..{}", &a[..10.min(a.len())], &b[..10.min(b.len())])
+                }
                 _ => String::new(),
             };
             // Top entities by frequency across the room's drawers.
@@ -568,7 +638,10 @@ impl PalaceStore {
         tag: &[u8],
     ) -> Result<Drawer, StoreError> {
         self.vault
-            .verify_tag(&crate::canonical(id, meta_json.as_bytes(), content_rest), tag)
+            .verify_tag(
+                &crate::canonical(id, meta_json.as_bytes(), content_rest),
+                tag,
+            )
             .map_err(|_| StoreError::Integrity(id.to_string()))?;
         self.decode(id, meta_json, content_rest)
     }
@@ -625,7 +698,8 @@ mod tests {
     #[test]
     fn diaries_per_agent() {
         let (_d, mut s) = store();
-        s.diary_write("scout", "explored the auth module today").unwrap();
+        s.diary_write("scout", "explored the auth module today")
+            .unwrap();
         s.diary_write("scout", "found the race condition").unwrap();
         s.diary_write("builder", "shipped the fix").unwrap();
         assert_eq!(s.list_agents().unwrap(), vec!["builder", "scout"]);
@@ -650,7 +724,8 @@ mod tests {
     #[test]
     fn tunnels_create_follow_traverse() {
         let (_d, mut s) = store();
-        s.upsert(&drawer("wing-b", "r", "destination memory", 0)).unwrap();
+        s.upsert(&drawer("wing-b", "r", "destination memory", 0))
+            .unwrap();
         let id = s.create_tunnel("wing-a", "wing-b", "related work").unwrap();
         assert_eq!(s.list_tunnels(Some("wing-a")).unwrap().len(), 1);
         let dest = s.follow_tunnel(&id, 5).unwrap();
@@ -686,7 +761,8 @@ mod tests {
         s.upsert(&drawer("w1", "r1", "x", 0)).unwrap();
         s.upsert(&drawer("w1", "r2", "y", 1)).unwrap();
         s.upsert(&drawer("w2", "r1", "z", 2)).unwrap();
-        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None).unwrap();
+        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
         let st = s.stats().unwrap();
         assert_eq!(st.records, 3);
         assert_eq!(st.rooms, 3);

@@ -23,8 +23,8 @@ pub struct HashEmbedder;
 impl HashEmbedder {
     fn bucket(token: &str) -> (usize, f32) {
         let digest = Sha256::digest(token.as_bytes());
-        let idx = u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize
-            % EMBED_DIM;
+        let idx =
+            u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize % EMBED_DIM;
         // Sign bit from an independent digest byte reduces hash-collision bias.
         let sign = if digest[4] & 1 == 0 { 1.0 } else { -1.0 };
         (idx, sign)

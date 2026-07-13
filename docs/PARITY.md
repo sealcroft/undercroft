@@ -25,7 +25,7 @@ original this repo was forked from), updated 2026-07-13.
 | Backups | `backup create/list/restore` (verifies before snapshot) |
 | Repair | `repair` (fingerprint backfill, re-embed, vacuum, verify) |
 | Export / migrate | `export` (JSONL) + `import` (undercroft & mempalace formats) |
-| MCP stdio server (~35 tools) | 30 tools (daemon/sync/session tools inapplicable — see below) |
+| MCP stdio server (~35 tools) | 32 tools (daemon/sync/session tools inapplicable — process management moved to the OS) |
 | MCP HTTP team server (`serve`) | `serve-http` (bearer token enforced, `--read-only`) |
 | Daemon / jobs / start / stop / wait | `daemon run` + systemd/compose units (`deploy/`) — process management belongs to the OS |
 | `tools/render_jsonl.py` | `transcript render` |

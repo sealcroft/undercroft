@@ -43,7 +43,12 @@ pub enum StoreError {
          Set UNDERCROFT_FORCE_EMBEDDER=1 to record the new identity, then run `undercroft repair` \
          to re-embed."
     )]
-    EmbedderMismatch { stored: String, stored_dim: usize, current: String, current_dim: usize },
+    EmbedderMismatch {
+        stored: String,
+        stored_dim: usize,
+        current: String,
+        current_dim: usize,
+    },
     #[error("remote index error: {0}")]
     Index(#[from] undercroft_index::IndexError),
 }
@@ -121,11 +126,19 @@ impl PalaceStore {
     fn enforce_embedder_identity(&self) -> Result<(), StoreError> {
         let stored_name: Option<String> = self
             .conn
-            .query_row("SELECT value FROM meta WHERE key = 'embedder_name'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'embedder_name'",
+                [],
+                |r| r.get(0),
+            )
             .optional()?;
         let stored_dim: Option<String> = self
             .conn
-            .query_row("SELECT value FROM meta WHERE key = 'embedder_dim'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'embedder_dim'",
+                [],
+                |r| r.get(0),
+            )
             .optional()?;
         let current_name = self.embedder.model_name().to_string();
         let current_dim = self.embedder.dimension();
@@ -193,8 +206,12 @@ impl PalaceStore {
                  at        TEXT NOT NULL
              );",
         )?;
-        let store =
-            Self { conn, vault, embedder, emb_cache: std::cell::RefCell::new(None) };
+        let store = Self {
+            conn,
+            vault,
+            embedder,
+            emb_cache: std::cell::RefCell::new(None),
+        };
         store.init_kg_schema()?;
         store.init_manage_schema()?;
         Ok(store)
@@ -213,7 +230,10 @@ impl PalaceStore {
             let emb = self
                 .vault
                 .embedding_from_rest(&id, &emb_rest)
-                .map_err(|e| StoreError::CorruptRow { id: id.clone(), reason: e.to_string() })?;
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.clone(),
+                    reason: e.to_string(),
+                })?;
             map.insert(id, emb);
         }
         let n = map.len();
@@ -226,24 +246,39 @@ impl PalaceStore {
     }
 
     pub fn count(&self) -> Result<u64, StoreError> {
-        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
         Ok(n as u64)
     }
 
     /// Insert or replace a drawer. Returns `true` if the id was new.
     pub fn upsert(&mut self, drawer: &Drawer) -> Result<bool, StoreError> {
-        let meta_json = serde_json::to_string(&drawer.meta)
-            .map_err(|e| StoreError::CorruptRow { id: drawer.id.clone(), reason: e.to_string() })?;
-        let content_rest = self.vault.content_at_rest(&drawer.id, drawer.content.as_bytes());
+        let meta_json =
+            serde_json::to_string(&drawer.meta).map_err(|e| StoreError::CorruptRow {
+                id: drawer.id.clone(),
+                reason: e.to_string(),
+            })?;
+        let content_rest = self
+            .vault
+            .content_at_rest(&drawer.id, drawer.content.as_bytes());
         let embedding = self.embedder.embed(&drawer.content);
         let emb_rest = self.vault.embedding_at_rest(&drawer.id, &embedding);
-        let tag = self.vault.tag(&canonical(&drawer.id, meta_json.as_bytes(), &content_rest));
+        let tag = self
+            .vault
+            .tag(&canonical(&drawer.id, meta_json.as_bytes(), &content_rest));
         let fp = self.fingerprint(&drawer.content);
-        let now = OffsetDateTime::now_utc().format(&Rfc3339).expect("rfc3339 now");
+        let now = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("rfc3339 now");
 
         let existing: Option<i64> = self
             .conn
-            .query_row("SELECT seq FROM drawers WHERE id = ?1", params![drawer.id], |r| r.get(0))
+            .query_row(
+                "SELECT seq FROM drawers WHERE id = ?1",
+                params![drawer.id],
+                |r| r.get(0),
+            )
             .optional()?;
         let tx = self.conn.transaction()?;
         tx.execute(
@@ -310,29 +345,34 @@ impl PalaceStore {
         }
     }
 
-    fn decode(
-        &self,
-        id: &str,
-        meta_json: &str,
-        content_rest: &[u8],
-    ) -> Result<Drawer, StoreError> {
-        let meta: DrawerMeta = serde_json::from_str(meta_json)
-            .map_err(|e| StoreError::CorruptRow { id: id.into(), reason: e.to_string() })?;
+    fn decode(&self, id: &str, meta_json: &str, content_rest: &[u8]) -> Result<Drawer, StoreError> {
+        let meta: DrawerMeta =
+            serde_json::from_str(meta_json).map_err(|e| StoreError::CorruptRow {
+                id: id.into(),
+                reason: e.to_string(),
+            })?;
         let plain = self
             .vault
             .content_from_rest(id, content_rest)
-            .map_err(|e| StoreError::CorruptRow { id: id.into(), reason: e.to_string() })?;
-        let content = String::from_utf8(plain)
-            .map_err(|e| StoreError::CorruptRow { id: id.into(), reason: e.to_string() })?;
-        Ok(Drawer { id: id.to_string(), content, meta })
+            .map_err(|e| StoreError::CorruptRow {
+                id: id.into(),
+                reason: e.to_string(),
+            })?;
+        let content = String::from_utf8(plain).map_err(|e| StoreError::CorruptRow {
+            id: id.into(),
+            reason: e.to_string(),
+        })?;
+        Ok(Drawer {
+            id: id.to_string(),
+            content,
+            meta,
+        })
     }
 
     /// Most recently filed drawers (optionally scoped to a wing) — the
     /// palace's "essential story" feed used by wake-up.
     pub fn recent(&self, wing: Option<&str>, limit: usize) -> Result<Vec<Drawer>, StoreError> {
-        let mut sql = String::from(
-            "SELECT id, meta_json, content, tag FROM drawers",
-        );
+        let mut sql = String::from("SELECT id, meta_json, content, tag FROM drawers");
         if wing.is_some() {
             sql.push_str(" WHERE wing = ?1");
         }
@@ -392,13 +432,7 @@ impl PalaceStore {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows: Vec<(String, String, Vec<u8>, Vec<u8>, Vec<u8>)> = stmt
             .query_map(rusqlite::params_from_iter(binds.iter()), |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                ))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
             .collect::<Result<_, _>>()?;
 
@@ -409,26 +443,42 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
-            let cached = self.emb_cache.borrow().as_ref().and_then(|c| c.get(&id).cloned());
+            let cached = self
+                .emb_cache
+                .borrow()
+                .as_ref()
+                .and_then(|c| c.get(&id).cloned());
             let emb = match cached {
                 Some(e) => e,
                 None => self
                     .vault
                     .embedding_from_rest(&id, &emb_rest)
-                    .map_err(|e| StoreError::CorruptRow { id: id.clone(), reason: e.to_string() })?,
+                    .map_err(|e| StoreError::CorruptRow {
+                        id: id.clone(),
+                        reason: e.to_string(),
+                    })?,
             };
 
             let semantic = ((cosine(&qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
             let lexical = lexical_score(&qterms, query, &drawer.content);
             let recency = recency_boost(&drawer.meta.filed_at, now);
             let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
-            hits.push(SearchHit { drawer, score, semantic, lexical });
+            hits.push(SearchHit {
+                drawer,
+                score,
+                semantic,
+                lexical,
+            });
         }
         // Relevance gate: an unrelated record still scores ~0.35 from the
         // neutral cosine midpoint + recency alone. Require actual evidence —
         // a lexical match or a clearly positive semantic signal.
         hits.retain(|h| h.lexical > 0.0 || h.semantic > 0.56);
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(limit);
         Ok(hits)
     }
@@ -453,14 +503,20 @@ impl PalaceStore {
         let lexical = lexical_score(&qterms, query, &drawer.content);
         let recency = recency_boost(&drawer.meta.filed_at, OffsetDateTime::now_utc());
         let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
-        SearchHit { drawer, score, semantic, lexical }
+        SearchHit {
+            drawer,
+            score,
+            semantic,
+            lexical,
+        }
     }
 
     /// Walk every record verifying its HMAC, then replay the audit chain
     /// against the manifest head.
     pub fn verify(&self) -> Result<VerifyReport, StoreError> {
-        let mut stmt =
-            self.conn.prepare("SELECT id, meta_json, content, tag FROM drawers ORDER BY seq")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, meta_json, content, tag FROM drawers ORDER BY seq")?;
         let rows: Vec<(String, String, Vec<u8>, Vec<u8>)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<_, _>>()?;
@@ -482,10 +538,15 @@ impl PalaceStore {
         checked += self.tunnel_count()?;
         bad.extend(self.tunnels_verify()?);
         let mut stmt = self.conn.prepare("SELECT tag FROM audit ORDER BY seq")?;
-        let tags: Vec<Vec<u8>> =
-            stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?.collect::<Result<_, _>>()?;
+        let tags: Vec<Vec<u8>> = stmt
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+            .collect::<Result<_, _>>()?;
         let chain_ok = self.vault.verify_chain(&tags);
-        Ok(VerifyReport { records_checked: checked, bad_records: bad, chain_ok })
+        Ok(VerifyReport {
+            records_checked: checked,
+            bad_records: bad,
+            chain_ok,
+        })
     }
 
     /// Decrypted export of every drawer (for backup / migration).
@@ -512,7 +573,9 @@ impl PalaceStore {
             .conn
             .prepare("SELECT wing, COUNT(*) FROM drawers GROUP BY wing ORDER BY wing")?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+            })?
             .collect::<Result<_, _>>()?;
         Ok(rows)
     }
@@ -527,8 +590,10 @@ fn lexical_score(qterms: &[String], raw_query: &str, content: &str) -> f32 {
         return 0.0;
     }
     let lower = content.to_lowercase();
-    let words: Vec<&str> =
-        lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
     let matched = qterms
         .iter()
         .filter(|t| {
@@ -599,13 +664,25 @@ mod tests {
     }
 
     fn drawer(wing: &str, room: &str, content: &str, idx: u32) -> Drawer {
-        Drawer::new(wing, room, content.into(), Some("test.md".into()), idx, "test")
+        Drawer::new(
+            wing,
+            room,
+            content.into(),
+            Some("test.md".into()),
+            idx,
+            "test",
+        )
     }
 
     #[test]
     fn upsert_get_roundtrip_sealed() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        let dr = drawer("work", "decisions", "we chose graphql over rest for the api", 0);
+        let dr = drawer(
+            "work",
+            "decisions",
+            "we chose graphql over rest for the api",
+            0,
+        );
         assert!(s.upsert(&dr).unwrap());
         let back = s.get(&dr.id).unwrap().unwrap();
         assert_eq!(back.content, dr.content);
@@ -632,7 +709,8 @@ mod tests {
     #[test]
     fn hmac_only_content_is_plaintext_but_tagged() {
         let (dir, mut s) = store(SecurityLevel::HmacOnly);
-        s.upsert(&drawer("w", "r", "findable plaintext content", 0)).unwrap();
+        s.upsert(&drawer("w", "r", "findable plaintext content", 0))
+            .unwrap();
         drop(s);
         let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
         assert!(db.windows(8).any(|w| w == b"findable"));
@@ -641,11 +719,25 @@ mod tests {
     #[test]
     fn search_ranks_relevant_first() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.upsert(&drawer("work", "api", "we switched to graphql because rest was chatty", 0))
+        s.upsert(&drawer(
+            "work",
+            "api",
+            "we switched to graphql because rest was chatty",
+            0,
+        ))
+        .unwrap();
+        s.upsert(&drawer("home", "pets", "the cat likes the windowsill", 1))
             .unwrap();
-        s.upsert(&drawer("home", "pets", "the cat likes the windowsill", 1)).unwrap();
-        s.upsert(&drawer("work", "infra", "postgres migration completed friday", 2)).unwrap();
-        let hits = s.search("why did we switch to graphql", &SearchOptions::default()).unwrap();
+        s.upsert(&drawer(
+            "work",
+            "infra",
+            "postgres migration completed friday",
+            2,
+        ))
+        .unwrap();
+        let hits = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
         assert_eq!(hits[0].drawer.meta.room, "api");
         assert!(hits[0].score > hits.last().unwrap().score);
     }
@@ -653,12 +745,18 @@ mod tests {
     #[test]
     fn search_scopes_to_wing() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.upsert(&drawer("a", "r", "shared topic alpha content", 0)).unwrap();
-        s.upsert(&drawer("b", "r", "shared topic alpha content", 1)).unwrap();
+        s.upsert(&drawer("a", "r", "shared topic alpha content", 0))
+            .unwrap();
+        s.upsert(&drawer("b", "r", "shared topic alpha content", 1))
+            .unwrap();
         let hits = s
             .search(
                 "alpha",
-                &SearchOptions { wing: Some("a".into()), room: None, limit: 10 },
+                &SearchOptions {
+                    wing: Some("a".into()),
+                    room: None,
+                    limit: 10,
+                },
             )
             .unwrap();
         assert!(!hits.is_empty());
@@ -669,7 +767,8 @@ mod tests {
     fn verify_clean_store_passes() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
         for i in 0..5 {
-            s.upsert(&drawer("w", "r", &format!("memory number {i}"), i)).unwrap();
+            s.upsert(&drawer("w", "r", &format!("memory number {i}"), i))
+                .unwrap();
         }
         let report = s.verify().unwrap();
         assert!(report.ok());
@@ -717,29 +816,55 @@ mod tests {
     #[test]
     fn embedding_cache_stays_coherent() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.upsert(&drawer("w", "r", "the original cached memory about databases", 0)).unwrap();
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the original cached memory about databases",
+            0,
+        ))
+        .unwrap();
         assert_eq!(s.warm_embedding_cache().unwrap(), 1);
         // Search via cache finds it.
-        let hits = s.search("cached memory databases", &SearchOptions::default()).unwrap();
+        let hits = s
+            .search("cached memory databases", &SearchOptions::default())
+            .unwrap();
         assert_eq!(hits.len(), 1);
         // New upsert while warm must be searchable (cache updated).
-        s.upsert(&drawer("w", "r", "a second note about kubernetes upgrades", 1)).unwrap();
-        let hits = s.search("kubernetes upgrades", &SearchOptions::default()).unwrap();
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "a second note about kubernetes upgrades",
+            1,
+        ))
+        .unwrap();
+        let hits = s
+            .search("kubernetes upgrades", &SearchOptions::default())
+            .unwrap();
         assert!(hits.iter().any(|h| h.drawer.content.contains("kubernetes")));
         // Delete while warm removes it from results.
         let id = hits[0].drawer.id.clone();
         s.delete_drawer(&id).unwrap();
-        let hits = s.search("kubernetes upgrades", &SearchOptions::default()).unwrap();
+        let hits = s
+            .search("kubernetes upgrades", &SearchOptions::default())
+            .unwrap();
         assert!(hits.is_empty());
     }
 
     #[test]
     fn fuzzy_search_tolerates_one_typo() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.upsert(&drawer("w", "r", "the kubernetes cluster upgrade finished", 0)).unwrap();
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the kubernetes cluster upgrade finished",
+            0,
+        ))
+        .unwrap();
         // "kubernets" (missing e) and "clutser" (transposed = 2 edits, won't
         // match) — the single-typo term still anchors the hit.
-        let hits = s.search("kubernets upgrade", &SearchOptions::default()).unwrap();
+        let hits = s
+            .search("kubernets upgrade", &SearchOptions::default())
+            .unwrap();
         assert!(!hits.is_empty());
         assert!(hits[0].drawer.content.contains("kubernetes"));
     }

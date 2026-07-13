@@ -16,7 +16,11 @@ fn main() -> anyhow::Result<()> {
     let mut store = PalaceStore::open(manager.create("convos", SecurityLevel::Sealed)?)?;
 
     for msg in convo::parse_transcript(TRANSCRIPT) {
-        let who = if msg.role == "user" { "User" } else { "Assistant" };
+        let who = if msg.role == "user" {
+            "User"
+        } else {
+            "Assistant"
+        };
         let drawer = Drawer::new(
             "claude-code",
             "session-demo",

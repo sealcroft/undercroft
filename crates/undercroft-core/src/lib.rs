@@ -33,12 +33,17 @@ pub enum CoreError {
 pub fn validate_name(value: &str, what: &'static str) -> Result<(), CoreError> {
     let v = value.trim();
     if v.is_empty() || v.len() > 128 {
-        return Err(CoreError::InvalidName(value.into(), "must be 1..=128 chars"));
+        return Err(CoreError::InvalidName(
+            value.into(),
+            "must be 1..=128 chars",
+        ));
     }
     if v == "." || v == ".." {
         return Err(CoreError::InvalidName(value.into(), "reserved name"));
     }
-    if v.chars().any(|c| c.is_control() || c == '/' || c == '\\' || c == '\0') {
+    if v.chars()
+        .any(|c| c.is_control() || c == '/' || c == '\\' || c == '\0')
+    {
         let _ = what;
         return Err(CoreError::InvalidName(
             value.into(),
