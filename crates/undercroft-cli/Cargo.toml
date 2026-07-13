@@ -1,0 +1,27 @@
+[package]
+name = "undercroft-cli"
+description = "Undercroft CLI and MCP server — hardened local-first AI memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "undercroft"
+path = "src/main.rs"
+
+[dependencies]
+undercroft-core = { path = "../undercroft-core" }
+undercroft-vault = { path = "../undercroft-vault" }
+undercroft-store = { path = "../undercroft-store" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile = { workspace = true }
+rusqlite = { workspace = true }

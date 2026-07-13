@@ -1,0 +1,27 @@
+[package]
+name = "undercroft-vault"
+description = "Hardened memory-management layer: isolated vaults, AEAD encryption, HMAC integrity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+undercroft-core = { path = "../undercroft-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+hkdf = { workspace = true }
+chacha20poly1305 = { workspace = true }
+argon2 = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+hex = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

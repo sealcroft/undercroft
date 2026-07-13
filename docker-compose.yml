@@ -1,0 +1,40 @@
+# Undercroft test + run harness. Everything executes inside containers.
+#
+#   docker compose run --rm test         # unit + integration tests (cargo)
+#   docker compose run --rm e2e          # end-to-end UI/UX suite against the real binary
+#   docker compose run --rm cli --help   # any CLI command
+#   docker compose run --rm -i mcp       # MCP stdio server
+
+services:
+  test:
+    build:
+      context: .
+      target: test
+    command: ["cargo", "test", "--release", "--workspace"]
+
+  e2e:
+    build:
+      context: .
+      target: builder
+    entrypoint: ["bash", "/src/tests/e2e.sh"]
+    volumes:
+      - ./tests/e2e.sh:/src/tests/e2e.sh:ro
+
+  cli:
+    build:
+      context: .
+      target: runtime
+    volumes:
+      - undercroft-data:/data
+
+  mcp:
+    build:
+      context: .
+      target: runtime
+    stdin_open: true
+    command: ["serve-mcp"]
+    volumes:
+      - undercroft-data:/data
+
+volumes:
+  undercroft-data:

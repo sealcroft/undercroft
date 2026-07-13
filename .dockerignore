@@ -1,0 +1,8 @@
+# Keep the Rust build context small: only the workspace (and the e2e
+# suite) goes to the daemon. The legacy Python tree is excluded entirely.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!crates/**
+!tests/e2e.sh
