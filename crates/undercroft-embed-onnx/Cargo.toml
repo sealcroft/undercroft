@@ -10,5 +10,5 @@ authors.workspace = true
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 thiserror = { workspace = true }
-tract-onnx = "0.21"
+tract-onnx = "0.22"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
