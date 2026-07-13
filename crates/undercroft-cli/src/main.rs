@@ -114,6 +114,18 @@ enum Command {
         /// Max results
         #[arg(short = 'n', long, default_value_t = 5)]
         limit: usize,
+        /// Retrieval backend: local (scan), or a remote vector index
+        /// (qdrant | chroma | pgvector) used as an untrusted accelerator —
+        /// results are always re-verified and re-ranked locally
+        #[arg(long, default_value = "local")]
+        backend: String,
+    },
+    /// Remote vector indexes: push sealed records, check status
+    Index {
+        #[command(subcommand)]
+        action: IndexAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
     },
     /// Load session context: identity + recent essential memories
     WakeUp {
@@ -334,6 +346,20 @@ enum TunnelAction {
 }
 
 #[derive(Subcommand)]
+enum IndexAction {
+    /// Upload every drawer (sealed content + embedding) to a remote index
+    Push {
+        /// qdrant | chroma | pgvector
+        backend: String,
+    },
+    /// Show a remote index's record count for this vault
+    Status {
+        /// qdrant | chroma | pgvector
+        backend: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum BackupAction {
     /// Snapshot a vault into backups/
     Create {
@@ -386,7 +412,27 @@ fn manager(cli: &Cli) -> Result<VaultManager> {
 fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
     let mgr = manager(cli)?;
     let v = mgr.unlock(vault)?;
-    Ok(PalaceStore::open(v)?)
+    match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
+        Ok("onnx") => {
+            #[cfg(feature = "onnx")]
+            {
+                let embedder = undercroft_embed_onnx::from_env()
+                    .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
+                return Ok(PalaceStore::open_with_embedder(v, Box::new(embedder))?);
+            }
+            #[cfg(not(feature = "onnx"))]
+            bail!(
+                "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
+                 (cargo build -p undercroft-cli --features onnx)"
+            );
+        }
+        Ok("hash") | Ok("") | Err(_) => Ok(PalaceStore::open(v)?),
+        Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx)"),
+    }
+}
+
+fn open_index(backend: &str) -> Result<Box<dyn undercroft_index::VectorIndex>> {
+    Ok(undercroft_index::from_env(backend)?)
 }
 
 fn main() -> Result<()> {
@@ -508,12 +554,15 @@ fn main() -> Result<()> {
                 files.len()
             );
         }
-        Command::Search { query, vault, wing, room, limit } => {
+        Command::Search { query, vault, wing, room, limit, backend } => {
             let store = open_store(&cli, vault)?;
-            let hits = store.search(
-                query,
-                &SearchOptions { wing: wing.clone(), room: room.clone(), limit: *limit },
-            )?;
+            let opts = SearchOptions { wing: wing.clone(), room: room.clone(), limit: *limit };
+            let hits = if backend == "local" {
+                store.search(query, &opts)?
+            } else {
+                let mut index = open_index(backend)?;
+                store.search_with_index(index.as_mut(), query, &opts)?
+            };
             if hits.is_empty() {
                 println!("No memories matched.");
             }
@@ -862,6 +911,28 @@ fn main() -> Result<()> {
                     }
                     copy_dir(&src, &dst)?;
                     println!("Restored {} -> vault '{}'", name, vault_name);
+                }
+            }
+        }
+        Command::Index { action, vault } => {
+            let store = open_store(&cli, vault)?;
+            match action {
+                IndexAction::Push { backend } => {
+                    let mut index = open_index(backend)?;
+                    let n = store.index_push(index.as_mut())?;
+                    println!(
+                        "Pushed {n} sealed record(s) from vault '{vault}' to {backend} \
+                         (collection {})",
+                        store.index_collection()
+                    );
+                }
+                IndexAction::Status { backend } => {
+                    let mut index = open_index(backend)?;
+                    let (name, count) = store.index_status(index.as_mut())?;
+                    println!("backend:    {name}");
+                    println!("collection: {}", store.index_collection());
+                    println!("records:    {count}");
+                    println!("local:      {}", store.count()?);
                 }
             }
         }

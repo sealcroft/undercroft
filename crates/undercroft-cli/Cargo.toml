@@ -11,10 +11,17 @@ authors.workspace = true
 name = "undercroft"
 path = "src/main.rs"
 
+[features]
+# Enables the ONNX sentence-embedder (UNDERCROFT_EMBEDDER=onnx).
+# Off by default to keep the standard build lean and fully offline.
+onnx = ["dep:undercroft-embed-onnx"]
+
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-store = { path = "../undercroft-store" }
+undercroft-index = { path = "../undercroft-index" }
+undercroft-embed-onnx = { path = "../undercroft-embed-onnx", optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }

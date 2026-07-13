@@ -14,6 +14,7 @@
 
 pub mod kg;
 pub mod manage;
+pub mod remote;
 
 pub use kg::{KgStats, Triple};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
@@ -36,6 +37,15 @@ pub enum StoreError {
     CorruptRow { id: String, reason: String },
     #[error("integrity failure on record {0} — HMAC mismatch")]
     Integrity(String),
+    #[error(
+        "vault was embedded with {stored:?} ({stored_dim}d) but the current embedder is \
+         {current:?} ({current_dim}d); searching across a model swap silently degrades recall. \
+         Set UNDERCROFT_FORCE_EMBEDDER=1 to record the new identity, then run `undercroft repair` \
+         to re-embed."
+    )]
+    EmbedderMismatch { stored: String, stored_dim: usize, current: String, current_dim: usize },
+    #[error("remote index error: {0}")]
+    Index(#[from] undercroft_index::IndexError),
 }
 
 pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
@@ -79,12 +89,76 @@ impl VerifyReport {
 pub struct PalaceStore {
     conn: Connection,
     vault: Vault,
-    embedder: HashEmbedder,
+    embedder: Box<dyn Embedder + Send>,
 }
 
 impl PalaceStore {
-    /// Open (creating if needed) the store for an unlocked vault.
+    /// Open with the default deterministic hashed n-gram embedder.
     pub fn open(vault: Vault) -> Result<Self, StoreError> {
+        Self::open_with_embedder(vault, Box::new(HashEmbedder))
+    }
+
+    /// Open with an explicit embedder. The embedder's identity (model name
+    /// + dimension) is recorded on first use and enforced afterwards —
+    /// searching across a silent model swap degrades recall, so a mismatch
+    /// is an error unless `UNDERCROFT_FORCE_EMBEDDER=1` re-records it
+    /// (follow with `repair` to re-embed).
+    pub fn open_with_embedder(
+        vault: Vault,
+        embedder: Box<dyn Embedder + Send>,
+    ) -> Result<Self, StoreError> {
+        let store = Self::open_inner(vault, embedder)?;
+        store.enforce_embedder_identity()?;
+        Ok(store)
+    }
+
+    fn enforce_embedder_identity(&self) -> Result<(), StoreError> {
+        let stored_name: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = 'embedder_name'", [], |r| r.get(0))
+            .optional()?;
+        let stored_dim: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = 'embedder_dim'", [], |r| r.get(0))
+            .optional()?;
+        let current_name = self.embedder.model_name().to_string();
+        let current_dim = self.embedder.dimension();
+        match (stored_name, stored_dim) {
+            (Some(name), Some(dim)) => {
+                let dim: usize = dim.parse().unwrap_or(0);
+                if name != current_name || (dim != 0 && dim != current_dim) {
+                    if std::env::var("UNDERCROFT_FORCE_EMBEDDER").ok().as_deref() == Some("1") {
+                        self.record_embedder_identity()?;
+                        return Ok(());
+                    }
+                    return Err(StoreError::EmbedderMismatch {
+                        stored: name,
+                        stored_dim: dim,
+                        current: current_name,
+                        current_dim,
+                    });
+                }
+                Ok(())
+            }
+            _ => self.record_embedder_identity(),
+        }
+    }
+
+    fn record_embedder_identity(&self) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('embedder_name', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![self.embedder.model_name()],
+        )?;
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('embedder_dim', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![self.embedder.dimension().to_string()],
+        )?;
+        Ok(())
+    }
+
+    fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
         let conn = Connection::open(vault.db_path())?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -113,7 +187,7 @@ impl PalaceStore {
                  at        TEXT NOT NULL
              );",
         )?;
-        let store = Self { conn, vault, embedder: HashEmbedder };
+        let store = Self { conn, vault, embedder };
         store.init_kg_schema()?;
         store.init_manage_schema()?;
         Ok(store)
@@ -322,6 +396,29 @@ impl PalaceStore {
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         hits.truncate(limit);
         Ok(hits)
+    }
+
+    /// Score one already-decrypted drawer against a query (used by the
+    /// remote-index path, where the embedding is recomputed locally from
+    /// the verified plaintext rather than trusted from the server).
+    pub(crate) fn score_drawer(
+        &self,
+        drawer: undercroft_core::Drawer,
+        query: &str,
+        qvec: &[f32],
+    ) -> SearchHit {
+        let qterms: Vec<String> = query
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| t.len() > 1)
+            .map(str::to_string)
+            .collect();
+        let emb = self.embedder.embed(&drawer.content);
+        let semantic = ((cosine(qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
+        let lexical = lexical_score(&qterms, query, &drawer.content);
+        let recency = recency_boost(&drawer.meta.filed_at, OffsetDateTime::now_utc());
+        let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
+        SearchHit { drawer, score, semantic, lexical }
     }
 
     /// Walk every record verifying its HMAC, then replay the audit chain

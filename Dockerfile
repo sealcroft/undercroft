@@ -15,12 +15,14 @@
 
 FROM rust:1.90-slim-bookworm AS builder
 WORKDIR /src
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --workspace && cargo test --release --workspace --no-run
+# Default members only — the onnx embedder crate is built by the
+# dedicated `onnx-build` compose service.
+RUN cargo build --release && cargo test --release --no-run
 
 FROM builder AS test
-CMD ["cargo", "test", "--release", "--workspace", "--", "--nocapture"]
+CMD ["cargo", "test", "--release"]
 
 FROM debian:bookworm-slim AS runtime
 RUN useradd --create-home --uid 10001 undercroft \

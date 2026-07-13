@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — Remote backends + pluggable embedders
+
+- Remote vector indexes (Qdrant, Chroma, pgvector) as untrusted search
+  accelerators: sealed content uploaded, candidates HMAC-verified and
+  re-ranked locally; `index push/status`, `search --backend`.
+- Pluggable embedders with per-vault identity tracking; ONNX
+  sentence-embedder crate (tract, feature-gated).
+- Compose services + backends-e2e suite against real servers.
+
+
 ## 0.2.0 — Python removal + feature parity port
 
 - Removed the legacy Python implementation and all Python tooling; the Rust

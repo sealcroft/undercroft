@@ -6,3 +6,4 @@
 !crates
 !crates/**
 !tests/e2e.sh
+!tests/e2e-backends.sh

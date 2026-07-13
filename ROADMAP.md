@@ -27,11 +27,22 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   tags, tamper-evident audit chain, MAC'd manifests, sealed / hmac-only
 - SQLite per-vault storage; hybrid search; CLI; Docker-first test harness
 
+## v0.3.0 — Remote backends + pluggable embedders (done)
+
+- Remote vector indexes as untrusted accelerators: Qdrant, Chroma (REST v2),
+  pgvector — content sealed client-side before upload, candidates re-verified
+  (HMAC) and re-ranked locally; `index push/status`, `search --backend`
+- Embedder identity tracking per vault (record on first write, refuse silent
+  model swaps, `UNDERCROFT_FORCE_EMBEDDER=1` + `repair` to re-embed)
+- ONNX sentence-embedder crate (MiniLM-class exports) on tract, pure Rust,
+  feature-gated (`--features onnx`), models always user-supplied
+- Compose services + `backends-e2e` suite against real servers
+
 ## Next
 
-- **v0.3 — Retrieval quality**: model-based embedder behind the `Embedder`
-  trait (ONNX / candle) with identity tracking; FTS5 BM25 pre-filter for
-  hmac-only vaults; LongMemEval / LoCoMo harness to measure the port honestly
-- **v0.4 — Ecosystem**: server backends (pgvector, qdrant) with client-side
-  sealing so bytes leave the process encrypted; key rotation; export bundles
-  with recipient encryption; L2 on-demand room loading heuristics
+- **v0.4 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
+  LongMemEval / LoCoMo harness to measure the port honestly; L2 on-demand
+  room loading heuristics
+- **v0.5 — Ecosystem**: key rotation (re-seal under new derived keys);
+  export bundles with recipient encryption; Milvus REST backend if demand
+  exists

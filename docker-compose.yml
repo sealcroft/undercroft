@@ -1,16 +1,18 @@
 # Undercroft test + run harness. Everything executes inside containers.
 #
-#   docker compose run --rm test         # unit + integration tests (cargo)
-#   docker compose run --rm e2e          # end-to-end UI/UX suite against the real binary
-#   docker compose run --rm cli --help   # any CLI command
-#   docker compose run --rm -i mcp       # MCP stdio server
+#   docker compose run --rm test          # unit + integration tests (cargo)
+#   docker compose run --rm e2e           # end-to-end UI/UX suite against the real binary
+#   docker compose run --rm backends-e2e  # remote index suite (starts qdrant/chroma/pgvector)
+#   docker compose run --rm onnx-build    # compile check for the ONNX embedder feature
+#   docker compose run --rm cli --help    # any CLI command
+#   docker compose run --rm -i mcp        # MCP stdio server
 
 services:
   test:
     build:
       context: .
       target: test
-    command: ["cargo", "test", "--release", "--workspace"]
+    command: ["cargo", "test", "--release"]
 
   e2e:
     build:
@@ -19,6 +21,41 @@ services:
     entrypoint: ["bash", "/src/tests/e2e.sh"]
     volumes:
       - ./tests/e2e.sh:/src/tests/e2e.sh:ro
+
+  backends-e2e:
+    build:
+      context: .
+      target: builder
+    entrypoint: ["bash", "/src/tests/e2e-backends.sh"]
+    environment:
+      UNDERCROFT_QDRANT_URL: http://qdrant:6333
+      UNDERCROFT_CHROMA_URL: http://chroma:8000
+      UNDERCROFT_PGVECTOR_DSN: postgresql://undercroft:undercroft@pgvector:5432/undercroft
+    depends_on:
+      - qdrant
+      - chroma
+      - pgvector
+    volumes:
+      - ./tests/e2e-backends.sh:/src/tests/e2e-backends.sh:ro
+
+  onnx-build:
+    build:
+      context: .
+      target: builder
+    command: ["cargo", "build", "--release", "-p", "undercroft-cli", "--features", "onnx"]
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+
+  chroma:
+    image: chromadb/chroma:1.0.0
+
+  pgvector:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: undercroft
+      POSTGRES_PASSWORD: undercroft
+      POSTGRES_DB: undercroft
 
   cli:
     build:

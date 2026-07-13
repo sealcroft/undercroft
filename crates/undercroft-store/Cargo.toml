@@ -10,6 +10,8 @@ authors.workspace = true
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
+undercroft-index = { path = "../undercroft-index" }
+base64 = "0.22"
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

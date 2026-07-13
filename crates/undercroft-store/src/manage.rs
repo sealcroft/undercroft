@@ -310,7 +310,9 @@ impl PalaceStore {
         Ok(DedupReport { duplicate_groups: groups.len() as u64, removed, applied: apply })
     }
 
-    /// Repair pass: verify report + re-fingerprint any rows missing `fp`.
+    /// Repair pass: re-fingerprint rows missing `fp`, re-embed every drawer
+    /// with the current embedder (recording its identity — this is the
+    /// second half of a forced model swap), vacuum, and re-verify.
     /// Returns (report, rows_backfilled).
     pub fn repair(&mut self) -> Result<(crate::VerifyReport, u64), StoreError> {
         let missing: Vec<String> = self
@@ -326,6 +328,22 @@ impl PalaceStore {
                 fixed += 1;
             }
         }
+        // Re-embed everything with the current embedder. Embeddings are not
+        // HMAC-covered (they are derived data), so no retagging is needed.
+        let ids: Vec<String> = self
+            .conn
+            .prepare("SELECT id FROM drawers ORDER BY seq")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for id in ids {
+            if let Some(d) = self.get(&id)? {
+                let emb = self.embedder_embed(&d.content);
+                let emb_rest = self.vault.embedding_at_rest(&id, &emb);
+                self.conn
+                    .execute("UPDATE drawers SET embedding = ?1 WHERE id = ?2", params![emb_rest, id])?;
+            }
+        }
+        self.record_embedder_identity()?;
         self.conn.execute_batch("VACUUM;")?;
         Ok((self.verify()?, fixed))
     }

@@ -71,8 +71,54 @@ Every memory namespace is a **vault** — a hard isolation boundary:
 bleed, and offline tampering of the database or manifest. It does *not* defend
 against an attacker who can read process memory while a vault is unlocked.
 
-Nothing leaves your machine. The embedder is a deterministic local
-hashed n-gram model — no downloads, no API calls, no network at all.
+Nothing leaves your machine by default. The default embedder is a
+deterministic local hashed n-gram model — no downloads, no API calls, no
+network at all.
+
+## Storage & retrieval backends
+
+The bundled SQLite store is the system of record — keys, HMAC tags, audit
+chain, and knowledge graph always live there. Remote vector databases are
+supported as **untrusted search accelerators**:
+
+| Backend | Role | Configure with |
+| --- | --- | --- |
+| SQLite (bundled) | System of record + local search (default) | — |
+| `qdrant` | Remote ANN index (REST) | `UNDERCROFT_QDRANT_URL` |
+| `chroma` | Remote ANN index (REST v2, server mode) | `UNDERCROFT_CHROMA_URL` |
+| `pgvector` | Remote ANN index (Postgres) | `UNDERCROFT_PGVECTOR_DSN` |
+
+Unlike upstream MemPalace — which stored plaintext documents in these
+databases — Undercroft uploads only the **sealed** content blob plus the
+embedding and wing/room labels. Remote search returns candidate ids; every
+candidate is re-loaded from the local palace, HMAC-verified, decrypted, and
+re-ranked locally. A compromised index can hide results but cannot forge,
+alter, or inject them. The trade-off that remains: embeddings are visible
+server-side (ANN cannot work otherwise) — if embedding-inversion leakage is
+unacceptable, use local search. Milvus is not included (gRPC-only client,
+heavy deployment; it was an opt-in extra upstream).
+
+```bash
+undercroft index push qdrant            # upload sealed records
+undercroft search "query" --backend qdrant
+undercroft index status qdrant
+```
+
+## Embedders
+
+The `Embedder` trait is pluggable and identity-tracked: the model name and
+dimension are recorded per vault on first write, and a mismatch is refused
+(silent model swaps degrade recall) unless `UNDERCROFT_FORCE_EMBEDDER=1` is
+set, after which `undercroft repair` re-embeds every drawer.
+
+- **`hash` (default)** — deterministic hashed n-gram embedder, zero
+  dependencies, fully offline.
+- **`onnx`** — MiniLM-class sentence-transformer ONNX exports via
+  [tract](https://github.com/sonos/tract) (pure Rust, no native binaries).
+  Build with `--features onnx`, then point `UNDERCROFT_ONNX_MODEL` and
+  `UNDERCROFT_ONNX_TOKENIZER` at a user-supplied `model.onnx` +
+  `tokenizer.json` and set `UNDERCROFT_EMBEDDER=onnx`. Undercroft never
+  downloads models itself.
 
 ## Quickstart (Docker — recommended)
 
@@ -153,14 +199,17 @@ sealed in encrypted vaults, and every triple is HMAC-tagged and audit-chained.
 ## Testing (all in Docker)
 
 ```bash
-docker compose run --rm test   # unit + integration tests (cargo, 40+ tests)
-docker compose run --rm e2e    # end-to-end UI/UX suite against the real binary
+docker compose run --rm test          # unit + integration tests (cargo)
+docker compose run --rm e2e           # end-to-end UI/UX suite against the real binary
+docker compose run --rm backends-e2e  # remote-index suite (spins up qdrant/chroma/pgvector)
+docker compose run --rm onnx-build    # compile check for the ONNX embedder feature
 ```
 
 The e2e suite drives the actual CLI the way a user would — help text, happy
 paths, exit codes, vault isolation, plaintext-leak checks against the raw DB
 file, deliberate on-disk tampering (must be detected), and a scripted MCP
-JSON-RPC session.
+JSON-RPC session. The backends suite runs the full push → remote search →
+verify flow against real Qdrant, Chroma, and Postgres+pgvector servers.
 
 ## Architecture
 
@@ -184,12 +233,12 @@ Undercroft is a fork of [MemPalace](https://github.com/MemPalace/mempalace)
 (MIT), fully converted to Rust — the Python implementation has been removed.
 Ported: the palace model and miners (files + conversation transcripts +
 sweep), wake-up layers, knowledge graph, tunnels/hallways navigation, agent
-diaries, drawer management, dedup/stats/backups/repair, hooks output, and the
-MCP tool surface. Intentionally not carried over: the Chroma/Qdrant/Milvus/
-pgvector server backends (the bundled SQLite store replaces `sqlite_exact`;
-server backends would bypass the vault layer unless sealed client-side — see
-[ROADMAP](ROADMAP.md)) and the downloaded-model embedder (replaced by the
-offline hashed n-gram embedder behind a pluggable `Embedder` trait).
+diaries, drawer management, dedup/stats/backups/repair, hooks output, the
+MCP tool surface, remote vector backends (Qdrant, Chroma, pgvector — with
+client-side sealing, unlike upstream's plaintext uploads), and model-based
+embeddings (ONNX via tract, feature-gated). Not carried over: Milvus
+(gRPC-only, opt-in extra upstream) and embedded ChromaDB (a Python library;
+the bundled SQLite store fills that role).
 
 ## License
 

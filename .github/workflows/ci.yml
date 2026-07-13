@@ -13,3 +13,7 @@ jobs:
         run: docker build --target test -t undercroft-test . && docker run --rm undercroft-test
       - name: E2E UI/UX suite (Docker)
         run: docker compose run --rm e2e
+      - name: Remote backends suite (qdrant/chroma/pgvector)
+        run: docker compose run --rm backends-e2e
+      - name: ONNX embedder compile check
+        run: docker compose run --rm onnx-build

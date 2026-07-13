@@ -4,11 +4,22 @@ members = [
     "crates/undercroft-core",
     "crates/undercroft-vault",
     "crates/undercroft-store",
+    "crates/undercroft-index",
+    "crates/undercroft-cli",
+    "crates/undercroft-embed-onnx",
+]
+# The ONNX embedder pulls heavy ML deps; it is built explicitly
+# (see the `onnx-build` compose service), not by default.
+default-members = [
+    "crates/undercroft-core",
+    "crates/undercroft-vault",
+    "crates/undercroft-store",
+    "crates/undercroft-index",
     "crates/undercroft-cli",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/compufreq/undercroft"
