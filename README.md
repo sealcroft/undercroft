@@ -4,7 +4,7 @@
 
 **Hardened, local-first AI memory: encrypted, integrity-verified memory vaults with verbatim recall.**
 
-[Documentation](https://compufreq.github.io/undercroft/) · [Getting started](https://compufreq.github.io/undercroft/getting-started.html) · [Security model](https://compufreq.github.io/undercroft/security.html)
+[Website](https://compufreq.github.io/undercroft/) · [Documentation](https://compufreq.github.io/undercroft/docs/) · [Security model](https://compufreq.github.io/undercroft/docs/security.html)
 
 </div>
 
