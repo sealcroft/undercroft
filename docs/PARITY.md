@@ -40,17 +40,24 @@ HKDF keys, XChaCha20-Poly1305 sealing, HMAC record tags, tamper-evident
 audit chain, MAC'd manifests, keyed dup fingerprints, token-mandatory HTTP
 bind, read-only serving. Upstream stored everything in plaintext.
 
+## Ported in v0.5.0 (previously listed as gaps)
+
+| Upstream | Undercroft equivalent |
+|---|---|
+| Milvus backend | `undercroft-index` REST v2 client (`--backend milvus`), tested against live standalone Milvus in compose |
+| LLM refinement pipeline (`llm_refine`, `llm_client`) | `undercroft-llm` crate (Ollama + OpenAI-compatible local runtimes) + `undercroft refine` — extracts entities and KG triples from drawers; never touches verbatim content; only runs when `UNDERCROFT_LLM_URL` is explicitly set |
+| `model_eval` multilingual datasets + harness | Datasets restored (10 languages × calibration / entity / memory / room tasks); `undercroft-bench model-eval calibration|entities [--lang de]` scores the configured local LLM |
+| AAAK dialect / closets (`dialect.py`) | `undercroft closets` + `undercroft_get_closet_index` MCP tool — deterministic compact index (one scannable line per room: counts, date span, key entities, drawer ids); computed on demand, nothing persisted |
+| Spellcheck (query typo tolerance) | Levenshtein-1 fuzzy term matching built into the lexical scorer (5+ char terms) |
+| Website | Rust-native mdBook site in `website/` reusing docs/ (`docker compose run --rm site`) |
+
 ## Not ported (deliberate, with reasons)
 
 | Upstream | Status |
 |---|---|
-| Embedded ChromaDB default | Python library; the bundled SQLite store fills this role |
-| Milvus backend | gRPC-only client + heavy deployment; opt-in extra upstream. Candidate: REST v2 client |
-| LLM refinement pipeline (`llm_refine`, `closet_llm`, local NLP extractors) | Requires an LLM runtime (Ollama etc.); planned — the heuristic extractors it falls back to are ported |
-| AAAK dialect compression (`dialect.py`) | Upstream-specific index format tied to the LLM pipeline; closets are represented by drawer line metadata instead |
-| `model_eval` benchmark suite (multilingual calibration datasets) | Evaluates the unported LLM extraction models; N/A until that pipeline lands |
-| Spellcheck / i18n of CLI output | Low value relative to weight; CLI is English-only for now |
-| Website / landing page | Marketing site, not code; README + docs/ serve this repo |
+| Embedded ChromaDB default | Python library — cannot exist in Rust; the bundled SQLite store *is* the embedded store (this is a role replacement, not a gap) |
+| Memory-extraction LLM task in model_eval | Dataset restored; scoring harness pending (needs a fuzzy-match metric worth trusting) |
+| i18n of CLI output | Multilingual *content* is fully supported (unicode-aware tokenization, multilingual model-eval datasets); translated CLI strings are not |
 | LoCoMo / ConvoMem / MemBench harnesses | Same protocol as the LongMemEval harness; add dataset adapters to `undercroft-bench` when needed |
 
 ## Behavioral differences to know about

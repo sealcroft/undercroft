@@ -87,6 +87,7 @@ supported as **untrusted search accelerators**:
 | `qdrant` | Remote ANN index (REST) | `UNDERCROFT_QDRANT_URL` |
 | `chroma` | Remote ANN index (REST v2, server mode) | `UNDERCROFT_CHROMA_URL` |
 | `pgvector` | Remote ANN index (Postgres) | `UNDERCROFT_PGVECTOR_DSN` |
+| `milvus` | Remote ANN index (REST v2, standalone) | `UNDERCROFT_MILVUS_URL` |
 
 Unlike upstream MemPalace — which stored plaintext documents in these
 databases — Undercroft uploads only the **sealed** content blob plus the
@@ -95,8 +96,7 @@ candidate is re-loaded from the local palace, HMAC-verified, decrypted, and
 re-ranked locally. A compromised index can hide results but cannot forge,
 alter, or inject them. The trade-off that remains: embeddings are visible
 server-side (ANN cannot work otherwise) — if embedding-inversion leakage is
-unacceptable, use local search. Milvus is not included (gRPC-only client,
-heavy deployment; it was an opt-in extra upstream).
+unacceptable, use local search.
 
 ```bash
 undercroft index push qdrant            # upload sealed records
@@ -166,6 +166,8 @@ undercroft kg add|query|rel|invalidate|supersede|timeline|stats
 undercroft diary write|read|agents    # per-agent diaries in their own wings
 undercroft tunnel create|list|follow|delete|traverse   # cross-wing links
 undercroft hallways <wing>            # within-wing entity co-occurrence
+undercroft closets [--wing]           # compact LLM-scannable index (AAAK port)
+undercroft refine [--dry-run]         # local-LLM extraction into the KG (UNDERCROFT_LLM_URL)
 undercroft stats | taxonomy           # palace shape
 undercroft dedup [--apply]            # exact-duplicate detection (keyed fingerprints)
 undercroft backup create|list|restore # verified snapshots, keeps last 10

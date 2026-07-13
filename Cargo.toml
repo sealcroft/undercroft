@@ -5,6 +5,7 @@ members = [
     "crates/undercroft-vault",
     "crates/undercroft-store",
     "crates/undercroft-index",
+    "crates/undercroft-llm",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
     "crates/undercroft-embed-onnx",
@@ -16,12 +17,13 @@ default-members = [
     "crates/undercroft-vault",
     "crates/undercroft-store",
     "crates/undercroft-index",
+    "crates/undercroft-llm",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/compufreq/undercroft"

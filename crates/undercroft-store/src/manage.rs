@@ -503,6 +503,57 @@ impl PalaceStore {
         Ok(out)
     }
 
+    // ------------------------------------------------------------------
+    // Closets — compact LLM-scannable index (port of the AAAK idea)
+    // ------------------------------------------------------------------
+
+    /// Compact index lines an LLM can scan to decide which drawers to open
+    /// — the Rust port of mempalace's AAAK/closet concept, deterministic
+    /// (no LLM required to build). One line per room:
+    ///
+    /// `wing/room n=COUNT span=FIRST..LAST keys=entity,entity,… ids=ID,ID,…`
+    ///
+    /// Computed on demand from decrypted content; nothing is persisted, so
+    /// sealed vaults leak nothing.
+    pub fn closet_index(&self, wing: Option<&str>) -> Result<Vec<String>, StoreError> {
+        use std::collections::BTreeMap;
+        let drawers = self.recent(wing, 100_000)?;
+        let mut rooms: BTreeMap<(String, String), Vec<&Drawer>> = BTreeMap::new();
+        for d in &drawers {
+            rooms
+                .entry((d.meta.wing.clone(), d.meta.room.clone()))
+                .or_default()
+                .push(d);
+        }
+        let mut out = Vec::with_capacity(rooms.len());
+        for ((w, r), ds) in rooms {
+            let mut dates: Vec<&str> = ds.iter().map(|d| d.meta.filed_at.as_str()).collect();
+            dates.sort();
+            let span = match (dates.first(), dates.last()) {
+                (Some(a), Some(b)) => format!("{}..{}", &a[..10.min(a.len())], &b[..10.min(b.len())]),
+                _ => String::new(),
+            };
+            // Top entities by frequency across the room's drawers.
+            let mut freq: std::collections::HashMap<String, u32> = Default::default();
+            for d in &ds {
+                for e in extract_entities(&d.content) {
+                    *freq.entry(e).or_insert(0) += 1;
+                }
+            }
+            let mut keys: Vec<(String, u32)> = freq.into_iter().collect();
+            keys.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let keys: Vec<String> = keys.into_iter().take(6).map(|(k, _)| k).collect();
+            let ids: Vec<&str> = ds.iter().take(4).map(|d| d.id.as_str()).collect();
+            out.push(format!(
+                "{w}/{r} n={} span={span} keys={} ids={}",
+                ds.len(),
+                keys.join(","),
+                ids.join(",")
+            ));
+        }
+        Ok(out)
+    }
+
     /// Shared verify-and-decode used by list paths.
     fn verify_and_decode(
         &self,

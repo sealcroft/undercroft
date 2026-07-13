@@ -21,6 +21,7 @@ undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-store = { path = "../undercroft-store" }
 undercroft-index = { path = "../undercroft-index" }
+undercroft-llm = { path = "../undercroft-llm" }
 undercroft-embed-onnx = { path = "../undercroft-embed-onnx", optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

@@ -62,6 +62,7 @@ echo "== Service readiness =="
 wait_for "qdrant"   probe_http "$UNDERCROFT_QDRANT_URL"
 wait_for "chroma"   probe_http "$UNDERCROFT_CHROMA_URL"
 wait_for "pgvector" probe_pg
+wait_for "milvus"   probe_http "http://milvus:9091"
 
 run_backend_suite() { # run_backend_suite <backend>
   local be="$1"
@@ -82,6 +83,7 @@ run_backend_suite() { # run_backend_suite <backend>
 run_backend_suite qdrant
 run_backend_suite chroma
 run_backend_suite pgvector
+run_backend_suite milvus
 
 echo "== Misconfiguration UX =="
 unset UNDERCROFT_QDRANT_URL

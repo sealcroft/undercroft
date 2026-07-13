@@ -1,5 +1,6 @@
-# Keep the Rust build context small: only the workspace (and the e2e
-# suite) goes to the daemon. The legacy Python tree is excluded entirely.
+# Keep the Rust build context small. The legacy Python tree is long gone;
+# what ships: the workspace, e2e suites, docs (mdBook site includes them),
+# and the model_eval datasets used by undercroft-bench.
 *
 !Cargo.toml
 !Cargo.lock
@@ -7,3 +8,10 @@
 !crates/**
 !tests/e2e.sh
 !tests/e2e-backends.sh
+!docs
+!docs/**
+!website
+!website/**
+!benchmarks/model_eval/datasets
+!benchmarks/model_eval/datasets/**
+!README.md

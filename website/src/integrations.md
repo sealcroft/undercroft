@@ -1,0 +1,1 @@
+{{#include ../../docs/integrations.md}}

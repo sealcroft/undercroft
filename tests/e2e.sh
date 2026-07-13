@@ -133,6 +133,13 @@ check "dedup reports"             0 "1 duplicate group(s)"           -- "$BIN" d
 check "dedup applies"             0 "removed"                        -- "$BIN" dedup --apply
 check "verify ok after dedup"     0 "VERIFY OK"                      -- "$BIN" verify
 
+echo "== Closets, fuzzy search, refine gating =="
+"$BIN" remember "We migrated the search stack to Rust for speed and memory safety" --wing eng --room decisions >/dev/null
+check "closets index lines"       0 "eng/decisions"                  -- "$BIN" closets --wing eng
+check "closets show counts"       0 "n="                             -- "$BIN" closets
+check "fuzzy search one typo"     0 "eng/decisions"                  -- "$BIN" search "migrated the serch stack"
+check "refine needs llm url"      1 "UNDERCROFT_LLM_URL"              -- "$BIN" refine
+
 echo "== Backups & repair =="
 check "backup create"             0 "Backup created"                 -- "$BIN" backup create
 check "backup list"               0 "default-"                       -- "$BIN" backup list

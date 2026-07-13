@@ -211,6 +211,27 @@ enum Command {
         #[arg(long, global = true, default_value = "default")]
         vault: String,
     },
+    /// Compact LLM-scannable index of the palace (port of AAAK closets)
+    Closets {
+        #[arg(long)]
+        wing: Option<String>,
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
+    /// LLM-assisted refinement: extract entities + knowledge-graph facts
+    /// from drawers using a local LLM runtime (requires UNDERCROFT_LLM_URL)
+    Refine {
+        #[arg(long, default_value = "default")]
+        vault: String,
+        #[arg(long)]
+        wing: Option<String>,
+        /// Refine at most N drawers (0 = all)
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        /// Only report what would be extracted; write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Within-wing entity co-occurrence connections
     Hallways {
         wing: String,
@@ -921,6 +942,65 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        Command::Closets { wing, vault } => {
+            let store = open_store(&cli, vault)?;
+            let lines = store.closet_index(wing.as_deref())?;
+            if lines.is_empty() {
+                println!("Palace is empty — nothing to index.");
+            }
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Command::Refine { vault, wing, limit, dry_run } => {
+            let llm = undercroft_llm::LlmClient::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut store = open_store(&cli, vault)?;
+            let drawers = store.recent(wing.as_deref(), if *limit == 0 { 100_000 } else { *limit })?;
+            if drawers.is_empty() {
+                bail!("no drawers to refine");
+            }
+            println!("Refining {} drawer(s) with {} …", drawers.len(), llm.model());
+            let mut entities_added = 0usize;
+            let mut facts_added = 0usize;
+            for d in &drawers {
+                match llm.extract_triples(&d.content) {
+                    Ok(triples) => {
+                        for t in triples {
+                            if undercroft_core::validate_name(&t.subject, "subject").is_err()
+                                || undercroft_core::validate_name(&t.predicate, "predicate").is_err()
+                            {
+                                continue;
+                            }
+                            if *dry_run {
+                                println!("  would add: {} --{}--> {}", t.subject, t.predicate, t.object);
+                            } else {
+                                store.kg_add(
+                                    &t.subject.to_lowercase(),
+                                    &t.predicate.to_lowercase(),
+                                    &t.object,
+                                    None,
+                                    None,
+                                    0.8, // model-extracted: below human-asserted confidence
+                                    Some(&d.id),
+                                )?;
+                            }
+                            facts_added += 1;
+                        }
+                    }
+                    Err(e) => eprintln!("  triples failed for {}: {e}", d.id),
+                }
+                match llm.extract_entities(&d.content) {
+                    Ok(ents) => entities_added += ents.len(),
+                    Err(e) => eprintln!("  entities failed for {}: {e}", d.id),
+                }
+            }
+            println!(
+                "Refinement {}: {} fact(s) into the knowledge graph, {} entit(ies) seen",
+                if *dry_run { "dry run" } else { "complete" },
+                facts_added,
+                entities_added
+            );
         }
         Command::Hallways { wing, top, vault } => {
             let store = open_store(&cli, vault)?;

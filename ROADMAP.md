@@ -48,12 +48,17 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 - Claude Code plugin, hooks, commands, skills, Cursor rules, integrations
   protocol, docs (architecture / security / PARITY), examples, devcontainer
 
+## v0.5.0 — Final parity gaps (done)
+
+- Milvus backend (REST v2), tested live alongside qdrant/chroma/pgvector
+- Local-LLM refinement (`undercroft-llm`, `refine`) + restored model_eval
+  datasets and scoring harness
+- Closets compact index (AAAK port), typo-tolerant search, mdBook site
+
 ## Next
 
-- **v0.5 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
+- **v0.6 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
   LoCoMo / ConvoMem / MemBench dataset adapters; L2 on-demand room loading
-  heuristics; local-LLM refinement pipeline (Ollama) with the model_eval
-  calibration suite
-- **v0.6 — Ecosystem**: key rotation (re-seal under new derived keys);
-  export bundles with recipient encryption; Milvus REST backend if demand
-  exists
+  heuristics; memory-extraction task scoring in model-eval
+- **v0.7 — Ecosystem**: key rotation (re-seal under new derived keys);
+  export bundles with recipient encryption

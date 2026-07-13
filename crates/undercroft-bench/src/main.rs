@@ -58,6 +58,22 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// Evaluate the configured local LLM (UNDERCROFT_LLM_URL) on the
+    /// extraction tasks used by `undercroft refine`, against the labeled
+    /// multilingual datasets in benchmarks/model_eval/datasets
+    ModelEval {
+        /// Task: calibration | entities
+        task: String,
+        /// Dataset directory
+        #[arg(long, default_value = "benchmarks/model_eval/datasets")]
+        dataset_dir: std::path::PathBuf,
+        /// Language suffix (e.g. de, fr, zh) — default is English
+        #[arg(long)]
+        lang: Option<String>,
+        /// Evaluate only the first N items
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 fn level_of(s: &str) -> SecurityLevel {
@@ -301,6 +317,109 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// model_eval — score the configured local LLM on refine's extraction tasks
+// ---------------------------------------------------------------------------
+
+fn load_jsonl(path: &std::path::Path) -> Result<Vec<Value>> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    raw.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).map_err(Into::into))
+        .collect()
+}
+
+fn run_model_eval(
+    task: &str,
+    dataset_dir: &std::path::Path,
+    lang: Option<&str>,
+    limit: Option<usize>,
+) -> Result<()> {
+    let llm = undercroft_llm::LlmClient::from_env()
+        .map_err(|e| anyhow::anyhow!("{e} (model-eval scores a local LLM)"))?;
+    let (subdir, file) = match task {
+        "calibration" => ("calibration", "dataset"),
+        "entities" => ("entity_extraction", "dataset"),
+        other => anyhow::bail!("unknown task {other:?} (expected: calibration, entities)"),
+    };
+    let suffix = lang.map(|l| format!(".{l}")).unwrap_or_default();
+    let data = load_jsonl(&dataset_dir.join(subdir).join(format!("{file}{suffix}.jsonl")))?;
+    let labels = load_jsonl(&dataset_dir.join(subdir).join("labels.jsonl"))?;
+    let label_by_id: std::collections::HashMap<&str, &Value> = labels
+        .iter()
+        .filter_map(|l| Some((l.get("id")?.as_str()?, l)))
+        .collect();
+    let total = limit.unwrap_or(data.len()).min(data.len());
+
+    match task {
+        "calibration" => {
+            let mut correct = 0u32;
+            for item in data.iter().take(total) {
+                let id = item.get("id").and_then(Value::as_str).context("item id")?;
+                let text = item.get("text").and_then(Value::as_str).context("item text")?;
+                let classes: Vec<String> = item
+                    .get("classes")
+                    .and_then(Value::as_array)
+                    .context("item classes")?
+                    .iter()
+                    .filter_map(|c| c.as_str().map(str::to_string))
+                    .collect();
+                let expected = label_by_id
+                    .get(id)
+                    .and_then(|l| l.get("label"))
+                    .and_then(Value::as_str)
+                    .context("label")?;
+                let got = llm.classify(text, &classes).map_err(|e| anyhow::anyhow!("{e}"))?;
+                if got.eq_ignore_ascii_case(expected) {
+                    correct += 1;
+                }
+            }
+            println!(
+                "calibration{} — {}/{} correct ({:.1}%) with {}",
+                suffix, correct, total,
+                100.0 * correct as f32 / total as f32,
+                llm.model()
+            );
+        }
+        "entities" => {
+            let (mut tp, mut fp, mut fn_) = (0f32, 0f32, 0f32);
+            for item in data.iter().take(total) {
+                let id = item.get("id").and_then(Value::as_str).context("item id")?;
+                let text = item.get("text").and_then(Value::as_str).context("item text")?;
+                let expected: std::collections::BTreeSet<String> = label_by_id
+                    .get(id)
+                    .and_then(|l| l.get("entities"))
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|e| e.get("name")?.as_str().map(|s| s.to_lowercase()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let got: std::collections::BTreeSet<String> = llm
+                    .extract_entities(text)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .into_iter()
+                    .map(|e| e.name.to_lowercase())
+                    .collect();
+                tp += got.intersection(&expected).count() as f32;
+                fp += got.difference(&expected).count() as f32;
+                fn_ += expected.difference(&got).count() as f32;
+            }
+            let p = if tp + fp > 0.0 { tp / (tp + fp) } else { 0.0 };
+            let r = if tp + fn_ > 0.0 { tp / (tp + fn_) } else { 0.0 };
+            let f1 = if p + r > 0.0 { 2.0 * p * r / (p + r) } else { 0.0 };
+            println!(
+                "entities{} — P {:.1}%  R {:.1}%  F1 {:.1}%  ({} items, {})",
+                suffix, 100.0 * p, 100.0 * r, 100.0 * f1, total, llm.model()
+            );
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -308,6 +427,9 @@ fn main() -> Result<()> {
             run_longmemeval(&dataset, limit, k, level_of(&level))
         }
         Command::Synth { n, level } => run_synth(n, level_of(&level)),
+        Command::ModelEval { task, dataset_dir, lang, limit } => {
+            run_model_eval(&task, &dataset_dir, lang.as_deref(), limit)
+        }
     }
 }
 

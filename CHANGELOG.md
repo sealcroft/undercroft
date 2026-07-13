@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 — Final parity gaps closed
+
+- Milvus backend (RESTful v2, standalone) in undercroft-index — all four
+  remote backends now tested live in compose.
+- undercroft-llm crate: local-runtime client (Ollama + OpenAI-compatible);
+  `undercroft refine` extracts entities and KG facts from drawers (opt-in
+  via UNDERCROFT_LLM_URL; verbatim content never modified).
+- model_eval restored: multilingual datasets (10 languages) +
+  `undercroft-bench model-eval calibration|entities [--lang]`.
+- Closets: `undercroft closets` + `undercroft_get_closet_index` MCP tool —
+  deterministic compact index (the AAAK port), computed on demand.
+- Typo-tolerant search: Levenshtein-1 fuzzy term matching in the lexical
+  scorer (spellcheck port).
+- mdBook documentation site in website/ (`docker compose run --rm site`).
+
+
 ## 0.4.0 — Ecosystem parity: benchmarks, team server, integrations
 
 - `undercroft-bench`: LongMemEval-protocol harness (session R@k, NDCG@k,

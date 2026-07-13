@@ -26,7 +26,7 @@ pub enum IndexError {
     Pg(String),
     #[error("unexpected response from backend: {0}")]
     BadResponse(String),
-    #[error("unknown backend {0:?} (expected: qdrant, chroma, pgvector)")]
+    #[error("unknown backend {0:?} (expected: qdrant, chroma, pgvector, milvus)")]
     UnknownBackend(String),
     #[error("backend {0} is not configured: set {1}")]
     NotConfigured(&'static str, &'static str),
@@ -84,6 +84,11 @@ pub fn from_env(backend: &str) -> Result<Box<dyn VectorIndex>, IndexError> {
             let dsn = std::env::var("UNDERCROFT_PGVECTOR_DSN")
                 .map_err(|_| IndexError::NotConfigured("pgvector", "UNDERCROFT_PGVECTOR_DSN"))?;
             Ok(Box::new(pgvector::PgVectorIndex::new(&dsn)?))
+        }
+        "milvus" => {
+            let url = std::env::var("UNDERCROFT_MILVUS_URL")
+                .map_err(|_| IndexError::NotConfigured("milvus", "UNDERCROFT_MILVUS_URL"))?;
+            Ok(Box::new(milvus::MilvusIndex::new(&url)))
         }
         other => Err(IndexError::UnknownBackend(other.into())),
     }
@@ -528,6 +533,150 @@ pub mod pgvector {
             self.client
                 .execute(&format!("DELETE FROM {table} WHERE id = ANY($1)"), &[&ids])
                 .map_err(|e| IndexError::Pg(e.to_string()))?;
+            Ok(())
+        }
+    }
+}
+
+pub mod milvus {
+    use super::*;
+    use serde_json::{json, Value};
+
+    /// Milvus standalone via the RESTful v2 API (proxy port 19530).
+    /// Collections are quick-created with a VarChar primary key and dynamic
+    /// fields for the sealed payload + wing/room labels.
+    pub struct MilvusIndex {
+        base: String,
+        agent: ureq::Agent,
+    }
+
+    impl MilvusIndex {
+        pub fn new(base_url: &str) -> Self {
+            Self {
+                base: base_url.trim_end_matches('/').to_string(),
+                agent: ureq::AgentBuilder::new()
+                    .timeout(std::time::Duration::from_secs(60))
+                    .build(),
+            }
+        }
+
+        fn call(&self, path: &str, body: Value) -> Result<Value, IndexError> {
+            let url = format!("{}/v2/vectordb{}", self.base, path);
+            let resp = self
+                .agent
+                .post(&url)
+                .send_json(body)
+                .map_err(|e| IndexError::Http(format!("POST {url}: {e}")))?;
+            let v: Value =
+                resp.into_json().map_err(|e| IndexError::BadResponse(e.to_string()))?;
+            let code = v.get("code").and_then(Value::as_i64).unwrap_or(0);
+            if code != 0 && code != 200 {
+                return Err(IndexError::BadResponse(format!("milvus code {code}: {v}")));
+            }
+            Ok(v)
+        }
+    }
+
+    impl VectorIndex for MilvusIndex {
+        fn name(&self) -> &'static str {
+            "milvus"
+        }
+
+        fn ensure(&mut self, collection: &str, dim: usize) -> Result<(), IndexError> {
+            self.call(
+                "/collections/create",
+                json!({
+                    "collectionName": collection,
+                    "dimension": dim,
+                    "metricType": "COSINE",
+                    "idType": "VarChar",
+                    "primaryFieldName": "id",
+                    "vectorFieldName": "vector",
+                    "params": { "max_length": "64" }
+                }),
+            )?;
+            Ok(())
+        }
+
+        fn upsert(&mut self, collection: &str, records: &[IndexRecord]) -> Result<(), IndexError> {
+            let data: Vec<Value> = records
+                .iter()
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "vector": r.embedding,
+                        "sealed_b64": r.sealed_b64,
+                        "wing": r.wing,
+                        "room": r.room
+                    })
+                })
+                .collect();
+            self.call(
+                "/entities/upsert",
+                json!({ "collectionName": collection, "data": data }),
+            )?;
+            Ok(())
+        }
+
+        fn query(
+            &mut self,
+            collection: &str,
+            embedding: &[f32],
+            wing: Option<&str>,
+            limit: usize,
+        ) -> Result<Vec<Candidate>, IndexError> {
+            let mut body = json!({
+                "collectionName": collection,
+                "data": [embedding],
+                "limit": limit,
+                "outputFields": ["id"],
+                // Freshly-upserted entities must be visible.
+                "consistencyLevel": "Strong"
+            });
+            if let Some(w) = wing {
+                body["filter"] = json!(format!("wing == \"{}\"", w.replace('"', "")));
+            }
+            let resp = self.call("/entities/search", body)?;
+            let hits = resp
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| IndexError::BadResponse("missing data array".into()))?;
+            Ok(hits
+                .iter()
+                .filter_map(|h| {
+                    Some(Candidate {
+                        id: h.get("id")?.as_str()?.to_string(),
+                        score: h.get("distance")?.as_f64()? as f32,
+                    })
+                })
+                .collect())
+        }
+
+        fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
+            let resp = self.call(
+                "/entities/query",
+                json!({
+                    "collectionName": collection,
+                    "filter": "",
+                    "outputFields": ["count(*)"],
+                    "consistencyLevel": "Strong"
+                }),
+            )?;
+            resp.pointer("/data/0/count(*)")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| IndexError::BadResponse("missing count(*)".into()))
+        }
+
+        fn delete(&mut self, collection: &str, ids: &[String]) -> Result<(), IndexError> {
+            let list = ids
+                .iter()
+                .map(|i| format!("\"{}\"", i.replace('"', "")))
+                .collect::<Vec<_>>()
+                .join(",");
+            self.call(
+                "/entities/delete",
+                json!({ "collectionName": collection, "filter": format!("id in [{list}]") }),
+            )?;
             Ok(())
         }
     }

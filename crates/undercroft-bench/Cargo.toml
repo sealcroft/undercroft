@@ -15,6 +15,7 @@ path = "src/main.rs"
 undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-store = { path = "../undercroft-store" }
+undercroft-llm = { path = "../undercroft-llm" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

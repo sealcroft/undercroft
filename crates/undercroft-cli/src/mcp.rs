@@ -202,6 +202,8 @@ fn tool_definitions() -> Value {
             json!({ "start": s("start wing"), "depth": i("max hops") }), &["start"]),
         tool("undercroft_list_hallways", "Entity pairs co-occurring across a wing's drawers.",
             json!({ "wing": s("wing"), "top": i("max pairs") }), &["wing"]),
+        tool("undercroft_get_closet_index", "Compact scannable index: one line per room with counts, date span, key entities, and drawer ids — decide WHERE to look, then get_drawer.",
+            json!({ "wing": s("scope to wing") }), &[]),
         // --- knowledge graph ---
         tool("undercroft_kg_add", "Add a temporal fact (subject, predicate, object).",
             json!({ "subject": s("entity"), "predicate": s("relation"), "object": s("value"),
@@ -410,6 +412,13 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let reach = store
                 .traverse(req_str(args, "start")?, opt_u64(args, "depth").unwrap_or(3) as usize)?;
             Ok(serde_json::to_string_pretty(&reach)?)
+        }
+        "undercroft_get_closet_index" => {
+            let lines = store.closet_index(opt_str(args, "wing"))?;
+            if lines.is_empty() {
+                return Ok("palace is empty".into());
+            }
+            Ok(lines.join("\n"))
         }
         "undercroft_list_hallways" => {
             let halls = store

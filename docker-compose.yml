@@ -31,10 +31,12 @@ services:
       UNDERCROFT_QDRANT_URL: http://qdrant:6333
       UNDERCROFT_CHROMA_URL: http://chroma:8000
       UNDERCROFT_PGVECTOR_DSN: postgresql://undercroft:undercroft@pgvector:5432/undercroft
+      UNDERCROFT_MILVUS_URL: http://milvus:19530
     depends_on:
       - qdrant
       - chroma
       - pgvector
+      - milvus
     volumes:
       - ./tests/e2e-backends.sh:/src/tests/e2e-backends.sh:ro
 
@@ -62,6 +64,38 @@ services:
       POSTGRES_USER: undercroft
       POSTGRES_PASSWORD: undercroft
       POSTGRES_DB: undercroft
+
+  milvus:
+    image: milvusdb/milvus:v2.4.15
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /milvus/configs
+        cat > /milvus/configs/embedEtcd.yaml <<'YAML'
+        listen-client-urls: http://0.0.0.0:2379
+        advertise-client-urls: http://0.0.0.0:2379
+        quota-backend-bytes: 4294967296
+        auto-compaction-mode: revision
+        auto-compaction-retention: '1000'
+        YAML
+        exec milvus run standalone
+    environment:
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
+      COMMON_STORAGETYPE: local
+
+  # Build the documentation site (mdBook). Slow first run (compiles mdbook).
+  #   docker compose run --rm site   → website/book/
+  site:
+    build:
+      context: .
+      target: builder
+    working_dir: /src
+    command: ["sh", "-c", "cargo install mdbook --locked --quiet && mdbook build website && echo SITE OK: website/book"]
+    volumes:
+      - ./website:/src/website
 
   cli:
     build:

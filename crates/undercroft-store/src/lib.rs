@@ -484,18 +484,59 @@ impl PalaceStore {
 }
 
 /// Fraction of query terms present in the content, with a phrase bonus.
+/// Terms of 5+ chars also match with one typo (edit distance 1) — the
+/// port of mempalace's spellcheck extra, done at query time instead of
+/// with a dictionary.
 fn lexical_score(qterms: &[String], raw_query: &str, content: &str) -> f32 {
     if qterms.is_empty() {
         return 0.0;
     }
     let lower = content.to_lowercase();
-    let matched = qterms.iter().filter(|t| lower.contains(t.as_str())).count() as f32;
+    let words: Vec<&str> =
+        lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let matched = qterms
+        .iter()
+        .filter(|t| {
+            lower.contains(t.as_str())
+                || (t.len() >= 5 && words.iter().any(|w| within_one_edit(t, w)))
+        })
+        .count() as f32;
     let mut score = matched / qterms.len() as f32;
     let phrase = raw_query.trim().to_lowercase();
     if phrase.len() > 3 && lower.contains(&phrase) {
         score = (score + 0.5).min(1.0);
     }
     score
+}
+
+/// True when `a` and `b` are within Levenshtein distance 1 (single
+/// substitution, insertion, or deletion). O(len) — no DP table.
+fn within_one_edit(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let (la, lb) = (a.len(), b.len());
+    if la.abs_diff(lb) > 1 {
+        return false;
+    }
+    let (short, long) = if la <= lb { (&a, &b) } else { (&b, &a) };
+    let mut i = 0;
+    let mut j = 0;
+    let mut edits = 0;
+    while i < short.len() && j < long.len() {
+        if short[i] == long[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        edits += 1;
+        if edits > 1 {
+            return false;
+        }
+        if short.len() == long.len() {
+            i += 1; // substitution
+        }
+        j += 1; // skip in the longer (insertion/deletion)
+    }
+    edits + (long.len() - j) + (short.len() - i) <= 1
 }
 
 /// Exponential recency decay with a 30-day half-life.
@@ -636,6 +677,46 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
         assert!(!s.verify().unwrap().chain_ok);
+    }
+
+    #[test]
+    fn fuzzy_search_tolerates_one_typo() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "the kubernetes cluster upgrade finished", 0)).unwrap();
+        // "kubernets" (missing e) and "clutser" (transposed = 2 edits, won't
+        // match) — the single-typo term still anchors the hit.
+        let hits = s.search("kubernets upgrade", &SearchOptions::default()).unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits[0].drawer.content.contains("kubernetes"));
+    }
+
+    #[test]
+    fn within_one_edit_cases() {
+        assert!(within_one_edit("kubernetes", "kubernets")); // deletion
+        assert!(within_one_edit("color", "colour")); // insertion
+        assert!(within_one_edit("grafana", "grafena")); // substitution
+        assert!(!within_one_edit("cluster", "clutser")); // transposition = 2 edits
+        assert!(!within_one_edit("abc", "xyz"));
+    }
+
+    #[test]
+    fn closet_index_lines() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..3 {
+            s.upsert(&drawer(
+                "team",
+                "standups",
+                &format!("Update {i}: Alice shipped the Billing Portal migration"),
+                i,
+            ))
+            .unwrap();
+        }
+        let lines = s.closet_index(Some("team")).unwrap();
+        assert_eq!(lines.len(), 1);
+        let line = &lines[0];
+        assert!(line.starts_with("team/standups n=3"));
+        assert!(line.contains("alice"));
+        assert!(line.contains("ids="));
     }
 
     #[test]
