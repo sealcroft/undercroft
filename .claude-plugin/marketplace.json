@@ -1,0 +1,11 @@
+{
+  "name": "undercroft",
+  "owner": { "name": "compufreq", "url": "https://github.com/compufreq" },
+  "plugins": [
+    {
+      "name": "undercroft",
+      "source": "./",
+      "description": "Hardened local-first AI memory: encrypted vaults, verbatim recall, knowledge graph."
+    }
+  ]
+}

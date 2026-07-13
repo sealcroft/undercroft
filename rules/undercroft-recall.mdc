@@ -1,0 +1,10 @@
+---
+description: Recall project memory from Undercroft before answering questions about past decisions
+alwaysApply: false
+---
+
+When the user references past work, decisions, or conversations, query the
+Undercroft palace before answering: `undercroft search "<question>"` (scope
+with --wing for this project). At the start of long sessions, prime context
+with `undercroft wake-up`. Store the user's exact words with
+`undercroft remember` when asked to remember something — never paraphrase.

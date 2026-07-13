@@ -44,6 +44,12 @@ services:
       target: builder
     command: ["cargo", "build", "--release", "-p", "undercroft-cli", "--features", "onnx"]
 
+  bench:
+    build:
+      context: .
+      target: builder
+    command: ["/src/target/release/undercroft-bench", "synth", "--n", "200"]
+
   qdrant:
     image: qdrant/qdrant:v1.12.4
 

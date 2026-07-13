@@ -16,32 +16,44 @@ use undercroft_store::{PalaceStore, SearchOptions};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-pub fn serve(mut store: PalaceStore) -> Result<()> {
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+/// Tools that mutate the palace — rejected when the server runs read-only
+/// (the team-server deployment exposes recall without write access).
+const WRITE_TOOLS: &[&str] = &[
+    "undercroft_save",
+    "undercroft_add_drawer",
+    "undercroft_update_drawer",
+    "undercroft_delete_drawer",
+    "undercroft_delete_by_source",
+    "undercroft_create_tunnel",
+    "undercroft_delete_tunnel",
+    "undercroft_kg_add",
+    "undercroft_kg_invalidate",
+    "undercroft_kg_supersede",
+    "undercroft_diary_write",
+    "undercroft_dedup",
+];
 
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let msg: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                write_msg(&mut out, &error_response(Value::Null, -32700, &format!("parse error: {e}")))?;
-                continue;
-            }
-        };
+/// Transport-independent MCP message handler, shared by the stdio and HTTP
+/// servers.
+pub struct McpHandler {
+    store: PalaceStore,
+    read_only: bool,
+}
+
+impl McpHandler {
+    pub fn new(store: PalaceStore, read_only: bool) -> Self {
+        Self { store, read_only }
+    }
+
+    /// Handle one JSON-RPC message. Returns `None` for notifications.
+    pub fn handle(&mut self, msg: &Value) -> Option<Value> {
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
         let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
 
         // Notifications (no id) get no response.
-        if msg.get("id").is_none() {
-            continue;
-        }
+        msg.get("id")?;
 
-        let response = match method {
+        Some(match method {
             "initialize" => json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -64,7 +76,12 @@ pub fn serve(mut store: PalaceStore) -> Result<()> {
                     .unwrap_or_default()
                     .to_string();
                 let args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
-                match call_tool(&mut store, &name, &args) {
+                let result = if self.read_only && WRITE_TOOLS.contains(&name.as_str()) {
+                    Err(anyhow::anyhow!("server is read-only: {name} is not allowed"))
+                } else {
+                    call_tool(&mut self.store, &name, &args)
+                };
+                match result {
                     Ok(text) => json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -84,8 +101,31 @@ pub fn serve(mut store: PalaceStore) -> Result<()> {
                 }
             }
             _ => error_response(id, -32601, &format!("method not found: {method}")),
+        })
+    }
+}
+
+pub fn serve(store: PalaceStore) -> Result<()> {
+    let mut handler = McpHandler::new(store, false);
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let msg: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                write_msg(&mut out, &error_response(Value::Null, -32700, &format!("parse error: {e}")))?;
+                continue;
+            }
         };
-        write_msg(&mut out, &response)?;
+        if let Some(response) = handler.handle(&msg) {
+            write_msg(&mut out, &response)?;
+        }
     }
     Ok(())
 }

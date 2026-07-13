@@ -1,0 +1,35 @@
+# Undercroft remote MCP server — systemd unit template.
+#
+# Install:
+#   sudo useradd --system --home /var/lib/undercroft --shell /usr/sbin/nologin undercroft
+#   sudo install -d -o undercroft -g undercroft -m 750 /var/lib/undercroft /etc/undercroft
+#   sudo cp deploy/server.env.example /etc/undercroft/server.env   # edit, then chmod 600
+#   sudo cp target/release/undercroft /usr/local/bin/
+#   sudo cp deploy/undercroft-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now undercroft-server
+#
+# Binds 0.0.0.0:8765 and requires UNDERCROFT_MCP_HTTP_TOKEN (set in the
+# EnvironmentFile). Front it with a TLS-terminating reverse proxy.
+
+[Unit]
+Description=Undercroft remote MCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=undercroft
+Group=undercroft
+EnvironmentFile=/etc/undercroft/server.env
+Environment=UNDERCROFT_HOME=/var/lib/undercroft
+ExecStart=/usr/local/bin/undercroft serve-http --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/undercroft
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

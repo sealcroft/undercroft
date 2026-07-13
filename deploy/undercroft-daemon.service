@@ -1,0 +1,18 @@
+# Undercroft auto-save daemon — sweeps agent transcripts into the palace.
+#
+#   sudo cp deploy/undercroft-daemon.service /etc/systemd/system/
+#   systemctl --user daemon-reload && systemctl --user enable --now undercroft-daemon
+#
+# Runs as a user service so it can read ~/.claude/projects.
+
+[Unit]
+Description=Undercroft transcript auto-save daemon
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/undercroft daemon run --watch %h/.claude/projects --interval 300
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -38,11 +38,22 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   feature-gated (`--features onnx`), models always user-supplied
 - Compose services + `backends-e2e` suite against real servers
 
+## v0.4.0 — Ecosystem parity (done)
+
+- `undercroft-bench`: LongMemEval harness (same protocol/metrics as
+  upstream) + synthetic CI benchmark
+- MCP HTTP team server (`serve-http`, token-enforced, read-only mode) and
+  `deploy/` (compose + systemd)
+- `daemon run`, `transcript render`, `import` (mempalace migration path)
+- Claude Code plugin, hooks, commands, skills, Cursor rules, integrations
+  protocol, docs (architecture / security / PARITY), examples, devcontainer
+
 ## Next
 
-- **v0.4 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
-  LongMemEval / LoCoMo harness to measure the port honestly; L2 on-demand
-  room loading heuristics
-- **v0.5 — Ecosystem**: key rotation (re-seal under new derived keys);
+- **v0.5 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
+  LoCoMo / ConvoMem / MemBench dataset adapters; L2 on-demand room loading
+  heuristics; local-LLM refinement pipeline (Ollama) with the model_eval
+  calibration suite
+- **v0.6 — Ecosystem**: key rotation (re-seal under new derived keys);
   export bundles with recipient encryption; Milvus REST backend if demand
   exists

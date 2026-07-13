@@ -172,8 +172,12 @@ undercroft backup create|list|restore # verified snapshots, keeps last 10
 undercroft repair                     # backfill + vacuum + re-verify
 undercroft verify [--vault]           # HMAC every record + replay audit chain
 undercroft export [--vault]           # decrypted JSONL to stdout
+undercroft import <file.jsonl>        # migrate from undercroft or mempalace exports
+undercroft transcript render <f.jsonl># pretty-print an agent transcript
+undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
 undercroft serve-mcp [--vault]        # MCP stdio server (30 tools)
+undercroft serve-http [--host --port --read-only]  # shared team server (bearer auth)
 ```
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
@@ -239,6 +243,18 @@ client-side sealing, unlike upstream's plaintext uploads), and model-based
 embeddings (ONNX via tract, feature-gated). Not carried over: Milvus
 (gRPC-only, opt-in extra upstream) and embedded ChromaDB (a Python library;
 the bundled SQLite store fills that role).
+
+## More
+
+- [Getting started](docs/getting-started.md) · [Architecture](docs/architecture.md) ·
+  [Security model](docs/security.md) · [Integrations](docs/integrations.md) ·
+  [Remote team server](docs/remote-server.md)
+- [Parity with upstream MemPalace](docs/PARITY.md) — what's ported, what's
+  deliberately different, what's pending
+- [Benchmarks](benchmarks/README.md) — LongMemEval harness + synthetic CI benchmark
+- [Deploy](deploy/README.md) — compose team server, systemd units
+- Claude Code plugin: [.claude-plugin/](.claude-plugin/) · hooks: [hooks/](hooks/) ·
+  examples: [examples/](examples/)
 
 ## License
 

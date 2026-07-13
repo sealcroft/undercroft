@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="120" viewBox="0 0 480 120" role="img" aria-label="Undercroft">
+  <rect width="480" height="120" rx="16" fill="#0a0e14"/>
+  <!-- palace columns -->
+  <g fill="none" stroke="#4dc9f6" stroke-width="6" stroke-linecap="round">
+    <path d="M28 92 V52 M48 92 V52 M68 92 V52"/>
+    <path d="M20 52 L48 28 L76 52"/>
+    <path d="M20 92 H76"/>
+  </g>
+  <!-- keyhole in the pediment -->
+  <circle cx="48" cy="44" r="5" fill="#b0e8ff"/>
+  <rect x="45.5" y="46" width="5" height="9" rx="2" fill="#b0e8ff"/>
+  <text x="100" y="76" font-family="Georgia, 'Times New Roman', serif" font-size="44" fill="#e6f7ff">undercroft</text>
+</svg>

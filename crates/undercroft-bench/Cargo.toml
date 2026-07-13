@@ -1,0 +1,22 @@
+[package]
+name = "undercroft-bench"
+description = "Retrieval benchmarks for Undercroft: LongMemEval-format harness + synthetic self-contained benchmark"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "undercroft-bench"
+path = "src/main.rs"
+
+[dependencies]
+undercroft-core = { path = "../undercroft-core" }
+undercroft-vault = { path = "../undercroft-vault" }
+undercroft-store = { path = "../undercroft-store" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }

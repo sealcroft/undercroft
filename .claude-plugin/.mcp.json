@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "undercroft": {
+      "command": "undercroft",
+      "args": ["serve-mcp"]
+    }
+  }
+}

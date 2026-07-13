@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 — Ecosystem parity: benchmarks, team server, integrations
+
+- `undercroft-bench`: LongMemEval-protocol harness (session R@k, NDCG@k,
+  per-type breakdown) + deterministic synthetic benchmark wired into CI.
+- `serve-http`: MCP over HTTP for shared team servers — bearer token
+  mandatory on non-loopback binds, `--read-only` mode, `/healthz`.
+- `daemon run` (periodic transcript sweep), `transcript render`,
+  `import` (undercroft + mempalace export formats).
+- Recreated ecosystem directories natively: `deploy/` (compose server,
+  systemd units), `.claude-plugin/` (commands, hooks, skills, MCP),
+  `hooks/`, `commands/`, `skills/`, `rules/`, `integrations/`, `docs/`
+  (incl. PARITY.md), `examples/`, `.devcontainer/`, SVG logo.
+
+
 ## 0.3.0 — Remote backends + pluggable embedders
 
 - Remote vector indexes (Qdrant, Chroma, pgvector) as untrusted search

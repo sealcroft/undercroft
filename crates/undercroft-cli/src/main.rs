@@ -4,6 +4,7 @@
 //! memories live in isolated vaults with per-vault derived keys, AEAD
 //! encryption, and HMAC integrity verification.
 
+mod http;
 mod mcp;
 
 use anyhow::{bail, Context, Result};
@@ -148,6 +149,39 @@ enum Command {
     ServeMcp {
         #[arg(long, default_value = "default")]
         vault: String,
+    },
+    /// Serve MCP over HTTP — the shared team-server mode. Requires
+    /// UNDERCROFT_MCP_HTTP_TOKEN for any non-loopback bind.
+    ServeHttp {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+        #[arg(long, default_value = "default")]
+        vault: String,
+        /// Expose recall without write access
+        #[arg(long)]
+        read_only: bool,
+    },
+    /// Background auto-save loop: periodically sweep a transcript directory
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+    /// Work with raw agent transcripts
+    Transcript {
+        #[command(subcommand)]
+        action: TranscriptAction,
+    },
+    /// Import memories from a JSONL export (undercroft or mempalace format)
+    Import {
+        /// JSONL file (one drawer per line)
+        file: PathBuf,
+        #[arg(long, default_value = "default")]
+        vault: String,
+        /// Wing for records that do not carry one
+        #[arg(long, default_value = "imported")]
+        wing: String,
     },
     /// Knowledge graph: temporal facts with validity windows
     Kg {
@@ -346,6 +380,38 @@ enum TunnelAction {
 }
 
 #[derive(Subcommand)]
+enum DaemonAction {
+    /// Run the sweep loop in the foreground (systemd/compose manage the
+    /// process; upstream's start/stop/jobs machinery is replaced by them)
+    Run {
+        /// Transcript directory to watch
+        #[arg(long, default_value = "~/.claude/projects")]
+        watch: String,
+        /// Seconds between sweeps
+        #[arg(long, default_value_t = 300)]
+        interval: u64,
+        #[arg(long, default_value = "default")]
+        vault: String,
+        #[arg(long, default_value = "claude-code")]
+        wing: String,
+        /// Sweep once and exit (for tests / cron)
+        #[arg(long)]
+        once: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TranscriptAction {
+    /// Render a JSONL agent transcript as readable prose
+    Render {
+        file: PathBuf,
+        /// Show at most N messages (0 = all)
+        #[arg(long, default_value_t = 0)]
+        max: usize,
+    },
+}
+
+#[derive(Subcommand)]
 enum IndexAction {
     /// Upload every drawer (sealed content + embedding) to a remote index
     Push {
@@ -518,40 +584,9 @@ fn main() -> Result<()> {
         Command::Sweep { path, vault, wing } => {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
-            let files = collect_transcripts(path)?;
-            if files.is_empty() {
-                bail!("no .jsonl transcripts under {}", path.display());
-            }
-            let mut filed = 0usize;
-            let mut skipped = 0usize;
-            for file in &files {
-                let Ok(text) = std::fs::read_to_string(file) else { continue };
-                let room = room_for_file(file);
-                for msg in undercroft_core::convo::parse_transcript(&text) {
-                    let content =
-                        format!("{}: {}", if msg.role == "user" { "User" } else { "Assistant" }, msg.text);
-                    let normalized = normalize_content(&content);
-                    // One drawer per message, keyed by (file, line) — re-sweeps
-                    // are no-ops for already-filed messages.
-                    if store.check_duplicate(&normalized)?.is_some() {
-                        skipped += 1;
-                        continue;
-                    }
-                    let drawer = Drawer::new(
-                        wing,
-                        &room,
-                        normalized,
-                        Some(file.display().to_string()),
-                        msg.line,
-                        "sweeper",
-                    );
-                    store.upsert(&drawer)?;
-                    filed += 1;
-                }
-            }
+            let (files, filed, skipped) = sweep_path(&mut store, path, wing, true)?;
             println!(
-                "Swept {} transcript(s): {filed} message drawer(s) filed, {skipped} already present",
-                files.len()
+                "Swept {files} transcript(s): {filed} message drawer(s) filed, {skipped} already present",
             );
         }
         Command::Search { query, vault, wing, room, limit, backend } => {
@@ -627,6 +662,96 @@ fn main() -> Result<()> {
         Command::ServeMcp { vault } => {
             let store = open_store(&cli, vault)?;
             mcp::serve(store)?;
+        }
+        Command::ServeHttp { host, port, vault, read_only } => {
+            let store = open_store(&cli, vault)?;
+            http::serve_http(store, host, *port, *read_only)?;
+        }
+        Command::Daemon { action } => match action {
+            DaemonAction::Run { watch, interval, vault, wing, once } => {
+                undercroft_core::validate_name(wing, "wing")?;
+                let watch_path = expand_home(watch);
+                let mut store = open_store(&cli, vault)?;
+                loop {
+                    match sweep_path(&mut store, &watch_path, wing, false) {
+                        Ok((files, filed, skipped)) => {
+                            println!(
+                                "[daemon] swept {files} transcript(s): {filed} filed, {skipped} present"
+                            );
+                        }
+                        Err(e) => eprintln!("[daemon] sweep failed: {e}"),
+                    }
+                    if *once {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(*interval));
+                }
+            }
+        },
+        Command::Transcript { action } => match action {
+            TranscriptAction::Render { file, max } => {
+                let text = std::fs::read_to_string(file)
+                    .with_context(|| format!("reading {}", file.display()))?;
+                let messages = undercroft_core::convo::parse_transcript(&text);
+                if messages.is_empty() {
+                    bail!("no prose messages found in {}", file.display());
+                }
+                let shown = if *max == 0 { messages.len() } else { (*max).min(messages.len()) };
+                for msg in &messages[..shown] {
+                    let who = if msg.role == "user" { "User" } else { "Assistant" };
+                    println!("── {who} (line {}) ──", msg.line);
+                    println!("{}\n", msg.text);
+                }
+                if shown < messages.len() {
+                    println!("… {} more message(s)", messages.len() - shown);
+                }
+            }
+        },
+        Command::Import { file, vault, wing } => {
+            undercroft_core::validate_name(wing, "wing")?;
+            let mut store = open_store(&cli, vault)?;
+            let text = std::fs::read_to_string(file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            let mut imported = 0usize;
+            let mut skipped = 0usize;
+            for (lineno, line) in text.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let v: serde_json::Value = serde_json::from_str(line)
+                    .with_context(|| format!("line {} is not valid JSON", lineno + 1))?;
+                let drawer = if v.get("meta").is_some() {
+                    // Native undercroft export: full Drawer JSON.
+                    serde_json::from_value::<Drawer>(v)
+                        .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?
+                } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
+                    // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
+                    let meta = v.get("metadata").cloned().unwrap_or_default();
+                    let g = |k: &str| meta.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+                    Drawer::new(
+                        &g("wing").unwrap_or_else(|| wing.clone()),
+                        &g("room").unwrap_or_else(|| "imported".into()),
+                        normalize_content(doc),
+                        g("source_file"),
+                        meta.get("chunk_index").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
+                        "import",
+                    )
+                } else {
+                    bail!(
+                        "line {}: unrecognized record (expected undercroft export with 'meta' \
+                         or mempalace export with 'document'/'metadata')",
+                        lineno + 1
+                    );
+                };
+                if store.check_duplicate(&drawer.content)?.is_some() {
+                    skipped += 1;
+                    continue;
+                }
+                store.upsert(&drawer)?;
+                imported += 1;
+            }
+            println!("Imported {imported} drawer(s) into vault '{vault}' ({skipped} duplicates skipped)");
         }
         Command::Kg { action, vault } => {
             let mut store = open_store(&cli, vault)?;
@@ -1026,6 +1151,62 @@ fn mine_convos(
         }
     }
     Ok((files.len(), drawers))
+}
+
+/// Sweep every transcript under `path`: one drawer per prose message,
+/// idempotent via keyed content fingerprints. Returns (files, filed,
+/// skipped). With `require_files`, an empty directory is an error (CLI
+/// sweep); the daemon treats it as a quiet pass.
+fn sweep_path(
+    store: &mut undercroft_store::PalaceStore,
+    path: &Path,
+    wing: &str,
+    require_files: bool,
+) -> Result<(usize, usize, usize)> {
+    let files = collect_transcripts(path)?;
+    if files.is_empty() {
+        if require_files {
+            bail!("no .jsonl transcripts under {}", path.display());
+        }
+        return Ok((0, 0, 0));
+    }
+    let mut filed = 0usize;
+    let mut skipped = 0usize;
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        let room = room_for_file(file);
+        for msg in undercroft_core::convo::parse_transcript(&text) {
+            let content =
+                format!("{}: {}", if msg.role == "user" { "User" } else { "Assistant" }, msg.text);
+            let normalized = normalize_content(&content);
+            // One drawer per message, keyed by (file, line) — re-sweeps
+            // are no-ops for already-filed messages.
+            if store.check_duplicate(&normalized)?.is_some() {
+                skipped += 1;
+                continue;
+            }
+            let drawer = Drawer::new(
+                wing,
+                &room,
+                normalized,
+                Some(file.display().to_string()),
+                msg.line,
+                "sweeper",
+            );
+            store.upsert(&drawer)?;
+            filed += 1;
+        }
+    }
+    Ok((files.len(), filed, skipped))
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
 }
 
 fn room_for_file(file: &Path) -> String {

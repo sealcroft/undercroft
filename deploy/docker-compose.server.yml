@@ -1,0 +1,59 @@
+# Undercroft remote team server — MCP over HTTP, backed by a central Qdrant.
+#
+# One command stands up a shared memory service a whole team's AI clients
+# connect to. Unlike the upstream MemPalace server, drawer content reaches
+# Qdrant SEALED (encrypted client-side inside the undercroft container);
+# the vector index never holds plaintext.
+#
+#   1. cp deploy/server.env.example deploy/.env  &&  edit deploy/.env
+#      (at minimum set UNDERCROFT_MCP_HTTP_TOKEN to a long random secret)
+#   2. docker compose -f deploy/docker-compose.server.yml --env-file deploy/.env up -d
+#   3. connect a client:
+#      claude mcp add --transport http undercroft http://YOUR_HOST:8765/mcp \
+#        --header "Authorization: Bearer $UNDERCROFT_MCP_HTTP_TOKEN"
+#
+# SECURITY: this exposes plaintext HTTP on :8765. For anything beyond a
+# trusted private network, put a TLS-terminating reverse proxy in front
+# (nginx/Caddy/Traefik) and only expose the proxy. The server refuses to
+# start on a non-loopback bind without the bearer token.
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    restart: unless-stopped
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    # Not published to the host: only the undercroft service reaches it over
+    # the internal compose network.
+
+  undercroft:
+    build:
+      context: ..
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+    command:
+      - serve-http
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8765"
+      # Uncomment to expose recall without write access:
+      # - --read-only
+    environment:
+      UNDERCROFT_MCP_HTTP_TOKEN: ${UNDERCROFT_MCP_HTTP_TOKEN:?set UNDERCROFT_MCP_HTTP_TOKEN in deploy/.env}
+      UNDERCROFT_QDRANT_URL: http://qdrant:6333
+    ports:
+      - "8765:8765"
+    volumes:
+      - undercroft-data:/data
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8765 && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q 200 <(head -1 <&3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  qdrant-storage:
+  undercroft-data:

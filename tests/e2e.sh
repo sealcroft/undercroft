@@ -152,6 +152,91 @@ else
   echo "FAIL  tamper detection — exit $code"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 
+echo "== Transcripts: render, import, daemon =="
+T_DIR="$(mktemp -d)"
+cat > "$T_DIR/session-x.jsonl" <<'JSONL'
+{"type":"user","message":{"role":"user","content":"where do we keep the deploy runbook?"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The runbook lives in ops/runbooks/deploy.md — release train section."}]}}
+JSONL
+check "transcript render"         0 "release train"                  -- "$BIN" transcript render "$T_DIR/session-x.jsonl"
+check "transcript render max"     0 "more message(s)"                -- "$BIN" transcript render "$T_DIR/session-x.jsonl" --max 1
+check "daemon --once sweeps"      0 "swept 1 transcript(s)"          -- "$BIN" daemon run --watch "$T_DIR" --once --wing daemon-test
+check "daemon result searchable"  0 "runbook"                        -- "$BIN" search "deploy runbook location" --wing daemon-test
+
+EXPORT_FILE="$(mktemp)"
+"$BIN" export > "$EXPORT_FILE"
+IMPORT_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" init >/dev/null
+out="$(UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$EXPORT_FILE" 2>&1)"; code=$?
+if [ $code -eq 0 ] && grep -q "Imported" <<<"$out"; then
+  echo "ok    import from export"; PASS=$((PASS+1))
+else
+  echo "FAIL  import from export"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# Mempalace-format line imports too.
+MEMPAL_FILE="$(mktemp)"
+echo '{"document":"legacy memory from the python palace","metadata":{"wing":"legacy","room":"misc","chunk_index":0}}' > "$MEMPAL_FILE"
+out="$(UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$MEMPAL_FILE" 2>&1)"; code=$?
+if [ $code -eq 0 ] && UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" search "legacy python palace" | grep -q "legacy"; then
+  echo "ok    mempalace-format import"; PASS=$((PASS+1))
+else
+  echo "FAIL  mempalace-format import"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+
+echo "== HTTP MCP server =="
+# Non-loopback bind without token must be refused.
+check "http refuses tokenless 0.0.0.0" 1 "UNDERCROFT_MCP_HTTP_TOKEN" -- "$BIN" serve-http --host 0.0.0.0 --port 18765
+export UNDERCROFT_MCP_HTTP_TOKEN="e2e-secret-token"
+"$BIN" serve-http --host 127.0.0.1 --port 18765 &
+HTTP_PID=$!
+sleep 1
+http_req() { # http_req <path> <body-or-empty> [auth]
+  local path="$1" body="$2" auth="${3:-}"
+  exec 3<>/dev/tcp/127.0.0.1/18765
+  if [ -n "$body" ]; then
+    printf 'POST %s HTTP/1.0\r\nContent-Type: application/json\r\n%sContent-Length: %d\r\n\r\n%s' \
+      "$path" "$auth" "${#body}" "$body" >&3
+  else
+    printf 'GET %s HTTP/1.0\r\n\r\n' "$path" >&3
+  fi
+  cat <&3
+  exec 3<&- 3>&-
+}
+out="$(http_req /healthz "")"
+if grep -q "^ok$" <<<"$out" || grep -q "ok" <<<"$out"; then
+  echo "ok    healthz"; PASS=$((PASS+1))
+else
+  echo "FAIL  healthz"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+out="$(http_req /mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
+if grep -q "401" <<<"$out"; then
+  echo "ok    http rejects missing token"; PASS=$((PASS+1))
+else
+  echo "FAIL  http rejects missing token"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+out="$(http_req /mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' $'Authorization: Bearer e2e-secret-token\r\n')"
+if grep -q "undercroft_kg_add" <<<"$out"; then
+  echo "ok    http tools/list with token"; PASS=$((PASS+1))
+else
+  echo "FAIL  http tools/list with token"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+kill $HTTP_PID 2>/dev/null
+# Read-only server rejects writes.
+"$BIN" serve-http --host 127.0.0.1 --port 18766 --read-only &
+RO_PID=$!
+sleep 1
+out="$(exec 3<>/dev/tcp/127.0.0.1/18766; body='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_save","arguments":{"content":"nope"}}}'; printf 'POST /mcp HTTP/1.0\r\nContent-Type: application/json\r\nAuthorization: Bearer e2e-secret-token\r\nContent-Length: %d\r\n\r\n%s' "${#body}" "$body" >&3; cat <&3; exec 3<&- 3>&-)"
+if grep -q "read-only" <<<"$out"; then
+  echo "ok    read-only rejects writes"; PASS=$((PASS+1))
+else
+  echo "FAIL  read-only rejects writes"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+kill $RO_PID 2>/dev/null
+unset UNDERCROFT_MCP_HTTP_TOKEN
+
+echo "== Benchmark harness =="
+check "bench synth passes"        0 "SYNTH OK"                       -- "${BIN%/*}/undercroft-bench" synth --n 60
+
 echo "== MCP server (JSON-RPC over stdio) =="
 MCP_OUT="$(printf '%s\n%s\n%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
