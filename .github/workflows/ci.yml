@@ -4,7 +4,46 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  lint:
+    name: Lint (rustfmt + clippy)
+    runs-on: ubuntu-latest
+    container: rust:1.90-slim-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add rustfmt clippy
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy (warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings
+
+  audit:
+    name: Dependency audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  trivy-fs:
+    name: Trivy scan (source, secrets, configs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -13,7 +52,22 @@ jobs:
         run: docker build --target test -t undercroft-test . && docker run --rm undercroft-test
       - name: E2E UI/UX suite (Docker)
         run: docker compose run --rm e2e
-      - name: Remote backends suite (qdrant/chroma/pgvector)
+      - name: Remote backends suite (qdrant/chroma/pgvector/milvus)
         run: docker compose run --rm backends-e2e
       - name: ONNX embedder compile check
         run: docker compose run --rm onnx-build
+
+  trivy-image:
+    name: Trivy scan (runtime image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build runtime image
+        run: docker build -t undercroft:scan .
+      - uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: image
+          image-ref: undercroft:scan
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true

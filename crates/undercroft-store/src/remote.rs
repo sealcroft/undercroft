@@ -18,6 +18,9 @@ use undercroft_index::{IndexRecord, VectorIndex};
 
 use crate::{PalaceStore, SearchHit, SearchOptions, StoreError};
 
+/// Raw index-push row: (id, wing, room, content, embedding).
+type PushRow = (String, String, String, Vec<u8>, Vec<u8>);
+
 impl PalaceStore {
     /// Collection name for this vault on remote backends.
     pub fn index_collection(&self) -> String {
@@ -32,7 +35,7 @@ impl PalaceStore {
         let mut stmt = self
             .conn
             .prepare("SELECT id, wing, room, content, embedding FROM drawers ORDER BY seq")?;
-        let rows: Vec<(String, String, String, Vec<u8>, Vec<u8>)> = stmt
+        let rows: Vec<PushRow> = stmt
             .query_map([], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?

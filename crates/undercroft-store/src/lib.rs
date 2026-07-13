@@ -53,6 +53,9 @@ pub enum StoreError {
     Index(#[from] undercroft_index::IndexError),
 }
 
+/// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
+type SearchRow = (String, String, Vec<u8>, Vec<u8>, Vec<u8>);
+
 pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
     out.extend_from_slice(id.as_bytes());
@@ -110,7 +113,7 @@ impl PalaceStore {
     }
 
     /// Open with an explicit embedder. The embedder's identity (model name
-    /// + dimension) is recorded on first use and enforced afterwards —
+    /// and dimension) is recorded on first use and enforced afterwards:
     /// searching across a silent model swap degrades recall, so a mismatch
     /// is an error unless `UNDERCROFT_FORCE_EMBEDDER=1` re-records it
     /// (follow with `repair` to re-embed).
@@ -430,7 +433,7 @@ impl PalaceStore {
             sql.push_str(&clauses.join(" AND "));
         }
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows: Vec<(String, String, Vec<u8>, Vec<u8>, Vec<u8>)> = stmt
+        let rows: Vec<SearchRow> = stmt
             .query_map(rusqlite::params_from_iter(binds.iter()), |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?

@@ -281,10 +281,7 @@ pub mod chroma {
                 None => req.call(),
             };
             match resp {
-                Ok(r) => r
-                    .into_json()
-                    .or_else(|_| Ok(Value::Null))
-                    .map_err(|e: std::io::Error| IndexError::BadResponse(e.to_string())),
+                Ok(r) => Ok(r.into_json().unwrap_or(Value::Null)),
                 Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
                     "{method} {url} -> {code}: {}",
                     r.into_string().unwrap_or_default()
@@ -705,6 +702,22 @@ pub mod milvus {
     }
 }
 
+// Expose the point-id helper for the unit test without making it public API.
+impl qdrant::QdrantIndex {
+    #[doc(hidden)]
+    pub fn point_id_for_test(id: &str) -> String {
+        let h = format!("{:0<32}", id.chars().take(32).collect::<String>());
+        format!(
+            "{}-{}-{}-{}-{}",
+            &h[0..8],
+            &h[8..12],
+            &h[12..16],
+            &h[16..20],
+            &h[20..32]
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,21 +759,5 @@ mod tests {
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect();
         format!("undercroft_{safe}")
-    }
-}
-
-// Expose the point-id helper for the unit test without making it public API.
-impl qdrant::QdrantIndex {
-    #[doc(hidden)]
-    pub fn point_id_for_test(id: &str) -> String {
-        let h = format!("{:0<32}", id.chars().take(32).collect::<String>());
-        format!(
-            "{}-{}-{}-{}-{}",
-            &h[0..8],
-            &h[8..12],
-            &h[12..16],
-            &h[16..20],
-            &h[20..32]
-        )
     }
 }

@@ -18,7 +18,7 @@ fn lang() -> String {
     let raw = std::env::var("UNDERCROFT_LANG")
         .or_else(|_| std::env::var("LANG"))
         .unwrap_or_default();
-    raw.split(|c: char| c == '_' || c == '-' || c == '.')
+    raw.split(['_', '-', '.'])
         .next()
         .unwrap_or("")
         .to_lowercase()

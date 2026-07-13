@@ -60,6 +60,12 @@ pub struct Hallway {
     pub strength: u64,
 }
 
+/// Raw tunnel row: (id, from_wing, to_wing, label, tag, created_at).
+type TunnelRow = (String, String, String, String, Vec<u8>, String);
+
+/// One wing's rooms with drawer counts.
+pub type WingRooms = (String, Vec<(String, u64)>);
+
 fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -226,7 +232,7 @@ impl PalaceStore {
     }
 
     /// The palace's full wing → rooms tree (mempalace's taxonomy).
-    pub fn taxonomy(&self) -> Result<Vec<(String, Vec<(String, u64)>)>, StoreError> {
+    pub fn taxonomy(&self) -> Result<Vec<WingRooms>, StoreError> {
         let mut out = Vec::new();
         for (wing, _) in self.wings()? {
             let rooms = self.rooms(&wing)?;
@@ -414,7 +420,7 @@ impl PalaceStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, from_wing, to_wing, label, tag, created_at FROM tunnels ORDER BY seq",
         )?;
-        let rows: Vec<(String, String, String, String, Vec<u8>, String)> = stmt
+        let rows: Vec<TunnelRow> = stmt
             .query_map([], |r| {
                 Ok((
                     r.get(0)?,
@@ -514,7 +520,7 @@ impl PalaceStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, from_wing, to_wing, label, tag, created_at FROM tunnels ORDER BY seq",
         )?;
-        let rows: Vec<(String, String, String, String, Vec<u8>, String)> = stmt
+        let rows: Vec<TunnelRow> = stmt
             .query_map([], |r| {
                 Ok((
                     r.get(0)?,

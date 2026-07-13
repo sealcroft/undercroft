@@ -612,14 +612,17 @@ fn run_model_eval(
 /// pairs whose evidence is dialog ids like "D3:12" (session 3). Session-
 /// granularity retrieval: rank sessions, score R@k against evidence
 /// sessions. Returns (recall_sum, evaluated, per_category).
+/// Per-category (recall_sum, count) accumulator.
+type CategoryScores = std::collections::BTreeMap<String, (f32, u32)>;
+
 fn locomo_eval(
     samples: &[Value],
     k: usize,
     limit: Option<usize>,
-) -> Result<(f32, u32, std::collections::BTreeMap<String, (f32, u32)>)> {
+) -> Result<(f32, u32, CategoryScores)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
-    let mut per_cat: std::collections::BTreeMap<String, (f32, u32)> = Default::default();
+    let mut per_cat: CategoryScores = Default::default();
     for sample in samples {
         let conv = sample
             .get("conversation")
@@ -931,13 +934,16 @@ fn token_f1(a: &str, b: &str) -> f32 {
     2.0 * p * r / (p + r)
 }
 
+/// A matched (pred_idx, gold_idx, token_f1) alignment pair.
+type AlignedPair = (usize, usize, f32);
+
 /// Greedy one-to-one alignment of predictions to gold by descending token
-/// F1; pairs below `threshold` never match. Returns (pred_idx, gold_idx, f1).
+/// F1; pairs below `threshold` never match.
 fn greedy_align(
     pred: &[(String, String)],
     gold: &[(String, String)],
     threshold: f32,
-) -> Vec<(usize, usize, f32)> {
+) -> Vec<AlignedPair> {
     let mut scored: Vec<(usize, usize, f32)> = Vec::new();
     for (pi, p) in pred.iter().enumerate() {
         for (gi, g) in gold.iter().enumerate() {

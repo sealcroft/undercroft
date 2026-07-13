@@ -147,6 +147,7 @@ impl PalaceStore {
 
     /// Add a fact. Entities are created implicitly. Returns the triple id;
     /// re-adding the same (s, p, o, valid_from) is idempotent.
+    #[allow(clippy::too_many_arguments)]
     pub fn kg_add(
         &mut self,
         subject: &str,
