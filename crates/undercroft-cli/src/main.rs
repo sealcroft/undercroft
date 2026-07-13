@@ -79,13 +79,27 @@ enum Command {
         #[arg(long, default_value = "inbox")]
         room: String,
     },
-    /// Mine a directory of text files into the palace
+    /// Mine a directory into the palace (text files, or agent transcripts)
     Mine {
         /// Directory (or single file) to mine
         path: PathBuf,
         #[arg(long, default_value = "default")]
         vault: String,
         #[arg(long, default_value = "mined")]
+        wing: String,
+        /// "files" for documents, "convos" for Claude Code / Codex JSONL
+        /// session transcripts
+        #[arg(long, default_value = "files")]
+        mode: String,
+    },
+    /// Sweep transcripts: one verbatim drawer per user/assistant message
+    /// (idempotent, resume-safe)
+    Sweep {
+        /// Directory of .jsonl transcripts (or a single file)
+        path: PathBuf,
+        #[arg(long, default_value = "default")]
+        vault: String,
+        #[arg(long, default_value = "convos")]
         wing: String,
     },
     /// Search memories (hybrid semantic + lexical + recency)
@@ -118,10 +132,222 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
-    /// Serve the MCP stdio server (tools: save, search, wake_up, verify)
+    /// Serve the MCP stdio server (full palace / KG / diary tool surface)
     ServeMcp {
         #[arg(long, default_value = "default")]
         vault: String,
+    },
+    /// Knowledge graph: temporal facts with validity windows
+    Kg {
+        #[command(subcommand)]
+        action: KgAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
+    },
+    /// Manage individual drawers
+    Drawer {
+        #[command(subcommand)]
+        action: DrawerAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
+    },
+    /// Agent diaries (each agent gets its own wing)
+    Diary {
+        #[command(subcommand)]
+        action: DiaryAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
+    },
+    /// Cross-wing tunnels: create, follow, traverse
+    Tunnel {
+        #[command(subcommand)]
+        action: TunnelAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
+    },
+    /// Within-wing entity co-occurrence connections
+    Hallways {
+        wing: String,
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
+    /// Palace statistics (records, wings, rooms, KG, size)
+    Stats {
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
+    /// Wing → room taxonomy tree
+    Taxonomy {
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
+    /// Find (and optionally remove) exact-duplicate drawers
+    Dedup {
+        #[arg(long, default_value = "default")]
+        vault: String,
+        /// Actually delete duplicates (default: report only)
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Repair: backfill fingerprints, vacuum, re-verify
+    Repair {
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
+    /// Vault backups: create, list, restore
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
+    },
+    /// Print auto-save hook settings for an agent client
+    Hooks {
+        /// Client: claude-code
+        #[arg(default_value = "claude-code")]
+        client: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum KgAction {
+    /// Add a fact: subject predicate object
+    Add {
+        subject: String,
+        predicate: String,
+        object: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, default_value_t = 1.0)]
+        confidence: f64,
+    },
+    /// Facts about an entity
+    Query {
+        entity: String,
+        #[arg(long)]
+        as_of: Option<String>,
+        /// outgoing | incoming | both
+        #[arg(long, default_value = "outgoing")]
+        direction: String,
+    },
+    /// Facts using a predicate
+    Rel {
+        predicate: String,
+        #[arg(long)]
+        as_of: Option<String>,
+    },
+    /// Close the validity window of matching active facts
+    Invalidate {
+        subject: String,
+        predicate: String,
+        #[arg(long)]
+        object: Option<String>,
+        #[arg(long)]
+        ended: Option<String>,
+    },
+    /// Replace the current value of (subject, predicate)
+    Supersede {
+        subject: String,
+        predicate: String,
+        new_object: String,
+        #[arg(long)]
+        at: Option<String>,
+    },
+    /// Full history, optionally for one entity
+    Timeline {
+        #[arg(long)]
+        entity: Option<String>,
+    },
+    /// Graph statistics
+    Stats,
+}
+
+#[derive(Subcommand)]
+enum DrawerAction {
+    /// Print one drawer verbatim
+    Get { id: String },
+    /// List drawer summaries
+    List {
+        #[arg(long)]
+        wing: Option<String>,
+        #[arg(long)]
+        room: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+    },
+    /// Replace a drawer's content in place
+    Update { id: String, content: String },
+    /// Delete one drawer (tamper-evident tombstone)
+    Delete { id: String },
+    /// Delete every drawer mined from a source file
+    DeleteBySource { source: String },
+    /// Check whether exact content is already filed
+    CheckDup { content: String },
+}
+
+#[derive(Subcommand)]
+enum DiaryAction {
+    /// Append a diary entry for an agent
+    Write { agent: String, entry: String },
+    /// Read an agent's recent diary entries
+    Read {
+        agent: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// List agents with diaries
+    Agents,
+}
+
+#[derive(Subcommand)]
+enum TunnelAction {
+    /// Connect two wings
+    Create {
+        from: String,
+        to: String,
+        #[arg(long, default_value = "related")]
+        label: String,
+    },
+    /// List tunnels (optionally touching one wing)
+    List {
+        #[arg(long)]
+        wing: Option<String>,
+    },
+    /// Recent drawers from a tunnel's destination wing
+    Follow {
+        id: String,
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+    },
+    /// Remove a tunnel
+    Delete { id: String },
+    /// BFS reachable wings from a starting wing
+    Traverse {
+        start: String,
+        #[arg(long, default_value_t = 3)]
+        depth: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupAction {
+    /// Snapshot a vault into backups/
+    Create {
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
+    /// List available backups
+    List,
+    /// Restore a backup over its vault
+    Restore {
+        name: String,
+        /// Overwrite the existing vault
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -231,43 +457,55 @@ fn main() -> Result<()> {
             store.upsert(&drawer)?;
             println!("Filed drawer {} in {}/{} (vault '{}')", drawer.id, wing, room, vault);
         }
-        Command::Mine { path, vault, wing } => {
+        Command::Mine { path, vault, wing, mode } => {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
-            let files = collect_files(path)?;
+            let (files, drawers) = match mode.as_str() {
+                "files" => mine_files(&mut store, path, wing)?,
+                "convos" => mine_convos(&mut store, path, wing)?,
+                other => bail!("unknown mine mode {other:?} (expected: files, convos)"),
+            };
+            println!(
+                "Mined {files} file(s) into vault '{vault}' wing '{wing}': {drawers} drawer(s) filed",
+            );
+        }
+        Command::Sweep { path, vault, wing } => {
+            undercroft_core::validate_name(wing, "wing")?;
+            let mut store = open_store(&cli, vault)?;
+            let files = collect_transcripts(path)?;
             if files.is_empty() {
-                bail!("no minable text files under {}", path.display());
+                bail!("no .jsonl transcripts under {}", path.display());
             }
-            let mut drawers = 0usize;
+            let mut filed = 0usize;
+            let mut skipped = 0usize;
             for file in &files {
                 let Ok(text) = std::fs::read_to_string(file) else { continue };
-                let normalized = normalize_content(&text);
-                let room = file
-                    .file_stem()
-                    .map(|s| undercroft_core::normalize_wing_name(&s.to_string_lossy()))
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "unsorted".into());
-                for (idx, chunk) in
-                    chunk_text(&normalized, ChunkOptions::default()).into_iter().enumerate()
-                {
+                let room = room_for_file(file);
+                for msg in undercroft_core::convo::parse_transcript(&text) {
+                    let content =
+                        format!("{}: {}", if msg.role == "user" { "User" } else { "Assistant" }, msg.text);
+                    let normalized = normalize_content(&content);
+                    // One drawer per message, keyed by (file, line) — re-sweeps
+                    // are no-ops for already-filed messages.
+                    if store.check_duplicate(&normalized)?.is_some() {
+                        skipped += 1;
+                        continue;
+                    }
                     let drawer = Drawer::new(
                         wing,
                         &room,
-                        chunk,
+                        normalized,
                         Some(file.display().to_string()),
-                        idx as u32,
-                        "miner",
+                        msg.line,
+                        "sweeper",
                     );
                     store.upsert(&drawer)?;
-                    drawers += 1;
+                    filed += 1;
                 }
             }
             println!(
-                "Mined {} file(s) into vault '{}' wing '{}': {} drawer(s) filed",
-                files.len(),
-                vault,
-                wing,
-                drawers
+                "Swept {} transcript(s): {filed} message drawer(s) filed, {skipped} already present",
+                files.len()
             );
         }
         Command::Search { query, vault, wing, room, limit } => {
@@ -341,8 +579,462 @@ fn main() -> Result<()> {
             let store = open_store(&cli, vault)?;
             mcp::serve(store)?;
         }
+        Command::Kg { action, vault } => {
+            let mut store = open_store(&cli, vault)?;
+            match action {
+                KgAction::Add { subject, predicate, object, from, to, confidence } => {
+                    let id = store.kg_add(
+                        subject,
+                        predicate,
+                        object,
+                        from.as_deref(),
+                        to.as_deref(),
+                        *confidence,
+                        None,
+                    )?;
+                    println!("Added fact {id}: {subject} --{predicate}--> {object}");
+                }
+                KgAction::Query { entity, as_of, direction } => {
+                    let facts = store.kg_query_entity(entity, as_of.as_deref(), direction)?;
+                    print_triples(&facts);
+                }
+                KgAction::Rel { predicate, as_of } => {
+                    let facts = store.kg_query_relationship(predicate, as_of.as_deref())?;
+                    print_triples(&facts);
+                }
+                KgAction::Invalidate { subject, predicate, object, ended } => {
+                    let n = store.kg_invalidate(
+                        subject,
+                        predicate,
+                        object.as_deref(),
+                        ended.as_deref(),
+                    )?;
+                    println!("Invalidated {n} fact(s)");
+                }
+                KgAction::Supersede { subject, predicate, new_object, at } => {
+                    let id = store.kg_supersede(subject, predicate, new_object, at.as_deref())?;
+                    println!("Superseded: {subject} --{predicate}--> {new_object} ({id})");
+                }
+                KgAction::Timeline { entity } => {
+                    let facts = store.kg_timeline(entity.as_deref())?;
+                    print_triples(&facts);
+                }
+                KgAction::Stats => {
+                    let st = store.kg_stats()?;
+                    println!(
+                        "entities: {}  triples: {}  active: {}  closed: {}",
+                        st.entities, st.triples, st.active, st.closed
+                    );
+                }
+            }
+        }
+        Command::Drawer { action, vault } => {
+            let mut store = open_store(&cli, vault)?;
+            match action {
+                DrawerAction::Get { id } => match store.get(id)? {
+                    Some(d) => {
+                        println!("id:     {}", d.id);
+                        println!("wing:   {}/{}", d.meta.wing, d.meta.room);
+                        println!("filed:  {}", d.meta.filed_at);
+                        if let Some(src) = &d.meta.source_file {
+                            println!("source: {src}");
+                        }
+                        println!("---\n{}", d.content);
+                    }
+                    None => {
+                        println!("No drawer with id {id}");
+                        std::process::exit(1);
+                    }
+                },
+                DrawerAction::List { wing, room, limit, offset } => {
+                    let rows =
+                        store.list_drawers(wing.as_deref(), room.as_deref(), *limit, *offset)?;
+                    if rows.is_empty() {
+                        println!("No drawers.");
+                    }
+                    for d in rows {
+                        println!(
+                            "{}  {}/{}  {}  {}",
+                            d.id,
+                            d.wing,
+                            d.room,
+                            d.filed_at,
+                            first_line(&d.preview, 60)
+                        );
+                    }
+                }
+                DrawerAction::Update { id, content } => {
+                    if store.update_drawer(id, content)? {
+                        println!("Updated drawer {id}");
+                    } else {
+                        bail!("no drawer with id {id}");
+                    }
+                }
+                DrawerAction::Delete { id } => {
+                    if store.delete_drawer(id)? {
+                        println!("Deleted drawer {id}");
+                    } else {
+                        bail!("no drawer with id {id}");
+                    }
+                }
+                DrawerAction::DeleteBySource { source } => {
+                    let n = store.delete_by_source(source)?;
+                    println!("Deleted {n} drawer(s) from {source}");
+                }
+                DrawerAction::CheckDup { content } => {
+                    match store.check_duplicate(&normalize_content(content))? {
+                        Some(id) => println!("duplicate of {id}"),
+                        None => println!("not filed"),
+                    }
+                }
+            }
+        }
+        Command::Diary { action, vault } => {
+            let mut store = open_store(&cli, vault)?;
+            match action {
+                DiaryAction::Write { agent, entry } => {
+                    let id = store.diary_write(agent, entry)?;
+                    println!("Diary entry {id} written for agent '{agent}'");
+                }
+                DiaryAction::Read { agent, limit } => {
+                    let entries = store.diary_read(agent, *limit)?;
+                    if entries.is_empty() {
+                        println!("No diary entries for agent '{agent}'.");
+                    }
+                    for e in entries {
+                        println!("[{}] {}", e.meta.filed_at, e.content);
+                    }
+                }
+                DiaryAction::Agents => {
+                    for a in store.list_agents()? {
+                        println!("{a}");
+                    }
+                }
+            }
+        }
+        Command::Tunnel { action, vault } => {
+            let mut store = open_store(&cli, vault)?;
+            match action {
+                TunnelAction::Create { from, to, label } => {
+                    let id = store.create_tunnel(from, to, label)?;
+                    println!("Tunnel {id}: {from} <-> {to} ({label})");
+                }
+                TunnelAction::List { wing } => {
+                    let tunnels = store.list_tunnels(wing.as_deref())?;
+                    if tunnels.is_empty() {
+                        println!("No tunnels.");
+                    }
+                    for t in tunnels {
+                        println!("{}  {} <-> {}  ({})", t.id, t.from_wing, t.to_wing, t.label);
+                    }
+                }
+                TunnelAction::Follow { id, limit } => {
+                    let drawers = store.follow_tunnel(id, *limit)?;
+                    for d in drawers {
+                        println!("- [{}/{}] {}", d.meta.wing, d.meta.room, first_line(&d.content, 100));
+                    }
+                }
+                TunnelAction::Delete { id } => {
+                    if store.delete_tunnel(id)? {
+                        println!("Deleted tunnel {id}");
+                    } else {
+                        bail!("no tunnel with id {id}");
+                    }
+                }
+                TunnelAction::Traverse { start, depth } => {
+                    for (wing, d) in store.traverse(start, *depth)? {
+                        println!("{}{}", "  ".repeat(d), wing);
+                    }
+                }
+            }
+        }
+        Command::Hallways { wing, top, vault } => {
+            let store = open_store(&cli, vault)?;
+            let halls = store.hallways(wing, *top)?;
+            if halls.is_empty() {
+                println!("No hallways in wing '{wing}' (need entities co-occurring in 2+ drawers).");
+            }
+            for h in halls {
+                println!("{} <-> {}  (strength {})", h.entity_a, h.entity_b, h.strength);
+            }
+        }
+        Command::Stats { vault } => {
+            let store = open_store(&cli, vault)?;
+            let st = store.stats()?;
+            println!("vault:   {} (level: {})", store.vault().id(), st.level);
+            println!("records: {}", st.records);
+            println!("rooms:   {}", st.rooms);
+            println!("tunnels: {}", st.tunnels);
+            println!("kg:      {} triples ({} active)", st.kg.triples, st.kg.active);
+            println!("writes:  {}", st.writes);
+            println!("db size: {} bytes", st.db_bytes);
+            println!("wings:");
+            for (w, n) in st.wings {
+                println!("  {w:<24} {n}");
+            }
+        }
+        Command::Taxonomy { vault } => {
+            let store = open_store(&cli, vault)?;
+            for (wing, rooms) in store.taxonomy()? {
+                println!("{wing}/");
+                for (room, n) in rooms {
+                    println!("  {room} ({n})");
+                }
+            }
+        }
+        Command::Dedup { vault, apply } => {
+            let mut store = open_store(&cli, vault)?;
+            let report = store.dedup(*apply)?;
+            println!(
+                "{} duplicate group(s), {} extra drawer(s) {}",
+                report.duplicate_groups,
+                report.removed.len(),
+                if report.applied { "removed" } else { "found (use --apply to remove)" }
+            );
+        }
+        Command::Repair { vault } => {
+            let mut store = open_store(&cli, vault)?;
+            let (report, backfilled) = store.repair()?;
+            println!("fingerprints backfilled: {backfilled}");
+            println!("records checked: {}", report.records_checked);
+            println!(
+                "integrity: {}",
+                if report.ok() { "ok" } else { "FAILED — see verify" }
+            );
+            if !report.ok() {
+                std::process::exit(2);
+            }
+        }
+        Command::Backup { action } => {
+            let root = data_dir(&cli);
+            match action {
+                BackupAction::Create { vault } => {
+                    // Verify before snapshotting — never archive a bad palace.
+                    let store = open_store(&cli, vault)?;
+                    if !store.verify()?.ok() {
+                        bail!("refusing to back up vault '{vault}': integrity verification failed");
+                    }
+                    drop(store);
+                    let stamp = time::OffsetDateTime::now_utc()
+                        .format(&time::format_description::well_known::Rfc3339)?
+                        .replace([':', '.'], "-");
+                    let src = root.join("vaults").join(vault);
+                    let dst = root.join("backups").join(format!("{vault}-{stamp}"));
+                    copy_dir(&src, &dst)?;
+                    prune_backups(&root.join("backups"), vault, 10)?;
+                    println!("Backup created: {}", dst.display());
+                }
+                BackupAction::List => {
+                    let dir = root.join("backups");
+                    let mut names: Vec<String> = match std::fs::read_dir(&dir) {
+                        Ok(rd) => rd
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.file_name().to_string_lossy().to_string())
+                            .collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    names.sort();
+                    if names.is_empty() {
+                        println!("No backups.");
+                    }
+                    for n in names {
+                        println!("{n}");
+                    }
+                }
+                BackupAction::Restore { name, force } => {
+                    let src = root.join("backups").join(name);
+                    if !src.join("vault.json").exists() {
+                        bail!("no backup named {name}");
+                    }
+                    let vault_name = name
+                        .rsplitn(2, "-20")
+                        .last()
+                        .unwrap_or(name)
+                        .to_string();
+                    let dst = root.join("vaults").join(&vault_name);
+                    if dst.exists() && !force {
+                        bail!(
+                            "vault '{vault_name}' exists; pass --force to overwrite it with the backup"
+                        );
+                    }
+                    if dst.exists() {
+                        std::fs::remove_dir_all(&dst)?;
+                    }
+                    copy_dir(&src, &dst)?;
+                    println!("Restored {} -> vault '{}'", name, vault_name);
+                }
+            }
+        }
+        Command::Hooks { client } => match client.as_str() {
+            "claude-code" => {
+                println!("{}", claude_code_hooks_json());
+            }
+            other => bail!("unknown client {other:?} (supported: claude-code)"),
+        },
     }
     Ok(())
+}
+
+fn print_triples(facts: &[undercroft_store::Triple]) {
+    if facts.is_empty() {
+        println!("No facts.");
+    }
+    for t in facts {
+        let window = match (&t.valid_from, &t.valid_to) {
+            (Some(f), Some(u)) => format!(" [{f} .. {u}]"),
+            (Some(f), None) => format!(" [{f} ..]"),
+            (None, Some(u)) => format!(" [.. {u}]"),
+            (None, None) => String::new(),
+        };
+        println!("{} --{}--> {}{}", t.subject, t.predicate, t.object, window);
+    }
+}
+
+fn mine_files(
+    store: &mut undercroft_store::PalaceStore,
+    path: &Path,
+    wing: &str,
+) -> Result<(usize, usize)> {
+    let files = collect_files(path)?;
+    if files.is_empty() {
+        bail!("no minable text files under {}", path.display());
+    }
+    let mut drawers = 0usize;
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        let normalized = normalize_content(&text);
+        let room = room_for_file(file);
+        for (idx, chunk) in chunk_text(&normalized, ChunkOptions::default()).into_iter().enumerate()
+        {
+            let drawer = Drawer::new(
+                wing,
+                &room,
+                chunk,
+                Some(file.display().to_string()),
+                idx as u32,
+                "miner",
+            );
+            store.upsert(&drawer)?;
+            drawers += 1;
+        }
+    }
+    Ok((files.len(), drawers))
+}
+
+fn mine_convos(
+    store: &mut undercroft_store::PalaceStore,
+    path: &Path,
+    wing: &str,
+) -> Result<(usize, usize)> {
+    let files = collect_transcripts(path)?;
+    if files.is_empty() {
+        bail!("no .jsonl transcripts under {}", path.display());
+    }
+    let mut drawers = 0usize;
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        let messages = undercroft_core::convo::parse_transcript(&text);
+        if messages.is_empty() {
+            continue;
+        }
+        let room = room_for_file(file);
+        for (idx, chunk) in undercroft_core::convo::chunk_exchanges(&messages, 800)
+            .into_iter()
+            .enumerate()
+        {
+            let drawer = Drawer::new(
+                wing,
+                &room,
+                normalize_content(&chunk),
+                Some(file.display().to_string()),
+                idx as u32,
+                "convo-miner",
+            );
+            store.upsert(&drawer)?;
+            drawers += 1;
+        }
+    }
+    Ok((files.len(), drawers))
+}
+
+fn room_for_file(file: &Path) -> String {
+    file.file_stem()
+        .map(|s| undercroft_core::normalize_wing_name(&s.to_string_lossy()))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unsorted".into())
+}
+
+fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
+    if path.is_file() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    if !path.is_dir() {
+        bail!("{} does not exist", path.display());
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let p = entry?.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+fn prune_backups(dir: &Path, vault: &str, keep: usize) -> Result<()> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Ok(()) };
+    let mut names: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with(&format!("{vault}-")))
+        .collect();
+    names.sort();
+    while names.len() > keep {
+        let victim = names.remove(0);
+        std::fs::remove_dir_all(dir.join(victim))?;
+    }
+    Ok(())
+}
+
+fn claude_code_hooks_json() -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hooks": {
+            "Stop": [ {
+                "hooks": [ {
+                    "type": "command",
+                    "command": "undercroft sweep ~/.claude/projects --wing claude-code"
+                } ]
+            } ],
+            "PreCompact": [ {
+                "hooks": [ {
+                    "type": "command",
+                    "command": "undercroft sweep ~/.claude/projects --wing claude-code"
+                } ]
+            } ]
+        }
+    }))
+    .expect("static json serializes")
 }
 
 fn first_line(text: &str, max: usize) -> String {

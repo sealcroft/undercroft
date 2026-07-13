@@ -213,6 +213,85 @@ fn rejects_path_traversal_names() {
         .failure();
 }
 
+#[test]
+fn kg_cli_supersede_and_time_travel() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["kg", "add", "alice", "works_at", "acme", "--from", "2024-01-01"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added fact"));
+    cmd(&home)
+        .args(["kg", "supersede", "alice", "works_at", "globex", "--at", "2025-06-01"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["kg", "query", "alice"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("globex"))
+        .stdout(predicate::str::contains("acme").not());
+    cmd(&home)
+        .args(["kg", "query", "alice", "--as-of", "2024-06-15"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("acme"));
+}
+
+#[test]
+fn convo_mine_and_sweep_idempotent() {
+    let home = TempDir::new().unwrap();
+    let convos = TempDir::new().unwrap();
+    std::fs::write(
+        convos.path().join("sess.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"what timezone does the cron run in?"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"All crons run in UTC to avoid DST bugs."}]}}"#,
+    )
+    .unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["mine", convos.path().to_str().unwrap(), "--mode", "convos", "--wing", "cc"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["search", "cron timezone", "--wing", "cc"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("UTC"));
+    // Sweep files per-message drawers; second sweep is a no-op.
+    cmd(&home)
+        .args(["sweep", convos.path().to_str().unwrap(), "--wing", "swept"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 message drawer(s) filed"));
+    cmd(&home)
+        .args(["sweep", convos.path().to_str().unwrap(), "--wing", "swept"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 message drawer(s) filed"));
+}
+
+#[test]
+fn diary_and_tunnel_flow() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home).args(["diary", "write", "scout", "note one"]).assert().success();
+    cmd(&home)
+        .args(["diary", "agents"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("scout"));
+    cmd(&home).args(["remember", "target wing memory", "--wing", "b"]).assert().success();
+    cmd(&home).args(["tunnel", "create", "a", "b"]).assert().success();
+    cmd(&home)
+        .args(["tunnel", "traverse", "a"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("b"));
+    cmd(&home).args(["verify"]).assert().success().stdout(predicate::str::contains("VERIFY OK"));
+}
+
 // Tiny local shim so this test file does not depend on rusqlite directly
 // through the workspace: reuse the store crate's re-exported connection.
 fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {

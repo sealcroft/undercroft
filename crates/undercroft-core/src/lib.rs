@@ -6,8 +6,10 @@
 //! in; retrieval returns the exact bytes that were stored.
 
 pub mod chunk;
+pub mod convo;
 pub mod drawer;
 pub mod embed;
+pub mod entity;
 pub mod ids;
 pub mod normalize;
 

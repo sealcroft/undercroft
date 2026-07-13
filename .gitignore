@@ -1,14 +1,6 @@
-*.egg-info/
-dist/
-build/
-__pycache__/
-*.pyc
-.pytest_cache/
-mempal.yaml
-.a5c/
-.claude/
-.codex/
-.codex
+# Rust
+/target/
+**/target/
 
 # Environment
 .env
@@ -25,20 +17,6 @@ Thumbs.db
 *.swo
 *~
 
-# Coverage
-htmlcov/
-.coverage
-coverage.xml
-
-# Virtual environments
-.venv/
-venv/
-
-# ChromaDB local data
-*.sqlite3-journal
-.envrc
-.review-logs
-
-# Rust
-/target/
-**/target/
+# Local agent state
+.claude/
+.a5c/

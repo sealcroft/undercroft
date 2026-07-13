@@ -1,7 +1,8 @@
 {
   "mcpServers": {
-    "mempalace": {
-      "command": "mempalace-mcp"
+    "undercroft": {
+      "command": "undercroft",
+      "args": ["serve-mcp"]
     }
   }
 }

@@ -111,25 +111,44 @@ undercroft init                       # master key + 'default' sealed vault
 undercroft vault create work          # new isolated vault (own keys, own DB)
 undercroft vault list | status <name>
 undercroft remember <text> [--vault --wing --room]
-undercroft mine <dir> [--vault --wing]    # chunk + file text/markdown files
+undercroft mine <dir> [--mode files|convos]  # documents, or Claude Code/Codex JSONL sessions
+undercroft sweep <dir>                # one verbatim drawer per transcript message (idempotent)
 undercroft search <query> [--vault --wing --room -n N]
-undercroft wake-up [--vault --wing]       # L0 identity + L1 essential story
-undercroft verify [--vault]               # HMAC every record + replay audit chain
-undercroft export [--vault]               # decrypted JSONL to stdout
-undercroft serve-mcp [--vault]            # MCP tools: save/search/wake_up/verify
+undercroft wake-up [--vault --wing]   # L0 identity + L1 essential story
+undercroft drawer get|list|update|delete|delete-by-source|check-dup
+undercroft kg add|query|rel|invalidate|supersede|timeline|stats
+undercroft diary write|read|agents    # per-agent diaries in their own wings
+undercroft tunnel create|list|follow|delete|traverse   # cross-wing links
+undercroft hallways <wing>            # within-wing entity co-occurrence
+undercroft stats | taxonomy           # palace shape
+undercroft dedup [--apply]            # exact-duplicate detection (keyed fingerprints)
+undercroft backup create|list|restore # verified snapshots, keeps last 10
+undercroft repair                     # backfill + vacuum + re-verify
+undercroft verify [--vault]           # HMAC every record + replay audit chain
+undercroft export [--vault]           # decrypted JSONL to stdout
+undercroft hooks claude-code          # auto-save hook settings snippet
+undercroft serve-mcp [--vault]        # MCP stdio server (30 tools)
 ```
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
-## MCP tools
+## MCP tools (30)
 
-| Tool | Purpose |
+| Category | Tools |
 |---|---|
-| `undercroft_save` | File one verbatim memory (encrypted + tagged at rest) |
-| `undercroft_search` | Hybrid search over the vault |
-| `undercroft_wake_up` | Recent essential memories for session start |
-| `undercroft_verify` | HMAC + audit-chain integrity check |
+| Palace core | `save`, `search`, `wake_up`, `verify`, `status` |
+| Drawers | `get_drawer`, `add_drawer`, `update_drawer`, `delete_drawer`, `list_drawers`, `delete_by_source`, `check_duplicate` |
+| Navigation | `list_wings`, `list_rooms`, `get_taxonomy`, `create_tunnel`, `list_tunnels`, `follow_tunnel`, `delete_tunnel`, `traverse`, `list_hallways` |
+| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats` |
+| Agent diaries | `diary_write`, `diary_read`, `list_agents` |
+| Maintenance | `dedup` |
+
+All tool names are prefixed `undercroft_`. The knowledge graph stores temporal
+facts with validity windows — `kg_query --as-of 2024-06-15` answers "what was
+true then", `kg_supersede` closes the old fact and opens the new one, and
+`kg_timeline` replays history. KG facts live in the vault too: objects are
+sealed in encrypted vaults, and every triple is HMAC-tagged and audit-chained.
 
 ## Testing (all in Docker)
 
@@ -162,12 +181,15 @@ use the same deterministic-recipe idea (idempotent re-mining).
 ## Relationship to MemPalace
 
 Undercroft is a fork of [MemPalace](https://github.com/MemPalace/mempalace)
-(MIT). The Python implementation is retained in-tree (`mempalace/`,
-`Dockerfile.python`, `docker-compose.python.yml`) as the reference during the
-conversion; the Rust workspace is the primary implementation going forward.
-Not yet ported: the Chroma/Qdrant/Milvus/pgvector server backends, the
-conversation/format miners, knowledge graph, and the model-based embedder —
-see [ROADMAP](ROADMAP.md).
+(MIT), fully converted to Rust — the Python implementation has been removed.
+Ported: the palace model and miners (files + conversation transcripts +
+sweep), wake-up layers, knowledge graph, tunnels/hallways navigation, agent
+diaries, drawer management, dedup/stats/backups/repair, hooks output, and the
+MCP tool surface. Intentionally not carried over: the Chroma/Qdrant/Milvus/
+pgvector server backends (the bundled SQLite store replaces `sqlite_exact`;
+server backends would bypass the vault layer unless sealed client-side — see
+[ROADMAP](ROADMAP.md)) and the downloaded-model embedder (replaced by the
+offline hashed n-gram embedder behind a pluggable `Embedder` trait).
 
 ## License
 

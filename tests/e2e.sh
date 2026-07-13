@@ -81,6 +81,64 @@ check "mine directory"            0 "drawer(s) filed"                -- "$BIN" m
 check "mined content searchable"  0 "flaky CI"                       -- "$BIN" search "what should we fix in CI" --wing team
 check "export emits jsonl"        0 "retro-2026-07"                  -- "$BIN" export
 
+echo "== Conversation mining + sweep =="
+CONVO_DIR="$(mktemp -d)"
+cat > "$CONVO_DIR/session-abc.jsonl" <<'JSONL'
+{"type":"user","message":{"role":"user","content":"how do we handle rate limiting in the gateway?"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The gateway uses a token bucket with 100 requests per minute per client."},{"type":"tool_use","name":"Bash","input":{}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"noise"}]}}
+JSONL
+check "mine convos"               0 "drawer(s) filed"                -- "$BIN" mine "$CONVO_DIR" --mode convos --wing claude
+check "convo content searchable"  0 "token bucket"                   -- "$BIN" search "how is rate limiting handled" --wing claude
+check "sweep transcripts"         0 "message drawer(s) filed"        -- "$BIN" sweep "$CONVO_DIR" --wing swept
+check "sweep is idempotent"       0 "0 message drawer(s) filed"      -- "$BIN" sweep "$CONVO_DIR" --wing swept
+check "bad mine mode fails"       1 "unknown mine mode"              -- "$BIN" mine "$CONVO_DIR" --mode nope
+
+echo "== Knowledge graph =="
+check "kg add"                    0 "Added fact"                     -- "$BIN" kg add alice works_at acme --from 2024-01-01
+check "kg query finds fact"       0 "acme"                           -- "$BIN" kg query alice
+check "kg supersede"              0 "globex"                         -- "$BIN" kg supersede alice works_at globex --at 2025-06-01
+check "kg query shows current"    0 "globex"                         -- "$BIN" kg query alice
+check "kg as-of shows history"    0 "acme"                           -- "$BIN" kg query alice --as-of 2024-06-15
+check "kg timeline"               0 "acme"                           -- "$BIN" kg timeline --entity alice
+check "kg stats"                  0 "triples: 2"                     -- "$BIN" kg stats
+
+echo "== Drawer management =="
+DRAWER_ID="$("$BIN" drawer list --wing eng --limit 1 | awk '{print $1}')"
+check "drawer list"               0 "eng/decisions"                  -- "$BIN" drawer list --wing eng
+check "drawer get verbatim"       0 "memory safety"                  -- "$BIN" drawer get "$DRAWER_ID"
+check "check-dup finds filed"     0 "duplicate of"                   -- "$BIN" drawer check-dup "We migrated the search stack to Rust for memory safety"
+check "check-dup misses novel"    0 "not filed"                      -- "$BIN" drawer check-dup "never stored anywhere"
+check "drawer delete"             0 "Deleted drawer"                 -- "$BIN" drawer delete "$DRAWER_ID"
+check "deleted drawer gone"       1 "No drawer"                      -- "$BIN" drawer get "$DRAWER_ID"
+check "verify ok after delete"    0 "VERIFY OK"                      -- "$BIN" verify
+
+echo "== Agent diaries =="
+check "diary write"               0 "written for agent"              -- "$BIN" diary write scout "mapped the auth flow today"
+check "diary read"                0 "auth flow"                      -- "$BIN" diary read scout
+check "list agents"               0 "scout"                          -- "$BIN" diary agents
+
+echo "== Tunnels & taxonomy & stats =="
+check "tunnel create"             0 "Tunnel"                         -- "$BIN" tunnel create eng claude --label "code discussions"
+check "tunnel list"               0 "eng <-> claude"                 -- "$BIN" tunnel list
+check "traverse reaches wing"     0 "claude"                         -- "$BIN" tunnel traverse eng
+check "taxonomy tree"             0 "claude/"                        -- "$BIN" taxonomy
+check "stats output"              0 "records:"                       -- "$BIN" stats
+check "stats counts kg"           0 "triples"                        -- "$BIN" stats
+
+echo "== Dedup =="
+"$BIN" remember "duplicate payload content" --wing dup >/dev/null
+"$BIN" remember "duplicate payload content" --wing dup --room second >/dev/null
+check "dedup reports"             0 "1 duplicate group(s)"           -- "$BIN" dedup
+check "dedup applies"             0 "removed"                        -- "$BIN" dedup --apply
+check "verify ok after dedup"     0 "VERIFY OK"                      -- "$BIN" verify
+
+echo "== Backups & repair =="
+check "backup create"             0 "Backup created"                 -- "$BIN" backup create
+check "backup list"               0 "default-"                       -- "$BIN" backup list
+check "repair passes"             0 "integrity: ok"                  -- "$BIN" repair
+check "hooks prints settings"     0 "PreCompact"                     -- "$BIN" hooks claude-code
+
 echo "== Integrity: verify + tamper detection =="
 check "verify clean vault"        0 "VERIFY OK"                      -- "$BIN" verify --vault work
 # Forge the record's metadata in place (same length, so the SQLite file

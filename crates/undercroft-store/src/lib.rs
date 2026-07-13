@@ -12,6 +12,12 @@
 //! * an append-only `audit` table records the tag of every write in order,
 //!   which must replay to the manifest's HMAC chain head.
 
+pub mod kg;
+pub mod manage;
+
+pub use kg::{KgStats, Triple};
+pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
+
 use rusqlite::{params, Connection, OptionalExtension};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -32,7 +38,7 @@ pub enum StoreError {
     Integrity(String),
 }
 
-fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
+pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
     out.extend_from_slice(id.as_bytes());
     out.push(0x1f);
@@ -107,7 +113,10 @@ impl PalaceStore {
                  at        TEXT NOT NULL
              );",
         )?;
-        Ok(Self { conn, vault, embedder: HashEmbedder })
+        let store = Self { conn, vault, embedder: HashEmbedder };
+        store.init_kg_schema()?;
+        store.init_manage_schema()?;
+        Ok(store)
     }
 
     pub fn vault(&self) -> &Vault {
@@ -127,6 +136,7 @@ impl PalaceStore {
         let embedding = self.embedder.embed(&drawer.content);
         let emb_rest = self.vault.embedding_at_rest(&drawer.id, &embedding);
         let tag = self.vault.tag(&canonical(&drawer.id, meta_json.as_bytes(), &content_rest));
+        let fp = self.fingerprint(&drawer.content);
         let now = OffsetDateTime::now_utc().format(&Rfc3339).expect("rfc3339 now");
 
         let existing: Option<i64> = self
@@ -135,8 +145,8 @@ impl PalaceStore {
             .optional()?;
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO drawers (id, wing, room, meta_json, content, embedding, tag, filed_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+            "INSERT INTO drawers (id, wing, room, meta_json, content, embedding, tag, fp, filed_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
              ON CONFLICT(id) DO UPDATE SET
                  wing = excluded.wing,
                  room = excluded.room,
@@ -144,6 +154,7 @@ impl PalaceStore {
                  content = excluded.content,
                  embedding = excluded.embedding,
                  tag = excluded.tag,
+                 fp = excluded.fp,
                  updated_at = excluded.updated_at",
             params![
                 drawer.id,
@@ -153,6 +164,7 @@ impl PalaceStore {
                 content_rest,
                 emb_rest,
                 tag.as_slice(),
+                fp,
                 now,
             ],
         )?;
@@ -332,6 +344,11 @@ impl PalaceStore {
                 bad.push(id);
             }
         }
+        // Knowledge-graph and tunnel rows are integrity-tagged too.
+        checked += self.kg_count()?;
+        bad.extend(self.kg_verify()?);
+        checked += self.tunnel_count()?;
+        bad.extend(self.tunnels_verify()?);
         let mut stmt = self.conn.prepare("SELECT tag FROM audit ORDER BY seq")?;
         let tags: Vec<Vec<u8>> =
             stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?.collect::<Result<_, _>>()?;

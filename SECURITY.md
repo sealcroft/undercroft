@@ -1,33 +1,23 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-MemPalace follows semantic versioning. Security fixes land on the current major version line.
+Security fixes land on the current 0.x line.
 
-| Version            | Supported |
-| ------------------ | --------- |
-| 3.x (current)      | Yes       |
-| 2.x and earlier    | No        |
+## Threat model
 
-## Reporting a Vulnerability
+Undercroft's vault layer protects memories **at rest**: disk theft,
+cross-vault bleed, and offline tampering of the database or manifest
+(XChaCha20-Poly1305 AEAD, per-vault HKDF-SHA256 key derivation,
+HMAC-SHA256 record tags plus a tamper-evident audit chain). It does **not**
+defend against an attacker who can read process memory while a vault is
+unlocked, nor against a compromised host OS.
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+Details are documented in `crates/undercroft-vault/src/lib.rs`.
 
-We take the security of MemPalace seriously. If you believe you have found a security vulnerability, please report it privately using **GitHub Private Vulnerability Reporting**:
+## Reporting a vulnerability
 
-1. Open the [Security tab](https://github.com/MemPalace/mempalace/security) of this repository.
-2. Click **Advisories** → **Report a vulnerability**.
-3. Fill in the form with the details below.
-
-### What to include in your report
-
-- A descriptive summary of the vulnerability.
-- Detailed steps to reproduce the issue (including any proof-of-concept scripts or specific file paths).
-- The affected version(s) and platform(s).
-- The potential impact and severity.
-
-### What to expect
-
-- We aim to acknowledge receipt within 48 hours.
-- We will triage the issue and keep you updated on progress toward a patch.
-- Once the vulnerability is resolved and an update is released, we will publish a security advisory and credit you for the discovery (if you wish to be credited).
+**Please do not report security vulnerabilities through public GitHub
+issues.** Use GitHub Private Vulnerability Reporting on this repository
+(Security → Report a vulnerability). Include reproduction steps and the
+commit hash. You can expect an acknowledgement within a week.
