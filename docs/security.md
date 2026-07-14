@@ -20,6 +20,11 @@ modification: every read verifies, `verify` audits everything.
   `vault_id + record_id` — ciphertext cannot be replayed across vaults or
   record slots. Sealed vaults encrypt content *and* embeddings; nothing
   content-derived is written to disk in plaintext (no FTS index either).
+  hmac-only vaults — which store plaintext by choice — keep an FTS5 BM25
+  prefilter index. Like embeddings, it is derived data outside the HMAC
+  envelope: tampering with it can hide records from *search* (an
+  availability attack, self-healed by an index rebuild) but can never
+  forge a record, since every returned row still verifies its HMAC.
 - **Integrity**: HMAC-SHA256 per record (independent key) over
   id + metadata + at-rest content; append-only audit table; chain head
   `h_i = HMAC(mac, h_{i-1} || tag_i)` stored in a MAC'd manifest. Deletions

@@ -34,5 +34,8 @@ id/meta/content → SQLite row + audit append → manifest chain head advances.
 ## Read path
 
 search → embed query → candidates (local scan, FTS-free by design in sealed
-vaults; or remote ANN index) → HMAC verify every candidate → decrypt →
-hybrid re-rank (semantic + lexical + recency) → relevance gate.
+vaults; FTS5 BM25 top-K prefilter in hmac-only vaults above ~2k drawers,
+with full-scan fallback; or remote ANN index) → HMAC verify every
+candidate → decrypt → hybrid re-rank (semantic + lexical + recency) →
+relevance gate. The prefilter only narrows the scan — final scoring is
+identical on every path.

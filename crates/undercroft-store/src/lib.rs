@@ -25,7 +25,12 @@ use time::OffsetDateTime;
 
 use undercroft_core::embed::{cosine, Embedder};
 use undercroft_core::{Drawer, DrawerMeta, HashEmbedder};
-use undercroft_vault::{Vault, VaultError};
+use undercroft_vault::{SecurityLevel, Vault, VaultError};
+
+/// Drawer count at which the BM25 prefilter engages for hmac-only vaults.
+/// Below this a full decrypt-free scan is cheap and keeps semantic-only
+/// recall exact; above it the FTS5 candidate cut dominates search cost.
+const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -104,6 +109,12 @@ pub struct PalaceStore {
     /// — this is the in-memory role embedded ChromaDB's index played
     /// upstream, without writing plaintext-derived data to disk.
     emb_cache: std::cell::RefCell<Option<std::collections::HashMap<String, Vec<f32>>>>,
+    /// Whether the FTS5 BM25 prefilter index exists. Only ever true for
+    /// hmac-only vaults — sealed vaults must not persist anything
+    /// plaintext-derived, an FTS index included.
+    fts: bool,
+    /// Drawer count at which the prefilter engages; `None` disables it.
+    fts_min: Option<usize>,
 }
 
 impl PalaceStore {
@@ -209,15 +220,79 @@ impl PalaceStore {
                  at        TEXT NOT NULL
              );",
         )?;
-        let store = Self {
+        let fts_min = match std::env::var("UNDERCROFT_FTS_PREFILTER_MIN") {
+            Ok(v) if v.eq_ignore_ascii_case("off") => None,
+            Ok(v) => Some(v.parse().unwrap_or(DEFAULT_FTS_PREFILTER_MIN)),
+            Err(_) => Some(DEFAULT_FTS_PREFILTER_MIN),
+        };
+        let mut store = Self {
             conn,
             vault,
             embedder,
             emb_cache: std::cell::RefCell::new(None),
+            fts: false,
+            fts_min,
         };
+        store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
         store.init_manage_schema()?;
         Ok(store)
+    }
+
+    /// hmac-only vaults keep a plaintext FTS5 index over drawer content as
+    /// a BM25 prefilter (triggers keep it coherent through every insert /
+    /// content update / delete). Sealed vaults never get one. Returns
+    /// whether the index is usable; `false` (e.g. an SQLite build without
+    /// the fts5 module) means search falls back to the full scan.
+    fn init_fts_schema(&self) -> Result<bool, StoreError> {
+        if !matches!(self.vault.level(), SecurityLevel::HmacOnly) {
+            return Ok(false);
+        }
+        if self
+            .conn
+            .execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS drawers_fts USING fts5(
+                     content, content='drawers', content_rowid='seq'
+                 );
+                 CREATE TRIGGER IF NOT EXISTS drawers_fts_ai AFTER INSERT ON drawers BEGIN
+                     INSERT INTO drawers_fts(rowid, content) VALUES (new.seq, new.content);
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS drawers_fts_ad AFTER DELETE ON drawers BEGIN
+                     INSERT INTO drawers_fts(drawers_fts, rowid, content)
+                     VALUES ('delete', old.seq, old.content);
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS drawers_fts_au AFTER UPDATE OF content ON drawers BEGIN
+                     INSERT INTO drawers_fts(drawers_fts, rowid, content)
+                     VALUES ('delete', old.seq, old.content);
+                     INSERT INTO drawers_fts(rowid, content) VALUES (new.seq, new.content);
+                 END;",
+            )
+            .is_err()
+        {
+            return Ok(false);
+        }
+        // Backfill drawers written before the index existed (a vault
+        // predating this feature, or a dropped index): an external-content
+        // rebuild re-reads every row from `drawers`.
+        let n_drawers: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+        let n_fts: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers_fts", [], |r| r.get(0))?;
+        if n_fts != n_drawers {
+            self.conn
+                .execute("INSERT INTO drawers_fts(drawers_fts) VALUES('rebuild')", [])?;
+        }
+        Ok(true)
+    }
+
+    /// Tune when the BM25 prefilter engages on hmac-only vaults: it runs
+    /// once the palace holds at least `min` drawers; `None` disables it
+    /// entirely. Also settable at open via `UNDERCROFT_FTS_PREFILTER_MIN`
+    /// (a number, or `off`).
+    pub fn set_fts_prefilter_min(&mut self, min: Option<usize>) {
+        self.fts_min = min;
     }
 
     /// Decrypt every drawer embedding into an in-memory map so subsequent
@@ -406,7 +481,9 @@ impl PalaceStore {
 
     /// Hybrid search: hashed-embedding cosine + lexical term overlap +
     /// recency decay. Sealed vaults decrypt-scan; nothing derived from
-    /// plaintext is read from disk indexes.
+    /// plaintext is read from disk indexes. hmac-only vaults above the
+    /// prefilter threshold first cut candidates to the FTS5 BM25 top-K
+    /// (final scoring is unchanged — the index only narrows the scan).
     pub fn search(&self, query: &str, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
         let qvec = self.embedder.embed(query);
@@ -417,9 +494,20 @@ impl PalaceStore {
             .map(str::to_string)
             .collect();
 
+        let candidates = match self.fts_min {
+            Some(min) if self.fts && !qterms.is_empty() && self.count()? >= min as u64 => {
+                self.fts_candidates(&qterms, std::cmp::max(256, limit * 32))
+            }
+            _ => None,
+        };
+
         let mut sql = String::from("SELECT id, meta_json, content, embedding, tag FROM drawers");
         let mut clauses: Vec<String> = Vec::new();
         let mut binds: Vec<String> = Vec::new();
+        if let Some(seqs) = &candidates {
+            let list: Vec<String> = seqs.iter().map(i64::to_string).collect();
+            clauses.push(format!("seq IN ({})", list.join(",")));
+        }
         if let Some(w) = &opts.wing {
             binds.push(w.clone());
             clauses.push(format!("wing = ?{}", binds.len()));
@@ -484,6 +572,43 @@ impl PalaceStore {
         });
         hits.truncate(limit);
         Ok(hits)
+    }
+
+    /// BM25 top-`k` candidate seqs from the FTS5 index. `None` means "no
+    /// usable cut" — nothing matched, or the query produced no tokens —
+    /// and the caller falls back to the full scan, which preserves
+    /// semantic-only recall when the query shares no term with any drawer.
+    fn fts_candidates(&self, qterms: &[String], k: usize) -> Option<Vec<i64>> {
+        let mut parts: Vec<String> = Vec::with_capacity(qterms.len() * 2);
+        for t in qterms {
+            parts.push(format!("\"{t}\""));
+            // The scorer tolerates one typo in terms of 5+ chars; a 4-char
+            // prefix match keeps most such variants in the candidate pool.
+            if t.chars().count() >= 5 {
+                let prefix: String = t.chars().take(4).collect();
+                parts.push(format!("\"{prefix}\"*"));
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT rowid FROM drawers_fts WHERE drawers_fts MATCH ?1
+                 ORDER BY rank LIMIT ?2",
+            )
+            .ok()?;
+        let seqs: Vec<i64> = stmt
+            .query_map(params![parts.join(" OR "), k as i64], |r| r.get(0))
+            .ok()?
+            .collect::<Result<_, _>>()
+            .ok()?;
+        if seqs.is_empty() {
+            None
+        } else {
+            Some(seqs)
+        }
     }
 
     /// Score one already-decrypted drawer against a query (used by the
@@ -899,6 +1024,131 @@ mod tests {
         assert!(line.starts_with("team/standups n=3"));
         assert!(line.contains("alice"));
         assert!(line.contains("ids="));
+    }
+
+    #[test]
+    fn fts_index_exists_only_in_hmac_only_vaults() {
+        let count_fts = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'drawers_fts%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        s.upsert(&drawer("w", "r", "indexed plaintext", 0)).unwrap();
+        assert!(s.fts);
+        assert!(count_fts(&s) > 0);
+        // Sealed vaults must not persist a plaintext-derived index.
+        let (_d2, s2) = store(SecurityLevel::Sealed);
+        assert!(!s2.fts);
+        assert_eq!(count_fts(&s2), 0);
+    }
+
+    #[test]
+    fn fts_prefilter_agrees_with_full_scan() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        for i in 0..30 {
+            s.upsert(&drawer("w", "r", &format!("routine note number {i}"), i))
+                .unwrap();
+        }
+        s.upsert(&drawer(
+            "w",
+            "api",
+            "we switched to graphql because rest was chatty",
+            100,
+        ))
+        .unwrap();
+        s.set_fts_prefilter_min(None);
+        let full = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        s.set_fts_prefilter_min(Some(0));
+        let pre = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(pre[0].drawer.id, full[0].drawer.id);
+        assert!(pre[0].drawer.content.contains("graphql"));
+    }
+
+    #[test]
+    fn fts_stays_coherent_through_update_and_delete() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        // Assert against the index itself — the full-scan fallback in
+        // search() would mask a stale index.
+        let fts_matches = |s: &PalaceStore, term: &str| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM drawers_fts WHERE drawers_fts MATCH ?1",
+                    params![term],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let mut dr = drawer("w", "r", "the elephant walked to the river", 0);
+        s.upsert(&dr).unwrap();
+        assert_eq!(fts_matches(&s, "elephant"), 1);
+        // Same id, new content: the old term must leave the index.
+        dr.content = "the giraffe reached the savanna".into();
+        s.upsert(&dr).unwrap();
+        assert_eq!(fts_matches(&s, "elephant"), 0);
+        assert_eq!(fts_matches(&s, "giraffe"), 1);
+        s.delete_drawer(&dr.id).unwrap();
+        assert_eq!(fts_matches(&s, "giraffe"), 0);
+        // And the prefiltered search path agrees.
+        s.set_fts_prefilter_min(Some(0));
+        let hits = s
+            .search("giraffe savanna", &SearchOptions::default())
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn fts_prefilter_keeps_one_typo_matches() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        s.set_fts_prefilter_min(Some(0));
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the kubernetes cluster upgrade finished",
+            0,
+        ))
+        .unwrap();
+        // "kubernets" shares the 4-char prefix, so the prefilter keeps the
+        // row and the fuzzy scorer still anchors the hit.
+        let hits = s
+            .search("kubernets upgrade", &SearchOptions::default())
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits[0].drawer.content.contains("kubernetes"));
+    }
+
+    #[test]
+    fn fts_backfills_missing_index_on_open() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
+        let mut s = PalaceStore::open(vault).unwrap();
+        s.upsert(&drawer("w", "r", "memory written before the index", 0))
+            .unwrap();
+        drop(s);
+        // Simulate a vault predating the feature (or a dropped index).
+        let conn = Connection::open(dir.path().join("vaults/test/palace.db")).unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER drawers_fts_ai; DROP TRIGGER drawers_fts_ad;
+             DROP TRIGGER drawers_fts_au; DROP TABLE drawers_fts;",
+        )
+        .unwrap();
+        drop(conn);
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        s.set_fts_prefilter_min(Some(0));
+        let hits = s
+            .search("memory written before", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(hits.len(), 1);
     }
 
     #[test]

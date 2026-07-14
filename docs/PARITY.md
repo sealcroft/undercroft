@@ -71,7 +71,10 @@ the bundled SQLite store and the in-memory embedding cache respectively.
 ## Behavioral differences to know about
 
 - Sealed vaults trade FTS5 indexing for encryption (decrypt-scan search);
-  `hmac-only` vaults keep plaintext searchability with integrity tags.
+  `hmac-only` vaults keep plaintext searchability with integrity tags and,
+  above ~2k drawers, an FTS5 BM25 prefilter (tunable via
+  `UNDERCROFT_FTS_PREFILTER_MIN`, `off` to disable) that narrows the
+  candidate scan without changing final scoring.
 - Remote backends receive sealed content; upstream uploaded plaintext.
 - Benchmark numbers with the default hash embedder are not comparable to
   upstream's published model-based numbers — use `--features onnx` with a

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.1 — FTS5 BM25 prefilter for hmac-only vaults
+
+- hmac-only vaults now carry an external-content FTS5 index over drawer
+  content (trigger-maintained through upsert/update/delete/dedup/restore,
+  rebuilt on open if missing or stale). Searches over palaces of 2048+
+  drawers prefilter candidates to the BM25 top-K before the usual
+  HMAC-verify + hybrid re-rank; if FTS matches nothing the full scan runs
+  instead, so semantic-only recall is preserved. Tune or disable with
+  `UNDERCROFT_FTS_PREFILTER_MIN` (a number, or `off`).
+- Sealed vaults are unchanged: no plaintext-derived index is ever created
+  (test-asserted), search remains decrypt-scan by design.
+
 ## 0.7.0 — Measured benchmarks, Weaviate, compressed storage
 
 - First measured benchmark results, in-repo (benchmarks/RESULTS.md), with

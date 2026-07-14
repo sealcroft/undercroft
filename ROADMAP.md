@@ -60,10 +60,21 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 - LoCoMo / ConvoMem / MemBench adapters (fixture-tested), in-memory
   embedding cache for server modes; PARITY "not ported" list emptied
 
+## v0.7.1 — FTS5 BM25 prefilter (done)
+
+- hmac-only vaults keep an external-content FTS5 index over drawer
+  content, maintained by triggers through every mutation path and
+  self-healed (rebuilt) on open when it goes missing or stale
+- Search above a drawer-count threshold (default 2048, tunable via
+  `UNDERCROFT_FTS_PREFILTER_MIN` / `PalaceStore::set_fts_prefilter_min`)
+  cuts candidates to the BM25 top-K before the usual verify + hybrid
+  re-rank; full-scan fallback when FTS matches nothing, preserving
+  semantic-only recall. Sealed vaults are untouched — no plaintext-derived
+  index is ever created for them.
+
 ## Next
 
-- **v0.7 — Retrieval quality**: FTS5 BM25 pre-filter for hmac-only vaults;
-  L2 on-demand room loading heuristics; ANN index (HNSW) atop the warmed
-  cache for very large palaces
+- **v0.7 — Retrieval quality**: L2 on-demand room loading heuristics;
+  ANN index (HNSW) atop the warmed cache for very large palaces
 - **v0.8 — Ecosystem**: key rotation (re-seal under new derived keys);
   export bundles with recipient encryption

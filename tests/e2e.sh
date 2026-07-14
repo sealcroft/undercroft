@@ -73,6 +73,25 @@ else
   echo "ok    sealed vault has no plaintext on disk"; PASS=$((PASS+1))
 fi
 
+echo "== FTS5 BM25 prefilter (hmac-only vaults) =="
+check "hmac-only vault create"    0 "Created vault 'plain'"          -- "$BIN" vault create plain --level hmac-only
+check "remember into plain vault" 0 "Filed drawer"                   -- "$BIN" remember \
+  "the staging cluster runs kubernetes one-thirty" --vault plain
+check "prefiltered search hits"   0 "kubernetes"                     -- \
+  env UNDERCROFT_FTS_PREFILTER_MIN=1 "$BIN" search "staging kubernetes cluster" --vault plain
+check "prefilter off still hits"  0 "kubernetes"                     -- \
+  env UNDERCROFT_FTS_PREFILTER_MIN=off "$BIN" search "staging kubernetes cluster" --vault plain
+if grep -qF "drawers_fts" "$UNDERCROFT_HOME/vaults/plain/palace.db" 2>/dev/null; then
+  echo "ok    hmac-only vault has an FTS index"; PASS=$((PASS+1))
+else
+  echo "FAIL  hmac-only vault missing its FTS index"; FAIL=$((FAIL+1))
+fi
+if grep -qF "drawers_fts" "$UNDERCROFT_HOME/vaults/work/palace.db" 2>/dev/null; then
+  echo "FAIL  sealed vault grew an FTS index"; FAIL=$((FAIL+1))
+else
+  echo "ok    sealed vault has no FTS index"; PASS=$((PASS+1))
+fi
+
 echo "== Mining files =="
 MINE_DIR="$(mktemp -d)"
 printf '# Retro\n\nWhat went well: the release train.\n\nWhat to fix: flaky CI on arm64.\n' \
