@@ -26,3 +26,7 @@ website/book/
 
 # Browser automation artifacts
 .playwright-mcp/
+
+# Session handover notes (local only — never committed)
+/HANDOVER.md
+HANDOVER*.md
