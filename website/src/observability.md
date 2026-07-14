@@ -132,3 +132,26 @@ Frames:
 Each connection is served on its own thread (the request is handed off so
 the single-threaded server keeps serving), reading only from an in-process
 broker — never a vault store — so streaming can never touch content.
+
+## Palace Monitor UI
+
+A telemetry build also serves a self-contained pixel-art dashboard at
+**`GET /monitor`** (unauthenticated static page — no secrets in it):
+
+```
+http://127.0.0.1:8765/monitor
+```
+
+Enter the palace bearer token, pick a vault (from `GET /v1/vaults`, or type
+the id), and connect. An archivist files drawers into wings as writes land,
+searches pulse the wings, the audit chain stamps on each commit, and the
+**ambulance beacon** fires on a real HMAC-verify failure (tamper) — the same
+`hmac_verify_failures` signal, live. Until you connect it runs in demo mode
+with synthetic events. Sealed vaults stream aggregate counts only (wing/room
+names suppressed server-side).
+
+The page uses `fetch()` streaming (not `EventSource`, which can't send an
+`Authorization` header) and is fully self-contained — no external requests,
+same-origin only. It targets bearer-only servers; with per-vault assertions
+enabled the stream is rejected (the UI shows it) since a browser can't mint
+an assertion.

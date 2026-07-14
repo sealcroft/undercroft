@@ -440,6 +440,7 @@ impl PalaceStore {
                 .verify_tag(&tunnel_canonical(&id, &from, &to, &label, &created), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("tunnel");
+                    undercroft_obs::event_hmac_fail(self.vault.id(), "tunnel");
                     StoreError::Integrity(format!("tunnel/{id}"))
                 })?;
             if wing.map(|w| from == w || to == w).unwrap_or(true) {
@@ -655,6 +656,7 @@ impl PalaceStore {
             )
             .map_err(|_| {
                 undercroft_obs::hmac_verify_failed("drawer");
+                undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                 StoreError::Integrity(id.to_string())
             })?;
         self.decode(id, meta_json, content_rest)

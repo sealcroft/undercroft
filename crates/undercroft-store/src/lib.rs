@@ -688,6 +688,7 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
+                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                     StoreError::Integrity(id.clone())
                 })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -755,6 +756,7 @@ impl PalaceStore {
                     .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                     .map_err(|_| {
                         undercroft_obs::hmac_verify_failed("drawer");
+                        undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                         StoreError::Integrity(id.clone())
                     })?;
                 Ok(Some(self.decode(&id, &meta_json, &content_rest)?))
@@ -814,6 +816,7 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
+                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                     StoreError::Integrity(id.clone())
                 })?;
             out.push(self.decode(&id, &meta_json, &content_rest)?);
@@ -913,6 +916,7 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
+                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                     StoreError::Integrity(id.clone())
                 })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -1129,6 +1133,7 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
+                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                     StoreError::Integrity(id.clone())
                 })?;
             out.push(self.decode(&id, &meta_json, &content_rest)?);

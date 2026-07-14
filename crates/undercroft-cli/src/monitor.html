@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Undercroft · Palace Monitor</title>
+<style>
+  :root{
+    --bg:#080b10; --panel:#0e141c; --panel2:#131c27; --edge:#22303f; --grid:#16202b;
+    --phos:#5ef0a8; --phos-dim:#2d7a56; --amber:#ffb43a; --cyan:#57d8ff;
+    --violet:#b98bff; --red:#ff3b46; --red-deep:#7a0d13; --gold:#f6c358; --ink:#8fa6b8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--phos);
+    font-family:"DejaVu Sans Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+  .wrap{max-width:920px;margin:0 auto;padding:14px 14px 40px;}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    border:1px solid var(--edge);background:linear-gradient(180deg,var(--panel2),var(--panel));
+    padding:10px 14px;border-radius:8px;}
+  .logo{font-size:18px;letter-spacing:2px;color:var(--phos);text-shadow:0 0 8px rgba(94,240,168,.4)}
+  .logo b{color:#fff}
+  .spacer{flex:1}
+  .status{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:1.5px}
+  .lamp{width:12px;height:12px;border-radius:50%;background:var(--phos-dim);box-shadow:0 0 0 2px #0006 inset;transition:background .15s}
+  .lamp.live{background:var(--phos);animation:none}
+  .lamp.demo{background:var(--amber)}
+  .lamp.proc{background:var(--amber);animation:blink .7s steps(2) infinite}
+  .lamp.alert{background:var(--red);animation:blink .25s steps(2) infinite}
+  .lamp.off{background:var(--phos-dim)}
+  @keyframes blink{50%{opacity:.25}}
+  .spin{display:inline-block;width:11px;height:11px;border:2px solid #5a4526;border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;vertical-align:-1px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .conn{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;
+    border:1px solid var(--edge);background:var(--panel);border-radius:8px;padding:9px 12px;font-size:11px}
+  .conn label{color:var(--ink);letter-spacing:1px}
+  .conn input{background:var(--bg);color:var(--phos);border:1px solid var(--edge);
+    font-family:inherit;font-size:11px;padding:5px 7px;border-radius:5px}
+  #token{width:200px} #vault{width:150px}
+  button.ctl{font-family:inherit;font-size:11px;letter-spacing:.5px;cursor:pointer;
+    background:var(--panel2);color:var(--phos);border:1px solid var(--edge);padding:6px 11px;border-radius:5px;transition:.12s}
+  button.ctl:hover{background:#1b2734;border-color:var(--phos-dim)}
+  button.ctl.on{background:#123;border-color:var(--cyan);color:var(--cyan)}
+  button.ctl.danger{color:var(--red);border-color:#5a1a1f}
+  .conn .msg{color:var(--amber);font-size:10px}
+
+  .stage{position:relative;margin-top:12px;border:1px solid var(--edge);border-radius:8px;overflow:hidden;background:#05070a}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges}
+  .stage::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.22) 2px 3px);mix-blend-mode:multiply;opacity:.7}
+  .stage::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:2;box-shadow:inset 0 0 80px rgba(0,0,0,.7)}
+  .stage.alarm{animation:frameflash .5s steps(2) infinite}
+  @keyframes frameflash{50%{box-shadow:0 0 0 3px var(--red),0 0 24px var(--red) inset}}
+  .banner{position:absolute;left:0;right:0;top:0;z-index:5;display:none;align-items:center;gap:10px;padding:7px 12px;
+    font-size:12px;letter-spacing:1px;background:linear-gradient(90deg,var(--red-deep),#c01722,var(--red-deep));
+    color:#fff;text-shadow:0 1px 0 #000;border-bottom:2px solid var(--red)}
+  .banner.on{display:flex;animation:banpulse .5s steps(2) infinite}
+  @keyframes banpulse{50%{filter:brightness(.6)}}
+  .banner .ack{margin-left:auto;background:#000a;border:1px solid #fff6;color:#fff;font-family:inherit;font-size:11px;padding:3px 9px;border-radius:4px;cursor:pointer;letter-spacing:1px}
+
+  .gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;margin-top:12px}
+  .g{border:1px solid var(--edge);background:var(--panel);border-radius:6px;padding:8px 10px}
+  .g .k{font-size:9px;letter-spacing:1.5px;color:var(--ink)}
+  .g .v{font-size:19px;color:#fff;margin-top:2px}
+  .g.chain .v{color:var(--gold)}
+  .g.fail .v{color:var(--red)}
+
+  .controls{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  .sep{width:1px;height:22px;background:var(--edge);margin:0 3px}
+  .speed{font-size:11px;color:var(--ink);display:flex;align-items:center;gap:6px}
+  input[type=range]{accent-color:var(--phos);width:90px}
+
+  .ticker{margin-top:12px;border:1px solid var(--edge);background:var(--panel);border-radius:6px;padding:8px 10px;height:118px;overflow:hidden;font-size:11px}
+  .ticker .h{font-size:9px;letter-spacing:1.5px;color:var(--ink);margin-bottom:5px}
+  .row{display:flex;gap:8px;padding:1px 0;white-space:nowrap;opacity:.95}
+  .row .t{color:#4d6070}
+  .row .b{padding:0 5px;border-radius:3px;font-size:9px;line-height:15px}
+  .b.save{background:#0c2a1c;color:var(--phos)} .b.del{background:#241a0c;color:var(--amber)}
+  .b.search{background:#0b2632;color:var(--cyan)} .b.kg{background:#241634;color:var(--violet)}
+  .b.chain{background:#2a230c;color:var(--gold)} .b.tamper{background:#2a0e10;color:var(--red)}
+  .b.info{background:#12202b;color:var(--ink)}
+  .foot{margin-top:14px;font-size:10px;color:#4d6070;line-height:1.6}
+  .foot code{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="logo">◈ UNDERCROFT <b>PALACE&nbsp;MONITOR</b></span>
+    <span class="spacer"></span>
+    <span class="status"><span id="lamp" class="lamp demo"></span><span id="statusText">DEMO</span></span>
+  </header>
+
+  <div class="conn">
+    <label>bearer</label>
+    <input id="token" type="password" placeholder="UNDERCROFT_MCP_HTTP_TOKEN" autocomplete="off">
+    <button class="ctl" id="loadBtn">↻ vaults</button>
+    <label>vault</label>
+    <input id="vault" list="vaultlist" placeholder="vault id">
+    <datalist id="vaultlist"></datalist>
+    <button class="ctl" id="connectBtn">▶ CONNECT</button>
+    <span class="msg" id="connMsg"></span>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="banner" id="banner">
+      <span>🚨</span><span id="bannerText">INTEGRITY ALERT</span>
+      <button class="ack" id="ackBtn">ACKNOWLEDGE</button>
+    </div>
+    <canvas id="cv" width="384" height="216"></canvas>
+  </div>
+
+  <div class="gauges">
+    <div class="g"><div class="k">DRAWERS</div><div class="v" id="gDrawers">—</div></div>
+    <div class="g chain"><div class="k">CHAIN</div><div class="v">#<span id="gChain">—</span></div></div>
+    <div class="g"><div class="k">KG TRIPLES</div><div class="v" id="gKgT">—</div></div>
+    <div class="g"><div class="k">KG ENTITIES</div><div class="v" id="gKgE">—</div></div>
+    <div class="g"><div class="k">TUNNELS</div><div class="v" id="gTun">—</div></div>
+    <div class="g"><div class="k">STORE</div><div class="v" id="gBytes">—</div></div>
+    <div class="g fail"><div class="k">TAMPER</div><div class="v" id="gFail">0</div></div>
+  </div>
+
+  <div class="controls">
+    <button class="ctl" id="btnPause">⏸ PAUSE</button>
+    <button class="ctl" id="btnSound">🔇 SOUND</button>
+    <div class="sep"></div>
+    <span class="speed">SPEED <input type="range" id="speed" min="0.3" max="3" step="0.1" value="1"></span>
+  </div>
+
+  <div class="ticker"><div class="h">◂ ACTIVITY STREAM</div><div id="tickerBody"></div></div>
+
+  <div class="foot">
+    Live view of the Undercroft SSE stream (<code>/v1/vaults/&lt;id&gt;/stream</code>). Enter the palace
+    bearer token, pick a vault, and connect. Until then it runs in <b>demo mode</b> with synthetic events.
+    The archivist files drawers into wings as writes land; the <b>ambulance beacon</b> fires on a real
+    <b>HMAC-verify failure</b> (tamper). Sealed vaults stream aggregate counts only — wing names are
+    suppressed server-side. Metadata only; drawer contents never leave the vault.
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const $=id=>document.getElementById(id);
+  const cv=$('cv'), ctx=cv.getContext('2d'), W=cv.width, H=cv.height;
+  const C=getComputedStyle(document.documentElement), col=n=>C.getPropertyValue(n).trim();
+  const PHOS=col('--phos'), AMBER=col('--amber'), CYAN=col('--cyan'), VIOLET=col('--violet'),
+        RED=col('--red'), GOLD=col('--gold'), INK=col('--ink');
+
+  // ---------- world: wings as buildings ----------
+  let wings=[];              // {name, count, cap, cx, cy, x, y, w, h, sealed, pulse, tamper, highlight}
+  const byName=new Map();
+  let sealedVault=false;
+
+  function layout(){
+    const n=Math.max(1, wings.length);
+    const cols=Math.min(4, Math.ceil(Math.sqrt(n))), rows=Math.ceil(n/cols);
+    const gap=10, ox=8, oy=8;
+    const bw=(W-ox*2-gap*(cols-1))/cols, bh=(H-oy*2-gap*(rows-1))/rows;
+    wings.forEach((wg,i)=>{
+      const c=i%cols, r=(i/cols)|0;
+      wg.x=ox+c*(bw+gap); wg.y=oy+r*(bh+gap); wg.w=bw; wg.h=bh;
+      wg.cx=wg.x+bw/2; wg.cy=wg.y+bh/2;
+    });
+  }
+  function ensureWing(name, sealed){
+    if(byName.has(name)) return byName.get(name);
+    const wg={name, count:0, sealed:!!sealed, pulse:0, tamper:0, highlight:0, x:0,y:0,w:1,h:1,cx:W/2,cy:H/2};
+    wings.push(wg); byName.set(name, wg); layout();
+    return wg;
+  }
+  function setWings(list, sealed){
+    // reconcile from a sample's wings [[name,count],...]
+    sealedVault=!!sealed;
+    if(sealed){
+      // aggregate only — one locked vault block
+      if(!byName.has('◈ sealed')){ wings=[]; byName.clear(); ensureWing('◈ sealed', true); }
+      return;
+    }
+    let changed=false;
+    for(const [name,count] of list){
+      const wg=byName.get(name);
+      if(wg){ wg.count=count; } else { const w=ensureWing(name,false); w.count=count; changed=true; }
+    }
+    if(changed) layout();
+    const maxc=Math.max(1,...wings.map(w=>w.count));
+    wings.forEach(w=>w.cap=maxc);
+  }
+
+  // ---------- archivist ----------
+  const arc={x:W/2,y:H/2,tx:W/2,ty:H/2,face:1,state:'idle',timer:0,job:null,step:0};
+  function fileAt(wg){ arc.job=wg; arc.tx=wg.cx; arc.ty=wg.cy; arc.state='goto'; }
+
+  // ---------- HUD / events ----------
+  const tickerBody=$('tickerBody');
+  let clockT=0, haveClock=false;
+  function stamp(ts){ if(ts){ haveClock=true; clockT=ts; } const t=haveClock?clockT:(clockT+=7);
+    const s=((t%86400)+86400)%86400; const p=n=>String(n).padStart(2,'0');
+    return `${p(s/3600|0)}:${p(s/60%60|0)}:${p(s%60|0)}`; }
+  function log(kind, text, ts){
+    const row=document.createElement('div'); row.className='row';
+    const map={save:'SAVE',del:'DEL',search:'SRCH',kg:'LINK',chain:'CMMT',tamper:'!TMP',info:'INFO'};
+    row.innerHTML=`<span class="t">${stamp(ts)}</span><span class="b ${kind}">${map[kind]||'·'}</span><span>${text}</span>`;
+    tickerBody.prepend(row); while(tickerBody.children.length>7) tickerBody.lastChild.remove();
+  }
+
+  const floaters=[], links=[];
+  let procStack=0, procUntil=0;
+  function proc(ms){ procUntil=Math.max(procUntil, perf()+ms); }
+  let alarm=0, alarmBeacon=0, failCount=0;
+
+  // ---------- gauges ----------
+  function fmtBytes(b){ if(b<1024) return b+'B'; if(b<1048576) return (b/1024).toFixed(0)+'K'; return (b/1048576).toFixed(1)+'M'; }
+  function gauges(s){
+    $('gDrawers').textContent=s.drawers.toLocaleString();
+    $('gChain').textContent=s.chain_height;
+    $('gKgT').textContent=s.kg_triples;
+    $('gKgE').textContent=s.kg_entities;
+    $('gTun').textContent=s.tunnels;
+    $('gBytes').textContent=fmtBytes(s.db_bytes);
+  }
+
+  // ---------- stream event handlers ----------
+  function onSample(s, quiet){
+    setWings(s.wings||[], s.sealed);
+    gauges(s);
+    if(!quiet) { /* samples are ambient */ }
+  }
+  function onDrawerSaved(d){
+    const name=sealedVault ? '◈ sealed' : (d.wing||'general');
+    const wg=ensureWing(name, sealedVault); wg.count++; wg.pulse=1;
+    fileAt(wg);
+    floaters.push({x:wg.cx,y:wg.cy-10,txt:d.deduped?'↻':'+1',life:1,col:d.deduped?AMBER:PHOS});
+    log('save', sealedVault?`drawer → ◈ sealed`:`drawer → ${d.wing}/${d.room}${d.deduped?' (dedup)':''}`);
+  }
+  function onDrawerDeleted(d){
+    const wg=sealedVault?byName.get('◈ sealed'):null;
+    if(wg && wg.count>0) wg.count--;
+    log('del', 'drawer removed');
+  }
+  function onSearch(d){
+    proc(1200); arc.state='read'; arc.timer=1.0;
+    if(sealedVault){ wings.forEach(w=>w.highlight=1); }
+    else if(d.wing){ const w=byName.get(d.wing); if(w) w.highlight=1; }
+    else wings.forEach(w=>w.highlight=1);
+    log('search', `${d.hits} hit${d.hits===1?'':'s'}${d.wing?` · ${d.wing}`:''}`);
+  }
+  function onKg(d){
+    if(wings.length>=2){ const a=wings[(Math.random()*wings.length)|0], b=wings[(Math.random()*wings.length)|0];
+      if(a!==b) links.push({a,b,life:1.4}); }
+    log('kg', 'entity link');
+  }
+  function onCommit(d){
+    const wg=wings[(Math.random()*wings.length)|0]; if(wg){ floaters.push({x:wg.cx,y:wg.y+6,txt:'✔',life:1.2,col:GOLD}); }
+    log('chain', 'chain block sealed');
+  }
+  function onTamper(d){
+    failCount++; $('gFail').textContent=failCount;
+    alarm=6.5; if(sealedVault){ wings.forEach(w=>w.tamper=1); }
+    else if(d.wing){ const w=byName.get(d.wing); if(w) w.tamper=1; } else wings.forEach(w=>w.tamper=1);
+    $('banner').classList.add('on'); $('stage').classList.add('alarm');
+    $('bannerText').textContent=`INTEGRITY ALERT — HMAC VERIFY FAILED @ ${d.vault||'?'} (${d.surface||'?'})`;
+    log('tamper', `HMAC mismatch · ${d.surface||'?'}`);
+    if(soundOn) siren(true);
+  }
+  function clearAlarm(){ alarm=0; wings.forEach(w=>w.tamper=0);
+    $('banner').classList.remove('on'); $('stage').classList.remove('alarm'); siren(false); }
+
+  function dispatch(ev, d){
+    switch(ev){
+      case 'sample': onSample(d); break;
+      case 'drawer-saved': onDrawerSaved(d); break;
+      case 'drawer-deleted': onDrawerDeleted(d); break;
+      case 'search': onSearch(d); break;
+      case 'kg-triple': onKg(d); break;
+      case 'chain-commit': onCommit(d); break;
+      case 'hmac-fail': onTamper(d); break;
+    }
+  }
+
+  // ---------- connection (fetch-based SSE; EventSource can't set headers) ----------
+  let connected=false, abort=null, mode='demo';
+  function setStatus(cls, text){ $('lamp').className='lamp '+cls; $('statusText').textContent=text; }
+  function headers(){ const t=$('token').value.trim(); return t?{Authorization:'Bearer '+t}:{}; }
+
+  async function loadVaults(){
+    $('connMsg').textContent='';
+    try{
+      const res=await fetch('/v1/vaults',{headers:headers()});
+      if(res.status===403){ $('connMsg').textContent='listing disabled (assertions on) — type a vault id'; return; }
+      if(!res.ok){ $('connMsg').textContent='vaults: HTTP '+res.status; return; }
+      const j=await res.json(); const dl=$('vaultlist'); dl.innerHTML='';
+      (j.vaults||[]).forEach(v=>{ const o=document.createElement('option'); o.value=v; dl.appendChild(o); });
+      $('connMsg').textContent=(j.vaults||[]).length+' vault(s)';
+    }catch(e){ $('connMsg').textContent='vaults: '+e.message; }
+  }
+
+  async function connect(){
+    const vault=$('vault').value.trim();
+    if(!vault){ $('connMsg').textContent='enter a vault id'; return; }
+    disconnect();
+    // Drop the demo world so only real vault data is shown.
+    wings=[]; byName.clear(); demoInit=false; sealedVault=false; links.length=0; floaters.length=0;
+    connected=true; mode='live'; abort=new AbortController();
+    setStatus('proc','CONNECTING'); $('connMsg').textContent='';
+    // backfill history first
+    try{
+      const h=await fetch(`/v1/vaults/${encodeURIComponent(vault)}/stats/history?window=50`,{headers:headers()});
+      if(h.ok){ (await h.json()).forEach(s=>onSample(s,true)); }
+    }catch(e){}
+    try{
+      const res=await fetch(`/v1/vaults/${encodeURIComponent(vault)}/stream`,
+        {headers:headers(), signal:abort.signal});
+      if(!res.ok){ setStatus('off','HTTP '+res.status); $('connMsg').textContent='stream: HTTP '+res.status; connected=false; mode='demo'; return; }
+      setStatus('live','● LIVE · '+vault);
+      const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
+      while(connected){
+        const {value,done}=await reader.read(); if(done) break;
+        buf+=dec.decode(value,{stream:true}); let i;
+        while((i=buf.indexOf('\n\n'))>=0){ const raw=buf.slice(0,i); buf=buf.slice(i+2);
+          if(raw.startsWith(':')) continue; // heartbeat
+          let ev='message', data='';
+          for(const line of raw.split('\n')){
+            if(line.startsWith('event:')) ev=line.slice(6).trim();
+            else if(line.startsWith('data:')) data+=line.slice(5).trim();
+          }
+          if(data){ try{ dispatch(ev, JSON.parse(data)); }catch(e){} }
+        }
+      }
+    }catch(e){ if(connected) $('connMsg').textContent='stream: '+e.message; }
+    if(connected && mode==='live'){ setStatus('off','DISCONNECTED'); mode='demo'; connected=false; }
+  }
+  function disconnect(){ connected=false; if(abort){ try{abort.abort()}catch(e){} abort=null; }
+    mode='demo'; setStatus('demo','DEMO'); }
+
+  // ---------- demo mode (synthetic events until connected) ----------
+  const DEMO_WINGS=['journal','projects','reference','agents'];
+  let demoInit=false, demoTimer=0;
+  function demoSeed(){ if(demoInit) return; demoInit=true;
+    setWings(DEMO_WINGS.map((w,i)=>[w, 6+i*7]), false); }
+  function demoTick(dt){
+    demoSeed(); demoTimer-=dt; if(demoTimer>0) return; demoTimer=0.9+Math.random()*1.2;
+    const r=Math.random(), wg=wings[(Math.random()*wings.length)|0], name=wg?wg.name:'journal';
+    if(r<0.5) onDrawerSaved({wing:name, room:'inbox', deduped:Math.random()<0.2});
+    else if(r<0.72) onSearch({wing:Math.random()<0.5?name:null, hits:(Math.random()*4)|0});
+    else if(r<0.88) onKg({});
+    else onCommit({});
+    if(Math.random()<0.012 && alarm<=0) onTamper({vault:'demo', wing:name, surface:'drawer'});
+    // keep gauges plausible in demo
+    gauges({drawers:wings.reduce((a,w)=>a+w.count,0), chain_height:40+((perf()/1000)|0)%50,
+      kg_triples:12, kg_entities:9, tunnels:2, db_bytes:262144});
+  }
+
+  // ---------- render ----------
+  let paused=false, speed=1, soundOn=false;
+  function px(){ ctx.imageSmoothingEnabled=false; }
+  function line(a,b,c,d){ ctx.beginPath(); ctx.moveTo(a+.5,b+.5); ctx.lineTo(c+.5,d+.5); ctx.stroke(); }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H); ctx.fillStyle='#05070a'; ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle=col('--grid'); ctx.lineWidth=1; ctx.globalAlpha=.5;
+    for(let x=0;x<W;x+=8) line(x,0,x,H); for(let y=0;y<H;y+=8) line(0,y,W,y); ctx.globalAlpha=1;
+
+    links.forEach(l=>{ ctx.globalAlpha=Math.min(1,l.life)*.9; ctx.strokeStyle=VIOLET; ctx.lineWidth=2;
+      ctx.setLineDash([4,3]); line(l.a.cx,l.a.cy,l.b.cx,l.b.cy); ctx.setLineDash([]); ctx.globalAlpha=1; });
+
+    wings.forEach(drawWing);
+    floaters.forEach(f=>{ ctx.globalAlpha=Math.min(1,f.life); px(); ctx.fillStyle=f.col; ctx.font='7px monospace';
+      ctx.textAlign='center'; ctx.fillText(f.txt,f.x,f.y); ctx.globalAlpha=1; });
+    drawArchivist();
+    if(alarm>0) drawBeacon();
+  }
+
+  function drawWing(wg){
+    const glow=wg.pulse, hl=wg.highlight;
+    ctx.fillStyle=wg.tamper?'#1a0709':'#0c141d'; ctx.fillRect(wg.x,wg.y,wg.w,wg.h);
+    let bc=wg.tamper?RED:(hl>0?CYAN:col('--edge'));
+    ctx.strokeStyle=bc; ctx.lineWidth=(wg.tamper||hl>0)?2:1;
+    ctx.globalAlpha=wg.tamper?(0.5+0.5*Math.abs(Math.sin(alarmBeacon*3))):1;
+    ctx.strokeRect(wg.x+.5,wg.y+.5,wg.w-1,wg.h-1); ctx.globalAlpha=1;
+    if(hl>0){ ctx.globalAlpha=hl*.16; ctx.fillStyle=CYAN; ctx.fillRect(wg.x,wg.y,wg.w,wg.h); ctx.globalAlpha=1; }
+
+    px(); ctx.textAlign='left'; ctx.font='8px monospace';
+    ctx.fillStyle=wg.tamper?RED:'#dfeaf2'; ctx.fillText(wg.name.slice(0,14)+(wg.sealed?' 🔒':''), wg.x+5, wg.y+13);
+    ctx.fillStyle=wg.sealed?INK:PHOS; ctx.font='7px monospace';
+    ctx.fillText(wg.count+' drwrs', wg.x+5, wg.y+wg.h-6);
+
+    if(wg.sealed){
+      ctx.fillStyle='#101820'; ctx.fillRect(wg.x+wg.w-30,wg.y+18,22,22);
+      ctx.strokeStyle='#2c3f52'; ctx.strokeRect(wg.x+wg.w-30+.5,wg.y+18.5,21,21);
+      ctx.fillStyle=GOLD; ctx.globalAlpha=.85; ctx.fillRect(wg.x+wg.w-20,wg.y+27,3,8);
+      ctx.beginPath(); ctx.arc(wg.x+wg.w-18.5,wg.y+27,3,Math.PI,0); ctx.fill(); ctx.globalAlpha=1;
+    } else {
+      const cols=6, rws=3, gw=5, gh=5, ox=wg.x+wg.w-6-cols*gw, oy=wg.y+18;
+      const lit=Math.max(0,Math.min(cols*rws, Math.round(wg.count/(wg.cap||1)*cols*rws))); let k=0;
+      for(let yy=0;yy<rws;yy++)for(let xx=0;xx<cols;xx++,k++){ const on=k<lit;
+        ctx.fillStyle=on?(glow>0&&k>=lit-2?'#eafff4':PHOS):'#132530';
+        ctx.globalAlpha=on?(0.55+(glow>0&&k>=lit-2?glow*.4:0)):1;
+        ctx.fillRect(ox+xx*gw,oy+yy*gh,gw-1,gh-1); } ctx.globalAlpha=1;
+    }
+  }
+
+  function drawArchivist(){
+    const x=Math.round(arc.x), y=Math.round(arc.y), f=arc.face;
+    const bob=(arc.state==='walk'||arc.state==='return')?(Math.floor(arc.step)%2):0;
+    px(); ctx.globalAlpha=.35; ctx.fillStyle='#000'; ctx.fillRect(x-4,y+5,9,2); ctx.globalAlpha=1;
+    ctx.fillStyle='#20303f'; ctx.fillRect(x-3,y+2,2,3); ctx.fillRect(x+1,y+2,2,3); if(bob) ctx.fillRect(x-3,y+3,2,2);
+    ctx.fillStyle=arc.state==='read'?CYAN:'#2fa5b0'; ctx.fillRect(x-3,y-4,6,6);
+    if(arc.state==='goto'){ ctx.fillStyle=GOLD; ctx.fillRect(x+(f>0?3:-5),y-3,3,3); }
+    ctx.fillStyle='#f0c9a0'; ctx.fillRect(x-2,y-9,4,4);
+    ctx.fillStyle=PHOS; ctx.fillRect(x-3,y-10,6,2);
+    ctx.fillStyle='#0a0a0a'; ctx.fillRect(x+(f>0?0:-1),y-7,1,1);
+    if(arc.state==='file'){ ctx.fillStyle=PHOS; ctx.font='7px monospace'; ctx.textAlign='center'; ctx.fillText('▤',x,y-12); }
+  }
+
+  function drawBeacon(){
+    const t=alarmBeacon, a=0.18+0.16*Math.abs(Math.sin(t*3));
+    const g=ctx.createRadialGradient(W/2,H/2,40,W/2,H/2,W*.7);
+    g.addColorStop(0,'rgba(255,40,50,0)'); g.addColorStop(1,`rgba(255,20,28,${a})`);
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    for(let k=0;k<2;k++){ const ang=t*2.4+k*Math.PI; ctx.save(); ctx.translate(W/2,-10); ctx.rotate(ang);
+      const grd=ctx.createLinearGradient(0,0,0,H*1.2); grd.addColorStop(0,'rgba(255,60,70,.32)'); grd.addColorStop(1,'rgba(255,60,70,0)');
+      ctx.fillStyle=grd; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-26,H*1.2); ctx.lineTo(26,H*1.2); ctx.closePath(); ctx.fill(); ctx.restore(); }
+    ctx.fillStyle=Math.floor(t*4)%2?RED:'#ff9aa0'; ctx.fillRect(W/2-4,2,8,4);
+  }
+
+  // ---------- update loop ----------
+  function stepArc(dt){
+    if(arc.state==='read'){ arc.timer-=dt; if(arc.timer<=0) arc.state='idle'; return; }
+    if(arc.state==='file'){ arc.timer-=dt; if(arc.timer<=0) arc.state='idle'; return; }
+    if(arc.state==='goto'){
+      const dx=arc.tx-arc.x, dy=arc.ty-arc.y, d=Math.hypot(dx,dy), spd=70*speed*dt;
+      if(dx<-.5)arc.face=-1; else if(dx>.5)arc.face=1;
+      if(d<=spd){ arc.x=arc.tx; arc.y=arc.ty; arc.state='file'; arc.timer=.45/speed; }
+      else { arc.x+=dx/d*spd; arc.y+=dy/d*spd; arc.step+=spd*.15; }
+    }
+  }
+  function update(dt){
+    if(mode==='demo') demoTick(dt);
+    wings.forEach(w=>{ w.pulse=Math.max(0,w.pulse-dt*2); w.highlight=Math.max(0,w.highlight-dt*.9); });
+    for(let i=links.length-1;i>=0;i--){ links[i].life-=dt; if(links[i].life<=0) links.splice(i,1); }
+    for(let i=floaters.length-1;i>=0;i--){ const f=floaters[i]; f.y-=dt*14; f.life-=dt; if(f.life<=0) floaters.splice(i,1); }
+    if(alarm>0){ alarm-=dt; alarmBeacon+=dt*3.2; if(alarm<=0) clearAlarm(); }
+    stepArc(dt);
+    // status lamp for processing
+    if(alarm<=0 && mode==='live'){ $('lamp').className='lamp '+(perf()<procUntil?'proc':'live'); }
+  }
+
+  // ---------- siren ----------
+  let actx=null, osc=null;
+  function siren(on){ if(!soundOn||!on){ if(osc){try{osc.stop()}catch(e){} osc=null;} return; }
+    try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(osc){try{osc.stop()}catch(e){}}
+      const o=actx.createOscillator(), g=actx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(actx.destination);
+      g.gain.value=.04; const now=actx.currentTime; for(let i=0;i<14;i++) o.frequency.setValueAtTime(i%2?740:480, now+i*.35);
+      o.start(); o.stop(now+14*.35); osc=o; }catch(e){} }
+
+  // ---------- wiring ----------
+  $('loadBtn').addEventListener('click', loadVaults);
+  $('connectBtn').addEventListener('click', ()=>{ if(connected) { disconnect(); $('connectBtn').textContent='▶ CONNECT'; }
+    else { connect(); $('connectBtn').textContent='■ DISCONNECT'; } });
+  $('ackBtn').addEventListener('click', clearAlarm);
+  $('btnPause').addEventListener('click', e=>{ paused=!paused; e.target.textContent=paused?'▶ RESUME':'⏸ PAUSE'; });
+  $('btnSound').addEventListener('click', e=>{ soundOn=!soundOn; e.target.textContent=soundOn?'🔊 SOUND':'🔇 SOUND';
+    e.target.classList.toggle('on',soundOn); if(!soundOn) siren(false); });
+  $('speed').addEventListener('input', e=>{ speed=parseFloat(e.target.value); });
+
+  // ---------- boot ----------
+  let last=perf();
+  function perf(){ return performance.now(); }
+  demoSeed();
+  log('info','demo mode — connect to a vault for live data');
+  function frame(now){ let dt=(now-last)/1000; last=now; if(dt>.1)dt=.1;
+    if(!paused) update(dt); else if(alarm>0){ alarm-=dt; alarmBeacon+=dt*3.2; if(alarm<=0) clearAlarm(); }
+    draw(); requestAnimationFrame(frame); }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

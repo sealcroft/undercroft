@@ -106,6 +106,18 @@ pub fn serve_http(
             undercroft_obs::http_request("healthz", 200, start.elapsed());
             continue;
         }
+        // /monitor serves the Palace Monitor UI — a self-contained static
+        // page (no secrets) that connects to the SSE stream with a bearer
+        // the user supplies in the page. Only present in telemetry builds.
+        #[cfg(feature = "telemetry")]
+        if request.method() == &Method::Get && path == "/monitor" {
+            let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+                .expect("static header");
+            let _ = request
+                .respond(Response::from_string(include_str!("monitor.html")).with_header(ct));
+            undercroft_obs::http_request("monitor", 200, start.elapsed());
+            continue;
+        }
         // Palace-wide bearer gates every non-health route (MCP and REST).
         if let Some(expected) = &token {
             let ok = request

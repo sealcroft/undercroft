@@ -124,6 +124,7 @@ impl Tenancy {
         let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
         match (method.as_str(), segs.as_slice()) {
             ("POST", &["v1", "vaults"]) => self.create_vault(req, body, now),
+            ("GET", &["v1", "vaults"]) => self.list_vaults(),
             ("DELETE", &["v1", "vaults", id]) => self.delete_vault(id, req, now),
             ("GET", &["v1", "vaults", id, "stats"]) => self.stats(id, req, now),
             ("GET", &["v1", "vaults", id, "stats", "history"]) => self.stats_history(id, req, now),
@@ -175,6 +176,23 @@ impl Tenancy {
             201,
             Body::Json(json!({ "id": id, "level": level.to_string(), "created": true })),
         ))
+    }
+
+    /// `GET /v1/vaults` — list vault ids (for the Palace Monitor picker).
+    /// Palace-wide, so it is disabled under per-vault assertion isolation;
+    /// operators there address vaults by a known id instead.
+    fn list_vaults(&mut self) -> RestResult {
+        if self.requires_assertion() {
+            return Err(RestError::new(
+                403,
+                "vault listing is disabled under per-vault assertions",
+            ));
+        }
+        let ids = self
+            .manager
+            .list()
+            .map_err(|e| RestError::new(500, e.to_string()))?;
+        Ok((200, Body::Json(json!({ "vaults": ids }))))
     }
 
     fn delete_vault(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
