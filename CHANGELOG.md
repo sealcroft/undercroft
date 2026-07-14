@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 — Measured benchmarks, Weaviate, compressed storage
+
+- First measured benchmark results, in-repo (benchmarks/RESULTS.md), with
+  the zero-model hash embedder: LoCoMo session R@10 92.7% (beats
+  upstream's published raw and hybrid), LongMemEval-S R@5 90.4% (6.2 pts
+  under upstream's model-based raw; gap isolated to the
+  single-session-preference type).
+- Weaviate backend (REST + GraphQL, vectorizer:none) — fifth live-tested
+  remote index; PUT-vs-POST upsert semantics handled.
+- Storage growth control: zstd compress-then-encrypt for sealed content
+  (legacy records stay readable) and int8 embedding quantization with
+  per-vector scale (4x smaller, cosine drift < 0.1%), both test-covered.
+
+
 ## 0.6.0 — Benchmark adapters + in-process vector cache; PARITY complete
 
 - `undercroft-bench locomo|convomem|membench`: adapters for the remaining

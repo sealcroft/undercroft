@@ -37,6 +37,11 @@ original this repo was forked from), updated 2026-07-13.
 | Deploy (compose server, systemd) | `deploy/` |
 | Docs / examples | `docs/`, `examples/` |
 
+**Capabilities that exist only here:** Weaviate backend; zstd
+compress-then-encrypt for sealed content; int8 embedding quantization
+(4x smaller vectors); measured benchmark results in-repo
+(benchmarks/RESULTS.md).
+
 **Security features that exist only here:** vault isolation with per-vault
 HKDF keys, XChaCha20-Poly1305 sealing, HMAC record tags, tamper-evident
 audit chain, MAC'd manifests, keyed dup fingerprints, token-mandatory HTTP

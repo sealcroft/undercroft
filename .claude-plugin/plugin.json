@@ -2,7 +2,7 @@
   "name": "undercroft",
   "displayName": "Undercroft",
   "description": "Hardened local-first AI memory: encrypted vaults, verbatim recall, knowledge graph. Requires the `undercroft` binary on PATH.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "compufreq",
   "homepage": "https://github.com/compufreq/undercroft"
 }

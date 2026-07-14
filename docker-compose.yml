@@ -32,11 +32,13 @@ services:
       UNDERCROFT_CHROMA_URL: http://chroma:8000
       UNDERCROFT_PGVECTOR_DSN: postgresql://undercroft:undercroft@pgvector:5432/undercroft
       UNDERCROFT_MILVUS_URL: http://milvus:19530
+      UNDERCROFT_WEAVIATE_URL: http://weaviate:8080
     depends_on:
       - qdrant
       - chroma
       - pgvector
       - milvus
+      - weaviate
     volumes:
       - ./tests/e2e-backends.sh:/src/tests/e2e-backends.sh:ro
 
@@ -85,6 +87,14 @@ services:
       ETCD_DATA_DIR: /var/lib/milvus/etcd
       ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
       COMMON_STORAGETYPE: local
+
+  weaviate:
+    image: semitechnologies/weaviate:1.25.10
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: none
+      CLUSTER_HOSTNAME: node1
 
   # Build the documentation site (mdBook). Slow first run (compiles mdbook).
   #   docker compose run --rm site   → website/book/

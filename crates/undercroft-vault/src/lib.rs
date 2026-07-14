@@ -144,12 +144,16 @@ impl Vault {
         &self.manifest.chain_head_hex
     }
 
-    /// Prepare content for storage. Sealed vaults return the AEAD blob;
-    /// hmac-only vaults return the plaintext bytes unchanged.
+    /// Prepare content for storage. Sealed vaults compress (zstd) then
+    /// encrypt — that order matters: ciphertext has no redundancy left to
+    /// compress. Compression is skipped when it doesn't pay (tiny or
+    /// incompressible content). Hmac-only vaults keep raw plaintext so the
+    /// database stays inspectable with standard tools.
     pub fn content_at_rest(&self, record_id: &str, plaintext: &[u8]) -> Vec<u8> {
         match self.level {
             SecurityLevel::Sealed => {
-                seal::seal_content(&self.enc_key, &self.id, record_id, plaintext)
+                let framed = compress_frame(plaintext);
+                seal::seal_content(&self.enc_key, &self.id, record_id, &framed)
             }
             SecurityLevel::HmacOnly => plaintext.to_vec(),
         }
@@ -158,23 +162,20 @@ impl Vault {
     /// Recover plaintext content from its at-rest form.
     pub fn content_from_rest(&self, record_id: &str, blob: &[u8]) -> Result<Vec<u8>, VaultError> {
         match self.level {
-            SecurityLevel::Sealed => Ok(seal::open_content(
-                &self.enc_key,
-                &self.id,
-                record_id,
-                blob,
-            )?),
+            SecurityLevel::Sealed => {
+                let framed = seal::open_content(&self.enc_key, &self.id, record_id, blob)?;
+                decompress_frame(&framed)
+            }
             SecurityLevel::HmacOnly => Ok(blob.to_vec()),
         }
     }
 
-    /// Seal an embedding vector (sealed vaults only — embeddings of
-    /// plaintext leak content and must not be stored in clear).
+    /// Store an embedding: quantized to i8 (4x smaller than f32 — the
+    /// vector is usually bigger than the text it embeds), then sealed in
+    /// encrypted vaults (embeddings of plaintext leak content and must not
+    /// be stored in clear).
     pub fn embedding_at_rest(&self, record_id: &str, embedding: &[f32]) -> Vec<u8> {
-        let mut raw = Vec::with_capacity(embedding.len() * 4);
-        for v in embedding {
-            raw.extend_from_slice(&v.to_le_bytes());
-        }
+        let raw = quantize_embedding(embedding);
         match self.level {
             SecurityLevel::Sealed => {
                 seal::seal_content(&self.enc_key, &self.id, &format!("{record_id}/emb"), &raw)
@@ -194,10 +195,7 @@ impl Vault {
             }
             SecurityLevel::HmacOnly => blob.to_vec(),
         };
-        Ok(raw
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect())
+        Ok(dequantize_embedding(&raw))
     }
 
     /// HMAC tag for a record's canonical bytes.
@@ -374,6 +372,78 @@ impl std::fmt::Debug for VaultManager {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Storage framing: compression (content) and quantization (embeddings)
+// ---------------------------------------------------------------------------
+
+/// Frame markers for compressed content. Legacy blobs (pre-compression)
+/// contain normalized UTF-8 whose first byte is always >= 0x09, so 0x00 /
+/// 0x01 are unambiguous.
+const FRAME_RAW: u8 = 0x00;
+const FRAME_ZSTD: u8 = 0x01;
+
+/// zstd-compress with a marker frame; falls back to a raw frame when
+/// compression doesn't pay.
+fn compress_frame(plaintext: &[u8]) -> Vec<u8> {
+    if plaintext.len() >= 64 {
+        if let Ok(z) = zstd::bulk::compress(plaintext, 3) {
+            if z.len() + 1 < plaintext.len() {
+                let mut out = Vec::with_capacity(z.len() + 1);
+                out.push(FRAME_ZSTD);
+                out.extend_from_slice(&z);
+                return out;
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(plaintext.len() + 1);
+    out.push(FRAME_RAW);
+    out.extend_from_slice(plaintext);
+    out
+}
+
+fn decompress_frame(framed: &[u8]) -> Result<Vec<u8>, VaultError> {
+    match framed.first() {
+        Some(&FRAME_RAW) => Ok(framed[1..].to_vec()),
+        Some(&FRAME_ZSTD) => zstd::bulk::decompress(&framed[1..], 16 * 1024 * 1024)
+            .map_err(|e| VaultError::CorruptManifest(format!("zstd: {e}"))),
+        // Legacy record written before compression framing: the whole
+        // buffer is the content (normalized UTF-8 never starts with 0x00/0x01).
+        _ => Ok(framed.to_vec()),
+    }
+}
+
+/// Quantized-embedding frame: `[0x02, 'Q', scale f32 LE, i8 * dim]`.
+/// Standard embedder dims are multiples of 128, so the frame length
+/// (6 + dim) is never divisible by 4 — legacy f32 blobs (4 * dim) can't
+/// collide with it.
+const EMB_MAGIC0: u8 = 0x02;
+const EMB_MAGIC1: u8 = b'Q';
+
+fn quantize_embedding(embedding: &[f32]) -> Vec<u8> {
+    let max_abs = embedding.iter().fold(0f32, |m, v| m.max(v.abs()));
+    let scale = if max_abs > 0.0 { max_abs / 127.0 } else { 1.0 };
+    let mut out = Vec::with_capacity(6 + embedding.len());
+    out.push(EMB_MAGIC0);
+    out.push(EMB_MAGIC1);
+    out.extend_from_slice(&scale.to_le_bytes());
+    for v in embedding {
+        out.push((v / scale).round().clamp(-127.0, 127.0) as i8 as u8);
+    }
+    out
+}
+
+fn dequantize_embedding(raw: &[u8]) -> Vec<f32> {
+    if raw.len() > 6 && raw[0] == EMB_MAGIC0 && raw[1] == EMB_MAGIC1 && !raw.len().is_multiple_of(4)
+    {
+        let scale = f32::from_le_bytes([raw[2], raw[3], raw[4], raw[5]]);
+        return raw[6..].iter().map(|&b| (b as i8) as f32 * scale).collect();
+    }
+    // Legacy f32 little-endian blob.
+    raw.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
 // Re-export for store-layer signatures.
 pub use seal::HMAC_LEN as RECORD_TAG_LEN;
 pub const MASTER_KEY_LEN: usize = KEY_LEN;
@@ -443,6 +513,63 @@ mod tests {
     }
 
     #[test]
+    fn sealed_content_is_compressed_before_encryption() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("z", SecurityLevel::Sealed).unwrap();
+        // Highly repetitive 8 KB text must shrink dramatically at rest.
+        let plaintext = "the quarterly report moved to friday. ".repeat(200);
+        let blob = v.content_at_rest("r", plaintext.as_bytes());
+        assert!(
+            blob.len() < plaintext.len() / 4,
+            "expected compression: {} at rest vs {} plaintext",
+            blob.len(),
+            plaintext.len()
+        );
+        let back = v.content_from_rest("r", &blob).unwrap();
+        assert_eq!(back, plaintext.as_bytes());
+    }
+
+    #[test]
+    fn legacy_uncompressed_content_still_decodes() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("legacy", SecurityLevel::Sealed).unwrap();
+        // Simulate a pre-compression record: sealed raw plaintext, no frame.
+        let legacy_blob =
+            seal::seal_content(&v.enc_key, v.id(), "old", b"legacy verbatim memory text");
+        let back = v.content_from_rest("old", &legacy_blob).unwrap();
+        assert_eq!(back, b"legacy verbatim memory text");
+    }
+
+    #[test]
+    fn embedding_quantization_shrinks_and_preserves_ranking() {
+        let e = undercroft_core::HashEmbedder;
+        use undercroft_core::embed::{cosine, Embedder};
+        let v = e.embed("the deployment pipeline failed on friday");
+        let q = super::quantize_embedding(&v);
+        assert!(
+            q.len() < v.len() * 4 / 3,
+            "quantized {} vs f32 {}",
+            q.len(),
+            v.len() * 4
+        );
+        let back = super::dequantize_embedding(&q);
+        assert_eq!(back.len(), v.len());
+        assert!(
+            cosine(&v, &back) > 0.999,
+            "quantization must not disturb ranking: {}",
+            cosine(&v, &back)
+        );
+        // Legacy f32 blobs still decode.
+        let mut legacy = Vec::new();
+        for x in &v {
+            legacy.extend_from_slice(&x.to_le_bytes());
+        }
+        assert_eq!(super::dequantize_embedding(&legacy), v);
+    }
+
+    #[test]
     fn embedding_seal_roundtrip() {
         let dir = tempdir().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
@@ -450,6 +577,9 @@ mod tests {
         let emb = vec![0.25f32, -1.5, 3.0];
         let blob = v.embedding_at_rest("r", &emb);
         let back = v.embedding_from_rest("r", &blob).unwrap();
-        assert_eq!(back, emb);
+        assert_eq!(back.len(), emb.len());
+        for (a, b) in back.iter().zip(&emb) {
+            assert!((a - b).abs() < 0.02, "quantized {a} vs {b}");
+        }
     }
 }

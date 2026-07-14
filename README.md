@@ -90,6 +90,7 @@ supported as **untrusted search accelerators**:
 | `chroma` | Remote ANN index (REST v2, server mode) | `UNDERCROFT_CHROMA_URL` |
 | `pgvector` | Remote ANN index (Postgres) | `UNDERCROFT_PGVECTOR_DSN` |
 | `milvus` | Remote ANN index (REST v2, standalone) | `UNDERCROFT_MILVUS_URL` |
+| `weaviate` | Remote ANN index (REST + GraphQL) | `UNDERCROFT_WEAVIATE_URL` |
 
 Unlike upstream MemPalace — which stored plaintext documents in these
 databases — Undercroft uploads only the **sealed** content blob plus the
@@ -247,6 +248,26 @@ client-side sealing, unlike upstream's plaintext uploads), and model-based
 embeddings (ONNX via tract, feature-gated). Not carried over: Milvus
 (gRPC-only, opt-in extra upstream) and embedded ChromaDB (a Python library;
 the bundled SQLite store fills that role).
+
+## Benchmarks (measured, not inherited)
+
+Full methodology and reproduce commands: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+With the default zero-model hash embedder: **LoCoMo session R@10 92.7%**
+(upstream MemPalace published 60.3% raw / 88.9% hybrid with an embedding
+model) and **LongMemEval-S R@5 90.4%** (upstream raw: 96.6% with a model —
+the gap is one paraphrase-heavy question type; see the honest reading in
+RESULTS.md).
+
+## Storage that doesn't balloon
+
+- Sealed content is **zstd-compressed before encryption** (compress-then-
+  encrypt — ciphertext can't be compressed after the fact), with a raw
+  fallback when compression doesn't pay. Legacy records stay readable.
+- Embeddings are **int8-quantized** (4× smaller than f32; the vector is
+  usually bigger than the text it embeds) with per-vector scaling —
+  ranking-neutral (cosine drift < 0.1%) and covered by tests.
+- Exact-duplicate detection (keyed fingerprints), `dedup --apply`, and
+  `repair` (vacuum + re-embed) keep the palace tight.
 
 ## More
 

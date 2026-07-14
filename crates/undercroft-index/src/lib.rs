@@ -26,7 +26,7 @@ pub enum IndexError {
     Pg(String),
     #[error("unexpected response from backend: {0}")]
     BadResponse(String),
-    #[error("unknown backend {0:?} (expected: qdrant, chroma, pgvector, milvus)")]
+    #[error("unknown backend {0:?} (expected: qdrant, chroma, pgvector, milvus, weaviate)")]
     UnknownBackend(String),
     #[error("backend {0} is not configured: set {1}")]
     NotConfigured(&'static str, &'static str),
@@ -89,6 +89,11 @@ pub fn from_env(backend: &str) -> Result<Box<dyn VectorIndex>, IndexError> {
             let url = std::env::var("UNDERCROFT_MILVUS_URL")
                 .map_err(|_| IndexError::NotConfigured("milvus", "UNDERCROFT_MILVUS_URL"))?;
             Ok(Box::new(milvus::MilvusIndex::new(&url)))
+        }
+        "weaviate" => {
+            let url = std::env::var("UNDERCROFT_WEAVIATE_URL")
+                .map_err(|_| IndexError::NotConfigured("weaviate", "UNDERCROFT_WEAVIATE_URL"))?;
+            Ok(Box::new(weaviate::WeaviateIndex::new(&url)))
         }
         other => Err(IndexError::UnknownBackend(other.into())),
     }
@@ -697,6 +702,195 @@ pub mod milvus {
                 "/entities/delete",
                 json!({ "collectionName": collection, "filter": format!("id in [{list}]") }),
             )?;
+            Ok(())
+        }
+    }
+}
+
+pub mod weaviate {
+    use super::*;
+    use serde_json::{json, Value};
+
+    /// Weaviate (REST v1 + GraphQL). Classes are created with
+    /// `vectorizer: none` — vectors always come from the client, and the
+    /// stored document is the sealed blob, never plaintext.
+    pub struct WeaviateIndex {
+        base: String,
+        agent: ureq::Agent,
+    }
+
+    impl WeaviateIndex {
+        pub fn new(base_url: &str) -> Self {
+            Self {
+                base: base_url.trim_end_matches('/').to_string(),
+                agent: ureq::AgentBuilder::new()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build(),
+            }
+        }
+
+        /// Weaviate class names must be /[A-Z][A-Za-z0-9]*/.
+        fn class_name(collection: &str) -> String {
+            let safe: String = collection
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect();
+            format!("Mnemo{safe}")
+        }
+
+        /// Weaviate object ids must be UUIDs; derive one from the record id.
+        fn object_id(id: &str) -> String {
+            let h = format!("{:0<32}", id.chars().take(32).collect::<String>());
+            format!(
+                "{}-{}-{}-{}-{}",
+                &h[0..8],
+                &h[8..12],
+                &h[12..16],
+                &h[16..20],
+                &h[20..32]
+            )
+        }
+
+        fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, IndexError> {
+            let url = format!("{}{}", self.base, path);
+            let req = self.agent.request(method, &url);
+            let resp = match body {
+                Some(b) => req.send_json(b),
+                None => req.call(),
+            };
+            match resp {
+                Ok(r) => Ok(r.into_json().unwrap_or(Value::Null)),
+                Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
+                    "{method} {url} -> {code}: {}",
+                    r.into_string().unwrap_or_default()
+                ))),
+                Err(e) => Err(IndexError::Http(e.to_string())),
+            }
+        }
+    }
+
+    impl VectorIndex for WeaviateIndex {
+        fn name(&self) -> &'static str {
+            "weaviate"
+        }
+
+        fn ensure(&mut self, collection: &str, _dim: usize) -> Result<(), IndexError> {
+            let class = Self::class_name(collection);
+            if self
+                .call("GET", &format!("/v1/schema/{class}"), None)
+                .is_ok()
+            {
+                return Ok(());
+            }
+            self.call(
+                "POST",
+                "/v1/schema",
+                Some(json!({
+                    "class": class,
+                    "vectorizer": "none",
+                    "vectorIndexConfig": { "distance": "cosine" },
+                    "properties": [
+                        { "name": "record_id", "dataType": ["text"] },
+                        { "name": "sealed_b64", "dataType": ["text"] },
+                        { "name": "wing", "dataType": ["text"] },
+                        { "name": "room", "dataType": ["text"] }
+                    ]
+                })),
+            )?;
+            Ok(())
+        }
+
+        fn upsert(&mut self, collection: &str, records: &[IndexRecord]) -> Result<(), IndexError> {
+            let class = Self::class_name(collection);
+            for r in records {
+                let body = json!({
+                    "class": class,
+                    "id": Self::object_id(&r.id),
+                    "vector": r.embedding,
+                    "properties": {
+                        "record_id": r.id,
+                        "sealed_b64": r.sealed_b64,
+                        "wing": r.wing,
+                        "room": r.room
+                    }
+                });
+                // PUT replaces an existing object; a new id needs POST.
+                let path = format!("/v1/objects/{class}/{}", Self::object_id(&r.id));
+                match self.call("PUT", &path, Some(body.clone())) {
+                    Ok(_) => {}
+                    Err(IndexError::Http(msg)) if msg.contains("no object with id") => {
+                        self.call("POST", "/v1/objects", Some(body))?;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+
+        fn query(
+            &mut self,
+            collection: &str,
+            embedding: &[f32],
+            wing: Option<&str>,
+            limit: usize,
+        ) -> Result<Vec<Candidate>, IndexError> {
+            let class = Self::class_name(collection);
+            let vec_json = serde_json::to_string(embedding)
+                .map_err(|e| IndexError::BadResponse(e.to_string()))?;
+            let where_clause = match wing {
+                Some(w) => format!(
+                    ", where: {{ path: [\"wing\"], operator: Equal, valueText: \"{}\" }}",
+                    w.replace('"', "")
+                ),
+                None => String::new(),
+            };
+            let gql = format!(
+                "{{ Get {{ {class}(nearVector: {{ vector: {vec_json} }}, limit: {limit}{where_clause}) \
+                 {{ record_id _additional {{ certainty }} }} }} }}"
+            );
+            let resp = self.call("POST", "/v1/graphql", Some(json!({ "query": gql })))?;
+            if let Some(errs) = resp.get("errors") {
+                if errs.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+                    return Err(IndexError::BadResponse(format!("graphql errors: {errs}")));
+                }
+            }
+            let hits = resp
+                .pointer(&format!("/data/Get/{class}"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            Ok(hits
+                .iter()
+                .filter_map(|h| {
+                    Some(Candidate {
+                        id: h.get("record_id")?.as_str()?.to_string(),
+                        score: h
+                            .pointer("/_additional/certainty")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.5) as f32,
+                    })
+                })
+                .collect())
+        }
+
+        fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
+            let class = Self::class_name(collection);
+            let gql = format!("{{ Aggregate {{ {class} {{ meta {{ count }} }} }} }}");
+            let resp = self.call("POST", "/v1/graphql", Some(json!({ "query": gql })))?;
+            resp.pointer(&format!("/data/Aggregate/{class}/0/meta/count"))
+                .and_then(Value::as_u64)
+                .ok_or_else(|| IndexError::BadResponse("missing aggregate count".into()))
+        }
+
+        fn delete(&mut self, collection: &str, ids: &[String]) -> Result<(), IndexError> {
+            let class = Self::class_name(collection);
+            for id in ids {
+                let _ = self.call(
+                    "DELETE",
+                    &format!("/v1/objects/{class}/{}", Self::object_id(id)),
+                    None,
+                );
+            }
             Ok(())
         }
     }

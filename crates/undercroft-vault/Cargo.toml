@@ -22,6 +22,7 @@ hex = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
+zstd = "0.13"
 
 [dev-dependencies]
 tempfile = { workspace = true }
