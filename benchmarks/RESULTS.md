@@ -26,27 +26,39 @@ undercroft-bench longmemeval longmemeval_s_cleaned.json --k 5
 UNDERCROFT_EMBEDDER=onnx UNDERCROFT_ONNX_MODEL=model.onnx \
 UNDERCROFT_ONNX_TOKENIZER=tokenizer.json \
 undercroft-bench longmemeval longmemeval_s_cleaned.json --k 5
-# (500 questions were sharded with --skip/--limit across 5 containers)
+# (500 questions were sharded with --skip/--limit across 8 containers)
 ```
 
 | Metric | Undercroft hash (no model) | **Undercroft + MiniLM** | MemPalace raw (model) | MemPalace hybrid v4 |
 |---|---|---|---|---|
-| Recall@5 (any) | 95.0% | **97.4%** (487/500) † | 96.6% | 98.4% |
-| NDCG@5 | 0.888 | ≈ 0.93 † | — | — |
-| Wall clock | 305 s / 500 q | ≈ 86 s/question | — | — |
+| Recall@5 (any) | 95.0% | **99.4%** (497/500) | 96.6% | 98.4% |
+| NDCG@5 | 0.888 | 0.948 | — | — |
+| Wall clock | 305 s / 500 q | ≈ 92 s/question | — | — |
 
-† MiniLM rows measured under `legacy` fusion; BM25 re-measure pending.
+Both configurations use the default **BM25 fusion**. The MiniLM rows were
+re-measured under BM25 (8-way sharded, full 500).
 
-Matched-model reading: with the same embedding-model class upstream used,
-Undercroft's raw pipeline lands **+0.8 over upstream raw** and 1.0 under
-their tuned hybrid. With **BM25 fusion the zero-model hash embedder now
-reaches 95.0%** — within 2.4 points of MiniLM and above upstream's own raw
-model number, closing most of the semantics gap without a download.
+Matched-model reading: with the same embedding-model class upstream used
+and BM25 fusion, Undercroft's raw pipeline reaches **99.4%** — **above
+upstream's own tuned hybrid (98.4%)**, not just their raw number (96.6%).
+The zero-model hash embedder reaches 95.0% — within 4.4 points of the
+model and above upstream raw, closing most of the semantics gap with no
+download.
 
-Per-type (R@5 any, hash + BM25): knowledge-update 100.0 · multi-session
-96.2 · single-session-assistant 98.2 · single-session-user 98.6 ·
-temporal-reasoning 94.0 · **single-session-preference 66.7** (was 36.7
-under legacy — the paraphrase-heavy category BM25 helps most).
+Per-type (R@5 any):
+
+| Type | hash + BM25 | MiniLM + BM25 |
+|---|---|---|
+| knowledge-update | 100.0 | 100.0 |
+| multi-session | 96.2 | 99.2 |
+| single-session-assistant | 98.2 | 100.0 |
+| single-session-user | 98.6 | 100.0 |
+| temporal-reasoning | 94.0 | 99.2 |
+| single-session-preference | 66.7 | **96.7** |
+
+The paraphrase-heavy single-session-preference category — the historical
+weak spot (36.7 under legacy fusion) — is where BM25 and the model both
+help most: 96.7 with MiniLM.
 
 ## LoCoMo (1,982 evaluable QA, session granularity)
 
@@ -58,9 +70,10 @@ undercroft-bench locomo locomo10.json --k 10
 
 | Metric | Undercroft hash | **Undercroft + MiniLM** | MemPalace raw | MemPalace hybrid v5 |
 |---|---|---|---|---|
-| Session R@10 | 94.6% | **93.8%** † | 60.3% | 88.9% |
+| Session R@10 | 94.6% | **94.6%** | 60.3% | 88.9% |
 
-† MiniLM row measured under `legacy` fusion; BM25 re-measure pending.
+Both under BM25 fusion. Here the model and the zero-model hash embedder
+converge at 94.6% — both above upstream's best (88.9%).
 
 Per-category (hash + BM25): 1: 94.7 · 2: 90.3 · 3: 81.5 · 4: 96.3 · 5: 97.1
 (the hardest multi-hop category 3 rises from 75.0 under legacy to 81.5).
@@ -91,15 +104,16 @@ Ablation on the default hash embedder, all three fusion modes, full suites
 The `legacy` numbers reproduce the earlier published figures exactly,
 confirming the refactor left that path unchanged. BM25 is embedder- and
 security-level-independent (it re-ranks already-HMAC-verified candidates),
-so the same lift is expected under the MiniLM embedder.
+and the lift carries to the model: MiniLM went **97.4 → 99.4** on
+LongMemEval and **93.8 → 94.6** on LoCoMo under BM25.
 
 ## Honest reading
 
-- **Matched-model conditions (the fair comparison):** LoCoMo 93.8 vs
-  upstream's best 88.9; LongMemEval 97.4 vs upstream raw 96.6 (their
-  tuned hybrid holds 98.4). Undercroft's raw pipeline is at or above
-  upstream raw on both benchmarks with the same model class. (These MiniLM
-  numbers predate BM25 fusion; re-measurement is expected to hold or lift.)
+- **Matched-model conditions (the fair comparison):** with the same model
+  class and BM25 fusion, LongMemEval **99.4% clears upstream's tuned hybrid
+  (98.4%)** — not just their raw (96.6%) — and LoCoMo **94.6% is well above
+  upstream's best (88.9%)**. Undercroft's pipeline is at or above upstream on
+  both benchmarks.
 - **Zero-model rows now close most of the gap:** with BM25 the hash
   embedder reaches 95.0 on LongMemEval (was 90.4) and 94.6 on LoCoMo (was
   92.7) — no download, ~95x faster per question, and on LoCoMo it now
