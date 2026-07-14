@@ -13,6 +13,9 @@ docker compose -f docker-compose.observability.yml up --build
   (anonymous viewer access is enabled for convenience; admin login is
   `admin` / `admin` unless you set `GRAFANA_ADMIN_PASSWORD`).
 - **Prometheus** → http://localhost:9090
+- **Palace Monitor** → http://localhost:8765/monitor — the pixel-art live
+  view; enter the bearer token (the demo token below), pick a vault, and
+  watch the archivist file drawers in real time.
 
 The dashboard shows request rate by route, search rate and p95/p50
 latency, drawer writes by outcome (created vs deduped), audit-chain commit

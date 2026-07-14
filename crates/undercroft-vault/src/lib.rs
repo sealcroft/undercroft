@@ -359,6 +359,7 @@ impl VaultManager {
         if verify_hmac(&vault.manifest_key, &vault.manifest.canonical(), &stored).is_err() {
             let _ = expected;
             undercroft_obs::hmac_verify_failed("manifest");
+            undercroft_obs::event_hmac_fail(vault.id(), "manifest");
             return Err(VaultError::ManifestTampered);
         }
         Ok(vault)

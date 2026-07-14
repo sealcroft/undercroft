@@ -341,6 +341,14 @@ pub(crate) fn event_chain_commit(vault: &str) {
     emit(vault, "chain-commit", serde_json::json!({ "vault": vault }));
 }
 
+pub(crate) fn event_hmac_fail(vault: &str, surface: &str) {
+    emit(
+        vault,
+        "hmac-fail",
+        serde_json::json!({ "vault": vault, "surface": surface }),
+    );
+}
+
 pub(crate) fn history(vault: &str, window: usize) -> Vec<Sample> {
     let b = broker().lock().unwrap();
     match b.history.get(vault) {

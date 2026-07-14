@@ -300,6 +300,15 @@ pub fn event_chain_commit(vault: &str) {
     imp::event_chain_commit(vault);
 }
 
+/// An HMAC / integrity verification failed on `vault` — the live tamper
+/// signal for the Palace Monitor alarm. `surface` is `drawer`/`kg`/
+/// `tunnel`/`manifest`. Metadata only (vault + surface tag).
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn event_hmac_fail(vault: &str, surface: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::event_hmac_fail(vault, surface);
+}
+
 // ---------------------------------------------------------------------------
 // Live telemetry — periodic sampler + SSE stream (telemetry feature only)
 // ---------------------------------------------------------------------------

@@ -234,6 +234,7 @@ impl PalaceStore {
             )
             .map_err(|_| {
                 undercroft_obs::hmac_verify_failed("kg");
+                undercroft_obs::event_hmac_fail(self.vault.id(), "kg");
                 StoreError::Integrity(format!("kg/{}", row.id))
             })?;
         let object = self

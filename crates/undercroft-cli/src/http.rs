@@ -84,18 +84,27 @@ pub fn serve_http(
             .unwrap_or(2000),
     );
 
+    // Track the last sampler tick by wall clock, not by loop idleness: under
+    // sustained load `recv_timeout` always returns a request within the
+    // window, so the sampler must fire on elapsed time or it starves exactly
+    // when there is the most to observe.
+    #[cfg(feature = "telemetry")]
+    let mut last_sample = Instant::now();
+
     loop {
-        let mut request = match server.recv_timeout(sample_interval) {
-            Ok(Some(request)) => request,
-            Ok(None) => {
-                #[cfg(feature = "telemetry")]
-                {
-                    let now = OffsetDateTime::now_utc().unix_timestamp();
-                    tenancy.sample(now);
-                }
-                continue;
-            }
+        let maybe_request = match server.recv_timeout(sample_interval) {
+            Ok(req) => req,
             Err(_) => break,
+        };
+        #[cfg(feature = "telemetry")]
+        if last_sample.elapsed() >= sample_interval {
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            tenancy.sample(now);
+            last_sample = Instant::now();
+        }
+        let mut request = match maybe_request {
+            Some(request) => request,
+            None => continue,
         };
         let start = Instant::now();
         let url = request.url().to_string();
@@ -104,6 +113,18 @@ pub fn serve_http(
         if request.method() == &Method::Get && path == "/healthz" {
             let _ = request.respond(Response::from_string("ok"));
             undercroft_obs::http_request("healthz", 200, start.elapsed());
+            continue;
+        }
+        // /monitor serves the Palace Monitor UI — a self-contained static
+        // page (no secrets) that connects to the SSE stream with a bearer
+        // the user supplies in the page. Only present in telemetry builds.
+        #[cfg(feature = "telemetry")]
+        if request.method() == &Method::Get && path == "/monitor" {
+            let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+                .expect("static header");
+            let _ = request
+                .respond(Response::from_string(include_str!("monitor.html")).with_header(ct));
+            undercroft_obs::http_request("monitor", 200, start.elapsed());
             continue;
         }
         // Palace-wide bearer gates every non-health route (MCP and REST).

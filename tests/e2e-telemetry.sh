@@ -119,6 +119,16 @@ hist=$(curl -s "${AUTH[@]}" "$BASE/plain/stats/history")
 grep -q '"drawers"' <<<"$hist" && pass "stats/history returns samples" \
   || fail "history empty" "$hist"
 
+# Palace Monitor UI is served (telemetry build), text/html, with a marker.
+mon=$(curl -s -D - "${AUTH[@]}" "http://127.0.0.1:8797/monitor")
+grep -qi "palace monitor" <<<"$mon" && pass "/monitor serves the UI" || fail "/monitor missing marker"
+grep -qi "content-type: text/html" <<<"$mon" && pass "/monitor is text/html" || fail "/monitor wrong content-type"
+
+# Vault list for the picker (bearer-gated, ids only).
+vl=$(curl -s "${AUTH[@]}" "$BASE")
+grep -q '"plain"' <<<"$vl" && grep -q '"sealed"' <<<"$vl" && pass "/v1/vaults lists created vaults" \
+  || fail "/v1/vaults missing ids" "$vl"
+
 kill "$S3" 2>/dev/null
 wait "$S3" 2>/dev/null
 

@@ -385,6 +385,11 @@ rest_body "delete vault"        '"deleted":true'  -- -X DELETE "$API/vaults/glob
 rest_code "deleted vault gone 404" 404 -- "$API/vaults/globex/stats" \
   -H "X-Vault-Assertion: $(sign globex)"
 
+# Vault listing is disabled under per-vault assertions (this server sets one).
+rest_code "vault list 403 under assertions" 403 -- "$API/vaults"
+# The Palace Monitor UI is telemetry-only; absent from this default build.
+rest_code "/monitor 404 without telemetry" 404 -- "http://127.0.0.1:$PORT/monitor"
+
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 
 echo

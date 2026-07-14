@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.0 — Palace Monitor UI
+
+A self-contained pixel-art dashboard served at **`GET /monitor`**, driven
+by the v0.10 SSE stream. Opt-in behind `--features telemetry`; the page is
+unauthenticated static HTML (no secrets), metadata only, sealed vaults show
+aggregates only.
+
+- **Palace Monitor** — a retro game-world view: an archivist files drawers
+  into wings as writes land, searches pulse the wings, the audit chain
+  stamps on each commit, and an **ambulance beacon** fires on a real tamper.
+  Runs in demo mode until you enter the bearer token and pick a vault.
+  Fully inlined (no external requests); uses `fetch()` streaming so it can
+  send the bearer (`EventSource` can't).
+- **Live tamper alarm** — new `hmac-fail` stream event, emitted at every
+  HMAC-verify-failure site (drawer/kg/tunnel/manifest), powers the beacon.
+- **`GET /v1/vaults`** — lists vault ids for the picker (bearer-gated;
+  disabled under per-vault assertions).
+
 ## 0.10.0 — Live memory telemetry
 
 Turns the v0.9.0 point-in-time observability into a **live push stream** —

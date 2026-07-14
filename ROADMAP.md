@@ -115,6 +115,19 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   wing/room names. Opt-in (`--features telemetry`). Second stage of the
   Operability track; feeds the v0.11 Palace Monitor UI.
 
+## v0.11.0 — Palace Monitor UI (done)
+
+- A self-contained pixel-art dashboard at `GET /monitor` (unauthenticated
+  static page, telemetry build only), driven by the v0.10 SSE stream: an
+  archivist files drawers into wings as writes land, searches pulse the
+  wings, the chain stamps on commits, and an **ambulance beacon** fires on
+  a real HMAC-verify failure — powered by a new `hmac-fail` stream event
+  wired to every tamper site. Demo mode until the bearer + vault are
+  entered; uses `fetch()` streaming (so it can send the bearer, unlike
+  `EventSource`); fully inlined, same-origin only. Adds `GET /v1/vaults`
+  (bearer-gated; disabled under per-vault assertions) for the picker.
+  Final stage of the Operability track.
+
 ## Next
 
 - **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,
@@ -199,7 +212,12 @@ that only ticks watched vaults, and sealed-vault wing/room suppression.
   QPS + latency, KG triple counts, cache hit rate, FTS prefilter ratio,
   audit-chain height — all counts and rates, never text.
 
-### v0.11.0 — Palace Monitor: pixel-art memory world (planned)
+### v0.11.0 — Palace Monitor: pixel-art memory world (done)
+
+Shipped: served at `GET /monitor` (self-contained, `fetch()`-streamed so it
+can send the bearer), demo mode until connected, a live `hmac-fail` event
+driving the tamper beacon, and a `GET /v1/vaults` picker. Verified live
+against a real server.
 
 A real-time, game-style pixel-art view of how memory is distributed
 across the palace, reading the v0.10 stream. Inspiration:
