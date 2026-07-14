@@ -142,6 +142,10 @@ A telemetry build also serves a self-contained pixel-art dashboard at
 http://127.0.0.1:8765/monitor
 ```
 
+![The Palace Monitor connected live: nine wings named for the conversation
+participants of a LoCoMo-derived vault, each filling with filed drawers, an
+archivist mid-file, and gold audit-chain links stamping between wings.](images/palace-monitor-live.png)
+
 Enter the palace bearer token, pick a vault (from `GET /v1/vaults`, or type
 the id), and connect. An archivist files drawers into wings as writes land,
 searches pulse the wings, the audit chain stamps on each commit, and the
@@ -149,6 +153,13 @@ searches pulse the wings, the audit chain stamps on each commit, and the
 `hmac_verify_failures` signal, live. Until you connect it runs in demo mode
 with synthetic events. Sealed vaults stream aggregate counts only (wing/room
 names suppressed server-side).
+
+The beacon is not decorative. Corrupt a single drawer's bytes on disk and the
+next read fails its HMAC; a genuine `hmac-fail` stream event floods the palace
+red. It fires only on real integrity failure — never a synthetic alarm.
+
+![The same monitor in its tamper state: the whole palace flushed red under the
+integrity-alert beacon after a real HMAC-verify failure.](images/palace-monitor-tamper.png)
 
 The page uses `fetch()` streaming (not `EventSource`, which can't send an
 `Authorization` header) and is fully self-contained — no external requests,
