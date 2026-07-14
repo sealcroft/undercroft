@@ -449,6 +449,7 @@ impl PalaceStore {
     /// vaults, which must supply a vector via
     /// [`upsert_external`](Self::upsert_external).
     pub fn upsert(&mut self, drawer: &Drawer) -> Result<bool, StoreError> {
+        let _span = undercroft_obs::scope("save", self.vault.id());
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
@@ -474,6 +475,7 @@ impl PalaceStore {
         drawer: &Drawer,
         vector: Vec<f32>,
     ) -> Result<bool, StoreError> {
+        let _span = undercroft_obs::scope("save", self.vault.id());
         match self.external_dim {
             None => Err(StoreError::NotExternalVault),
             Some(dim) if vector.len() != dim => Err(StoreError::EmbeddingDim {
@@ -591,6 +593,7 @@ impl PalaceStore {
         embedding: Vec<f32>,
         threshold: f32,
     ) -> Result<SaveOutcome, StoreError> {
+        let _span = undercroft_obs::scope("save", self.vault.id());
         if let Some(dim) = self.external_dim {
             if embedding.len() != dim {
                 return Err(StoreError::EmbeddingDim {
@@ -863,6 +866,7 @@ impl PalaceStore {
         qvec: Vec<f32>,
         opts: &SearchOptions,
     ) -> Result<Vec<SearchHit>, StoreError> {
+        let _span = undercroft_obs::scope("search", self.vault.id());
         let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
         let qterms: Vec<String> = query

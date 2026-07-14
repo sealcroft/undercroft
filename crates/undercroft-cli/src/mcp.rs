@@ -56,6 +56,7 @@ impl McpHandler {
         // Notifications (no id) get no response.
         msg.get("id")?;
 
+        let _span = undercroft_obs::scope_request(method, None);
         Some(match method {
             "initialize" => json!({
                 "jsonrpc": "2.0",

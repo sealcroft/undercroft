@@ -117,6 +117,87 @@
           { "matcher": { "id": "byName", "options": "hmac failures" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }
         ]
       }
+    },
+    {
+      "type": "row",
+      "title": "Integrity & alerting",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Tamper by surface (2m increase)",
+      "description": "HMAC-verify failures grouped by surface: drawer / kg / tunnel / manifest.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 23 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (surface) (increase(undercroft_hmac_verify_failures_total[2m]))", "legendFormat": "{{surface}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60 }, "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP 5xx errors",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 23 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (route) (rate(undercroft_http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "{{route}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 }, "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Auth rejections by kind",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 23 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind) (rate(undercroft_auth_rejections_total[5m]))", "legendFormat": "{{kind}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] }
+    },
+    {
+      "type": "alertlist",
+      "title": "Active alerts (Alertmanager)",
+      "datasource": { "type": "alertmanager", "uid": "alertmanager" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 31 },
+      "options": {
+        "viewMode": "list",
+        "groupMode": "default",
+        "maxItems": 20,
+        "sortOrder": 3,
+        "alertInstanceLabelFilter": "",
+        "datasource": "Alertmanager",
+        "stateFilter": { "firing": true, "pending": true, "normal": false, "error": true, "noData": false }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Logs & traces (metadata only)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "logs",
+      "title": "Undercroft logs (Loki)",
+      "description": "Structured tracing logs — counts, routes, surfaces. Never drawer content or keys.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 40 },
+      "targets": [
+        { "refId": "A", "expr": "{service=\"undercroft\"}", "queryType": "range" }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
+    },
+    {
+      "type": "table",
+      "title": "Recent traces (Tempo)",
+      "description": "Request/search/save spans — metadata-only (vault id, route, op).",
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 40 },
+      "targets": [
+        { "refId": "A", "queryType": "traceqlSearch", "query": "{ resource.service.name = \"undercroft\" }", "limit": 20, "tableType": "traces", "filters": [] }
+      ]
     }
   ]
 }

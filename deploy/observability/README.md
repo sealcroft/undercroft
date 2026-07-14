@@ -1,49 +1,99 @@
-# Undercroft observability stack (Prometheus + Grafana)
+# Undercroft observability stack (metrics · logs · traces · alerting)
 
-A self-contained local stack that runs a telemetry-enabled Undercroft
-server, scrapes its `/metrics` endpoint with Prometheus, and renders a
-pre-provisioned Grafana dashboard.
+A self-contained local stack that runs a telemetry-enabled Undercroft server
+and gives it the full operability picture: **metrics** (Prometheus), **logs**
+(Loki), **distributed traces** (Tempo), and **alerting** (Alertmanager) — all
+rendered in **Grafana**, with server-side PNG export via a Grafana image
+renderer. Everything Undercroft emits is **metadata and counts only** — never
+drawer content or key material.
 
 ```bash
 cd deploy/observability
 docker compose -f docker-compose.observability.yml up --build
 ```
 
-- **Grafana** → http://localhost:3000 — dashboard **“Undercroft — Palace”**
-  (anonymous viewer access is enabled for convenience; admin login is
-  `admin` / `admin` unless you set `GRAFANA_ADMIN_PASSWORD`).
-- **Prometheus** → http://localhost:9090
-- **Palace Monitor** → http://localhost:8765/monitor — the pixel-art live
-  view; enter the bearer token (the demo token below), pick a vault, and
-  watch the archivist file drawers in real time.
+```
+undercroft (telemetry) ──/metrics──▶ Prometheus ──rules──▶ Alertmanager ──▶ alert-sink
+          │  │                          │                                    (webhook)
+          │  └──JSON logs──▶ promtail ──▶ Loki ──┐
+          └──OTLP traces────────────────▶ Tempo ─┤
+                                                 └──▶ Grafana (+ image-renderer)
+```
 
-The dashboard shows request rate by route, search rate and p95/p50
-latency, drawer writes by outcome (created vs deduped), audit-chain commit
-rate, and — front and center — **HMAC verify failures**, the tamper
-signal, which turns the stat panel red the moment it goes non-zero.
+| Service | URL | What |
+|---|---|---|
+| **Grafana** | http://localhost:3000 | Dashboard **“Undercroft — Palace”** (metrics + logs + traces + active alerts). Anonymous viewer is on; admin is `admin`/`admin` unless you set `GRAFANA_ADMIN_PASSWORD`. |
+| **Prometheus** | http://localhost:9090 | Metrics + the **Alerts** tab (rule state). |
+| **Alertmanager** | http://localhost:9093 | Routed/firing alerts. |
+| **Loki** | http://localhost:3100 | Log store (query via Grafana). |
+| **Tempo** | http://localhost:3200 | Trace store (query via Grafana). |
+| **Palace Monitor** | http://localhost:8765/monitor | The pixel-art live view — enter the demo token, pick a vault, watch it work. |
 
 ## How it fits together
 
-- The `undercroft` image is built with the `telemetry` feature via the
-  `UNDERCROFT_FEATURES=telemetry` build arg, and started with
-  `UNDERCROFT_METRICS=1`, so `/metrics` is live.
-- `/metrics` is bearer-gated. Prometheus authenticates with the same token
-  (`prometheus.yml` → `authorization.credentials`).
+- The `undercroft` image is built with the `telemetry` feature
+  (`UNDERCROFT_FEATURES=telemetry`) and started with `UNDERCROFT_METRICS=1`
+  (`/metrics` on), `UNDERCROFT_LOG_FORMAT=json` (structured logs promtail ships
+  to Loki), and `UNDERCROFT_OTLP_ENDPOINT=http://tempo:4318` (traces to Tempo).
+- `/metrics` is bearer-gated; Prometheus authenticates with the same token
+  (`prometheus.yml`).
+- Prometheus evaluates `alerts.yml` and pushes firing alerts to Alertmanager,
+  which routes them to **`alert-sink`** — a tiny webhook receiver that logs
+  every delivered alert to stdout (`docker compose logs -f alert-sink`), so the
+  whole path is visible without external creds. Swap in Slack/email in
+  `alertmanager/alertmanager.yml`.
+
+## Alerts
+
+Defined in `alerts.yml`:
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| **PalaceTamperDetected** | critical | any `undercroft_hmac_verify_failures_total` increase — a record/KG/tunnel/manifest failed its integrity tag on read. The `surface` label says where. |
+| **AuditChainStalled** | warning | writes are landing but the audit chain isn't advancing (10m). |
+| **UndercroftDown** | critical | the `/metrics` target is unscrapable (1m). |
+| **HighSearchLatencyP95** | warning | search p95 > 500ms (10m). |
+| **HttpServerErrors** | warning | any HTTP 5xx (5m). |
+| **AuthRejectionsSpike** | warning | elevated bearer/assertion rejections (10m). |
+
+A firing tamper alert links to the [**runbook**](RUNBOOK.md) (published at
+`/docs/runbook.html`) — where it happened, and how to confirm, mitigate, fix,
+and prevent it.
 
 ## Generating some data
 
 ```bash
 TOKEN=undercroft-observability-demo-token
-# a search over the single-vault MCP surface
-curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"undercroft_save","arguments":{"content":"first memory"}}}' \
-  http://localhost:8765/mcp
+# create a vault + save a drawer over the /v1 REST surface
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"id":"demo","level":"hmac-only"}' http://localhost:8765/v1/vaults
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"text":"We chose XChaCha20 for sealing","wing":"security","room":"decisions"}' \
+  http://localhost:8765/v1/vaults/demo/drawers
+```
+
+## Demonstrating a tamper alert
+
+Corrupt one drawer's bytes on disk, then read it — the HMAC check fails, the
+metric increments, and `PalaceTamperDetected` fires within a scrape interval:
+
+```bash
+# rewrite a drawer's content column directly in the vault DB (bypassing the HMAC)
+docker compose exec undercroft sh -c \
+  "sqlite3 /data/vaults/demo/palace.db \"UPDATE drawers SET content=x'00' WHERE 1 LIMIT 1\"" \
+  || echo "(install sqlite3 in the image, or use the python one-liner in RUNBOOK.md)"
+# now search so the record is read + verified → hmac-fail
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"xchacha","limit":5}' http://localhost:8765/v1/vaults/demo/search
+# watch it arrive:
+docker compose logs -f alert-sink
 ```
 
 ## Security note
 
 `UNDERCROFT_MCP_HTTP_TOKEN` (compose) and the Prometheus scrape credential
-(`prometheus.yml`) share **one fixed demo token** for turnkey local use.
-It is not a secret. For anything beyond localhost: change both to a real
-secret (or use Prometheus `authorization.credentials_file`), disable
-Grafana anonymous access, and front the whole thing with TLS.
+(`prometheus.yml`) share **one fixed demo token** for turnkey local use — not a
+secret. Loki, Tempo, Alertmanager, and the renderer are unauthenticated, and
+promtail mounts the Docker socket read-only. Keep this stack on localhost; for
+anything shared, set real secrets, disable Grafana anonymous access, drop the
+socket mount for a different log path, and front it all with TLS.

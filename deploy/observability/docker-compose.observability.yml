@@ -1,20 +1,29 @@
-# Undercroft observability stack — undercroft + Prometheus + Grafana.
+# Undercroft observability stack — the full picture: metrics, logs, traces,
+# and alerting, rendered in Grafana.
 #
-# Stands up a telemetry-enabled undercroft server, scrapes its /metrics
-# endpoint with Prometheus, and renders a pre-provisioned Grafana
-# dashboard. Everything is local and self-contained.
+#   undercroft (telemetry) ──/metrics──▶ Prometheus ──rules──▶ Alertmanager ──▶ alert-sink
+#             │  │                          │                                    (webhook)
+#             │  └──JSON logs──▶ promtail ──▶ Loki ──┐
+#             └──OTLP traces────────────────▶ Tempo ─┤
+#                                                    └──▶ Grafana (+ image-renderer for PNGs)
 #
 #   cd deploy/observability
 #   docker compose -f docker-compose.observability.yml up --build
-#   # Grafana:    http://localhost:3000   (dashboard: "Undercroft — Palace")
-#   # Prometheus: http://localhost:9090
 #
-# The undercroft image is built with `--features telemetry` (UNDERCROFT_FEATURES
-# build arg) so /metrics is live; UNDERCROFT_METRICS=1 turns the endpoint on.
+#   # Grafana:      http://localhost:3000   (dashboard: "Undercroft — Palace")
+#   # Prometheus:   http://localhost:9090   (Alerts tab shows rule state)
+#   # Alertmanager: http://localhost:9093
+#   # Palace Monitor: http://localhost:8765/monitor
 #
-# DEMO TOKEN: UNDERCROFT_MCP_HTTP_TOKEN below and Prometheus' scrape
-# credential (prometheus.yml) share one fixed value for turnkey local use.
-# It is NOT a secret — change both for anything beyond localhost.
+# The undercroft image is built with `--features telemetry`; UNDERCROFT_METRICS=1
+# turns /metrics on, UNDERCROFT_LOG_FORMAT=json makes logs structured for Loki,
+# and UNDERCROFT_OTLP_ENDPOINT ships traces to Tempo. Everything is metadata /
+# counts only — never drawer content or key material.
+#
+# DEMO TOKEN: UNDERCROFT_MCP_HTTP_TOKEN and Prometheus' scrape credential share
+# one fixed value for turnkey local use. NOT a secret — change both for
+# anything beyond localhost. The exposed Docker-less services (Loki/Tempo/
+# Alertmanager) are unauthenticated; keep this stack on localhost.
 
 services:
   undercroft:
@@ -30,12 +39,16 @@ services:
       - --port
       - "8765"
     environment:
-      # Metrics are opt-in and sit behind this bearer token.
       UNDERCROFT_MCP_HTTP_TOKEN: ${UNDERCROFT_MCP_HTTP_TOKEN:-undercroft-observability-demo-token}
       UNDERCROFT_METRICS: "1"
       UNDERCROFT_LOG: "warn,undercroft=info"
+      UNDERCROFT_LOG_FORMAT: "json"
+      UNDERCROFT_OTLP_ENDPOINT: "http://tempo:4318"
+      UNDERCROFT_SERVICE_NAME: "undercroft"
     volumes:
       - undercroft-data:/data
+    ports:
+      - "8765:8765"
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -44,21 +57,75 @@ services:
       - undercroft
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+
+  alert-sink:
+    image: python:3.12-slim
+    restart: unless-stopped
+    command: ["python", "/app/sink.py"]
+    volumes:
+      - ./alert-sink/sink.py:/app/sink.py:ro
+
+  loki:
+    image: grafana/loki:3.2.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    restart: unless-stopped
+    depends_on:
+      - loki
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # Read container logs via the Docker API (read-only).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
 
   grafana:
     image: grafana/grafana:11.3.0
     restart: unless-stopped
     depends_on:
       - prometheus
+      - loki
+      - tempo
+      - alertmanager
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       # Anonymous read access for a frictionless local look; lock this down
       # (or remove) for any shared deployment.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Server-side PNG rendering (for exported screenshots) via the sidecar.
+      GF_RENDERING_SERVER_URL: http://renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -66,7 +133,16 @@ services:
     ports:
       - "3000:3000"
 
+  renderer:
+    image: grafana/grafana-image-renderer:3.11.6
+    restart: unless-stopped
+    environment:
+      ENABLE_METRICS: "false"
+
 volumes:
   undercroft-data:
   prometheus-data:
+  alertmanager-data:
+  loki-data:
+  tempo-data:
   grafana-data:

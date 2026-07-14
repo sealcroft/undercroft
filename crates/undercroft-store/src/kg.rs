@@ -158,6 +158,7 @@ impl PalaceStore {
         confidence: f64,
         source_drawer_id: Option<&str>,
     ) -> Result<String, StoreError> {
+        let _span = undercroft_obs::scope("kg", self.vault.id());
         undercroft_core::validate_name(subject, "subject").map_err(|e| StoreError::CorruptRow {
             id: subject.into(),
             reason: e.to_string(),
