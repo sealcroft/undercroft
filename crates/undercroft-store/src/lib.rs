@@ -1408,8 +1408,13 @@ mod tests {
         // fraction, which weights every matched term equally, cannot do.
         let (_d, mut s) = store(SecurityLevel::Sealed);
         for i in 0..12 {
-            s.upsert(&drawer("w", "r", &format!("the system logged an event {i}"), i))
-                .unwrap();
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("the system logged an event {i}"),
+                i,
+            ))
+            .unwrap();
         }
         // One drawer additionally mentions a rare term.
         s.upsert(&drawer(
@@ -1440,8 +1445,13 @@ mod tests {
             .unwrap();
             s.upsert(&drawer("home", "pets", "the cat likes the windowsill", 1))
                 .unwrap();
-            s.upsert(&drawer("work", "infra", "postgres migration completed friday", 2))
-                .unwrap();
+            s.upsert(&drawer(
+                "work",
+                "infra",
+                "postgres migration completed friday",
+                2,
+            ))
+            .unwrap();
             s.set_fusion(mode);
             let hits = s
                 .search("why did we switch to graphql", &SearchOptions::default())
@@ -1454,8 +1464,13 @@ mod tests {
     fn bm25_fusion_tolerates_one_typo() {
         // The typo tolerance carries into BM25 term matching.
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.upsert(&drawer("w", "r", "the kubernetes cluster upgrade finished", 0))
-            .unwrap();
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the kubernetes cluster upgrade finished",
+            0,
+        ))
+        .unwrap();
         s.upsert(&drawer("w", "r", "unrelated note about the weather", 1))
             .unwrap();
         s.set_fusion(Fusion::Bm25);

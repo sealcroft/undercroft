@@ -14,6 +14,18 @@ services:
       target: test
     command: ["cargo", "test", "--release"]
 
+  # The CI lint gate (rustfmt + clippy, warnings-as-errors), runnable
+  # locally so a push never fails on formatting. Use --build after code
+  # changes, like the other suites:
+  #   docker compose run --rm --build lint
+  lint:
+    build:
+      context: .
+      target: test
+    entrypoint: ["sh", "-c"]
+    command:
+      - "rustup component add rustfmt clippy >/dev/null 2>&1 && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings"
+
   e2e:
     build:
       context: .
