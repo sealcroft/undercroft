@@ -6,4 +6,5 @@
 - [Security model](security.md)
 - [Integrations](integrations.md)
 - [Remote team server](remote-server.md)
+- [Observability](observability.md)
 - [Parity with MemPalace](parity.md)

@@ -91,15 +91,131 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   (`external:<name>@<dim>`) embeddings, dedup-refresh on save, and an
   orchestrated one-instance-per-tenant deployment path.
 
+## v0.9.0 — Observability & telemetry (done)
+
+- Opt-in observability behind `--features telemetry` (off by default, zero
+  extra deps / zero overhead): `tracing` structured logs (`UNDERCROFT_LOG`,
+  `UNDERCROFT_LOG_FORMAT`), a Prometheus `/metrics` endpoint
+  (`UNDERCROFT_METRICS=1`, loopback + bearer-gated), and OTLP trace export
+  (`UNDERCROFT_OTLP_ENDPOINT`, unset ⇒ no egress). Metadata/counts only;
+  the headline signal is `undercroft_hmac_verify_failures_total` (tamper on
+  read). New `undercroft-obs` shim crate; fully synchronous (no tokio).
+  First stage of the Operability track below.
+
 ## Next
 
 - **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,
   the next accuracy lever — targets the residual preference/paraphrase
-  gap); re-measure the MiniLM rows under BM25.
+  gap). (MiniLM rows already re-measured under BM25 — see RESULTS.md:
+  LongMemEval-S 99.4%, LoCoMo 94.6%.)
 - **Scale**: L2 on-demand room loading heuristics; ANN index (HNSW) atop
   the warmed cache for very large palaces; share one ONNX model across
   tenant vaults in the multi-tenant server.
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
-- **v0.8 — Ecosystem**: key rotation (re-seal under new derived keys);
-  export bundles with recipient encryption
+- **Operability** (planned track below): observability/telemetry
+  (v0.9.0), live memory telemetry (v0.10.0), and a retro real-time
+  Palace Monitor UI (v0.11.0).
+
+---
+
+## Operability track (planned)
+
+Observability and a management/visualization surface for the stack. The
+whole track obeys the project's core stance — **local-first, opt-in,
+zero external by default, no plaintext or key material ever exposed**:
+
+- **Default-off, loopback-only.** No metrics port, telemetry export, or
+  UI is served unless explicitly enabled; when enabled it binds loopback
+  and sits behind the existing palace bearer / `X-Vault-Assertion` auth.
+- **Feature-gated**, mirroring the `--features onnx` pattern — a build
+  without the feature carries zero extra dependencies and zero overhead.
+- **Metadata and counts only.** Everything below exposes structure,
+  aggregate counts, rates, and latencies — never drawer content, drawer
+  names beyond what `stats` already surfaces, or anything key-derived.
+  Sealed vaults expose only aggregate distribution, preserving the
+  no-plaintext-derived-index invariant (in-memory samples are counts,
+  not content, and are never persisted for sealed vaults).
+
+### v0.9.0 — Observability & telemetry (done)
+
+Instrumentation foundation the higher layers read from. Shipped in the
+new `undercroft-obs` shim crate; fully synchronous (no async runtime).
+
+- **Structured logging** via `tracing` + `tracing-subscriber`, replacing
+  the ad-hoc `eprintln`s. Level via `UNDERCROFT_LOG`; human format by
+  default, JSON via `UNDERCROFT_LOG_FORMAT=json`. No content or key
+  material is logged (`SecretKey` stays non-`Debug`).
+- **Prometheus** `/metrics` endpoint (text exposition format) on the HTTP
+  server, gated by `UNDERCROFT_METRICS=1`, loopback + bearer-gated.
+  Counters/histograms for search, drawer writes/deletes, dedup, KG ops,
+  audit-chain commits, HMAC verify failures, HTTP requests, auth
+  rejections, vault opens; per-vault gauges (drawers, chain height).
+  Metadata only.
+- **OpenTelemetry** OTLP **trace** export behind `UNDERCROFT_OTLP_ENDPOINT`
+  (unset ⇒ no network egress). Metrics are surfaced via the Prometheus
+  pull model — OTLP metric push needs a periodic-reader runtime this sync
+  stack deliberately avoids; deferrable follow-up.
+- **Hot-path instrumentation** at search, save/dedup, KG writes, vault
+  seal/commit, and every HMAC-verify failure site.
+- All behind `--features telemetry` — default builds carry zero extra
+  deps and zero overhead.
+
+### v0.10.0 — Live memory telemetry (planned)
+
+Turns point-in-time `PalaceStats`/`KgStats` into a streaming time series.
+
+- **In-process sampler**: periodic snapshot of `PalaceStats` + `KgStats`
+  + cache/index gauges into a bounded in-memory ring buffer (window and
+  resolution configurable). No disk writes for sealed-vault derived data.
+- **SSE stream**: `GET /v1/vaults/{id}/stream` (and a palace-wide roll-up)
+  pushing sampled deltas over chunked HTTP (supported by the current
+  `tiny_http` server). Auth-gated, opt-in.
+- **Discrete event pings** on the same stream, so a UI can animate
+  individual actions rather than only sampled totals: `drawer-saved`
+  (wing/room), `drawer-deleted`, `search` (wing/room hits), `kg-triple`,
+  `chain-commit`. Payload is type + location + counts — metadata only,
+  never drawer text or names beyond what `stats` already exposes.
+- **History backfill**: `GET /v1/vaults/{id}/stats/history?window=…`
+  returns the ring buffer so a fresh client can draw the recent past on
+  connect.
+- Exposed signals: wing/room populations, drawer add/delete rate, search
+  QPS + latency, KG triple counts, cache hit rate, FTS prefilter ratio,
+  audit-chain height — all counts and rates, never text.
+
+### v0.11.0 — Palace Monitor: pixel-art memory world (planned)
+
+A real-time, game-style pixel-art view of how memory is distributed
+across the palace, reading the v0.10 stream. Inspiration:
+`pixel-agents-hq/pixel-agents` (agents-as-characters in a live office) —
+reimagined around Undercroft's own metaphor: the palace *is* the world,
+and an **archivist** files drawers into wings and rooms as writes land.
+
+- **Self-contained local UI** served at `/monitor`. Vanilla Canvas-2D +
+  a sprite sheet embedded as a data-URI — **no framework, no external
+  CDN/fonts/assets, zero runtime JS toolchain** (hand-written, or a Vite
+  bundle inlined at build time). One self-contained asset, CSP-safe,
+  faithful to the local-first ethos. (Deliberate divergence from the
+  reference's Node/React/Fastify stack, which the Rust runtime avoids.)
+- **Pixel-art game world**: the palace rendered as an explorable
+  top-down / isometric building. Wings are wings/floors, rooms are
+  chambers, drawers are filing cabinets whose fill/brightness tracks
+  drawer density. A lightweight game loop with sprite animation and a
+  character state machine (idle → walk → file/pull).
+- **Live, event-driven animation** off the v0.10 discrete pings:
+  - *Archivist* walks to the target room and **files a drawer** on each
+    `drawer-saved` (and on `mine`/`sweep` bursts); pulls and highlights
+    drawers on `search` hits.
+  - *KG hallways* — corridors drawn between co-occurring rooms, pulsing
+    when a new `kg-triple` forms; entities as a constellation overlay.
+  - *Audit-chain* — a stamp/ledger animation on each `chain-commit`,
+    with the running chain height shown.
+  - *Activity ticker + gauges* — search latency, QPS, cache hit rate,
+    FTS prefilter ratio, drawer add/delete rate.
+- **Sealed vaults stay opaque**: a sealed room renders as a locked
+  vault-door showing only an aggregate silhouette (drawer *count*),
+  never names or content — same no-plaintext invariant as the rest of
+  the stack.
+- **Read-only, metadata-only, default-off, loopback, auth-gated.**
+  Multi-tenant aware: one building per vault/tenant plus a palace-wide
+  roll-up (mirrors the reference's multi-agent view).

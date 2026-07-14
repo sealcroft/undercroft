@@ -1,0 +1,22 @@
+# Prometheus scrape config for the Undercroft observability stack.
+#
+# /metrics is opt-in and bearer-gated, so the scrape carries the same demo
+# token the undercroft service uses. Change both together for real use
+# (Prometheus supports `authorization.credentials_file` if you prefer to
+# keep the token out of this file).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: undercroft
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials: undercroft-observability-demo-token
+    static_configs:
+      - targets: ["undercroft:8765"]
+        labels:
+          service: undercroft

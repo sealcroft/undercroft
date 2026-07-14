@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0 — Observability & telemetry
+
+An **opt-in** observability layer, off by default with zero extra
+dependencies and zero overhead unless built with `--features telemetry`.
+Everything reported is metadata and counts only — never drawer content or
+key material — and nothing leaves the process unless explicitly pointed
+somewhere. Additive and non-breaking.
+
+- **Structured logs.** The pre-existing `eprintln!` diagnostics route
+  through one macro; with `telemetry` on they become `tracing` events,
+  level via `UNDERCROFT_LOG`, `json` output via `UNDERCROFT_LOG_FORMAT`.
+- **Prometheus `/metrics`.** Opt-in via `UNDERCROFT_METRICS=1`, served on
+  the bind address behind the existing bearer token (absent otherwise).
+  Counters for search / drawer writes+deletes / KG writes / chain commits
+  / **HMAC verify failures** (the tamper signal) / HTTP requests / auth
+  rejections / vault opens; histograms for search and request latency;
+  per-vault gauges for drawer count and audit-chain height.
+- **OpenTelemetry export.** Set `UNDERCROFT_OTLP_ENDPOINT` to export traces
+  over OTLP/HTTP (unset ⇒ no network egress). Fully synchronous — no async
+  runtime is introduced; metrics stay on the Prometheus pull model.
+- **New crate `undercroft-obs`** — a shim every instrumented crate depends
+  on that compiles to no-ops (and pulls no dependencies) without the
+  feature. Enable end-to-end with `--features telemetry` on the CLI.
+
 ## 0.8.0 — Multi-tenant server support
 
 `serve-http` becomes a first-class per-tenant memory engine (one vault per

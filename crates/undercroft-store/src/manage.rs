@@ -187,6 +187,7 @@ impl PalaceStore {
                 params![format!("del/{id}"), tag.as_slice(), now_rfc3339()],
             )?;
             self.vault.commit_write(&tag)?;
+            undercroft_obs::drawer_delete();
         }
         Ok(n > 0)
     }
@@ -436,7 +437,10 @@ impl PalaceStore {
         for (id, from, to, label, tag, created) in rows {
             self.vault
                 .verify_tag(&tunnel_canonical(&id, &from, &to, &label, &created), &tag)
-                .map_err(|_| StoreError::Integrity(format!("tunnel/{id}")))?;
+                .map_err(|_| {
+                    undercroft_obs::hmac_verify_failed("tunnel");
+                    StoreError::Integrity(format!("tunnel/{id}"))
+                })?;
             if wing.map(|w| from == w || to == w).unwrap_or(true) {
                 out.push(Tunnel {
                     id,
@@ -648,7 +652,10 @@ impl PalaceStore {
                 &crate::canonical(id, meta_json.as_bytes(), content_rest),
                 tag,
             )
-            .map_err(|_| StoreError::Integrity(id.to_string()))?;
+            .map_err(|_| {
+                undercroft_obs::hmac_verify_failed("drawer");
+                StoreError::Integrity(id.to_string())
+            })?;
         self.decode(id, meta_json, content_rest)
     }
 }

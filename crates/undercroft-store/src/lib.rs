@@ -447,7 +447,9 @@ impl PalaceStore {
             return Err(StoreError::ExternalVault);
         }
         let embedding = self.embedder.embed(&drawer.content);
-        self.write_drawer(drawer, embedding)
+        let created = self.write_drawer(drawer, embedding)?;
+        undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
+        Ok(created)
     }
 
     /// Insert or replace a drawer on an external-embedding vault using the
@@ -465,7 +467,11 @@ impl PalaceStore {
                 expected: dim,
                 got: vector.len(),
             }),
-            Some(_) => self.write_drawer(drawer, vector),
+            Some(_) => {
+                let created = self.write_drawer(drawer, vector)?;
+                undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
+                Ok(created)
+            }
         }
     }
 
@@ -611,6 +617,7 @@ impl PalaceStore {
                 meta: drawer.meta.clone(),
             };
             self.write_drawer(&refreshed, embedding)?;
+            undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Deduped);
             Ok(SaveOutcome {
                 id: match_id,
                 created: false,
@@ -618,6 +625,7 @@ impl PalaceStore {
             })
         } else {
             let created = self.write_drawer(drawer, embedding)?;
+            undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
             Ok(SaveOutcome {
                 id: drawer.id.clone(),
                 created,
@@ -644,7 +652,10 @@ impl PalaceStore {
         for (id, meta_json, content_rest, emb_rest, tag) in rows {
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| StoreError::Integrity(id.clone()))?;
+                .map_err(|_| {
+                    undercroft_obs::hmac_verify_failed("drawer");
+                    StoreError::Integrity(id.clone())
+                })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
             let emb = self
                 .vault
@@ -708,7 +719,10 @@ impl PalaceStore {
             Some((id, meta_json, content_rest, tag)) => {
                 self.vault
                     .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                    .map_err(|_| StoreError::Integrity(id.clone()))?;
+                    .map_err(|_| {
+                        undercroft_obs::hmac_verify_failed("drawer");
+                        StoreError::Integrity(id.clone())
+                    })?;
                 Ok(Some(self.decode(&id, &meta_json, &content_rest)?))
             }
         }
@@ -764,7 +778,10 @@ impl PalaceStore {
         for (id, meta_json, content_rest, tag) in rows {
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| StoreError::Integrity(id.clone()))?;
+                .map_err(|_| {
+                    undercroft_obs::hmac_verify_failed("drawer");
+                    StoreError::Integrity(id.clone())
+                })?;
             out.push(self.decode(&id, &meta_json, &content_rest)?);
         }
         Ok(out)
@@ -809,6 +826,7 @@ impl PalaceStore {
         qvec: Vec<f32>,
         opts: &SearchOptions,
     ) -> Result<Vec<SearchHit>, StoreError> {
+        let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
         let qterms: Vec<String> = query
             .to_lowercase()
@@ -823,6 +841,7 @@ impl PalaceStore {
             }
             _ => None,
         };
+        let obs_prefiltered = candidates.is_some();
 
         let mut sql = String::from("SELECT id, meta_json, content, embedding, tag FROM drawers");
         let mut clauses: Vec<String> = Vec::new();
@@ -858,7 +877,10 @@ impl PalaceStore {
         for (id, meta_json, content_rest, emb_rest, tag) in rows {
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| StoreError::Integrity(id.clone()))?;
+                .map_err(|_| {
+                    undercroft_obs::hmac_verify_failed("drawer");
+                    StoreError::Integrity(id.clone())
+                })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
             let cached = self
                 .emb_cache
@@ -934,6 +956,18 @@ impl PalaceStore {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         hits.truncate(limit);
+
+        let fusion_label = match self.fusion {
+            Fusion::Legacy => "legacy",
+            Fusion::Bm25 => "bm25",
+            Fusion::Rrf => "rrf",
+        };
+        undercroft_obs::search_completed(
+            obs_start.elapsed(),
+            hits.len(),
+            fusion_label,
+            obs_prefiltered,
+        );
         Ok(hits)
     }
 
@@ -1052,7 +1086,10 @@ impl PalaceStore {
         for (id, meta_json, content_rest, tag) in rows {
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| StoreError::Integrity(id.clone()))?;
+                .map_err(|_| {
+                    undercroft_obs::hmac_verify_failed("drawer");
+                    StoreError::Integrity(id.clone())
+                })?;
             out.push(self.decode(&id, &meta_json, &content_rest)?);
         }
         Ok(out)

@@ -1,0 +1,33 @@
+[package]
+name = "undercroft-obs"
+description = "Observability shim for Undercroft — no-op unless built with the `telemetry` feature"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# All telemetry (structured logs, Prometheus metrics, OTLP export) lives
+# behind this feature. With it OFF this crate pulls NO dependencies and
+# every entry point compiles to a no-op — default builds are untouched.
+telemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-prometheus",
+    "dep:prometheus",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:tracing-opentelemetry",
+]
+
+[dependencies]
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-prometheus = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
