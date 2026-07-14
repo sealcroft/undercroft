@@ -103,7 +103,9 @@ services:
       context: .
       target: builder
     working_dir: /src
-    command: ["sh", "-c", "cargo install mdbook --locked --quiet && mdbook build website && echo SITE OK: website/book"]
+    # Same version the pages workflow pins — the two builds must not drift,
+    # or the manual's sidebar markup/behavior differs between preview and live.
+    command: ["sh", "-c", "cargo install mdbook --version 0.5.4 --locked --quiet && mdbook build website && echo SITE OK: website/book"]
     volumes:
       - ./website:/src/website
       # The book sources {{#include}} files from the repo root.
