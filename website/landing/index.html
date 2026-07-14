@@ -320,6 +320,37 @@ body.js .reveal.in .bar i { width: var(--w); }
 .bench-link { display: inline-block; margin-top: 1.5rem; font-family: var(--mono); font-size: .8rem; color: var(--teal); text-decoration: none; border-bottom: 1px solid var(--teal-dark); padding-bottom: 2px; transition: color .2s, border-color .2s; }
 .bench-link:hover { color: var(--green); border-color: var(--green); }
 
+/* ---------------- palace monitor ---------------- */
+.mon-lede { color: var(--ink-dim); max-width: 760px; margin-top: .2rem; }
+.mon-lede b { color: var(--ink); font-weight: 500; }
+.mon-lede code { font-family: var(--mono); color: var(--gold); font-size: .82em; }
+.mon-shots { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; margin-top: 2rem; }
+@media (max-width: 820px) { .mon-shots { grid-template-columns: 1fr; } }
+.mon-fig {
+  margin: 0; border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(7,16,20,.92), rgba(4,10,12,.96));
+  box-shadow: 0 24px 60px rgba(0,0,0,.5), inset 0 0 60px rgba(53,224,194,.03);
+  overflow: hidden;
+}
+.mon-fig.alarm { border-color: rgba(255,93,115,.28); box-shadow: 0 24px 60px rgba(0,0,0,.5), inset 0 0 60px rgba(255,93,115,.05); }
+.mon-fig-bar {
+  display: flex; align-items: center; gap: 9px; padding: .55rem 1rem;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono); font-size: .72rem; color: var(--ink-dim); letter-spacing: .08em;
+}
+.mon-fig-bar .lbl { margin-left: auto; color: var(--teal); }
+.mon-fig.alarm .mon-fig-bar .lbl { color: var(--danger); }
+.mon-fig img { display: block; width: 100%; height: auto; background: #04080a; }
+.mon-cap { padding: .85rem 1rem 1rem; font-family: var(--mono); font-size: .74rem; color: var(--ink-dim); line-height: 1.65; }
+.mon-cap b { color: var(--teal); font-weight: 500; }
+.mon-cap code { font-family: var(--mono); font-size: .9em; }
+.mon-fig.alarm .mon-cap b { color: var(--danger); }
+.mon-how { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.6rem; margin-top: 2.4rem; }
+.mon-note h3 { font-family: var(--mono); font-weight: 500; font-size: .8rem; color: var(--gold); letter-spacing: .18em; text-transform: uppercase; margin-bottom: .5rem; }
+.mon-note p { font-size: .88rem; color: var(--ink-dim); }
+.mon-note p b { color: var(--ink); font-weight: 500; }
+.mon-note p code { font-family: var(--mono); color: var(--gold); font-size: .82em; }
+
 /* ---------------- numbers ---------------- */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 2rem; margin-top: 2rem; text-align: center; }
 .stat .n { font-family: var(--didot); font-size: clamp(2rem, 5vw, 3.2rem); color: var(--teal); }
@@ -404,6 +435,61 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
            <code style="font-family:var(--mono);color:var(--danger)">verify</code> names the record.</p>
         <p><b>Keys:</b> derived per-vault with HKDF domain separation. One vault falling
            tells an attacker nothing about its siblings.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap reveal" id="monitor">
+    <div class="sec-label">Watch it work</div>
+    <h2>The Palace Monitor</h2>
+    <p class="mon-lede">A telemetry build serves a self-contained pixel-art dashboard at
+       <code>GET /monitor</code>. Point it at a running palace and watch the archivist file
+       drawers into wings, searches pulse the halls, the audit chain stamp every write — and
+       the ambulance beacon fire the instant a record fails its HMAC. It reads the live
+       <b>server-sent event stream</b>: metadata only, never drawer contents, and sealed vaults
+       stream aggregate counts with wing names suppressed.</p>
+
+    <div class="mon-shots">
+      <figure class="mon-fig">
+        <div class="mon-fig-bar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="lbl">● LIVE · palace-demo</span>
+        </div>
+        <img src="assets/palace-monitor-live.png" width="1536" height="864" loading="lazy"
+             alt="Palace Monitor live view: nine wings named for conversation participants, each filling with filed drawers, an archivist mid-file, gold audit-chain links stamping between wings.">
+        <figcaption class="mon-cap"><b>Live.</b> Each wing is a real drawer stream — this palace is
+           built from the <b>LoCoMo</b> long-conversation benchmark, filed verbatim. The archivist
+           files every write, the chain stamps, and the counts climb as it happens.</figcaption>
+      </figure>
+      <figure class="mon-fig alarm">
+        <div class="mon-fig-bar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="lbl">🚨 INTEGRITY ALERT</span>
+        </div>
+        <img src="assets/palace-monitor-tamper.png" width="1536" height="864" loading="lazy"
+             alt="Palace Monitor tamper alarm: the whole palace flushed red under a beacon after a real HMAC verify failure.">
+        <figcaption class="mon-cap"><b>Tampered.</b> Corrupt one drawer's bytes on disk and the next
+           read fails its HMAC — a genuine <code>hmac-fail</code> event floods the palace red. The
+           beacon only ever fires on a real integrity failure.</figcaption>
+      </figure>
+    </div>
+
+    <div class="mon-how">
+      <div class="mon-note">
+        <h3>Opt-in, zero-egress</h3>
+        <p>Monitor and stream exist only in a <code>--features telemetry</code> build. Default builds
+           carry no telemetry deps and phone nothing home; the page is fully self-contained —
+           same-origin, no external requests.</p>
+      </div>
+      <div class="mon-note">
+        <h3>Metadata only</h3>
+        <p>The stream carries counts, rates, and wing/room labels — <b>never</b> drawer content or
+           keys. Sealed vaults stream aggregate totals with names suppressed server-side.</p>
+      </div>
+      <div class="mon-note">
+        <h3>A beacon you can trust</h3>
+        <p>The tamper light is wired to the same <code>hmac_verify_failures</code> signal as the
+           metrics: it fires on real verification failure and nothing else. No synthetic alarms.</p>
       </div>
     </div>
   </section>
@@ -544,6 +630,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="wrap foot-row">
       <span class="foot-glyph">Μ</span>
       <a href="docs/">documentation</a>
+      <a href="#monitor">monitor</a>
       <a href="#bench">benchmarks</a>
       <a href="docs/security.html">security model</a>
       <a href="docs/parity.html">parity</a>
