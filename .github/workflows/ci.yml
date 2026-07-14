@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     container: rust:1.90-slim-bookworm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup component add rustfmt clippy
       - name: rustfmt
         run: cargo fmt --all --check
@@ -24,7 +24,7 @@ jobs:
     name: Dependency audit (RustSec)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
@@ -34,7 +34,7 @@ jobs:
     name: Trivy scan (source, secrets, configs)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -47,7 +47,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Unit + integration tests (Docker)
         run: docker build --target test -t undercroft-test . && docker run --rm undercroft-test
       - name: E2E UI/UX suite (Docker)
@@ -61,7 +61,7 @@ jobs:
     name: Trivy scan (runtime image)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build runtime image
         run: docker build -t undercroft:scan .
       - uses: aquasecurity/trivy-action@v0.36.0
