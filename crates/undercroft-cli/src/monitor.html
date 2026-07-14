@@ -234,6 +234,7 @@
     const wg=ensureWing(name, sealedVault); wg.count++; wg.pulse=1;
     fileAt(wg);
     floaters.push({x:wg.cx,y:wg.cy-10,txt:d.deduped?'↻':'+1',life:1,col:d.deduped?AMBER:PHOS});
+    if(soundOn) tick(d.deduped?540:720);
     log('save', sealedVault?`drawer → ◈ sealed`:`drawer → ${d.wing}/${d.room}${d.deduped?' (dedup)':''}`);
   }
   function onDrawerDeleted(d){
@@ -242,7 +243,8 @@
     log('del', 'drawer removed');
   }
   function onSearch(d){
-    proc(1200); arc.state='read'; arc.timer=1.0;
+    proc(1200); if(arc.state==='idle'){ arc.state='read'; arc.timer=0.6; } // don't freeze a walking archivist
+    if(soundOn) tick(420);
     if(sealedVault){ wings.forEach(w=>w.highlight=1); }
     else if(d.wing){ const w=byName.get(d.wing); if(w) w.highlight=1; }
     else wings.forEach(w=>w.highlight=1);
@@ -395,8 +397,11 @@
       ctx.fillStyle=GOLD; ctx.globalAlpha=.85; ctx.fillRect(wg.x+wg.w-20,wg.y+27,3,8);
       ctx.beginPath(); ctx.arc(wg.x+wg.w-18.5,wg.y+27,3,Math.PI,0); ctx.fill(); ctx.globalAlpha=1;
     } else {
-      const cols=6, rws=3, gw=5, gh=5, ox=wg.x+wg.w-6-cols*gw, oy=wg.y+18;
-      const lit=Math.max(0,Math.min(cols*rws, Math.round(wg.count/(wg.cap||1)*cols*rws))); let k=0;
+      const cols=6, rws=3, gw=5, gh=5, ox=wg.x+wg.w-6-cols*gw, oy=wg.y+18, tiles=cols*rws;
+      // Absolute log-scale fill: tiles light up as a wing accumulates drawers,
+      // independent of its neighbours, so each write visibly grows the grid.
+      const frac=wg.count>0?Math.min(1, Math.log2(wg.count+1)/Math.log2(600)):0;
+      const lit=Math.max(0,Math.min(tiles, Math.round(frac*tiles))); let k=0;
       for(let yy=0;yy<rws;yy++)for(let xx=0;xx<cols;xx++,k++){ const on=k<lit;
         ctx.fillStyle=on?(glow>0&&k>=lit-2?'#eafff4':PHOS):'#132530';
         ctx.globalAlpha=on?(0.55+(glow>0&&k>=lit-2?glow*.4:0)):1;
@@ -406,7 +411,7 @@
 
   function drawArchivist(){
     const x=Math.round(arc.x), y=Math.round(arc.y), f=arc.face;
-    const bob=(arc.state==='walk'||arc.state==='return')?(Math.floor(arc.step)%2):0;
+    const bob=(arc.state==='goto')?(Math.floor(arc.step)%2):0;
     px(); ctx.globalAlpha=.35; ctx.fillStyle='#000'; ctx.fillRect(x-4,y+5,9,2); ctx.globalAlpha=1;
     ctx.fillStyle='#20303f'; ctx.fillRect(x-3,y+2,2,3); ctx.fillRect(x+1,y+2,2,3); if(bob) ctx.fillRect(x-3,y+3,2,2);
     ctx.fillStyle=arc.state==='read'?CYAN:'#2fa5b0'; ctx.fillRect(x-3,y-4,6,6);
@@ -433,28 +438,45 @@
     if(arc.state==='read'){ arc.timer-=dt; if(arc.timer<=0) arc.state='idle'; return; }
     if(arc.state==='file'){ arc.timer-=dt; if(arc.timer<=0) arc.state='idle'; return; }
     if(arc.state==='goto'){
-      const dx=arc.tx-arc.x, dy=arc.ty-arc.y, d=Math.hypot(dx,dy), spd=70*speed*dt;
+      const dx=arc.tx-arc.x, dy=arc.ty-arc.y, d=Math.hypot(dx,dy), spd=70*dt; // dt is already speed-scaled
       if(dx<-.5)arc.face=-1; else if(dx>.5)arc.face=1;
-      if(d<=spd){ arc.x=arc.tx; arc.y=arc.ty; arc.state='file'; arc.timer=.45/speed; }
+      if(d<=spd){ arc.x=arc.tx; arc.y=arc.ty; arc.state='file'; arc.timer=.45; }
       else { arc.x+=dx/d*spd; arc.y+=dy/d*spd; arc.step+=spd*.15; }
       return;
     }
     // idle: pick up the next queued filing target, if any
-    if(arcQueue.length){ const wg=arcQueue.shift(); arc.job=wg; arc.tx=wg.cx; arc.ty=wg.cy; arc.state='goto'; }
+    if(arcQueue.length){ const wg=arcQueue.shift(); arc.job=wg; arc.tx=wg.cx; arc.ty=wg.cy; arc.state='goto'; return; }
+    // nothing queued: wander between wings on a cooldown so the archivist reads as alive
+    arc.timer-=dt;
+    if(arc.timer<=0 && wings.length){ arc.timer=1.2+Math.random()*2.4;
+      const wg=wings[(Math.random()*wings.length)|0];
+      arc.tx=wg.cx+(Math.random()*22-11); arc.ty=wg.cy+(Math.random()*16-8); arc.state='goto'; }
   }
   function update(dt){
-    if(mode==='demo') demoTick(dt);
-    wings.forEach(w=>{ w.pulse=Math.max(0,w.pulse-dt*2); w.highlight=Math.max(0,w.highlight-dt*.9); });
-    for(let i=links.length-1;i>=0;i--){ links[i].life-=dt; if(links[i].life<=0) links.splice(i,1); }
-    for(let i=floaters.length-1;i>=0;i--){ const f=floaters[i]; f.y-=dt*14; f.life-=dt; if(f.life<=0) floaters.splice(i,1); }
-    if(alarm>0){ alarm-=dt; alarmBeacon+=dt*3.2; if(alarm<=0) clearAlarm(); }
-    stepArc(dt);
+    const sd=dt*speed; // SPEED scales the whole simulation tempo…
+    if(mode==='demo') demoTick(sd);
+    wings.forEach(w=>{ w.pulse=Math.max(0,w.pulse-sd*2); w.highlight=Math.max(0,w.highlight-sd*.9); });
+    for(let i=links.length-1;i>=0;i--){ links[i].life-=sd; if(links[i].life<=0) links.splice(i,1); }
+    for(let i=floaters.length-1;i>=0;i--){ const f=floaters[i]; f.y-=sd*14; f.life-=sd; if(f.life<=0) floaters.splice(i,1); }
+    if(alarm>0){ alarm-=dt; alarmBeacon+=dt*3.2; if(alarm<=0) clearAlarm(); } // …but not the tamper beacon's real-time duration
+    stepArc(sd);
     // status lamp for processing
     if(alarm<=0 && mode==='live'){ $('lamp').className='lamp '+(perf()<procUntil?'proc':'live'); }
   }
 
+  // ---------- audio ----------
+  let actx=null, osc=null, lastTick=0;
+  function ensureAudio(){ actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==='suspended') actx.resume(); return actx; }
+  function blip(freq,dur,vol,type){ if(!soundOn) return;
+    try{ const ac=ensureAudio(), o=ac.createOscillator(), g=ac.createGain();
+      o.type=type||'square'; o.frequency.value=freq; o.connect(g); g.connect(ac.destination);
+      const now=ac.currentTime; g.gain.setValueAtTime(vol||.03, now);
+      g.gain.exponentialRampToValueAtTime(.0001, now+(dur||.05));
+      o.start(now); o.stop(now+(dur||.05)); }catch(e){} }
+  // Throttled soft ticks so a stream of events reads as a gentle geiger counter.
+  function tick(freq,vol){ const n=perf(); if(n-lastTick<130) return; lastTick=n; blip(freq,.045,vol||.022,'square'); }
   // ---------- siren ----------
-  let actx=null, osc=null;
   function siren(on){ if(!soundOn||!on){ if(osc){try{osc.stop()}catch(e){} osc=null;} return; }
     try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(osc){try{osc.stop()}catch(e){}}
       const o=actx.createOscillator(), g=actx.createGain(); o.type='sawtooth'; o.connect(g); g.connect(actx.destination);
@@ -468,7 +490,9 @@
   $('ackBtn').addEventListener('click', clearAlarm);
   $('btnPause').addEventListener('click', e=>{ paused=!paused; e.target.textContent=paused?'▶ RESUME':'⏸ PAUSE'; });
   $('btnSound').addEventListener('click', e=>{ soundOn=!soundOn; e.target.textContent=soundOn?'🔊 SOUND':'🔇 SOUND';
-    e.target.classList.toggle('on',soundOn); if(!soundOn) siren(false); });
+    e.target.classList.toggle('on',soundOn);
+    if(soundOn){ blip(523,.08,.05,'triangle'); setTimeout(()=>blip(784,.1,.05,'triangle'),90); } // confirm the toggle works
+    else siren(false); });
   $('speed').addEventListener('input', e=>{ speed=parseFloat(e.target.value); });
 
   // ---------- boot ----------
