@@ -32,6 +32,44 @@ use undercroft_vault::{SecurityLevel, Vault, VaultError};
 /// recall exact; above it the FTS5 candidate cut dominates search cost.
 const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 
+/// How the semantic and lexical signals are combined at rank time.
+///
+/// `Bm25` (the default) blends cosine with a real Okapi BM25 lexical score
+/// (IDF-weighted, length-normalized) computed over the decrypted candidate
+/// set, plus recency. `Legacy` is the older behavior: the lexical term is a
+/// flat term-overlap fraction that weights every matched query term equally
+/// — measurably worse (see benchmarks/RESULTS.md; BM25 lifts LongMemEval-S
+/// R@5 from 90.4% to 95.0% with the hash embedder, almost entirely on
+/// paraphrase-heavy preference questions). `Rrf` fuses the cosine and BM25
+/// rankings with reciprocal-rank fusion — scale-free, but it discards score
+/// magnitude and benchmarked below `Bm25`. All three verify HMACs
+/// identically; fusion only reorders already-trusted candidates.
+///
+/// Override at open with `UNDERCROFT_FUSION` (`bm25` / `legacy` / `rrf`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fusion {
+    Legacy,
+    Bm25,
+    Rrf,
+}
+
+impl Fusion {
+    fn from_env() -> Self {
+        match std::env::var("UNDERCROFT_FUSION").ok().as_deref() {
+            Some(v) if v.eq_ignore_ascii_case("legacy") => Fusion::Legacy,
+            Some(v) if v.eq_ignore_ascii_case("rrf") => Fusion::Rrf,
+            _ => Fusion::Bm25,
+        }
+    }
+}
+
+// Okapi BM25 constants (the standard defaults).
+const BM25_K1: f32 = 1.2;
+const BM25_B: f32 = 0.75;
+// Reciprocal-rank-fusion damping — the canonical value from the original
+// RRF paper; larger flattens the contribution of top ranks.
+const RRF_K: f32 = 60.0;
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("sqlite error: {0}")]
@@ -115,6 +153,8 @@ pub struct PalaceStore {
     fts: bool,
     /// Drawer count at which the prefilter engages; `None` disables it.
     fts_min: Option<usize>,
+    /// How semantic and lexical signals are combined at rank time.
+    fusion: Fusion,
 }
 
 impl PalaceStore {
@@ -232,6 +272,7 @@ impl PalaceStore {
             emb_cache: std::cell::RefCell::new(None),
             fts: false,
             fts_min,
+            fusion: Fusion::from_env(),
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
@@ -293,6 +334,13 @@ impl PalaceStore {
     /// (a number, or `off`).
     pub fn set_fts_prefilter_min(&mut self, min: Option<usize>) {
         self.fts_min = min;
+    }
+
+    /// Select the rank-time fusion strategy. Defaults to the value of
+    /// `UNDERCROFT_FUSION` at open (`legacy` / `bm25` / `rrf`, legacy
+    /// otherwise). See [`Fusion`].
+    pub fn set_fusion(&mut self, fusion: Fusion) {
+        self.fusion = fusion;
     }
 
     /// Decrypt every drawer embedding into an in-memory map so subsequent
@@ -527,8 +575,11 @@ impl PalaceStore {
             })?
             .collect::<Result<_, _>>()?;
 
+        // Pass 1: verify + decrypt every candidate, and gather the signals
+        // that don't need corpus statistics (cosine, recency). Content
+        // tokens are kept only when a BM25-based fusion needs them.
         let now = OffsetDateTime::now_utc();
-        let mut hits: Vec<SearchHit> = Vec::new();
+        let mut cands: Vec<Candidate> = Vec::with_capacity(rows.len());
         for (id, meta_json, content_rest, emb_rest, tag) in rows {
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
@@ -549,18 +600,55 @@ impl PalaceStore {
                         reason: e.to_string(),
                     })?,
             };
-
             let semantic = ((cosine(&qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
-            let lexical = lexical_score(&qterms, query, &drawer.content);
             let recency = recency_boost(&drawer.meta.filed_at, now);
-            let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
-            hits.push(SearchHit {
+            let tokens = if self.fusion == Fusion::Legacy {
+                Vec::new()
+            } else {
+                tokenize(&drawer.content)
+            };
+            cands.push(Candidate {
                 drawer,
-                score,
                 semantic,
-                lexical,
+                recency,
+                tokens,
             });
         }
+
+        // Pass 2: derive the lexical signal (per fusion mode) and combine.
+        let mut hits = match self.fusion {
+            Fusion::Legacy => cands
+                .into_iter()
+                .map(|c| {
+                    let lexical = lexical_score(&qterms, query, &c.drawer.content);
+                    let score = 0.55 * c.semantic + 0.35 * lexical + 0.10 * c.recency;
+                    SearchHit {
+                        drawer: c.drawer,
+                        score,
+                        semantic: c.semantic,
+                        lexical,
+                    }
+                })
+                .collect::<Vec<_>>(),
+            Fusion::Bm25 => {
+                let bm25 = bm25_scores(&qterms, &cands);
+                cands
+                    .into_iter()
+                    .zip(bm25)
+                    .map(|(c, lexical)| {
+                        let score = 0.55 * c.semantic + 0.35 * lexical + 0.10 * c.recency;
+                        SearchHit {
+                            drawer: c.drawer,
+                            score,
+                            semantic: c.semantic,
+                            lexical,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+            Fusion::Rrf => rrf_fuse(&qterms, cands),
+        };
+
         // Relevance gate: an unrelated record still scores ~0.35 from the
         // neutral cosine midpoint + recency alone. Require actual evidence —
         // a lexical match or a clearly positive semantic signal.
@@ -707,6 +795,168 @@ impl PalaceStore {
             .collect::<Result<_, _>>()?;
         Ok(rows)
     }
+}
+
+/// One verified, decrypted candidate carried between search's two passes:
+/// the signals computable per-document up front (cosine, recency) plus the
+/// content tokens BM25 needs once corpus statistics are known. `tokens` is
+/// left empty under `Fusion::Legacy`, which never inspects them.
+struct Candidate {
+    drawer: Drawer,
+    semantic: f32,
+    recency: f32,
+    tokens: Vec<String>,
+}
+
+/// Lowercase alphanumeric tokens of length > 1 — the same tokenization the
+/// query goes through, so BM25 term matching is symmetric with the query.
+fn tokenize(content: &str) -> Vec<String> {
+    content
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.len() > 1)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Raw Okapi BM25 per candidate over the candidate set as the corpus, plus
+/// `k_sat` — the mean IDF of query terms that actually occur, used as the
+/// saturation constant when squashing raw scores into [0,1]. Term matching
+/// carries the same one-typo tolerance (5+ char terms) as lexical search,
+/// so a misspelled query still contributes.
+fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> (Vec<f32>, f32) {
+    let n = cands.len();
+    if n == 0 || qterms.is_empty() {
+        return (vec![0.0; n], 0.0);
+    }
+    // tf[doc][term] = occurrences of qterms[term] in the doc's tokens.
+    let mut tf = vec![vec![0u32; qterms.len()]; n];
+    let mut lengths = vec![0f32; n];
+    for (i, c) in cands.iter().enumerate() {
+        lengths[i] = c.tokens.len() as f32;
+        for tok in &c.tokens {
+            for (j, q) in qterms.iter().enumerate() {
+                if tok == q || (q.len() >= 5 && within_one_edit(q, tok)) {
+                    tf[i][j] += 1;
+                    break; // a token fills at most one query-term slot
+                }
+            }
+        }
+    }
+    let avgdl = (lengths.iter().sum::<f32>() / n as f32).max(1.0);
+    let mut idf = vec![0f32; qterms.len()];
+    let mut present_idf_sum = 0f32;
+    let mut present_cnt = 0f32;
+    for (j, idf_j) in idf.iter_mut().enumerate() {
+        let df = tf.iter().filter(|row| row[j] > 0).count() as f32;
+        // Okapi probabilistic IDF, +1 inside the log to stay non-negative.
+        *idf_j = (1.0 + (n as f32 - df + 0.5) / (df + 0.5)).ln();
+        if df > 0.0 {
+            present_idf_sum += *idf_j;
+            present_cnt += 1.0;
+        }
+    }
+    let k_sat = if present_cnt > 0.0 {
+        present_idf_sum / present_cnt
+    } else {
+        0.0
+    };
+    let mut raw = vec![0f32; n];
+    for (i, raw_i) in raw.iter_mut().enumerate() {
+        let len_norm = 1.0 - BM25_B + BM25_B * lengths[i] / avgdl;
+        let mut s = 0f32;
+        for (j, idf_j) in idf.iter().enumerate() {
+            let f = tf[i][j] as f32;
+            if f > 0.0 {
+                s += idf_j * (f * (BM25_K1 + 1.0)) / (f + BM25_K1 * len_norm);
+            }
+        }
+        *raw_i = s;
+    }
+    (raw, k_sat)
+}
+
+/// BM25 squashed into [0,1] for the linear blend: `raw / (raw + k_sat)`,
+/// so one strong term match sits near 0.5 and additional evidence climbs
+/// toward 1 without ever forcing a top candidate to exactly 1.0.
+fn bm25_scores(qterms: &[String], cands: &[Candidate]) -> Vec<f32> {
+    let (raw, k_sat) = bm25_raw(qterms, cands);
+    if k_sat <= 0.0 {
+        return vec![0.0; cands.len()];
+    }
+    raw.iter()
+        .map(|&r| if r > 0.0 { r / (r + k_sat) } else { 0.0 })
+        .collect()
+}
+
+/// 1-based ranks by descending value, ties broken by original index.
+fn ranks_desc(vals: &[f32]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..vals.len()).collect();
+    idx.sort_by(|&a, &b| {
+        vals[b]
+            .partial_cmp(&vals[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    let mut rank = vec![0usize; vals.len()];
+    for (r, &i) in idx.iter().enumerate() {
+        rank[i] = r + 1;
+    }
+    rank
+}
+
+/// Like [`ranks_desc`] but only entries with a positive value are ranked;
+/// the rest get `None` so they contribute nothing to the RRF sum (a zero
+/// BM25 must not earn rank credit just for existing).
+fn ranks_desc_positive(vals: &[f32]) -> Vec<Option<usize>> {
+    let mut idx: Vec<usize> = (0..vals.len()).filter(|&i| vals[i] > 0.0).collect();
+    idx.sort_by(|&a, &b| {
+        vals[b]
+            .partial_cmp(&vals[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    let mut rank = vec![None; vals.len()];
+    for (r, &i) in idx.iter().enumerate() {
+        rank[i] = Some(r + 1);
+    }
+    rank
+}
+
+/// Reciprocal-rank fusion of the cosine ranking and the BM25 ranking, with
+/// recency as a lightly-weighted third ranker (0.10, matching the linear
+/// blend's recency weight). Scale-free: no semantic/lexical weight to tune,
+/// only rank positions. `lexical` is reported as the squashed BM25 so the
+/// caller's relevance gate treats it exactly like the BM25 blend.
+fn rrf_fuse(qterms: &[String], cands: Vec<Candidate>) -> Vec<SearchHit> {
+    let (raw, k_sat) = bm25_raw(qterms, &cands);
+    let sem: Vec<f32> = cands.iter().map(|c| c.semantic).collect();
+    let rec: Vec<f32> = cands.iter().map(|c| c.recency).collect();
+    let sem_rank = ranks_desc(&sem);
+    let rec_rank = ranks_desc(&rec);
+    let bm_rank = ranks_desc_positive(&raw);
+    cands
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mut score = 1.0 / (RRF_K + sem_rank[i] as f32);
+            if let Some(r) = bm_rank[i] {
+                score += 1.0 / (RRF_K + r as f32);
+            }
+            score += 0.10 * (1.0 / (RRF_K + rec_rank[i] as f32));
+            let lexical = if k_sat > 0.0 && raw[i] > 0.0 {
+                raw[i] / (raw[i] + k_sat)
+            } else {
+                0.0
+            };
+            SearchHit {
+                drawer: c.drawer,
+                score,
+                semantic: c.semantic,
+                lexical,
+            }
+        })
+        .collect()
 }
 
 /// Fraction of query terms present in the content, with a phrase bonus.
@@ -1149,6 +1399,71 @@ mod tests {
             .search("memory written before", &SearchOptions::default())
             .unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn bm25_ranks_rare_term_over_common_term() {
+        // A term that appears in almost every drawer (IDF≈0) should lose to
+        // a rare, discriminating term — something the legacy term-overlap
+        // fraction, which weights every matched term equally, cannot do.
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..12 {
+            s.upsert(&drawer("w", "r", &format!("the system logged an event {i}"), i))
+                .unwrap();
+        }
+        // One drawer additionally mentions a rare term.
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the system logged an event about xylophone calibration",
+            99,
+        ))
+        .unwrap();
+        s.set_fusion(Fusion::Bm25);
+        let hits = s
+            .search("system xylophone", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("xylophone"));
+    }
+
+    #[test]
+    fn bm25_and_rrf_still_find_relevant_first() {
+        // Both fusion modes must preserve the basic ranking contract.
+        for mode in [Fusion::Bm25, Fusion::Rrf] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer(
+                "work",
+                "api",
+                "we switched to graphql because rest was chatty",
+                0,
+            ))
+            .unwrap();
+            s.upsert(&drawer("home", "pets", "the cat likes the windowsill", 1))
+                .unwrap();
+            s.upsert(&drawer("work", "infra", "postgres migration completed friday", 2))
+                .unwrap();
+            s.set_fusion(mode);
+            let hits = s
+                .search("why did we switch to graphql", &SearchOptions::default())
+                .unwrap();
+            assert_eq!(hits[0].drawer.meta.room, "api", "mode {mode:?}");
+        }
+    }
+
+    #[test]
+    fn bm25_fusion_tolerates_one_typo() {
+        // The typo tolerance carries into BM25 term matching.
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "the kubernetes cluster upgrade finished", 0))
+            .unwrap();
+        s.upsert(&drawer("w", "r", "unrelated note about the weather", 1))
+            .unwrap();
+        s.set_fusion(Fusion::Bm25);
+        let hits = s
+            .search("kubernets upgrade", &SearchOptions::default())
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits[0].drawer.content.contains("kubernetes"));
     }
 
     #[test]

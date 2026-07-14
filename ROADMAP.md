@@ -72,9 +72,22 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   semantic-only recall. Sealed vaults are untouched — no plaintext-derived
   index is ever created for them.
 
+## v0.7.2 — BM25 rank fusion (done)
+
+- Real Okapi BM25 lexical scoring over the verified candidate set,
+  blended with cosine, now the search default (`UNDERCROFT_FUSION=bm25`;
+  `legacy` and `rrf` selectable). Measured with the hash embedder:
+  LongMemEval-S R@5 90.4 → 95.0, LoCoMo R@10 92.7 → 94.6, both above the
+  prior numbers; the single-session-preference category nearly doubles.
+  Embedder- and security-level-independent; re-ranks HMAC-verified
+  candidates only.
+
 ## Next
 
-- **v0.7 — Retrieval quality**: L2 on-demand room loading heuristics;
-  ANN index (HNSW) atop the warmed cache for very large palaces
+- **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,
+  the next accuracy lever — targets the residual preference/paraphrase
+  gap); re-measure the MiniLM rows under BM25.
+- **Scale**: L2 on-demand room loading heuristics; ANN index (HNSW) atop
+  the warmed cache for very large palaces.
 - **v0.8 — Ecosystem**: key rotation (re-seal under new derived keys);
   export bundles with recipient encryption

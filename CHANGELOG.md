@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.2 — BM25 rank fusion (new search default)
+
+- Search now blends cosine with a real **Okapi BM25** lexical score
+  (IDF-weighted, `k1=1.2`/`b=0.75` length normalization, one-typo
+  tolerant) computed over the decrypted, HMAC-verified candidate set,
+  replacing the old flat term-overlap fraction. Measured lift with the
+  zero-model hash embedder: **LongMemEval-S R@5 90.4% → 95.0%** (the
+  paraphrase-heavy preference category 36.7% → 66.7%), **LoCoMo session
+  R@10 92.7% → 94.6%** — where the hash embedder now edges past the
+  earlier MiniLM run. See benchmarks/RESULTS.md for the full ablation.
+- Fusion is selectable with `UNDERCROFT_FUSION`: `bm25` (default),
+  `legacy` (the prior term-overlap blend, reproduces the old numbers
+  exactly), or `rrf` (reciprocal-rank fusion — scale-free but benchmarks
+  below bm25). Fusion only re-ranks already-verified candidates; every
+  security guarantee is unchanged, and it is embedder- and
+  security-level-independent.
+
 ## 0.7.1 — FTS5 BM25 prefilter for hmac-only vaults
 
 - hmac-only vaults now carry an external-content FTS5 index over drawer
