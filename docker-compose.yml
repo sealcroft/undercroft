@@ -106,6 +106,9 @@ services:
     command: ["sh", "-c", "cargo install mdbook --locked --quiet && mdbook build website && echo SITE OK: website/book"]
     volumes:
       - ./website:/src/website
+      # The book sources {{#include}} files from the repo root.
+      - ./README.md:/src/README.md:ro
+      - ./docs:/src/docs:ro
 
   cli:
     build:

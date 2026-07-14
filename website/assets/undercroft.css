@@ -1,0 +1,140 @@
+/* Undercroft manual skin — keeps the mdBook manual visually continuous
+   with the landing page (same palette, same faces: GFS Didot display,
+   IBM Plex Sans text, IBM Plex Mono code). Loaded after the stock theme
+   css, and pins the brand look across every built-in theme choice. */
+
+@import url('https://fonts.googleapis.com/css2?family=GFS+Didot&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+html.light, html.rust, html.coal, html.navy, html.ayu {
+  --bg: #04080a;
+  --fg: #d9f0ea;
+  --sidebar-bg: #071014;
+  --sidebar-fg: #7fa39c;
+  --sidebar-non-existant: #29403c;
+  --sidebar-active: #35e0c2;
+  --sidebar-spacer: #0f2228;
+  --scrollbar: #0f2228;
+  --icons: #7fa39c;
+  --icons-hover: #35e0c2;
+  --links: #35e0c2;
+  --inline-code-color: #c9a961;
+  --theme-popup-bg: #071014;
+  --theme-popup-border: #0f2228;
+  --theme-hover: #0a171c;
+  --quote-bg: #071014;
+  --quote-border: #0f2228;
+  --table-border-color: #0f2228;
+  --table-header-bg: #071014;
+  --table-alternate-bg: #060d10;
+  --searchbar-border-color: #0f2228;
+  --searchbar-bg: #071014;
+  --searchbar-fg: #d9f0ea;
+  --searchbar-shadow-color: #000;
+  --searchresults-header-fg: #7fa39c;
+  --searchresults-border-color: #0f2228;
+  --searchresults-li-bg: #071014;
+  --search-mark-bg: #c9a961;
+  --color-scheme: dark;
+}
+
+html {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-weight: 300;
+}
+
+.content main {
+  line-height: 1.65;
+}
+
+h1, h2, h3, h4, h5 {
+  font-family: "GFS Didot", "Times New Roman", serif;
+  font-weight: 400;
+  color: #d9f0ea;
+}
+
+.content h1 {
+  letter-spacing: .02em;
+  text-shadow: 0 0 34px rgba(53, 224, 194, .22);
+}
+
+.content h2 {
+  border-bottom: 1px solid #0f2228;
+  padding-bottom: .35em;
+}
+
+.menu-title {
+  font-family: "GFS Didot", "Times New Roman", serif;
+  font-weight: 400;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: #c9a961 !important;
+}
+
+.chapter li.chapter-item {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-weight: 300;
+  line-height: 1.9;
+}
+
+.chapter li a.active {
+  color: #35e0c2;
+}
+
+.sidebar .part-title {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: .72rem;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: #7fa39c;
+}
+
+:not(pre) > code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: .86em;
+}
+
+pre > code, pre > .hljs {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  background: #071014 !important;
+  border: 1px solid #0f2228;
+}
+
+.content a {
+  text-underline-offset: 3px;
+}
+
+.content a:hover {
+  color: #57ff9a;
+}
+
+blockquote {
+  font-style: italic;
+}
+
+table th {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: .78rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+::selection {
+  background: #35e0c2;
+  color: #032620;
+}
+
+/* home link injected by undercroft.js */
+.mnemo-home {
+  font-family: "GFS Didot", "Times New Roman", serif;
+  font-size: 1.35rem;
+  line-height: 1;
+  color: #c9a961 !important;
+  text-decoration: none;
+  padding: 0 8px;
+}
+
+.mnemo-home:hover {
+  color: #35e0c2 !important;
+  text-shadow: 0 0 18px rgba(53, 224, 194, .5);
+}

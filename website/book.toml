@@ -7,3 +7,6 @@ src = "src"
 [output.html]
 git-repository-url = "https://github.com/compufreq/undercroft"
 default-theme = "ayu"
+preferred-dark-theme = "ayu"
+additional-css = ["assets/undercroft.css"]
+additional-js = ["assets/undercroft.js"]
