@@ -11,8 +11,13 @@ authors.workspace = true
 name = "undercroft-bench"
 path = "src/main.rs"
 
+[features]
+# Model-based benchmarking: UNDERCROFT_EMBEDDER=onnx + UNDERCROFT_ONNX_MODEL/_TOKENIZER
+onnx = ["dep:undercroft-embed-onnx"]
+
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
+undercroft-embed-onnx = { path = "../undercroft-embed-onnx", optional = true }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-store = { path = "../undercroft-store" }
 undercroft-llm = { path = "../undercroft-llm" }

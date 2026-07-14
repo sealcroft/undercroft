@@ -1280,6 +1280,7 @@ dependencies = [
  "anyhow",
  "clap",
  "undercroft-core",
+ "undercroft-embed-onnx",
  "undercroft-llm",
  "undercroft-store",
  "undercroft-vault",

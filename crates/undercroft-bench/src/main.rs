@@ -40,9 +40,12 @@ enum Command {
     Longmemeval {
         /// Path to longmemeval_s(.cleaned).json
         dataset: std::path::PathBuf,
-        /// Evaluate only the first N questions
+        /// Evaluate only the first N questions (after --skip)
         #[arg(long)]
         limit: Option<usize>,
+        /// Skip the first N questions (for sharded parallel runs)
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
         /// Report recall/ndcg at this k
         #[arg(short = 'k', long, default_value_t = 5)]
         k: usize,
@@ -119,7 +122,44 @@ fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, PalaceStore)>
     let dir = tempfile::TempDir::new()?;
     let mgr = VaultManager::open(dir.path(), None)?;
     let vault = mgr.create("bench", level)?;
-    Ok((dir, PalaceStore::open(vault)?))
+    match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
+        Ok("onnx") => {
+            #[cfg(feature = "onnx")]
+            {
+                return Ok((dir, PalaceStore::open_with_embedder(vault, onnx_shared())?));
+            }
+            #[cfg(not(feature = "onnx"))]
+            anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires building with --features onnx");
+        }
+        _ => Ok((dir, PalaceStore::open(vault)?)),
+    }
+}
+
+/// The ONNX model is loaded once and shared across every per-question
+/// palace — model load costs seconds and LongMemEval creates 500 stores.
+#[cfg(feature = "onnx")]
+fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_onnx::OnnxEmbedder>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(undercroft_embed_onnx::from_env().expect("loading ONNX embedder from env"))
+        })
+        .clone();
+
+    struct Shared(Arc<undercroft_embed_onnx::OnnxEmbedder>);
+    impl undercroft_core::embed::Embedder for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn dimension(&self) -> usize {
+            self.0.dimension()
+        }
+        fn embed(&self, text: &str) -> Vec<f32> {
+            self.0.embed(text)
+        }
+    }
+    Box::new(Shared(arc))
 }
 
 // ---------------------------------------------------------------------------
@@ -160,10 +200,15 @@ fn run_longmemeval(
     limit: Option<usize>,
     k: usize,
     level: SecurityLevel,
+    skip: usize,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(dataset)
         .with_context(|| format!("reading dataset {}", dataset.display()))?;
-    let items: Vec<Value> = serde_json::from_str(&raw).context("dataset must be a JSON array")?;
+    let mut items: Vec<Value> =
+        serde_json::from_str(&raw).context("dataset must be a JSON array")?;
+    if skip > 0 {
+        items.drain(..skip.min(items.len()));
+    }
     let total = limit.unwrap_or(items.len()).min(items.len());
 
     let mut recall_any_sum = 0f32;
@@ -975,7 +1020,8 @@ fn main() -> Result<()> {
             limit,
             k,
             level,
-        } => run_longmemeval(&dataset, limit, k, level_of(&level)),
+            skip,
+        } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level } => run_synth(n, level_of(&level)),
         Command::Locomo { dataset, k, limit } => {
             let raw = std::fs::read_to_string(&dataset)

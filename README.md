@@ -252,11 +252,11 @@ the bundled SQLite store fills that role).
 ## Benchmarks (measured, not inherited)
 
 Full methodology and reproduce commands: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-With the default zero-model hash embedder: **LoCoMo session R@10 92.7%**
-(upstream MemPalace published 60.3% raw / 88.9% hybrid with an embedding
-model) and **LongMemEval-S R@5 90.4%** (upstream raw: 96.6% with a model —
-the gap is one paraphrase-heavy question type; see the honest reading in
-RESULTS.md).
+Matched-model conditions (all-MiniLM-L6-v2, the class upstream used):
+**LoCoMo session R@10 93.8%** (upstream: 60.3% raw / 88.9% hybrid) and
+**LongMemEval-S R@5 97.4%** on the full 500 (upstream raw: 96.6%; their
+tuned hybrid: 98.4%). The zero-model hash embedder — no download, ~95x
+faster — holds 92.7% / 90.4% respectively.
 
 ## Storage that doesn't balloon
 
