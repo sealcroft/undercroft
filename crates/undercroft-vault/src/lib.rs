@@ -215,7 +215,9 @@ impl Vault {
         let next = chain_next(&self.mac_key, &prev, record_tag);
         self.manifest.chain_head_hex = hex::encode(next);
         self.manifest.writes += 1;
-        self.save_manifest()
+        self.save_manifest()?;
+        undercroft_obs::chain_commit();
+        Ok(())
     }
 
     /// Recompute the audit chain from an ordered list of record tags and
@@ -355,6 +357,7 @@ impl VaultManager {
             .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
         if verify_hmac(&vault.manifest_key, &vault.manifest.canonical(), &stored).is_err() {
             let _ = expected;
+            undercroft_obs::hmac_verify_failed("manifest");
             return Err(VaultError::ManifestTampered);
         }
         Ok(vault)

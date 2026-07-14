@@ -23,7 +23,18 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # Default members only — the onnx embedder crate is built by the
 # dedicated `onnx-build` compose service.
-RUN cargo build --release && cargo test --release --no-run
+#
+# UNDERCROFT_FEATURES lets a downstream image build the CLI with extra
+# features (e.g. `telemetry` for the observability stack). Unset — the
+# default for the test/e2e/runtime images — keeps the standard build and
+# pre-compiles the test targets. Set: builds only the CLI with the given
+# features so the runtime binary carries them (no test overwrite).
+ARG UNDERCROFT_FEATURES=""
+RUN if [ -n "$UNDERCROFT_FEATURES" ]; then \
+        cargo build --release -p undercroft-cli --features "$UNDERCROFT_FEATURES"; \
+    else \
+        cargo build --release && cargo test --release --no-run; \
+    fi
 
 FROM builder AS test
 CMD ["cargo", "test", "--release"]

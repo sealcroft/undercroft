@@ -573,6 +573,9 @@ fn embedder_factory() -> tenant::EmbedderFactory {
 }
 
 fn main() -> Result<()> {
+    // Telemetry is a no-op unless built with `--features telemetry`. The
+    // guard flushes providers on any return path (including `?`).
+    let _telemetry = undercroft_obs::init();
     let cli = Cli::parse();
     match &cli.command {
         Command::Init { level } => {
@@ -821,7 +824,7 @@ fn main() -> Result<()> {
         Command::ServeMcp { vault } => {
             let store = open_store(&cli, vault)?;
             if let Ok(n) = store.warm_embedding_cache() {
-                eprintln!("warmed embedding cache: {n} vector(s)");
+                undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
             mcp::serve(store)?;
         }
@@ -833,7 +836,7 @@ fn main() -> Result<()> {
         } => {
             let store = open_store(&cli, vault)?;
             if let Ok(n) = store.warm_embedding_cache() {
-                eprintln!("warmed embedding cache: {n} vector(s)");
+                undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
             let tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only);
             http::serve_http(store, tenancy, host, *port, *read_only)?;
@@ -865,7 +868,7 @@ fn main() -> Result<()> {
                                 "[daemon] swept {files} transcript(s): {filed} filed, {skipped} present"
                             );
                         }
-                        Err(e) => eprintln!("[daemon] sweep failed: {e}"),
+                        Err(e) => undercroft_obs::diag_error!("[daemon] sweep failed: {e}"),
                     }
                     if *once {
                         break;
@@ -1221,11 +1224,11 @@ fn main() -> Result<()> {
                             facts_added += 1;
                         }
                     }
-                    Err(e) => eprintln!("  triples failed for {}: {e}", d.id),
+                    Err(e) => undercroft_obs::diag_error!("  triples failed for {}: {e}", d.id),
                 }
                 match llm.extract_entities(&d.content) {
                     Ok(ents) => entities_added += ents.len(),
-                    Err(e) => eprintln!("  entities failed for {}: {e}", d.id),
+                    Err(e) => undercroft_obs::diag_error!("  entities failed for {}: {e}", d.id),
                 }
             }
             println!(

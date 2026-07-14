@@ -16,6 +16,8 @@
 //! private network, front it with a TLS-terminating reverse proxy.
 //! `/healthz` is unauthenticated for load-balancer probes.
 
+use std::time::Instant;
+
 use anyhow::{bail, Result};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -43,12 +45,18 @@ pub fn serve_http(
         );
     }
 
+    // Prometheus /metrics is opt-in (loopback + behind the bearer gate).
+    let metrics_enabled = std::env::var("UNDERCROFT_METRICS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     let mut handler = McpHandler::new(store, read_only);
     let mut tenancy = tenancy;
     let server =
         Server::http((host, port)).map_err(|e| anyhow::anyhow!("binding {host}:{port}: {e}"))?;
-    eprintln!(
-        "undercroft server listening on http://{host}:{port} — /mcp (MCP) + /v1 (REST) ({}{}{})",
+    undercroft_obs::diag_info!(
+        "undercroft server listening on http://{host}:{port} — /mcp (MCP) + /v1 (REST){} ({}{}{})",
+        if metrics_enabled { " + /metrics" } else { "" },
         if read_only { "read-only, " } else { "" },
         if token.is_some() {
             "bearer auth"
@@ -66,11 +74,13 @@ pub fn serve_http(
         Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).expect("static header");
 
     for mut request in server.incoming_requests() {
+        let start = Instant::now();
         let url = request.url().to_string();
         let path = url.split('?').next().unwrap_or("").to_string();
         // /healthz is unauthenticated for load-balancer probes.
         if request.method() == &Method::Get && path == "/healthz" {
             let _ = request.respond(Response::from_string("ok"));
+            undercroft_obs::http_request("healthz", 200, start.elapsed());
             continue;
         }
         // Palace-wide bearer gates every non-health route (MCP and REST).
@@ -84,21 +94,44 @@ pub fn serve_http(
             if !ok {
                 let _ =
                     request.respond(Response::from_string("unauthorized").with_status_code(401));
+                undercroft_obs::auth_rejected("bearer");
+                undercroft_obs::http_request("unauthorized", 401, start.elapsed());
                 continue;
             }
         }
-        // Multi-tenant REST surface.
+        // Prometheus metrics — opt-in, behind the bearer gate above.
+        if metrics_enabled && request.method() == &Method::Get && path == "/metrics" {
+            let (code, body) = match undercroft_obs::render_prometheus() {
+                Some(text) => (200, text),
+                None => (
+                    503,
+                    "metrics require building undercroft with --features telemetry\n".to_string(),
+                ),
+            };
+            let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/plain; version=0.0.4"[..])
+                .expect("static header");
+            let _ = request.respond(
+                Response::from_string(body)
+                    .with_status_code(code)
+                    .with_header(ct),
+            );
+            undercroft_obs::http_request("metrics", code, start.elapsed());
+            continue;
+        }
+        // Multi-tenant REST surface (per-request metrics recorded inside).
         if path.starts_with("/v1/") || path == "/v1" {
             let now = OffsetDateTime::now_utc().unix_timestamp();
             tenancy.handle(request, now);
             continue;
         }
+        let mut status: u16 = 200;
         match (request.method().clone(), path.as_str()) {
             (Method::Post, "/mcp") => {
                 let mut body = String::new();
                 if std::io::Read::read_to_string(request.as_reader(), &mut body).is_err() {
                     let _ =
                         request.respond(Response::from_string("bad request").with_status_code(400));
+                    undercroft_obs::http_request("mcp", 400, start.elapsed());
                     continue;
                 }
                 let msg: Value = match serde_json::from_str(&body) {
@@ -109,6 +142,7 @@ pub fn serve_http(
                                 .with_status_code(400)
                                 .with_header(json_header.clone()),
                         );
+                        undercroft_obs::http_request("mcp", 400, start.elapsed());
                         continue;
                     }
                 };
@@ -121,12 +155,15 @@ pub fn serve_http(
                     }
                     // Notification: acknowledge with 202, no body.
                     None => {
+                        status = 202;
                         let _ = request.respond(Response::empty(202));
                     }
                 }
+                undercroft_obs::http_request("mcp", status, start.elapsed());
             }
             _ => {
                 let _ = request.respond(Response::from_string("not found").with_status_code(404));
+                undercroft_obs::http_request("other", 404, start.elapsed());
             }
         }
     }

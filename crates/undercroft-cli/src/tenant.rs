@@ -96,9 +96,16 @@ impl Tenancy {
     /// (tiny_http hands it out only via `&mut Request`); everything after
     /// routes on the borrowed request plus that body string.
     pub fn handle(&mut self, mut req: Request, now: i64) {
+        let start = std::time::Instant::now();
+        let route_label = rest_route_label(req.url());
         let mut body = String::new();
         let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
         let reply = self.route(&req, &body, now);
+        let status = match &reply {
+            Ok((code, _)) => *code,
+            Err(e) => e.code,
+        };
+        undercroft_obs::http_request(route_label, status, start.elapsed());
         match reply {
             Ok((code, Body::Json(v))) => respond(req, code, &v.to_string(), "application/json"),
             Ok((code, Body::Ndjson(s))) => respond(req, code, &s, "application/x-ndjson"),
@@ -190,6 +197,8 @@ impl Tenancy {
         let count = store.count().map_err(err500)?;
         let external = store.is_external();
         let vault = store.vault();
+        undercroft_obs::set_gauge("drawers", id, count as f64);
+        undercroft_obs::set_gauge("audit_chain_height", id, vault.writes() as f64);
         Ok((
             200,
             Body::Json(json!({
@@ -381,6 +390,7 @@ impl Tenancy {
             let store = PalaceStore::open_with_embedder(vault, embedder)
                 .map_err(|e| RestError::new(500, e.to_string()))?;
             self.stores.insert(vault_id.to_string(), store);
+            undercroft_obs::vault_opened();
         }
         Ok(self.stores.get_mut(vault_id).expect("just inserted"))
     }
@@ -407,10 +417,29 @@ impl Tenancy {
             .map(|h| h.value.as_str());
         assertion::verify(secret, vault_id, header, now, self.window).map_err(
             |e: AssertionError| {
-                eprintln!("vault assertion rejected for {vault_id}: {e}");
+                undercroft_obs::diag_warn!("vault assertion rejected for {vault_id}: {e}");
+                undercroft_obs::auth_rejected("assertion");
                 RestError::new(401, "unauthorized")
             },
         )
+    }
+}
+
+/// Coarse, cardinality-safe route label for metrics (ids stripped).
+fn rest_route_label(url: &str) -> &'static str {
+    let path = url.split('?').next().unwrap_or("");
+    if path.ends_with("/search") {
+        "v1_search"
+    } else if path.ends_with("/stats") {
+        "v1_stats"
+    } else if path.ends_with("/export") {
+        "v1_export"
+    } else if path.ends_with("/import") {
+        "v1_import"
+    } else if path.contains("/drawers") {
+        "v1_drawers"
+    } else {
+        "v1_vaults"
     }
 }
 

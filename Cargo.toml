@@ -6,6 +6,7 @@ members = [
     "crates/undercroft-store",
     "crates/undercroft-index",
     "crates/undercroft-llm",
+    "crates/undercroft-obs",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
     "crates/undercroft-embed-onnx",
@@ -18,12 +19,13 @@ default-members = [
     "crates/undercroft-store",
     "crates/undercroft-index",
     "crates/undercroft-llm",
+    "crates/undercroft-obs",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
 ]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/compufreq/undercroft"
@@ -49,6 +51,18 @@ subtle = "2.6"
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+
+# --- observability (undercroft-obs, `telemetry` feature only) ---
+# Versions are indicative and reconciled in Cargo.lock, matching the
+# loose-pin convention above. Never pulled into a default build.
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["metrics", "trace"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "metrics", "http-proto", "reqwest-blocking-client"] }
+opentelemetry-prometheus = "0.27"
+prometheus = "0.13"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-opentelemetry = "0.28"
 
 [profile.release]
 lto = "thin"

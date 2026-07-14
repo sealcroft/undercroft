@@ -213,6 +213,7 @@ impl PalaceStore {
             params![format!("kg/{id}"), tag.as_slice(), now],
         )?;
         self.vault.commit_write(&tag)?;
+        undercroft_obs::kg_write(undercroft_obs::KgKind::Triple);
         Ok(id)
     }
 
@@ -230,7 +231,10 @@ impl PalaceStore {
                 ),
                 &row.tag,
             )
-            .map_err(|_| StoreError::Integrity(format!("kg/{}", row.id)))?;
+            .map_err(|_| {
+                undercroft_obs::hmac_verify_failed("kg");
+                StoreError::Integrity(format!("kg/{}", row.id))
+            })?;
         let object = self
             .vault
             .content_from_rest(&format!("kg/{}", row.id), &row.object)
@@ -347,6 +351,7 @@ impl PalaceStore {
                 params![format!("kg/{}", t.id), tag.as_slice(), now_rfc3339()],
             )?;
             self.vault.commit_write(&tag)?;
+            undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);
             count += 1;
         }
         Ok(count)

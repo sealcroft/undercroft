@@ -60,6 +60,20 @@ services:
       target: builder
     command: ["cargo", "build", "--release", "-p", "undercroft-cli", "--features", "onnx"]
 
+  # Observability end-to-end suite. Builds the CLI with --features telemetry
+  # (like onnx-build), then exercises the opt-in /metrics gating and that
+  # traffic advances the Prometheus counters.
+  #   docker compose run --rm e2e-telemetry
+  e2e-telemetry:
+    build:
+      context: .
+      target: builder
+    entrypoint: ["bash", "-c"]
+    command:
+      - "cargo build --release -p undercroft-cli --features telemetry && bash /src/tests/e2e-telemetry.sh"
+    volumes:
+      - ./tests/e2e-telemetry.sh:/src/tests/e2e-telemetry.sh:ro
+
   bench:
     build:
       context: .

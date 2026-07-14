@@ -11,6 +11,7 @@ authors.workspace = true
 undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-index = { path = "../undercroft-index" }
+undercroft-obs = { path = "../undercroft-obs" }
 base64 = "0.22"
 rusqlite = { workspace = true }
 serde = { workspace = true }
