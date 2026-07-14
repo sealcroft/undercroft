@@ -25,7 +25,8 @@ jobs:
       - name: Assemble site (landing at root, book under /docs)
         run: |
           mkdir -p _site/docs
-          cp website/landing/index.html _site/index.html
+          # Copy the whole landing dir (index.html + assets/) so local images ship too.
+          cp -r website/landing/. _site/
           cp -r website/book/* _site/docs/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
