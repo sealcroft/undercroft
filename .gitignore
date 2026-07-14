@@ -23,3 +23,6 @@ Thumbs.db
 
 # mdBook build output
 website/book/
+
+# Browser automation artifacts
+.playwright-mcp/
