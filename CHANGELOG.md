@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.11.1 — Palace Monitor fixes
+
+Bug fixes to the Palace Monitor UI (`GET /monitor`), plus a website section
+showcasing it with real screenshots. No API or on-disk changes.
+
+- **Archivist now animates.** Search events no longer freeze the archivist in
+  its `read` pose (under load it was permanently stuck); filing walks run
+  uninterrupted, the walk-cycle bob is fixed (it checked states that never
+  existed), and the archivist gently wanders between wings during lulls.
+- **Speed slider works.** It now scales the whole simulation tempo instead of
+  only the (previously frozen) archivist. The tamper beacon's real-time
+  duration stays unscaled.
+- **Sound button works.** A confirmation chirp on enable plus throttled soft
+  ticks on live save/search events, alongside the existing tamper siren.
+- **Drawer tiles grow with writes.** The per-wing grid uses an absolute
+  log-scale fill so it visibly fills as a wing accumulates drawers, instead of
+  a relative-to-busiest scale that barely moved (and lit all tiles for a
+  brand-new wing).
+- **Website.** New "Palace Monitor" section on the landing page and screenshots
+  in the Observability docs, captured from the monitor connected live to a
+  vault filed from the LoCoMo benchmark, including a real `hmac-fail` tamper
+  alarm.
+
 ## 0.11.0 — Palace Monitor UI
 
 A self-contained pixel-art dashboard served at **`GET /monitor`**, driven

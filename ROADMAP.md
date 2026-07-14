@@ -128,6 +128,15 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   (bearer-gated; disabled under per-vault assertions) for the picker.
   Final stage of the Operability track.
 
+## v0.11.1 — Palace Monitor fixes (done)
+
+- Fixes to the monitor UI after live testing: the archivist now animates
+  (searches no longer freeze it; walk-cycle and idle wander restored), the
+  speed slider scales the whole sim, the sound toggle gives audible feedback,
+  and per-wing drawer tiles grow on an absolute log scale as writes land.
+  Adds the website "Palace Monitor" section with real screenshots. No API or
+  on-disk changes.
+
 ## Next
 
 - **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,
