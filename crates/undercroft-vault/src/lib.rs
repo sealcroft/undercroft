@@ -217,6 +217,7 @@ impl Vault {
         self.manifest.writes += 1;
         self.save_manifest()?;
         undercroft_obs::chain_commit();
+        undercroft_obs::event_chain_commit(self.id());
         Ok(())
     }
 

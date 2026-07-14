@@ -16,7 +16,7 @@
 //! private network, front it with a TLS-terminating reverse proxy.
 //! `/healthz` is unauthenticated for load-balancer probes.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use serde_json::Value;
@@ -73,7 +73,30 @@ pub fn serve_http(
     let json_header =
         Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).expect("static header");
 
-    for mut request in server.incoming_requests() {
+    // The loop wakes on this interval even when idle so the telemetry
+    // sampler can tick between requests (negligible cost; only the tick body
+    // is feature-gated).
+    let sample_interval = Duration::from_millis(
+        std::env::var("UNDERCROFT_SAMPLE_INTERVAL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|&ms| ms >= 100)
+            .unwrap_or(2000),
+    );
+
+    loop {
+        let mut request = match server.recv_timeout(sample_interval) {
+            Ok(Some(request)) => request,
+            Ok(None) => {
+                #[cfg(feature = "telemetry")]
+                {
+                    let now = OffsetDateTime::now_utc().unix_timestamp();
+                    tenancy.sample(now);
+                }
+                continue;
+            }
+            Err(_) => break,
+        };
         let start = Instant::now();
         let url = request.url().to_string();
         let path = url.split('?').next().unwrap_or("").to_string();
@@ -117,6 +140,33 @@ pub fn serve_http(
             );
             undercroft_obs::http_request("metrics", code, start.elapsed());
             continue;
+        }
+        // Live SSE telemetry stream — hijack the connection onto its own
+        // thread (the Request is Send) so the single-threaded main loop keeps
+        // serving. The thread touches only the obs broker, never a store.
+        #[cfg(feature = "telemetry")]
+        if request.method() == &Method::Get && path.starts_with("/v1/") && path.ends_with("/stream")
+        {
+            let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+            if segs.len() == 4 && segs[0] == "v1" && segs[1] == "vaults" && segs[3] == "stream" {
+                let id = segs[2];
+                let now = OffsetDateTime::now_utc().unix_timestamp();
+                match tenancy.authorize(id, &request, now) {
+                    Ok(_sealed) => {
+                        let vault = id.to_string();
+                        undercroft_obs::http_request("v1_stream", 200, start.elapsed());
+                        let writer = request.into_writer();
+                        std::thread::spawn(move || {
+                            undercroft_obs::run_sse(writer, vault);
+                        });
+                    }
+                    Err(code) => {
+                        let _ = request.respond(Response::from_string("").with_status_code(code));
+                        undercroft_obs::http_request("v1_stream", code, start.elapsed());
+                    }
+                }
+                continue;
+            }
         }
         // Multi-tenant REST surface (per-request metrics recorded inside).
         if path.starts_with("/v1/") || path == "/v1" {

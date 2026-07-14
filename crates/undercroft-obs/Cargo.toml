@@ -20,6 +20,8 @@ telemetry = [
     "dep:tracing",
     "dep:tracing-subscriber",
     "dep:tracing-opentelemetry",
+    "dep:serde",
+    "dep:serde_json",
 ]
 
 [dependencies]
@@ -31,3 +33,5 @@ prometheus = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }

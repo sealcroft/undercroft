@@ -74,6 +74,54 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" 
 kill "$S2" 2>/dev/null
 wait "$S2" 2>/dev/null
 
+echo "== SSE stream + event pings (v0.10) =="
+UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
+  "$BIN" serve-http --host 127.0.0.1 --port 8797 >/tmp/tstream.log 2>&1 &
+S3=$!
+wait_up 8797 || fail "stream server did not start" "$(cat /tmp/tstream.log)"
+AUTH=(-H "Authorization: Bearer $TOKEN")
+BASE="http://127.0.0.1:8797/v1/vaults"
+
+# hmac-only vault: live events keep wing/room.
+curl -s "${AUTH[@]}" -X POST "$BASE" -d '{"id":"plain","level":"hmac-only"}' >/dev/null
+curl -sN --max-time 4 "${AUTH[@]}" "$BASE/plain/stream" >/tmp/plain.sse 2>/dev/null &
+C1=$!
+sleep 1
+curl -s "${AUTH[@]}" -X POST "$BASE/plain/drawers" \
+  -d '{"text":"we chose postgres for billing","wing":"eng","room":"decisions"}' >/dev/null
+curl -s "${AUTH[@]}" -X POST "$BASE/plain/search" -d '{"query":"which database"}' >/dev/null
+wait $C1 2>/dev/null
+grep -q "event: drawer-saved" /tmp/plain.sse && pass "stream emits drawer-saved" \
+  || fail "no drawer-saved frame" "$(cat /tmp/plain.sse)"
+grep -q "event: search" /tmp/plain.sse && pass "stream emits search" || fail "no search frame"
+grep -q "event: sample" /tmp/plain.sse && pass "stream emits sampler frame" || fail "no sample frame"
+grep -q '"wing":"eng"' /tmp/plain.sse && pass "hmac-only stream carries wing/room" \
+  || fail "wing/room missing on hmac-only vault"
+
+# sealed vault: live events suppress wing/room names.
+curl -s "${AUTH[@]}" -X POST "$BASE" -d '{"id":"sealed","level":"sealed"}' >/dev/null
+curl -sN --max-time 3 "${AUTH[@]}" "$BASE/sealed/stream" >/tmp/sealed.sse 2>/dev/null &
+C2=$!
+sleep 1
+curl -s "${AUTH[@]}" -X POST "$BASE/sealed/drawers" \
+  -d '{"text":"acquisition plan","wing":"topsecret","room":"boardroom"}' >/dev/null
+wait $C2 2>/dev/null
+grep -q "event: drawer-saved" /tmp/sealed.sse && pass "sealed stream emits drawer-saved" \
+  || fail "no sealed drawer-saved frame"
+if grep -qE "topsecret|boardroom" /tmp/sealed.sse; then
+  fail "sealed stream leaked wing/room names" "$(cat /tmp/sealed.sse)"
+else
+  pass "sealed stream suppresses wing/room"
+fi
+
+# history backfill endpoint returns the sample ring.
+hist=$(curl -s "${AUTH[@]}" "$BASE/plain/stats/history")
+grep -q '"drawers"' <<<"$hist" && pass "stats/history returns samples" \
+  || fail "history empty" "$hist"
+
+kill "$S3" 2>/dev/null
+wait "$S3" 2>/dev/null
+
 echo
 echo "telemetry e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

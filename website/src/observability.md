@@ -98,3 +98,37 @@ The dashboard surfaces request rate by route, search rate and p95/p50
 latency, drawer writes (created vs deduped), audit-chain commit rate, and
 an **HMAC-verify-failures** stat panel that turns red the instant tamper
 is detected. See `deploy/observability/README.md`.
+
+## Live stream (SSE)
+
+Prometheus is pull-based; for a **live** view the multi-tenant server also
+pushes an [SSE](https://developer.mozilla.org/docs/Web/API/Server-sent_events)
+stream per vault — a periodic sample of aggregate counts plus discrete
+event pings as they happen. This is what the forthcoming Palace Monitor
+UI consumes. Telemetry build + bearer required; sealed vaults stream only
+aggregates (wing/room names suppressed).
+
+```bash
+# live event stream (Ctrl-C to stop)
+curl -N -H "Authorization: Bearer $TOKEN" \
+     http://127.0.0.1:8765/v1/vaults/<id>/stream
+
+# recent samples for backfill
+curl -H "Authorization: Bearer $TOKEN" \
+     "http://127.0.0.1:8765/v1/vaults/<id>/stats/history?window=100"
+```
+
+Frames:
+
+- `event: sample` — `{ts, drawers, rooms, wings, kg_triples, kg_entities,
+  kg_active, tunnels, chain_height, db_bytes, sealed}`. Emitted on the
+  sampler tick (default 2s, `UNDERCROFT_SAMPLE_INTERVAL_MS`), and only for
+  vaults with an active subscriber.
+- `event: drawer-saved` / `drawer-deleted` / `search` / `kg-triple` /
+  `chain-commit` — discrete pings carrying vault + (for hmac-only vaults)
+  wing/room. A comment heartbeat (`: ping`) every 15s keeps the
+  connection detectably alive.
+
+Each connection is served on its own thread (the request is handed off so
+the single-threaded server keeps serving), reading only from an in-process
+broker — never a vault store — so streaming can never touch content.

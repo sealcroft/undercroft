@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.10.0 — Live memory telemetry
+
+Turns the v0.9.0 point-in-time observability into a **live push stream** —
+the foundation the Palace Monitor UI will consume. Opt-in behind
+`--features telemetry`, default build untouched, metadata/counts only,
+sealed vaults expose only aggregates. Additive and non-breaking.
+
+- **SSE stream** — `GET /v1/vaults/{id}/stream` (bearer + per-vault
+  assertion) pushes a periodic `sample` frame (aggregate counts) plus
+  discrete **event pings** (`drawer-saved`, `drawer-deleted`, `search`,
+  `kg-triple`, `chain-commit`) as they happen. Each connection is served
+  on its own thread that reads only an in-process broker — never a store —
+  so the single-threaded server keeps serving and streaming can never
+  touch content. Sealed vaults suppress wing/room names.
+- **In-process sampler** — a bounded per-vault ring buffer, filled on a
+  tick (default 2s, `UNDERCROFT_SAMPLE_INTERVAL_MS`) but only for vaults
+  with an active subscriber, so it costs nothing when nobody is watching.
+  Also populates the previously-unset `kg_triples`/`kg_entities`/
+  `store_bytes` Prometheus gauges.
+- **History backfill** — `GET /v1/vaults/{id}/stats/history?window=N`
+  returns the recent samples so a fresh client can draw the past.
+
 ## 0.9.0 — Observability & telemetry
 
 An **opt-in** observability layer, off by default with zero extra
