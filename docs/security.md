@@ -36,6 +36,32 @@ modification: every read verifies, `verify` audits everything.
 - **HTTP server**: refuses non-loopback binds without a bearer token;
   `--read-only` strips all mutating tools.
 
+## Server auth model (two layers)
+
+The HTTP server distinguishes *reaching the server* from *addressing a
+tenant*:
+
+1. **Palace-wide bearer** (`UNDERCROFT_MCP_HTTP_TOKEN`) — mandatory for any
+   non-loopback bind, gates every authenticated route (MCP and REST).
+   Proves the caller reached the right server; it does not distinguish
+   vaults, so on its own whoever holds it can address every vault.
+2. **Per-vault assertion** (`UNDERCROFT_ASSERTION_SECRET`, optional) — when
+   set, every `/v1` request must carry
+   `X-Vault-Assertion: <ts>:<HMAC-SHA256(secret, "<ts>|<vault_id>")>` for
+   the exact vault it addresses. The vault id is bound into the MAC, so an
+   assertion for vault A cannot authorize vault B; timestamps outside ±120s
+   are refused; comparison is constant-time. The caller platform authorizes
+   its user and mints the assertion, and the engine verifies independently
+   — a compromised caller component without the secret gets nothing. This
+   is what makes a multi-tenant host (vault = customer) safe: the engine,
+   not the caller, enforces per-tenant access on every request. Failures
+   return a bare 401; the reason is logged server-side, never returned (it
+   would leak vault existence or how close a forgery got).
+
+Fusion and external-embedding vaults do not change any of this: search only
+re-ranks already-HMAC-verified candidates, and caller-supplied vectors are
+sealed exactly like internally-computed ones.
+
 ## Non-goals
 
 An attacker reading process memory while a vault is unlocked; a compromised

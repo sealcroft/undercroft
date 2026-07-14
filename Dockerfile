@@ -15,6 +15,10 @@
 
 FROM rust:1.90-slim-bookworm AS builder
 WORKDIR /src
+# curl is used by the e2e suite to exercise the HTTP REST surface.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # Default members only — the onnx embedder crate is built by the

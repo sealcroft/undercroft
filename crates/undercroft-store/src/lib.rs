@@ -94,6 +94,12 @@ pub enum StoreError {
     },
     #[error("remote index error: {0}")]
     Index(#[from] undercroft_index::IndexError),
+    #[error("this vault uses external embeddings; writes must supply a vector")]
+    ExternalVault,
+    #[error("this vault computes its own embeddings; a vector may not be supplied")]
+    NotExternalVault,
+    #[error("embedding dimension mismatch: vault expects {expected}, got {got}")]
+    EmbeddingDim { expected: usize, got: usize },
 }
 
 /// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
@@ -115,6 +121,16 @@ pub struct SearchHit {
     pub score: f32,
     pub semantic: f32,
     pub lexical: f32,
+}
+
+/// Result of [`PalaceStore::save_with_dedup`]: the drawer id that now holds
+/// the content, whether it was a fresh insert, and whether an existing
+/// near-duplicate was refreshed in place.
+#[derive(Debug, Clone)]
+pub struct SaveOutcome {
+    pub id: String,
+    pub created: bool,
+    pub deduped: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -155,6 +171,10 @@ pub struct PalaceStore {
     fts_min: Option<usize>,
     /// How semantic and lexical signals are combined at rank time.
     fusion: Fusion,
+    /// `Some(dim)` when this vault's embeddings are supplied by the caller
+    /// (embedder identity `external:<name>@<dim>`): writes must carry a
+    /// vector of exactly `dim`, and the store never computes an embedding.
+    external_dim: Option<usize>,
 }
 
 impl PalaceStore {
@@ -265,6 +285,10 @@ impl PalaceStore {
             Ok(v) => Some(v.parse().unwrap_or(DEFAULT_FTS_PREFILTER_MIN)),
             Err(_) => Some(DEFAULT_FTS_PREFILTER_MIN),
         };
+        let external_dim = embedder
+            .model_name()
+            .starts_with("external:")
+            .then(|| embedder.dimension());
         let mut store = Self {
             conn,
             vault,
@@ -273,6 +297,7 @@ impl PalaceStore {
             fts: false,
             fts_min,
             fusion: Fusion::from_env(),
+            external_dim,
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
@@ -378,8 +403,77 @@ impl PalaceStore {
         Ok(n as u64)
     }
 
-    /// Insert or replace a drawer. Returns `true` if the id was new.
+    /// Whether this vault stores caller-supplied embeddings
+    /// (`external:<name>@<dim>` identity). Such vaults reject
+    /// [`upsert`](Self::upsert) — use [`upsert_external`](Self::upsert_external).
+    pub fn is_external(&self) -> bool {
+        self.external_dim.is_some()
+    }
+
+    /// Read a vault's recorded embedder identity `(name, dim)` without
+    /// opening a full store — lets a caller (e.g. the multi-tenant server)
+    /// pick the right embedder before opening. `None` if nothing is
+    /// recorded yet (a fresh, never-written vault).
+    pub fn recorded_embedder(vault: &Vault) -> Result<Option<(String, usize)>, StoreError> {
+        let conn = Connection::open(vault.db_path())?;
+        let name: Option<String> = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'embedder_name'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let dim: Option<String> = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'embedder_dim'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        Ok(match (name, dim) {
+            (Some(n), Some(d)) => Some((n, d.parse().unwrap_or(0))),
+            _ => None,
+        })
+    }
+
+    /// Insert or replace a drawer, computing its embedding with the vault's
+    /// embedder. Returns `true` if the id was new. Refused on external
+    /// vaults, which must supply a vector via
+    /// [`upsert_external`](Self::upsert_external).
     pub fn upsert(&mut self, drawer: &Drawer) -> Result<bool, StoreError> {
+        if self.external_dim.is_some() {
+            return Err(StoreError::ExternalVault);
+        }
+        let embedding = self.embedder.embed(&drawer.content);
+        self.write_drawer(drawer, embedding)
+    }
+
+    /// Insert or replace a drawer on an external-embedding vault using the
+    /// caller-supplied `vector`, which must match the recorded dimension
+    /// exactly. Returns `true` if the id was new. Errors on a non-external
+    /// vault or a dimension mismatch.
+    pub fn upsert_external(
+        &mut self,
+        drawer: &Drawer,
+        vector: Vec<f32>,
+    ) -> Result<bool, StoreError> {
+        match self.external_dim {
+            None => Err(StoreError::NotExternalVault),
+            Some(dim) if vector.len() != dim => Err(StoreError::EmbeddingDim {
+                expected: dim,
+                got: vector.len(),
+            }),
+            Some(_) => self.write_drawer(drawer, vector),
+        }
+    }
+
+    /// Seal + tag + persist a drawer with an already-computed `embedding`,
+    /// advancing the audit chain and keeping the warm cache coherent. The
+    /// embedding source (local embedder or caller-supplied) is the caller's
+    /// concern; the at-rest sealing and integrity handling are identical.
+    fn write_drawer(&mut self, drawer: &Drawer, embedding: Vec<f32>) -> Result<bool, StoreError> {
         let meta_json =
             serde_json::to_string(&drawer.meta).map_err(|e| StoreError::CorruptRow {
                 id: drawer.id.clone(),
@@ -388,7 +482,6 @@ impl PalaceStore {
         let content_rest = self
             .vault
             .content_at_rest(&drawer.id, drawer.content.as_bytes());
-        let embedding = self.embedder.embed(&drawer.content);
         let emb_rest = self.vault.embedding_at_rest(&drawer.id, &embedding);
         let tag = self
             .vault
@@ -441,6 +534,156 @@ impl PalaceStore {
             cache.insert(drawer.id.clone(), embedding);
         }
         Ok(existing.is_none())
+    }
+
+    /// Save a drawer, collapsing near-duplicates. If some existing drawer
+    /// in the SAME wing+room has embedding cosine `>= threshold` against the
+    /// incoming one, that drawer is refreshed in place — its text, metadata,
+    /// and recency updated while its id is kept — and the outcome reports
+    /// `deduped`. Otherwise it is a normal insert/update. Makes re-ingesting
+    /// an updated corpus idempotent: unchanged facts refresh instead of
+    /// piling up as near-copies. The refresh is an ordinary audited update
+    /// (re-tagged, chain advanced), never a silent overwrite. Refused on
+    /// external vaults — use [`save_with_dedup_vec`](Self::save_with_dedup_vec).
+    pub fn save_with_dedup(
+        &mut self,
+        drawer: &Drawer,
+        threshold: f32,
+    ) -> Result<SaveOutcome, StoreError> {
+        if self.external_dim.is_some() {
+            return Err(StoreError::ExternalVault);
+        }
+        let embedding = self.embedder.embed(&drawer.content);
+        self.save_with_dedup_vec(drawer, embedding, threshold)
+    }
+
+    /// [`save_with_dedup`](Self::save_with_dedup) with a caller-supplied
+    /// embedding — the external-vault path (dimension-checked there).
+    pub fn save_with_dedup_vec(
+        &mut self,
+        drawer: &Drawer,
+        embedding: Vec<f32>,
+        threshold: f32,
+    ) -> Result<SaveOutcome, StoreError> {
+        if let Some(dim) = self.external_dim {
+            if embedding.len() != dim {
+                return Err(StoreError::EmbeddingDim {
+                    expected: dim,
+                    got: embedding.len(),
+                });
+            }
+        }
+        // Scan the same wing+room for the closest existing drawer. Scope
+        // the statement so its borrow of `self.conn` is released before the
+        // `&mut self` write below.
+        let rows: Vec<(String, Vec<u8>)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, embedding FROM drawers WHERE wing = ?1 AND room = ?2")?;
+            let rows = stmt
+                .query_map(params![drawer.meta.wing, drawer.meta.room], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .collect::<Result<_, _>>()?;
+            rows
+        };
+        let mut best: Option<(String, f32)> = None;
+        for (id, emb_rest) in rows {
+            let emb = self
+                .vault
+                .embedding_from_rest(&id, &emb_rest)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.clone(),
+                    reason: e.to_string(),
+                })?;
+            let sim = cosine(&embedding, &emb);
+            if sim >= threshold && best.as_ref().map(|(_, s)| sim > *s).unwrap_or(true) {
+                best = Some((id, sim));
+            }
+        }
+
+        if let Some((match_id, _)) = best {
+            // Refresh the matched drawer in place: keep its id, take the
+            // incoming content/metadata and a fresh recency.
+            let refreshed = Drawer {
+                id: match_id.clone(),
+                content: drawer.content.clone(),
+                meta: drawer.meta.clone(),
+            };
+            self.write_drawer(&refreshed, embedding)?;
+            Ok(SaveOutcome {
+                id: match_id,
+                created: false,
+                deduped: true,
+            })
+        } else {
+            let created = self.write_drawer(drawer, embedding)?;
+            Ok(SaveOutcome {
+                id: drawer.id.clone(),
+                created,
+                deduped: false,
+            })
+        }
+    }
+
+    /// Decrypted export of every drawer together with its embedding vector,
+    /// for lossless migration (verified import elsewhere, then drop the
+    /// source). Ordered by insertion. Unlike [`export_all`](Self::export_all)
+    /// this carries the vector so an external-embedding vault round-trips
+    /// without a model.
+    pub fn export_all_with_vectors(&self) -> Result<Vec<(Drawer, Vec<f32>)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, meta_json, content, embedding, tag FROM drawers ORDER BY seq")?;
+        let rows: Vec<SearchRow> = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (id, meta_json, content_rest, emb_rest, tag) in rows {
+            self.vault
+                .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
+                .map_err(|_| StoreError::Integrity(id.clone()))?;
+            let drawer = self.decode(&id, &meta_json, &content_rest)?;
+            let emb = self
+                .vault
+                .embedding_from_rest(&id, &emb_rest)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.clone(),
+                    reason: e.to_string(),
+                })?;
+            out.push((drawer, emb));
+        }
+        Ok(out)
+    }
+
+    /// Import one drawer, the inverse of a migration export. On an external
+    /// vault a `vector` is required (dimension-checked). On a normal vault a
+    /// matching-dimension `vector` is preserved verbatim; otherwise the
+    /// drawer is re-embedded with the vault's own embedder. Returns whether
+    /// the id was new.
+    pub fn import_record(
+        &mut self,
+        drawer: &Drawer,
+        vector: Option<Vec<f32>>,
+    ) -> Result<bool, StoreError> {
+        match self.external_dim {
+            Some(dim) => {
+                let v = vector.ok_or(StoreError::ExternalVault)?;
+                if v.len() != dim {
+                    return Err(StoreError::EmbeddingDim {
+                        expected: dim,
+                        got: v.len(),
+                    });
+                }
+                self.write_drawer(drawer, v)
+            }
+            None => match vector {
+                Some(v) if v.len() == self.embedder.dimension() => self.write_drawer(drawer, v),
+                _ => self.upsert(drawer),
+            },
+        }
     }
 
     /// Fetch one drawer by id, verifying its HMAC and decrypting content.
@@ -533,8 +776,40 @@ impl PalaceStore {
     /// prefilter threshold first cut candidates to the FTS5 BM25 top-K
     /// (final scoring is unchanged — the index only narrows the scan).
     pub fn search(&self, query: &str, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
-        let limit = if opts.limit == 0 { 10 } else { opts.limit };
+        if self.external_dim.is_some() {
+            return Err(StoreError::ExternalVault);
+        }
         let qvec = self.embedder.embed(query);
+        self.search_inner(query, qvec, opts)
+    }
+
+    /// Search an external-embedding vault with a caller-supplied query
+    /// vector (same embedding space as the stored drawers); `query` still
+    /// drives the lexical/BM25 half. The vector must match the recorded
+    /// dimension. Errors on a non-external vault or a dimension mismatch.
+    pub fn search_with_vector(
+        &self,
+        query: &str,
+        qvec: Vec<f32>,
+        opts: &SearchOptions,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        match self.external_dim {
+            None => Err(StoreError::NotExternalVault),
+            Some(dim) if qvec.len() != dim => Err(StoreError::EmbeddingDim {
+                expected: dim,
+                got: qvec.len(),
+            }),
+            Some(_) => self.search_inner(query, qvec, opts),
+        }
+    }
+
+    fn search_inner(
+        &self,
+        query: &str,
+        qvec: Vec<f32>,
+        opts: &SearchOptions,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let limit = if opts.limit == 0 { 10 } else { opts.limit };
         let qterms: Vec<String> = query
             .to_lowercase()
             .split(|c: char| !c.is_alphanumeric())
@@ -1050,6 +1325,168 @@ mod tests {
             idx,
             "test",
         )
+    }
+
+    fn external_store(level: SecurityLevel, dim: usize) -> (TempDir, PalaceStore) {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", level).unwrap();
+        let emb = Box::new(undercroft_core::ExternalEmbedder::new("acme-embed", dim));
+        (dir, PalaceStore::open_with_embedder(vault, emb).unwrap())
+    }
+
+    #[test]
+    fn external_vault_enforces_vector_and_dimension() {
+        let (_d, mut s) = external_store(SecurityLevel::Sealed, 4);
+        assert!(s.is_external());
+        let dr = drawer("w", "r", "customer prefers dark mode", 0);
+        // Auto-embedding paths are refused.
+        assert!(matches!(s.upsert(&dr), Err(StoreError::ExternalVault)));
+        assert!(matches!(
+            s.search("dark mode", &SearchOptions::default()),
+            Err(StoreError::ExternalVault)
+        ));
+        // Wrong dimension is refused on write and on search.
+        assert!(matches!(
+            s.upsert_external(&dr, vec![0.1, 0.2]),
+            Err(StoreError::EmbeddingDim {
+                expected: 4,
+                got: 2
+            })
+        ));
+        // Correct dimension round-trips, and search uses the supplied vector.
+        s.upsert_external(&dr, vec![1.0, 0.0, 0.0, 0.0]).unwrap();
+        let hits = s
+            .search_with_vector(
+                "dark mode",
+                vec![1.0, 0.0, 0.0, 0.0],
+                &SearchOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].drawer.content, "customer prefers dark mode");
+        assert!(matches!(
+            s.search_with_vector("x", vec![1.0, 0.0], &SearchOptions::default()),
+            Err(StoreError::EmbeddingDim {
+                expected: 4,
+                got: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn external_identity_recorded_and_reenforced() {
+        let (dir, mut s) = external_store(SecurityLevel::Sealed, 8);
+        s.upsert_external(&drawer("w", "r", "note", 0), vec![0.5; 8])
+            .unwrap();
+        drop(s);
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.unlock("test").unwrap();
+        assert_eq!(
+            PalaceStore::recorded_embedder(&vault).unwrap(),
+            Some(("external:acme-embed".to_string(), 8))
+        );
+        // Opening the external vault with the plain hash embedder must be
+        // refused — a silent embedder swap degrades recall.
+        assert!(matches!(
+            PalaceStore::open(mgr.unlock("test").unwrap()),
+            Err(StoreError::EmbedderMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn external_vault_seals_supplied_vector() {
+        let (dir, mut s) = external_store(SecurityLevel::Sealed, 3);
+        s.upsert_external(
+            &drawer("w", "r", "top-secret preference", 0),
+            vec![0.11, 0.22, 0.33],
+        )
+        .unwrap();
+        drop(s);
+        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        assert!(
+            !db.windows(9).any(|w| w == b"top-secre"),
+            "external sealed vault leaked plaintext content"
+        );
+    }
+
+    #[test]
+    fn dedup_refresh_is_idempotent_and_audited() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let d1 = drawer("team", "facts", "the deploy target is us-east-1", 0);
+        let o1 = s.save_with_dedup(&d1, 0.95).unwrap();
+        assert!(o1.created && !o1.deduped);
+        // Same corpus re-ingested with a fresh id: a near-duplicate refresh,
+        // not a new record.
+        let d2 = drawer("team", "facts", "the deploy target is us-east-1", 99);
+        assert_ne!(d1.id, d2.id);
+        let o2 = s.save_with_dedup(&d2, 0.95).unwrap();
+        assert!(o2.deduped && !o2.created);
+        assert_eq!(o2.id, d1.id, "refresh keeps the original id");
+        assert_eq!(s.count().unwrap(), 1, "no near-duplicate piled up");
+        // A genuinely different fact in the same room is not deduped.
+        let o3 = s
+            .save_with_dedup(
+                &drawer("team", "facts", "the on-call rotation is weekly", 1),
+                0.95,
+            )
+            .unwrap();
+        assert!(o3.created && !o3.deduped);
+        assert_eq!(s.count().unwrap(), 2);
+        // The refresh was an audited update, so the chain still verifies.
+        assert!(s.verify().unwrap().ok());
+    }
+
+    #[test]
+    fn dedup_refresh_updates_text_in_place() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.save_with_dedup(&drawer("w", "r", "alice works at acme corporation", 0), 0.9)
+            .unwrap();
+        // Near-duplicate with updated wording refreshes the existing drawer.
+        let o = s
+            .save_with_dedup(
+                &drawer("w", "r", "alice works at acme corporation now", 1),
+                0.9,
+            )
+            .unwrap();
+        assert!(o.deduped);
+        let back = s.get(&o.id).unwrap().unwrap();
+        assert_eq!(back.content, "alice works at acme corporation now");
+    }
+
+    #[test]
+    fn import_roundtrip_preserves_records() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "first memory", 0)).unwrap();
+        s.upsert(&drawer("w", "r", "second memory", 1)).unwrap();
+        let exported = s.export_all_with_vectors().unwrap();
+        assert_eq!(exported.len(), 2);
+        // Import into a fresh vault, mirroring a migration.
+        let (_d2, mut s2) = store(SecurityLevel::Sealed);
+        let mut n = 0u64;
+        for (dr, vec) in &exported {
+            if s2.import_record(dr, Some(vec.clone())).unwrap() {
+                n += 1;
+            }
+        }
+        assert_eq!(n, 2);
+        assert_eq!(s2.count().unwrap(), 2);
+        assert!(s2.verify().unwrap().ok());
+        let hits = s2
+            .search("second memory", &SearchOptions::default())
+            .unwrap();
+        assert!(hits.iter().any(|h| h.drawer.content == "second memory"));
+    }
+
+    #[test]
+    fn external_import_requires_vector() {
+        let (_d, mut s) = external_store(SecurityLevel::Sealed, 4);
+        let dr = drawer("w", "r", "x", 0);
+        assert!(matches!(
+            s.import_record(&dr, None),
+            Err(StoreError::ExternalVault)
+        ));
+        assert!(s.import_record(&dr, Some(vec![0.0; 4])).unwrap());
     }
 
     #[test]

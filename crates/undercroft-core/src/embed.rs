@@ -80,6 +80,65 @@ impl Embedder for HashEmbedder {
     }
 }
 
+/// Identity for a vault whose embeddings are supplied by the caller rather
+/// than computed locally. Some platforms already own an embedding space
+/// (they embed through their own model gateway for spend attribution and
+/// share one space across ingest, sync, and migration); such a vault stores
+/// caller-provided vectors and never runs a local model.
+///
+/// The recorded identity is `external:<name>@<dim>` — `model_name()` is
+/// `external:<name>` and `dimension()` is `<dim>`, so it enforces exactly
+/// like any other embedder identity (a silent model/dimension swap is
+/// still refused). `embed()` is never reached: the store requires a vector
+/// on every write to an external vault and refuses auto-embedding here.
+#[derive(Debug, Clone)]
+pub struct ExternalEmbedder {
+    name: String,
+    dim: usize,
+}
+
+impl ExternalEmbedder {
+    /// `name` is the bare model name (no `external:` prefix); it is stored
+    /// prefixed so the recorded identity is self-describing.
+    pub fn new(name: &str, dim: usize) -> Self {
+        Self {
+            name: format!("external:{name}"),
+            dim,
+        }
+    }
+}
+
+impl Embedder for ExternalEmbedder {
+    fn model_name(&self) -> &str {
+        &self.name
+    }
+
+    fn dimension(&self) -> usize {
+        self.dim
+    }
+
+    fn embed(&self, _text: &str) -> Vec<f32> {
+        // Unreachable in normal operation — external vaults are written and
+        // searched with caller-supplied vectors. A zero vector is a safe
+        // degradation (cosine 0) rather than a panic if some path slips
+        // through the store's guards.
+        vec![0.0; self.dim.max(1)]
+    }
+}
+
+/// Parse an `external:<name>@<dim>` embedder spec into `(name, dim)` with
+/// the `external:` prefix stripped. Returns `None` if it is not an external
+/// spec or the dimension is missing / unparseable.
+pub fn parse_external_spec(spec: &str) -> Option<(String, usize)> {
+    let rest = spec.strip_prefix("external:")?;
+    let (name, dim) = rest.rsplit_once('@')?;
+    let dim: usize = dim.parse().ok()?;
+    if name.is_empty() || dim == 0 {
+        return None;
+    }
+    Some((name.to_string(), dim))
+}
+
 /// Cosine similarity between two same-width vectors.
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {

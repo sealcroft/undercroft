@@ -182,8 +182,16 @@ undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
 undercroft serve-mcp [--vault]        # MCP stdio server (32 tools)
-undercroft serve-http [--host --port --read-only]  # shared team server (bearer auth)
+undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
+undercroft assert-header <vault>      # mint an X-Vault-Assertion (per-tenant auth)
 ```
+
+`serve-http` is both the shared team server (MCP over HTTP, bearer auth) and
+a multi-tenant memory engine: a versioned `/v1` REST surface with vault
+lifecycle, per-vault HMAC assertions (`UNDERCROFT_ASSERTION_SECRET`),
+caller-supplied embeddings, dedup-refresh on save, and lossless
+export/import for migrating a tenant between instances. See
+[the remote-server guide](docs/remote-server.md).
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.

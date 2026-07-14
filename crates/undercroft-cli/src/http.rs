@@ -18,12 +18,20 @@
 
 use anyhow::{bail, Result};
 use serde_json::Value;
+use time::OffsetDateTime;
 use tiny_http::{Header, Method, Response, Server};
 
 use crate::mcp::McpHandler;
+use crate::tenant::Tenancy;
 use undercroft_store::PalaceStore;
 
-pub fn serve_http(store: PalaceStore, host: &str, port: u16, read_only: bool) -> Result<()> {
+pub fn serve_http(
+    store: PalaceStore,
+    tenancy: Tenancy,
+    host: &str,
+    port: u16,
+    read_only: bool,
+) -> Result<()> {
     let token = std::env::var("UNDERCROFT_MCP_HTTP_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
@@ -36,15 +44,21 @@ pub fn serve_http(store: PalaceStore, host: &str, port: u16, read_only: bool) ->
     }
 
     let mut handler = McpHandler::new(store, read_only);
+    let mut tenancy = tenancy;
     let server =
         Server::http((host, port)).map_err(|e| anyhow::anyhow!("binding {host}:{port}: {e}"))?;
     eprintln!(
-        "undercroft MCP server listening on http://{host}:{port}/mcp ({}{})",
+        "undercroft server listening on http://{host}:{port} — /mcp (MCP) + /v1 (REST) ({}{}{})",
         if read_only { "read-only, " } else { "" },
         if token.is_some() {
             "bearer auth"
         } else {
             "loopback, no auth"
+        },
+        if tenancy.requires_assertion() {
+            ", per-vault assertions required"
+        } else {
+            ""
         }
     );
 
@@ -53,24 +67,34 @@ pub fn serve_http(store: PalaceStore, host: &str, port: u16, read_only: bool) ->
 
     for mut request in server.incoming_requests() {
         let url = request.url().to_string();
-        match (request.method().clone(), url.as_str()) {
-            (Method::Get, "/healthz") => {
-                let _ = request.respond(Response::from_string("ok"));
+        let path = url.split('?').next().unwrap_or("").to_string();
+        // /healthz is unauthenticated for load-balancer probes.
+        if request.method() == &Method::Get && path == "/healthz" {
+            let _ = request.respond(Response::from_string("ok"));
+            continue;
+        }
+        // Palace-wide bearer gates every non-health route (MCP and REST).
+        if let Some(expected) = &token {
+            let ok = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .map(|h| h.value.as_str() == format!("Bearer {expected}"))
+                .unwrap_or(false);
+            if !ok {
+                let _ =
+                    request.respond(Response::from_string("unauthorized").with_status_code(401));
+                continue;
             }
+        }
+        // Multi-tenant REST surface.
+        if path.starts_with("/v1/") || path == "/v1" {
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            tenancy.handle(request, now);
+            continue;
+        }
+        match (request.method().clone(), path.as_str()) {
             (Method::Post, "/mcp") => {
-                if let Some(expected) = &token {
-                    let ok = request
-                        .headers()
-                        .iter()
-                        .find(|h| h.field.equiv("Authorization"))
-                        .map(|h| h.value.as_str() == format!("Bearer {expected}"))
-                        .unwrap_or(false);
-                    if !ok {
-                        let _ = request
-                            .respond(Response::from_string("unauthorized").with_status_code(401));
-                        continue;
-                    }
-                }
                 let mut body = String::new();
                 if std::io::Read::read_to_string(request.as_reader(), &mut body).is_err() {
                     let _ =

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.0 — Multi-tenant server support
+
+`serve-http` becomes a first-class per-tenant memory engine (one vault per
+customer), additive and non-breaking — MCP stdio, the `/mcp` HTTP surface,
+and single-vault behavior are unchanged.
+
+- **Per-vault request authorization.** Set `UNDERCROFT_ASSERTION_SECRET` and
+  every `/v1` request must carry `X-Vault-Assertion: <ts>:<hmac>` where
+  `hmac = HMAC-SHA256(secret, "<ts>|<vault_id>")`, verified within ±120s
+  with a constant-time compare. An assertion minted for vault A cannot
+  authorize vault B. `undercroft assert-header <vault>` mints one.
+- **Versioned REST surface** (`/v1`) in the same process, same bearer:
+  create/delete vault, stats, save/search/delete drawer, and a lossless
+  NDJSON export/import pair (import returns the exact record count) for
+  migrating a vault between instances.
+- **Externally-supplied embeddings.** A vault created with
+  `embedder: external:<name>@<dim>` stores caller-provided vectors, refuses
+  writes/searches without one, and enforces the dimension — sealing those
+  vectors like internally-computed ones.
+- **Semantic dedup-refresh on save.** `dedup_threshold` on a write refreshes
+  an existing same-wing/room drawer in place (cosine ≥ threshold, id kept)
+  as an audited update, making bulk re-ingestion idempotent.
+- **Orchestrated deployment** documented: headless `init` from
+  `UNDERCROFT_PASSPHRASE`, key never logged, one instance per tenant (compose
+  example in docs/remote-server.md).
+
 ## 0.7.2 — BM25 rank fusion (new search default)
 
 - Search now blends cosine with a real **Okapi BM25** lexical score

@@ -306,6 +306,87 @@ mcp_check "tools/list has 4 tools"  '"undercroft_verify"'
 mcp_check "save tool works"         'saved drawer'
 mcp_check "search tool round-trips" 'mcp saved this memory'
 
+echo "== Multi-tenant HTTP REST surface =="
+REST_HOME="$(mktemp -d)"
+PORT=8791
+SECRET="e2e-assertion-secret-key-material"
+UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_ASSERTION_SECRET="$SECRET" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_ASSERTION_SECRET="$SECRET" \
+  "$BIN" serve-http --host 127.0.0.1 --port "$PORT" >/tmp/serve.log 2>&1 &
+SRV=$!
+for _ in $(seq 1 100); do
+  curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.1
+done
+
+API="http://127.0.0.1:$PORT/v1"
+sign() { UNDERCROFT_ASSERTION_SECRET="$SECRET" "$BIN" assert-header "$1"; }
+
+rest_body() { # <name> <expected-substr> -- <curl args...>
+  local name="$1" sub="$2"; shift 2; [ "$1" = "--" ] && shift
+  local out; out="$(curl -s "$@" 2>&1)"
+  if grep -qF "$sub" <<<"$out"; then echo "ok    $name"; PASS=$((PASS+1))
+  else echo "FAIL  $name — missing: $sub"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1)); fi
+}
+rest_code() { # <name> <expected-code> -- <curl args...>
+  local name="$1" want="$2"; shift 2; [ "$1" = "--" ] && shift
+  local code; code="$(curl -s -o /dev/null -w '%{http_code}' "$@")"
+  if [ "$code" = "$want" ]; then echo "ok    $name"; PASS=$((PASS+1))
+  else echo "FAIL  $name — code $code (wanted $want)"; FAIL=$((FAIL+1)); fi
+}
+
+rest_body "create vault"        '"created":true'  -- -X POST "$API/vaults" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"id":"acme","level":"sealed"}'
+rest_code "missing assertion 401" 401 -- -X POST "$API/vaults/acme/search" -d '{"query":"x"}'
+rest_body "save drawer"         '"created":true'  -- -X POST "$API/vaults/acme/drawers" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"we picked postgres for the billing service","wing":"eng","room":"decisions"}'
+rest_body "search finds it"     'postgres'        -- -X POST "$API/vaults/acme/search" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"which database for billing"}'
+rest_body "stats"               '"drawers":1'     -- "$API/vaults/acme/stats" \
+  -H "X-Vault-Assertion: $(sign acme)"
+
+# The core multi-tenant guarantee: an assertion minted for one vault must
+# not authorize another.
+rest_body "create globex"       '"created":true'  -- -X POST "$API/vaults" \
+  -H "X-Vault-Assertion: $(sign globex)" -d '{"id":"globex"}'
+ACME_ASSERT="$(sign acme)"
+rest_code "acme assertion on globex 401" 401 -- -X POST "$API/vaults/globex/search" \
+  -H "X-Vault-Assertion: $ACME_ASSERT" -d '{"query":"x"}'
+
+# Export → verified import → drop, with an exact record count.
+curl -s "$API/vaults/acme/export" -H "X-Vault-Assertion: $(sign acme)" > /tmp/acme.jsonl
+rest_body "create acme2"        '"created":true'  -- -X POST "$API/vaults" \
+  -H "X-Vault-Assertion: $(sign acme2)" -d '{"id":"acme2"}'
+rest_body "import count"        '"imported":1'    -- -X POST "$API/vaults/acme2/import" \
+  -H "X-Vault-Assertion: $(sign acme2)" --data-binary @/tmp/acme.jsonl
+rest_body "import verified"     '"drawers":1'     -- "$API/vaults/acme2/stats" \
+  -H "X-Vault-Assertion: $(sign acme2)"
+
+# Semantic dedup-refresh: re-ingesting the same fact refreshes, not piles up.
+rest_body "dedup first insert"  '"deduped":false' -- -X POST "$API/vaults/acme/drawers" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"the release train ships on thursday","wing":"eng","room":"process","dedup_threshold":0.9}'
+rest_body "dedup refresh"       '"deduped":true'  -- -X POST "$API/vaults/acme/drawers" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"the release train ships on thursday","wing":"eng","room":"process","dedup_threshold":0.9}'
+
+# External-embedding vault: dimension enforced exactly.
+rest_body "create external"     '"created":true'  -- -X POST "$API/vaults" \
+  -H "X-Vault-Assertion: $(sign ext)" -d '{"id":"ext","embedder":"external:acme-embed@4"}'
+rest_body "external needs vector" 'requires'      -- -X POST "$API/vaults/ext/drawers" \
+  -H "X-Vault-Assertion: $(sign ext)" -d '{"text":"customer prefers dark mode"}'
+rest_body "external wrong dim"  'dimension'       -- -X POST "$API/vaults/ext/drawers" \
+  -H "X-Vault-Assertion: $(sign ext)" -d '{"text":"customer prefers dark mode","vector":[0.1,0.2]}'
+rest_body "external ok dim"     '"created":true'  -- -X POST "$API/vaults/ext/drawers" \
+  -H "X-Vault-Assertion: $(sign ext)" -d '{"text":"customer prefers dark mode","vector":[1,0,0,0]}'
+
+rest_body "delete vault"        '"deleted":true'  -- -X DELETE "$API/vaults/globex" \
+  -H "X-Vault-Assertion: $(sign globex)"
+rest_code "deleted vault gone 404" 404 -- "$API/vaults/globex/stats" \
+  -H "X-Vault-Assertion: $(sign globex)"
+
+kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

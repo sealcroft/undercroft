@@ -82,12 +82,24 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   Embedder- and security-level-independent; re-ranks HMAC-verified
   candidates only.
 
+## v0.8.0 — Multi-tenant server (done)
+
+- `serve-http` is now a first-class per-tenant memory engine (vault =
+  tenant), additive over the team-server mode: per-vault `X-Vault-Assertion`
+  HMAC authorization, a versioned `/v1` REST surface (vault lifecycle +
+  drawer ops + lossless export/import migration), caller-supplied
+  (`external:<name>@<dim>`) embeddings, dedup-refresh on save, and an
+  orchestrated one-instance-per-tenant deployment path.
+
 ## Next
 
 - **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,
   the next accuracy lever — targets the residual preference/paraphrase
   gap); re-measure the MiniLM rows under BM25.
 - **Scale**: L2 on-demand room loading heuristics; ANN index (HNSW) atop
-  the warmed cache for very large palaces.
+  the warmed cache for very large palaces; share one ONNX model across
+  tenant vaults in the multi-tenant server.
+- **Ecosystem**: key rotation (re-seal under new derived keys); export
+  bundles with recipient encryption.
 - **v0.8 — Ecosystem**: key rotation (re-seal under new derived keys);
   export bundles with recipient encryption

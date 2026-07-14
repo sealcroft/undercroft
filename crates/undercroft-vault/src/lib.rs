@@ -321,6 +321,21 @@ impl VaultManager {
         Ok(vault)
     }
 
+    /// Permanently delete a vault: its manifest, database, and directory.
+    /// Returns `false` if the vault did not exist. Irreversible — the
+    /// caller (e.g. an orchestrator migrating a tenant) is responsible for
+    /// having exported/verified the contents first. Each vault is fully
+    /// self-contained (its own dir + manifest), so removal touches nothing
+    /// else in the palace.
+    pub fn delete(&self, id: &str) -> Result<bool, VaultError> {
+        undercroft_core::validate_name(id, "vault")?;
+        if !self.exists(id) {
+            return Ok(false);
+        }
+        fs::remove_dir_all(self.vault_dir(id))?;
+        Ok(true)
+    }
+
     /// Unlock an existing vault: derive its keys and verify the manifest MAC.
     pub fn unlock(&self, id: &str) -> Result<Vault, VaultError> {
         let dir = self.vault_dir(id);

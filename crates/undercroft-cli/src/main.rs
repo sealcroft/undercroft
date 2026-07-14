@@ -4,9 +4,11 @@
 //! memories live in isolated vaults with per-vault derived keys, AEAD
 //! encryption, and HMAC integrity verification.
 
+mod assertion;
 mod http;
 mod i18n;
 mod mcp;
+mod tenant;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -16,7 +18,7 @@ use std::path::{Path, PathBuf};
 use i18n::{fill, tr};
 use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer, MAX_CONTENT_BYTES};
 use undercroft_store::{PalaceStore, SearchOptions};
-use undercroft_vault::{SecurityLevel, VaultManager};
+use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 #[derive(Parser)]
 #[command(
@@ -152,8 +154,10 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
-    /// Serve MCP over HTTP — the shared team-server mode. Requires
-    /// UNDERCROFT_MCP_HTTP_TOKEN for any non-loopback bind.
+    /// Serve MCP + the multi-tenant REST surface over HTTP. Requires
+    /// UNDERCROFT_MCP_HTTP_TOKEN for any non-loopback bind; set
+    /// UNDERCROFT_ASSERTION_SECRET to require a per-vault assertion on every
+    /// `/v1` request.
     ServeHttp {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -164,6 +168,13 @@ enum Command {
         /// Expose recall without write access
         #[arg(long)]
         read_only: bool,
+    },
+    /// Print an `X-Vault-Assertion` header value for a vault, signed with
+    /// UNDERCROFT_ASSERTION_SECRET. For orchestrators (and tests) minting
+    /// per-request assertions; the engine verifies these independently.
+    AssertHeader {
+        /// Vault id the assertion authorizes.
+        vault: String,
     },
     /// Background auto-save loop: periodically sweep a transcript directory
     Daemon {
@@ -528,6 +539,39 @@ fn open_index(backend: &str) -> Result<Box<dyn undercroft_index::VectorIndex>> {
     Ok(undercroft_index::from_env(backend)?)
 }
 
+/// Build the per-vault embedder factory for the multi-tenant server: a
+/// vault that recorded an `external:<name>@<dim>` identity reconstructs an
+/// [`undercroft_core::ExternalEmbedder`]; every other vault gets the
+/// configured default (`UNDERCROFT_EMBEDDER`).
+fn embedder_factory() -> tenant::EmbedderFactory {
+    Box::new(
+        |vault: &Vault| -> Result<Box<dyn undercroft_core::embed::Embedder + Send>> {
+            if let Some((name, dim)) = PalaceStore::recorded_embedder(vault)? {
+                if let Some(bare) = name.strip_prefix("external:") {
+                    return Ok(Box::new(undercroft_core::ExternalEmbedder::new(bare, dim)));
+                }
+            }
+            match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
+                Ok("onnx") => {
+                    #[cfg(feature = "onnx")]
+                    {
+                        Ok(Box::new(undercroft_embed_onnx::from_env().map_err(|e| {
+                            anyhow::anyhow!("loading ONNX embedder: {e}")
+                        })?))
+                    }
+                    #[cfg(not(feature = "onnx"))]
+                    bail!(
+                        "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
+                         (cargo build -p undercroft-cli --features onnx)"
+                    )
+                }
+                Ok("hash") | Ok("") | Err(_) => Ok(Box::new(undercroft_core::HashEmbedder)),
+                Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx)"),
+            }
+        },
+    )
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
@@ -791,7 +835,16 @@ fn main() -> Result<()> {
             if let Ok(n) = store.warm_embedding_cache() {
                 eprintln!("warmed embedding cache: {n} vector(s)");
             }
-            http::serve_http(store, host, *port, *read_only)?;
+            let tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only);
+            http::serve_http(store, tenancy, host, *port, *read_only)?;
+        }
+        Command::AssertHeader { vault } => {
+            let secret = std::env::var("UNDERCROFT_ASSERTION_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("UNDERCROFT_ASSERTION_SECRET is not set"))?;
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            println!("{}", assertion::header_value(secret.as_bytes(), vault, now));
         }
         Command::Daemon { action } => match action {
             DaemonAction::Run {
