@@ -82,11 +82,12 @@ Spans cover the hot paths (search, save/dedup, KG writes, vault
 seal/commit). Export is synchronous and thread-based — the server itself
 stays fully synchronous, with no async runtime introduced.
 
-## Grafana dashboard
+## The full stack (Grafana)
 
 A ready-to-run stack lives in `deploy/observability/` — a telemetry-built
-Undercroft server, Prometheus scraping its `/metrics`, and Grafana with a
-pre-provisioned dashboard:
+Undercroft server wired to the full operability picture: **metrics**
+(Prometheus), **logs** (Loki), **distributed traces** (Tempo), and **alerting**
+(Alertmanager), all rendered in **Grafana**.
 
 ```bash
 cd deploy/observability
@@ -94,10 +95,59 @@ docker compose -f docker-compose.observability.yml up --build
 # Grafana → http://localhost:3000  (dashboard: "Undercroft — Palace")
 ```
 
-The dashboard surfaces request rate by route, search rate and p95/p50
-latency, drawer writes (created vs deduped), audit-chain commit rate, and
-an **HMAC-verify-failures** stat panel that turns red the instant tamper
-is detected. See `deploy/observability/README.md`.
+```
+undercroft (telemetry) ──/metrics──▶ Prometheus ──rules──▶ Alertmanager ──▶ alert-sink
+          │  │                          │                                    (webhook)
+          │  └──JSON logs──▶ promtail ──▶ Loki ──┐
+          └──OTLP traces────────────────▶ Tempo ─┤
+                                                 └──▶ Grafana (+ image-renderer)
+```
+
+The dashboard surfaces request rate by route, search rate and p95/p50 latency,
+drawer writes (created vs deduped), audit-chain commit rate, HTTP 5xx and auth
+rejections, tamper broken out by surface, recent logs and traces, active
+alerts, and — front and centre — the **HMAC-verify-failures** stat that turns
+red the instant tamper is detected.
+
+![The Undercroft — Palace Grafana dashboard: metrics, tamper-by-surface, active
+alerts, logs and traces on one board.](images/grafana-dashboard.png)
+
+### Alerting (Prometheus + Alertmanager)
+
+Prometheus evaluates `alerts.yml` and pushes firing alerts to Alertmanager,
+which routes them to a receiver. The demo stack ships a tiny **`alert-sink`**
+webhook that logs every delivery, so the whole path is visible without external
+credentials — swap in Slack/email/PagerDuty in `alertmanager/alertmanager.yml`.
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| **PalaceTamperDetected** | critical | any HMAC-verify failure — the `surface` label says where (`drawer`/`kg`/`tunnel`/`manifest`). |
+| **AuditChainStalled** | warning | writes are landing but the audit chain isn't advancing. |
+| **UndercroftDown** | critical | the `/metrics` target is unscrapable. |
+| **HighSearchLatencyP95** | warning | search p95 > 500 ms. |
+| **HttpServerErrors** | warning | any HTTP 5xx. |
+| **AuthRejectionsSpike** | warning | elevated bearer/assertion rejections. |
+
+A firing tamper alert links straight to the [tamper runbook](runbook.md) —
+where it happened, and how to confirm, mitigate, fix, and prevent it.
+
+![A real PalaceTamperDetected alert firing in Grafana / Alertmanager after an
+on-disk drawer was corrupted.](images/grafana-tamper-alert.png)
+
+### Logs & traces (metadata only)
+
+With `UNDERCROFT_LOG_FORMAT=json`, promtail ships Undercroft's structured logs to
+Loki; with `UNDERCROFT_OTLP_ENDPOINT` set, request/search/save/kg spans export to
+Tempo. Both carry **only metadata** — operation names, routes, the `surface`
+label, vault ids, counts and durations. Query text, drawer content, wing/room
+names, and key material are **never** emitted, so you get full traceability
+without leaking what's in the palace.
+
+![Loki logs and Tempo traces for Undercroft — structured, correlated, and
+content-free.](images/grafana-logs-traces.png)
+
+See `deploy/observability/README.md` for ports, the tamper-demo commands, and
+the security notes.
 
 ## Live stream (SSE)
 
