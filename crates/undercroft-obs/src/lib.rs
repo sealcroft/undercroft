@@ -249,6 +249,111 @@ pub fn render_prometheus() -> Option<String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Live telemetry — discrete event pings (v0.10)
+// ---------------------------------------------------------------------------
+//
+// These are SEPARATE from the Prometheus counters above: they carry vault +
+// location so a live UI can animate individual actions, without polluting
+// counter label cardinality. Sealed vaults pass `sealed = true` and their
+// wing/room is suppressed before it leaves the process. All no-op without
+// the `telemetry` feature.
+
+/// A drawer was filed (created or deduped) in `vault` at `wing`/`room`.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool, sealed: bool) {
+    #[cfg(feature = "telemetry")]
+    imp::event_drawer_saved(vault, wing, room, deduped, sealed);
+}
+
+/// A drawer was deleted from `vault` (location not resolved at this site).
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn event_drawer_deleted(vault: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::event_drawer_deleted(vault);
+}
+
+/// A search ran against `vault` (optionally wing/room scoped) with `hits`.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn event_search(
+    vault: &str,
+    wing: Option<&str>,
+    room: Option<&str>,
+    hits: usize,
+    sealed: bool,
+) {
+    #[cfg(feature = "telemetry")]
+    imp::event_search(vault, wing, room, hits, sealed);
+}
+
+/// A knowledge-graph triple was written/superseded in `vault`.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn event_kg_triple(vault: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::event_kg_triple(vault);
+}
+
+/// The audit chain advanced for `vault`.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn event_chain_commit(vault: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::event_chain_commit(vault);
+}
+
+// ---------------------------------------------------------------------------
+// Live telemetry — periodic sampler + SSE stream (telemetry feature only)
+// ---------------------------------------------------------------------------
+
+/// One point-in-time snapshot of a vault's aggregate counts. All fields are
+/// counts/metadata — never content. For a sealed vault `wings` is empty
+/// (names suppressed); the scalar counts still flow.
+#[cfg(feature = "telemetry")]
+#[derive(Clone, serde::Serialize)]
+pub struct Sample {
+    pub ts: i64,
+    pub vault: String,
+    pub sealed: bool,
+    pub drawers: u64,
+    pub rooms: u64,
+    pub wings: Vec<(String, u64)>,
+    pub kg_triples: u64,
+    pub kg_entities: u64,
+    pub kg_active: u64,
+    pub tunnels: u64,
+    pub chain_height: u64,
+    pub db_bytes: u64,
+}
+
+/// Push a sample into the ring buffer and broadcast it to subscribers.
+#[cfg(feature = "telemetry")]
+pub fn publish_sample(sample: Sample) {
+    imp::publish_sample(sample);
+}
+
+/// The most recent `window` samples for `vault` (oldest→newest).
+#[cfg(feature = "telemetry")]
+pub fn history(vault: &str, window: usize) -> Vec<Sample> {
+    imp::history(vault, window)
+}
+
+/// Distinct vault ids with at least one active stream subscriber — so the
+/// sampler only samples what someone is watching.
+#[cfg(feature = "telemetry")]
+pub fn subscribed_vaults() -> Vec<String> {
+    imp::subscribed_vaults()
+}
+
+/// Run one SSE connection to completion on the calling thread: subscribe to
+/// `vault`, write the HTTP head + `text/event-stream`, replay recent
+/// history, then stream live frames until the client disconnects. `writer`
+/// is the hijacked socket (`tiny_http::Request::into_writer()`), kept out of
+/// this crate's type surface so obs never depends on the HTTP server.
+/// Returns `false` if the subscriber cap is reached (caller should 503).
+#[cfg(feature = "telemetry")]
+pub fn run_sse(writer: Box<dyn std::io::Write + Send>, vault: String) -> bool {
+    imp::run_sse(writer, vault)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +376,44 @@ mod tests {
         http_request("v1_search", 200, std::time::Duration::from_millis(1));
         auth_rejected("bearer");
         set_gauge("drawers", "personal", 42.0);
+        event_drawer_saved("personal", "eng", "decisions", false, false);
+        event_drawer_deleted("personal");
+        event_search("personal", Some("eng"), None, 3, false);
+        event_kg_triple("personal");
+        event_chain_commit("personal");
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn broker_history_is_a_bounded_ring() {
+        let mk = |ts: i64| Sample {
+            ts,
+            vault: "ring-test".into(),
+            sealed: false,
+            drawers: ts as u64,
+            rooms: 0,
+            wings: vec![],
+            kg_triples: 0,
+            kg_entities: 0,
+            kg_active: 0,
+            tunnels: 0,
+            chain_height: 0,
+            db_bytes: 0,
+        };
+        for i in 0..350 {
+            publish_sample(mk(i));
+        }
+        let all = history("ring-test", 10_000);
+        assert!(
+            all.len() <= 300,
+            "ring should cap at 300, got {}",
+            all.len()
+        );
+        assert_eq!(all.last().unwrap().ts, 349, "newest sample retained");
+        let win = history("ring-test", 5);
+        assert_eq!(win.len(), 5, "window slices to the last N");
+        assert_eq!(win.first().unwrap().ts, 345);
+        assert!(history("no-such-vault", 10).is_empty());
     }
 
     #[cfg(not(feature = "telemetry"))]

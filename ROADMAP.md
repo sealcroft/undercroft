@@ -102,6 +102,19 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   read). New `undercroft-obs` shim crate; fully synchronous (no tokio).
   First stage of the Operability track below.
 
+## v0.10.0 — Live memory telemetry (done)
+
+- The point-in-time observability becomes a **live push stream**: an SSE
+  endpoint `GET /v1/vaults/{id}/stream` pushing periodic aggregate
+  `sample` frames plus discrete event pings (`drawer-saved`,
+  `drawer-deleted`, `search`, `kg-triple`, `chain-commit`) as they happen,
+  a bounded per-vault sampler ring buffer (tick only for watched vaults),
+  and a `stats/history` backfill. Each connection runs on its own thread
+  reading only the in-process broker — never a store — so the sync server
+  keeps serving and streaming can't touch content. Sealed vaults suppress
+  wing/room names. Opt-in (`--features telemetry`). Second stage of the
+  Operability track; feeds the v0.11 Palace Monitor UI.
+
 ## Next
 
 - **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,
@@ -161,9 +174,12 @@ new `undercroft-obs` shim crate; fully synchronous (no async runtime).
 - All behind `--features telemetry` — default builds carry zero extra
   deps and zero overhead.
 
-### v0.10.0 — Live memory telemetry (planned)
+### v0.10.0 — Live memory telemetry (done)
 
 Turns point-in-time `PalaceStats`/`KgStats` into a streaming time series.
+Shipped: per-connection SSE thread reading a thread-safe broker (the
+sync server + `!Send` stores made this the only sound model), sampler
+that only ticks watched vaults, and sealed-vault wing/room suppression.
 
 - **In-process sampler**: periodic snapshot of `PalaceStats` + `KgStats`
   + cache/index gauges into a bounded in-memory ring buffer (window and

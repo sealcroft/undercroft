@@ -1,9 +1,13 @@
 //! Real telemetry implementation, compiled only under the `telemetry`
 //! feature. Everything here is metadata/counts only.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::io::Write;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::Duration;
+
+use crate::Sample;
 
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
@@ -229,4 +233,197 @@ pub(crate) fn shutdown() {
     if let Some(tp) = TRACER_PROVIDER.get() {
         let _ = tp.shutdown();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Live telemetry broker: bounded per-vault ring buffer + SSE pub/sub.
+//
+// The main server thread publishes samples/events; each SSE connection runs
+// on its own thread that touches ONLY this broker (never a store), which is
+// why the whole thing is thread-safe behind one Mutex. Frames are
+// pre-serialized SSE strings pushed over an mpsc channel per subscriber.
+// ---------------------------------------------------------------------------
+
+const HISTORY_CAP: usize = 300;
+const MAX_SUBS: usize = 32;
+const HEARTBEAT: Duration = Duration::from_secs(15);
+
+struct Sub {
+    id: u64,
+    vault: String,
+    tx: Sender<String>,
+}
+
+struct Broker {
+    history: HashMap<String, VecDeque<Sample>>,
+    subs: Vec<Sub>,
+    next_id: u64,
+}
+
+fn broker() -> &'static Mutex<Broker> {
+    static B: OnceLock<Mutex<Broker>> = OnceLock::new();
+    B.get_or_init(|| {
+        Mutex::new(Broker {
+            history: HashMap::new(),
+            subs: Vec::new(),
+            next_id: 1,
+        })
+    })
+}
+
+fn sse_frame(event: &str, data: &str) -> String {
+    format!("event: {event}\ndata: {data}\n\n")
+}
+
+/// Send `msg` to every subscriber of `vault`, pruning any whose receiver has
+/// gone away.
+fn broadcast(b: &mut Broker, vault: &str, msg: &str) {
+    b.subs
+        .retain(|s| s.vault != vault || s.tx.send(msg.to_string()).is_ok());
+}
+
+fn emit(vault: &str, kind: &str, data: serde_json::Value) {
+    let msg = sse_frame(kind, &data.to_string());
+    broadcast(&mut broker().lock().unwrap(), vault, &msg);
+}
+
+pub(crate) fn publish_sample(sample: Sample) {
+    let json = serde_json::to_string(&sample).unwrap_or_default();
+    let vault = sample.vault.clone();
+    let mut b = broker().lock().unwrap();
+    {
+        let ring = b.history.entry(vault.clone()).or_default();
+        ring.push_back(sample);
+        while ring.len() > HISTORY_CAP {
+            ring.pop_front();
+        }
+    }
+    broadcast(&mut b, &vault, &sse_frame("sample", &json));
+}
+
+pub(crate) fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool, sealed: bool) {
+    let data = if sealed {
+        serde_json::json!({ "vault": vault, "deduped": deduped })
+    } else {
+        serde_json::json!({ "vault": vault, "wing": wing, "room": room, "deduped": deduped })
+    };
+    emit(vault, "drawer-saved", data);
+}
+
+pub(crate) fn event_drawer_deleted(vault: &str) {
+    emit(
+        vault,
+        "drawer-deleted",
+        serde_json::json!({ "vault": vault }),
+    );
+}
+
+pub(crate) fn event_search(
+    vault: &str,
+    wing: Option<&str>,
+    room: Option<&str>,
+    hits: usize,
+    sealed: bool,
+) {
+    let data = if sealed {
+        serde_json::json!({ "vault": vault, "hits": hits })
+    } else {
+        serde_json::json!({ "vault": vault, "wing": wing, "room": room, "hits": hits })
+    };
+    emit(vault, "search", data);
+}
+
+pub(crate) fn event_kg_triple(vault: &str) {
+    emit(vault, "kg-triple", serde_json::json!({ "vault": vault }));
+}
+
+pub(crate) fn event_chain_commit(vault: &str) {
+    emit(vault, "chain-commit", serde_json::json!({ "vault": vault }));
+}
+
+pub(crate) fn history(vault: &str, window: usize) -> Vec<Sample> {
+    let b = broker().lock().unwrap();
+    match b.history.get(vault) {
+        Some(ring) => {
+            let start = ring.len().saturating_sub(window);
+            ring.iter().skip(start).cloned().collect()
+        }
+        None => Vec::new(),
+    }
+}
+
+pub(crate) fn subscribed_vaults() -> Vec<String> {
+    let b = broker().lock().unwrap();
+    let mut v: Vec<String> = b.subs.iter().map(|s| s.vault.clone()).collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+fn subscribe(vault: &str) -> Option<(u64, Receiver<String>)> {
+    let mut b = broker().lock().unwrap();
+    if b.subs.len() >= MAX_SUBS {
+        return None;
+    }
+    let (tx, rx) = mpsc::channel();
+    let id = b.next_id;
+    b.next_id += 1;
+    b.subs.push(Sub {
+        id,
+        vault: vault.to_string(),
+        tx,
+    });
+    Some((id, rx))
+}
+
+fn unsubscribe(id: u64) {
+    broker().lock().unwrap().subs.retain(|s| s.id != id);
+}
+
+pub(crate) fn run_sse(mut writer: Box<dyn Write + Send>, vault: String) -> bool {
+    let Some((id, rx)) = subscribe(&vault) else {
+        let _ = writer.write_all(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\n\
+              Connection: close\r\n\r\nstream subscriber limit reached\n",
+        );
+        return false;
+    };
+
+    let head = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                 Cache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\n";
+    let write = |w: &mut Box<dyn Write + Send>, bytes: &[u8]| -> bool {
+        w.write_all(bytes).and_then(|_| w.flush()).is_ok()
+    };
+
+    if !write(&mut writer, head) {
+        unsubscribe(id);
+        return true;
+    }
+    // Replay recent history so a fresh client can draw the past.
+    for s in history(&vault, HISTORY_CAP) {
+        let json = serde_json::to_string(&s).unwrap_or_default();
+        if !write(&mut writer, sse_frame("sample", &json).as_bytes()) {
+            unsubscribe(id);
+            return true;
+        }
+    }
+    let _ = write(&mut writer, b": connected\n\n");
+
+    loop {
+        match rx.recv_timeout(HEARTBEAT) {
+            Ok(msg) => {
+                if !write(&mut writer, msg.as_bytes()) {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if !write(&mut writer, b": ping\n\n") {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    unsubscribe(id);
+    true
 }

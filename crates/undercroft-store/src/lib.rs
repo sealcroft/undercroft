@@ -396,6 +396,12 @@ impl PalaceStore {
         &self.vault
     }
 
+    /// Whether this vault seals content at rest. Used to suppress wing/room
+    /// names in live telemetry events for sealed vaults.
+    fn is_sealed(&self) -> bool {
+        matches!(self.vault.level(), SecurityLevel::Sealed)
+    }
+
     pub fn count(&self) -> Result<u64, StoreError> {
         let n: i64 = self
             .conn
@@ -449,6 +455,13 @@ impl PalaceStore {
         let embedding = self.embedder.embed(&drawer.content);
         let created = self.write_drawer(drawer, embedding)?;
         undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
+        undercroft_obs::event_drawer_saved(
+            self.vault.id(),
+            &drawer.meta.wing,
+            &drawer.meta.room,
+            false,
+            self.is_sealed(),
+        );
         Ok(created)
     }
 
@@ -470,6 +483,13 @@ impl PalaceStore {
             Some(_) => {
                 let created = self.write_drawer(drawer, vector)?;
                 undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
+                undercroft_obs::event_drawer_saved(
+                    self.vault.id(),
+                    &drawer.meta.wing,
+                    &drawer.meta.room,
+                    false,
+                    self.is_sealed(),
+                );
                 Ok(created)
             }
         }
@@ -618,6 +638,13 @@ impl PalaceStore {
             };
             self.write_drawer(&refreshed, embedding)?;
             undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Deduped);
+            undercroft_obs::event_drawer_saved(
+                self.vault.id(),
+                &drawer.meta.wing,
+                &drawer.meta.room,
+                true,
+                self.is_sealed(),
+            );
             Ok(SaveOutcome {
                 id: match_id,
                 created: false,
@@ -626,6 +653,13 @@ impl PalaceStore {
         } else {
             let created = self.write_drawer(drawer, embedding)?;
             undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
+            undercroft_obs::event_drawer_saved(
+                self.vault.id(),
+                &drawer.meta.wing,
+                &drawer.meta.room,
+                false,
+                self.is_sealed(),
+            );
             Ok(SaveOutcome {
                 id: drawer.id.clone(),
                 created,
@@ -967,6 +1001,13 @@ impl PalaceStore {
             hits.len(),
             fusion_label,
             obs_prefiltered,
+        );
+        undercroft_obs::event_search(
+            self.vault.id(),
+            opts.wing.as_deref(),
+            opts.room.as_deref(),
+            hits.len(),
+            self.is_sealed(),
         );
         Ok(hits)
     }

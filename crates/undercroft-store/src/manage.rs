@@ -188,6 +188,7 @@ impl PalaceStore {
             )?;
             self.vault.commit_write(&tag)?;
             undercroft_obs::drawer_delete();
+            undercroft_obs::event_drawer_deleted(self.vault.id());
         }
         Ok(n > 0)
     }

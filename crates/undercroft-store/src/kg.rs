@@ -214,6 +214,7 @@ impl PalaceStore {
         )?;
         self.vault.commit_write(&tag)?;
         undercroft_obs::kg_write(undercroft_obs::KgKind::Triple);
+        undercroft_obs::event_kg_triple(self.vault.id());
         Ok(id)
     }
 
@@ -352,6 +353,7 @@ impl PalaceStore {
             )?;
             self.vault.commit_write(&tag)?;
             undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);
+            undercroft_obs::event_kg_triple(self.vault.id());
             count += 1;
         }
         Ok(count)

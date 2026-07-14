@@ -126,6 +126,7 @@ impl Tenancy {
             ("POST", &["v1", "vaults"]) => self.create_vault(req, body, now),
             ("DELETE", &["v1", "vaults", id]) => self.delete_vault(id, req, now),
             ("GET", &["v1", "vaults", id, "stats"]) => self.stats(id, req, now),
+            ("GET", &["v1", "vaults", id, "stats", "history"]) => self.stats_history(id, req, now),
             ("POST", &["v1", "vaults", id, "drawers"]) => self.save_drawer(id, req, body, now),
             ("POST", &["v1", "vaults", id, "search"]) => self.search(id, req, body, now),
             ("DELETE", &["v1", "vaults", id, "drawers", drawer_id]) => {
@@ -210,6 +211,80 @@ impl Tenancy {
                 "chain_head": vault.chain_head_hex(),
             })),
         ))
+    }
+
+    /// `GET /v1/vaults/{id}/stats/history?window=N` — the recent sample ring
+    /// buffer (aggregate counts only) so a fresh stream client can backfill.
+    /// Requires the `telemetry` feature; a plain build returns 501.
+    #[cfg(feature = "telemetry")]
+    fn stats_history(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        self.store_for(id)?; // 404s if the vault does not exist
+        let window = req
+            .url()
+            .split('?')
+            .nth(1)
+            .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("window=")))
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(300)
+            .min(300);
+        let samples = undercroft_obs::history(id, window);
+        Ok((
+            200,
+            Body::Json(serde_json::to_value(samples).unwrap_or_else(|_| json!([]))),
+        ))
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    fn stats_history(&mut self, _id: &str, _req: &Request, _now: i64) -> RestResult {
+        Err(RestError::new(
+            501,
+            "history requires a build with --features telemetry",
+        ))
+    }
+
+    /// Authorize a stream connection: verify the per-vault assertion and open
+    /// (cache) the store so the sampler can read it. Returns whether the
+    /// vault is sealed, or the HTTP status to reject with. `telemetry` only.
+    #[cfg(feature = "telemetry")]
+    pub fn authorize(&mut self, id: &str, req: &Request, now: i64) -> Result<bool, u16> {
+        self.assert_or_401(id, req, now).map_err(|e| e.code)?;
+        let store = self.store_for(id).map_err(|e| e.code)?;
+        Ok(matches!(store.vault().level(), SecurityLevel::Sealed))
+    }
+
+    /// Sample every currently-watched vault into the telemetry ring buffer
+    /// and refresh the per-vault Prometheus gauges. Called on the sampler
+    /// tick; samples only vaults with an active stream subscriber, so it
+    /// costs nothing when no dashboard is connected. `telemetry` only.
+    #[cfg(feature = "telemetry")]
+    pub fn sample(&self, now: i64) {
+        for id in undercroft_obs::subscribed_vaults() {
+            let Some(store) = self.stores.get(&id) else {
+                continue;
+            };
+            let Ok(stats) = store.stats() else { continue };
+            let sealed = matches!(store.vault().level(), SecurityLevel::Sealed);
+            undercroft_obs::set_gauge("drawers", &id, stats.records as f64);
+            undercroft_obs::set_gauge("audit_chain_height", &id, stats.writes as f64);
+            undercroft_obs::set_gauge("kg_triples", &id, stats.kg.triples as f64);
+            undercroft_obs::set_gauge("kg_entities", &id, stats.kg.entities as f64);
+            undercroft_obs::set_gauge("store_bytes", &id, stats.db_bytes as f64);
+            undercroft_obs::publish_sample(undercroft_obs::Sample {
+                ts: now,
+                vault: id.clone(),
+                sealed,
+                drawers: stats.records,
+                rooms: stats.rooms,
+                wings: if sealed { Vec::new() } else { stats.wings },
+                kg_triples: stats.kg.triples,
+                kg_entities: stats.kg.entities,
+                kg_active: stats.kg.active,
+                tunnels: stats.tunnels,
+                chain_height: stats.writes,
+                db_bytes: stats.db_bytes,
+            });
+        }
     }
 
     // ---- drawers ------------------------------------------------------
@@ -430,6 +505,10 @@ fn rest_route_label(url: &str) -> &'static str {
     let path = url.split('?').next().unwrap_or("");
     if path.ends_with("/search") {
         "v1_search"
+    } else if path.ends_with("/stats/history") {
+        "v1_stats_history"
+    } else if path.ends_with("/stream") {
+        "v1_stream"
     } else if path.ends_with("/stats") {
         "v1_stats"
     } else if path.ends_with("/export") {
