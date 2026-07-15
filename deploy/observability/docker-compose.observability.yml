@@ -32,13 +32,12 @@ services:
       args:
         UNDERCROFT_FEATURES: telemetry
     restart: unless-stopped
-    command:
-      - serve-http
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8765"
+    # Create the palace + default vault on first run, then serve.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]
     environment:
+      # Palace lives on the named volume.
+      UNDERCROFT_HOME: /data
       UNDERCROFT_MCP_HTTP_TOKEN: ${UNDERCROFT_MCP_HTTP_TOKEN:-undercroft-observability-demo-token}
       UNDERCROFT_METRICS: "1"
       UNDERCROFT_LOG: "warn,undercroft=info"

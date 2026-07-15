@@ -27,9 +27,6 @@ schema_config:
         prefix: index_
         period: 24h
 
-limits_config:
-  metric_aggregation_enabled: true
-
 query_range:
   results_cache:
     cache:

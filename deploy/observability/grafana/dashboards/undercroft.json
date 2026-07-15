@@ -1,23 +1,43 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "graphTooltip": 1,
   "schemaVersion": 39,
-  "title": "Undercroft — Palace",
+  "title": "Undercroft \u2014 Palace",
   "uid": "undercroft-palace",
-  "tags": ["undercroft"],
-  "time": { "from": "now-30m", "to": "now" },
+  "tags": [
+    "undercroft"
+  ],
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
   "refresh": "10s",
-  "templating": { "list": [] },
+  "templating": {
+    "list": []
+  },
   "panels": [
     {
       "type": "stat",
       "title": "HMAC verify failures (tamper)",
       "description": "Any non-zero value means a record, KG triple, tunnel, or vault manifest failed HMAC verification on read.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(undercroft_hmac_verify_failures_total)" }
+        {
+          "refId": "A",
+          "expr": "sum(undercroft_hmac_verify_failures_total)"
+        }
       ],
       "fieldConfig": {
         "defaults": {
@@ -25,8 +45,14 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
             ]
           }
         },
@@ -35,169 +61,577 @@
       "options": {
         "colorMode": "background",
         "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"] }
-      }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "id": 1
     },
     {
       "type": "stat",
       "title": "Drawers",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(undercroft_drawers)" }
+        {
+          "refId": "A",
+          "expr": "sum(undercroft_drawers)"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "id": 2
     },
     {
       "type": "stat",
       "title": "Audit chain height",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
       "targets": [
-        { "refId": "A", "expr": "max(undercroft_audit_chain_height)" }
+        {
+          "refId": "A",
+          "expr": "max(undercroft_audit_chain_height)"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "yellow" } }, "overrides": [] },
-      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "id": 3
     },
     {
       "type": "stat",
       "title": "Search rate (1m)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(undercroft_search_total[1m]))" }
+        {
+          "refId": "A",
+          "expr": "sum(rate(undercroft_search_total[1m]))"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "id": 4
     },
     {
       "type": "timeseries",
       "title": "HTTP request rate by route",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (route) (rate(undercroft_http_requests_total[5m]))", "legendFormat": "{{route}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(undercroft_http_requests_total[5m]))",
+          "legendFormat": "{{route}}"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "id": 5
     },
     {
       "type": "timeseries",
       "title": "Search latency (p95 / p50)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(undercroft_search_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
-        { "refId": "B", "expr": "histogram_quantile(0.50, sum by (le) (rate(undercroft_search_duration_seconds_bucket[5m])))", "legendFormat": "p50" }
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(undercroft_search_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(undercroft_search_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "id": 6
     },
     {
       "type": "timeseries",
       "title": "Drawer writes by outcome",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (outcome) (rate(undercroft_drawer_writes_total[5m]))", "legendFormat": "{{outcome}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(undercroft_drawer_writes_total[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "wps", "custom": { "drawStyle": "line", "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "wps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "id": 7
     },
     {
       "type": "timeseries",
       "title": "Audit-chain commits & HMAC failures (rate)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(undercroft_chain_commits_total[5m]))", "legendFormat": "chain commits" },
-        { "refId": "B", "expr": "sum(rate(undercroft_hmac_verify_failures_total[5m]))", "legendFormat": "hmac failures" }
+        {
+          "refId": "A",
+          "expr": "sum(rate(undercroft_chain_commits_total[5m]))",
+          "legendFormat": "chain commits"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(undercroft_hmac_verify_failures_total[5m]))",
+          "legendFormat": "hmac failures"
+        }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "hmac failures" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "hmac failures"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
         ]
-      }
+      },
+      "id": 8
     },
     {
       "type": "row",
       "title": "Integrity & alerting",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
       "collapsed": false,
-      "panels": []
+      "panels": [],
+      "id": 9
     },
     {
       "type": "timeseries",
       "title": "Tamper by surface (2m increase)",
       "description": "HMAC-verify failures grouped by surface: drawer / kg / tunnel / manifest.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 23 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 23
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (surface) (increase(undercroft_hmac_verify_failures_total[2m]))", "legendFormat": "{{surface}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (surface) (increase(undercroft_hmac_verify_failures_total[2m]))",
+          "legendFormat": "{{surface}}"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60 }, "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "id": 10
     },
     {
       "type": "timeseries",
       "title": "HTTP 5xx errors",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 23 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 23
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (route) (rate(undercroft_http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "{{route}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(undercroft_http_requests_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "{{route}}"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 }, "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
+      "id": 11
     },
     {
       "type": "timeseries",
       "title": "Auth rejections by kind",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 23 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 23
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (kind) (rate(undercroft_auth_rejections_total[5m]))", "legendFormat": "{{kind}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(undercroft_auth_rejections_total[5m]))",
+          "legendFormat": "{{kind}}"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "id": 12
     },
     {
-      "type": "alertlist",
-      "title": "Active alerts (Alertmanager)",
-      "datasource": { "type": "alertmanager", "uid": "alertmanager" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 31 },
+      "type": "table",
+      "title": "Active alerts (firing / pending)",
+      "description": "Firing and pending alerts from Prometheus rules (also routed to Alertmanager \u2192 the alert-sink).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ALERTS{alertstate=~\"firing|pending\"}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "otel_scope_name": true,
+              "job": true,
+              "instance": true,
+              "service": true
+            },
+            "indexByName": {
+              "alertname": 0,
+              "alertstate": 1,
+              "severity": 2,
+              "surface": 3,
+              "vault": 4
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "alertstate": "State",
+              "severity": "Severity",
+              "surface": "Surface",
+              "vault": "Vault"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "warning": {
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
       "options": {
-        "viewMode": "list",
-        "groupMode": "default",
-        "maxItems": 20,
-        "sortOrder": 3,
-        "alertInstanceLabelFilter": "",
-        "datasource": "Alertmanager",
-        "stateFilter": { "firing": true, "pending": true, "normal": false, "error": true, "noData": false }
-      }
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Severity",
+            "desc": false
+          }
+        ]
+      },
+      "id": 13
     },
     {
       "type": "row",
       "title": "Logs & traces (metadata only)",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
       "collapsed": false,
-      "panels": []
+      "panels": [],
+      "id": 14
     },
     {
       "type": "logs",
       "title": "Undercroft logs (Loki)",
-      "description": "Structured tracing logs — counts, routes, surfaces. Never drawer content or keys.",
-      "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 40 },
+      "description": "Structured tracing logs \u2014 counts, routes, surfaces. Never drawer content or keys.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
       "targets": [
-        { "refId": "A", "expr": "{service=\"undercroft\"}", "queryType": "range" }
+        {
+          "refId": "A",
+          "expr": "{service=\"undercroft\"}",
+          "queryType": "range"
+        }
       ],
-      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "id": 15
     },
     {
       "type": "table",
       "title": "Recent traces (Tempo)",
-      "description": "Request/search/save spans — metadata-only (vault id, route, op).",
-      "datasource": { "type": "tempo", "uid": "tempo" },
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 40 },
+      "description": "Request/search/save spans \u2014 metadata-only (vault id, route, op).",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
       "targets": [
-        { "refId": "A", "queryType": "traceqlSearch", "query": "{ resource.service.name = \"undercroft\" }", "limit": 20, "tableType": "traces", "filters": [] }
-      ]
+        {
+          "refId": "A",
+          "queryType": "traceqlSearch",
+          "query": "{ resource.service.name = \"undercroft\" }",
+          "limit": 20,
+          "tableType": "traces",
+          "filters": []
+        }
+      ],
+      "id": 16
     }
   ]
 }

@@ -180,9 +180,17 @@ fn real_init() {
     // above — the OTLP metric push path needs a periodic-reader runtime
     // this fully-synchronous stack deliberately avoids.
     if let Some(endpoint) = otlp_endpoint {
+        // UNDERCROFT_OTLP_ENDPOINT is a base URL (e.g. http://collector:4318);
+        // `with_endpoint` wants the full per-signal path, so append the
+        // standard OTLP/HTTP traces path unless the caller already did.
+        let traces_endpoint = if endpoint.ends_with("/v1/traces") {
+            endpoint
+        } else {
+            format!("{}/v1/traces", endpoint.trim_end_matches('/'))
+        };
         if let Ok(span_exporter) = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
+            .with_endpoint(traces_endpoint)
             .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
             .build()
         {

@@ -143,8 +143,15 @@ label, vault ids, counts and durations. Query text, drawer content, wing/room
 names, and key material are **never** emitted, so you get full traceability
 without leaking what's in the palace.
 
-![Loki logs and Tempo traces for Undercroft — structured, correlated, and
-content-free.](images/grafana-logs-traces.png)
+![Undercroft's structured logs in Loki — every line is metadata (level, target,
+route, the operation span) with no drawer content or keys.](images/grafana-logs.png)
+
+![Tempo trace list for undercroft — request spans with their nested
+search/save children.](images/grafana-traces.png)
+
+Here the logs even carry the tamper signal: `integrity failure — HMAC
+verification failed on drawer`, tagged with the operation span — traceable,
+but content-free.
 
 See `deploy/observability/README.md` for ports, the tamper-demo commands, and
 the security notes.
