@@ -76,6 +76,13 @@ enum Command {
         /// Skip the first N conversations (pairs with --limit for sharding).
         #[arg(long, default_value_t = 0)]
         skip: usize,
+        /// Retrieval backend: `local` (SQLite full-scan + fusion + optional
+        /// reranker) or a remote vector index used as an ANN accelerator
+        /// (`qdrant` / `weaviate` / `chroma` / `pgvector` / `milvus`). The
+        /// remote path re-verifies + re-scores candidates locally but does
+        /// NOT run BM25 fusion or the reranker (see `search_with_index`).
+        #[arg(long, default_value = "local")]
+        backend: String,
     },
     /// ConvoMem protocol: message-level evidence recall
     Convomem {
@@ -125,9 +132,17 @@ fn level_of(s: &str) -> SecurityLevel {
 }
 
 fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, PalaceStore)> {
+    fresh_store_id(level, "bench")
+}
+
+/// Like [`fresh_store`] but with a caller-chosen vault id. The remote-backend
+/// LoCoMo path needs one collection per conversation (collection name derives
+/// from the vault id), so it passes a unique id per convo to avoid cross-convo
+/// vector collisions in the shared index.
+fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, PalaceStore)> {
     let dir = tempfile::TempDir::new()?;
     let mgr = VaultManager::open(dir.path(), None)?;
-    let vault = mgr.create("bench", level)?;
+    let vault = mgr.create(id, level)?;
     #[allow(unused_mut)]
     let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
         Ok("onnx") => {
@@ -144,6 +159,13 @@ fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, PalaceStore)>
     #[cfg(feature = "onnx")]
     if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("onnx") {
         store.set_reranker(Some(rerank_shared()));
+    }
+    // Optional local HNSW ANN prefilter (replaces the full cosine scan).
+    if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("hnsw") {
+        #[cfg(feature = "hnsw")]
+        store.set_hnsw(true);
+        #[cfg(not(feature = "hnsw"))]
+        eprintln!("note: UNDERCROFT_RETRIEVAL=hnsw ignored — built without --features hnsw");
     }
     Ok((dir, store))
 }
@@ -715,17 +737,32 @@ struct PhaseTiming {
     search_secs: f32,
 }
 
-fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores, PhaseTiming)> {
+fn locomo_eval(
+    samples: &[Value],
+    k: usize,
+    backend: &str,
+) -> Result<(f32, u32, CategoryScores, PhaseTiming)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
     let mut per_cat: CategoryScores = Default::default();
     let mut timing = PhaseTiming::default();
     let total = samples.len();
+    // Optional remote ANN accelerator. `local` ⇒ full-scan fusion path.
+    let mut index = match backend {
+        "local" => None,
+        other => Some(undercroft_index::from_env(other)?),
+    };
     for (si, sample) in samples.iter().enumerate() {
         let conv = sample
             .get("conversation")
             .context("sample missing conversation")?;
-        let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
+        // One collection per conversation in remote mode (collection name
+        // derives from the vault id), so convos don't share vectors.
+        let (_tmp, mut store) = if index.is_some() {
+            fresh_store_id(SecurityLevel::Sealed, &format!("benchc{si}"))?
+        } else {
+            fresh_store(SecurityLevel::Sealed)?
+        };
         // Ingest: one room per session.
         let ingest_started = Instant::now();
         let mut n = 1;
@@ -758,6 +795,10 @@ fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores,
             }
             n += 1;
         }
+        // In remote mode, publishing to the ANN index is part of ingest.
+        if let Some(idx) = index.as_mut() {
+            store.index_push(idx.as_mut())?;
+        }
         timing.ingest_secs += ingest_started.elapsed().as_secs_f32();
         let qa_pairs = sample
             .get("qa")
@@ -789,15 +830,16 @@ fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores,
                     Some(format!("session_{sess}"))
                 })
                 .collect();
+            let opts = SearchOptions {
+                wing: None,
+                room: None,
+                limit: k * 6,
+            };
             let search_started = Instant::now();
-            let hits = store.search(
-                question,
-                &SearchOptions {
-                    wing: None,
-                    room: None,
-                    limit: k * 6,
-                },
-            )?;
+            let hits = match index.as_mut() {
+                Some(idx) => store.search_with_index(idx.as_mut(), question, &opts)?,
+                None => store.search(question, &opts)?,
+            };
             timing.search_secs += search_started.elapsed().as_secs_f32();
             let mut rooms: Vec<String> = Vec::new();
             for h in &hits {
@@ -1085,6 +1127,7 @@ fn main() -> Result<()> {
             k,
             limit,
             skip,
+            backend,
         } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
@@ -1093,7 +1136,7 @@ fn main() -> Result<()> {
             let start = skip.min(total);
             let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
             let shard = &samples[start..end];
-            let (recall_sum, n, per_cat, timing) = locomo_eval(shard, k)?;
+            let (recall_sum, n, per_cat, timing) = locomo_eval(shard, k, &backend)?;
             // RAW line carries the exact numerator/denominator so sharded runs
             // (convos [start,end)) sum to the full R@k without rounding drift.
             println!(
@@ -1214,7 +1257,7 @@ mod tests {
                 {"question": "adversarial with no evidence", "category": 5}
             ]
         });
-        let (recall, n, per_cat, _timing) = locomo_eval(&[sample], 5).unwrap();
+        let (recall, n, per_cat, _timing) = locomo_eval(&[sample], 5, "local").unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);
