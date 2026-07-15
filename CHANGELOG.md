@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.12.0 — Full observability & alerting stack
+
+Metrics were already there; this turns `deploy/observability/` into the full
+operability picture — **logs, traces, and alerting** — and adds a tamper
+runbook. No API or on-disk format changes; default (non-telemetry) builds are
+unaffected.
+
+- **Distributed traces.** New metadata-only spans on the request/search/save/KG
+  hot paths (`undercroft-obs`; zero-dep no-op without `--features telemetry`),
+  exported over OTLP to **Tempo**. Spans carry operation, route, and vault id —
+  never query text, drawer content, wing/room names, or keys.
+- **Alerting.** **Alertmanager** + Prometheus rules: `PalaceTamperDetected`
+  (critical, broken out by `surface`), `AuditChainStalled`, `UndercroftDown`,
+  `HighSearchLatencyP95`, `HttpServerErrors`, `AuthRejectionsSpike`. Routed to a
+  self-contained webhook `alert-sink` (swap in Slack/email/PagerDuty).
+- **Logs.** **Loki** + promtail ship Undercroft's structured JSON logs
+  (`UNDERCROFT_LOG_FORMAT=json`) — metadata only.
+- **Grafana.** Loki/Tempo/Alertmanager datasources; the dashboard gains
+  tamper-by-surface, HTTP 5xx, auth rejections, an active-alerts table, logs,
+  and traces panels. A `grafana-image-renderer` sidecar enables PNG export.
+- **Tamper runbook** (`RUNBOOK.md` + docs) — where it happened, and how to
+  confirm (`verify`), mitigate (`--read-only`, preserve evidence), fix (verbatim
+  restore from `backup`), and prevent. The alert's `runbook_url` links to it.
+- **Fixes surfaced while wiring this up:** the OTLP→Prometheus exporter emitted
+  double-`_total` counter names (`without_counter_suffixes`), and OTLP traces
+  posted to the base URL instead of `/v1/traces` (404); both fixed. The
+  observability compose now initializes the palace before `serve-http`.
+- **Site.** Landing gains an "Operate it" section; observability docs gain
+  alerting/logs/traces sections with real screenshots.
+
 ## 0.11.1 — Palace Monitor fixes
 
 Bug fixes to the Palace Monitor UI (`GET /monitor`), plus a website section
