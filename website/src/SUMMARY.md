@@ -7,4 +7,5 @@
 - [Integrations](integrations.md)
 - [Remote team server](remote-server.md)
 - [Observability](observability.md)
+- [Tamper runbook](runbook.md)
 - [Parity with MemPalace](parity.md)

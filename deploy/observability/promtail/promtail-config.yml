@@ -1,0 +1,42 @@
+# Promtail: discover Docker containers, ship their logs to Loki.
+#
+# Reads container logs via the Docker API (needs /var/run/docker.sock, mounted
+# read-only). Undercroft runs with UNDERCROFT_LOG_FORMAT=json, so each line is a
+# structured tracing event; we parse it and label by level. Only undercroft's
+# logs are kept — everything it emits is metadata/counts, never drawer content.
+
+server:
+  http_listen_port: 9080
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+    relabel_configs:
+      # compose service name → `service` label
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      # Keep only the undercroft server's logs in this pipeline.
+      - source_labels: ["service"]
+        regex: "undercroft"
+        action: keep
+    pipeline_stages:
+      # tracing's JSON format: {"timestamp","level","fields":{"message":...},"target",...}
+      - json:
+          expressions:
+            level: level
+            target: target
+      - labels:
+          level:
+          target:

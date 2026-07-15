@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-bench"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-cli"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-core"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "hex",
  "serde",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-embed-onnx"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "undercroft-core",
  "thiserror 2.0.18",
@@ -1480,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-index"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "postgres",
  "serde",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-llm"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1502,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-obs"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-store"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -1537,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-vault"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",

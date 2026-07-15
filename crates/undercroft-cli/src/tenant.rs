@@ -98,6 +98,7 @@ impl Tenancy {
     pub fn handle(&mut self, mut req: Request, now: i64) {
         let start = std::time::Instant::now();
         let route_label = rest_route_label(req.url());
+        let _span = undercroft_obs::scope_request(route_label, None);
         let mut body = String::new();
         let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
         let reply = self.route(&req, &body, now);

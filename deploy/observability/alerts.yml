@@ -1,0 +1,78 @@
+# Prometheus alerting rules for Undercroft.
+#
+# The headline rule is PalaceTamperDetected: any HMAC-verify failure means a
+# record, KG triple, tunnel, or vault manifest failed its integrity tag on
+# read — i.e. on-disk tampering was caught. The `surface` label says WHERE.
+# See RUNBOOK.md (published at /docs/runbook.html) for how to respond.
+
+groups:
+  - name: undercroft-integrity
+    rules:
+      - alert: PalaceTamperDetected
+        # Fire the instant a verify failure is observed, per surface.
+        expr: increase(undercroft_hmac_verify_failures_total[2m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tamper detected — HMAC verify failed on {{ $labels.surface }}"
+          description: >-
+            {{ $value | printf "%.0f" }} HMAC-verify failure(s) on surface
+            '{{ $labels.surface }}' in the last 2m. A stored record failed its
+            integrity tag on read — treat as on-disk tampering until proven
+            otherwise. Confirm with `undercroft verify`; follow the runbook.
+          runbook_url: "https://compufreq.github.io/undercroft/docs/runbook.html"
+
+      - alert: AuditChainStalled
+        # Writes are landing but the tamper-evident chain isn't advancing.
+        expr: sum(rate(undercroft_drawer_writes_total[5m])) > 0 and sum(rate(undercroft_chain_commits_total[5m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit chain is not advancing while writes are happening"
+          description: >-
+            Drawer writes are being recorded but no audit-chain commits have
+            occurred in 10m. The tamper-evident chain may be stuck; investigate
+            before trusting integrity guarantees.
+          runbook_url: "https://compufreq.github.io/undercroft/docs/runbook.html"
+
+  - name: undercroft-health
+    rules:
+      - alert: UndercroftDown
+        expr: up{job="undercroft"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Undercroft /metrics target is down"
+          description: "Prometheus cannot scrape undercroft:8765/metrics for 1m."
+
+      - alert: HighSearchLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(undercroft_search_duration_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Search p95 latency above 500ms"
+          description: "p95 search latency has exceeded 500ms for 10m ({{ $value | printf \"%.3f\" }}s)."
+
+      - alert: HttpServerErrors
+        expr: sum(rate(undercroft_http_requests_total{status=~"5.."}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Undercroft is returning HTTP 5xx"
+          description: "5xx responses observed for 5m — the server is erroring on some requests."
+
+      - alert: AuthRejectionsSpike
+        expr: sum(rate(undercroft_auth_rejections_total[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated auth rejections"
+          description: >-
+            Bearer/assertion rejections are elevated (> 0.2/s for 10m) —
+            could be a misconfigured client or a credential-probing attempt.

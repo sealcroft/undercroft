@@ -137,6 +137,17 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   Adds the website "Palace Monitor" section with real screenshots. No API or
   on-disk changes.
 
+## v0.12.0 — Full observability & alerting stack (done)
+
+- Turns `deploy/observability/` into the full picture: **Alertmanager** +
+  Prometheus rules (headline `PalaceTamperDetected`, by `surface`), **Loki**
+  logs, **Tempo** traces, an expanded Grafana dashboard, and a
+  `grafana-image-renderer` for PNG export. Adds metadata-only trace **spans**
+  to the Rust hot paths (zero-dep no-op without telemetry) and a **tamper
+  runbook** (confirm/mitigate/fix/prevent). Fixes surfaced en route: exporter
+  double-`_total` counter names, and OTLP traces missing the `/v1/traces` path.
+  Site gains an "Operate it" section. No API/on-disk changes.
+
 ## Next
 
 - **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,

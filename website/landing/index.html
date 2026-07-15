@@ -393,7 +393,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="cta-row">
       <a class="btn" href="docs/">Read the docs</a>
       <a class="btn gold" href="https://github.com/compufreq/undercroft">Source on GitHub</a>
-      <a class="btn ghost" href="https://github.com/compufreq/undercroft/releases/latest">v0.11.1 · releases</a>
+      <a class="btn ghost" href="https://github.com/compufreq/undercroft/releases/latest">v0.12.0 · releases</a>
     </div>
     <div class="scroll-hint">descend</div>
   </header>
@@ -490,6 +490,59 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <h3>A beacon you can trust</h3>
         <p>The tamper light is wired to the same <code>hmac_verify_failures</code> signal as the
            metrics: it fires on real verification failure and nothing else. No synthetic alarms.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap reveal" id="operate">
+    <div class="sec-label">Operate it</div>
+    <h2>Alerting you can trust</h2>
+    <p class="mon-lede">A telemetry build drops into a full <b>Grafana</b> stack —
+       <b>Prometheus</b> metrics, <b>Loki</b> logs, <b>Tempo</b> traces, and
+       <b>Alertmanager</b>. Health and latency are there, but the headline is
+       <b>integrity</b>: the instant a record fails its HMAC, <code>PalaceTamperDetected</code>
+       fires — tagged with the <i>surface</i> that was hit — and routes to your pager with a
+       link to the runbook.</p>
+
+    <figure class="mon-fig">
+      <div class="mon-fig-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="lbl">Grafana · Undercroft — Palace</span>
+      </div>
+      <img src="assets/grafana-dashboard.png" width="1500" height="1800" loading="lazy"
+           alt="The Undercroft — Palace Grafana dashboard: a red HMAC-failures tamper stat, request/latency/write metrics, tamper broken out by surface, an active-alerts table, structured logs, and traces — all on one board.">
+      <figcaption class="mon-cap"><b>One board.</b> Metrics, tamper-by-surface, the active-alerts
+         table, logs, and traces — this palace is a live vault filed from the <b>LoCoMo</b>
+         benchmark, with a drawer corrupted on disk to trip the alarm.</figcaption>
+    </figure>
+
+    <figure class="mon-fig alarm" style="margin-top:1.4rem">
+      <div class="mon-fig-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="lbl">🚨 PalaceTamperDetected · firing</span>
+      </div>
+      <img src="assets/grafana-tamper-alert.png" width="1400" height="210" loading="lazy"
+           alt="Grafana active-alerts table showing PalaceTamperDetected firing at critical severity on the drawer surface.">
+      <figcaption class="mon-cap"><b>A real alert.</b> Corrupt one drawer's bytes on disk and the next
+         read fails its HMAC — <code>PalaceTamperDetected</code> fires <b>critical</b>, names the
+         <code>drawer</code> surface, and is delivered through Alertmanager. No synthetic alarms.</figcaption>
+    </figure>
+
+    <div class="mon-how">
+      <div class="mon-note">
+        <h3>Alertmanager-routed</h3>
+        <p>Six rules ship out of the box — tamper, chain-stalled, target-down, latency, 5xx, auth.
+           Route them to Slack, email, or PagerDuty; the demo stack logs every delivery.</p>
+      </div>
+      <div class="mon-note">
+        <h3>Logs &amp; traces, metadata only</h3>
+        <p>Loki logs and Tempo spans carry operation, route, and vault — <b>never</b> query text,
+           drawer content, or keys. Full traceability without leaking the palace.</p>
+      </div>
+      <div class="mon-note">
+        <h3>A tamper runbook</h3>
+        <p>The alert links to a <a href="docs/runbook.html" style="color:var(--teal)">runbook</a>:
+           where it happened, and how to confirm, mitigate, fix, and prevent it.</p>
       </div>
     </div>
   </section>
@@ -631,6 +684,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       <span class="foot-glyph">Μ</span>
       <a href="docs/">documentation</a>
       <a href="#monitor">monitor</a>
+      <a href="#operate">operate</a>
       <a href="#bench">benchmarks</a>
       <a href="docs/security.html">security model</a>
       <a href="docs/parity.html">parity</a>

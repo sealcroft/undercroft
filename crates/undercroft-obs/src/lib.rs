@@ -192,6 +192,46 @@ pub fn auth_rejected(kind: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Tracing spans (OTLP traces)
+// ---------------------------------------------------------------------------
+
+/// RAII guard for an open trace span. Hold it for the duration of the
+/// operation; the span closes (and, with an OTLP endpoint set, exports to a
+/// collector such as Tempo) when this drops.
+///
+/// **Metadata only** — spans carry the operation name plus low-cardinality
+/// identifiers (vault id, route). They never carry query text, drawer
+/// content, wing/room names, or key material.
+///
+/// Without the `telemetry` feature this is a zero-sized no-op.
+#[must_use = "bind the span guard to a local (`let _s = …`) so it stays open for the operation"]
+pub struct Scope {
+    #[cfg(feature = "telemetry")]
+    _guard: imp::SpanGuard,
+}
+
+/// Open a span for an operation (`search`, `save`, `kg`, `commit`), tagged
+/// with the vault id. Nests under whatever span is already open on this
+/// thread, so a request span becomes the parent of the work it drives.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn scope(op: &'static str, vault: &str) -> Scope {
+    Scope {
+        #[cfg(feature = "telemetry")]
+        _guard: imp::enter_op(op, vault),
+    }
+}
+
+/// Open a request-root span for an inbound call, tagged with its route
+/// class (e.g. `v1_search`) and optional vault id.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn scope_request(route: &str, vault: Option<&str>) -> Scope {
+    Scope {
+        #[cfg(feature = "telemetry")]
+        _guard: imp::enter_request(route, vault.unwrap_or("")),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Gauges (metadata sampled from stats)
 // ---------------------------------------------------------------------------
 

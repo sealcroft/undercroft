@@ -105,6 +105,33 @@ pub(crate) fn set_gauge(name: &str, vault: &str, value: f64) {
         .insert((name.to_string(), vault.to_string()), value);
 }
 
+// ---------------------------------------------------------------------------
+// Spans (bridged to OTLP by the tracing_opentelemetry layer set up in init)
+// ---------------------------------------------------------------------------
+
+/// Wraps an entered span; dropping it closes the span (and exports it when an
+/// OTLP endpoint is configured). Named span constructors keep the span name a
+/// static string (as `tracing`'s macros require) while the vault/route stay
+/// fields — always metadata, never content.
+pub(crate) struct SpanGuard(#[allow(dead_code)] tracing::span::EnteredSpan);
+
+pub(crate) fn enter_op(op: &'static str, vault: &str) -> SpanGuard {
+    let span = match op {
+        "search" => tracing::info_span!(target: "undercroft", "search", vault = vault),
+        "save" => tracing::info_span!(target: "undercroft", "save", vault = vault),
+        "kg" => tracing::info_span!(target: "undercroft", "kg", vault = vault),
+        "commit" => tracing::info_span!(target: "undercroft", "commit", vault = vault),
+        other => tracing::info_span!(target: "undercroft", "op", op = other, vault = vault),
+    };
+    SpanGuard(span.entered())
+}
+
+pub(crate) fn enter_request(route: &str, vault: &str) -> SpanGuard {
+    SpanGuard(
+        tracing::info_span!(target: "undercroft", "request", route = route, vault = vault).entered(),
+    )
+}
+
 pub(crate) fn diag(level: DiagLevel, args: std::fmt::Arguments<'_>) {
     let msg = args.to_string();
     match level {
@@ -135,6 +162,10 @@ fn real_init() {
     let registry = prometheus::Registry::new();
     let prom = opentelemetry_prometheus::exporter()
         .with_registry(registry.clone())
+        // Our counter instruments are already named `..._total`; without this
+        // the exporter would append a second `_total` (`..._total_total`),
+        // which is non-idiomatic and breaks dashboard/alert queries.
+        .without_counter_suffixes()
         .build()
         .expect("build prometheus exporter");
     let mp = SdkMeterProvider::builder()
@@ -149,9 +180,17 @@ fn real_init() {
     // above — the OTLP metric push path needs a periodic-reader runtime
     // this fully-synchronous stack deliberately avoids.
     if let Some(endpoint) = otlp_endpoint {
+        // UNDERCROFT_OTLP_ENDPOINT is a base URL (e.g. http://collector:4318);
+        // `with_endpoint` wants the full per-signal path, so append the
+        // standard OTLP/HTTP traces path unless the caller already did.
+        let traces_endpoint = if endpoint.ends_with("/v1/traces") {
+            endpoint
+        } else {
+            format!("{}/v1/traces", endpoint.trim_end_matches('/'))
+        };
         if let Ok(span_exporter) = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
+            .with_endpoint(traces_endpoint)
             .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
             .build()
         {
