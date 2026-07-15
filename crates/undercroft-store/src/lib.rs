@@ -1098,22 +1098,23 @@ impl PalaceStore {
         // overwritten with the reranker score; `semantic`/`lexical` are kept
         // for transparency. Bounded to `rerank_top_n()` forward passes.
         if let Some(reranker) = &self.reranker {
-            let pool = hits.len().min(rerank_top_n().max(limit));
-            hits.truncate(pool);
-            // Score the pool in parallel across cores. The cross-encoder runs
-            // one independent forward pass per candidate, so the passes fan out
-            // cleanly — the dominant search cost (≈2,700× fusion) drops by up to
-            // the core count (e.g. 16.6s → sub-second on a many-core host). The
-            // reranker is Sync; each rayon thread shares `&reranker` and writes
-            // its own hit's score.
-            let scores: Vec<f32> = hits
+            // Rerank only the top `top_n` fusion candidates — a true latency
+            // cap, since each candidate costs one cross-encoder forward pass.
+            // Candidates below `top_n` keep their fusion rank, so a small
+            // `top_n` never drops results, it only leaves the tail unreranked.
+            // The passes are independent, so they fan out across cores with
+            // rayon (the dominant search cost, ≈2,700× fusion, drops by up to
+            // the core count — 16.6s → ~1s measured on 24 cores). The reranker
+            // is Sync; each thread shares `&reranker` and writes its own hit.
+            let pool = hits.len().min(rerank_top_n());
+            let scores: Vec<f32> = hits[..pool]
                 .par_iter()
                 .map(|h| reranker.score(query, &h.drawer.content))
                 .collect();
-            for (h, s) in hits.iter_mut().zip(scores) {
+            for (h, s) in hits[..pool].iter_mut().zip(scores) {
                 h.score = s;
             }
-            hits.sort_by(|a, b| {
+            hits[..pool].sort_by(|a, b| {
                 b.score
                     .partial_cmp(&a.score)
                     .unwrap_or(std::cmp::Ordering::Equal)
