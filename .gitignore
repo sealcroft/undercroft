@@ -30,6 +30,7 @@ website/book/
 # Session handover notes (local only — never committed)
 /HANDOVER.md
 HANDOVER*.md
+.handover/
 
 # Local design prototype for the Palace Monitor (superseded by the real
 # served UI at crates/undercroft-cli/src/monitor.html). Kept locally only.
