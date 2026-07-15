@@ -77,7 +77,8 @@ impl OnnxReranker {
             .map_err(|_| OnnxError::Model("UNDERCROFT_RERANK_MODEL is not set".into()))?;
         let tokenizer = std::env::var("UNDERCROFT_RERANK_TOKENIZER")
             .map_err(|_| OnnxError::Tokenizer("UNDERCROFT_RERANK_TOKENIZER is not set".into()))?;
-        let name = std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| "onnx-reranker".into());
+        let name =
+            std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| "onnx-reranker".into());
         Self::load(
             std::path::Path::new(&model),
             std::path::Path::new(&tokenizer),
@@ -169,7 +170,10 @@ mod tests {
         let irrelevant = "The gateway rate limits use a token bucket algorithm.";
         let s_rel = rr.score(query, relevant);
         let s_irr = rr.score(query, irrelevant);
-        println!("relevant={s_rel:.4} irrelevant={s_irr:.4} model={}", rr.model_name());
+        println!(
+            "relevant={s_rel:.4} irrelevant={s_irr:.4} model={}",
+            rr.model_name()
+        );
         assert!(
             s_rel > s_irr,
             "expected relevant > irrelevant, got {s_rel} vs {s_irr}"
