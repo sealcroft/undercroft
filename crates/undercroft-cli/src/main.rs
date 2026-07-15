@@ -598,6 +598,53 @@ fn embedder_factory() -> tenant::EmbedderFactory {
     )
 }
 
+/// Build the shared reranker factory for the multi-tenant server. When
+/// `UNDERCROFT_RERANKER=onnx`, the cross-encoder model is loaded **once** here
+/// and every tenant vault shares that single model (each `store_for` gets a
+/// cheap `Arc`-clone handle) — mirroring how a single-vault server attaches
+/// its reranker, without loading a copy per vault. Unset ⇒ `None` (first-pass
+/// ranking only, the default).
+#[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
+fn reranker_factory() -> Result<Option<tenant::RerankerFactory>> {
+    match std::env::var("UNDERCROFT_RERANKER").as_deref() {
+        Ok("onnx") => {
+            #[cfg(feature = "onnx")]
+            {
+                use std::sync::Arc;
+                let shared = Arc::new(
+                    undercroft_embed_onnx::OnnxReranker::from_env()
+                        .map_err(|e| anyhow::anyhow!("loading ONNX reranker: {e}"))?,
+                );
+                let factory: tenant::RerankerFactory =
+                    Box::new(move || Box::new(SharedReranker(shared.clone())));
+                Ok(Some(factory))
+            }
+            #[cfg(not(feature = "onnx"))]
+            bail!(
+                "UNDERCROFT_RERANKER=onnx requires a build with the 'onnx' feature \
+                 (cargo build -p undercroft-cli --features onnx)"
+            );
+        }
+        Ok("") | Err(_) => Ok(None),
+        Ok(other) => bail!("unknown UNDERCROFT_RERANKER {other:?} (expected: onnx or unset)"),
+    }
+}
+
+/// A cheap handle onto the one shared [`OnnxReranker`] the multi-tenant server
+/// loaded — every tenant store scores against the same model.
+#[cfg(feature = "onnx")]
+struct SharedReranker(std::sync::Arc<undercroft_embed_onnx::OnnxReranker>);
+
+#[cfg(feature = "onnx")]
+impl undercroft_core::rerank::Reranker for SharedReranker {
+    fn model_name(&self) -> &str {
+        self.0.model_name()
+    }
+    fn score(&self, query: &str, passage: &str) -> f32 {
+        self.0.score(query, passage)
+    }
+}
+
 fn main() -> Result<()> {
     // Telemetry is a no-op unless built with `--features telemetry`. The
     // guard flushes providers on any return path (including `?`).
@@ -864,7 +911,10 @@ fn main() -> Result<()> {
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only);
+            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only);
+            if let Some(reranker) = reranker_factory()? {
+                tenancy = tenancy.with_reranker(reranker);
+            }
             http::serve_http(store, tenancy, host, *port, *read_only)?;
         }
         Command::AssertHeader { vault } => {

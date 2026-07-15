@@ -34,12 +34,21 @@ use crate::assertion::{self, AssertionError};
 pub type EmbedderFactory =
     Box<dyn Fn(&Vault) -> Result<Box<dyn undercroft_core::embed::Embedder + Send>>>;
 
+/// Produces a second-stage reranker to attach to each per-vault store. The
+/// model is loaded **once** in `main` and every call hands back a cheap
+/// handle onto that single shared model (an `Arc` clone), so all tenant
+/// vaults share one ONNX reranker instead of loading a copy apiece.
+pub type RerankerFactory = Box<dyn Fn() -> Box<dyn undercroft_core::rerank::Reranker + Send>>;
+
 /// The multi-tenant engine state behind the `/v1` routes. Single-threaded
 /// (the `tiny_http` request loop is sequential), so the store cache needs
 /// no locking.
 pub struct Tenancy {
     manager: VaultManager,
     factory: EmbedderFactory,
+    /// Optional shared second-stage reranker, attached to every store as it
+    /// is opened. `None` ⇒ first-pass ranking only (the default).
+    reranker: Option<RerankerFactory>,
     stores: HashMap<String, PalaceStore>,
     read_only: bool,
     /// Per-request vault-assertion secret; when present every vault-
@@ -80,11 +89,20 @@ impl Tenancy {
         Self {
             manager,
             factory,
+            reranker: None,
             stores: HashMap::new(),
             read_only,
             secret,
             window: assertion::DEFAULT_WINDOW_SECS,
         }
+    }
+
+    /// Attach a shared second-stage reranker, applied to every per-vault
+    /// store as it is opened. The model is loaded once by the caller; the
+    /// factory only clones a handle onto it.
+    pub fn with_reranker(mut self, factory: RerankerFactory) -> Self {
+        self.reranker = Some(factory);
+        self
     }
 
     /// True when this server enforces per-vault assertions.
@@ -481,8 +499,11 @@ impl Tenancy {
                 .map_err(|e| RestError::new(500, e.to_string()))?;
             let embedder =
                 (self.factory)(&vault).map_err(|e| RestError::new(500, e.to_string()))?;
-            let store = PalaceStore::open_with_embedder(vault, embedder)
+            let mut store = PalaceStore::open_with_embedder(vault, embedder)
                 .map_err(|e| RestError::new(500, e.to_string()))?;
+            if let Some(make_reranker) = &self.reranker {
+                store.set_reranker(Some(make_reranker()));
+            }
             self.stores.insert(vault_id.to_string(), store);
             undercroft_obs::vault_opened();
         }
