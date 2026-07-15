@@ -705,10 +705,21 @@ fn run_model_eval(
 /// Per-category (recall_sum, count) accumulator.
 type CategoryScores = std::collections::BTreeMap<String, (f32, u32)>;
 
-fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores)> {
+/// Wall-clock split between the two dominant bench phases. Rerank (when
+/// enabled) runs inside `store.search`, so it is folded into `search_secs`;
+/// query/passage embedding likewise sits inside its owning phase. The point
+/// is to *measure* the ingest⋈search split instead of inferring it.
+#[derive(Default, Clone, Copy)]
+struct PhaseTiming {
+    ingest_secs: f32,
+    search_secs: f32,
+}
+
+fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores, PhaseTiming)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
     let mut per_cat: CategoryScores = Default::default();
+    let mut timing = PhaseTiming::default();
     let total = samples.len();
     for (si, sample) in samples.iter().enumerate() {
         let conv = sample
@@ -716,6 +727,7 @@ fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores)
             .context("sample missing conversation")?;
         let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
         // Ingest: one room per session.
+        let ingest_started = Instant::now();
         let mut n = 1;
         while let Some(dialogs) = conv.get(format!("session_{n}")).and_then(Value::as_array) {
             let text: Vec<String> = dialogs
@@ -746,6 +758,7 @@ fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores)
             }
             n += 1;
         }
+        timing.ingest_secs += ingest_started.elapsed().as_secs_f32();
         let qa_pairs = sample
             .get("qa")
             .and_then(Value::as_array)
@@ -776,6 +789,7 @@ fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores)
                     Some(format!("session_{sess}"))
                 })
                 .collect();
+            let search_started = Instant::now();
             let hits = store.search(
                 question,
                 &SearchOptions {
@@ -784,6 +798,7 @@ fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores)
                     limit: k * 6,
                 },
             )?;
+            timing.search_secs += search_started.elapsed().as_secs_f32();
             let mut rooms: Vec<String> = Vec::new();
             for h in &hits {
                 if !rooms.contains(&h.drawer.meta.room) {
@@ -812,7 +827,7 @@ fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores)
             100.0 * recall_sum / evaluated.max(1) as f32
         );
     }
-    Ok((recall_sum, evaluated, per_cat))
+    Ok((recall_sum, evaluated, per_cat, timing))
 }
 
 /// ConvoMem: one item = conversations of messages + `message_evidences`
@@ -1078,11 +1093,19 @@ fn main() -> Result<()> {
             let start = skip.min(total);
             let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
             let shard = &samples[start..end];
-            let (recall_sum, n, per_cat) = locomo_eval(shard, k)?;
+            let (recall_sum, n, per_cat, timing) = locomo_eval(shard, k)?;
             // RAW line carries the exact numerator/denominator so sharded runs
             // (convos [start,end)) sum to the full R@k without rounding drift.
             println!(
                 "LOCOMO_RAW convos={start}..{end}/{total} recall_sum={recall_sum:.4} evaluated={n}"
+            );
+            // Phase split, machine-readable and additive across shards: total
+            // wall-clock in each phase and the mean per-query search cost.
+            let ingest = timing.ingest_secs;
+            let search = timing.search_secs;
+            println!(
+                "LOCOMO_TIMING convos={start}..{end}/{total} ingest_secs={ingest:.3} search_secs={search:.3} evaluated={n} search_ms_per_q={:.1}",
+                1000.0 * search / n.max(1) as f32
             );
             println!(
                 "LoCoMo — {} questions, session granularity: R@{k} {:.1}%",
@@ -1191,7 +1214,7 @@ mod tests {
                 {"question": "adversarial with no evidence", "category": 5}
             ]
         });
-        let (recall, n, per_cat) = locomo_eval(&[sample], 5).unwrap();
+        let (recall, n, per_cat, _timing) = locomo_eval(&[sample], 5).unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);
