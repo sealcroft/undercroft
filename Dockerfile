@@ -30,15 +30,10 @@ COPY crates ./crates
 # pre-compiles the test targets. Set: builds only the CLI with the given
 # features so the runtime binary carries them (no test overwrite).
 ARG UNDERCROFT_FEATURES=""
-# CARGO_BUILD_JOBS caps compiler parallelism so the build fits on small hosts.
-# Unset (the default) ⇒ no flag ⇒ cargo's default (one job per core). It must
-# not be exported empty — cargo rejects an empty CARGO_BUILD_JOBS.
-ARG CARGO_BUILD_JOBS=""
-RUN JOBS=""; [ -n "$CARGO_BUILD_JOBS" ] && JOBS="--jobs $CARGO_BUILD_JOBS"; \
-    if [ -n "$UNDERCROFT_FEATURES" ]; then \
-        cargo build --release -p undercroft-cli --features "$UNDERCROFT_FEATURES" $JOBS; \
+RUN if [ -n "$UNDERCROFT_FEATURES" ]; then \
+        cargo build --release -p undercroft-cli --features "$UNDERCROFT_FEATURES"; \
     else \
-        cargo build --release $JOBS && cargo test --release --no-run $JOBS; \
+        cargo build --release && cargo test --release --no-run; \
     fi
 
 FROM builder AS test
