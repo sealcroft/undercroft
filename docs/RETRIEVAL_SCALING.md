@@ -79,12 +79,18 @@ rejects).
 
 ### Near-term pragmatic win (today's model, no new architecture)
 
-Make the existing cross-encoder usable before ColBERT lands: **int8-quantize +
-batch (one forward over the pool) + drop `top_n` to ≤10**. Estimated
-~16,600 ms → **~200–400 ms** (40–80×) while keeping most of the +3 pts. The
-batched `score_batch` call site (the `#6` change) is the hook; the missing
-piece is a batched `OnnxReranker::score_batch` (blocked today by a fixed
-batch-dim-1 model load) and int8 quantization.
+Make the existing cross-encoder usable before ColBERT lands. The passes are
+independent, so the first lever is **parallelism** — and it's shipped:
+
+- **rayon across cores (done).** The rerank pool fans out over all cores.
+  Measured on LoCoMo convo 0 (msmarco, pool ~60): **16,600 ms → 1,103 ms/query
+  on 24 cores (~15×)**, R@10 99.0% unchanged. Not the full 24× because the
+  MiniLM query-embed (~128 ms) and fusion are sequential.
+- **smaller `top_n` (linear).** In production search (`limit=10`), `top_n=10`
+  cuts the pool ~60 → ~10 → a projected **~180 ms** on top of the above.
+- **still open:** int8 quantization of the cross-encoder, and a truly batched
+  `OnnxReranker::score_batch` (one forward over the pool — blocked today by a
+  fixed batch-dim-1 model load), each a further ~2–4×.
 
 ## Security tiering (same invariant, applied per level)
 
@@ -101,8 +107,9 @@ encrypted-at-rest, page-decryptable sealed index is the genuine research item.
 
 ## Phased plan
 
-1. **Reranker latency (cheapest, biggest win):** int8 + batch + `top_n` ≤ 10.
-   Target < 400 ms/query at ~+3 pts. Benchmark against the 16,600 ms baseline.
+1. **Reranker latency (cheapest, biggest win):** rayon parallelism **(done —
+   16,600 ms → 1,103 ms/query, ~15×)**; next `top_n` ≤ 10 (→ ~180 ms projected),
+   then int8 + true batched forward. Target < 200 ms/query at ~+3 pts.
 2. **On-disk IVF-PQ retrieval** for hmac-only vaults (bounded RAM, mirrors the
    FTS precedent). Retire the in-memory HNSW prototype as the default.
 3. **Late interaction (ColBERT)** scoring as the reranker replacement.
