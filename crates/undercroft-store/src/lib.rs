@@ -16,6 +16,7 @@
 mod hnsw;
 pub mod kg;
 pub mod manage;
+pub mod pq;
 pub mod remote;
 
 pub use kg::{KgStats, Triple};
