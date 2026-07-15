@@ -80,6 +80,38 @@ Per-category (hash + BM25): 1: 94.7 · 2: 90.3 · 3: 81.5 · 4: 96.3 · 5: 97.1
 With BM25, the **zero-model hash embedder (94.6%) now edges past the
 earlier MiniLM number (93.8%)** on this suite.
 
+### Cross-encoder reranker (second stage)
+
+Run 2026-07-15, MiniLM embedder + BM25 fusion + an optional cross-encoder
+second stage (`UNDERCROFT_RERANKER=onnx`, `ms-marco-MiniLM-L-6-v2`,
+`top_n=50`) that re-scores the fusion-ranked top-N by the full
+`(query, passage)` pair before the final `limit` cut. Summed exactly across
+5 conversation-shards.
+
+```
+# build with --features onnx, then
+UNDERCROFT_EMBEDDER=onnx UNDERCROFT_ONNX_MODEL=model.onnx \
+UNDERCROFT_ONNX_TOKENIZER=tokenizer.json UNDERCROFT_FUSION=bm25 \
+UNDERCROFT_RERANKER=onnx UNDERCROFT_RERANK_MODEL=reranker/model.onnx \
+UNDERCROFT_RERANK_TOKENIZER=reranker/tokenizer.json \
+undercroft-bench locomo locomo10.json --k 10 --skip N --limit M
+# (5 conversation-shards; LOCOMO_RAW numerator lines summed for the exact R@k)
+```
+
+| Metric | MiniLM + BM25 | **+ cross-encoder reranker** | Δ |
+|---|---|---|---|
+| Session R@10 | 94.6% | **97.68%** (1936/1982) | **+3.08 pts** |
+
+The reranker lifts LoCoMo R@10 to **97.68%** — above the pre-reranker
+pipeline and far above upstream's best (88.9%). It is **off by default**
+(the fusion-ranked result is already strong); enabling it costs a second
+tract pass per top-N candidate, so `UNDERCROFT_RERANK_TOP_N` bounds latency.
+
+**No LongMemEval reranker row (deliberate):** the MiniLM baseline there is
+already **99.4% (497/500)** — saturated. A second-stage reranker can only
+move it ≤0.6 pts, indistinguishable from noise, and the multi-hour run
+isn't worth it. The reranker's value shows on LoCoMo, which has headroom.
+
 ## Retrieval fusion
 
 Ablation on the default hash embedder, all three fusion modes, full suites

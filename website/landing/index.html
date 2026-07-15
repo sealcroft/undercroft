@@ -577,18 +577,19 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <div class="bar-row hash"><span class="bar-name">undercroft · hash</span><div class="bar"><i style="--w:95.0%"></i></div><span class="bar-val">95.0</span></div>
         <div class="bar-row up"><span class="bar-name">mempalace · hybrid</span><div class="bar"><i style="--w:98.4%"></i></div><span class="bar-val">98.4</span></div>
         <div class="bar-row up2"><span class="bar-name">mempalace · raw</span><div class="bar"><i style="--w:96.6%"></i></div><span class="bar-val">96.6</span></div>
-        <div class="bench-foot">recall@5 of the evidence session · MiniLM + BM25 clears upstream's tuned hybrid; zero-model hash reaches 95.0</div>
+        <div class="bench-foot">recall@5 of the evidence session · MiniLM + BM25 clears upstream's tuned hybrid; zero-model hash reaches 95.0 · already saturated at 99.4, so a reranker only adds noise here</div>
       </figure>
       <figure class="bench-card">
         <figcaption class="bench-head">
           <span class="bench-name">LoCoMo</span>
           <span class="bench-metric">session recall@10 · 1,982 QA</span>
         </figcaption>
-        <div class="bar-row hero"><span class="bar-name">undercroft · MiniLM</span><div class="bar"><i style="--w:94.6%"></i></div><span class="bar-val">94.6</span></div>
+        <div class="bar-row hero"><span class="bar-name">undercroft · MiniLM + reranker</span><div class="bar"><i style="--w:97.68%"></i></div><span class="bar-val">97.7</span></div>
+        <div class="bar-row hash"><span class="bar-name">undercroft · MiniLM</span><div class="bar"><i style="--w:94.6%"></i></div><span class="bar-val">94.6</span></div>
         <div class="bar-row hash"><span class="bar-name">undercroft · hash</span><div class="bar"><i style="--w:94.6%"></i></div><span class="bar-val">94.6</span></div>
         <div class="bar-row up"><span class="bar-name">mempalace · hybrid</span><div class="bar"><i style="--w:88.9%"></i></div><span class="bar-val">88.9</span></div>
         <div class="bar-row up2"><span class="bar-name">mempalace · raw</span><div class="bar"><i style="--w:60.3%"></i></div><span class="bar-val">60.3</span></div>
-        <div class="bench-foot">recall@10 of the evidence session · model and zero-model hash converge at 94.6 with BM25, both far above upstream</div>
+        <div class="bench-foot">recall@10 of the evidence session · MiniLM + BM25 and zero-model hash converge at 94.6, both far above upstream; an optional cross-encoder reranker lifts it to 97.68 (1936/1982)</div>
       </figure>
     </div>
 

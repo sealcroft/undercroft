@@ -162,13 +162,37 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   serve-mcp / daemon / bench. Full sharded benchmark + landing headline bars =
   follow-up; multi-tenant `/v1` reranker = follow-up (with shared-model item).
 
+## v0.13.1 — Reranker follow-ups (in progress, `wip/reranker-followups`)
+
+Closes the v0.13.0 follow-up items:
+
+- **Shared-model `/v1` reranker**: the multi-tenant server loads one
+  `OnnxReranker` and hands every per-vault store a cheap `Arc` handle onto
+  it (`RerankerFactory` + `Tenancy::with_reranker` in `tenant.rs`), so all
+  tenant vaults share a single ONNX model instead of a copy apiece. Off by
+  default (`UNDERCROFT_RERANKER=onnx`; bails without the `onnx` feature). See
+  [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
+- **Full sharded LoCoMo benchmark**: the reranker lifts LoCoMo R@10
+  **94.6 → 97.68** (1936/1982), summed exactly across 5 conversation-shards.
+  RESULTS.md + the landing benchmark bars updated. `undercroft-bench locomo`
+  gained `--skip`, conversation-scoped `--limit`, and machine-readable
+  `LOCOMO_RAW`/`LME_RAW` numerator lines so sharded runs sum with no rounding
+  drift.
+- **No LongMemEval reranker row (deliberate)**: the MiniLM baseline is
+  already saturated at 99.4% (497/500), so a second stage can only move it
+  ≤0.6 pts — not worth the multi-hour run. Documented as a footnote rather
+  than a row.
+
 ## Next
 
 - **Scale**: L2 on-demand room loading heuristics; ANN index (HNSW) atop
-  the warmed cache for very large palaces; share one ONNX model across
-  tenant vaults in the multi-tenant server (also enables the `/v1` reranker).
-- **Reranker follow-up**: full sharded LongMemEval/LoCoMo run with the reranker,
-  then update RESULTS.md + the landing benchmark bars.
+  the warmed cache for very large palaces.
+- **Reranker latency**: rayon-parallelize the serial rerank loop
+  (`store/lib.rs`); A/B a lower `DEFAULT_RERANK_TOP_N` (50 → ~20); batched
+  `score_batch`. All off-by-default, so non-opt-in users are unaffected.
+- **Orchestrator**: the multi-tenant routing/migration/key-minting layer as
+  a separate optional tool (`examples/orchestrator/` or sibling crate),
+  keeping the engine tree-blind — see [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
 - **Operability** (planned track below): observability/telemetry
