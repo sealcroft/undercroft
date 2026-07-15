@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.13.0 — Cross-encoder reranker
+
+An optional second retrieval stage. After hybrid search's cosine+BM25 fusion
+ranks a candidate pool, a cross-encoder re-scores the top-N with the full
+`(query, passage)` pair — the interaction a bi-encoder embedding can't capture —
+and re-orders them before the final `limit` cut. Off by default; when unset,
+search behaviour is byte-for-byte unchanged.
+
+- **`Reranker` trait** (`undercroft-core`) + **`OnnxReranker`**
+  (`undercroft-embed-onnx`, under the existing `onnx` feature) — reuses the
+  tract/tokenizer machinery, pair-encodes, reads the relevance logit, sigmoids.
+  Model is **user-supplied**: `UNDERCROFT_RERANK_MODEL` / `_TOKENIZER` +
+  `UNDERCROFT_RERANKER=onnx`. `UNDERCROFT_RERANK_TOP_N` (default 50) bounds latency.
+- Wired into `search`, `serve-mcp`, the daemon, and the `longmemeval`/`locomo`
+  benchmark harness. Pairs with either embedder (hash or ONNX).
+- **Targets BERT-family cross-encoders** (`cross-encoder/ms-marco-MiniLM-L-6-v2`):
+  tract 0.22 can't run DeBERTa rerankers (mxbai-rerank hits an unsupported `Sign`
+  op), so that's the shipped default.
+- **Directional lift** (subset smoke, hash embedder + ms-marco reranker, real
+  data): LongMemEval-S R@5 **98.3 → 100.0** (60-question subset), LoCoMo R@10
+  **94.6 → 97.2** (full 1,982 QA). The full sharded LongMemEval-500 +
+  MiniLM-embedder matched-model run and the landing headline bars are a
+  follow-up; the multi-tenant `/v1` reranker pairs with the shared-model item.
+
 ## 0.12.0 — Full observability & alerting stack
 
 Metrics were already there; this turns `deploy/observability/` into the full
