@@ -13,6 +13,15 @@ HMAC-SHA256 record tags plus a tamper-evident audit chain). It does **not**
 defend against an attacker who can read process memory while a vault is
 unlocked, nor against a compromised host OS.
 
+**Tamper is detected on read, not prevented.** Any record, KG triple, tunnel,
+or manifest that fails its HMAC surfaces immediately: `undercroft verify` names
+the record, and (on a `--features telemetry` build) the
+`undercroft_hmac_verify_failures_total` metric, the live event stream, and the
+Palace Monitor beacon all fire on the same real signal — never synthetically.
+`deploy/observability/` ships a `PalaceTamperDetected` alert, and
+`deploy/observability/RUNBOOK.md` (published at `/docs/runbook.html`) covers
+how to confirm, mitigate, fix, and prevent it.
+
 Details are documented in `crates/undercroft-vault/src/lib.rs`.
 
 ## Reporting a vulnerability
