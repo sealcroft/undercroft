@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Local in-memory HNSW ANN prefilter (pure Rust). Off by default; a build
+# without it carries zero extra deps. RAM-only index, never persisted — the
+# no-plaintext-derived-index-on-disk invariant holds for sealed vaults.
+hnsw = ["dep:instant-distance"]
+
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
@@ -20,6 +26,7 @@ time = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
+instant-distance = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

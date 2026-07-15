@@ -12,6 +12,8 @@
 //! * an append-only `audit` table records the tag of every write in order,
 //!   which must replay to the manifest's HMAC chain head.
 
+#[cfg(feature = "hnsw")]
+mod hnsw;
 pub mod kg;
 pub mod manage;
 pub mod remote;
@@ -191,6 +193,13 @@ pub struct PalaceStore {
     /// (embedder identity `external:<name>@<dim>`): writes must carry a
     /// vector of exactly `dim`, and the store never computes an embedding.
     external_dim: Option<usize>,
+    /// When true, search uses the local in-memory HNSW ANN prefilter instead
+    /// of the full cosine scan. Opt-in; requires the `hnsw` build feature.
+    hnsw_enabled: bool,
+    /// Lazily-built in-memory HNSW index (RAM only, never persisted). Dropped
+    /// on any write and rebuilt on the next search.
+    #[cfg(feature = "hnsw")]
+    hnsw: std::cell::RefCell<Option<hnsw::HnswIndex>>,
 }
 
 impl PalaceStore {
@@ -315,6 +324,9 @@ impl PalaceStore {
             fts_min,
             fusion: Fusion::from_env(),
             external_dim,
+            hnsw_enabled: false,
+            #[cfg(feature = "hnsw")]
+            hnsw: std::cell::RefCell::new(None),
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
@@ -391,6 +403,46 @@ impl PalaceStore {
     /// additive — leaving it unset preserves first-pass ranking exactly.
     pub fn set_reranker(&mut self, reranker: Option<Box<dyn Reranker + Send>>) {
         self.reranker = reranker;
+    }
+
+    /// Enable (or disable) the local in-memory HNSW ANN prefilter. When on,
+    /// search cuts candidates to the vector top-K via an O(log n) graph walk
+    /// instead of the O(n) full cosine scan. The index is built lazily on the
+    /// first search, held in RAM only, and rebuilt after any write. Requires
+    /// the `hnsw` build feature; a no-op flag otherwise (falls back to scan).
+    pub fn set_hnsw(&mut self, on: bool) {
+        self.hnsw_enabled = on;
+    }
+
+    /// Vector top-`k` candidate `seq`s via the HNSW index, building it lazily
+    /// from the (decrypted) corpus on first use. `None` ⇒ empty corpus, so the
+    /// caller falls back to a full scan (which also yields nothing).
+    #[cfg(feature = "hnsw")]
+    fn hnsw_candidates(&self, qvec: &[f32], k: usize) -> Result<Option<Vec<i64>>, StoreError> {
+        if self.hnsw.borrow().is_none() {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT seq, id, embedding FROM drawers")?;
+            let rows: Vec<(i64, String, Vec<u8>)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<Result<_, _>>()?;
+            if rows.is_empty() {
+                return Ok(None);
+            }
+            let mut items = Vec::with_capacity(rows.len());
+            for (seq, id, emb_rest) in rows {
+                let emb = self
+                    .vault
+                    .embedding_from_rest(&id, &emb_rest)
+                    .map_err(|e| StoreError::CorruptRow {
+                        id: id.clone(),
+                        reason: e.to_string(),
+                    })?;
+                items.push((seq, emb));
+            }
+            *self.hnsw.borrow_mut() = Some(hnsw::HnswIndex::build(items));
+        }
+        Ok(Some(self.hnsw.borrow().as_ref().unwrap().query(qvec, k)))
     }
 
     /// Decrypt every drawer embedding into an in-memory map so subsequent
@@ -586,6 +638,9 @@ impl PalaceStore {
         if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
             cache.insert(drawer.id.clone(), embedding);
         }
+        // The ANN index is now stale; drop it so the next search rebuilds.
+        #[cfg(feature = "hnsw")]
+        self.hnsw.borrow_mut().take();
         Ok(existing.is_none())
     }
 
@@ -901,11 +956,24 @@ impl PalaceStore {
             .map(str::to_string)
             .collect();
 
-        let candidates = match self.fts_min {
-            Some(min) if self.fts && !qterms.is_empty() && self.count()? >= min as u64 => {
-                self.fts_candidates(&qterms, std::cmp::max(256, limit * 32))
+        let candidates = if self.hnsw_enabled {
+            // Semantic ANN prefilter: cut to the vector top-K before verify +
+            // fusion. Over-fetch generously so BM25 fusion still has material.
+            #[cfg(feature = "hnsw")]
+            {
+                self.hnsw_candidates(&qvec, std::cmp::max(256, limit * 32))?
             }
-            _ => None,
+            #[cfg(not(feature = "hnsw"))]
+            {
+                None
+            }
+        } else {
+            match self.fts_min {
+                Some(min) if self.fts && !qterms.is_empty() && self.count()? >= min as u64 => {
+                    self.fts_candidates(&qterms, std::cmp::max(256, limit * 32))
+                }
+                _ => None,
+            }
         };
         let obs_prefiltered = candidates.is_some();
 
