@@ -148,15 +148,27 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   double-`_total` counter names, and OTLP traces missing the `/v1/traces` path.
   Site gains an "Operate it" section. No API/on-disk changes.
 
+## v0.13.0 — Cross-encoder reranker (done)
+
+- Optional second retrieval stage: a cross-encoder re-scores the fusion-ranked
+  top-N candidates by the full `(query, passage)` pair before the final `limit`
+  cut. New `Reranker` trait (`undercroft-core`) + `OnnxReranker`
+  (`undercroft-embed-onnx`, reusing the tract/tokenizer machinery, pair-encode →
+  relevance logit). Feature-gated (`onnx`), model user-supplied via
+  `UNDERCROFT_RERANK_MODEL`/`_TOKENIZER` + `UNDERCROFT_RERANKER=onnx`;
+  `UNDERCROFT_RERANK_TOP_N` (default 50) bounds latency. **tract 0.22 can't run
+  DeBERTa rerankers** (mxbai-rerank was `Sign`-op-rejected) → ships targeting
+  the BERT-family `cross-encoder/ms-marco-MiniLM-L-6-v2`. Wired into `search` /
+  serve-mcp / daemon / bench. Full sharded benchmark + landing headline bars =
+  follow-up; multi-tenant `/v1` reranker = follow-up (with shared-model item).
+
 ## Next
 
-- **Retrieval quality**: cross-encoder reranker over the top-k (ONNX,
-  the next accuracy lever — targets the residual preference/paraphrase
-  gap). (MiniLM rows already re-measured under BM25 — see RESULTS.md:
-  LongMemEval-S 99.4%, LoCoMo 94.6%.)
 - **Scale**: L2 on-demand room loading heuristics; ANN index (HNSW) atop
   the warmed cache for very large palaces; share one ONNX model across
-  tenant vaults in the multi-tenant server.
+  tenant vaults in the multi-tenant server (also enables the `/v1` reranker).
+- **Reranker follow-up**: full sharded LongMemEval/LoCoMo run with the reranker,
+  then update RESULTS.md + the landing benchmark bars.
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
 - **Operability** (planned track below): observability/telemetry

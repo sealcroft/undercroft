@@ -123,6 +123,18 @@ set, after which `undercroft repair` re-embeds every drawer.
   `tokenizer.json` and set `UNDERCROFT_EMBEDDER=onnx`. Undercroft never
   downloads models itself.
 
+### Cross-encoder reranker (optional, `onnx` feature)
+
+A second retrieval stage: after hybrid search surfaces a candidate pool, a
+cross-encoder re-scores the top-N with the full `(query, passage)` pair and
+re-orders them. Point `UNDERCROFT_RERANK_MODEL` / `UNDERCROFT_RERANK_TOKENIZER`
+at a user-supplied cross-encoder ONNX export (a **BERT-family** model such as
+`cross-encoder/ms-marco-MiniLM-L-6-v2`; note tract 0.22 does not run
+DeBERTa-based rerankers) and set `UNDERCROFT_RERANKER=onnx`. Pairs with either
+embedder; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds the added latency. It
+applies to `search`, `serve-mcp`, and the daemon; the multi-tenant `/v1`
+surface is a follow-up (shares one model across vaults).
+
 ## Quickstart (Docker — recommended)
 
 Everything persists under `/data`, so mount a volume there:

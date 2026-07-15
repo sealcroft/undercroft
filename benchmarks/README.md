@@ -65,6 +65,18 @@ and type accuracy.
   much weaker on semantic paraphrase; for comparable conditions build with
   `--features onnx` and set `UNDERCROFT_EMBEDDER=onnx` with a MiniLM-class
   model.
+- **Reranker rows** re-run the *same* `longmemeval`/`locomo` subcommands with a
+  cross-encoder attached: set `UNDERCROFT_RERANKER=onnx` plus
+  `UNDERCROFT_RERANK_MODEL` / `UNDERCROFT_RERANK_TOKENIZER`. Export a BERT-family
+  cross-encoder to ONNX first (tract can't run DeBERTa rerankers), e.g.:
+  ```python
+  # pip install "optimum[onnxruntime]" transformers torch
+  from optimum.onnxruntime import ORTModelForSequenceClassification
+  from transformers import AutoTokenizer
+  m = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  ORTModelForSequenceClassification.from_pretrained(m, export=True).save_pretrained("rr")
+  AutoTokenizer.from_pretrained(m).save_pretrained("rr")   # -> rr/model.onnx, rr/tokenizer.json
+  ```
 - Sealed vaults decrypt-scan during search; benchmark both levels
   (`--level sealed|hmac-only`) if you care about the crypto overhead.
 - No result files are committed until they can be reproduced from this

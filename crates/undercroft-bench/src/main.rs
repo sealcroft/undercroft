@@ -122,17 +122,24 @@ fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, PalaceStore)>
     let dir = tempfile::TempDir::new()?;
     let mgr = VaultManager::open(dir.path(), None)?;
     let vault = mgr.create("bench", level)?;
-    match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
+    #[allow(unused_mut)]
+    let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
         Ok("onnx") => {
             #[cfg(feature = "onnx")]
             {
-                return Ok((dir, PalaceStore::open_with_embedder(vault, onnx_shared())?));
+                PalaceStore::open_with_embedder(vault, onnx_shared())?
             }
             #[cfg(not(feature = "onnx"))]
             anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires building with --features onnx");
         }
-        _ => Ok((dir, PalaceStore::open(vault)?)),
+        _ => PalaceStore::open(vault)?,
+    };
+    // Optional second-stage reranker (pairs with either embedder).
+    #[cfg(feature = "onnx")]
+    if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("onnx") {
+        store.set_reranker(Some(rerank_shared()));
     }
+    Ok((dir, store))
 }
 
 /// The ONNX model is loaded once and shared across every per-question
@@ -157,6 +164,33 @@ fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
         }
         fn embed(&self, text: &str) -> Vec<f32> {
             self.0.embed(text)
+        }
+    }
+    Box::new(Shared(arc))
+}
+
+/// The cross-encoder reranker, loaded once and shared across every per-question
+/// palace (same rationale as `onnx_shared`).
+#[cfg(feature = "onnx")]
+fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_onnx::OnnxReranker>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(
+                undercroft_embed_onnx::OnnxReranker::from_env()
+                    .expect("loading ONNX reranker from env"),
+            )
+        })
+        .clone();
+
+    struct Shared(Arc<undercroft_embed_onnx::OnnxReranker>);
+    impl undercroft_core::rerank::Reranker for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn score(&self, query: &str, passage: &str) -> f32 {
+            self.0.score(query, passage)
         }
     }
     Box::new(Shared(arc))

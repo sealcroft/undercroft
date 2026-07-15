@@ -183,6 +183,9 @@ pub fn from_env() -> Result<OnnxEmbedder, OnnxError> {
     )
 }
 
+mod rerank;
+pub use rerank::OnnxReranker;
+
 #[cfg(test)]
 mod tests {
     use super::*;

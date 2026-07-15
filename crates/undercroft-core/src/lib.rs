@@ -12,12 +12,14 @@ pub mod embed;
 pub mod entity;
 pub mod ids;
 pub mod normalize;
+pub mod rerank;
 
 pub use chunk::{chunk_text, ChunkOptions};
 pub use drawer::{Drawer, DrawerMeta};
 pub use embed::{parse_external_spec, ExternalEmbedder, HashEmbedder, EMBED_DIM};
 pub use ids::drawer_id;
 pub use normalize::{normalize_content, normalize_wing_name, NORMALIZE_VERSION};
+pub use rerank::Reranker;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {

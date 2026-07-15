@@ -516,13 +516,13 @@ fn manager(cli: &Cli) -> Result<VaultManager> {
 fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
     let mgr = manager(cli)?;
     let v = mgr.unlock(vault)?;
-    match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
+    let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
         Ok("onnx") => {
             #[cfg(feature = "onnx")]
             {
                 let embedder = undercroft_embed_onnx::from_env()
                     .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
-                return Ok(PalaceStore::open_with_embedder(v, Box::new(embedder))?);
+                PalaceStore::open_with_embedder(v, Box::new(embedder))?
             }
             #[cfg(not(feature = "onnx"))]
             bail!(
@@ -530,8 +530,34 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
                  (cargo build -p undercroft-cli --features onnx)"
             );
         }
-        Ok("hash") | Ok("") | Err(_) => Ok(PalaceStore::open(v)?),
+        Ok("hash") | Ok("") | Err(_) => PalaceStore::open(v)?,
         Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx)"),
+    };
+    attach_reranker(&mut store)?;
+    Ok(store)
+}
+
+/// Attach the second-stage cross-encoder reranker when `UNDERCROFT_RERANKER=onnx`
+/// (requires the `onnx` feature). Unset ⇒ first-pass ranking only.
+#[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
+fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
+    match std::env::var("UNDERCROFT_RERANKER").as_deref() {
+        Ok("onnx") => {
+            #[cfg(feature = "onnx")]
+            {
+                let rr = undercroft_embed_onnx::OnnxReranker::from_env()
+                    .map_err(|e| anyhow::anyhow!("loading ONNX reranker: {e}"))?;
+                store.set_reranker(Some(Box::new(rr)));
+                Ok(())
+            }
+            #[cfg(not(feature = "onnx"))]
+            bail!(
+                "UNDERCROFT_RERANKER=onnx requires a build with the 'onnx' feature \
+                 (cargo build -p undercroft-cli --features onnx)"
+            );
+        }
+        Ok("") | Err(_) => Ok(()),
+        Ok(other) => bail!("unknown UNDERCROFT_RERANKER {other:?} (expected: onnx or unset)"),
     }
 }
 
