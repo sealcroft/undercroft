@@ -86,8 +86,12 @@ independent, so the first lever is **parallelism** — and it's shipped:
   Measured on LoCoMo convo 0 (msmarco, pool ~60): **16,600 ms → 1,103 ms/query
   on 24 cores (~15×)**, R@10 99.0% unchanged. Not the full 24× because the
   MiniLM query-embed (~128 ms) and fusion are sequential.
-- **smaller `top_n` (linear).** In production search (`limit=10`), `top_n=10`
-  cuts the pool ~60 → ~10 → a projected **~180 ms** on top of the above.
+- **smaller `top_n` (done — now a true pool cap).** Reranking exactly the top
+  `top_n` (tail keeps fusion order). Measured (LoCoMo, parallel): `top_n=20`
+  **694 ms at R@10 98.7%** (full accuracy, the knee), `top_n=10` **389 ms** at
+  97.4%. Below ~10, embed+fusion is the floor.
+- **combined:** the original ~16,600 ms sequential reranker is now **694 ms at
+  full accuracy (~24×)** or 389 ms at ~−1 pt (~43×). Interactive.
 - **still open:** int8 quantization of the cross-encoder, and a truly batched
   `OnnxReranker::score_batch` (one forward over the pool — blocked today by a
   fixed batch-dim-1 model load), each a further ~2–4×.
@@ -107,9 +111,10 @@ encrypted-at-rest, page-decryptable sealed index is the genuine research item.
 
 ## Phased plan
 
-1. **Reranker latency (cheapest, biggest win):** rayon parallelism **(done —
-   16,600 ms → 1,103 ms/query, ~15×)**; next `top_n` ≤ 10 (→ ~180 ms projected),
-   then int8 + true batched forward. Target < 200 ms/query at ~+3 pts.
+1. **Reranker latency (done):** rayon parallelism (16,600 → ~1,100 ms) + `top_n`
+   as a true cap → **694 ms at full accuracy (top_n=20), 389 ms at −1 pt
+   (top_n=10)** — ~24–43× over the sequential baseline. Remaining polish: int8
+   + a true batched forward (each ~2–4× more).
 2. **On-disk IVF-PQ retrieval** for hmac-only vaults (bounded RAM, mirrors the
    FTS precedent). Retire the in-memory HNSW prototype as the default.
 3. **Late interaction (ColBERT)** scoring as the reranker replacement.
