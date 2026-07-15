@@ -68,8 +68,14 @@ enum Command {
         dataset: std::path::PathBuf,
         #[arg(short = 'k', long, default_value_t = 10)]
         k: usize,
+        /// Evaluate at most N conversations (the top-level shard unit), after
+        /// --skip. Omit for all. Recall is additive, so sharding by
+        /// conversation and summing the RAW lines reproduces the full number.
         #[arg(long)]
         limit: Option<usize>,
+        /// Skip the first N conversations (pairs with --limit for sharding).
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
     },
     /// ConvoMem protocol: message-level evidence recall
     Convomem {
@@ -358,6 +364,11 @@ fn run_longmemeval(
     }
 
     let n = total as f32;
+    // RAW numerators so sharded runs sum to the exact R@k / NDCG (per-shard
+    // percentages would round-drift). skip/limit define the shard window.
+    println!(
+        "LME_RAW total={total} recall_any_sum={recall_any_sum:.4} recall_all_sum={recall_all_sum:.4} ndcg_sum={ndcg_sum:.4}"
+    );
     println!("LongMemEval — {total} questions, session granularity, k={k}");
     println!("  Recall@{k} (any): {:.1}%", 100.0 * recall_any_sum / n);
     println!("  Recall@{k} (all): {:.1}%", 100.0 * recall_all_sum / n);
@@ -694,15 +705,12 @@ fn run_model_eval(
 /// Per-category (recall_sum, count) accumulator.
 type CategoryScores = std::collections::BTreeMap<String, (f32, u32)>;
 
-fn locomo_eval(
-    samples: &[Value],
-    k: usize,
-    limit: Option<usize>,
-) -> Result<(f32, u32, CategoryScores)> {
+fn locomo_eval(samples: &[Value], k: usize) -> Result<(f32, u32, CategoryScores)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
     let mut per_cat: CategoryScores = Default::default();
-    for sample in samples {
+    let total = samples.len();
+    for (si, sample) in samples.iter().enumerate() {
         let conv = sample
             .get("conversation")
             .context("sample missing conversation")?;
@@ -743,11 +751,6 @@ fn locomo_eval(
             .and_then(Value::as_array)
             .context("sample missing qa")?;
         for qa in qa_pairs.iter() {
-            if let Some(cap) = limit {
-                if evaluated as usize >= cap {
-                    break;
-                }
-            }
             let question = qa
                 .get("question")
                 .and_then(Value::as_str)
@@ -803,6 +806,11 @@ fn locomo_eval(
             e.0 += recall;
             e.1 += 1;
         }
+        eprintln!(
+            "  convo {}/{total} done — {evaluated} q, R@{k} so far: {:.1}%",
+            si + 1,
+            100.0 * recall_sum / evaluated.max(1) as f32
+        );
     }
     Ok((recall_sum, evaluated, per_cat))
 }
@@ -1057,11 +1065,25 @@ fn main() -> Result<()> {
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level } => run_synth(n, level_of(&level)),
-        Command::Locomo { dataset, k, limit } => {
+        Command::Locomo {
+            dataset,
+            k,
+            limit,
+            skip,
+        } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
             let samples: Vec<Value> = serde_json::from_str(&raw)?;
-            let (recall_sum, n, per_cat) = locomo_eval(&samples, k, limit)?;
+            let total = samples.len();
+            let start = skip.min(total);
+            let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
+            let shard = &samples[start..end];
+            let (recall_sum, n, per_cat) = locomo_eval(shard, k)?;
+            // RAW line carries the exact numerator/denominator so sharded runs
+            // (convos [start,end)) sum to the full R@k without rounding drift.
+            println!(
+                "LOCOMO_RAW convos={start}..{end}/{total} recall_sum={recall_sum:.4} evaluated={n}"
+            );
             println!(
                 "LoCoMo — {} questions, session granularity: R@{k} {:.1}%",
                 n,
@@ -1169,7 +1191,7 @@ mod tests {
                 {"question": "adversarial with no evidence", "category": 5}
             ]
         });
-        let (recall, n, per_cat) = locomo_eval(&[sample], 5, None).unwrap();
+        let (recall, n, per_cat) = locomo_eval(&[sample], 5).unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);
