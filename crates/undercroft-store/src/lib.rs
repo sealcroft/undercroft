@@ -1031,8 +1031,13 @@ impl PalaceStore {
         if let Some(reranker) = &self.reranker {
             let pool = hits.len().min(rerank_top_n().max(limit));
             hits.truncate(pool);
-            for h in &mut hits {
-                h.score = reranker.score(query, &h.drawer.content);
+            // One batched call so a model-backed reranker can run a single
+            // forward pass over the whole pool (the default trait impl still
+            // maps `score` one-by-one, so this never regresses correctness).
+            let passages: Vec<&str> = hits.iter().map(|h| h.drawer.content.as_str()).collect();
+            let scores = reranker.score_batch(query, &passages);
+            for (h, s) in hits.iter_mut().zip(scores) {
+                h.score = s;
             }
             hits.sort_by(|a, b| {
                 b.score
