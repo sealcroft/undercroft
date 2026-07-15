@@ -24,13 +24,25 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use undercroft_core::embed::{cosine, Embedder};
-use undercroft_core::{Drawer, DrawerMeta, HashEmbedder};
+use undercroft_core::{Drawer, DrawerMeta, HashEmbedder, Reranker};
 use undercroft_vault::{SecurityLevel, Vault, VaultError};
 
 /// Drawer count at which the BM25 prefilter engages for hmac-only vaults.
 /// Below this a full decrypt-free scan is cheap and keeps semantic-only
 /// recall exact; above it the FTS5 candidate cut dominates search cost.
 const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
+/// Default number of fusion-ranked candidates a reranker re-scores per search
+/// (override with `UNDERCROFT_RERANK_TOP_N`). One cross-encoder forward pass
+/// runs per candidate, so this bounds the added latency.
+const DEFAULT_RERANK_TOP_N: usize = 50;
+
+fn rerank_top_n() -> usize {
+    std::env::var("UNDERCROFT_RERANK_TOP_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_RERANK_TOP_N)
+}
 
 /// How the semantic and lexical signals are combined at rank time.
 ///
@@ -157,6 +169,10 @@ pub struct PalaceStore {
     conn: Connection,
     vault: Vault,
     embedder: Box<dyn Embedder + Send>,
+    /// Optional second-stage cross-encoder reranker. When present, the
+    /// fusion-ranked top-N candidates are re-scored by `(query, content)`
+    /// pairs before the final `limit` cut. `None` ⇒ first-pass ranking only.
+    reranker: Option<Box<dyn Reranker + Send>>,
     /// In-process decrypted-embedding cache for long-running servers
     /// (serve-mcp / serve-http / daemon): sealed vaults pay AEAD decryption
     /// of every embedding once instead of on every search. Never persisted
@@ -293,6 +309,7 @@ impl PalaceStore {
             conn,
             vault,
             embedder,
+            reranker: None,
             emb_cache: std::cell::RefCell::new(None),
             fts: false,
             fts_min,
@@ -366,6 +383,14 @@ impl PalaceStore {
     /// otherwise). See [`Fusion`].
     pub fn set_fusion(&mut self, fusion: Fusion) {
         self.fusion = fusion;
+    }
+
+    /// Attach (or clear) a second-stage cross-encoder reranker. With one set,
+    /// `search` re-scores the fusion-ranked top-N candidates by the full
+    /// `(query, content)` pair before the final `limit` cut. Idempotent and
+    /// additive — leaving it unset preserves first-pass ranking exactly.
+    pub fn set_reranker(&mut self, reranker: Option<Box<dyn Reranker + Send>>) {
+        self.reranker = reranker;
     }
 
     /// Decrypt every drawer embedding into an in-memory map so subsequent
@@ -997,6 +1022,24 @@ impl PalaceStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // Optional second stage: a cross-encoder re-scores the top-N
+        // fusion-ranked candidates using the full (query, content) pair — the
+        // interaction a bi-encoder can't capture — then we re-sort. `score` is
+        // overwritten with the reranker score; `semantic`/`lexical` are kept
+        // for transparency. Bounded to `rerank_top_n()` forward passes.
+        if let Some(reranker) = &self.reranker {
+            let pool = hits.len().min(rerank_top_n().max(limit));
+            hits.truncate(pool);
+            for h in &mut hits {
+                h.score = reranker.score(query, &h.drawer.content);
+            }
+            hits.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
         hits.truncate(limit);
 
         let fusion_label = match self.fusion {
@@ -1420,6 +1463,68 @@ mod tests {
         let vault = mgr.create("test", level).unwrap();
         let emb = Box::new(undercroft_core::ExternalEmbedder::new("acme-embed", dim));
         (dir, PalaceStore::open_with_embedder(vault, emb).unwrap())
+    }
+
+    /// A deterministic reranker that scores purely by passage length — used to
+    /// prove the rerank pass actually re-orders results independently of the
+    /// first-pass fusion score.
+    struct LenReranker;
+    impl Reranker for LenReranker {
+        fn model_name(&self) -> &str {
+            "len-mock"
+        }
+        fn score(&self, _query: &str, passage: &str) -> f32 {
+            passage.chars().count() as f32
+        }
+    }
+
+    #[test]
+    fn reranker_reorders_top_k() {
+        let (_d, mut store) = store(SecurityLevel::HmacOnly);
+        // Three candidates that all match the query term, of increasing length.
+        store.upsert(&drawer("w", "r", "graphql", 0)).unwrap();
+        store
+            .upsert(&drawer("w", "r", "graphql over rest for the mobile api", 1))
+            .unwrap();
+        store
+            .upsert(&drawer(
+                "w",
+                "r",
+                "graphql was chosen because the mobile app needed far fewer round \
+                 trips and one flexible endpoint instead of many rest calls",
+                2,
+            ))
+            .unwrap();
+        let opts = SearchOptions {
+            wing: None,
+            room: None,
+            limit: 3,
+        };
+
+        // Baseline (no reranker) returns all three, fusion-ordered.
+        let base = store.search("graphql", &opts).unwrap();
+        assert_eq!(base.len(), 3);
+
+        // With the length reranker attached, the longest passage must be first
+        // — proving the rerank score drives the final order.
+        store.set_reranker(Some(Box::new(LenReranker)));
+        let reranked = store.search("graphql", &opts).unwrap();
+        let longest = reranked
+            .iter()
+            .max_by_key(|h| h.drawer.content.chars().count())
+            .unwrap()
+            .drawer
+            .content
+            .clone();
+        assert_eq!(
+            reranked[0].drawer.content, longest,
+            "reranker should rank the longest passage first"
+        );
+
+        // Clearing the reranker restores first-pass behaviour.
+        store.set_reranker(None);
+        let after = store.search("graphql", &opts).unwrap();
+        assert_eq!(after[0].drawer.content, base[0].drawer.content);
     }
 
     #[test]
