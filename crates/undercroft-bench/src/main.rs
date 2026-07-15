@@ -200,7 +200,7 @@ fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
 /// The cross-encoder reranker, loaded once and shared across every per-question
 /// palace (same rationale as `onnx_shared`).
 #[cfg(feature = "onnx")]
-fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send> {
+fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
     use std::sync::{Arc, OnceLock};
     static SHARED: OnceLock<Arc<undercroft_embed_onnx::OnnxReranker>> = OnceLock::new();
     let arc = SHARED

@@ -38,7 +38,7 @@ pub type EmbedderFactory =
 /// model is loaded **once** in `main` and every call hands back a cheap
 /// handle onto that single shared model (an `Arc` clone), so all tenant
 /// vaults share one ONNX reranker instead of loading a copy apiece.
-pub type RerankerFactory = Box<dyn Fn() -> Box<dyn undercroft_core::rerank::Reranker + Send>>;
+pub type RerankerFactory = Box<dyn Fn() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync>>;
 
 /// The multi-tenant engine state behind the `/v1` routes. Single-threaded
 /// (the `tiny_http` request loop is sequential), so the store cache needs

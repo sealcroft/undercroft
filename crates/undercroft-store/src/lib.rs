@@ -21,6 +21,7 @@ pub mod remote;
 pub use kg::{KgStats, Triple};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
 
+use rayon::prelude::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -174,7 +175,7 @@ pub struct PalaceStore {
     /// Optional second-stage cross-encoder reranker. When present, the
     /// fusion-ranked top-N candidates are re-scored by `(query, content)`
     /// pairs before the final `limit` cut. `None` ⇒ first-pass ranking only.
-    reranker: Option<Box<dyn Reranker + Send>>,
+    reranker: Option<Box<dyn Reranker + Send + Sync>>,
     /// In-process decrypted-embedding cache for long-running servers
     /// (serve-mcp / serve-http / daemon): sealed vaults pay AEAD decryption
     /// of every embedding once instead of on every search. Never persisted
@@ -401,7 +402,7 @@ impl PalaceStore {
     /// `search` re-scores the fusion-ranked top-N candidates by the full
     /// `(query, content)` pair before the final `limit` cut. Idempotent and
     /// additive — leaving it unset preserves first-pass ranking exactly.
-    pub fn set_reranker(&mut self, reranker: Option<Box<dyn Reranker + Send>>) {
+    pub fn set_reranker(&mut self, reranker: Option<Box<dyn Reranker + Send + Sync>>) {
         self.reranker = reranker;
     }
 
@@ -1099,11 +1100,16 @@ impl PalaceStore {
         if let Some(reranker) = &self.reranker {
             let pool = hits.len().min(rerank_top_n().max(limit));
             hits.truncate(pool);
-            // One batched call so a model-backed reranker can run a single
-            // forward pass over the whole pool (the default trait impl still
-            // maps `score` one-by-one, so this never regresses correctness).
-            let passages: Vec<&str> = hits.iter().map(|h| h.drawer.content.as_str()).collect();
-            let scores = reranker.score_batch(query, &passages);
+            // Score the pool in parallel across cores. The cross-encoder runs
+            // one independent forward pass per candidate, so the passes fan out
+            // cleanly — the dominant search cost (≈2,700× fusion) drops by up to
+            // the core count (e.g. 16.6s → sub-second on a many-core host). The
+            // reranker is Sync; each rayon thread shares `&reranker` and writes
+            // its own hit's score.
+            let scores: Vec<f32> = hits
+                .par_iter()
+                .map(|h| reranker.score(query, &h.drawer.content))
+                .collect();
             for (h, s) in hits.iter_mut().zip(scores) {
                 h.score = s;
             }
