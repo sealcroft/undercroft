@@ -154,3 +154,80 @@ LongMemEval and **93.8 → 94.6** on LoCoMo under BM25.
   to our 1,982 evaluable (no-evidence QA skipped); their numbers come from
   their own harness implementation; our MiniLM inference runs tract
   (pure Rust) with 256-token truncation and mean pooling.
+
+## Retrieval performance: every lever, measured (run 2026-07-15/16, 24-core `avx512_vnni` host, inside Docker)
+
+The retrieval-quality track measured **every configurable lever** end to end.
+Full engineering rationale: [docs/RETRIEVAL_SCALING.md](../docs/RETRIEVAL_SCALING.md);
+rendered docs: the "Retrieval, scoring & scaling" page on the site.
+
+### Lever 1 — rank fusion (free accuracy)
+
+LoCoMo R@10, hash embedder: **bm25 94.6%** > legacy 92.7% > rrf 92.5%, all
+~6 ms/query. **Impact:** +1.9 pts for free. **Recommendation:** always
+`UNDERCROFT_FUSION=bm25` (the default).
+
+### Lever 2 — embedder (latency, not accuracy, under BM25)
+
+LoCoMo R@10: hash 94.6% @ ~6 ms/query vs MiniLM 94.6% @ ~128 ms/query (tract);
+ingest 9 s vs 221 s. **Impact:** under BM25 the model buys nothing on LoCoMo and
+costs ~20× query latency, ~24× ingest. **Recommendation:** hash by default; a
+model embedder earns its keep only with weaker fusion or model-favoring corpora
+— measure before paying for it.
+
+### Lever 3 — cross-encoder reranker (+3 pts, tamed from 16.6 s to ~0.1 s)
+
+The reranker lifts LoCoMo R@10 94.6 → ~98%. Its cost was retired step by step
+(302-QA subset, R@10 held ≈98% throughout):
+
+| Step | top_n=20 | top_n=10 | top_n=5 |
+|---|---|---|---|
+| sequential tract (baseline, pool ~60) | ~16,600 ms | — | — |
+| + rayon across cores | 694 ms | 389 ms | 321 ms |
+| + ORT runtime (batched) | 614 ms | 386 ms | 251 ms |
+| + ORT session pool | 427 ms | 214 ms | 142 ms |
+| + **int8 models** | **327 ms** | **171 ms** | **101 ms** |
+
+`top_n` is a true pool cap (accuracy plateaus at top_n≈20); ORT ≈2.5× tract per
+forward (identical fp32 accuracy — runtime never changes scores); int8 (a 4×
+smaller user-supplied model file, no code change) attacks the memory-bandwidth
+bound of concurrent forwards; ingest embed drops 24 s → ~5 s with ORT.
+**Recommendation:** reranker on = `UNDERCROFT_RERANKER=onnx`, `top_n=20`, the
+`ort` backend where the C++ dep is acceptable, int8 models, pool = cores
+(`UNDERCROFT_ORT_POOL`; `pool=1` on few-core boxes = batched mode). Pure-Rust
+tract remains the default fallback.
+
+### Lever 4 — candidate index at scale (synthetic corpus, hmac-only)
+
+| Mode | N=20k q/s | N=20k R@5 | N=50k q/s | N=50k R@5 | RAM |
+|---|---|---|---|---|---|
+| true full-scan | ~6.6 | 100% | ~2.6 | 100% | transient O(n) |
+| FTS prefilter (default) | 76.7 | 100% | 33.2 | 100% | on-disk |
+| **PQ prefilter** | 59.2 | 98.6% | 18.6 | **98.9%** | **codebook only (~400 KB)** |
+| in-memory HNSW | 454.1 | 93.1% | 377.7 | **71.7%** | O(corpus) |
+
+**Impact:** PQ (on-disk codes, 48 B/vector) gives bounded RAM with recall that
+is *flat in corpus size*; HNSW is fastest but holds everything in RAM and its
+recall collapses without per-size `ef` tuning; the FTS prefilter stays excellent
+on lexical-friendly corpora. **Recommendation:** hmac-only large corpora →
+`set_pq(true)`; RAM-rich + tuned → HNSW; sealed vaults keep full-scan/HNSW
+until the encrypted-at-rest index lands. IVF lists (sub-linear PQ) are the
+next step.
+
+### Lever 5 — remote vector backends (they don't offload work)
+
+Qdrant/Weaviate sat at ~0.5% CPU while the client did all crypto + scoring
+locally (by design: untrusted accelerators get sealed blobs, return only ids);
+at LoCoMo scale they were slower than the local scan. **Recommendation:** only
+for corpora too large to scan locally — never for latency, never for accuracy.
+
+### Scenario recipes
+
+| Deployment | Recipe | Expected |
+|---|---|---|
+| Personal palace (default) | hash + bm25, no reranker | ~6 ms/q, 94.6% |
+| Accuracy-critical, many-core | + reranker top_n=20, ort+int8, pool=cores | ~330 ms/q, ~98% |
+| Fast + accurate compromise | + reranker top_n=5–10, ort+int8 | ~100–170 ms/q, ~98% |
+| 4-core / edge, large corpus | hmac-only + PQ prefilter; reranker `pool=1` or off | bounded RAM; ~ms retrieval |
+| GPU box | ort CUDA EP (each forward ~1–5 ms) | reranked query well under 50 ms |
+| Huge corpus, RAM-rich | HNSW (tune `ef`/over-fetch with N) or PQ+IVF (planned) | 300+ q/s |

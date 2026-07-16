@@ -190,6 +190,27 @@ A 4-core edge box picks **IVF-PQ + ColBERT + int8**; a many-core server can add
 the **cross-encoder + rayon** fast path; a GPU box turns on **ort-CUDA**. Same
 engine, config-selected — never a rewrite.
 
+## Scenario recipes
+
+Concrete configurations with the measured expectations:
+
+| Deployment | Recipe | Expected |
+|---|---|---|
+| **Personal palace** (default) | hash + bm25, no reranker | ~6 ms/query, 94.6% R@10 |
+| **Accuracy-critical, many-core** | + reranker `top_n=20`, `ort` + int8, pool = cores | ~330 ms/query, ~98% |
+| **Fast + accurate compromise** | + reranker `top_n=5–10`, `ort` + int8 | ~100–170 ms/query, ~98% |
+| **4-core / edge, large corpus** | hmac-only + **PQ prefilter**; reranker `pool=1` or off | bounded RAM, ~ms retrieval |
+| **GPU box** | `ort` CUDA (each forward ~1–5 ms) | reranked query well under 50 ms |
+| **Huge corpus, RAM-rich** | HNSW (tune `ef` with N) or PQ+IVF (planned) | 300+ q/s |
+
+Rules of thumb from the measurements: **BM25 fusion is always on** (free
++1.9 pts); **the model embedder is not worth 20× latency under BM25** — measure
+before paying for it; **the reranker is the accuracy lever** (+3 pts) and is now
+affordable (`top_n=20`, ort+int8); **PQ is the bounded-RAM index whose recall
+holds at scale**; **remote vector DBs never make a small palace faster** — they
+are for corpora too large to scan locally, and all trust stays local
+regardless.
+
 ## Invariants preserved throughout
 
 Every option obeys the vault rules: sealed vaults never persist a
