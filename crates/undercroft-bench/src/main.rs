@@ -60,6 +60,11 @@ enum Command {
         n: usize,
         #[arg(long, default_value = "sealed")]
         level: String,
+        /// Cap the query phase to this many queries (default: one per fact).
+        /// Recall is reported over the queries actually run — an even sample
+        /// across the corpus, so large-N sweeps finish in minutes.
+        #[arg(long)]
+        queries: Option<usize>,
     },
     /// LoCoMo protocol (10 conversations, ~200 QA): session-level retrieval
     /// recall against evidence dialog ids
@@ -501,7 +506,7 @@ const QUERY_TEMPLATES: &[&str] = &[
     "remind me about the {key} for {topic}",
 ];
 
-fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
+fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<()> {
     let (_tmp, mut store) = fresh_store(level)?;
     // Deterministic distinct facts: each carries a unique key token that the
     // query paraphrases around (tests retrieval, not string equality —
@@ -525,10 +530,17 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
     }
     let ingest_secs = ingest_started.elapsed().as_secs_f32();
 
+    // Query either every fact or an even sample of `queries` of them.
+    let stride = queries
+        .map(|q| keys.len().div_ceil(q.max(1)))
+        .unwrap_or(1)
+        .max(1);
+    let q_total = keys.iter().step_by(stride).count();
+
     let mut r1 = 0u32;
     let mut r5 = 0u32;
     let query_started = Instant::now();
-    for (i, (key, topic, id)) in keys.iter().enumerate() {
+    for (i, (key, topic, id)) in keys.iter().enumerate().step_by(stride) {
         let query = QUERY_TEMPLATES[i % QUERY_TEMPLATES.len()]
             .replace("{topic}", topic)
             .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
@@ -551,9 +563,9 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
     }
     let query_secs = query_started.elapsed().as_secs_f32();
 
-    println!("Synthetic benchmark — {n} facts, level={level:?}");
-    println!("  Recall@1: {:.1}%", 100.0 * r1 as f32 / n as f32);
-    println!("  Recall@5: {:.1}%", 100.0 * r5 as f32 / n as f32);
+    println!("Synthetic benchmark — {n} facts, {q_total} queries, level={level:?}");
+    println!("  Recall@1: {:.1}%", 100.0 * r1 as f32 / q_total as f32);
+    println!("  Recall@5: {:.1}%", 100.0 * r5 as f32 / q_total as f32);
     println!(
         "  ingest:   {:.2}s ({:.1} docs/s)",
         ingest_secs,
@@ -562,9 +574,9 @@ fn run_synth(n: usize, level: SecurityLevel) -> Result<()> {
     println!(
         "  query:    {:.2}s ({:.1} q/s)",
         query_secs,
-        n as f32 / query_secs
+        q_total as f32 / query_secs
     );
-    let r5_pct = 100.0 * r5 as f32 / n as f32;
+    let r5_pct = 100.0 * r5 as f32 / q_total as f32;
     if r5_pct < 95.0 {
         anyhow::bail!("regression: synthetic Recall@5 {r5_pct:.1}% (expected >= 95%)");
     }
@@ -1190,7 +1202,7 @@ fn main() -> Result<()> {
             level,
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
-        Command::Synth { n, level } => run_synth(n, level_of(&level)),
+        Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
         Command::Locomo {
             dataset,
             k,
@@ -1283,7 +1295,7 @@ mod tests {
 
     #[test]
     fn synth_small_run_passes() {
-        run_synth(40, SecurityLevel::Sealed).expect("synthetic benchmark must pass");
+        run_synth(40, SecurityLevel::Sealed, None).expect("synthetic benchmark must pass");
     }
 
     #[test]

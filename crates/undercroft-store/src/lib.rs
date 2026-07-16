@@ -207,6 +207,13 @@ pub struct PalaceStore {
     pq_enabled: bool,
     /// The cached PQ codebook (the on-disk copy in `pq_meta` is authoritative).
     pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
+    /// The cached IVF coarse quantizer (on-disk copy in `pq_meta`, key `ivf`).
+    ivf: std::cell::RefCell<Option<pq::CoarseQuantizer>>,
+    /// Corpus size at which the PQ prefilter partitions into IVF inverted
+    /// lists (`usize::MAX` ⇒ never). See `pqidx`.
+    ivf_min: usize,
+    /// Inverted lists probed per query (`None` ⇒ `max(8, nlist/8)`).
+    ivf_nprobe: Option<usize>,
 }
 
 impl PalaceStore {
@@ -336,6 +343,15 @@ impl PalaceStore {
             hnsw: std::cell::RefCell::new(None),
             pq_enabled: false,
             pq: std::cell::RefCell::new(None),
+            ivf: std::cell::RefCell::new(None),
+            ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(pqidx::IVF_MIN_DEFAULT),
+                Err(_) => pqidx::IVF_MIN_DEFAULT,
+            },
+            ivf_nprobe: std::env::var("UNDERCROFT_IVF_NPROBE")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
@@ -2121,6 +2137,172 @@ mod tests {
             .search("kafka event stream backlog", &SearchOptions::default())
             .unwrap();
         assert!(hits[0].drawer.content.contains("kafka"));
+    }
+
+    #[test]
+    fn ivf_partitions_agree_with_flat_pq_and_self_heal() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        for i in 0..120 {
+            s.upsert(&drawer("w", "r", &format!("routine note number {i}"), i))
+                .unwrap();
+        }
+        s.upsert(&drawer(
+            "w",
+            "api",
+            "we switched to graphql because rest was chatty",
+            500,
+        ))
+        .unwrap();
+        s.set_pq(true);
+
+        // Flat PQ baseline (IVF off).
+        s.set_ivf(usize::MAX, None);
+        let flat = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+
+        // IVF on, generous probe: same result, and the rows are partitioned.
+        s.set_ivf(32, Some(4));
+        let ivf = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(ivf[0].drawer.id, flat[0].drawer.id);
+        let listed: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq WHERE list IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(listed, 121, "every code row must carry a list id");
+        let stored_ivf: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM pq_meta WHERE key = 'ivf'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_ivf, 1, "IVF centroids must persist");
+
+        // Incremental write gets a list id and stays findable through the
+        // probed path.
+        s.upsert(&drawer(
+            "w",
+            "api",
+            "kafka handles the event stream backlog now",
+            600,
+        ))
+        .unwrap();
+        let unlisted: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq \
+                 WHERE p.list IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unlisted, 0, "incremental writes must be list-assigned");
+        let hits = s
+            .search("kafka event stream backlog", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("kafka"));
+
+        // Outgrown partitions retrain: tripling the corpus past 2× the
+        // trained size must bump trained_n on the persisted centroids.
+        let before = s
+            .conn
+            .query_row("SELECT value FROM pq_meta WHERE key = 'ivf'", [], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .map(|b| pq::CoarseQuantizer::from_bytes(&b).unwrap().trained_n())
+            .unwrap();
+        for i in 0..400 {
+            s.upsert(&drawer("w", "grow", &format!("expansion fact {i}"), 1000 + i))
+                .unwrap();
+        }
+        let _ = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        let after = s
+            .conn
+            .query_row("SELECT value FROM pq_meta WHERE key = 'ivf'", [], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .map(|b| pq::CoarseQuantizer::from_bytes(&b).unwrap().trained_n())
+            .unwrap();
+        assert!(
+            after > before * 2,
+            "outgrown IVF must retrain (trained_n {before} -> {after})"
+        );
+
+        // Below the threshold the partitions are dropped, not left stale.
+        s.set_ivf(usize::MAX, None);
+        s.upsert(&drawer("w", "r", "one more to force a heal", 2000))
+            .unwrap();
+        // Corrupt the matched count so the next search rebuilds.
+        s.conn
+            .execute("DELETE FROM drawer_pq WHERE seq IN (SELECT seq FROM drawer_pq LIMIT 1)", [])
+            .unwrap();
+        let _ = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        let stored_ivf: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM pq_meta WHERE key = 'ivf'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_ivf, 0, "sub-threshold rebuild must drop IVF");
+    }
+
+    #[test]
+    fn ivf_probe_finds_the_target_in_a_strict_subset() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        let target = drawer("w", "r", "topic 3 detail number 13", 13);
+        for i in 0..200 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("topic {} detail number {i}", i % 10),
+                i,
+            ))
+            .unwrap();
+        }
+        s.set_pq(true);
+        s.set_ivf(64, Some(2));
+        // Small k so the probed lists satisfy it and the early-return branch
+        // (not the full-scan fallback) is what's under test.
+        let qvec = s.embedder.embed("topic 3 detail number 13");
+        let cands = s.pq_candidates(&qvec, 20).unwrap().expect("PQ index");
+        assert_eq!(cands.len(), 20);
+        let target_seq: i64 = s
+            .conn
+            .query_row(
+                "SELECT seq FROM drawers WHERE id = ?1",
+                [&target.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            cands.contains(&target_seq),
+            "the query's own drawer must survive a 2-list probe"
+        );
+        // And the probe really is a strict subset: no two lists cover the
+        // whole corpus (nlist = 16 at N=200).
+        let max_two_lists: i64 = s
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(c), 0) FROM (SELECT COUNT(*) c FROM drawer_pq \
+                 GROUP BY list ORDER BY c DESC LIMIT 2)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            max_two_lists < 200,
+            "a 2-list probe must scan a strict subset ({max_two_lists}/200)"
+        );
     }
 
     #[test]

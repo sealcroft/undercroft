@@ -12,23 +12,42 @@
 //! resident memory is the codebook + tables, **not** O(corpus) vectors, unlike
 //! the in-memory HNSW prototype.
 //!
-//! Coherence: `write_drawer` encodes each new/updated row incrementally with
-//! the persisted codebook; a cheap matched-count check on every search
-//! detects drift (crash between writes, missed rows) and re-encodes from
-//! scratch — mirroring the FTS index's self-heal. Deleted drawers leave
-//! orphaned code rows that the `JOIN drawers` excludes; they're swept on the
-//! next rebuild.
+//! **IVF inverted lists** make the scan sub-linear above `ivf_min` drawers:
+//! a coarse quantizer ([`crate::pq::CoarseQuantizer`], `nlist ≈ √N` centroids)
+//! partitions the corpus, each code row carries its `list` id, and a search
+//! ADC-scans only the `nprobe` lists nearest the query (indexed `WHERE list
+//! IN …`) instead of every row. Non-residual: codes are identical with or
+//! without IVF. Below `ivf_min` — or whenever a probe returns fewer than `k`
+//! rows — the flat full-code scan runs instead, so IVF can narrow the
+//! candidate set but never empty it.
+//!
+//! Coherence: `write_drawer` encodes (and list-assigns) each new/updated row
+//! incrementally with the persisted codebook; a cheap matched-count check on
+//! every search detects drift (crash between writes, missed rows) and
+//! re-encodes from scratch — mirroring the FTS index's self-heal. The IVF
+//! partitions are additionally retrained when the corpus **doubles** past
+//! their training size (centroids trained on a small corpus mis-partition a
+//! large one), and dropped entirely when the corpus is below `ivf_min` or PQ
+//! training data can't support them. Deleted drawers leave orphaned code rows
+//! that the `JOIN drawers` excludes; they're swept on the next rebuild.
 
 use undercroft_vault::SecurityLevel;
 use rusqlite::{params, OptionalExtension};
 
-use crate::pq::ProductQuantizer;
+use crate::pq::{CoarseQuantizer, ProductQuantizer};
 use crate::{PalaceStore, StoreError};
 
 /// k-means iterations and training-sample cap: PQ codebooks tolerate sampling
 /// well, and training is a one-time cost we keep to seconds.
 const PQ_TRAIN_ITERS: usize = 12;
 const PQ_TRAIN_SAMPLE: usize = 4096;
+
+/// IVF partitioning kicks in above this corpus size by default — below it the
+/// flat ADC scan is already a few milliseconds and partitions would only add
+/// recall risk. Tunable: `UNDERCROFT_IVF_MIN` (`off` disables IVF, keeping the
+/// flat PQ scan) / [`PalaceStore::set_ivf`].
+pub(crate) const IVF_MIN_DEFAULT: usize = 8192;
+const IVF_TRAIN_ITERS: usize = 10;
 
 impl PalaceStore {
     /// Enable (or disable) the on-disk PQ ANN prefilter. **hmac-only vaults
@@ -38,23 +57,43 @@ impl PalaceStore {
         self.pq_enabled = on && matches!(self.vault.level(), SecurityLevel::HmacOnly);
     }
 
+    /// Tune the IVF layer of the PQ prefilter: `min` is the corpus size at
+    /// which partitioning kicks in (`usize::MAX` ⇒ never — flat scan only),
+    /// `nprobe` the number of inverted lists a query scans (`None` ⇒ the
+    /// default `max(8, nlist/8)`). Defaults come from `UNDERCROFT_IVF_MIN` /
+    /// `UNDERCROFT_IVF_NPROBE` at open.
+    pub fn set_ivf(&mut self, min: usize, nprobe: Option<usize>) {
+        self.ivf_min = min;
+        self.ivf_nprobe = nprobe;
+    }
+
     fn pq_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS drawer_pq (
                  seq  INTEGER PRIMARY KEY,
-                 code BLOB NOT NULL
+                 code BLOB NOT NULL,
+                 list INTEGER
              );
              CREATE TABLE IF NOT EXISTS pq_meta (
                  key   TEXT PRIMARY KEY,
                  value BLOB NOT NULL
              );",
         )?;
+        // Pre-IVF (v0.14.0) tables lack the list column — migrate in place.
+        // The error on an already-migrated table is the expected case.
+        let _ = self
+            .conn
+            .execute("ALTER TABLE drawer_pq ADD COLUMN list INTEGER", []);
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS drawer_pq_list ON drawer_pq(list);",
+        )?;
         Ok(())
     }
 
     /// Vector top-`k` candidate `seq`s by streaming ADC over the on-disk
-    /// codes. `None` ⇒ no usable index (empty corpus, or a dimension PQ can't
-    /// split); the caller falls back to the full scan.
+    /// codes — only the probed inverted lists when IVF is active, every code
+    /// row otherwise. `None` ⇒ no usable index (empty corpus, or a dimension
+    /// PQ can't split); the caller falls back to the full scan.
     pub(crate) fn pq_candidates(
         &self,
         qvec: &[f32],
@@ -68,13 +107,25 @@ impl PalaceStore {
             return Ok(None);
         }
         // Self-heal: every live drawer must have a code row (orphans from
-        // deletes are excluded by the join and are harmless).
+        // deletes are excluded by the join and are harmless), and — when the
+        // corpus is IVF-sized — the partitions must exist and not be
+        // outgrown (2× their training size).
         let matched: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
             [],
             |r| r.get(0),
         )?;
-        if (self.pq.borrow().is_none() || matched != drawers) && !self.pq_build()? {
+        let want_ivf = (drawers as usize) >= self.ivf_min;
+        let ivf_stale = want_ivf && {
+            if self.ivf.borrow().is_none() {
+                self.ivf_load()?;
+            }
+            match self.ivf.borrow().as_ref() {
+                None => true,
+                Some(cq) => drawers as u64 > cq.trained_n().saturating_mul(2),
+            }
+        };
+        if (self.pq.borrow().is_none() || matched != drawers || ivf_stale) && !self.pq_build()? {
             return Ok(None);
         }
         let pq_ref = self.pq.borrow();
@@ -82,15 +133,51 @@ impl PalaceStore {
             return Ok(None);
         };
         let tables = pq.distance_tables(qvec);
-        let mut stmt = self
-            .conn
-            .prepare("SELECT p.seq, p.code FROM drawer_pq p JOIN drawers d ON d.seq = p.seq")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
-        let mut scored: Vec<(f32, i64)> = Vec::new();
-        for row in rows {
-            let (seq, code) = row?;
-            scored.push((pq.adc(&tables, &code), seq));
+        let scan = |sql: &str| -> Result<Vec<(f32, i64)>, StoreError> {
+            let mut stmt = self.conn.prepare(sql)?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+            let mut scored: Vec<(f32, i64)> = Vec::new();
+            for row in rows {
+                let (seq, code) = row?;
+                scored.push((pq.adc(&tables, &code), seq));
+            }
+            Ok(scored)
+        };
+
+        // IVF: ADC only the lists nearest the query. The cache is fresh here
+        // whether or not a rebuild just ran (pq_build retrains or drops it).
+        // If the probed lists hold fewer than `k` rows (skewed partitions,
+        // tiny corpus), widen to the full scan rather than starve the fusion
+        // stage.
+        let mut scored: Option<Vec<(f32, i64)>> = None;
+        if want_ivf {
+            if let Some(cq) = self.ivf.borrow().as_ref() {
+                let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 8).max(8));
+                let lists = cq.probe(qvec, nprobe);
+                if !lists.is_empty() {
+                    // Safe to inline: list ids are integers, not user input.
+                    let in_list = lists
+                        .iter()
+                        .map(|l| l.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let probed = scan(&format!(
+                        "SELECT p.seq, p.code FROM drawer_pq p \
+                         JOIN drawers d ON d.seq = p.seq WHERE p.list IN ({in_list})"
+                    ))?;
+                    if probed.len() >= k {
+                        scored = Some(probed);
+                    }
+                }
+            }
         }
+        let mut scored = match scored {
+            Some(s) => s,
+            None => scan(
+                "SELECT p.seq, p.code FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
+            )?,
+        };
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {
                 a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
@@ -100,9 +187,23 @@ impl PalaceStore {
         Ok(Some(scored.into_iter().map(|(_, seq)| seq).collect()))
     }
 
-    /// Load-or-train the codebook and (re)encode every drawer. Returns `false`
-    /// when the corpus can't be quantized (empty, or dimension not divisible
-    /// into subspaces) — the caller falls back to the full scan.
+    /// Fill the RAM cache from the persisted IVF centroids, if any.
+    fn ivf_load(&self) -> Result<(), StoreError> {
+        let stored: Option<Vec<u8>> = self
+            .conn
+            .query_row("SELECT value FROM pq_meta WHERE key = 'ivf'", [], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        *self.ivf.borrow_mut() = stored.and_then(|b| CoarseQuantizer::from_bytes(&b));
+        Ok(())
+    }
+
+    /// Load-or-train the codebook and (re)encode every drawer; train (or
+    /// retrain) the IVF partitions when the corpus warrants them, drop them
+    /// when it doesn't. Returns `false` when the corpus can't be quantized
+    /// (empty, or dimension not divisible into subspaces) — the caller falls
+    /// back to the full scan.
     fn pq_build(&self) -> Result<bool, StoreError> {
         let mut stmt = self
             .conn
@@ -164,20 +265,63 @@ impl PalaceStore {
             }
         };
 
+        // IVF partitions: (re)train whenever the corpus is IVF-sized and the
+        // cached centroids are absent or outgrown; drop them below the
+        // threshold so they can't silently go stale.
+        let n = items.len();
+        if n >= self.ivf_min {
+            let fresh = matches!(
+                self.ivf.borrow().as_ref(),
+                Some(cq) if n as u64 <= cq.trained_n().saturating_mul(2)
+            );
+            if !fresh {
+                let nlist = (n as f64).sqrt() as usize;
+                let nlist = nlist.clamp(16, 1024);
+                let stride = n.div_ceil(PQ_TRAIN_SAMPLE).max(1);
+                let sample: Vec<Vec<f32>> = items
+                    .iter()
+                    .step_by(stride)
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                match CoarseQuantizer::train(&sample, nlist, IVF_TRAIN_ITERS, n as u64) {
+                    Some(cq) => {
+                        self.conn.execute(
+                            "INSERT OR REPLACE INTO pq_meta (key, value) VALUES ('ivf', ?1)",
+                            params![cq.to_bytes()],
+                        )?;
+                        *self.ivf.borrow_mut() = Some(cq);
+                    }
+                    None => {
+                        self.conn
+                            .execute("DELETE FROM pq_meta WHERE key = 'ivf'", [])?;
+                        *self.ivf.borrow_mut() = None;
+                    }
+                }
+            }
+        } else {
+            self.conn
+                .execute("DELETE FROM pq_meta WHERE key = 'ivf'", [])?;
+            *self.ivf.borrow_mut() = None;
+        }
+
         self.conn.execute("DELETE FROM drawer_pq", [])?;
         let mut ins = self
             .conn
-            .prepare("INSERT OR REPLACE INTO drawer_pq (seq, code) VALUES (?1, ?2)")?;
+            .prepare("INSERT OR REPLACE INTO drawer_pq (seq, code, list) VALUES (?1, ?2, ?3)")?;
+        let ivf_ref = self.ivf.borrow();
         for (seq, vec) in &items {
-            ins.execute(params![seq, pq.encode(vec)])?;
+            let list: Option<i64> = ivf_ref.as_ref().map(|cq| cq.assign(vec) as i64);
+            ins.execute(params![seq, pq.encode(vec), list])?;
         }
+        drop(ivf_ref);
         *self.pq.borrow_mut() = Some(pq);
         Ok(true)
     }
 
     /// Incrementally encode one written drawer with the cached codebook
-    /// (called from `write_drawer` after commit). Missing codebook or any
-    /// failure is fine: the next search's matched-count check rebuilds.
+    /// (called from `write_drawer` after commit), list-assigning it when IVF
+    /// partitions are live. Missing codebook or any failure is fine: the
+    /// next search's matched-count check rebuilds.
     pub(crate) fn pq_encode_row(&self, id: &str, embedding: &[f32]) {
         if !self.pq_enabled {
             return;
@@ -186,10 +330,15 @@ impl PalaceStore {
             Some(pq) => pq.encode(embedding),
             None => return,
         };
+        let list: Option<i64> = self
+            .ivf
+            .borrow()
+            .as_ref()
+            .map(|cq| cq.assign(embedding) as i64);
         let _ = self.conn.execute(
-            "INSERT OR REPLACE INTO drawer_pq (seq, code)
-             SELECT seq, ?2 FROM drawers WHERE id = ?1",
-            params![id, code],
+            "INSERT OR REPLACE INTO drawer_pq (seq, code, list)
+             SELECT seq, ?2, ?3 FROM drawers WHERE id = ?1",
+            params![id, code, list],
         );
     }
 }
