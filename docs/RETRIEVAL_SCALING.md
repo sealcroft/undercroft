@@ -82,9 +82,57 @@ The differentiator, now confirmed at both sizes: **PQ recall is flat in N**
 (98.6% → 98.9% — ADC is exhaustive over the codes, quantization error only),
 where HNSW's graph approximation collapses without per-N tuning (93% → 72%).
 PQ's flat scan is still O(n) — q/s falls ~linearly (59 → 19), ~3–9× the true
-scan — which is exactly what **IVF inverted lists** fix (scan only the nearest
-coarse lists). HNSW stays the raw-speed option when RAM allows and its `ef` is
-tuned. **Still open:** IVF lists + the sealed-tier encrypted index.
+scan. HNSW stays the raw-speed option when RAM allows and its `ef` is tuned.
+**Still open:** the sealed-tier encrypted index.
+
+### IVF inverted lists — and the three scan bottlenecks the sweeps exposed
+
+IVF was built to make the flat ADC scan sub-linear: a coarse quantizer
+(`nlist ≈ √N` centroids, same deterministic k-means) partitions the codes,
+and a query ADC-scans only the `nprobe` nearest lists. Benchmarking it
+(synthetic corpus, hash embedder, hmac-only, 4,000 sampled queries per cell,
+second 24-core host — absolute q/s not comparable to the tables above;
+every comparison below is within one run) surfaced three structural costs,
+each fixed and re-measured:
+
+1. **Random-access layout.** With codes keyed by `seq` + a secondary `list`
+   index, every probed row was a point B-tree fetch — a 23%-fraction probe
+   ran *slower* than the sequential flat scan (16.6–22.6 q/s vs 26.5 flat
+   at N=20k, and recall tracks the probed **fraction**: 3% → 68.7%,
+   11% → 86.9%, 23% → 99.6% = flat parity). Fix: cluster the table
+   `WITHOUT ROWID, PRIMARY KEY (list, seq)` so a probed list is one
+   sequential range scan, and default `nprobe = nlist/4` (a fixed count
+   would silently lose recall as N grows). Result: probed 23% beat flat
+   28.6 vs 23.9 q/s at recall parity.
+2. **Per-search coherence check.** The matched-count `JOIN` that guarded
+   against index drift cost more at N=50k than the probed scan it guarded
+   (IVF only +13% over flat). Fix: verification is event-driven — first
+   search after open, or after a write that couldn't encode; a successful
+   incremental encode is coherent by construction. Crash drift is still
+   caught (a fresh open starts unverified).
+3. **Per-row join in the scan itself.** The scan joined `drawers` on every
+   code row only to exclude delete-orphans — one point lookup into the big
+   drawers B-tree per code (12.5k/query probed, 50k flat). Fix: scan
+   `drawer_pq` alone; `delete_drawer` purges its code row; a crash-window
+   orphan wastes one of 256 over-fetched candidate slots and is swept by
+   the next rebuild.
+
+**Final numbers** (within one uncontended run, after all three fixes):
+
+| N | flat PQ q/s | IVF-default q/s | R@5 (both) |
+|---|---|---|---|
+| 20,000 | 34.4 | **38.3** (+11%) | 99.6% |
+| 50,000 | 14.8 | **15.9** (+7%) | 99.1% |
+
+The fixes lifted the **flat** path itself ~45% (23.9 → 34.4 q/s at N=20k,
+10.1 → 14.8 at 50k, same-host same-run comparisons) — every PQ user gets
+that. IVF's *marginal* win on top is +7–11% at these sizes because the pure
+ADC arithmetic is now only ~4–6 ms even at 50k; its share (the only part of
+query cost that scales with N) grows with the corpus, so IVF is kept on by
+default above `UNDERCROFT_IVF_MIN` (8192; `off` restores the flat scan,
+`UNDERCROFT_IVF_NPROBE` overrides the probe count). Recall parity, in-place
+migration from the v0.14.0 layout, and self-healing partitions (retrain when
+the corpus doubles past their training size) are all test-asserted.
 
 ### Scoring → two strategies, chosen by the deployment
 
@@ -214,8 +262,8 @@ defaults stay local-first and pure-Rust; every faster option is opt-in.
 |---|---|---|---|
 | Full-scan cosine + BM25 | O(corpus) transient | small palaces (default) | shipped |
 | In-memory HNSW (`hnsw`) | O(corpus) | moderate corpora, raw speed | experimental |
-| **On-disk PQ** (`set_pq`) | ~O(codebook) | large corpora, edge/IoT (hmac-only) | **shipped** |
-| + IVF lists / sealed encrypted tier | ~O(codebook) | sub-linear scan; sealed vaults | planned |
+| **On-disk PQ + IVF** (`set_pq`, `UNDERCROFT_RETRIEVAL=pq`) | ~O(codebook) | large corpora, edge/IoT (hmac-only) | **shipped** |
+| + sealed encrypted tier | ~O(codebook) | sealed vaults | planned |
 
 **Scoring**
 
@@ -246,10 +294,12 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    tract kept as fallback. Measured: ingest ~4–5× faster; reranker
    **327 ms @ 98.3% (top_n=20) / 101 ms @ 98.0% (top_n=5)** with the session
    pool + int8 models — ~100–160× over the original sequential reranker.
-3. **On-disk PQ retrieval (done, flat):** bounded-RAM prefilter for hmac-only
-   vaults — 59 q/s @ 98.6% R@5 at N=20k, codebook-only RAM, recall holds where
-   HNSW's collapses. Remaining: IVF inverted lists (sub-linear) + the
-   sealed-tier encrypted-at-rest index.
+3. **On-disk PQ retrieval (done, flat + IVF):** bounded-RAM prefilter for
+   hmac-only vaults — codebook-only RAM, recall holds where HNSW's collapses.
+   IVF inverted lists shipped on top (clustered `(list, seq)` layout,
+   `nprobe = nlist/4`, self-healing partitions) and the scan-path fixes they
+   motivated lifted flat PQ itself ~45%; IVF adds +7–11% at N=20–50k and
+   grows with N. Remaining: the sealed-tier encrypted-at-rest index.
 4. **ColBERT late interaction** — the core-independent scoring default (the
    4-core answer); cross-encoder+rayon stays as the many-core fast path.
 5. **Sealed-tier encrypted-at-rest** IVF-PQ + ColBERT token store (research).

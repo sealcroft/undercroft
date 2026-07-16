@@ -96,9 +96,22 @@ disk, and only a ~400 KB codebook stays resident. Measured at N=20,000
 
 **PQ's recall is flat in N** (98.6% → 98.9% — it scans every code, so the only
 error is quantization), where the graph-based HNSW collapses without per-size
-tuning (93% → 72%). PQ's flat scan is still O(n) in latency — the planned IVF
-inverted lists make it sub-linear. Sealed vaults keep full-scan/HNSW: their
-on-disk index must be encrypted at rest, which is the research follow-up.
+tuning (93% → 72%). Sealed vaults keep full-scan/HNSW: their on-disk index
+must be encrypted at rest, which is the research follow-up.
+
+**IVF inverted lists** now sit on top of the codes: a coarse quantizer
+(`√N` centroids) partitions the corpus, codes are physically clustered by
+list on disk, and a query ADC-scans only the quarter of lists nearest it —
+recall tracks the probed fraction, and a quarter is exactly recall parity
+(measured: 99.6% at N=20k, 99.1% at 50k, identical to the flat scan).
+Benchmarking IVF exposed three structural costs in the scan path — a
+random-access row layout, a per-search coherence check, and a per-row join —
+and fixing them lifted **flat PQ itself ~45%** (within-run: 23.9 → 34.4 q/s
+at N=20k, 10.1 → 14.8 at 50k). IVF's marginal gain on top is +7–11% at these
+sizes and grows with the corpus, since the probed scan is the only query cost
+that scales with N. On by default above `UNDERCROFT_IVF_MIN` (8192) whenever
+PQ is enabled (`UNDERCROFT_RETRIEVAL=pq`, now wired through the CLI and the
+multi-tenant `/v1` server, not just the bench harness).
 
 ### Remote vector backends are untrusted accelerators, not a store swap
 
@@ -201,7 +214,7 @@ Concrete configurations with the measured expectations:
 | **Fast + accurate compromise** | + reranker `top_n=5–10`, `ort` + int8 | ~100–170 ms/query, ~98% |
 | **4-core / edge, large corpus** | hmac-only + **PQ prefilter**; reranker `pool=1` or off | bounded RAM, ~ms retrieval |
 | **GPU box** | `ort` CUDA (each forward ~1–5 ms) | reranked query well under 50 ms |
-| **Huge corpus, RAM-rich** | HNSW (tune `ef` with N) or PQ+IVF (planned) | 300+ q/s |
+| **Huge corpus, RAM-rich** | HNSW (tune `ef` with N) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded RAM (PQ+IVF) |
 
 Rules of thumb from the measurements: **BM25 fusion is always on** (free
 +1.9 pts); **the model embedder is not worth 20× latency under BM25** — measure
