@@ -31,8 +31,9 @@
 //! probed scan it guarded). The IVF partitions are additionally retrained
 //! when the corpus **doubles** past their training size (centroids trained on
 //! a small corpus mis-partition a large one), and dropped by any rebuild that
-//! finds the corpus below `ivf_min`. Deleted drawers leave orphaned code rows
-//! that the `JOIN drawers` excludes; they're swept on the next rebuild.
+//! finds the corpus below `ivf_min`. `delete_drawer` purges its code row;
+//! an orphan surviving a crash window merely wastes a candidate slot (the
+//! hydration query filters against live drawers) until the next rebuild.
 
 use undercroft_vault::SecurityLevel;
 use rusqlite::{params, OptionalExtension};
@@ -188,6 +189,13 @@ impl PalaceStore {
             return Ok(None);
         };
         let tables = pq.distance_tables(qvec);
+        // The scan reads codes only — no `JOIN drawers`. Measured at N=50k,
+        // the per-row join (one point lookup into the big drawers B-tree per
+        // code) cost several times the ADC arithmetic it accompanied.
+        // Delete-orphans are purged by `delete_drawer`; any survivor (crash
+        // window) wastes a candidate slot downstream — the hydration query
+        // filters `seq IN (...)` against live drawers — and is swept by the
+        // next rebuild.
         let scan = |sql: &str| -> Result<Vec<(f32, i64)>, StoreError> {
             let mut stmt = self.conn.prepare(sql)?;
             let rows =
@@ -227,8 +235,7 @@ impl PalaceStore {
                         .collect::<Vec<_>>()
                         .join(",");
                     let probed = scan(&format!(
-                        "SELECT p.seq, p.code FROM drawer_pq p \
-                         JOIN drawers d ON d.seq = p.seq WHERE p.list IN ({in_list})"
+                        "SELECT seq, code FROM drawer_pq WHERE list IN ({in_list})"
                     ))?;
                     if probed.len() >= k {
                         scored = Some(probed);
@@ -238,9 +245,7 @@ impl PalaceStore {
         }
         let mut scored = match scored {
             Some(s) => s,
-            None => scan(
-                "SELECT p.seq, p.code FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
-            )?,
+            None => scan("SELECT seq, code FROM drawer_pq")?,
         };
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {

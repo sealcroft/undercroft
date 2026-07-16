@@ -2365,6 +2365,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(dup, 0, "an updated drawer must occupy exactly one list");
+
+        // Deleting a drawer purges its code row (the scan doesn't join
+        // drawers, so orphans would linger as dead candidate slots).
+        let victim = drawer("w", "r", "migration note 5", 5);
+        assert!(s.delete_drawer(&victim.id).unwrap());
+        let orphans: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq WHERE seq NOT IN (SELECT seq FROM drawers)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0, "delete must purge the PQ code row");
     }
 
     #[test]
