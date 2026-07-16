@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.17.0 — Sealed-tier encrypted-at-rest index
+
+Sealed vaults had one retrieval mode: decrypt-scan every embedding on every
+query. They now run the full PQ/IVF prefilter under the same invariant —
+**nothing plaintext-derived ever touches sealed disk in clear** — and search
+went from **2.1 → 33.4 q/s at N=20k (×16)** and 1.1 → 11.8 at 50k (×11), at
+parity with the plaintext hmac-only index. Encryption stops being a
+query-time cost.
+
+- **Sealed index storage** (`Vault::index_at_rest`/`index_from_rest`, `/pq`
+  AAD domain): every code row is sealed as `(list ‖ code)` bound to its row
+  seq; the codebook and IVF centroids in `pq_meta` are sealed under synthetic
+  record ids. The plaintext `list` column stays `-1` on sealed vaults — a
+  clear list id would leak which drawers are semantically similar. Identity
+  transform on hmac-only vaults, so existing indexes read unchanged.
+- **Decrypt-once RAM cache**: search decrypts all rows one time per open
+  (~52 B/drawer — 2.6 MB at N=50k, bounded) and ADC-scans + IVF-probes in
+  RAM; writes keep the cache coherent with the plaintext in hand, deletes
+  drop it. At N=50k the cache even out-ran the hmac path's per-query SQLite
+  streaming — adopting the same cache for hmac-only is a noted follow-up.
+- **Threat model**: an offline attacker sees fixed-size sealed blobs — i.e.
+  the drawer count already visible from the drawers table. Nothing about
+  content, similarity, or cluster structure.
+- **Invariant test strengthened, not relaxed**: sealed vaults may now hold
+  the PQ tables, but no row contains a plain code, the metadata doesn't
+  decode without the vault key, list ids are never in clear, and results
+  agree with the decrypt-scan baseline across a cache rebuild. e2e
+  re-asserts the at-rest plaintext grep with the index present.
+- `set_pq` / `UNDERCROFT_RETRIEVAL=pq` now applies to both security levels.
+- Docs: sealed-tier measured tables, and a new **"Restore economics"**
+  design section (portable content-addressed derived artifacts, background
+  backfill, token-store PQ with register-LUT MaxSim — the roadmap for
+  fast shard restore).
+
 ## 0.16.0 — ColBERT late interaction
 
 The core-count-independent second retrieval stage. The cross-encoder reranker

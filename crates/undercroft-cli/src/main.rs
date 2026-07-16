@@ -540,8 +540,9 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
 
 /// Select the candidate-generation strategy via `UNDERCROFT_RETRIEVAL`
 /// (same contract as the bench harness). Unset ⇒ the default full scan with
-/// the FTS prefilter. `pq` enables the on-disk PQ/IVF prefilter — a
-/// documented no-op on sealed vaults (no plaintext-derived index on disk).
+/// the FTS prefilter. `pq` enables the on-disk PQ/IVF prefilter — plain
+/// codes on hmac-only vaults, AEAD-sealed rows + a decrypt-once RAM cache
+/// on sealed vaults.
 fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
     match std::env::var("UNDERCROFT_RETRIEVAL").as_deref() {
         Ok("pq") => store.set_pq(true),

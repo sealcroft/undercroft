@@ -229,6 +229,36 @@ impl Vault {
         }
     }
 
+    /// Store a retrieval-index artifact (PQ code row, codebook, IVF
+    /// centroids — all plaintext-derived). Sealed vaults seal it under the
+    /// `/pq` AAD domain; callers pass the owning drawer id for per-row
+    /// artifacts or a stable synthetic id (e.g. `"pq/codebook"`) for
+    /// index-wide ones. This closes the sealed-tier gap: sealed vaults can
+    /// now persist an ANN index because none of it ever touches disk in
+    /// clear — the search layer decrypts it once per open into a bounded
+    /// RAM cache and scans there.
+    pub fn index_at_rest(&self, record_id: &str, bytes: &[u8]) -> Vec<u8> {
+        match self.level {
+            SecurityLevel::Sealed => {
+                seal::seal_content(&self.enc_key, &self.id, &format!("{record_id}/pq"), bytes)
+            }
+            SecurityLevel::HmacOnly => bytes.to_vec(),
+        }
+    }
+
+    /// Recover a retrieval-index artifact from its at-rest form.
+    pub fn index_from_rest(&self, record_id: &str, blob: &[u8]) -> Result<Vec<u8>, VaultError> {
+        match self.level {
+            SecurityLevel::Sealed => Ok(seal::open_content(
+                &self.enc_key,
+                &self.id,
+                &format!("{record_id}/pq"),
+                blob,
+            )?),
+            SecurityLevel::HmacOnly => Ok(blob.to_vec()),
+        }
+    }
+
     /// HMAC tag for a record's canonical bytes.
     pub fn tag(&self, canonical: &[u8]) -> [u8; HMAC_LEN] {
         record_hmac(&self.mac_key, canonical)

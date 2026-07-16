@@ -257,14 +257,79 @@ Still open on this path:
 
 | Vault level | Retrieval index | Token/rescore store | RAM |
 |---|---|---|---|
-| **hmac-only** | on-disk IVF-PQ (plain) | on-disk ColBERT tokens (plain) | bounded |
-| **sealed** | IVF-PQ **encrypted at rest** | ColBERT tokens **encrypted at rest** | working set only |
+| **hmac-only** | on-disk IVF-PQ (plain) — shipped | on-disk ColBERT tokens (plain) — shipped | bounded |
+| **sealed** | IVF-PQ **encrypted at rest** — shipped | ColBERT tokens **encrypted at rest** — shipped | bounded (decrypt-once cache) |
+
+**Sealed IVF-PQ, measured** (synth, 4,000 sampled queries, within one run):
+every code row is AEAD-sealed (`list ‖ code`, bound to its seq under the
+`/pq` AAD domain — a plaintext list id would leak semantic clustering), the
+codebook/centroids are sealed in `pq_meta`, and search decrypts all rows
+**once per open** into a ~52 B/drawer RAM cache and ADC-scans there. An
+offline attacker sees fixed-size sealed blobs — the drawer count it already
+knows.
+
+| Sealed vault | N=20k q/s | N=20k R@5 | N=50k q/s | N=50k R@5 |
+|---|---|---|---|---|
+| decrypt-scan (old only option) | 2.1 | 99.9% | 1.1 | 99.9% |
+| **sealed IVF-PQ** | **33.4 (×16)** | 99.6% | **11.8 (×11)** | 99.1% |
+| hmac-only IVF-PQ (within-run ref) | 37.1 | 99.6% | 8.1 | 99.1% |
+
+Encryption stops being a query-time cost: at 20k the sealed path runs at
+~90% of the plaintext index, and at 50k it *beat* the within-run plaintext
+reference — the decrypt-once RAM cache skips the per-query SQLite code
+streaming that hmac-only still pays (cross-run note: a quieter v0.15 run
+measured hmac@50k at 14.8 q/s, so treat the 50k ordering as parity, not a
+sealed win). Obvious follow-up: give hmac-only the same RAM cache.
 
 hmac-only content is already unencrypted on disk, so on-disk indexes are
 invariant-consistent — this mirrors the existing on-disk FTS5, which sealed
-vaults never get. Sealed vaults keep the same structures but encrypted at rest,
-with only the working set decrypted transiently (like the emb cache). The
-encrypted-at-rest, page-decryptable sealed index is the genuine research item.
+vaults never get (FTS is inherently a plaintext structure). Sealed vaults now
+keep the same PQ/IVF structures **encrypted at rest** with a decrypt-once RAM
+cache (~52 B/drawer — 5 MB per 100k drawers, bounded). The remaining research
+refinement is *page-level* decryption (decrypt only probed lists instead of
+all codes at open) — worthwhile only past the multi-million-drawer mark where
+the cache warmup itself gets heavy.
+
+## Restore economics — derived data is a portable, verifiable cache
+
+Restoring or importing a shard today rebuilds the derived artifacts, and they
+are wildly asymmetric: FTS re-triggers in seconds, PQ/IVF retrains in ~10–20 s
+at 20k drawers — but **ColBERT token matrices cost one transformer forward
+per drawer** (~2 h for 20k on tract, serial). The plan, in leverage order:
+
+1. **Portable artifacts (transport beats recompute).** Every derived
+   artifact is a pure function of `(content, model identity)`, and drawer
+   ids are already deterministic — so token matrices, PQ codes, and
+   codebooks are *content-addressed cache* and can ship inside export
+   bundles. Restore becomes copy + verify, zero forwards. The architecture
+   makes this uniquely safe: artifacts are advisory (self-heal rebuilds on
+   mismatch), model identity is checked before use, and every served result
+   is still HMAC-verified — an imported artifact can only mis-rank, never
+   forge. Sealed artifacts re-seal under the destination vault key (pairs
+   with recipient-encrypted export bundles on the roadmap).
+2. **Instant restore, background accuracy.** Drawers without token matrices
+   already keep their fusion rank, so a restored shard serves at bm25
+   quality immediately and climbs to late-interaction quality as a backfill
+   worker (`repair`/daemon) encodes matrices — with ort int8 + batching +
+   rayon, ~10 min for 20k drawers instead of ~2 h.
+3. **Token-store PQ + pruning (the PLAID move) — compression that speeds
+   scoring up.** Re-use [pq.rs](../crates/undercroft-store/src/pq.rs) on the
+   token vectors: at `m=16` a token is 16 bytes (8× below today's int8, 32×
+   below f32), and MaxSim becomes per-query-token **lookup-table adds**
+   instead of 128-dim dot products — the FAISS 4-bit "fast-scan" kernel
+   layout (LUTs in SIMD registers) is portable to pure-Rust `std::arch`, no
+   C++ dependency. Add doc-token pruning (drop punctuation/low-salience
+   rows, keep ~top-50) for another ~3× that often *improves* accuracy by
+   removing noise. A **shared codebook shipped with the model**
+   (identity-tracked like the embedder) makes codes portable across vaults
+   and shard restores retrain-free. Accuracy gate: LoCoMo must hold
+   ≥96.5% R@10.
+
+Nothing standard offers this combination: late-interaction retrieval whose
+entire derived state is **AEAD-sealed at rest, content-addressed, portable
+across backups, self-healing, and scored via register-LUT MaxSim over PQ
+codes**. Recompute-everything is slow; plaintext indexes are leaky; this is
+neither.
 
 ## Configurable — pick per deployment, not one-size-fits-all
 
@@ -321,9 +386,15 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    Sealed vaults AEAD-seal the token store — the first encrypted-at-rest
    derived store. Remaining: `ort` query-forward backend, PLAID-style token
    compression.
-5. **Sealed-tier encrypted-at-rest retrieval index** (research) — the token
-   *rescore* store shipped sealed in (4); the open half is the *prefilter*
-   (IVF-PQ codes) for sealed vaults.
+5. **Sealed-tier encrypted-at-rest retrieval index (done):** the token
+   *rescore* store shipped sealed in (4), and the IVF-PQ *prefilter* now
+   ships sealed too — AEAD rows + decrypt-once RAM cache; sealed search
+   **2.1 → 33.4 q/s at N=20k (×16)**, parity with the plaintext index.
+   Remaining refinements: the hmac-only path can adopt the same RAM cache;
+   page-level decryption matters only past multi-million drawers.
+6. **Restore economics** (next): portable derived artifacts in export
+   bundles, background backfill, token-store PQ with register-LUT MaxSim —
+   see "Restore economics" above.
 
 The in-memory HNSW (`hnsw` feature) stays as an experimental fast path for
 moderate sealed corpora and as the benchmark baseline — not the default.

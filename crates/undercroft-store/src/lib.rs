@@ -41,6 +41,9 @@ const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 /// runs per candidate, so this bounds the added latency.
 const DEFAULT_RERANK_TOP_N: usize = 50;
 
+/// One decrypted sealed-PQ cache row: `(seq, list, code)`.
+pub(crate) type PqCacheRow = (i64, i64, Vec<u8>);
+
 pub(crate) fn rerank_top_n() -> usize {
     std::env::var("UNDERCROFT_RERANK_TOP_N")
         .ok()
@@ -215,6 +218,9 @@ pub struct PalaceStore {
     pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
     /// The cached IVF coarse quantizer (on-disk copy in `pq_meta`, key `ivf`).
     ivf: std::cell::RefCell<Option<pq::CoarseQuantizer>>,
+    /// Sealed vaults only: `(seq, list, code)` rows decrypted once per open
+    /// (~52 B per drawer — bounded), scanned in RAM. See `pqidx`.
+    pq_cache: std::cell::RefCell<Option<Vec<PqCacheRow>>>,
     /// Whether the PQ index passed its coherence check since the last event
     /// that could break it (open, or a write that failed to encode). While
     /// true, searches skip the O(corpus) verification entirely. See `pqidx`.
@@ -358,6 +364,7 @@ impl PalaceStore {
             pq_enabled: false,
             pq: std::cell::RefCell::new(None),
             ivf: std::cell::RefCell::new(None),
+            pq_cache: std::cell::RefCell::new(None),
             pq_verified: std::cell::Cell::new(false),
             pq_live: std::cell::Cell::new(0),
             ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
@@ -2513,26 +2520,104 @@ mod tests {
     }
 
     #[test]
-    fn pq_never_touches_sealed_vault_disk() {
+    fn sealed_pq_stores_nothing_plaintext_derived_in_clear() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.upsert(&drawer("w", "r", "sealed content stays sealed", 0))
+        for i in 0..30 {
+            s.upsert(&drawer("w", "r", &format!("routine note number {i}"), i))
+                .unwrap();
+        }
+        s.upsert(&drawer(
+            "w",
+            "api",
+            "we switched to graphql because rest was chatty",
+            100,
+        ))
+        .unwrap();
+
+        // Sealed baseline (decrypt-scan), then the sealed PQ path: results
+        // must agree.
+        let full = s
+            .search("why did we switch to graphql", &SearchOptions::default())
             .unwrap();
-        s.set_pq(true); // documented no-op on sealed vaults
-        let _ = s
-            .search("sealed content", &SearchOptions::default())
+        s.set_pq(true);
+        let pre = s
+            .search("why did we switch to graphql", &SearchOptions::default())
             .unwrap();
-        let n: i64 = s
+        assert_eq!(pre[0].drawer.id, full[0].drawer.id);
+
+        // The index exists — but nothing on disk is in clear.
+        // (1) Every row's blob must differ from the plain (list ‖ code)
+        //     packing of its embedding, and the list column must carry no
+        //     information.
+        let coded: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(coded, 31, "sealed vaults get the PQ index too");
+        let clear_lists: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq WHERE list != -1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(clear_lists, 0, "list ids must never be stored in clear");
+        {
+            let pq_ref = s.pq.borrow();
+            let pq = pq_ref.as_ref().expect("codebook cached");
+            let emb = s
+                .embedder
+                .embed("we switched to graphql because rest was chatty");
+            let plain_code = pq.encode(&emb);
+            let blobs: Vec<Vec<u8>> = s
+                .conn
+                .prepare("SELECT code FROM drawer_pq")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert!(
+                blobs.iter().all(|b| !b
+                    .windows(plain_code.len())
+                    .any(|w| w == plain_code.as_slice())),
+                "no sealed row may contain a plain code"
+            );
+        }
+        // (2) The codebook/IVF metadata must not decode as plaintext.
+        let meta: Vec<u8> = s
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('drawer_pq','pq_meta')",
+                "SELECT value FROM pq_meta WHERE key = 'codebook'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(
-            n, 0,
-            "sealed vaults must never get plaintext-derived PQ tables on disk"
+        assert!(
+            pq::ProductQuantizer::from_bytes(&meta).is_none(),
+            "sealed codebook must not be readable without the vault key"
         );
+
+        // Incremental sealed write stays findable (cache kept coherent).
+        s.upsert(&drawer(
+            "w",
+            "api",
+            "kafka handles the event stream backlog now",
+            200,
+        ))
+        .unwrap();
+        let hits = s
+            .search("kafka event stream backlog", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("kafka"));
+
+        // Reopen semantics: a fresh cache (decrypt-on-open path) reproduces
+        // the same candidates.
+        s.pq_cache.borrow_mut().take();
+        s.pq_verified.set(false);
+        let again = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(again[0].drawer.id, full[0].drawer.id);
     }
 
     #[test]

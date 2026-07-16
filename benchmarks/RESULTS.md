@@ -241,7 +241,7 @@ is *flat in corpus size*; HNSW is fastest but holds everything in RAM and its
 recall collapses without per-size `ef` tuning; the FTS prefilter stays excellent
 on lexical-friendly corpora. **Recommendation:** hmac-only large corpora →
 `set_pq(true)` / `UNDERCROFT_RETRIEVAL=pq`; RAM-rich + tuned → HNSW; sealed
-vaults keep full-scan/HNSW until the encrypted-at-rest index lands.
+vaults get the sealed IVF-PQ variant (see the sealed section below).
 
 #### IVF inverted lists + the PQ scan-path fixes (second host; within-run comparisons)
 
@@ -273,6 +273,26 @@ arithmetic is only ~4–6 ms even at 50k; it is the only query cost that scales
 with N, so its share grows with the corpus. **Recommendation:** leave IVF on
 (default above `UNDERCROFT_IVF_MIN=8192`); recall parity and self-healing
 partitions are test-asserted.
+
+#### Sealed vaults get the index too (encrypted at rest, run 2026-07-16)
+
+Sealed vaults previously had one retrieval mode: decrypt-scan every
+embedding per query. The PQ/IVF prefilter now applies at both security
+levels — sealed rows, codebook, and centroids are AEAD-sealed (`/pq` AAD
+domain; list ids never in clear) and search ADC-scans a RAM cache decrypted
+once per open (~52 B/drawer):
+
+| Sealed vault | N=20k q/s | N=50k q/s | R@5 (20k/50k) |
+|---|---|---|---|
+| decrypt-scan (before) | 2.1 | 1.1 | 99.9% / 99.9% |
+| **sealed IVF-PQ** | **33.4 (×16)** | **11.8 (×11)** | 99.6% / 99.1% |
+| hmac-only IVF-PQ (within-run ref) | 37.1 | 8.1 | 99.6% / 99.1% |
+
+**Impact:** encrypted-at-rest search at plaintext-index speed (parity with
+the hmac path; the sealed RAM cache even skips hmac's per-query SQLite
+streaming at 50k). Nothing plaintext-derived touches sealed disk —
+test-asserted. **Recommendation:** sealed + large corpus →
+`UNDERCROFT_RETRIEVAL=pq`, same as hmac-only.
 
 ### Lever 5 — remote vector backends (they don't offload work)
 
