@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.14.0 — Retrieval performance & scaling
+
+The retrieval-performance track: every configurable lever measured end to end
+(LoCoMo + synthetic corpora, 24-core host, in Docker), and the expensive ones
+retired. Headline: the optional cross-encoder reranker drops **16.6 s → 101–327
+ms per query at ~98% R@10**, and large hmac-only corpora get a bounded-RAM
+on-disk ANN prefilter. Everything is opt-in; default search behaviour and the
+default build are unchanged.
+
+- **Reranker latency, step by step** (302-QA LoCoMo subset, R@10 ≈98%
+  throughout): rayon-parallel scoring across cores (16.6 s → 694 ms) →
+  `UNDERCROFT_RERANK_TOP_N` is now a true rerank-pool cap (accuracy plateaus at
+  ≈20; a real latency knob) → `Reranker::score_batch` becomes the whole-pool
+  trait interface so the backend owns parallelization → ONNX Runtime backend +
+  int8 models take top_n=20 to **327 ms** and top_n=5 to **101 ms**.
+- **New `undercroft-embed-ort` crate**: an ONNX Runtime inference backend
+  (embedder + reranker) as an opt-in alternative to the pure-Rust tract
+  default (~2.5× faster per forward, identical scores; C++ dependency — see
+  the `ort-build` compose service). Session pool sized to cores
+  (`UNDERCROFT_ORT_POOL`; `pool=1` = batched mode for few-core boxes). int8
+  quantized models (4× smaller files, user-supplied, no code change) attack
+  the memory-bandwidth bound; ingest embedding drops 24 s → ~5 s.
+- **On-disk Product-Quantization prefilter** for hmac-only vaults: 48-byte PQ
+  codes per drawer (`drawer_pq`) + a ~400 KB codebook (`pq_meta`), incremental
+  encode on write, count-mismatch self-heal on open. Recall is *flat in corpus
+  size* (98.6% at N=20k → 98.9% at N=50k) with codebook-only RAM, while
+  in-memory ANN recall collapses untuned. Opt-in via
+  `PalaceStore::set_pq(true)` (bench: `UNDERCROFT_RETRIEVAL=pq`). **Sealed
+  vaults are untouched** — the no-plaintext-derived-index-on-disk invariant
+  holds and is test-asserted; CLI wiring is a follow-up.
+- **Experimental in-memory HNSW prefilter** (`hnsw` feature, off by default):
+  fastest option measured (378 q/s at N=50k) but O(corpus) RAM and recall
+  needs `ef`/over-fetch scaling with N — kept as a raw-speed option, RAM-only,
+  never persisted.
+- **Multi-tenant `/v1` shared-model reranker**: the tenant server loads one
+  ONNX model and hands every per-vault store an `Arc` handle
+  (`Tenancy::with_reranker`), closing the v0.13.0 follow-up.
+- **Benchmarks**: full sharded LoCoMo reranker run — R@10 **94.6 → 97.68**
+  (1936/1982); conversation-scoped `--skip`/`--limit` sharding +
+  machine-readable `LOCOMO_RAW`/`LME_RAW` numerator lines; per-phase
+  `LOCOMO_TIMING` (ingest vs search); `--backend` for measuring remote
+  vector backends (confirmed idle untrusted accelerators — never a latency
+  or accuracy lever).
+- **Docs**: `docs/RETRIEVAL_SCALING.md` (architecture + every measured
+  number + the IVF/ColBERT plan), the public "Retrieval, scoring & scaling"
+  site page, `docs/MULTI_TENANCY.md`, and the `benchmarks/RESULTS.md`
+  "every lever" section with scenario recipes.
+- `.gitattributes` forces LF checkout (Windows clones broke bind-mounted
+  scripts inside the Docker test containers).
+
 ## 0.13.0 — Cross-encoder reranker
 
 An optional second retrieval stage. After hybrid search's cosine+BM25 fusion

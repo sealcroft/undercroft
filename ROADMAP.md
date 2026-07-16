@@ -162,9 +162,29 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   serve-mcp / daemon / bench. Full sharded benchmark + landing headline bars =
   follow-up; multi-tenant `/v1` reranker = follow-up (with shared-model item).
 
-## v0.13.1 — Reranker follow-ups (in progress, `wip/reranker-followups`)
+## v0.14.0 — Retrieval performance & scaling (done)
 
-Closes the v0.13.0 follow-up items:
+Every retrieval lever measured end to end; the expensive ones retired.
+Reranker query cost **16.6 s → 101–327 ms at ~98% R@10**; bounded-RAM on-disk
+ANN for large hmac-only corpora. All opt-in; defaults unchanged.
+
+- **Reranker latency ladder**: rayon-parallel scoring → `RERANK_TOP_N` as a
+  true pool cap (knee ≈20) → `score_batch` whole-pool trait interface → new
+  **`undercroft-embed-ort`** crate (ONNX Runtime backend, opt-in C++ dep,
+  ~2.5× tract per forward, identical scores) with a session pool
+  (`UNDERCROFT_ORT_POOL`, `pool=1` = batched) + int8 model support. Ingest
+  embedding 24 s → ~5 s.
+- **On-disk PQ prefilter** (hmac-only vaults): 48 B codes + ~400 KB codebook,
+  incremental encode, self-heal; recall flat in N (98.9% at 50k) with
+  codebook-only RAM. `set_pq(true)`; sealed vaults untouched (invariant
+  test-asserted). **Experimental in-memory HNSW** (`hnsw` feature): fastest,
+  but O(corpus) RAM and needs `ef` scaling — RAM-only, never persisted.
+- Remote vector backends measured under load: idle untrusted accelerators
+  (by design) — never a latency/accuracy lever.
+- Docs: `docs/RETRIEVAL_SCALING.md`, the public "Retrieval, scoring &
+  scaling" page, RESULTS.md "every lever" + scenario recipes.
+
+Also closes the v0.13.0 follow-up items:
 
 - **Shared-model `/v1` reranker**: the multi-tenant server loads one
   `OnnxReranker` and hands every per-vault store a cheap `Arc` handle onto
@@ -185,19 +205,24 @@ Closes the v0.13.0 follow-up items:
 
 ## Next
 
-- **Scale**: L2 on-demand room loading heuristics; ANN index (HNSW) atop
-  the warmed cache for very large palaces.
-- **Reranker latency**: rayon-parallelize the serial rerank loop
-  (`store/lib.rs`); A/B a lower `DEFAULT_RERANK_TOP_N` (50 → ~20); batched
-  `score_batch`. All off-by-default, so non-opt-in users are unaffected.
+- **IVF inverted lists** over the PQ codes: coarse-quantize, scan only the
+  nearest lists — makes the flat O(n) ADC scan sub-linear while keeping the
+  bounded-RAM/on-disk properties. The direct successor to v0.14.0's PQ.
+- **ColBERT late interaction**: a core-count-independent second stage (~one
+  forward per query instead of top_n) — the few-core endgame. Build plan in
+  [docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md).
+- **Sealed-tier encrypted-at-rest index** (research): an ANN index sealed
+  vaults can persist without violating the no-plaintext-derived-index
+  invariant — PQ/ColBERT stores AEAD-sealed at rest.
+- **Retrieval wiring**: CLI/env surface for `set_pq` and the ort backend
+  (bench-only today); HNSW `ef`/over-fetch scaling with corpus size.
+- **Durability**: ingest fsync + audit-chain atomicity design (chain head
+  and SQLite must move together across power loss).
 - **Orchestrator**: the multi-tenant routing/migration/key-minting layer as
   a separate optional tool (`examples/orchestrator/` or sibling crate),
   keeping the engine tree-blind — see [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
-- **Operability** (planned track below): observability/telemetry
-  (v0.9.0), live memory telemetry (v0.10.0), and a retro real-time
-  Palace Monitor UI (v0.11.0).
 
 ---
 
