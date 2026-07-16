@@ -210,9 +210,39 @@ tract remains the default fallback.
 is *flat in corpus size*; HNSW is fastest but holds everything in RAM and its
 recall collapses without per-size `ef` tuning; the FTS prefilter stays excellent
 on lexical-friendly corpora. **Recommendation:** hmac-only large corpora →
-`set_pq(true)`; RAM-rich + tuned → HNSW; sealed vaults keep full-scan/HNSW
-until the encrypted-at-rest index lands. IVF lists (sub-linear PQ) are the
-next step.
+`set_pq(true)` / `UNDERCROFT_RETRIEVAL=pq`; RAM-rich + tuned → HNSW; sealed
+vaults keep full-scan/HNSW until the encrypted-at-rest index lands.
+
+#### IVF inverted lists + the PQ scan-path fixes (second host; within-run comparisons)
+
+Adding IVF (coarse quantizer, `nlist ≈ √N`, probe the nearest `nlist/4` lists)
+exposed and fixed three structural costs in the PQ scan path — measured on a
+second 24-core host, so these tables compare only within their own runs:
+
+| Fix (each re-measured) | flat @20k | probed @20k, ~23–25% fraction |
+|---|---|---|
+| baseline (seq-keyed codes + per-row join) | 26.5 q/s | 19.4 q/s (**slower than flat**) |
+| + clustered `(list, seq)` layout | 23.9 | 28.6 |
+| + event-driven coherence (no per-search join-count) | — | ~+14% on probed cells |
+| + scan without the per-row `drawers` join | **34.4** | **38.3** |
+
+Recall is identical across every version (deterministic pipeline) and tracks
+the probed **fraction**: 3% → 68.7%, 11% → 86.9%, 23% → 99.6% = flat parity —
+hence the fraction-based `nprobe` default.
+
+Final (all fixes, one uncontended run):
+
+| N | flat PQ | IVF-default | R@5 (both) |
+|---|---|---|---|
+| 20,000 | 34.4 q/s | **38.3 q/s** (+11%) | 99.6% |
+| 50,000 | 14.8 q/s | **15.9 q/s** (+7%) | 99.1% |
+
+**Impact:** the fixes lifted **flat PQ itself ~45%** at both sizes — every PQ
+user gets that. IVF's marginal gain is +7–11% here because the pure ADC
+arithmetic is only ~4–6 ms even at 50k; it is the only query cost that scales
+with N, so its share grows with the corpus. **Recommendation:** leave IVF on
+(default above `UNDERCROFT_IVF_MIN=8192`); recall parity and self-healing
+partitions are test-asserted.
 
 ### Lever 5 — remote vector backends (they don't offload work)
 
@@ -228,6 +258,6 @@ for corpora too large to scan locally — never for latency, never for accuracy.
 | Personal palace (default) | hash + bm25, no reranker | ~6 ms/q, 94.6% |
 | Accuracy-critical, many-core | + reranker top_n=20, ort+int8, pool=cores | ~330 ms/q, ~98% |
 | Fast + accurate compromise | + reranker top_n=5–10, ort+int8 | ~100–170 ms/q, ~98% |
-| 4-core / edge, large corpus | hmac-only + PQ prefilter; reranker `pool=1` or off | bounded RAM; ~ms retrieval |
+| 4-core / edge, large corpus | hmac-only + PQ/IVF prefilter (`UNDERCROFT_RETRIEVAL=pq`); reranker `pool=1` or off | bounded RAM; ~ms retrieval |
 | GPU box | ort CUDA EP (each forward ~1–5 ms) | reranked query well under 50 ms |
-| Huge corpus, RAM-rich | HNSW (tune `ef`/over-fetch with N) or PQ+IVF (planned) | 300+ q/s |
+| Huge corpus, RAM-rich | HNSW (tune `ef`/over-fetch with N) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded-RAM (PQ+IVF) |

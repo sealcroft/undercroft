@@ -203,19 +203,31 @@ Also closes the v0.13.0 follow-up items:
   ≤0.6 pts — not worth the multi-hour run. Documented as a footnote rather
   than a row.
 
+## v0.15.0 — IVF inverted lists & PQ scan-path fixes (done)
+
+- **IVF** partitions the PQ codes (`nlist ≈ √N` coarse centroids, probe the
+  nearest quarter — recall tracks the probed fraction and a quarter is exact
+  parity: 99.6%/99.1% R@5 at N=20k/50k). Codes clustered on disk by list;
+  self-healing, doubling-triggered retrain, in-place migration.
+- Benchmarking it exposed three scan-path costs, all fixed: random-access row
+  layout → clustered `(list, seq)`; per-search coherence join → event-driven
+  verification; per-row `JOIN drawers` in the scan → codes-only scan with
+  delete-time purge. **Flat PQ itself gained ~45%** (23.9 → 34.4 q/s at 20k,
+  10.1 → 14.8 at 50k, within-run); IVF adds +7–11% on top, growing with N.
+- `UNDERCROFT_RETRIEVAL=pq|hnsw` wired through the CLI and multi-tenant `/v1`
+  (was bench-only); `UNDERCROFT_IVF_MIN` / `UNDERCROFT_IVF_NPROBE` /
+  `set_ivf`; bench `synth --queries` sampling.
+
 ## Next
 
-- **IVF inverted lists** over the PQ codes: coarse-quantize, scan only the
-  nearest lists — makes the flat O(n) ADC scan sub-linear while keeping the
-  bounded-RAM/on-disk properties. The direct successor to v0.14.0's PQ.
 - **ColBERT late interaction**: a core-count-independent second stage (~one
   forward per query instead of top_n) — the few-core endgame. Build plan in
   [docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md).
 - **Sealed-tier encrypted-at-rest index** (research): an ANN index sealed
   vaults can persist without violating the no-plaintext-derived-index
   invariant — PQ/ColBERT stores AEAD-sealed at rest.
-- **Retrieval wiring**: CLI/env surface for `set_pq` and the ort backend
-  (bench-only today); HNSW `ef`/over-fetch scaling with corpus size.
+- **Retrieval wiring**: env surface for the ort backend outside the bench;
+  HNSW `ef`/over-fetch scaling with corpus size.
 - **Durability**: ingest fsync + audit-chain atomicity design (chain head
   and SQLite must move together across power loss).
 - **Orchestrator**: the multi-tenant routing/migration/key-minting layer as

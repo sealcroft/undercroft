@@ -504,6 +504,12 @@ impl Tenancy {
             if let Some(make_reranker) = &self.reranker {
                 store.set_reranker(Some(make_reranker()));
             }
+            // Same retrieval contract as the CLI: UNDERCROFT_RETRIEVAL=pq
+            // enables the on-disk PQ/IVF prefilter per tenant vault
+            // (no-op on sealed vaults — invariant preserved).
+            if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("pq") {
+                store.set_pq(true);
+            }
             self.stores.insert(vault_id.to_string(), store);
             undercroft_obs::vault_opened();
         }

@@ -534,7 +534,30 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
         Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx)"),
     };
     attach_reranker(&mut store)?;
+    attach_retrieval(&mut store)?;
     Ok(store)
+}
+
+/// Select the candidate-generation strategy via `UNDERCROFT_RETRIEVAL`
+/// (same contract as the bench harness). Unset ⇒ the default full scan with
+/// the FTS prefilter. `pq` enables the on-disk PQ/IVF prefilter — a
+/// documented no-op on sealed vaults (no plaintext-derived index on disk).
+fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
+    match std::env::var("UNDERCROFT_RETRIEVAL").as_deref() {
+        Ok("pq") => store.set_pq(true),
+        Ok("hnsw") => {
+            #[cfg(feature = "hnsw")]
+            store.set_hnsw(true);
+            #[cfg(not(feature = "hnsw"))]
+            bail!(
+                "UNDERCROFT_RETRIEVAL=hnsw requires a build with the 'hnsw' feature \
+                 (cargo build -p undercroft-cli --features hnsw)"
+            );
+        }
+        Ok("") | Err(_) => {}
+        Ok(other) => bail!("unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, hnsw)"),
+    }
+    Ok(())
 }
 
 /// Attach the second-stage cross-encoder reranker when `UNDERCROFT_RERANKER=onnx`

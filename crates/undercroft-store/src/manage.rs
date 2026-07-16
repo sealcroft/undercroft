@@ -173,6 +173,14 @@ impl PalaceStore {
     /// Delete one drawer. Logs a keyed tombstone in the audit chain so the
     /// deletion itself is tamper-evident. Returns whether the id existed.
     pub fn delete_drawer(&mut self, id: &str) -> Result<bool, StoreError> {
+        // Purge the PQ code row first (needs the live seq): the ADC scan
+        // reads codes without joining drawers, so orphans would linger as
+        // wasted candidate slots until the next rebuild. Advisory — the
+        // table may simply not exist.
+        let _ = self.conn.execute(
+            "DELETE FROM drawer_pq WHERE seq = (SELECT seq FROM drawers WHERE id = ?1)",
+            params![id],
+        );
         let n = self
             .conn
             .execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
