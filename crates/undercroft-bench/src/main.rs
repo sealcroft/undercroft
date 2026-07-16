@@ -146,17 +146,28 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
     #[allow(unused_mut)]
     let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
         Ok("onnx") => {
-            #[cfg(feature = "onnx")]
+            // The `ort` (ONNX Runtime) backend takes precedence over `onnx`
+            // (tract) when both features are built — same model file, faster.
+            #[cfg(feature = "ort")]
+            {
+                PalaceStore::open_with_embedder(vault, ort_embedder_shared())?
+            }
+            #[cfg(all(feature = "onnx", not(feature = "ort")))]
             {
                 PalaceStore::open_with_embedder(vault, onnx_shared())?
             }
-            #[cfg(not(feature = "onnx"))]
-            anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires building with --features onnx");
+            #[cfg(not(any(feature = "onnx", feature = "ort")))]
+            anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires --features onnx or ort");
         }
         _ => PalaceStore::open(vault)?,
     };
-    // Optional second-stage reranker (pairs with either embedder).
-    #[cfg(feature = "onnx")]
+    // Optional second-stage reranker (pairs with either embedder). ORT wins
+    // over tract when both are built.
+    #[cfg(feature = "ort")]
+    if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("onnx") {
+        store.set_reranker(Some(ort_reranker_shared()));
+    }
+    #[cfg(all(feature = "onnx", not(feature = "ort")))]
     if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("onnx") {
         store.set_reranker(Some(rerank_shared()));
     }
@@ -219,6 +230,60 @@ fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
         }
         fn score(&self, query: &str, passage: &str) -> f32 {
             self.0.score(query, passage)
+        }
+    }
+    Box::new(Shared(arc))
+}
+
+/// ORT (ONNX Runtime) embedder, loaded once and shared, mirroring `onnx_shared`.
+#[cfg(feature = "ort")]
+fn ort_embedder_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtEmbedder>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(
+                undercroft_embed_ort::embedder_from_env().expect("loading ORT embedder from env"),
+            )
+        })
+        .clone();
+    struct Shared(Arc<undercroft_embed_ort::OrtEmbedder>);
+    impl undercroft_core::embed::Embedder for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn dimension(&self) -> usize {
+            self.0.dimension()
+        }
+        fn embed(&self, text: &str) -> Vec<f32> {
+            self.0.embed(text)
+        }
+    }
+    Box::new(Shared(arc))
+}
+
+/// ORT reranker, loaded once and shared, mirroring `rerank_shared`.
+#[cfg(feature = "ort")]
+fn ort_reranker_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtReranker>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(
+                undercroft_embed_ort::reranker_from_env().expect("loading ORT reranker from env"),
+            )
+        })
+        .clone();
+    struct Shared(Arc<undercroft_embed_ort::OrtReranker>);
+    impl undercroft_core::rerank::Reranker for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn score(&self, query: &str, passage: &str) -> f32 {
+            self.0.score(query, passage)
+        }
+        fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
+            self.0.score_batch(query, passages)
         }
     }
     Box::new(Shared(arc))
