@@ -81,9 +81,23 @@ Full-scan is O(n) per query; an ANN index (HNSW prototype) stays flat:
 
 The speedup is real and grows without bound. The in-memory HNSW is a *proof the
 algorithm helps*, but it costs O(corpus) RAM and its recall falls off at a fixed
-over-fetch — so the durable design is **on-disk IVF-PQ** (Product Quantization
-compresses each vector ~32×, codes stream from disk, only a small codebook stays
-resident). The PQ primitive is implemented and unit-tested.
+over-fetch. The durable, bounded-RAM design is the **on-disk PQ prefilter**
+(shipped for hmac-only vaults, mirroring the on-disk FTS5 rule): Product
+Quantization compresses each vector ~32× (1.5 KB → 48 B), the codes live on
+disk, and only a ~400 KB codebook stays resident. Measured at N=20,000
+(hmac-only):
+
+| Mode | q/s | Recall@5 | RAM |
+|---|---|---|---|
+| true full-scan | ~6.6 | 100% | transient O(n) |
+| FTS prefilter (default) | 76.7 | 100% | on-disk |
+| **PQ prefilter** | 59.2 | **98.6%** | **codebook only** |
+| in-memory HNSW | 454.1 | 93.1% | O(corpus) |
+
+**PQ's recall holds at scale** (it scans every code — quantization error only),
+where the graph-based HNSW needs per-size tuning to avoid collapse. Sealed
+vaults keep full-scan/HNSW: their on-disk index must be encrypted at rest,
+which is the research follow-up.
 
 ### Remote vector backends are untrusted accelerators, not a store swap
 
@@ -152,8 +166,8 @@ Defaults are local-first and pure-Rust; every faster option is opt-in.
 | Option | RAM | Best for |
 |---|---|---|
 | Full-scan + BM25 (default) | transient | small palaces |
-| In-memory HNSW (`hnsw` feature) | O(corpus) | moderate corpora, many-core |
-| On-disk IVF-PQ | ~O(codebook) | large corpora, edge/IoT |
+| In-memory HNSW (`hnsw` feature) | O(corpus) | moderate corpora, raw speed |
+| **On-disk PQ** (hmac-only) | ~O(codebook) | large corpora, edge/IoT |
 
 **Scoring**
 

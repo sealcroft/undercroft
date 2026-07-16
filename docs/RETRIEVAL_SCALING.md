@@ -58,14 +58,31 @@ So in-memory HNSW is a **proof the algorithm helps**, not the destination.
 
 ## The architecture: two costs, two purpose-built fixes
 
-### Retrieval → on-disk IVF-PQ (bounded RAM), not in-memory HNSW
+### Retrieval → on-disk PQ (bounded RAM), not in-memory HNSW
 
-Product Quantization compresses each vector ~16–32× (1.5 KB → ~48–96 bytes).
-Only the codebook + PQ codes stay resident (or are mmap'd); full-precision
-vectors live **on disk** and are fetched only for the final handful of
-candidates that get re-scored. RAM becomes ~O(√corpus) / O(codes), not
-O(corpus). This is the standard billion-scale-on-modest-RAM design. The int8
-embedding quantization already in the vault layer is the first step toward PQ.
+Product Quantization compresses each vector ~32× (1.5 KB → 48 bytes). Only the
+~400 KB codebook stays resident; the codes live **on disk** and search streams
+ADC over them. RAM is bounded at any corpus size — the standard
+billion-scale-on-modest-RAM design.
+
+**Shipped (flat PQ prefilter, hmac-only vaults)** — the invariant rule mirrors
+FTS5: hmac-only vaults may hold plaintext-derived indexes on disk, sealed
+vaults never do (their encrypted-at-rest variant is the research follow-up).
+`set_pq(true)` / `UNDERCROFT_RETRIEVAL=pq`; codes maintained incrementally on
+write with FTS-style self-heal. Measured (synth, hmac-only, N=20k):
+
+| N=20,000 | q/s | Recall@5 | RAM |
+|---|---|---|---|
+| true full-scan | ~6.6 (extrap.) | 100% | transient O(n) |
+| FTS prefilter (default) | 76.7 | 100% | on-disk |
+| **PQ prefilter** | 59.2 | **98.6%** | **codebook only** |
+| in-memory HNSW | 454.1 | **93.1%** | O(corpus) |
+
+The differentiator: **PQ recall holds at scale** (ADC is exhaustive over the
+codes — quantization error only), where HNSW's graph approximation collapses
+without per-N tuning (93% at 20k, 60% at 50k). HNSW stays the raw-speed option
+when RAM allows; PQ is the bounded-RAM one. **Still open:** IVF inverted lists
+on top of the codes (sub-linear scan) and the sealed-tier encrypted index.
 
 ### Scoring → two strategies, chosen by the deployment
 
@@ -194,8 +211,9 @@ defaults stay local-first and pure-Rust; every faster option is opt-in.
 | Option | RAM | Best for | Status |
 |---|---|---|---|
 | Full-scan cosine + BM25 | O(corpus) transient | small palaces (default) | shipped |
-| In-memory HNSW (`hnsw`) | O(corpus) | moderate corpora, many-core | experimental |
-| On-disk IVF-PQ | ~O(codebook) | large corpora, edge/IoT | planned (pq.rs primitive done) |
+| In-memory HNSW (`hnsw`) | O(corpus) | moderate corpora, raw speed | experimental |
+| **On-disk PQ** (`set_pq`) | ~O(codebook) | large corpora, edge/IoT (hmac-only) | **shipped** |
+| + IVF lists / sealed encrypted tier | ~O(codebook) | sub-linear scan; sealed vaults | planned |
 
 **Scoring**
 
@@ -226,8 +244,10 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    tract kept as fallback. Measured: ingest ~4–5× faster; reranker
    **327 ms @ 98.3% (top_n=20) / 101 ms @ 98.0% (top_n=5)** with the session
    pool + int8 models — ~100–160× over the original sequential reranker.
-3. **On-disk IVF-PQ retrieval** (bounded RAM; hmac-only plain, sealed encrypted).
-   Retire in-memory HNSW as a default.
+3. **On-disk PQ retrieval (done, flat):** bounded-RAM prefilter for hmac-only
+   vaults — 59 q/s @ 98.6% R@5 at N=20k, codebook-only RAM, recall holds where
+   HNSW's collapses. Remaining: IVF inverted lists (sub-linear) + the
+   sealed-tier encrypted-at-rest index.
 4. **ColBERT late interaction** — the core-independent scoring default (the
    4-core answer); cross-encoder+rayon stays as the many-core fast path.
 5. **Sealed-tier encrypted-at-rest** IVF-PQ + ColBERT token store (research).
