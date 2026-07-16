@@ -87,17 +87,18 @@ Quantization compresses each vector ~32× (1.5 KB → 48 B), the codes live on
 disk, and only a ~400 KB codebook stays resident. Measured at N=20,000
 (hmac-only):
 
-| Mode | q/s | Recall@5 | RAM |
-|---|---|---|---|
-| true full-scan | ~6.6 | 100% | transient O(n) |
-| FTS prefilter (default) | 76.7 | 100% | on-disk |
-| **PQ prefilter** | 59.2 | **98.6%** | **codebook only** |
-| in-memory HNSW | 454.1 | 93.1% | O(corpus) |
+| Mode | N=20k q/s | N=20k R@5 | N=50k q/s | N=50k R@5 | RAM |
+|---|---|---|---|---|---|
+| true full-scan | ~6.6 | 100% | ~2.6 | 100% | transient O(n) |
+| FTS prefilter (default) | 76.7 | 100% | 33.2 | 100% | on-disk |
+| **PQ prefilter** | 59.2 | **98.6%** | 18.6 | **98.9%** | **codebook only** |
+| in-memory HNSW | 454.1 | 93.1% | 377.7 | 71.7% | O(corpus) |
 
-**PQ's recall holds at scale** (it scans every code — quantization error only),
-where the graph-based HNSW needs per-size tuning to avoid collapse. Sealed
-vaults keep full-scan/HNSW: their on-disk index must be encrypted at rest,
-which is the research follow-up.
+**PQ's recall is flat in N** (98.6% → 98.9% — it scans every code, so the only
+error is quantization), where the graph-based HNSW collapses without per-size
+tuning (93% → 72%). PQ's flat scan is still O(n) in latency — the planned IVF
+inverted lists make it sub-linear. Sealed vaults keep full-scan/HNSW: their
+on-disk index must be encrypted at rest, which is the research follow-up.
 
 ### Remote vector backends are untrusted accelerators, not a store swap
 

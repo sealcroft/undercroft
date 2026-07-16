@@ -71,18 +71,20 @@ vaults never do (their encrypted-at-rest variant is the research follow-up).
 `set_pq(true)` / `UNDERCROFT_RETRIEVAL=pq`; codes maintained incrementally on
 write with FTS-style self-heal. Measured (synth, hmac-only, N=20k):
 
-| N=20,000 | q/s | Recall@5 | RAM |
-|---|---|---|---|
-| true full-scan | ~6.6 (extrap.) | 100% | transient O(n) |
-| FTS prefilter (default) | 76.7 | 100% | on-disk |
-| **PQ prefilter** | 59.2 | **98.6%** | **codebook only** |
-| in-memory HNSW | 454.1 | **93.1%** | O(corpus) |
+| Mode | N=20k q/s | N=20k R@5 | N=50k q/s | N=50k R@5 | RAM |
+|---|---|---|---|---|---|
+| true full-scan | ~6.6 (extrap.) | 100% | ~2.6 (extrap.) | 100% | transient O(n) |
+| FTS prefilter (default) | 76.7 | 100% | 33.2 | 100% | on-disk |
+| **PQ prefilter** | 59.2 | **98.6%** | 18.6 | **98.9%** | **codebook only** |
+| in-memory HNSW | 454.1 | **93.1%** | 377.7 | **71.7%** | O(corpus) |
 
-The differentiator: **PQ recall holds at scale** (ADC is exhaustive over the
-codes — quantization error only), where HNSW's graph approximation collapses
-without per-N tuning (93% at 20k, 60% at 50k). HNSW stays the raw-speed option
-when RAM allows; PQ is the bounded-RAM one. **Still open:** IVF inverted lists
-on top of the codes (sub-linear scan) and the sealed-tier encrypted index.
+The differentiator, now confirmed at both sizes: **PQ recall is flat in N**
+(98.6% → 98.9% — ADC is exhaustive over the codes, quantization error only),
+where HNSW's graph approximation collapses without per-N tuning (93% → 72%).
+PQ's flat scan is still O(n) — q/s falls ~linearly (59 → 19), ~3–9× the true
+scan — which is exactly what **IVF inverted lists** fix (scan only the nearest
+coarse lists). HNSW stays the raw-speed option when RAM allows and its `ef` is
+tuned. **Still open:** IVF lists + the sealed-tier encrypted index.
 
 ### Scoring → two strategies, chosen by the deployment
 
