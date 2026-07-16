@@ -261,12 +261,7 @@ impl CoarseQuantizer {
     /// Deterministic, like [`ProductQuantizer::train`]. `trained_n` records
     /// the *live corpus size* this training represents (the sample may be
     /// smaller). Returns `None` on an empty set or inconsistent dimensions.
-    pub fn train(
-        vectors: &[Vec<f32>],
-        nlist: usize,
-        iters: usize,
-        trained_n: u64,
-    ) -> Option<Self> {
+    pub fn train(vectors: &[Vec<f32>], nlist: usize, iters: usize, trained_n: u64) -> Option<Self> {
         if vectors.is_empty() || nlist == 0 {
             return None;
         }

@@ -2178,11 +2178,9 @@ mod tests {
         assert_eq!(ivf[0].drawer.id, flat[0].drawer.id);
         let listed: i64 = s
             .conn
-            .query_row(
-                "SELECT COUNT(*) FROM drawer_pq WHERE list >= 0",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM drawer_pq WHERE list >= 0", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(listed, 121, "every code row must carry a list id");
         let stored_ivf: i64 = s
@@ -2227,8 +2225,13 @@ mod tests {
             .map(|b| pq::CoarseQuantizer::from_bytes(&b).unwrap().trained_n())
             .unwrap();
         for i in 0..400 {
-            s.upsert(&drawer("w", "grow", &format!("expansion fact {i}"), 1000 + i))
-                .unwrap();
+            s.upsert(&drawer(
+                "w",
+                "grow",
+                &format!("expansion fact {i}"),
+                1000 + i,
+            ))
+            .unwrap();
         }
         let _ = s
             .search("why did we switch to graphql", &SearchOptions::default())
@@ -2251,7 +2254,10 @@ mod tests {
         // first search after open, not per query).
         s.set_ivf(usize::MAX, None);
         s.conn
-            .execute("DELETE FROM drawer_pq WHERE seq IN (SELECT seq FROM drawer_pq LIMIT 1)", [])
+            .execute(
+                "DELETE FROM drawer_pq WHERE seq IN (SELECT seq FROM drawer_pq LIMIT 1)",
+                [],
+            )
             .unwrap();
         s.pq_verified.set(false);
         let _ = s
@@ -2288,11 +2294,9 @@ mod tests {
         assert_eq!(cands.len(), 20);
         let target_seq: i64 = s
             .conn
-            .query_row(
-                "SELECT seq FROM drawers WHERE id = ?1",
-                [&target.id],
-                |r| r.get(0),
-            )
+            .query_row("SELECT seq FROM drawers WHERE id = ?1", [&target.id], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(
             cands.contains(&target_seq),

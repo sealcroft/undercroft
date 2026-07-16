@@ -222,9 +222,7 @@ impl PalaceStore {
                 // not a fixed count: recall tracks the probed fraction of the
                 // corpus, so a count that ignores nlist collapses recall as N
                 // grows. Measured on synth: 23% of lists = flat-scan recall.
-                let nprobe = self
-                    .ivf_nprobe
-                    .unwrap_or_else(|| (cq.nlist() / 4).max(8));
+                let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 4).max(8));
                 let lists = cq.probe(qvec, nprobe);
                 if !lists.is_empty() {
                     // Safe to inline: list ids are integers, not user input.
