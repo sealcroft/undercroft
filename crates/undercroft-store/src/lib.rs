@@ -212,7 +212,7 @@ pub struct PalaceStore {
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
     ivf_min: usize,
-    /// Inverted lists probed per query (`None` ⇒ `max(8, nlist/8)`).
+    /// Inverted lists probed per query (`None` ⇒ `max(8, nlist/4)`).
     ivf_nprobe: Option<usize>,
 }
 
@@ -2170,7 +2170,7 @@ mod tests {
         let listed: i64 = s
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM drawer_pq WHERE list IS NOT NULL",
+                "SELECT COUNT(*) FROM drawer_pq WHERE list >= 0",
                 [],
                 |r| r.get(0),
             )
@@ -2197,7 +2197,7 @@ mod tests {
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq \
-                 WHERE p.list IS NULL",
+                 WHERE p.list = -1",
                 [],
                 |r| r.get(0),
             )
@@ -2303,6 +2303,58 @@ mod tests {
             max_two_lists < 200,
             "a 2-list probe must scan a strict subset ({max_two_lists}/200)"
         );
+    }
+
+    #[test]
+    fn pq_legacy_layout_migrates_and_updates_leave_no_duplicates() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        // A pre-IVF (v0.14.0) drawer_pq: seq-keyed rowid table.
+        s.conn
+            .execute_batch(
+                "CREATE TABLE drawer_pq (seq INTEGER PRIMARY KEY, code BLOB NOT NULL);
+                 INSERT INTO drawer_pq VALUES (1, x'00');",
+            )
+            .unwrap();
+        for i in 0..40 {
+            s.upsert(&drawer("w", "r", &format!("migration note {i}"), i))
+                .unwrap();
+        }
+        s.set_pq(true);
+        let hits = s
+            .search("migration note 7", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("note 7"));
+        // The legacy table must have been replaced by the clustered layout
+        // and fully re-encoded.
+        let (sql, rows): (String, i64) = (
+            s.conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name = 'drawer_pq'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap(),
+            s.conn
+                .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+                .unwrap(),
+        );
+        assert!(sql.contains("WITHOUT ROWID"), "must migrate: {sql}");
+        assert_eq!(rows, 40);
+
+        // Updating a drawer (same id ⇒ same seq, embedding changes) must not
+        // leave a stale row in the old list.
+        let mut updated = drawer("w", "r", "migration note 3", 3);
+        updated.content = "completely different content about zebras".into();
+        s.upsert(&updated).unwrap();
+        let dup: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) - COUNT(DISTINCT seq) FROM drawer_pq",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dup, 0, "an updated drawer must occupy exactly one list");
     }
 
     #[test]

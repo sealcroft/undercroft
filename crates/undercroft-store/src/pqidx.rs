@@ -14,9 +14,10 @@
 //!
 //! **IVF inverted lists** make the scan sub-linear above `ivf_min` drawers:
 //! a coarse quantizer ([`crate::pq::CoarseQuantizer`], `nlist ≈ √N` centroids)
-//! partitions the corpus, each code row carries its `list` id, and a search
-//! ADC-scans only the `nprobe` lists nearest the query (indexed `WHERE list
-//! IN …`) instead of every row. Non-residual: codes are identical with or
+//! partitions the corpus, the code table is physically clustered by list
+//! (`WITHOUT ROWID`, PK `(list, seq)` — each probed list is one sequential
+//! range scan), and a search ADC-scans only the `nprobe` lists nearest the
+//! query instead of every row. Non-residual: codes are identical with or
 //! without IVF. Below `ivf_min` — or whenever a probe returns fewer than `k`
 //! rows — the flat full-code scan runs instead, so IVF can narrow the
 //! candidate set but never empty it.
@@ -60,7 +61,8 @@ impl PalaceStore {
     /// Tune the IVF layer of the PQ prefilter: `min` is the corpus size at
     /// which partitioning kicks in (`usize::MAX` ⇒ never — flat scan only),
     /// `nprobe` the number of inverted lists a query scans (`None` ⇒ the
-    /// default `max(8, nlist/8)`). Defaults come from `UNDERCROFT_IVF_MIN` /
+    /// default `max(8, nlist/4)` — a quarter of the corpus; recall tracks
+    /// the probed *fraction*). Defaults come from `UNDERCROFT_IVF_MIN` /
     /// `UNDERCROFT_IVF_NPROBE` at open.
     pub fn set_ivf(&mut self, min: usize, nprobe: Option<usize>) {
         self.ivf_min = min;
@@ -68,24 +70,37 @@ impl PalaceStore {
     }
 
     fn pq_schema(&self) -> Result<(), StoreError> {
+        // The code table is **physically clustered by inverted list**
+        // (`WITHOUT ROWID`, PK `(list, seq)`): a probe reads each list as a
+        // sequential B-tree range scan instead of one random row fetch per
+        // secondary-index hit — measured, the random-access layout made a
+        // 23%-fraction probe *slower* than the flat full scan. Rows without a
+        // partition (IVF off or not yet trained) sit in list -1; the flat
+        // scan reads the whole table regardless.
+        //
+        // Pre-IVF (v0.14.0) tables used `seq INTEGER PRIMARY KEY` — drop them
+        // and let the matched-count self-heal rebuild in the new layout.
+        let legacy: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'drawer_pq' \
+             AND sql NOT LIKE '%WITHOUT ROWID%'",
+            [],
+            |r| r.get(0),
+        )?;
+        if legacy > 0 {
+            self.conn.execute("DROP TABLE drawer_pq", [])?;
+        }
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS drawer_pq (
-                 seq  INTEGER PRIMARY KEY,
+                 list INTEGER NOT NULL,
+                 seq  INTEGER NOT NULL,
                  code BLOB NOT NULL,
-                 list INTEGER
-             );
+                 PRIMARY KEY (list, seq)
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS drawer_pq_seq ON drawer_pq(seq);
              CREATE TABLE IF NOT EXISTS pq_meta (
                  key   TEXT PRIMARY KEY,
                  value BLOB NOT NULL
              );",
-        )?;
-        // Pre-IVF (v0.14.0) tables lack the list column — migrate in place.
-        // The error on an already-migrated table is the expected case.
-        let _ = self
-            .conn
-            .execute("ALTER TABLE drawer_pq ADD COLUMN list INTEGER", []);
-        self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS drawer_pq_list ON drawer_pq(list);",
         )?;
         Ok(())
     }
@@ -145,21 +160,30 @@ impl PalaceStore {
             Ok(scored)
         };
 
-        // IVF: ADC only the lists nearest the query. The cache is fresh here
+        // IVF: ADC only the lists nearest the query (each one a sequential
+        // PK range scan in the clustered layout). The cache is fresh here
         // whether or not a rebuild just ran (pq_build retrains or drops it).
-        // If the probed lists hold fewer than `k` rows (skewed partitions,
-        // tiny corpus), widen to the full scan rather than starve the fusion
-        // stage.
+        // List -1 (rows written before the partitions existed) rides along in
+        // every probe. If the probed lists hold fewer than `k` rows (skewed
+        // partitions, tiny corpus), widen to the full scan rather than starve
+        // the fusion stage.
         let mut scored: Option<Vec<(f32, i64)>> = None;
         if want_ivf {
             if let Some(cq) = self.ivf.borrow().as_ref() {
-                let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 8).max(8));
+                // Default nprobe is a **fraction** (a quarter of the lists),
+                // not a fixed count: recall tracks the probed fraction of the
+                // corpus, so a count that ignores nlist collapses recall as N
+                // grows. Measured on synth: 23% of lists = flat-scan recall.
+                let nprobe = self
+                    .ivf_nprobe
+                    .unwrap_or_else(|| (cq.nlist() / 4).max(8));
                 let lists = cq.probe(qvec, nprobe);
                 if !lists.is_empty() {
                     // Safe to inline: list ids are integers, not user input.
                     let in_list = lists
                         .iter()
                         .map(|l| l.to_string())
+                        .chain(std::iter::once("-1".to_string()))
                         .collect::<Vec<_>>()
                         .join(",");
                     let probed = scan(&format!(
@@ -307,11 +331,11 @@ impl PalaceStore {
         self.conn.execute("DELETE FROM drawer_pq", [])?;
         let mut ins = self
             .conn
-            .prepare("INSERT OR REPLACE INTO drawer_pq (seq, code, list) VALUES (?1, ?2, ?3)")?;
+            .prepare("INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (?1, ?2, ?3)")?;
         let ivf_ref = self.ivf.borrow();
         for (seq, vec) in &items {
-            let list: Option<i64> = ivf_ref.as_ref().map(|cq| cq.assign(vec) as i64);
-            ins.execute(params![seq, pq.encode(vec), list])?;
+            let list: i64 = ivf_ref.as_ref().map_or(-1, |cq| cq.assign(vec) as i64);
+            ins.execute(params![list, seq, pq.encode(vec)])?;
         }
         drop(ivf_ref);
         *self.pq.borrow_mut() = Some(pq);
@@ -330,14 +354,21 @@ impl PalaceStore {
             Some(pq) => pq.encode(embedding),
             None => return,
         };
-        let list: Option<i64> = self
+        let list: i64 = self
             .ivf
             .borrow()
             .as_ref()
-            .map(|cq| cq.assign(embedding) as i64);
+            .map_or(-1, |cq| cq.assign(embedding) as i64);
+        // Updates keep their `seq` (drawers upsert is ON CONFLICT DO UPDATE),
+        // so a re-embedded drawer may move lists — drop the old row or it
+        // would live on as a stale (list, seq) duplicate.
         let _ = self.conn.execute(
-            "INSERT OR REPLACE INTO drawer_pq (seq, code, list)
-             SELECT seq, ?2, ?3 FROM drawers WHERE id = ?1",
+            "DELETE FROM drawer_pq WHERE seq = (SELECT seq FROM drawers WHERE id = ?1)",
+            params![id],
+        );
+        let _ = self.conn.execute(
+            "INSERT OR REPLACE INTO drawer_pq (list, seq, code)
+             SELECT ?3, seq, ?2 FROM drawers WHERE id = ?1",
             params![id, code, list],
         );
     }
