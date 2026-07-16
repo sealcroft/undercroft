@@ -134,6 +134,51 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Backfill token matrices for up to `limit` drawers that lack one under
+    /// the attached encoder's model — the recovery path for palaces ingested
+    /// before the encoder was attached, or restored from artifact-less
+    /// bundles. Each pass is bounded so callers (CLI `repair`, a daemon
+    /// tick) can spread the transformer forwards over time; searches served
+    /// meanwhile keep fusion rank for unencoded drawers and improve as
+    /// coverage grows. Returns `(encoded_this_pass, still_missing)`.
+    pub fn late_backfill(&mut self, limit: usize) -> Result<(u64, u64), StoreError> {
+        let Some(late) = &self.late else {
+            return Err(StoreError::CorruptRow {
+                id: "-".into(),
+                reason: "no late-interaction encoder attached (set UNDERCROFT_RERANKER=colbert)"
+                    .into(),
+            });
+        };
+        self.late_schema()?;
+        let missing: Vec<String> = self
+            .conn
+            .prepare(
+                "SELECT d.id FROM drawers d
+                 LEFT JOIN drawer_tok t ON t.id = d.id AND t.model = ?1
+                 WHERE t.id IS NULL ORDER BY d.seq",
+            )?
+            .query_map(params![late.model_name()], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let total = missing.len() as u64;
+        let mut encoded = 0u64;
+        for id in missing.into_iter().take(limit) {
+            let Some(d) = self.get(&id)? else { continue };
+            let late = self.late.as_ref().expect("checked above");
+            let matrix = late.encode_doc(&d.content);
+            if matrix.is_empty() {
+                continue;
+            }
+            let packed = quantize_tokens(&matrix, late.dim());
+            let blob = self.vault.tokens_at_rest(&id, &packed);
+            self.conn.execute(
+                "INSERT OR REPLACE INTO drawer_tok (id, model, tok) VALUES (?1, ?2, ?3)",
+                params![id, late.model_name(), blob],
+            )?;
+            encoded += 1;
+        }
+        Ok((encoded, total - encoded))
+    }
+
     /// Re-score the fusion top-N hits by MaxSim over stored matrices, then
     /// re-sort that head. One query-encode forward total. Hits without a
     /// stored matrix (pre-attach writes, failed encodes, other model)

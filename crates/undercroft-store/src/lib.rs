@@ -1819,6 +1819,31 @@ mod tests {
     }
 
     #[test]
+    fn late_backfill_encodes_missing_matrices_in_bounded_passes() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        // Three drawers ingested with no encoder → zero matrices.
+        for (i, text) in ["alpha fact", "beta fact", "gamma fact"].iter().enumerate() {
+            s.upsert(&drawer("w", "r", text, i as u32)).unwrap();
+        }
+        // Without an encoder, backfill refuses clearly.
+        assert!(s.late_backfill(10).is_err());
+
+        s.set_late(Some(Box::new(WordLate)));
+        let (encoded, remaining) = s.late_backfill(2).unwrap();
+        assert_eq!((encoded, remaining), (2, 1), "bounded pass");
+        let (encoded, remaining) = s.late_backfill(2).unwrap();
+        assert_eq!((encoded, remaining), (1, 0), "second pass completes");
+        let (encoded, remaining) = s.late_backfill(2).unwrap();
+        assert_eq!((encoded, remaining), (0, 0), "idempotent when covered");
+
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_tok", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 3, "every drawer carries a matrix after backfill");
+    }
+
+    #[test]
     fn reranker_reorders_top_k() {
         let (_d, mut store) = store(SecurityLevel::HmacOnly);
         // Three candidates that all match the query term, of increasing length.
