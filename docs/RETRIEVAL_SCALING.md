@@ -121,14 +121,29 @@ onnx models, seq 256, on this CPU (`avx512_vnni`, no GPU reachable):
 | MiniLM embed | ~128 ms | 53.7 | 28.1 | 24.9 | **15.0** |
 | cross-encoder | ~140–277 ms | 56.2 | 26.8 | 24.4 | **13.3** |
 
-**ORT is ~2.5× faster than tract same-precision; int8 (VNNI) ~2× more** —
-validated in Rust via the `ort` crate (numbers match Python onnxruntime; same
-C++ backend). Accuracy is **runtime-invariant** (identical weights). The
-tradeoff: `ort` links ORT's **C++** library, breaking the pure-Rust / zero-C-dep
-property (matters for the audit surface and wasm/IoT — though ORT ships
-mobile/wasm builds). Offered **feature-gated (`ort`), tract kept as the pure-Rust
-fallback**. With ORT int8 + rayon, `top_n=20` reranking ≈ one wave of ~24 ms
-forwards ≈ **~40 ms end-to-end** on a many-core host. On a GPU target,
+**ORT is ~2.5× faster than tract per forward, int8 (VNNI) ~2× more** — validated
+in Rust via the `ort` crate (matches Python onnxruntime; same C++ backend).
+Accuracy is **runtime-invariant** (identical weights). Tradeoff: `ort` links
+ORT's **C++** library, breaking the pure-Rust / zero-C-dep property (audit
+surface, wasm/IoT — though ORT ships mobile/wasm builds). Offered
+**feature-gated (`ort`), tract kept as the pure-Rust fallback**
+([`undercroft-embed-ort`](../crates/undercroft-embed-ort)).
+
+Measured **end-to-end** on LoCoMo (convos 0-1, R@10 unchanged at 98.7%),
+ORT vs tract, this 24-core host:
+
+| | ingest embed | rerank top_n=20 | rerank top_n=5 |
+|---|---|---|---|
+| tract | ~24 s | 694 ms | 321 ms |
+| **ORT (batched)** | **~5 s (4×)** | 614 ms | 251 ms |
+
+Two honest points: (1) **ingest is ~4× faster** with ORT. (2) The shipped ORT
+reranker uses **one batched forward** over the pool, which scales ~linearly — so
+on *many* cores it's only marginally ahead of tract+rayon. But batched is
+**core-friendly**: it's one forward using whatever cores exist, so on a **4-core**
+box it beats tract+rayon by ~5× (tract degrades to 5 waves). The projected
+**~40 ms** needs **int8 (~2×) + a session-pool parallel path** (N single-thread
+forwards concurrently, ~one wave) — the next refinement. On a GPU target,
 ORT-CUDA takes each forward to ~1–5 ms.
 
 ### ColBERT build plan
@@ -201,9 +216,11 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
 
 1. **Reranker latency (done):** rayon parallelism (16,600 → ~1,100 ms) + `top_n`
    true cap → **694 ms @ 98.7% (top_n=20), 389 ms @ 97.4% (top_n=10)** — ~24–43×.
-2. **`ort` runtime backend (validated, integration next):** feature-gated ONNX
-   Runtime behind the embedder/reranker traits, tract kept as fallback. ~40 ms
-   end-to-end with int8. Then int8 + batched forward polish.
+2. **`ort` runtime backend (done):** feature-gated ONNX Runtime behind the
+   embedder/reranker traits (`undercroft-embed-ort`), tract kept as fallback.
+   Measured: ingest ~4× faster, reranker top_n=20 614 ms (identical accuracy),
+   far more on few cores. **Next refinement:** int8 (~2×) + a session-pool
+   parallel reranker (N single-thread forwards concurrently → one wave, ~40 ms).
 3. **On-disk IVF-PQ retrieval** (bounded RAM; hmac-only plain, sealed encrypted).
    Retire in-memory HNSW as a default.
 4. **ColBERT late interaction** — the core-independent scoring default (the
