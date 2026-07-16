@@ -209,6 +209,13 @@ pub struct PalaceStore {
     pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
     /// The cached IVF coarse quantizer (on-disk copy in `pq_meta`, key `ivf`).
     ivf: std::cell::RefCell<Option<pq::CoarseQuantizer>>,
+    /// Whether the PQ index passed its coherence check since the last event
+    /// that could break it (open, or a write that failed to encode). While
+    /// true, searches skip the O(corpus) verification entirely. See `pqidx`.
+    pq_verified: std::cell::Cell<bool>,
+    /// Live drawer count as of the last verification, maintained on writes —
+    /// drives the IVF thresholds without per-search `COUNT(*)`.
+    pq_live: std::cell::Cell<i64>,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
     ivf_min: usize,
@@ -344,6 +351,8 @@ impl PalaceStore {
             pq_enabled: false,
             pq: std::cell::RefCell::new(None),
             ivf: std::cell::RefCell::new(None),
+            pq_verified: std::cell::Cell::new(false),
+            pq_live: std::cell::Cell::new(0),
             ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
                 Ok(v) => v.parse().unwrap_or(pqidx::IVF_MIN_DEFAULT),
@@ -661,7 +670,7 @@ impl PalaceStore {
         tx.commit()?;
         self.vault.commit_write(&tag)?;
         // Keep the on-disk PQ codes coherent (advisory; self-heals on search).
-        self.pq_encode_row(&drawer.id, &embedding);
+        self.pq_encode_row(&drawer.id, &embedding, existing.is_none());
         if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
             cache.insert(drawer.id.clone(), embedding);
         }
@@ -2236,14 +2245,15 @@ mod tests {
             "outgrown IVF must retrain (trained_n {before} -> {after})"
         );
 
-        // Below the threshold the partitions are dropped, not left stale.
+        // Below the threshold a rebuild drops the partitions, not leaves
+        // them stale. Model a crash that lost a code row: the row vanishes
+        // AND the next open starts unverified (coherence is checked on the
+        // first search after open, not per query).
         s.set_ivf(usize::MAX, None);
-        s.upsert(&drawer("w", "r", "one more to force a heal", 2000))
-            .unwrap();
-        // Corrupt the matched count so the next search rebuilds.
         s.conn
             .execute("DELETE FROM drawer_pq WHERE seq IN (SELECT seq FROM drawer_pq LIMIT 1)", [])
             .unwrap();
+        s.pq_verified.set(false);
         let _ = s
             .search("why did we switch to graphql", &SearchOptions::default())
             .unwrap();

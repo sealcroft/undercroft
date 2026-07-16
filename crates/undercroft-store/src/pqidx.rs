@@ -22,14 +22,16 @@
 //! rows — the flat full-code scan runs instead, so IVF can narrow the
 //! candidate set but never empty it.
 //!
-//! Coherence: `write_drawer` encodes (and list-assigns) each new/updated row
-//! incrementally with the persisted codebook; a cheap matched-count check on
-//! every search detects drift (crash between writes, missed rows) and
-//! re-encodes from scratch — mirroring the FTS index's self-heal. The IVF
-//! partitions are additionally retrained when the corpus **doubles** past
-//! their training size (centroids trained on a small corpus mis-partition a
-//! large one), and dropped entirely when the corpus is below `ivf_min` or PQ
-//! training data can't support them. Deleted drawers leave orphaned code rows
+//! Coherence is **event-driven**: `write_drawer` encodes (and list-assigns)
+//! each new/updated row incrementally with the persisted codebook — a
+//! successful encode keeps the index coherent by construction — and the
+//! O(corpus) verification (matched-count join, rebuild on drift) runs only on
+//! the first search after open or after a write that couldn't encode, never
+//! per query (measured at N=50k, the per-search join cost more than the
+//! probed scan it guarded). The IVF partitions are additionally retrained
+//! when the corpus **doubles** past their training size (centroids trained on
+//! a small corpus mis-partition a large one), and dropped by any rebuild that
+//! finds the corpus below `ivf_min`. Deleted drawers leave orphaned code rows
 //! that the `JOIN drawers` excludes; they're swept on the next rebuild.
 
 use undercroft_vault::SecurityLevel;
@@ -114,34 +116,72 @@ impl PalaceStore {
         qvec: &[f32],
         k: usize,
     ) -> Result<Option<Vec<i64>>, StoreError> {
-        self.pq_schema()?;
-        let drawers: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
-        if drawers == 0 {
+        // Coherence is **event-driven**, not per-query: the O(corpus)
+        // verification (schema + matched-count join) runs on the first
+        // search after open and after any write that could have broken the
+        // index (an encode that found no cached codebook, or one that
+        // errored — a *successful* incremental encode keeps the index
+        // coherent by construction and stays on the fast path). Measured at
+        // N=50k, the per-search join was costing more than the probed ADC
+        // scan it was guarding.
+        let mut just_verified = false;
+        if !self.pq_verified.get() || self.pq.borrow().is_none() {
+            just_verified = true;
+            self.pq_schema()?;
+            let drawers: i64 = self
+                .conn
+                .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+            if drawers == 0 {
+                return Ok(None);
+            }
+            // Self-heal: every live drawer must have a code row (orphans
+            // from deletes are excluded by the join and are harmless), and —
+            // when the corpus is IVF-sized — the partitions must exist and
+            // not be outgrown (2× their training size).
+            let matched: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
+                [],
+                |r| r.get(0),
+            )?;
+            let want_ivf = (drawers as usize) >= self.ivf_min;
+            let ivf_stale = want_ivf && {
+                if self.ivf.borrow().is_none() {
+                    self.ivf_load()?;
+                }
+                match self.ivf.borrow().as_ref() {
+                    None => true,
+                    Some(cq) => drawers as u64 > cq.trained_n().saturating_mul(2),
+                }
+            };
+            if (self.pq.borrow().is_none() || matched != drawers || ivf_stale)
+                && !self.pq_build()?
+            {
+                return Ok(None);
+            }
+            self.pq_live.set(drawers);
+            self.pq_verified.set(true);
+        }
+        let live = self.pq_live.get();
+        if live == 0 {
             return Ok(None);
         }
-        // Self-heal: every live drawer must have a code row (orphans from
-        // deletes are excluded by the join and are harmless), and — when the
-        // corpus is IVF-sized — the partitions must exist and not be
-        // outgrown (2× their training size).
-        let matched: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
-            [],
-            |r| r.get(0),
-        )?;
-        let want_ivf = (drawers as usize) >= self.ivf_min;
-        let ivf_stale = want_ivf && {
-            if self.ivf.borrow().is_none() {
-                self.ivf_load()?;
-            }
-            match self.ivf.borrow().as_ref() {
+        // Growth re-check on the fast path (cheap, cached counters): a
+        // corpus that crossed the IVF threshold, or doubled past the
+        // partitions' training size, re-verifies once so they (re)train
+        // rather than silently degrading recall. Skipped when this call
+        // just verified — whatever state the verify pass left (including
+        // "no partitions trainable") is trusted, which bounds the recursion
+        // at one level.
+        let want_ivf = (live as usize) >= self.ivf_min;
+        if want_ivf && !just_verified {
+            let outgrown = match self.ivf.borrow().as_ref() {
                 None => true,
-                Some(cq) => drawers as u64 > cq.trained_n().saturating_mul(2),
+                Some(cq) => live as u64 > cq.trained_n().saturating_mul(2),
+            };
+            if outgrown {
+                self.pq_verified.set(false);
+                return self.pq_candidates(qvec, k);
             }
-        };
-        if (self.pq.borrow().is_none() || matched != drawers || ivf_stale) && !self.pq_build()? {
-            return Ok(None);
         }
         let pq_ref = self.pq.borrow();
         let Some(pq) = pq_ref.as_ref() else {
@@ -344,14 +384,19 @@ impl PalaceStore {
 
     /// Incrementally encode one written drawer with the cached codebook
     /// (called from `write_drawer` after commit), list-assigning it when IVF
-    /// partitions are live. Missing codebook or any failure is fine: the
-    /// next search's matched-count check rebuilds.
-    pub(crate) fn pq_encode_row(&self, id: &str, embedding: &[f32]) {
+    /// partitions are live. A successful encode keeps the index coherent by
+    /// construction; a failure (or a write before any codebook exists) arms
+    /// the next search's full verification instead — nothing is ever lost,
+    /// only re-checked.
+    pub(crate) fn pq_encode_row(&self, id: &str, embedding: &[f32], created: bool) {
         if !self.pq_enabled {
             return;
         }
         let code = match self.pq.borrow().as_ref() {
             Some(pq) => pq.encode(embedding),
+            // No codebook yet ⇒ no index to keep coherent; the verify
+            // condition (`pq.is_none()`) already forces the first search to
+            // build from scratch.
             None => return,
         };
         let list: i64 = self
@@ -362,14 +407,24 @@ impl PalaceStore {
         // Updates keep their `seq` (drawers upsert is ON CONFLICT DO UPDATE),
         // so a re-embedded drawer may move lists — drop the old row or it
         // would live on as a stale (list, seq) duplicate.
-        let _ = self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM drawer_pq WHERE seq = (SELECT seq FROM drawers WHERE id = ?1)",
             params![id],
         );
-        let _ = self.conn.execute(
+        let inserted = self.conn.execute(
             "INSERT OR REPLACE INTO drawer_pq (list, seq, code)
              SELECT ?3, seq, ?2 FROM drawers WHERE id = ?1",
             params![id, code, list],
         );
+        match (deleted, inserted) {
+            (Ok(_), Ok(_)) => {
+                if created {
+                    self.pq_live.set(self.pq_live.get() + 1);
+                }
+            }
+            // The index may now be missing this row — re-verify on the next
+            // search rather than serve from a silently stale index.
+            _ => self.pq_verified.set(false),
+        }
     }
 }
