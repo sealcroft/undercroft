@@ -542,11 +542,11 @@ impl PalaceStore {
         let inserted = if self.pq_sealed() {
             // Sealed: the blob is bound to the row's seq, so fetch it first,
             // then keep the RAM cache coherent with the plaintext in hand.
-            let seq: Result<i64, _> = self.conn.query_row(
-                "SELECT seq FROM drawers WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            );
+            let seq: Result<i64, _> =
+                self.conn
+                    .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
+                        r.get(0)
+                    });
             match seq {
                 Ok(seq) => {
                     let blob = self

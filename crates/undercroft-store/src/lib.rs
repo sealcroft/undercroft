@@ -2553,17 +2553,17 @@ mod tests {
         assert_eq!(coded, 31, "sealed vaults get the PQ index too");
         let clear_lists: i64 = s
             .conn
-            .query_row(
-                "SELECT COUNT(*) FROM drawer_pq WHERE list != -1",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM drawer_pq WHERE list != -1", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(clear_lists, 0, "list ids must never be stored in clear");
         {
             let pq_ref = s.pq.borrow();
             let pq = pq_ref.as_ref().expect("codebook cached");
-            let emb = s.embedder.embed("we switched to graphql because rest was chatty");
+            let emb = s
+                .embedder
+                .embed("we switched to graphql because rest was chatty");
             let plain_code = pq.encode(&emb);
             let blobs: Vec<Vec<u8>> = s
                 .conn
