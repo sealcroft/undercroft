@@ -1547,6 +1547,7 @@ version = "0.13.0"
 dependencies = [
  "undercroft-core",
  "ort",
+ "rayon",
  "thiserror 2.0.18",
  "tokenizers",
 ]
