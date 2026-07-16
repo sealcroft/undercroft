@@ -26,7 +26,6 @@ time = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
-rayon = { workspace = true }
 instant-distance = { workspace = true, optional = true }
 
 [dev-dependencies]

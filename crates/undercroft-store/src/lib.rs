@@ -22,7 +22,6 @@ pub mod remote;
 pub use kg::{KgStats, Triple};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
 
-use rayon::prelude::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -1103,15 +1102,17 @@ impl PalaceStore {
             // cap, since each candidate costs one cross-encoder forward pass.
             // Candidates below `top_n` keep their fusion rank, so a small
             // `top_n` never drops results, it only leaves the tail unreranked.
-            // The passes are independent, so they fan out across cores with
-            // rayon (the dominant search cost, ≈2,700× fusion, drops by up to
-            // the core count — 16.6s → ~1s measured on 24 cores). The reranker
-            // is Sync; each thread shares `&reranker` and writes its own hit.
+            // `score_batch` is the whole-pool interface: each backend
+            // parallelizes it as it best can (the tract backend fans the
+            // independent passes across cores with rayon; an ORT backend runs
+            // one batched forward). 16.6s → ~0.7s measured with tract on 24
+            // cores at top_n=20.
             let pool = hits.len().min(rerank_top_n());
-            let scores: Vec<f32> = hits[..pool]
-                .par_iter()
-                .map(|h| reranker.score(query, &h.drawer.content))
+            let passages: Vec<&str> = hits[..pool]
+                .iter()
+                .map(|h| h.drawer.content.as_str())
                 .collect();
+            let scores = reranker.score_batch(query, &passages);
             for (h, s) in hits[..pool].iter_mut().zip(scores) {
                 h.score = s;
             }
