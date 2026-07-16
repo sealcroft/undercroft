@@ -181,6 +181,9 @@ impl PalaceStore {
             "DELETE FROM drawer_pq WHERE seq = (SELECT seq FROM drawers WHERE id = ?1)",
             params![id],
         );
+        // Sealed vaults also hold decrypted codes in RAM — drop the cache
+        // wholesale (deletes are rare; the next search re-decrypts once).
+        self.pq_cache.borrow_mut().take();
         self.late_purge_row(id);
         let n = self
             .conn

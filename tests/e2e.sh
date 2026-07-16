@@ -92,7 +92,7 @@ else
   echo "ok    sealed vault has no FTS index"; PASS=$((PASS+1))
 fi
 
-echo "== PQ/IVF prefilter (UNDERCROFT_RETRIEVAL=pq, hmac-only vaults) =="
+echo "== PQ/IVF prefilter (UNDERCROFT_RETRIEVAL=pq, both vault levels) =="
 check "pq search hits"            0 "kubernetes"                     -- \
   env UNDERCROFT_RETRIEVAL=pq "$BIN" search "staging kubernetes cluster" --vault plain
 check "bad retrieval mode fails"  1 "unknown UNDERCROFT_RETRIEVAL"    -- \
@@ -102,12 +102,15 @@ if grep -qF "drawer_pq" "$UNDERCROFT_HOME/vaults/plain/palace.db" 2>/dev/null; t
 else
   echo "FAIL  hmac-only vault missing its PQ codes"; FAIL=$((FAIL+1))
 fi
-check "pq no-op on sealed vault"  0 ""                               -- \
-  env UNDERCROFT_RETRIEVAL=pq "$BIN" search "rust migration" --vault work
-if grep -qF "drawer_pq" "$UNDERCROFT_HOME/vaults/work/palace.db" 2>/dev/null; then
-  echo "FAIL  sealed vault grew a PQ index"; FAIL=$((FAIL+1))
+check "pq search on sealed vault" 0 "BLUE HERON"                     -- \
+  env UNDERCROFT_RETRIEVAL=pq "$BIN" search "acquisition codename" --vault work
+# The sealed vault gets the index too — but every artifact is AEAD-sealed
+# (the unit suite asserts no plaintext-derived bytes; here we re-assert the
+# at-rest check now that the PQ tables exist in the same db file).
+if grep -qF "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/palace.db" 2>/dev/null; then
+  echo "FAIL  sealed vault leaked plaintext into the db"; FAIL=$((FAIL+1))
 else
-  echo "ok    sealed vault has no PQ index"; PASS=$((PASS+1))
+  echo "ok    sealed vault db stays sealed with PQ on"; PASS=$((PASS+1))
 fi
 
 echo "== Mining files =="

@@ -505,8 +505,8 @@ impl Tenancy {
                 store.set_reranker(Some(make_reranker()));
             }
             // Same retrieval contract as the CLI: UNDERCROFT_RETRIEVAL=pq
-            // enables the on-disk PQ/IVF prefilter per tenant vault
-            // (no-op on sealed vaults — invariant preserved).
+            // enables the on-disk PQ/IVF prefilter per tenant vault (plain
+            // on hmac-only; AEAD-sealed rows + RAM cache on sealed).
             if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("pq") {
                 store.set_pq(true);
             }
