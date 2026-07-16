@@ -41,6 +41,9 @@ const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 /// runs per candidate, so this bounds the added latency.
 const DEFAULT_RERANK_TOP_N: usize = 50;
 
+/// One decrypted sealed-PQ cache row: `(seq, list, code)`.
+pub(crate) type PqCacheRow = (i64, i64, Vec<u8>);
+
 pub(crate) fn rerank_top_n() -> usize {
     std::env::var("UNDERCROFT_RERANK_TOP_N")
         .ok()
@@ -217,7 +220,7 @@ pub struct PalaceStore {
     ivf: std::cell::RefCell<Option<pq::CoarseQuantizer>>,
     /// Sealed vaults only: `(seq, list, code)` rows decrypted once per open
     /// (~52 B per drawer — bounded), scanned in RAM. See `pqidx`.
-    pq_cache: std::cell::RefCell<Option<Vec<(i64, i64, Vec<u8>)>>>,
+    pq_cache: std::cell::RefCell<Option<Vec<PqCacheRow>>>,
     /// Whether the PQ index passed its coherence check since the last event
     /// that could break it (open, or a write that failed to encode). While
     /// true, searches skip the O(corpus) verification entirely. See `pqidx`.
