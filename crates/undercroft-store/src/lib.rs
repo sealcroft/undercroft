@@ -1719,6 +1719,90 @@ mod tests {
         }
     }
 
+    /// A LateInteraction encoder that panics on doc encodes — proves a
+    /// restore path never re-runs the expensive per-drawer forward.
+    struct QueryOnlyLate;
+    impl undercroft_core::late::LateInteraction for QueryOnlyLate {
+        fn model_name(&self) -> &str {
+            "word-mock" // must match WordLate so imported artifacts are used
+        }
+        fn dim(&self) -> usize {
+            16
+        }
+        fn encode_doc(&self, _text: &str) -> Vec<f32> {
+            panic!("restore must not re-encode documents");
+        }
+        fn encode_query(&self, text: &str) -> Vec<f32> {
+            WordLate.encode_doc(text)
+        }
+    }
+
+    #[test]
+    fn token_artifacts_round_trip_without_reencoding() {
+        // Source vault: sealed, encoder attached, matrices stored at write.
+        let (_d1, mut src) = store(SecurityLevel::Sealed);
+        src.set_late(Some(Box::new(WordLate)));
+        src.upsert(&drawer("w", "r", "kafka pipeline notes", 0))
+            .unwrap();
+        src.upsert(&drawer("w", "r", "kafka stream backlog rework", 1))
+            .unwrap();
+
+        // Export drawers + vectors + artifacts (artifacts come out as
+        // plaintext packing regardless of the source's sealing).
+        let records = src.export_all_with_vectors().unwrap();
+        let artifacts: Vec<Option<(String, Vec<u8>)>> = records
+            .iter()
+            .map(|(d, _)| src.token_artifact(&d.id).unwrap())
+            .collect();
+        assert!(artifacts.iter().all(Option::is_some));
+
+        // Destination vault (also sealed, different keys): import WITHOUT
+        // any encoder — then attach a query-only encoder that panics on any
+        // doc encode. Rescoring must work purely from imported artifacts.
+        let (_d2, mut dst) = store(SecurityLevel::Sealed);
+        for ((d, v), tok) in records.iter().zip(&artifacts) {
+            dst.import_record(d, Some(v.clone())).unwrap();
+            let (model, packed) = tok.as_ref().unwrap();
+            dst.import_token_artifact(&d.id, model, packed).unwrap();
+        }
+        dst.set_late(Some(Box::new(QueryOnlyLate)));
+        let hits = dst
+            .search("kafka stream backlog", &SearchOptions::default())
+            .unwrap();
+        assert!(
+            hits[0].drawer.content.contains("backlog"),
+            "imported matrices must drive MaxSim order: {:?}",
+            hits[0].drawer.content
+        );
+
+        // The destination's at-rest blob must be re-sealed under ITS key —
+        // not the source's bytes, not plaintext.
+        let (src_blob, dst_blob): (Vec<u8>, Vec<u8>) = {
+            let get = |s: &PalaceStore, id: &str| -> Vec<u8> {
+                s.conn
+                    .query_row(
+                        "SELECT tok FROM drawer_tok WHERE id = ?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .unwrap()
+            };
+            let id = &records[0].0.id;
+            (get(&src, id), get(&dst, id))
+        };
+        let plain = &artifacts[0].as_ref().unwrap().1;
+        assert_ne!(
+            &dst_blob, plain,
+            "sealed destination must not store plaintext"
+        );
+        assert_ne!(dst_blob, src_blob, "artifact must be re-sealed, not copied");
+
+        // Garbage artifacts are rejected up front.
+        assert!(dst
+            .import_token_artifact("some-id", "word-mock", &[9, 9, 9])
+            .is_err());
+    }
+
     #[test]
     fn late_rescore_leaves_unencoded_rows_at_fusion_rank() {
         let (_d, mut s) = store(SecurityLevel::HmacOnly);

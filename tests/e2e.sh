@@ -383,6 +383,16 @@ rest_body "import count"        '"imported":1'    -- -X POST "$API/vaults/acme2/
 rest_body "import verified"     '"drawers":1'     -- "$API/vaults/acme2/stats" \
   -H "X-Vault-Assertion: $(sign acme2)"
 
+# Portable derived artifacts: an import line may carry the drawer's
+# late-interaction token matrix (tok = model + base64 packed) — accepted and
+# stored without re-encoding; garbage artifacts are a clean 400.
+TOK_LINE="$(head -1 /tmp/acme.jsonl | sed 's/}$/,"tok":{"model":"m","b64":"AQEAAAABAAAAAACAP38="}}/')"
+rest_body "import with artifact" '"imported":1'   -- -X POST "$API/vaults/acme2/import" \
+  -H "X-Vault-Assertion: $(sign acme2)" --data-binary "$TOK_LINE"
+BAD_LINE="$(head -1 /tmp/acme.jsonl | sed 's/}$/,"tok":{"model":"m","b64":"AAAA"}}/')"
+rest_code "garbage artifact 400" 400 -- -X POST "$API/vaults/acme2/import" \
+  -H "X-Vault-Assertion: $(sign acme2)" --data-binary "$BAD_LINE"
+
 # Semantic dedup-refresh: re-ingesting the same fact refreshes, not piles up.
 rest_body "dedup first insert"  '"deduped":false' -- -X POST "$API/vaults/acme/drawers" \
   -H "X-Vault-Assertion: $(sign acme)" \
