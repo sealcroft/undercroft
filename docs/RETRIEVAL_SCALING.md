@@ -297,21 +297,23 @@ are wildly asymmetric: FTS re-triggers in seconds, PQ/IVF retrains in ~10–20 s
 at 20k drawers — but **ColBERT token matrices cost one transformer forward
 per drawer** (~2 h for 20k on tract, serial). The plan, in leverage order:
 
-1. **Portable artifacts (transport beats recompute).** Every derived
-   artifact is a pure function of `(content, model identity)`, and drawer
-   ids are already deterministic — so token matrices, PQ codes, and
-   codebooks are *content-addressed cache* and can ship inside export
-   bundles. Restore becomes copy + verify, zero forwards. The architecture
-   makes this uniquely safe: artifacts are advisory (self-heal rebuilds on
-   mismatch), model identity is checked before use, and every served result
+1. **Portable artifacts (transport beats recompute) — shipped.** Every
+   derived artifact is a pure function of `(content, model identity)`, and
+   drawer ids are already deterministic — so token matrices are
+   *content-addressed cache* and ship inside `/v1` export bundles (each
+   JSONL line carries optional `tok = {model, b64}`); import re-seals them
+   under the destination vault's key. Restore becomes copy + verify, zero
+   forwards. The architecture makes this uniquely safe: artifacts are
+   advisory, model identity is matched before use, and every served result
    is still HMAC-verified — an imported artifact can only mis-rank, never
-   forge. Sealed artifacts re-seal under the destination vault key (pairs
-   with recipient-encrypted export bundles on the roadmap).
-2. **Instant restore, background accuracy.** Drawers without token matrices
-   already keep their fusion rank, so a restored shard serves at bm25
-   quality immediately and climbs to late-interaction quality as a backfill
-   worker (`repair`/daemon) encodes matrices — with ort int8 + batching +
-   rayon, ~10 min for 20k drawers instead of ~2 h.
+   forge (test: a destination whose encoder panics on doc-encode rescores
+   correctly from imported artifacts alone).
+2. **Instant restore, background accuracy — shipped.** Drawers without
+   token matrices keep their fusion rank, so a restored shard serves at
+   bm25 quality immediately; `undercroft repair --tokens` (or a daemon tick
+   calling `late_backfill`) covers the gap in bounded batches — with ort
+   int8 + batching + rayon (still open), ~10 min for 20k drawers instead
+   of ~2 h.
 3. **Token-store PQ + pruning (the PLAID move) — compression that speeds
    scoring up.** Re-use [pq.rs](../crates/undercroft-store/src/pq.rs) on the
    token vectors: at `m=16` a token is 16 bytes (8× below today's int8, 32×

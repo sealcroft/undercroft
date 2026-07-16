@@ -240,14 +240,20 @@ Also closes the v0.13.0 follow-up items:
   Invariant test strengthened (no plain codes, undecodable metadata,
   baseline-agreeing results across cache rebuilds).
 
+## v0.18.0 — Portable derived artifacts & token backfill (done)
+
+- Restore economics tiers 1–2: `/v1` export bundles carry token matrices as
+  content-addressed artifacts (`tok = {model, b64}`, re-sealed under the
+  destination vault on import — restore is a copy, not one transformer
+  forward per drawer); `repair --tokens` backfills artifact-less palaces in
+  bounded batches while searches serve at fusion quality and climb.
+
 ## Next
 
-- **Restore economics** (design in RETRIEVAL_SCALING): derived artifacts as
-  portable content-addressed cache in export bundles (restore = copy, not
-  recompute); background token-matrix backfill (instant restore at fusion
-  quality, climbing to late-interaction quality); token-store PQ with
-  register-LUT MaxSim (PLAID-style — 8× smaller *and* faster scoring) +
-  doc-token pruning; shared codebooks shipped with models.
+- **Restore economics tier 3**: token-store PQ with register-LUT MaxSim
+  (PLAID-style — 8× smaller *and* faster scoring, FAISS 4-bit fast-scan
+  technique in pure-Rust `std::arch`) + doc-token pruning; shared codebooks
+  shipped with models. Accuracy gate: LoCoMo ≥96.5%.
 - **ColBERT follow-ups**: `ort` backend for the query forward (~93 → ~40
   ms/q); punctuation-filtered doc rows.
 - **PQ cache for hmac-only**: the sealed RAM cache out-ran per-query SQLite
