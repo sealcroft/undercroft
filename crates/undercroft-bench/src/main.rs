@@ -176,6 +176,12 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
     if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("onnx") {
         store.set_reranker(Some(rerank_shared()));
     }
+    // Late-interaction (ColBERT) second stage: token matrices stored at
+    // ingest, one query forward + MaxSim at search.
+    #[cfg(feature = "onnx")]
+    if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("colbert") {
+        store.set_late(Some(colbert_shared()));
+    }
     // Optional local HNSW ANN prefilter (replaces the full cosine scan).
     if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("hnsw") {
         #[cfg(feature = "hnsw")]
@@ -239,6 +245,38 @@ fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
         }
         fn score(&self, query: &str, passage: &str) -> f32 {
             self.0.score(query, passage)
+        }
+    }
+    Box::new(Shared(arc))
+}
+
+/// The ColBERT late-interaction encoder, loaded once and shared across every
+/// per-question palace (same rationale as `onnx_shared`).
+#[cfg(feature = "onnx")]
+fn colbert_shared() -> Box<dyn undercroft_core::late::LateInteraction + Send + Sync> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_onnx::OnnxColbert>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(
+                undercroft_embed_onnx::colbert_from_env().expect("loading ColBERT encoder from env"),
+            )
+        })
+        .clone();
+
+    struct Shared(Arc<undercroft_embed_onnx::OnnxColbert>);
+    impl undercroft_core::late::LateInteraction for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn dim(&self) -> usize {
+            self.0.dim()
+        }
+        fn encode_doc(&self, text: &str) -> Vec<f32> {
+            self.0.encode_doc(text)
+        }
+        fn encode_query(&self, text: &str) -> Vec<f32> {
+            self.0.encode_query(text)
         }
     }
     Box::new(Shared(arc))

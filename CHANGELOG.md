@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.16.0 — ColBERT late interaction
+
+The core-count-independent second retrieval stage. The cross-encoder reranker
+runs one transformer forward per candidate per query — great on 24 cores,
+painful on 4. Late interaction moves that work to ingest: each drawer is
+encoded **once** into a per-token embedding matrix; a search encodes the query
+in **one** forward and re-scores the fusion top-N by MaxSim over the stored
+matrices. **Measured (LoCoMo, full 1,982 QA, hash embedder + colbertv2.0 on
+tract): 94.6 → 96.77% R@10 at a flat 92.7 ms/query** — the same on any core
+count, where the cross-encoder's 97.68% costs 101–327 ms on 24 cores and ~5×
+that on 4. Off by default; the cross-encoder wins when both are configured.
+
+- **`LateInteraction` trait + MaxSim kernel + int8 token pack**
+  (`undercroft-core/src/late.rs`): row-major unit-row matrices, per-row-scale
+  int8 quantization (~4× smaller, scores within noise — round-trip tested).
+- **`OnnxColbert`** (`undercroft-embed-onnx`, `onnx` feature): tract-run, two
+  fixed-shape plans (query 32, doc 256), faithful ColBERT v2 conventions —
+  `[Q]`/`[D]` marker tokens and attending `[MASK]` query augmentation.
+  Models are user-supplied: `UNDERCROFT_RERANKER=colbert` +
+  `UNDERCROFT_COLBERT_MODEL` (doc export) / `_QUERY_MODEL` / `_TOKENIZER`.
+  **Export recipe matters**: fixed-shape legacy exports only — the dynamo
+  exporter's symbolic dims and dynamic-axes `Range` ops both fail in tract
+  (recipe in docs/RETRIEVAL_SCALING.md).
+- **Sealed-tier encrypted-at-rest token store**: `Vault::tokens_at_rest`
+  seals every matrix under a `/tok` AAD domain (distinct from content and
+  `/emb` — one drawer's blobs can never be swapped). Sealed vaults get the
+  full feature: the first plaintext-derived store that is allowed on sealed
+  disk, because it is never in clear (test-asserted at both levels). The
+  hmac-only/plain vs sealed/encrypted tiering mirrors the rest of the stack.
+- **Store stage** (`undercroft-store/src/latestage.rs`): advisory write-time
+  encode (a drawer written before the encoder was attached keeps its fusion
+  rank — never sunk); MaxSim normalized onto the fusion score scale;
+  `delete_drawer` purges the matrix.
+- Wired through the CLI (search / serve-mcp / daemon) and the bench harness
+  (shared encoder across per-question palaces).
+
 ## 0.15.0 — IVF inverted lists & the PQ scan-path fixes
 
 IVF partitioning on top of the v0.14.0 PQ codes — and, more consequentially,

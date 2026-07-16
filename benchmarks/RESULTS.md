@@ -112,6 +112,34 @@ already **99.4% (497/500)** — saturated. A second-stage reranker can only
 move it ≤0.6 pts, indistinguishable from noise, and the multi-hour run
 isn't worth it. The reranker's value shows on LoCoMo, which has headroom.
 
+### ColBERT late interaction (second stage, core-count-independent)
+
+Run 2026-07-16, hash embedder + BM25 fusion + the ColBERT late-interaction
+stage (`UNDERCROFT_RERANKER=colbert`, `colbertv2.0` exported to fixed-shape
+ONNX, tract runtime): passage token matrices are encoded **once at ingest**
+(int8 on disk; AEAD-sealed in sealed vaults) and a search runs **one** query
+forward + MaxSim over the fusion top-N — no transformer per candidate.
+
+```
+# build with --features onnx, then
+UNDERCROFT_RERANKER=colbert UNDERCROFT_COLBERT_MODEL=colbert/model.d256.onnx \
+UNDERCROFT_COLBERT_QUERY_MODEL=colbert/model.q32.onnx \
+UNDERCROFT_COLBERT_TOKENIZER=colbert/tokenizer.json \
+undercroft-bench locomo locomo10.json --k 10
+```
+
+| Second stage (hash + bm25 base) | Session R@10 | search ms/q | scales w/ cores |
+|---|---|---|---|
+| none | 94.6% | ~6 | — |
+| **ColBERT late interaction** | **96.77%** (1918/1982) | **92.7** | **no — flat on 4 or 24** |
+| cross-encoder (ort int8, top_n=20) | 97.68% | 101–327 *(24-core)* | yes (~5× worse on 4) |
+
++2.2 pts over fusion at a flat ~93 ms/query on **any** core count — the
+portable second stage for few-core boxes, where the cross-encoder's last
+point costs many-core parallelism it doesn't have. Ingest carries the moved
+cost (~0.37 s/drawer on tract). Off by default; the cross-encoder wins when
+both are configured.
+
 ## Retrieval fusion
 
 Ablation on the default hash embedder, all three fusion modes, full suites
@@ -195,7 +223,9 @@ bound of concurrent forwards; ingest embed drops 24 s → ~5 s with ORT.
 **Recommendation:** reranker on = `UNDERCROFT_RERANKER=onnx`, `top_n=20`, the
 `ort` backend where the C++ dep is acceptable, int8 models, pool = cores
 (`UNDERCROFT_ORT_POOL`; `pool=1` on few-core boxes = batched mode). Pure-Rust
-tract remains the default fallback.
+tract remains the default fallback. On few-core boxes prefer
+**`UNDERCROFT_RERANKER=colbert`** (see the ColBERT section above): 96.77% at a
+flat 92.7 ms/query, independent of core count.
 
 ### Lever 4 — candidate index at scale (synthetic corpus, hmac-only)
 
@@ -258,6 +288,6 @@ for corpora too large to scan locally — never for latency, never for accuracy.
 | Personal palace (default) | hash + bm25, no reranker | ~6 ms/q, 94.6% |
 | Accuracy-critical, many-core | + reranker top_n=20, ort+int8, pool=cores | ~330 ms/q, ~98% |
 | Fast + accurate compromise | + reranker top_n=5–10, ort+int8 | ~100–170 ms/q, ~98% |
-| 4-core / edge, large corpus | hmac-only + PQ/IVF prefilter (`UNDERCROFT_RETRIEVAL=pq`); reranker `pool=1` or off | bounded RAM; ~ms retrieval |
+| 4-core / edge, large corpus | hmac-only + PQ/IVF prefilter (`UNDERCROFT_RETRIEVAL=pq`); **ColBERT** (`UNDERCROFT_RERANKER=colbert`) | bounded RAM; ~93 ms/q @ 96.8% |
 | GPU box | ort CUDA EP (each forward ~1–5 ms) | reranked query well under 50 ms |
 | Huge corpus, RAM-rich | HNSW (tune `ef`/over-fetch with N) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded-RAM (PQ+IVF) |

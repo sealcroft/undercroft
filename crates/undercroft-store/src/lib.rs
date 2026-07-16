@@ -15,6 +15,7 @@
 #[cfg(feature = "hnsw")]
 mod hnsw;
 pub mod kg;
+mod latestage;
 pub mod manage;
 pub mod pq;
 mod pqidx;
@@ -40,7 +41,7 @@ const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 /// runs per candidate, so this bounds the added latency.
 const DEFAULT_RERANK_TOP_N: usize = 50;
 
-fn rerank_top_n() -> usize {
+pub(crate) fn rerank_top_n() -> usize {
     std::env::var("UNDERCROFT_RERANK_TOP_N")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -177,6 +178,11 @@ pub struct PalaceStore {
     /// fusion-ranked top-N candidates are re-scored by `(query, content)`
     /// pairs before the final `limit` cut. `None` ⇒ first-pass ranking only.
     reranker: Option<Box<dyn Reranker + Send + Sync>>,
+    /// Optional late-interaction (ColBERT) second stage: writes store
+    /// per-token matrices, searches MaxSim-rescore the fusion top-N in one
+    /// query forward. The cross-encoder wins when both are set. See
+    /// `latestage`.
+    late: Option<Box<dyn undercroft_core::late::LateInteraction + Send + Sync>>,
     /// In-process decrypted-embedding cache for long-running servers
     /// (serve-mcp / serve-http / daemon): sealed vaults pay AEAD decryption
     /// of every embedding once instead of on every search. Never persisted
@@ -340,6 +346,7 @@ impl PalaceStore {
             vault,
             embedder,
             reranker: None,
+            late: None,
             emb_cache: std::cell::RefCell::new(None),
             fts: false,
             fts_min,
@@ -671,6 +678,9 @@ impl PalaceStore {
         self.vault.commit_write(&tag)?;
         // Keep the on-disk PQ codes coherent (advisory; self-heals on search).
         self.pq_encode_row(&drawer.id, &embedding, existing.is_none());
+        // Store the late-interaction token matrix (advisory; a drawer
+        // without one keeps its fusion rank at rescore time).
+        self.late_encode_row(&drawer.id, &drawer.content);
         if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
             cache.insert(drawer.id.clone(), embedding);
         }
@@ -1161,6 +1171,10 @@ impl PalaceStore {
                     .partial_cmp(&a.score)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
+        } else {
+            // Late-interaction alternative: MaxSim over ingest-time token
+            // matrices, one query-encode forward total (no-op when unset).
+            self.late_rescore(query, &mut hits);
         }
         hits.truncate(limit);
 
@@ -1598,6 +1612,119 @@ mod tests {
         fn score(&self, _query: &str, passage: &str) -> f32 {
             passage.chars().count() as f32
         }
+    }
+
+    /// A deterministic late-interaction encoder: one "token" per word,
+    /// each a unit one-hot picked by a word hash. MaxSim then counts
+    /// (normalized) query-word coverage — enough to prove ordering flows
+    /// from the stored matrices.
+    struct WordLate;
+    impl undercroft_core::late::LateInteraction for WordLate {
+        fn model_name(&self) -> &str {
+            "word-mock"
+        }
+        fn dim(&self) -> usize {
+            16
+        }
+        fn encode_doc(&self, text: &str) -> Vec<f32> {
+            let mut m = Vec::new();
+            for w in text.split_whitespace() {
+                let mut row = vec![0f32; 16];
+                let h = w.bytes().fold(0usize, |a, b| (a * 31 + b as usize) % 16);
+                row[h] = 1.0;
+                m.extend(row);
+            }
+            m
+        }
+        fn encode_query(&self, text: &str) -> Vec<f32> {
+            self.encode_doc(text)
+        }
+    }
+
+    #[test]
+    fn late_interaction_rescore_orders_by_stored_matrices() {
+        for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+            let (_d, mut s) = store(level);
+            s.set_late(Some(Box::new(WordLate)));
+            // Both mention the query word once; the second covers more of
+            // the query's words, so MaxSim must rank it first even though
+            // both fuse similarly.
+            s.upsert(&drawer("w", "r", "kafka pipeline notes", 0))
+                .unwrap();
+            s.upsert(&drawer("w", "r", "kafka stream backlog rework", 1))
+                .unwrap();
+            let hits = s
+                .search(
+                    "kafka stream backlog",
+                    &SearchOptions {
+                        wing: None,
+                        room: None,
+                        limit: 2,
+                    },
+                )
+                .unwrap();
+            assert_eq!(hits.len(), 2);
+            assert!(
+                hits[0].drawer.content.contains("backlog"),
+                "MaxSim coverage must lead at level {level:?}: got {:?}",
+                hits[0].drawer.content
+            );
+
+            // The token store exists and, on sealed vaults, never holds the
+            // plaintext-derived matrix in clear: our mock rows are one-hot
+            // (byte 0x7F after int8 quantization at scale 1/127 appears
+            // per word) — a sealed blob must not equal the plain packing.
+            let (blob, plain): (Vec<u8>, Vec<u8>) = {
+                let b: Vec<u8> = s
+                    .conn
+                    .query_row(
+                        "SELECT tok FROM drawer_tok WHERE id = (SELECT id FROM drawers LIMIT 1)",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                let m = undercroft_core::late::LateInteraction::encode_doc(
+                    &WordLate,
+                    "kafka pipeline notes",
+                );
+                (b, undercroft_core::late::quantize_tokens(&m, 16))
+            };
+            match level {
+                SecurityLevel::HmacOnly => assert_eq!(blob, plain),
+                SecurityLevel::Sealed => assert_ne!(
+                    blob, plain,
+                    "sealed vault must not store plaintext-derived tokens in clear"
+                ),
+            }
+
+            // Deleting purges the token row.
+            let id = hits[0].drawer.id.clone();
+            s.delete_drawer(&id).unwrap();
+            let left: i64 = s
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM drawer_tok WHERE id = ?1",
+                    [&id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(left, 0, "delete must purge the token matrix");
+        }
+    }
+
+    #[test]
+    fn late_rescore_leaves_unencoded_rows_at_fusion_rank() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        // Written BEFORE the encoder is attached — no stored matrix.
+        s.upsert(&drawer("w", "r", "kafka stream backlog rework", 0))
+            .unwrap();
+        s.set_late(Some(Box::new(WordLate)));
+        let hits = s
+            .search("kafka stream backlog", &SearchOptions::default())
+            .unwrap();
+        // The drawer is still found with its fusion score intact (not sunk).
+        assert!(!hits.is_empty());
+        assert!(hits[0].score > 0.0);
     }
 
     #[test]

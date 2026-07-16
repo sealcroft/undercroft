@@ -181,6 +181,7 @@ impl PalaceStore {
             "DELETE FROM drawer_pq WHERE seq = (SELECT seq FROM drawers WHERE id = ?1)",
             params![id],
         );
+        self.late_purge_row(id);
         let n = self
             .conn
             .execute("DELETE FROM drawers WHERE id = ?1", params![id])?;

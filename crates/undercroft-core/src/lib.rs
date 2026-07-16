@@ -11,6 +11,7 @@ pub mod drawer;
 pub mod embed;
 pub mod entity;
 pub mod ids;
+pub mod late;
 pub mod normalize;
 pub mod rerank;
 
