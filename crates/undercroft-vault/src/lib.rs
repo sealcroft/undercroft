@@ -198,6 +198,37 @@ impl Vault {
         Ok(dequantize_embedding(&raw))
     }
 
+    /// Store a late-interaction token matrix (already quantized by the
+    /// caller). Token embeddings are plaintext-derived like the sentence
+    /// embedding, so sealed vaults seal them — under the `/tok` AAD domain,
+    /// distinct from content and `/emb`, so at-rest blobs of one drawer can
+    /// never be swapped for each other. This is the sealed tier's first
+    /// encrypted-at-rest derived store: unlike the PQ/FTS *prefilters*
+    /// (plaintext side-tables, hmac-only vaults only), a per-candidate
+    /// rescore store can exist for sealed vaults because nothing derived
+    /// ever touches disk in clear.
+    pub fn tokens_at_rest(&self, record_id: &str, packed: &[u8]) -> Vec<u8> {
+        match self.level {
+            SecurityLevel::Sealed => {
+                seal::seal_content(&self.enc_key, &self.id, &format!("{record_id}/tok"), packed)
+            }
+            SecurityLevel::HmacOnly => packed.to_vec(),
+        }
+    }
+
+    /// Recover a token matrix blob from its at-rest form.
+    pub fn tokens_from_rest(&self, record_id: &str, blob: &[u8]) -> Result<Vec<u8>, VaultError> {
+        match self.level {
+            SecurityLevel::Sealed => Ok(seal::open_content(
+                &self.enc_key,
+                &self.id,
+                &format!("{record_id}/tok"),
+                blob,
+            )?),
+            SecurityLevel::HmacOnly => Ok(blob.to_vec()),
+        }
+    }
+
     /// HMAC tag for a record's canonical bytes.
     pub fn tag(&self, canonical: &[u8]) -> [u8; HMAC_LEN] {
         record_hmac(&self.mac_key, canonical)

@@ -579,8 +579,24 @@ fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
                  (cargo build -p undercroft-cli --features onnx)"
             );
         }
+        Ok("colbert") => {
+            #[cfg(feature = "onnx")]
+            {
+                let c = undercroft_embed_onnx::colbert_from_env()
+                    .map_err(|e| anyhow::anyhow!("loading ColBERT encoder: {e}"))?;
+                store.set_late(Some(Box::new(c)));
+                Ok(())
+            }
+            #[cfg(not(feature = "onnx"))]
+            bail!(
+                "UNDERCROFT_RERANKER=colbert requires a build with the 'onnx' feature \
+                 (cargo build -p undercroft-cli --features onnx)"
+            );
+        }
         Ok("") | Err(_) => Ok(()),
-        Ok(other) => bail!("unknown UNDERCROFT_RERANKER {other:?} (expected: onnx or unset)"),
+        Ok(other) => {
+            bail!("unknown UNDERCROFT_RERANKER {other:?} (expected: onnx, colbert, or unset)")
+        }
     }
 }
 

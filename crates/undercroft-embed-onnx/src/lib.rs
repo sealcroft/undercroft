@@ -183,7 +183,9 @@ pub fn from_env() -> Result<OnnxEmbedder, OnnxError> {
     )
 }
 
+mod late;
 mod rerank;
+pub use late::{colbert_from_env, OnnxColbert};
 pub use rerank::OnnxReranker;
 
 #[cfg(test)]
