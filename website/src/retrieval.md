@@ -96,8 +96,16 @@ disk, and only a ~400 KB codebook stays resident. Measured at N=20,000
 
 **PQ's recall is flat in N** (98.6% → 98.9% — it scans every code, so the only
 error is quantization), where the graph-based HNSW collapses without per-size
-tuning (93% → 72%). Sealed vaults keep full-scan/HNSW: their on-disk index
-must be encrypted at rest, which is the research follow-up.
+tuning (93% → 72%).
+
+**Sealed vaults now get the index too — encrypted at rest.** Every code row,
+the codebook, and the IVF centroids are AEAD-sealed (list ids never stored in
+clear — they would leak semantic clustering); search decrypts the rows once
+per open into a ~52 B/drawer RAM cache and scans there. Measured: sealed
+search went from **2.1 → 33.4 q/s at N=20k (×16)** and 1.1 → 11.8 at 50k
+(×11), at parity with the plaintext hmac-only index — encryption stops being
+a query-time cost. An offline attacker sees fixed-size sealed blobs: the
+drawer count it already knows.
 
 **IVF inverted lists** now sit on top of the codes: a coarse quantizer
 (`√N` centroids) partitions the corpus, codes are physically clustered by

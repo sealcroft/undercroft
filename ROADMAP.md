@@ -230,11 +230,28 @@ Also closes the v0.13.0 follow-up items:
   the **first encrypted-at-rest derived store** (rescore stores can be
   sealed; plaintext prefilters remain hmac-only).
 
+## v0.17.0 — Sealed-tier encrypted-at-rest index (done)
+
+- Sealed vaults run the PQ/IVF prefilter: rows/codebook/centroids
+  AEAD-sealed (`/pq` AAD domain, list ids never in clear), search decrypts
+  once per open into a ~52 B/drawer RAM cache and scans there. **Sealed
+  search 2.1 → 33.4 q/s at N=20k (×16), 1.1 → 11.8 at 50k (×11)** — parity
+  with the plaintext index; encryption is no longer a query-time cost.
+  Invariant test strengthened (no plain codes, undecodable metadata,
+  baseline-agreeing results across cache rebuilds).
+
 ## Next
 
+- **Restore economics** (design in RETRIEVAL_SCALING): derived artifacts as
+  portable content-addressed cache in export bundles (restore = copy, not
+  recompute); background token-matrix backfill (instant restore at fusion
+  quality, climbing to late-interaction quality); token-store PQ with
+  register-LUT MaxSim (PLAID-style — 8× smaller *and* faster scoring) +
+  doc-token pruning; shared codebooks shipped with models.
 - **ColBERT follow-ups**: `ort` backend for the query forward (~93 → ~40
-  ms/q); PLAID-style token compression (int8 → PQ, ~4× → ~32×);
-  punctuation-filtered doc rows.
+  ms/q); punctuation-filtered doc rows.
+- **PQ cache for hmac-only**: the sealed RAM cache out-ran per-query SQLite
+  streaming at N=50k — adopt it for both levels.
 - **Sealed-tier encrypted-at-rest index** (research): an ANN index sealed
   vaults can persist without violating the no-plaintext-derived-index
   invariant — PQ/ColBERT stores AEAD-sealed at rest.
