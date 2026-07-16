@@ -12,14 +12,20 @@ name = "undercroft-bench"
 path = "src/main.rs"
 
 [features]
-# Model-based benchmarking: UNDERCROFT_EMBEDDER=onnx + UNDERCROFT_ONNX_MODEL/_TOKENIZER
+# Model-based benchmarking (tract): UNDERCROFT_EMBEDDER=onnx + UNDERCROFT_ONNX_MODEL/_TOKENIZER
 onnx = ["dep:undercroft-embed-onnx"]
+# Same models via ONNX Runtime (faster; links C++). Takes precedence over onnx.
+ort = ["dep:undercroft-embed-ort"]
+# Local HNSW ANN prefilter: UNDERCROFT_RETRIEVAL=hnsw
+hnsw = ["undercroft-store/hnsw"]
 
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 undercroft-embed-onnx = { path = "../undercroft-embed-onnx", optional = true }
+undercroft-embed-ort = { path = "../undercroft-embed-ort", optional = true }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-store = { path = "../undercroft-store" }
+undercroft-index = { path = "../undercroft-index" }
 undercroft-llm = { path = "../undercroft-llm" }
 anyhow = { workspace = true }
 clap = { workspace = true }

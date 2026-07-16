@@ -1,6 +1,6 @@
 [package]
-name = "undercroft-embed-onnx"
-description = "ONNX sentence-embedding backend (MiniLM-class models) for Undercroft, via tract (pure Rust)"
+name = "undercroft-embed-ort"
+description = "ONNX Runtime (ort) inference backend for Undercroft — a faster, opt-in alternative to the pure-Rust tract backend (links ONNX Runtime's C++ library)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,6 @@ authors.workspace = true
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 thiserror = { workspace = true }
-tract-onnx = "0.22"
+ort = "=2.0.0-rc.10"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 rayon = { workspace = true }

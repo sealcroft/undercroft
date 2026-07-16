@@ -1,0 +1,5 @@
+# Docker-first project: everything executable runs on Linux inside
+# containers, and scripts/configs are bind-mounted or COPY'd verbatim.
+# Force LF on checkout so a Windows clone (core.autocrlf=true) doesn't
+# smudge shell scripts into CRLF and break them in the containers.
+* text=auto eol=lf

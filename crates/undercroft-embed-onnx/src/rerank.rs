@@ -149,6 +149,14 @@ impl Reranker for OnnxReranker {
         // probe, so failures here are rare (e.g. a pathological input).
         self.score_inner(query, passage).unwrap_or(0.0)
     }
+
+    fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
+        // tract runs one batch-dim-1 forward per pair, but the passes are
+        // independent — fan them across cores. This is where the whole-pool
+        // parallelism lives (the store just calls `score_batch`).
+        use rayon::prelude::*;
+        passages.par_iter().map(|p| self.score(query, p)).collect()
+    }
 }
 
 #[cfg(test)]

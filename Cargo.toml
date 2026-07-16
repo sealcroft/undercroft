@@ -10,9 +10,11 @@ members = [
     "crates/undercroft-cli",
     "crates/undercroft-bench",
     "crates/undercroft-embed-onnx",
+    "crates/undercroft-embed-ort",
 ]
-# The ONNX embedder pulls heavy ML deps; it is built explicitly
-# (see the `onnx-build` compose service), not by default.
+# The ONNX embedders pull heavy ML deps (and `ort` links a C++ runtime); they
+# are built explicitly (see the `onnx-build` / `ort-build` compose services),
+# not by default.
 default-members = [
     "crates/undercroft-core",
     "crates/undercroft-vault",
@@ -25,7 +27,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/compufreq/undercroft"
@@ -49,6 +51,8 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 hex = "0.4"
 subtle = "2.6"
 tempfile = "3"
+instant-distance = "0.6"
+rayon = "1"
 assert_cmd = "2"
 predicates = "3"
 

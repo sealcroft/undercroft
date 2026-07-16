@@ -60,6 +60,16 @@ services:
       target: builder
     command: ["cargo", "build", "--release", "-p", "undercroft-cli", "--features", "onnx"]
 
+  # Compile-check the optional ONNX Runtime (ort) backend. Unlike the pure-Rust
+  # tract backend it links ORT's C++ library, so it needs pkg-config/openssl/g++.
+  ort-build:
+    build:
+      context: .
+      target: builder
+    entrypoint: ["bash", "-c"]
+    command:
+      - "apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev g++ >/dev/null 2>&1 && cargo build --release -p undercroft-embed-ort"
+
   # Observability end-to-end suite. Builds the CLI with --features telemetry
   # (like onnx-build), then exercises the opt-in /metrics gating and that
   # traffic advances the Prometheus counters.

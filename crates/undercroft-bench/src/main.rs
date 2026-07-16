@@ -68,8 +68,21 @@ enum Command {
         dataset: std::path::PathBuf,
         #[arg(short = 'k', long, default_value_t = 10)]
         k: usize,
+        /// Evaluate at most N conversations (the top-level shard unit), after
+        /// --skip. Omit for all. Recall is additive, so sharding by
+        /// conversation and summing the RAW lines reproduces the full number.
         #[arg(long)]
         limit: Option<usize>,
+        /// Skip the first N conversations (pairs with --limit for sharding).
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        /// Retrieval backend: `local` (SQLite full-scan + fusion + optional
+        /// reranker) or a remote vector index used as an ANN accelerator
+        /// (`qdrant` / `weaviate` / `chroma` / `pgvector` / `milvus`). The
+        /// remote path re-verifies + re-scores candidates locally but does
+        /// NOT run BM25 fusion or the reranker (see `search_with_index`).
+        #[arg(long, default_value = "local")]
+        backend: String,
     },
     /// ConvoMem protocol: message-level evidence recall
     Convomem {
@@ -119,25 +132,55 @@ fn level_of(s: &str) -> SecurityLevel {
 }
 
 fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, PalaceStore)> {
+    fresh_store_id(level, "bench")
+}
+
+/// Like [`fresh_store`] but with a caller-chosen vault id. The remote-backend
+/// LoCoMo path needs one collection per conversation (collection name derives
+/// from the vault id), so it passes a unique id per convo to avoid cross-convo
+/// vector collisions in the shared index.
+fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, PalaceStore)> {
     let dir = tempfile::TempDir::new()?;
     let mgr = VaultManager::open(dir.path(), None)?;
-    let vault = mgr.create("bench", level)?;
+    let vault = mgr.create(id, level)?;
     #[allow(unused_mut)]
     let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
         Ok("onnx") => {
-            #[cfg(feature = "onnx")]
+            // The `ort` (ONNX Runtime) backend takes precedence over `onnx`
+            // (tract) when both features are built — same model file, faster.
+            #[cfg(feature = "ort")]
+            {
+                PalaceStore::open_with_embedder(vault, ort_embedder_shared())?
+            }
+            #[cfg(all(feature = "onnx", not(feature = "ort")))]
             {
                 PalaceStore::open_with_embedder(vault, onnx_shared())?
             }
-            #[cfg(not(feature = "onnx"))]
-            anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires building with --features onnx");
+            #[cfg(not(any(feature = "onnx", feature = "ort")))]
+            anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires --features onnx or ort");
         }
         _ => PalaceStore::open(vault)?,
     };
-    // Optional second-stage reranker (pairs with either embedder).
-    #[cfg(feature = "onnx")]
+    // Optional second-stage reranker (pairs with either embedder). ORT wins
+    // over tract when both are built.
+    #[cfg(feature = "ort")]
+    if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("onnx") {
+        store.set_reranker(Some(ort_reranker_shared()));
+    }
+    #[cfg(all(feature = "onnx", not(feature = "ort")))]
     if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("onnx") {
         store.set_reranker(Some(rerank_shared()));
+    }
+    // Optional local HNSW ANN prefilter (replaces the full cosine scan).
+    if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("hnsw") {
+        #[cfg(feature = "hnsw")]
+        store.set_hnsw(true);
+        #[cfg(not(feature = "hnsw"))]
+        eprintln!("note: UNDERCROFT_RETRIEVAL=hnsw ignored — built without --features hnsw");
+    }
+    // Optional on-disk PQ ANN prefilter (hmac-only vaults; bounded RAM).
+    if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("pq") {
+        store.set_pq(true);
     }
     Ok((dir, store))
 }
@@ -172,7 +215,7 @@ fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
 /// The cross-encoder reranker, loaded once and shared across every per-question
 /// palace (same rationale as `onnx_shared`).
 #[cfg(feature = "onnx")]
-fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send> {
+fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
     use std::sync::{Arc, OnceLock};
     static SHARED: OnceLock<Arc<undercroft_embed_onnx::OnnxReranker>> = OnceLock::new();
     let arc = SHARED
@@ -191,6 +234,60 @@ fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send> {
         }
         fn score(&self, query: &str, passage: &str) -> f32 {
             self.0.score(query, passage)
+        }
+    }
+    Box::new(Shared(arc))
+}
+
+/// ORT (ONNX Runtime) embedder, loaded once and shared, mirroring `onnx_shared`.
+#[cfg(feature = "ort")]
+fn ort_embedder_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtEmbedder>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(
+                undercroft_embed_ort::embedder_from_env().expect("loading ORT embedder from env"),
+            )
+        })
+        .clone();
+    struct Shared(Arc<undercroft_embed_ort::OrtEmbedder>);
+    impl undercroft_core::embed::Embedder for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn dimension(&self) -> usize {
+            self.0.dimension()
+        }
+        fn embed(&self, text: &str) -> Vec<f32> {
+            self.0.embed(text)
+        }
+    }
+    Box::new(Shared(arc))
+}
+
+/// ORT reranker, loaded once and shared, mirroring `rerank_shared`.
+#[cfg(feature = "ort")]
+fn ort_reranker_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtReranker>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(
+                undercroft_embed_ort::reranker_from_env().expect("loading ORT reranker from env"),
+            )
+        })
+        .clone();
+    struct Shared(Arc<undercroft_embed_ort::OrtReranker>);
+    impl undercroft_core::rerank::Reranker for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn score(&self, query: &str, passage: &str) -> f32 {
+            self.0.score(query, passage)
+        }
+        fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
+            self.0.score_batch(query, passages)
         }
     }
     Box::new(Shared(arc))
@@ -358,6 +455,11 @@ fn run_longmemeval(
     }
 
     let n = total as f32;
+    // RAW numerators so sharded runs sum to the exact R@k / NDCG (per-shard
+    // percentages would round-drift). skip/limit define the shard window.
+    println!(
+        "LME_RAW total={total} recall_any_sum={recall_any_sum:.4} recall_all_sum={recall_all_sum:.4} ndcg_sum={ndcg_sum:.4}"
+    );
     println!("LongMemEval — {total} questions, session granularity, k={k}");
     println!("  Recall@{k} (any): {:.1}%", 100.0 * recall_any_sum / n);
     println!("  Recall@{k} (all): {:.1}%", 100.0 * recall_all_sum / n);
@@ -694,20 +796,44 @@ fn run_model_eval(
 /// Per-category (recall_sum, count) accumulator.
 type CategoryScores = std::collections::BTreeMap<String, (f32, u32)>;
 
+/// Wall-clock split between the two dominant bench phases. Rerank (when
+/// enabled) runs inside `store.search`, so it is folded into `search_secs`;
+/// query/passage embedding likewise sits inside its owning phase. The point
+/// is to *measure* the ingest⋈search split instead of inferring it.
+#[derive(Default, Clone, Copy)]
+struct PhaseTiming {
+    ingest_secs: f32,
+    search_secs: f32,
+}
+
 fn locomo_eval(
     samples: &[Value],
     k: usize,
-    limit: Option<usize>,
-) -> Result<(f32, u32, CategoryScores)> {
+    backend: &str,
+) -> Result<(f32, u32, CategoryScores, PhaseTiming)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
     let mut per_cat: CategoryScores = Default::default();
-    for sample in samples {
+    let mut timing = PhaseTiming::default();
+    let total = samples.len();
+    // Optional remote ANN accelerator. `local` ⇒ full-scan fusion path.
+    let mut index = match backend {
+        "local" => None,
+        other => Some(undercroft_index::from_env(other)?),
+    };
+    for (si, sample) in samples.iter().enumerate() {
         let conv = sample
             .get("conversation")
             .context("sample missing conversation")?;
-        let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
+        // One collection per conversation in remote mode (collection name
+        // derives from the vault id), so convos don't share vectors.
+        let (_tmp, mut store) = if index.is_some() {
+            fresh_store_id(SecurityLevel::Sealed, &format!("benchc{si}"))?
+        } else {
+            fresh_store(SecurityLevel::Sealed)?
+        };
         // Ingest: one room per session.
+        let ingest_started = Instant::now();
         let mut n = 1;
         while let Some(dialogs) = conv.get(format!("session_{n}")).and_then(Value::as_array) {
             let text: Vec<String> = dialogs
@@ -738,16 +864,16 @@ fn locomo_eval(
             }
             n += 1;
         }
+        // In remote mode, publishing to the ANN index is part of ingest.
+        if let Some(idx) = index.as_mut() {
+            store.index_push(idx.as_mut())?;
+        }
+        timing.ingest_secs += ingest_started.elapsed().as_secs_f32();
         let qa_pairs = sample
             .get("qa")
             .and_then(Value::as_array)
             .context("sample missing qa")?;
         for qa in qa_pairs.iter() {
-            if let Some(cap) = limit {
-                if evaluated as usize >= cap {
-                    break;
-                }
-            }
             let question = qa
                 .get("question")
                 .and_then(Value::as_str)
@@ -773,14 +899,17 @@ fn locomo_eval(
                     Some(format!("session_{sess}"))
                 })
                 .collect();
-            let hits = store.search(
-                question,
-                &SearchOptions {
-                    wing: None,
-                    room: None,
-                    limit: k * 6,
-                },
-            )?;
+            let opts = SearchOptions {
+                wing: None,
+                room: None,
+                limit: k * 6,
+            };
+            let search_started = Instant::now();
+            let hits = match index.as_mut() {
+                Some(idx) => store.search_with_index(idx.as_mut(), question, &opts)?,
+                None => store.search(question, &opts)?,
+            };
+            timing.search_secs += search_started.elapsed().as_secs_f32();
             let mut rooms: Vec<String> = Vec::new();
             for h in &hits {
                 if !rooms.contains(&h.drawer.meta.room) {
@@ -803,8 +932,13 @@ fn locomo_eval(
             e.0 += recall;
             e.1 += 1;
         }
+        eprintln!(
+            "  convo {}/{total} done — {evaluated} q, R@{k} so far: {:.1}%",
+            si + 1,
+            100.0 * recall_sum / evaluated.max(1) as f32
+        );
     }
-    Ok((recall_sum, evaluated, per_cat))
+    Ok((recall_sum, evaluated, per_cat, timing))
 }
 
 /// ConvoMem: one item = conversations of messages + `message_evidences`
@@ -1057,11 +1191,34 @@ fn main() -> Result<()> {
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level } => run_synth(n, level_of(&level)),
-        Command::Locomo { dataset, k, limit } => {
+        Command::Locomo {
+            dataset,
+            k,
+            limit,
+            skip,
+            backend,
+        } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
             let samples: Vec<Value> = serde_json::from_str(&raw)?;
-            let (recall_sum, n, per_cat) = locomo_eval(&samples, k, limit)?;
+            let total = samples.len();
+            let start = skip.min(total);
+            let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
+            let shard = &samples[start..end];
+            let (recall_sum, n, per_cat, timing) = locomo_eval(shard, k, &backend)?;
+            // RAW line carries the exact numerator/denominator so sharded runs
+            // (convos [start,end)) sum to the full R@k without rounding drift.
+            println!(
+                "LOCOMO_RAW convos={start}..{end}/{total} recall_sum={recall_sum:.4} evaluated={n}"
+            );
+            // Phase split, machine-readable and additive across shards: total
+            // wall-clock in each phase and the mean per-query search cost.
+            let ingest = timing.ingest_secs;
+            let search = timing.search_secs;
+            println!(
+                "LOCOMO_TIMING convos={start}..{end}/{total} ingest_secs={ingest:.3} search_secs={search:.3} evaluated={n} search_ms_per_q={:.1}",
+                1000.0 * search / n.max(1) as f32
+            );
             println!(
                 "LoCoMo — {} questions, session granularity: R@{k} {:.1}%",
                 n,
@@ -1169,7 +1326,7 @@ mod tests {
                 {"question": "adversarial with no evidence", "category": 5}
             ]
         });
-        let (recall, n, per_cat) = locomo_eval(&[sample], 5, None).unwrap();
+        let (recall, n, per_cat, _timing) = locomo_eval(&[sample], 5, "local").unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);

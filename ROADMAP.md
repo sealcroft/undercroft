@@ -162,18 +162,67 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
   serve-mcp / daemon / bench. Full sharded benchmark + landing headline bars =
   follow-up; multi-tenant `/v1` reranker = follow-up (with shared-model item).
 
+## v0.14.0 — Retrieval performance & scaling (done)
+
+Every retrieval lever measured end to end; the expensive ones retired.
+Reranker query cost **16.6 s → 101–327 ms at ~98% R@10**; bounded-RAM on-disk
+ANN for large hmac-only corpora. All opt-in; defaults unchanged.
+
+- **Reranker latency ladder**: rayon-parallel scoring → `RERANK_TOP_N` as a
+  true pool cap (knee ≈20) → `score_batch` whole-pool trait interface → new
+  **`undercroft-embed-ort`** crate (ONNX Runtime backend, opt-in C++ dep,
+  ~2.5× tract per forward, identical scores) with a session pool
+  (`UNDERCROFT_ORT_POOL`, `pool=1` = batched) + int8 model support. Ingest
+  embedding 24 s → ~5 s.
+- **On-disk PQ prefilter** (hmac-only vaults): 48 B codes + ~400 KB codebook,
+  incremental encode, self-heal; recall flat in N (98.9% at 50k) with
+  codebook-only RAM. `set_pq(true)`; sealed vaults untouched (invariant
+  test-asserted). **Experimental in-memory HNSW** (`hnsw` feature): fastest,
+  but O(corpus) RAM and needs `ef` scaling — RAM-only, never persisted.
+- Remote vector backends measured under load: idle untrusted accelerators
+  (by design) — never a latency/accuracy lever.
+- Docs: `docs/RETRIEVAL_SCALING.md`, the public "Retrieval, scoring &
+  scaling" page, RESULTS.md "every lever" + scenario recipes.
+
+Also closes the v0.13.0 follow-up items:
+
+- **Shared-model `/v1` reranker**: the multi-tenant server loads one
+  `OnnxReranker` and hands every per-vault store a cheap `Arc` handle onto
+  it (`RerankerFactory` + `Tenancy::with_reranker` in `tenant.rs`), so all
+  tenant vaults share a single ONNX model instead of a copy apiece. Off by
+  default (`UNDERCROFT_RERANKER=onnx`; bails without the `onnx` feature). See
+  [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
+- **Full sharded LoCoMo benchmark**: the reranker lifts LoCoMo R@10
+  **94.6 → 97.68** (1936/1982), summed exactly across 5 conversation-shards.
+  RESULTS.md + the landing benchmark bars updated. `undercroft-bench locomo`
+  gained `--skip`, conversation-scoped `--limit`, and machine-readable
+  `LOCOMO_RAW`/`LME_RAW` numerator lines so sharded runs sum with no rounding
+  drift.
+- **No LongMemEval reranker row (deliberate)**: the MiniLM baseline is
+  already saturated at 99.4% (497/500), so a second stage can only move it
+  ≤0.6 pts — not worth the multi-hour run. Documented as a footnote rather
+  than a row.
+
 ## Next
 
-- **Scale**: L2 on-demand room loading heuristics; ANN index (HNSW) atop
-  the warmed cache for very large palaces; share one ONNX model across
-  tenant vaults in the multi-tenant server (also enables the `/v1` reranker).
-- **Reranker follow-up**: full sharded LongMemEval/LoCoMo run with the reranker,
-  then update RESULTS.md + the landing benchmark bars.
+- **IVF inverted lists** over the PQ codes: coarse-quantize, scan only the
+  nearest lists — makes the flat O(n) ADC scan sub-linear while keeping the
+  bounded-RAM/on-disk properties. The direct successor to v0.14.0's PQ.
+- **ColBERT late interaction**: a core-count-independent second stage (~one
+  forward per query instead of top_n) — the few-core endgame. Build plan in
+  [docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md).
+- **Sealed-tier encrypted-at-rest index** (research): an ANN index sealed
+  vaults can persist without violating the no-plaintext-derived-index
+  invariant — PQ/ColBERT stores AEAD-sealed at rest.
+- **Retrieval wiring**: CLI/env surface for `set_pq` and the ort backend
+  (bench-only today); HNSW `ef`/over-fetch scaling with corpus size.
+- **Durability**: ingest fsync + audit-chain atomicity design (chain head
+  and SQLite must move together across power loss).
+- **Orchestrator**: the multi-tenant routing/migration/key-minting layer as
+  a separate optional tool (`examples/orchestrator/` or sibling crate),
+  keeping the engine tree-blind — see [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
-- **Operability** (planned track below): observability/telemetry
-  (v0.9.0), live memory telemetry (v0.10.0), and a retro real-time
-  Palace Monitor UI (v0.11.0).
 
 ---
 

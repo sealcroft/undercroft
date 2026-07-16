@@ -180,6 +180,9 @@ impl PalaceStore {
             if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
                 cache.remove(id);
             }
+            // Drop the stale ANN index; rebuilt on the next search.
+            #[cfg(feature = "hnsw")]
+            self.hnsw.borrow_mut().take();
             let marker = format!("del\x1f{id}");
             let tag = self.vault.tag(marker.as_bytes());
             self.conn.execute(
