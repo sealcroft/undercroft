@@ -17,6 +17,7 @@ mod hnsw;
 pub mod kg;
 pub mod manage;
 pub mod pq;
+mod pqidx;
 pub mod remote;
 
 pub use kg::{KgStats, Triple};
@@ -201,6 +202,11 @@ pub struct PalaceStore {
     /// on any write and rebuilt on the next search.
     #[cfg(feature = "hnsw")]
     hnsw: std::cell::RefCell<Option<hnsw::HnswIndex>>,
+    /// When true (hmac-only vaults only), search prefilters candidates via the
+    /// on-disk PQ codes — bounded RAM at any corpus size. See `pqidx`.
+    pq_enabled: bool,
+    /// The cached PQ codebook (the on-disk copy in `pq_meta` is authoritative).
+    pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
 }
 
 impl PalaceStore {
@@ -328,6 +334,8 @@ impl PalaceStore {
             hnsw_enabled: false,
             #[cfg(feature = "hnsw")]
             hnsw: std::cell::RefCell::new(None),
+            pq_enabled: false,
+            pq: std::cell::RefCell::new(None),
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
@@ -636,6 +644,8 @@ impl PalaceStore {
         )?;
         tx.commit()?;
         self.vault.commit_write(&tag)?;
+        // Keep the on-disk PQ codes coherent (advisory; self-heals on search).
+        self.pq_encode_row(&drawer.id, &embedding);
         if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
             cache.insert(drawer.id.clone(), embedding);
         }
@@ -957,7 +967,12 @@ impl PalaceStore {
             .map(str::to_string)
             .collect();
 
-        let candidates = if self.hnsw_enabled {
+        let candidates = if self.pq_enabled {
+            // On-disk PQ prefilter (hmac-only): stream ADC over the code rows,
+            // bounded RAM at any corpus size. Over-fetch generously so BM25
+            // fusion still has material.
+            self.pq_candidates(&qvec, std::cmp::max(256, limit * 32))?
+        } else if self.hnsw_enabled {
             // Semantic ANN prefilter: cut to the vector top-K before verify +
             // fusion. Over-fetch generously so BM25 fusion still has material.
             #[cfg(feature = "hnsw")]
@@ -2064,6 +2079,71 @@ mod tests {
             .search("giraffe savanna", &SearchOptions::default())
             .unwrap();
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn pq_prefilter_agrees_with_full_scan() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        for i in 0..30 {
+            s.upsert(&drawer("w", "r", &format!("routine note number {i}"), i))
+                .unwrap();
+        }
+        s.upsert(&drawer(
+            "w",
+            "api",
+            "we switched to graphql because rest was chatty",
+            100,
+        ))
+        .unwrap();
+        let full = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        s.set_pq(true);
+        let pre = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(pre[0].drawer.id, full[0].drawer.id);
+        // The index must actually exist (not the full-scan fallback).
+        let coded: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(coded, 31, "every drawer must be PQ-coded");
+        // Incremental coherence: a drawer written after the build is found.
+        s.upsert(&drawer(
+            "w",
+            "api",
+            "kafka handles the event stream backlog now",
+            200,
+        ))
+        .unwrap();
+        let hits = s
+            .search("kafka event stream backlog", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("kafka"));
+    }
+
+    #[test]
+    fn pq_never_touches_sealed_vault_disk() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "sealed content stays sealed", 0))
+            .unwrap();
+        s.set_pq(true); // documented no-op on sealed vaults
+        let _ = s
+            .search("sealed content", &SearchOptions::default())
+            .unwrap();
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('drawer_pq','pq_meta')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            n, 0,
+            "sealed vaults must never get plaintext-derived PQ tables on disk"
+        );
     }
 
     #[test]

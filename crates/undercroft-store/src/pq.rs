@@ -117,6 +117,45 @@ impl ProductQuantizer {
         d
     }
 
+    /// Serialize the trained codebooks: `[version:1][m:u32][dsub:u32]` then
+    /// `m × K × dsub` little-endian f32s. Stable across platforms so on-disk
+    /// codes stay decodable.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(9 + self.m * K * self.dsub * 4);
+        out.push(1u8);
+        out.extend((self.m as u32).to_le_bytes());
+        out.extend((self.dsub as u32).to_le_bytes());
+        for book in &self.codebooks {
+            for v in book {
+                out.extend(v.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Inverse of [`to_bytes`](Self::to_bytes). `None` on any shape mismatch.
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < 9 || data[0] != 1 {
+            return None;
+        }
+        let m = u32::from_le_bytes(data[1..5].try_into().ok()?) as usize;
+        let dsub = u32::from_le_bytes(data[5..9].try_into().ok()?) as usize;
+        if m == 0 || dsub == 0 || data.len() != 9 + m * K * dsub * 4 {
+            return None;
+        }
+        let mut codebooks = Vec::with_capacity(m);
+        let mut off = 9;
+        for _ in 0..m {
+            let mut book = Vec::with_capacity(K * dsub);
+            for _ in 0..K * dsub {
+                book.push(f32::from_le_bytes(data[off..off + 4].try_into().ok()?));
+                off += 4;
+            }
+            codebooks.push(book);
+        }
+        Some(Self { dsub, m, codebooks })
+    }
+
     fn nearest(&self, subspace: usize, sub: &[f32]) -> usize {
         let book = &self.codebooks[subspace];
         let mut best = 0usize;
@@ -226,6 +265,17 @@ mod tests {
         let pq = ProductQuantizer::train(&v, 8, 10).unwrap();
         assert_eq!(pq.code_len(), 8);
         assert_eq!(pq.encode(&v[0]).len(), 8);
+    }
+
+    #[test]
+    fn bytes_round_trip_preserves_codes() {
+        let v = synth(300, 32);
+        let pq = ProductQuantizer::train(&v, 8, 10).unwrap();
+        let back = ProductQuantizer::from_bytes(&pq.to_bytes()).expect("round trip");
+        for x in v.iter().take(20) {
+            assert_eq!(pq.encode(x), back.encode(x), "codes must be identical");
+        }
+        assert!(ProductQuantizer::from_bytes(&[1, 2, 3]).is_none());
     }
 
     #[test]
