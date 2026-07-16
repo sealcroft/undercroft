@@ -63,10 +63,14 @@ fn encode(
     ))
 }
 
-fn build_session(path: &str) -> Result<(Session, usize), OrtError> {
-    let threads = std::thread::available_parallelism()
+fn cores() -> usize {
+    std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(1);
+        .unwrap_or(1)
+}
+
+fn build_session(path: &str, threads: usize) -> Result<(Session, usize), OrtError> {
+    let threads = threads.max(1);
     let session = Session::builder()
         .map_err(|e| OrtError::Model(e.to_string()))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
@@ -131,7 +135,7 @@ impl OrtEmbedder {
     ) -> Result<Self, OrtError> {
         let tokenizer =
             Tokenizer::from_file(tokenizer_path).map_err(|e| OrtError::Tokenizer(e.to_string()))?;
-        let (session, n_inputs) = build_session(&model_path.to_string_lossy())?;
+        let (session, n_inputs) = build_session(&model_path.to_string_lossy(), cores())?;
         let mut me = Self {
             session: Mutex::new(session),
             tokenizer,
@@ -215,7 +219,12 @@ pub fn embedder_from_env() -> Result<OrtEmbedder, OrtError> {
 // ---------------------------------------------------------------------------
 
 pub struct OrtReranker {
-    session: Mutex<Session>,
+    /// A pool of single-threaded sessions: the independent `(query, passage)`
+    /// forwards fan out across them (one per core), so a `top_n ≤ pool` rerank
+    /// costs ~one single-thread forward instead of a linearly-scaling batched
+    /// one. Pool size defaults to the core count; `UNDERCROFT_ORT_POOL` tunes it
+    /// (each session holds its own copy of the model — memory scales with it).
+    sessions: Vec<Mutex<Session>>,
     tokenizer: Tokenizer,
     n_inputs: usize,
     name: String,
@@ -229,9 +238,26 @@ impl OrtReranker {
     ) -> Result<Self, OrtError> {
         let tokenizer =
             Tokenizer::from_file(tokenizer_path).map_err(|e| OrtError::Tokenizer(e.to_string()))?;
-        let (session, n_inputs) = build_session(&model_path.to_string_lossy())?;
+        let pool = std::env::var("UNDERCROFT_ORT_POOL")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or_else(cores);
+        // pool == 1 ⇒ a single all-core session (the batched/few-core mode);
+        // pool > 1 ⇒ single-thread sessions the forwards fan out across.
+        let per_session_threads = if pool > 1 { 1 } else { cores() };
+        let path = model_path.to_string_lossy().to_string();
+        // Session creation costs ~seconds each — build the pool in parallel.
+        use rayon::prelude::*;
+        let built: Result<Vec<(Session, usize)>, OrtError> = (0..pool)
+            .into_par_iter()
+            .map(|_| build_session(&path, per_session_threads))
+            .collect();
+        let built = built?;
+        let n_inputs = built.first().map(|(_, n)| *n).unwrap_or(0);
+        let sessions = built.into_iter().map(|(s, _)| Mutex::new(s)).collect();
         let me = Self {
-            session: Mutex::new(session),
+            sessions,
             tokenizer,
             n_inputs,
             name: model_name.to_string(),
@@ -241,33 +267,32 @@ impl OrtReranker {
         Ok(me)
     }
 
-    /// Score every `(query, passage)` pair in **one** batched forward.
+    /// One `(query, passage)` forward on pool slot `slot`.
+    fn score_one(&self, slot: usize, query: &str, passage: &str) -> Result<f32, OrtError> {
+        let (ids, mask, types) = encode(&self.tokenizer, query, Some(passage))?;
+        let (dims, data) = {
+            let mut guard = self.sessions[slot].lock().expect("ort session mutex");
+            run_batch(&mut guard, self.n_inputs, 1, ids, mask, types)?
+        };
+        // dims: (1, num_labels) — take the last (positive) logit.
+        let labels = if dims.len() >= 2 { dims[1].max(1) } else { 1 };
+        Ok(sigmoid(data.get(labels - 1).copied().unwrap_or(0.0)))
+    }
+
+    /// Fan the independent pair-forwards across the session pool: each rayon
+    /// worker owns a pool slot, so `top_n ≤ pool` completes in ~one wave.
     fn score_batch_inner(&self, query: &str, passages: &[&str]) -> Result<Vec<f32>, OrtError> {
-        let b = passages.len();
-        if b == 0 {
+        if passages.is_empty() {
             return Ok(Vec::new());
         }
-        let mut ids = Vec::with_capacity(b * MAX_LEN);
-        let mut mask = Vec::with_capacity(b * MAX_LEN);
-        let mut types = Vec::with_capacity(b * MAX_LEN);
-        for p in passages {
-            let (i, m, t) = encode(&self.tokenizer, query, Some(p))?;
-            ids.extend(i);
-            mask.extend(m);
-            types.extend(t);
-        }
-        let (dims, data) = {
-            let mut guard = self.session.lock().expect("ort session mutex");
-            run_batch(&mut guard, self.n_inputs, b, ids, mask, types)?
-        };
-        // dims: (b, num_labels) — take the last (positive) logit per row.
-        let labels = if dims.len() >= 2 { dims[1].max(1) } else { 1 };
-        Ok((0..b)
-            .map(|r| {
-                let idx = r * labels + (labels - 1);
-                sigmoid(data.get(idx).copied().unwrap_or(0.0))
+        use rayon::prelude::*;
+        passages
+            .par_iter()
+            .map(|p| {
+                let slot = rayon::current_thread_index().unwrap_or(0) % self.sessions.len();
+                self.score_one(slot, query, p)
             })
-            .collect())
+            .collect()
     }
 }
 
