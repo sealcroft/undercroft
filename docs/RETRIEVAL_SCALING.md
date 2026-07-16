@@ -157,26 +157,42 @@ across cores. Measured on LoCoMo:
 cores)`; when `top_n < cores`, give each forward `cores/top_n` intra-op threads
 so no core sits idle. This is fundamentally a **many-core optimization.**
 
-#### ColBERT late interaction — the core-independent default
+#### ColBERT late interaction — the core-independent option (shipped, measured)
 
 A cross-encoder is slow because it encodes each `(query, passage)` pair at query
-time. Late interaction encodes passage tokens **once at ingest** (stored on disk,
-quantized) and, per query, does **one** query-encode forward plus a cheap
-**MaxSim** (max-cosine per query token, summed) — plain SIMD-friendly linear
-algebra, **no transformer per candidate**. Query cost is therefore **~one
-forward, independent of `top_n` and of core count** — the same ~40–130 ms on 4
-cores or 24. Cross-encoder-competitive accuracy at bi-encoder latency; the
-expensive work moves to ingest + disk. ColBERT is BERT-family, so it runs in
-tract (unlike the DeBERTa rerankers tract rejects).
+time. Late interaction encodes passage tokens **once at ingest** (stored on
+disk, int8-quantized; sealed vaults AEAD-seal every matrix under a distinct
+`/tok` AAD domain — the first encrypted-at-rest derived store) and, per query,
+does **one** query-encode forward plus a cheap **MaxSim** (max-cosine per query
+token, summed) — plain arithmetic, **no transformer per candidate**. Query cost
+is **~one forward, independent of `top_n` and of core count**. ColBERT is
+BERT-family, so it runs in tract (unlike the DeBERTa rerankers tract rejects).
 
-| Reranker (4 cores) | latency | scales w/ `top_n` | scales w/ cores |
+**Measured** (LoCoMo full 1,982 QA, hash embedder + colbertv2.0 on tract):
+
+| Second stage | R@10 | search ms/q | scales w/ cores |
 |---|---|---|---|
-| cross-encoder + rayon (`top_n=20`) | ~270 ms | yes | yes |
-| **ColBERT late interaction** | **~40–130 ms** | **no** | **no** |
-| bi-encoder only (no rerank) | ~40–130 ms | no | no |
+| none (bm25 fusion) | 94.6% | ~6 | — |
+| **ColBERT late interaction (tract)** | **96.77%** | **92.7** | **no — same on 4 or 24** |
+| cross-encoder (ort int8, `top_n=20`) | 97.68% | 101–327 *(24-core)* | yes — ~5× worse on 4 cores |
 
-**So: cross-encoder+rayon is the fast path on big boxes; ColBERT is the portable
-default and the answer to the common 4-core / edge deployment.**
++2.2 pts over fusion at a flat ~93 ms/query; the cross-encoder buys ~1 more
+point but only at many-core prices. Ingest carries the moved cost (~0.37 s per
+drawer on tract — one doc forward at write time). Enable with
+`UNDERCROFT_RERANKER=colbert` + `UNDERCROFT_COLBERT_MODEL` (doc export) /
+`_QUERY_MODEL` (query export) / `_TOKENIZER`; the cross-encoder wins when both
+stages are configured. Drawers written before the encoder was attached keep
+their fusion rank (never sunk); export recipe below.
+
+**Export recipe** (models are user-supplied, as always): wrap the checkpoint's
+BERT + its `linear.weight` projection + L2-normalize in one module and export
+**fixed-shape** ONNX at query (32) and doc (256) lengths — the dynamo exporter
+emits `Min(512, seq)` symbolic dims and dynamic-axes legacy exports emit a
+`Range` op, both of which tract rejects; fixed shapes bake `arange` into
+constants and load clean.
+
+**So: cross-encoder+rayon is the accuracy ceiling on big boxes; ColBERT is the
+portable answer for the common 4-core / edge deployment.**
 
 ### Inference runtime → tract (pure-Rust) or ONNX Runtime (fast)
 
@@ -218,25 +234,24 @@ needs **no code change** (point `UNDERCROFT_RERANK_MODEL` at a quantized file);
 there while one ORT forward uses whatever cores exist. On a GPU target,
 ORT-CUDA takes each forward to ~1–5 ms.
 
-### ColBERT build plan
+### ColBERT build plan (shipped — see the measured section above)
 
-1. **Model + runtime.** A BERT-family ColBERT checkpoint exported to ONNX
-   (user-supplied, like the embedder); tract for pure-Rust, `ort` for speed.
-2. **Ingest.** Encode each drawer's passage tokens → a per-token vector matrix;
-   quantize (int8 / PQ, reusing [pq.rs](../crates/undercroft-store/src/pq.rs)) and
-   store. hmac-only: plain on disk (mirrors FTS5); sealed: a new **sealed token
-   store, encrypted at rest** like drawer content.
-3. **Query.** One forward to encode the query tokens; MaxSim against the stored
-   passage-token matrices of the IVF-PQ candidate shortlist; aggregate → score;
-   blend with or replace the fusion rank.
-4. **Storage.** Per-token vectors are larger than one embedding — PLAID-style
-   residual/PQ compression keeps them on-disk-cheap; only the shortlist's tokens
-   are read per query (bounded).
-5. **Trait fit.** A new `LateInteraction` scorer behind the same opt-in wiring as
-   the reranker; off by default. tract + `ort` backends behind it.
-6. **Still open on the cross-encoder path** (near-term, independent of ColBERT):
-   int8 quantization and a true batched `OnnxReranker::score_batch` (blocked
-   today by a fixed batch-dim-1 model load).
+Landed as designed: `LateInteraction` trait (`undercroft-core/src/late.rs`) +
+`OnnxColbert` on tract (`undercroft-embed-onnx/src/late.rs`, two fixed-shape
+plans); ingest-time doc encode → int8 token matrices (per-row scale) in
+`drawer_tok`, sealed vaults AEAD-seal each matrix (`Vault::tokens_at_rest`,
+`/tok` AAD domain); one query forward + MaxSim rescore of the fusion top-N
+(`undercroft-store/src/latestage.rs`), opt-in via `UNDERCROFT_RERANKER=colbert`.
+
+Still open on this path:
+1. **`ort` backend for the query forward** (~2.5× per forward — would take
+   ~93 ms/q toward ~40 ms).
+2. **PLAID-style residual/PQ compression** of the token store (int8 today,
+   ~4×; PQ would give ~32× like the retrieval codes).
+3. **Punctuation filtering** on doc rows (ColBERT convention; small win).
+4. **Cross-encoder path** (independent): a true batched
+   `OnnxReranker::score_batch` in tract (blocked by a fixed batch-dim-1
+   model load).
 
 ## Security tiering (same invariant, applied per level)
 
@@ -300,9 +315,15 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    `nprobe = nlist/4`, self-healing partitions) and the scan-path fixes they
    motivated lifted flat PQ itself ~45%; IVF adds +7–11% at N=20–50k and
    grows with N. Remaining: the sealed-tier encrypted-at-rest index.
-4. **ColBERT late interaction** — the core-independent scoring default (the
-   4-core answer); cross-encoder+rayon stays as the many-core fast path.
-5. **Sealed-tier encrypted-at-rest** IVF-PQ + ColBERT token store (research).
+4. **ColBERT late interaction (done):** the core-independent second stage —
+   LoCoMo 94.6 → **96.77% R@10 at a flat 92.7 ms/query** on tract (the
+   cross-encoder's 97.68% costs 101–327 ms on 24 cores and ~5× that on 4).
+   Sealed vaults AEAD-seal the token store — the first encrypted-at-rest
+   derived store. Remaining: `ort` query-forward backend, PLAID-style token
+   compression.
+5. **Sealed-tier encrypted-at-rest retrieval index** (research) — the token
+   *rescore* store shipped sealed in (4); the open half is the *prefilter*
+   (IVF-PQ codes) for sealed vaults.
 
 The in-memory HNSW (`hnsw` feature) stays as an experimental fast path for
 moderate sealed corpora and as the benchmark baseline — not the default.

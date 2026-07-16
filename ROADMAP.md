@@ -218,11 +218,23 @@ Also closes the v0.13.0 follow-up items:
   (was bench-only); `UNDERCROFT_IVF_MIN` / `UNDERCROFT_IVF_NPROBE` /
   `set_ivf`; bench `synth --queries` sampling.
 
+## v0.16.0 — ColBERT late interaction (done)
+
+- The core-count-independent second stage: drawers encoded once at ingest
+  into int8 per-token matrices, one query forward + MaxSim rescore at
+  search. **LoCoMo 94.6 → 96.77% R@10 at a flat 92.7 ms/query** (tract,
+  colbertv2.0) — same on 4 cores or 24, vs the cross-encoder's 97.68% at
+  many-core prices. `UNDERCROFT_RERANKER=colbert`, models user-supplied
+  (fixed-shape ONNX exports; recipe in RETRIEVAL_SCALING).
+- Sealed vaults AEAD-seal every matrix under a distinct `/tok` AAD domain —
+  the **first encrypted-at-rest derived store** (rescore stores can be
+  sealed; plaintext prefilters remain hmac-only).
+
 ## Next
 
-- **ColBERT late interaction**: a core-count-independent second stage (~one
-  forward per query instead of top_n) — the few-core endgame. Build plan in
-  [docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md).
+- **ColBERT follow-ups**: `ort` backend for the query forward (~93 → ~40
+  ms/q); PLAID-style token compression (int8 → PQ, ~4× → ~32×);
+  punctuation-filtered doc rows.
 - **Sealed-tier encrypted-at-rest index** (research): an ANN index sealed
   vaults can persist without violating the no-plaintext-derived-index
   invariant — PQ/ColBERT stores AEAD-sealed at rest.

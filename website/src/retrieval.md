@@ -160,15 +160,18 @@ cores buy headroom, not a lower floor; the floor is **one forward**. So on
 constrained devices the answer isn't more parallelism — it's **doing fewer
 query-time forwards**:
 
-- **ColBERT late interaction** encodes passage tokens once **at ingest** and, per
-  query, does **one** forward + a cheap MaxSim (no transformer per candidate).
-  Query cost is **~one forward, independent of `top_n` and of core count** — the
-  same ~40–130 ms on 4 cores or 24, at ~cross-encoder accuracy.
+- **ColBERT late interaction** (shipped, `UNDERCROFT_RERANKER=colbert`) encodes
+  passage tokens once **at ingest** (int8 on disk; sealed vaults AEAD-seal
+  every matrix — the first encrypted-at-rest derived store) and, per query,
+  does **one** forward + a cheap MaxSim (no transformer per candidate).
+  **Measured on LoCoMo (full 1,982 QA):** 94.6 → **96.77% R@10 at a flat
+  92.7 ms/query** on tract — the same on 4 cores or 24, while the
+  cross-encoder's 97.68% costs 101–327 ms *on 24 cores* and ~5× that on 4.
 - **A stronger bi-encoder with no reranker** is also one forward, core- and
   `top_n`-independent, at some accuracy cost.
 
 So the cross-encoder + rayon path is a *many-core* optimization; ColBERT is the
-*portable, core-independent* default.
+*portable, core-independent* option for constrained boxes.
 
 ## Configurable — choose per deployment
 
