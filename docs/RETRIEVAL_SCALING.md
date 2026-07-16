@@ -129,21 +129,26 @@ surface, wasm/IoT — though ORT ships mobile/wasm builds). Offered
 **feature-gated (`ort`), tract kept as the pure-Rust fallback**
 ([`undercroft-embed-ort`](../crates/undercroft-embed-ort)).
 
-Measured **end-to-end** on LoCoMo (convos 0-1, R@10 unchanged at 98.7%),
-ORT vs tract, this 24-core host:
+Measured **end-to-end** on LoCoMo (convos 0-1, 302 QA), this 24-core host.
+`OrtReranker` holds a **session pool** (default = core count,
+`UNDERCROFT_ORT_POOL`; `pool=1` = one all-core batched session, the few-core
+mode) and fans the independent forwards across it:
 
-| | ingest embed | rerank top_n=20 | rerank top_n=5 |
-|---|---|---|---|
-| tract | ~24 s | 694 ms | 321 ms |
-| **ORT (batched)** | **~5 s (4×)** | 614 ms | 251 ms |
+| Reranker config | top_n=20 | top_n=10 | top_n=5 | R@10 |
+|---|---|---|---|---|
+| tract + rayon | 694 ms | 389 ms | 321 ms | 98.7 / 97.4 / 97.4 |
+| ORT batched (pool=1) | 614 ms | 386 ms | 251 ms | same |
+| ORT session-pool fp32 | 427 ms | 214 ms | 142 ms | same |
+| **ORT session-pool int8** | **327 ms** | **171 ms** | **101 ms** | 98.3 / 98.0 / 98.0 |
 
-Two honest points: (1) **ingest is ~4× faster** with ORT. (2) The shipped ORT
-reranker uses **one batched forward** over the pool, which scales ~linearly — so
-on *many* cores it's only marginally ahead of tract+rayon. But batched is
-**core-friendly**: it's one forward using whatever cores exist, so on a **4-core**
-box it beats tract+rayon by ~5× (tract degrades to 5 waves). The projected
-**~40 ms** needs **int8 (~2×) + a session-pool parallel path** (N single-thread
-forwards concurrently, ~one wave) — the next refinement. On a GPU target,
+Ingest embed: tract ~24 s → ORT ~5 s (**~4–5×**). int8 accuracy is within noise
+of fp32 (±1–2 questions of 302). Net: the reranker went **16.6 s → ~101–171 ms
+(~100–160×)** at ~98% R@10. Two structural notes: (1) concurrent forwards
+contend for memory bandwidth (BERT is memory-bound), so a wave costs more than
+an isolated forward — int8's 4× smaller weights attack exactly that, and int8
+needs **no code change** (point `UNDERCROFT_RERANK_MODEL` at a quantized file);
+(2) on a **4-core** box use `pool=1` (batched) — tract+rayon degrades to waves
+there while one ORT forward uses whatever cores exist. On a GPU target,
 ORT-CUDA takes each forward to ~1–5 ms.
 
 ### ColBERT build plan
@@ -216,11 +221,11 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
 
 1. **Reranker latency (done):** rayon parallelism (16,600 → ~1,100 ms) + `top_n`
    true cap → **694 ms @ 98.7% (top_n=20), 389 ms @ 97.4% (top_n=10)** — ~24–43×.
-2. **`ort` runtime backend (done):** feature-gated ONNX Runtime behind the
-   embedder/reranker traits (`undercroft-embed-ort`), tract kept as fallback.
-   Measured: ingest ~4× faster, reranker top_n=20 614 ms (identical accuracy),
-   far more on few cores. **Next refinement:** int8 (~2×) + a session-pool
-   parallel reranker (N single-thread forwards concurrently → one wave, ~40 ms).
+2. **`ort` runtime backend (done, incl. session pool + int8):** feature-gated
+   ONNX Runtime behind the embedder/reranker traits (`undercroft-embed-ort`),
+   tract kept as fallback. Measured: ingest ~4–5× faster; reranker
+   **327 ms @ 98.3% (top_n=20) / 101 ms @ 98.0% (top_n=5)** with the session
+   pool + int8 models — ~100–160× over the original sequential reranker.
 3. **On-disk IVF-PQ retrieval** (bounded RAM; hmac-only plain, sealed encrypted).
    Retire in-memory HNSW as a default.
 4. **ColBERT late interaction** — the core-independent scoring default (the

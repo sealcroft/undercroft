@@ -106,16 +106,23 @@ Per-forward latency, same ONNX models, seq 256, on a CPU with `avx512_vnni`
 | MiniLM embed | ~128 ms | 53.7 | 28.1 | 24.9 | **15.0** |
 | cross-encoder | ~140–277 ms | 56.2 | 26.8 | 24.4 | **13.3** |
 
-ONNX Runtime is **~2.5× faster than tract** at the same precision, and **int8
-(VNNI) ~2× more** — validated in Rust via the `ort` crate (`undercroft-embed-ort`,
-opt-in; tract is the pure-Rust default). Accuracy is **runtime-invariant**
-(identical weights). Measured end-to-end on LoCoMo (R@10 unchanged 98.7%): the
-ORT backend makes **ingest ~4× faster**; reranking is a batched forward that's
-marginally faster on 24 cores (top_n=20: 614 ms vs tract 694 ms) but **~5× faster
-on a 4-core box** (tract degrades to multiple waves, ORT is one forward using
-whatever cores exist). int8 plus a session-pool parallel path bring an end-to-end
-reranked query toward **~40 ms**; on a GPU, ORT-CUDA puts each forward at
-~1–5 ms.
+ONNX Runtime is **~2.5× faster than tract** at the same precision, and int8
+(VNNI) more again — validated in Rust via the `ort` crate (`undercroft-embed-ort`,
+opt-in; tract stays the pure-Rust default). fp32 accuracy is
+**runtime-invariant** (identical weights); int8 is within noise. Measured
+end-to-end on LoCoMo, the ORT backend with a **session pool** (independent
+forwards fanned across single-thread sessions; `pool=1` = one batched all-core
+forward for few-core boxes) and **int8 models** (a 4× smaller file — no code
+change, just point the env at the quantized model):
+
+| Reranker | top_n=20 | top_n=10 | top_n=5 |
+|---|---|---|---|
+| tract + rayon | 694 ms | 389 ms | 321 ms |
+| **ORT pool + int8** | **327 ms** | **171 ms** | **101 ms** |
+
+with R@10 at 98.3 / 98.0 / 98.0% — and **ingest embed ~4–5× faster** (24 s →
+5 s). End to end, the reranker went **16.6 s → ~101–171 ms (~100–160×)** at
+~98% accuracy. On a GPU, ORT-CUDA puts each forward at ~1–5 ms.
 
 ## Scaling to few cores
 
