@@ -15,6 +15,9 @@ path = "src/main.rs"
 # Enables the ONNX sentence-embedder (UNDERCROFT_EMBEDDER=onnx).
 # Off by default to keep the standard build lean and fully offline.
 onnx = ["dep:undercroft-embed-onnx"]
+# Enables the experimental in-memory HNSW ANN prefilter
+# (UNDERCROFT_RETRIEVAL=hnsw). RAM-only, never persisted.
+hnsw = ["undercroft-store/hnsw"]
 # Enables observability: structured logs, Prometheus /metrics, OTLP export.
 # Off by default (zero extra deps, zero overhead) — see undercroft-obs.
 telemetry = ["undercroft-obs/telemetry"]
