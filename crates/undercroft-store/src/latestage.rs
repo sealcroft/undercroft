@@ -180,7 +180,7 @@ impl PalaceStore {
         let mut i = 0usize;
         for (_, matrix, dim) in &v1 {
             for row in matrix.chunks_exact(*dim) {
-                if i % stride == 0 {
+                if i.is_multiple_of(stride) {
                     sample.push(row.to_vec());
                 }
                 i += 1;
@@ -189,7 +189,7 @@ impl PalaceStore {
         let dim = v1[0].2;
         let Some(m) = [8usize, 4]
             .iter()
-            .find(|&&d| dim % d == 0)
+            .find(|&&d| dim.is_multiple_of(d))
             .map(|&d| dim / d)
         else {
             return Ok(false);
@@ -251,7 +251,7 @@ impl PalaceStore {
     /// migration event.
     fn late_pack(&self, matrix: &[f32], dim: usize) -> Vec<u8> {
         match self.tok_pq.borrow().as_ref() {
-            Some(pq) if dim > 0 && matrix.len() % dim == 0 => {
+            Some(pq) if dim > 0 && matrix.len().is_multiple_of(dim) => {
                 let rows = matrix.len() / dim;
                 let mut codes = Vec::with_capacity(rows * pq.code_len());
                 for row in matrix.chunks_exact(dim) {
