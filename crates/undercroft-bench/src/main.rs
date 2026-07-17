@@ -194,9 +194,13 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
         #[cfg(not(feature = "hnsw"))]
         eprintln!("note: UNDERCROFT_RETRIEVAL=hnsw ignored — built without --features hnsw");
     }
-    // Optional on-disk PQ ANN prefilter (hmac-only vaults; bounded RAM).
+    // Optional on-disk PQ ANN prefilter (bounded RAM).
     if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("pq") {
         store.set_pq(true);
+    }
+    // Optional MUVERA FDE candidate generation (needs the colbert encoder).
+    if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("fde") {
+        store.set_fde(true);
     }
     Ok((dir, store))
 }
