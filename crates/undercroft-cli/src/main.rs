@@ -552,6 +552,7 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
 fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
     match std::env::var("UNDERCROFT_RETRIEVAL").as_deref() {
         Ok("pq") => store.set_pq(true),
+        Ok("fde") => store.set_fde(true),
         Ok("hnsw") => {
             #[cfg(feature = "hnsw")]
             store.set_hnsw(true);
@@ -562,7 +563,7 @@ fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
             );
         }
         Ok("") | Err(_) => {}
-        Ok(other) => bail!("unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, hnsw)"),
+        Ok(other) => bail!("unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, fde, hnsw)"),
     }
     Ok(())
 }

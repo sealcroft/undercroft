@@ -53,6 +53,27 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// MUVERA FDE mechanics at scale: candidate recall vs exact MaxSim +
+    /// scan throughput over synthetic clustered token matrices — corpus
+    /// sizes no transformer could encode within a bench run
+    FdeSynth {
+        /// Number of synthetic documents (token matrices)
+        #[arg(long, default_value_t = 50_000)]
+        n: usize,
+        /// Ground-truth queries (each costs one exact MaxSim pass over all
+        /// N docs — the expensive part; sampled evenly across topics)
+        #[arg(long, default_value_t = 50)]
+        queries: usize,
+        /// Tokens per synthetic document
+        #[arg(long, default_value_t = 32)]
+        doc_tokens: usize,
+        /// Tokens per query (ColBERT mask-augments to 32)
+        #[arg(long, default_value_t = 32)]
+        query_tokens: usize,
+        /// Token embedding dim (ColBERT convention)
+        #[arg(long, default_value_t = 128)]
+        dim: usize,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -194,9 +215,13 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
         #[cfg(not(feature = "hnsw"))]
         eprintln!("note: UNDERCROFT_RETRIEVAL=hnsw ignored — built without --features hnsw");
     }
-    // Optional on-disk PQ ANN prefilter (hmac-only vaults; bounded RAM).
+    // Optional on-disk PQ ANN prefilter (bounded RAM).
     if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("pq") {
         store.set_pq(true);
+    }
+    // Optional MUVERA FDE candidate generation (needs the colbert encoder).
+    if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("fde") {
+        store.set_fde(true);
     }
     Ok((dir, store))
 }
@@ -1266,6 +1291,143 @@ fn greedy_align(
     out
 }
 
+/// MUVERA FDE mechanics at scale, on synthetic clustered token matrices —
+/// corpus sizes whose transformer ingest would take hours, isolating the two
+/// numbers the real pipeline needs from FDEs: does the **exact-MaxSim top-10
+/// survive inside the FDE candidate head** (that pool feeds the MaxSim
+/// rescore, which restores exact order), and what does the single-vector
+/// scan cost. Fully deterministic; within-run comparisons only, as always.
+fn run_fde_synth(
+    n: usize,
+    queries: usize,
+    doc_tokens: usize,
+    query_tokens: usize,
+    dim: usize,
+) -> Result<()> {
+    use undercroft_core::fde::{fde_dot, FdeEncoder, FdeParams};
+    use undercroft_core::late::maxsim;
+    use std::time::Instant;
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+    fn gaussian(state: &mut u64) -> f32 {
+        let u1 = ((splitmix(state) >> 11) as f64 + 1.0) / (1u64 << 53) as f64;
+        let u2 = ((splitmix(state) >> 11) as f64 + 1.0) / (1u64 << 53) as f64;
+        ((-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()) as f32
+    }
+    /// A unit token near its topic's base direction (deterministic base,
+    /// small per-token jitter) — same-topic tokens are close in cosine.
+    fn token(jitter: &mut u64, dim: usize, topic: u64) -> Vec<f32> {
+        let mut base = topic.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x5eed;
+        let mut v: Vec<f32> = (0..dim).map(|_| gaussian(&mut base)).collect();
+        for x in v.iter_mut() {
+            *x += 0.15 * gaussian(jitter);
+        }
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+        v.iter_mut().for_each(|x| *x /= norm);
+        v
+    }
+
+    let params = FdeParams::default();
+    let topics = ((n / 8).max(16)) as u64;
+    println!(
+        "FDE synth: n={n} docs × {doc_tokens} tokens, dim={dim}, topics={topics}, \
+         params reps={} ksim={} dproj={}",
+        params.reps, params.ksim, params.dproj
+    );
+
+    let mut jitter = 0xfde5_eed0_u64;
+    let t0 = Instant::now();
+    let docs: Vec<Vec<f32>> = (0..n)
+        .map(|i| {
+            // Two topics per doc — candidates must separate docs sharing
+            // one topic from docs sharing none.
+            let a = (i as u64) % topics;
+            let b = (i as u64 * 7 + 3) % topics;
+            let mut m = Vec::with_capacity(doc_tokens * dim);
+            for t in 0..doc_tokens {
+                m.extend(token(&mut jitter, dim, if t % 2 == 0 { a } else { b }));
+            }
+            m
+        })
+        .collect();
+    let gen_secs = t0.elapsed().as_secs_f64();
+
+    let enc = FdeEncoder::new(dim, params);
+    let t0 = Instant::now();
+    let fdes: Vec<Vec<f32>> = docs.iter().map(|d| enc.encode_doc(d)).collect();
+    let build_secs = t0.elapsed().as_secs_f64();
+    let ram_mb = (n * enc.dim() * 4) as f64 / 1e6;
+
+    let top = |scored: &mut Vec<(f32, usize)>, k: usize| -> Vec<usize> {
+        if scored.len() > k {
+            scored.select_nth_unstable_by(k - 1, |a, b| b.0.total_cmp(&a.0));
+            scored.truncate(k);
+        }
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+        scored.iter().map(|&(_, j)| j).collect()
+    };
+
+    let queries = queries.max(1);
+    let stride = (n / queries).max(1);
+    let (mut in10, mut in100, mut denom) = (0usize, 0usize, 0usize);
+    let (mut scan_secs, mut exact_secs) = (0f64, 0f64);
+    for qi in 0..queries {
+        // Query drawn from an evenly-sampled home doc's first topic.
+        let topic = ((qi * stride % n) as u64) % topics;
+        let mut qm = Vec::with_capacity(query_tokens * dim);
+        for _ in 0..query_tokens {
+            qm.extend(token(&mut jitter, dim, topic));
+        }
+        // Ground truth: exact MaxSim over every doc.
+        let t0 = Instant::now();
+        let mut exact: Vec<(f32, usize)> = docs
+            .iter()
+            .enumerate()
+            .map(|(j, d)| (maxsim(&qm, d, dim), j))
+            .collect();
+        exact_secs += t0.elapsed().as_secs_f64();
+        let exact10 = top(&mut exact, 10);
+        // FDE candidates.
+        let qfde = enc.encode_query(&qm);
+        let t0 = Instant::now();
+        let mut scored: Vec<(f32, usize)> = fdes
+            .iter()
+            .enumerate()
+            .map(|(j, f)| (fde_dot(&qfde, f), j))
+            .collect();
+        scan_secs += t0.elapsed().as_secs_f64();
+        let fde100 = top(&mut scored, 100);
+        let fde10 = &fde100[..10.min(fde100.len())];
+        for e in &exact10 {
+            denom += 1;
+            if fde10.contains(e) {
+                in10 += 1;
+            }
+            if fde100.contains(e) {
+                in100 += 1;
+            }
+        }
+    }
+    println!(
+        "FDE_SYNTH n={n} fde_dim={} gen_s={gen_secs:.1} build_s={build_secs:.1} \
+         exact_ms_per_q={:.0} scan_ms_per_q={:.1} scan_qps={:.1} \
+         r10_in_fde10={:.3} r10_in_fde100={:.3} ram_mb={ram_mb:.0}",
+        enc.dim(),
+        1000.0 * exact_secs / queries as f64,
+        1000.0 * scan_secs / queries as f64,
+        queries as f64 / scan_secs.max(1e-9),
+        in10 as f64 / denom.max(1) as f64,
+        in100 as f64 / denom.max(1) as f64,
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -1277,6 +1439,13 @@ fn main() -> Result<()> {
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
+        Command::FdeSynth {
+            n,
+            queries,
+            doc_tokens,
+            query_tokens,
+            dim,
+        } => run_fde_synth(n, queries, doc_tokens, query_tokens, dim),
         Command::Locomo {
             dataset,
             k,

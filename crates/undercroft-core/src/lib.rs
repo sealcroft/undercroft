@@ -10,6 +10,7 @@ pub mod convo;
 pub mod drawer;
 pub mod embed;
 pub mod entity;
+pub mod fde;
 pub mod ids;
 pub mod late;
 pub mod normalize;

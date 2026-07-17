@@ -50,7 +50,7 @@ fn pack_v2(dim: usize, rows: usize, codes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn unpack_v2(data: &[u8], code_len: usize) -> Option<(usize, usize, &[u8])> {
+pub(crate) fn unpack_v2(data: &[u8], code_len: usize) -> Option<(usize, usize, &[u8])> {
     if data.len() < 9 || data[0] != 2 {
         return None;
     }
@@ -94,7 +94,7 @@ impl PalaceStore {
     /// pure re-encoding, no transformer forwards. The codebook persists in
     /// `tok_meta`, sealed like the matrices themselves; a codebook trained
     /// for a different model is discarded and retrained.
-    fn tok_pq_ensure(&self, model: &str) -> bool {
+    pub(crate) fn tok_pq_ensure(&self, model: &str) -> bool {
         if self.tok_pq.borrow().is_some() {
             return true;
         }
@@ -243,6 +243,8 @@ impl PalaceStore {
             "INSERT OR REPLACE INTO drawer_tok (id, model, tok) VALUES (?1, ?2, ?3)",
             params![id, late.model_name(), blob],
         );
+        // MUVERA FDE from the matrix already in hand (no-op unless enabled).
+        self.fde_encode_row(id, late.model_name(), &matrix, late.dim());
     }
 
     /// Pack a token matrix in the best live format: v2 (PQ codes, ~8× below
@@ -263,11 +265,13 @@ impl PalaceStore {
         }
     }
 
-    /// Purge a deleted drawer's token row (mirrors the PQ purge).
+    /// Purge a deleted drawer's token row (mirrors the PQ purge), and its
+    /// FDE beside it.
     pub(crate) fn late_purge_row(&self, id: &str) {
         let _ = self
             .conn
             .execute("DELETE FROM drawer_tok WHERE id = ?1", params![id]);
+        self.fde_purge_row(id);
     }
 
     /// Export one drawer's stored token matrix as a **portable artifact**:
@@ -391,6 +395,8 @@ impl PalaceStore {
                 "INSERT OR REPLACE INTO drawer_tok (id, model, tok) VALUES (?1, ?2, ?3)",
                 params![id, late.model_name(), blob],
             )?;
+            let (model, dim) = (late.model_name().to_string(), late.dim());
+            self.fde_encode_row(&id, &model, &matrix, dim);
             encoded += 1;
         }
         Ok((encoded, total - encoded))
@@ -408,7 +414,14 @@ impl PalaceStore {
         if self.late_schema().is_err() {
             return;
         }
-        let qmatrix = late.encode_query(query);
+        // Reuse the query matrix FDE candidate generation already encoded
+        // for this exact query, if present (take() so a stale entry can
+        // never leak across searches); otherwise pay the one forward here.
+        let cached = self.qmatrix_cache.borrow_mut().take();
+        let qmatrix = match cached {
+            Some((q, m)) if q == query => m,
+            _ => late.encode_query(query),
+        };
         if qmatrix.is_empty() {
             return;
         }

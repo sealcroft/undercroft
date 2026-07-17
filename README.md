@@ -150,6 +150,13 @@ Runtime backend — recall identical across runtimes. Set
 [docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md)). Token matrices ride
 export bundles as portable artifacts (restore = copy, not re-encode);
 `repair --tokens` backfills palaces that predate the encoder.
+**MUVERA FDE candidates** (`UNDERCROFT_RETRIEVAL=fde`) make the candidate
+stage token-aware too: each matrix compresses to one fixed-dimensional
+vector (sealed at rest, built with zero extra forwards) whose dot product
+approximates MaxSim — measured on LoCoMo: recall identical to fusion,
+question-for-question, at **−25% search latency**; at N=200k synthetic
+docs the exact top-10 survives the FDE top-100 100% of the time at 40×
+below exact-scan cost.
 
 ### Scaling retrieval (PQ / IVF, both vault levels)
 

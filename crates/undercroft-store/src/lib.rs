@@ -12,6 +12,7 @@
 //! * an append-only `audit` table records the tag of every write in order,
 //!   which must replay to the manifest's HMAC chain head.
 
+mod fdeidx;
 #[cfg(feature = "hnsw")]
 mod hnsw;
 pub mod kg;
@@ -287,7 +288,26 @@ pub struct PalaceStore {
     ivf_min: usize,
     /// Inverted lists probed per query (`None` ⇒ `max(8, nlist/4)`).
     ivf_nprobe: Option<usize>,
+    /// When true, search generates candidates by MUVERA FDE dot product
+    /// (`UNDERCROFT_RETRIEVAL=fde`; needs the late encoder). See `fdeidx`.
+    fde_enabled: bool,
+    /// The deterministic FDE encoder (params persisted sealed in `fde_meta`).
+    fde_encoder: std::cell::RefCell<Option<undercroft_core::fde::FdeEncoder>>,
+    /// `(seq, fde)` rows loaded once per open (sealed rows decrypt).
+    fde_cache: std::cell::RefCell<Option<Vec<FdeCacheRow>>>,
+    /// Whether this session already ran the FDE backfill pass.
+    fde_checked: std::cell::Cell<bool>,
+    /// The current query's token matrix, stashed by FDE candidate
+    /// generation and consumed by the MaxSim rescore — the query forward is
+    /// the expensive part of both stages, and one search must pay it once.
+    qmatrix_cache: std::cell::RefCell<Option<EncodedQuery>>,
 }
+
+/// A query's encoded token matrix, keyed by the query text it encodes.
+type EncodedQuery = (String, Vec<f32>);
+
+/// One FDE cache row: `(seq, fde)`.
+type FdeCacheRow = (i64, Vec<f32>);
 
 impl PalaceStore {
     /// Open with the default deterministic hashed n-gram embedder.
@@ -436,6 +456,11 @@ impl PalaceStore {
             ivf_nprobe: std::env::var("UNDERCROFT_IVF_NPROBE")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            fde_enabled: false,
+            fde_encoder: std::cell::RefCell::new(None),
+            fde_cache: std::cell::RefCell::new(None),
+            fde_checked: std::cell::Cell::new(false),
+            qmatrix_cache: std::cell::RefCell::new(None),
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
@@ -1148,10 +1173,16 @@ impl PalaceStore {
             .map(str::to_string)
             .collect();
 
-        let candidates = if self.pq_enabled {
-            // On-disk PQ prefilter (hmac-only): stream ADC over the code rows,
-            // bounded RAM at any corpus size. Over-fetch generously so BM25
-            // fusion still has material.
+        let candidates = if self.fde_enabled {
+            // MUVERA FDE candidates: token-aware single-vector ranking over
+            // the load-once FDE cache (falls back to the fusion scan when no
+            // late encoder / no FDE rows exist). Over-fetch generously so
+            // BM25 fusion still has material.
+            self.fde_candidates(query, std::cmp::max(256, limit * 32))?
+        } else if self.pq_enabled {
+            // On-disk PQ prefilter: ADC over the RAM code cache, bounded at
+            // any corpus size. Over-fetch generously so BM25 fusion still
+            // has material.
             self.pq_candidates(&qvec, std::cmp::max(256, limit * 32))?
         } else if self.hnsw_enabled {
             // Semantic ANN prefilter: cut to the vector top-K before verify +
@@ -1879,6 +1910,137 @@ mod tests {
                 .unwrap();
             assert_eq!(left, 0, "delete must purge the token matrix");
         }
+    }
+
+    #[test]
+    fn fde_candidates_rank_the_target_and_seal_at_rest() {
+        for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+            let (_d, mut s) = store(level);
+            s.set_late(Some(Box::new(WordLate)));
+            s.set_fde(true);
+            for i in 0..30 {
+                s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                    .unwrap();
+            }
+            let target = drawer("w", "r", "kafka stream backlog rework", 100);
+            s.upsert(&target).unwrap();
+
+            // FDE candidate generation must place the covering doc in its
+            // head (call the generator directly — end-to-end search also
+            // fuses BM25, which would mask a broken FDE ranking).
+            let cands = s
+                .fde_candidates("kafka stream backlog", 5)
+                .unwrap()
+                .expect("FDE index must serve");
+            let target_seq: i64 = s
+                .conn
+                .query_row("SELECT seq FROM drawers WHERE id = ?1", [&target.id], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert!(
+                cands.contains(&target_seq),
+                "target must be an FDE top-5 candidate at level {level:?}"
+            );
+
+            // Every token-bearing drawer got an FDE row, written from the
+            // matrix in hand (no backfill was needed).
+            let rows: i64 = s
+                .conn
+                .query_row("SELECT COUNT(*) FROM drawer_fde", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(rows, 31, "every drawer must carry an FDE");
+
+            // At rest: the sealed blob must not be the plain f32 packing.
+            let expected_plain: Vec<u8> = {
+                let enc = undercroft_core::fde::FdeEncoder::new(
+                    16,
+                    undercroft_core::fde::FdeParams::default(),
+                );
+                let m = undercroft_core::late::LateInteraction::encode_doc(
+                    &WordLate,
+                    "kafka stream backlog rework",
+                );
+                enc.encode_doc(&m)
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect()
+            };
+            let blob: Vec<u8> = s
+                .conn
+                .query_row(
+                    "SELECT fde FROM drawer_fde WHERE id = ?1",
+                    [&target.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            match level {
+                SecurityLevel::HmacOnly => assert_eq!(blob, expected_plain),
+                SecurityLevel::Sealed => assert_ne!(
+                    blob, expected_plain,
+                    "sealed vault must not store plaintext-derived FDEs in clear"
+                ),
+            }
+
+            // Reopen semantics: a fresh cache reproduces the candidates.
+            s.fde_cache.borrow_mut().take();
+            let again = s
+                .fde_candidates("kafka stream backlog", 5)
+                .unwrap()
+                .expect("cache rebuild");
+            assert_eq!(cands, again, "cache rebuild must reproduce candidates");
+
+            // Delete purges the FDE row beside the token row.
+            s.delete_drawer(&target.id).unwrap();
+            let left: i64 = s
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM drawer_fde WHERE id = ?1",
+                    [&target.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(left, 0, "delete must purge the FDE row");
+        }
+    }
+
+    #[test]
+    fn fde_backfill_covers_pre_enable_writes() {
+        // Tokens ingested while FDE generation was off: the first FDE search
+        // must backfill every FDE from the stored matrices — pure
+        // arithmetic, no encoder forwards (WordLate is cheap, but the seam
+        // under test is the drawer_tok → drawer_fde path).
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.set_late(Some(Box::new(WordLate)));
+        for i in 0..10 {
+            s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                .unwrap();
+        }
+        let target = drawer("w", "r", "kafka stream backlog rework", 100);
+        s.upsert(&target).unwrap();
+        let before: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_fde", [], |r| r.get(0))
+            .unwrap_or(0);
+        assert_eq!(before, 0, "FDE off ⇒ no rows written at ingest");
+
+        s.set_fde(true);
+        let cands = s
+            .fde_candidates("kafka stream backlog", 5)
+            .unwrap()
+            .expect("backfill must produce a servable index");
+        let target_seq: i64 = s
+            .conn
+            .query_row("SELECT seq FROM drawers WHERE id = ?1", [&target.id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(cands.contains(&target_seq));
+        let after: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_fde", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, 11, "backfill must cover every token-bearing drawer");
     }
 
     /// A LateInteraction encoder that panics on doc encodes — proves a
