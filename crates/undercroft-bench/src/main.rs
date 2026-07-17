@@ -177,8 +177,13 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
         store.set_reranker(Some(rerank_shared()));
     }
     // Late-interaction (ColBERT) second stage: token matrices stored at
-    // ingest, one query forward + MaxSim at search.
-    #[cfg(feature = "onnx")]
+    // ingest, one query forward + MaxSim at search. ORT wins over tract when
+    // both are built (same exports, faster forwards).
+    #[cfg(feature = "ort")]
+    if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("colbert") {
+        store.set_late(Some(ort_colbert_shared()));
+    }
+    #[cfg(all(feature = "onnx", not(feature = "ort")))]
     if std::env::var("UNDERCROFT_RERANKER").as_deref() == Ok("colbert") {
         store.set_late(Some(colbert_shared()));
     }
@@ -331,6 +336,37 @@ fn ort_reranker_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + S
         }
         fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
             self.0.score_batch(query, passages)
+        }
+    }
+    Box::new(Shared(arc))
+}
+
+/// ORT ColBERT encoder, loaded once and shared, mirroring `colbert_shared`.
+#[cfg(feature = "ort")]
+fn ort_colbert_shared() -> Box<dyn undercroft_core::late::LateInteraction + Send + Sync> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtColbert>> = OnceLock::new();
+    let arc = SHARED
+        .get_or_init(|| {
+            Arc::new(
+                undercroft_embed_ort::colbert_from_env()
+                    .expect("loading ORT ColBERT encoder from env"),
+            )
+        })
+        .clone();
+    struct Shared(Arc<undercroft_embed_ort::OrtColbert>);
+    impl undercroft_core::late::LateInteraction for Shared {
+        fn model_name(&self) -> &str {
+            self.0.model_name()
+        }
+        fn dim(&self) -> usize {
+            self.0.dim()
+        }
+        fn encode_doc(&self, text: &str) -> Vec<f32> {
+            self.0.encode_doc(text)
+        }
+        fn encode_query(&self, text: &str) -> Vec<f32> {
+            self.0.encode_query(text)
         }
     }
     Box::new(Shared(arc))
