@@ -39,8 +39,9 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   rejects); built via the `onnx-build` compose service. Models are
   user-supplied; tract 0.22 runs BERT-family models, **not** DeBERTa rerankers
 - `crates/undercroft-embed-ort` — opt-in ONNX Runtime backend (C++ dep;
-  `ort-build` compose service): session-pool embedder + reranker, ~2.5× tract
-  per forward, int8 model support; pinned `ort = 2.0.0-rc.10`
+  `ort-build` compose service): session-pool embedder + reranker + ColBERT
+  encoder (late.rs — same exports/env as the tract one), ~2.5× tract per
+  forward, int8 model support; pinned `ort = 2.0.0-rc.10`
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI; mcp.rs: MCP stdio;
   http.rs/tenant.rs: HTTP + multi-tenant `/v1`; monitor.html: the Palace Monitor
   UI, `include_str!`'d and served at `GET /monitor` on telemetry builds);

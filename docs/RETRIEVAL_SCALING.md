@@ -168,17 +168,29 @@ token, summed) — plain arithmetic, **no transformer per candidate**. Query cos
 is **~one forward, independent of `top_n` and of core count**. ColBERT is
 BERT-family, so it runs in tract (unlike the DeBERTa rerankers tract rejects).
 
-**Measured** (LoCoMo full 1,982 QA, hash embedder + colbertv2.0 on tract):
+**Measured** (LoCoMo full 1,982 QA, hash embedder + colbertv2.0; tract and
+ORT rows are the same exports, same host):
 
 | Second stage | R@10 | search ms/q | scales w/ cores |
 |---|---|---|---|
 | none (bm25 fusion) | 94.6% | ~6 | — |
-| **ColBERT late interaction (tract)** | **96.77%** | **92.7** | **no — same on 4 or 24** |
+| ColBERT late interaction (tract) | 96.77% | 92.7 | no — same on 4 or 24 |
+| ColBERT (`ort`, int8-MaxSim) | 96.8% *(same 1918/1982)* | 81.6 | no |
+| **ColBERT (`ort` + token-PQ LUT)** | **96.5%** | **70.3** | **no** |
 | cross-encoder (ort int8, `top_n=20`) | 97.68% | 101–327 *(24-core)* | yes — ~5× worse on 4 cores |
 
-+2.2 pts over fusion at a flat ~93 ms/query; the cross-encoder buys ~1 more
-point but only at many-core prices. Ingest carries the moved cost (~0.37 s per
-drawer on tract — one doc forward at write time). Enable with
++2 pts over fusion at a flat ~70–93 ms/query; the cross-encoder buys ~1 more
+point but only at many-core prices. Recall is **runtime-invariant as
+measured**: tract and ORT int8-MaxSim recall the identical 1918 of 1982.
+Ingest carries the moved cost — one doc forward at write time, and the `ort`
+doc forward cut the bench's full-ingest phase **821 → 246 s (3.3×)**. Two
+honest notes from the ORT run: (1) the token-PQ LUT win is now visible
+(+4 ms *slower* under tract, **−11 ms** under ORT — the tract row amortized
+its one-time codebook train+repack behind a slower forward); (2) the
+tract→ORT delta on the int8 path is ~11 ms, so the seq-32 query forward was
+never the ~80 ms v0.20.0 estimated — **the residual ~70 ms is store-side**
+(candidate token fetch/decode + MaxSim + fusion), which is the next lever.
+Enable with
 `UNDERCROFT_RERANKER=colbert` + `UNDERCROFT_COLBERT_MODEL` (doc export) /
 `_QUERY_MODEL` (query export) / `_TOKENIZER`; the cross-encoder wins when both
 stages are configured. Drawers written before the encoder was attached keep
@@ -244,8 +256,11 @@ plans); ingest-time doc encode → int8 token matrices (per-row scale) in
 (`undercroft-store/src/latestage.rs`), opt-in via `UNDERCROFT_RERANKER=colbert`.
 
 Still open on this path:
-1. **`ort` backend for the query forward** (~2.5× per forward — would take
-   ~93 ms/q toward ~40 ms).
+1. **`ort` backend for the query forward — shipped, measured** (`OrtColbert`
+   in `undercroft-embed-ort/src/late.rs`, same exports/env as tract): search
+   92.7–96.7 → **70.3 ms/q** with the token-PQ LUT, ingest 3.3× faster,
+   recall runtime-invariant. The measured split shows the remaining ~70 ms
+   is store-side, not the forward — see the measured section above.
 2. **PLAID-style residual/PQ compression** of the token store (int8 today,
    ~4×; PQ would give ~32× like the retrieval codes).
 3. **Punctuation filtering** on doc rows (ColBERT convention; small win).
@@ -326,11 +341,13 @@ per drawer** (~2 h for 20k on tract, serial). The plan, in leverage order:
    and repacks every stored row in the same pass; v1/v2 coexist and
    portable artifacts always export as universal v1.
    **Gate met**: LoCoMo 96.57% R@10 (1914/1982) vs 96.77% plain — −0.2 pts
-   for 8× storage. Search 96.7 vs 92.7 ms/q: *neutral, honestly read* —
-   the bench amortizes each store's one-time train+repack into the query
-   phase, and the ~80 ms tract query-forward masks the LUT win until the
-   `ort` query-forward (~40 ms) lands. The 4-bit register-LUT (`std::arch`)
-   variant remains a micro-optimization for after that.
+   for 8× storage. Search under tract was 96.7 vs 92.7 ms/q (*neutral*: the
+   bench amortizes each store's one-time train+repack into the query phase,
+   behind a slow forward). The `ort` query-forward follow-up **unmasked the
+   LUT win as predicted**: 70.3 (LUT) vs 81.6 (int8) ms/q — an **11 ms**
+   measured gain — though the forward itself turned out to be ~11 ms of
+   search, not the ~80 ms estimated here; the rest is store-side. The 4-bit
+   register-LUT (`std::arch`) variant remains a micro-optimization.
 
 Nothing standard offers this combination: late-interaction retrieval whose
 entire derived state is **AEAD-sealed at rest, content-addressed, portable
@@ -387,12 +404,13 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    `nprobe = nlist/4`, self-healing partitions) and the scan-path fixes they
    motivated lifted flat PQ itself ~45%; IVF adds +7–11% at N=20–50k and
    grows with N. Remaining: the sealed-tier encrypted-at-rest index.
-4. **ColBERT late interaction (done):** the core-independent second stage —
-   LoCoMo 94.6 → **96.77% R@10 at a flat 92.7 ms/query** on tract (the
-   cross-encoder's 97.68% costs 101–327 ms on 24 cores and ~5× that on 4).
-   Sealed vaults AEAD-seal the token store — the first encrypted-at-rest
-   derived store. Remaining: `ort` query-forward backend, PLAID-style token
-   compression.
+4. **ColBERT late interaction (done, incl. `ort` forwards):** the
+   core-independent second stage — LoCoMo 94.6 → **96.77% R@10 at a flat
+   92.7 ms/query** on tract, **70.3 ms/query** with the `ort` forwards +
+   token-PQ LUT (the cross-encoder's 97.68% costs 101–327 ms on 24 cores
+   and ~5× that on 4). Sealed vaults AEAD-seal the token store — the first
+   encrypted-at-rest derived store. Remaining: store-side rescore cost
+   (now the dominant term), PLAID-style residual compression.
 5. **Sealed-tier encrypted-at-rest retrieval index (done):** the token
    *rescore* store shipped sealed in (4), and the IVF-PQ *prefilter* now
    ships sealed too — AEAD rows + decrypt-once RAM cache; sealed search

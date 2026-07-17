@@ -169,11 +169,13 @@ constrained devices the answer isn't more parallelism — it's **doing fewer
 query-time forwards**:
 
 - **ColBERT late interaction** (shipped, `UNDERCROFT_RERANKER=colbert`) encodes
-  passage tokens once **at ingest** (int8 on disk; sealed vaults AEAD-seal
-  every matrix — the first encrypted-at-rest derived store) and, per query,
-  does **one** forward + a cheap MaxSim (no transformer per candidate).
-  **Measured on LoCoMo (full 1,982 QA):** 94.6 → **96.77% R@10 at a flat
-  92.7 ms/query** on tract — the same on 4 cores or 24, while the
+  passage tokens once **at ingest** (PQ-compressed on disk; sealed vaults
+  AEAD-seal every matrix — the first encrypted-at-rest derived store) and,
+  per query, does **one** forward + a cheap MaxSim (no transformer per
+  candidate). **Measured on LoCoMo (full 1,982 QA):** 94.6 → **96.77% R@10
+  at a flat 92.7 ms/query** on pure-Rust tract, **70.3 ms/query** with the
+  opt-in ONNX Runtime forwards + token-PQ LUT (recall identical across
+  runtimes; ingest 3.3× faster too) — the same on 4 cores or 24, while the
   cross-encoder's 97.68% costs 101–327 ms *on 24 cores* and ~5× that on 4.
 - **A stronger bi-encoder with no reranker** is also one forward, core- and
   `top_n`-independent, at some accuracy cost.

@@ -136,13 +136,15 @@ Applies to `search`, `serve-mcp`, the daemon, and the multi-tenant `/v1`
 surface (one shared model across vaults). Measured: LoCoMo R@10 94.6 →
 **97.68%** at 101–327 ms/query on 24 cores (ONNX Runtime backend + int8).
 
-### ColBERT late interaction (optional, `onnx` feature)
+### ColBERT late interaction (optional, `onnx` feature; `ort` runtime available)
 
 The core-count-independent second stage: drawers are encoded **once at
 ingest** into per-token matrices (PQ-compressed to ~16 bytes/token on disk,
 AEAD-sealed in sealed vaults) and a search runs **one** query forward plus a
 MaxSim re-score — no transformer per candidate. Measured: LoCoMo R@10 94.6 →
-**96.6–96.8%** at a flat ~93 ms/query on *any* core count. Set
+**96.5–96.8%** at a flat ~93 ms/query on *any* core count with the pure-Rust
+tract runtime, **~70 ms/query** (and 3.3× faster ingest) on the opt-in ONNX
+Runtime backend — recall identical across runtimes. Set
 `UNDERCROFT_RERANKER=colbert` + `UNDERCROFT_COLBERT_MODEL` (doc export) /
 `_QUERY_MODEL` / `_TOKENIZER` (fixed-shape ONNX exports; recipe in
 [docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md)). Token matrices ride

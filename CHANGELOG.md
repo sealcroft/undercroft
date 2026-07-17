@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.21.0 — ColBERT forwards on ONNX Runtime
+
+The v0.20.0 follow-up: `OrtColbert` moves the ColBERT query/doc forwards
+onto the opt-in ONNX Runtime backend. Same fixed-shape exports, same
+`[Q]`/`[D]`/`[MASK]` framing, same `UNDERCROFT_COLBERT_*` env as the tract
+encoder — only the runtime changes, and the bench prefers ORT over tract
+when both features are built (matching the embedder/reranker precedence).
+
+Measured (LoCoMo full 1,982 QA, hash embedder + colbertv2.0, same host):
+
+- **Search 96.7 → 70.3 ms/q** with the token-PQ LUT (tract → ORT); ingest
+  doc-encode phase **821 → 246 s (3.3×)**. Recall gate ≥96.5 met: 96.5%
+  (1913/1982), and on the int8-MaxSim path recall is **identical** to tract
+  (1918/1982 both) — runtime-invariance confirmed exactly.
+- **The LUT win is unmasked as v0.20.0 predicted**: token-PQ LUT was +4 ms
+  *slower* than int8 MaxSim under tract, and is **11 ms faster** under ORT
+  (70.3 vs 81.6 ms/q).
+- Honest correction to v0.20.0's estimate: the tract→ORT int8 delta shows
+  the seq-32 query forward was ~11 ms of search, not ~80 ms — the residual
+  ~70 ms/q is **store-side** (token fetch/decode + MaxSim + fusion), now
+  the dominant term and the next optimization target.
+
+Internal: `run_batch` gains a sequence-length parameter (the query export
+is 32 tokens, not the embedder/reranker's 256).
+
 ## 0.20.0 — Token-store PQ & LUT MaxSim
 
 Restore economics tier 3 — the PLAID move on our own primitive. The
