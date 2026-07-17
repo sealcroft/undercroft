@@ -9,6 +9,7 @@ members = [
     "crates/undercroft-obs",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
+    "crates/undercroft-orchestrator",
     "crates/undercroft-embed-onnx",
     "crates/undercroft-embed-ort",
 ]
@@ -24,6 +25,7 @@ default-members = [
     "crates/undercroft-obs",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
+    "crates/undercroft-orchestrator",
 ]
 
 [workspace.package]
