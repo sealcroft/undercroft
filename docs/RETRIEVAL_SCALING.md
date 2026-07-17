@@ -314,18 +314,23 @@ per drawer** (~2 h for 20k on tract, serial). The plan, in leverage order:
    calling `late_backfill`) covers the gap in bounded batches — with ort
    int8 + batching + rayon (still open), ~10 min for 20k drawers instead
    of ~2 h.
-3. **Token-store PQ + pruning (the PLAID move) — compression that speeds
-   scoring up.** Re-use [pq.rs](../crates/undercroft-store/src/pq.rs) on the
-   token vectors: at `m=16` a token is 16 bytes (8× below today's int8, 32×
-   below f32), and MaxSim becomes per-query-token **lookup-table adds**
-   instead of 128-dim dot products — the FAISS 4-bit "fast-scan" kernel
-   layout (LUTs in SIMD registers) is portable to pure-Rust `std::arch`, no
-   C++ dependency. Add doc-token pruning (drop punctuation/low-salience
-   rows, keep ~top-50) for another ~3× that often *improves* accuracy by
-   removing noise. A **shared codebook shipped with the model**
-   (identity-tracked like the embedder) makes codes portable across vaults
-   and shard restores retrain-free. Accuracy gate: LoCoMo must hold
-   ≥96.5% R@10.
+3. **Token-store PQ + pruning (the PLAID move) — shipped, measured.**
+   [pq.rs](../crates/undercroft-store/src/pq.rs) re-used on the token
+   vectors: a 128-dim token is **16 PQ bytes (8.2× below int8, 33× below
+   f32** — a ~150-token drawer's matrix drops 19.8 KB → 2.4 KB), and MaxSim
+   scores v2 matrices via per-query-row **dot-product LUTs** (tables built
+   once per query row; each candidate token costs 16 adds instead of a
+   128-dim dot). Doc-side punctuation rows attend but aren't stored. The
+   codebook trains event-driven from the vault's own matrices past
+   `UNDERCROFT_TOK_PQ_MIN` (default 256), persists **sealed** in `tok_meta`,
+   and repacks every stored row in the same pass; v1/v2 coexist and
+   portable artifacts always export as universal v1.
+   **Gate met**: LoCoMo 96.57% R@10 (1914/1982) vs 96.77% plain — −0.2 pts
+   for 8× storage. Search 96.7 vs 92.7 ms/q: *neutral, honestly read* —
+   the bench amortizes each store's one-time train+repack into the query
+   phase, and the ~80 ms tract query-forward masks the LUT win until the
+   `ort` query-forward (~40 ms) lands. The 4-bit register-LUT (`std::arch`)
+   variant remains a micro-optimization for after that.
 
 Nothing standard offers this combination: late-interaction retrieval whose
 entire derived state is **AEAD-sealed at rest, content-addressed, portable

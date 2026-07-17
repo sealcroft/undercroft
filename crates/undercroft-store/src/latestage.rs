@@ -26,7 +26,42 @@
 use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInteraction};
 use rusqlite::{params, OptionalExtension};
 
+use crate::pq::ProductQuantizer;
 use crate::{rerank_top_n, PalaceStore, SearchHit, StoreError};
+
+/// Stored-matrix count at which the token codebook trains (v2 packing).
+/// Below it, int8 (v1) is already small and PQ would train on too few
+/// tokens. `UNDERCROFT_TOK_PQ_MIN` overrides; `off` disables v2 entirely.
+pub(crate) const TOK_PQ_MIN_DEFAULT: usize = 256;
+/// Sampling cap and k-means iterations for token-codebook training —
+/// tokens are plentiful (hundreds per drawer), so a modest sample is ample.
+const TOK_PQ_SAMPLE: usize = 16_384;
+const TOK_PQ_ITERS: usize = 10;
+
+/// Pack a PQ-coded token matrix (format v2): `[2][dim:u32][rows:u32]` then
+/// `rows × code_len` bytes. Reading it back needs the vault's token
+/// codebook — which is why portable artifacts always travel as v1.
+fn pack_v2(dim: usize, rows: usize, codes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + codes.len());
+    out.push(2u8);
+    out.extend((dim as u32).to_le_bytes());
+    out.extend((rows as u32).to_le_bytes());
+    out.extend_from_slice(codes);
+    out
+}
+
+fn unpack_v2(data: &[u8], code_len: usize) -> Option<(usize, usize, &[u8])> {
+    if data.len() < 9 || data[0] != 2 {
+        return None;
+    }
+    let dim = u32::from_le_bytes(data[1..5].try_into().ok()?) as usize;
+    let rows = u32::from_le_bytes(data[5..9].try_into().ok()?) as usize;
+    let codes = &data[9..];
+    if dim == 0 || codes.len() != rows * code_len {
+        return None;
+    }
+    Some((dim, rows, codes))
+}
 
 impl PalaceStore {
     /// Attach (or clear) the late-interaction encoder. With one set, writes
@@ -43,9 +78,149 @@ impl PalaceStore {
                  id    TEXT PRIMARY KEY,
                  model TEXT NOT NULL,
                  tok   BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS tok_meta (
+                 key   TEXT PRIMARY KEY,
+                 value BLOB NOT NULL
              );",
         )?;
         Ok(())
+    }
+
+    /// Load-or-train the token codebook (once per session). Returns whether
+    /// a codebook is now cached. Training happens when at least
+    /// `tok_pq_min` matrices exist for `model`; every stored v1 row is then
+    /// repacked to v2 (PQ codes, ~8× smaller than int8) in one pass —
+    /// pure re-encoding, no transformer forwards. The codebook persists in
+    /// `tok_meta`, sealed like the matrices themselves; a codebook trained
+    /// for a different model is discarded and retrained.
+    fn tok_pq_ensure(&self, model: &str) -> bool {
+        if self.tok_pq.borrow().is_some() {
+            return true;
+        }
+        if self.tok_pq_checked.get() {
+            return false;
+        }
+        self.tok_pq_checked.set(true);
+        if self.late_schema().is_err() {
+            return false;
+        }
+        // Stored codebook?
+        let stored_model: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT value FROM tok_meta WHERE key = 'codebook_model'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        if stored_model.as_deref() == Some(model.as_bytes()) {
+            let blob: Option<Vec<u8>> = self
+                .conn
+                .query_row(
+                    "SELECT value FROM tok_meta WHERE key = 'codebook'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten();
+            if let Some(pq) = blob
+                .and_then(|b| self.vault.tokens_from_rest("tok/codebook", &b).ok())
+                .and_then(|b| ProductQuantizer::from_bytes(&b))
+            {
+                *self.tok_pq.borrow_mut() = Some(pq);
+                return true;
+            }
+        }
+        // Train when the corpus warrants it.
+        let rows: i64 = match self.conn.query_row(
+            "SELECT COUNT(*) FROM drawer_tok WHERE model = ?1",
+            params![model],
+            |r| r.get(0),
+        ) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if (rows as usize) < self.tok_pq_min {
+            return false;
+        }
+        self.tok_pq_train_and_repack(model).unwrap_or(false)
+    }
+
+    /// Train the token codebook from the stored v1 matrices and repack them
+    /// all to v2. Returns whether a codebook is now cached.
+    fn tok_pq_train_and_repack(&self, model: &str) -> Result<bool, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, tok FROM drawer_tok WHERE model = ?1")?;
+        let blobs: Vec<(String, Vec<u8>)> = stmt
+            .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        // Gather an even sample of token rows across the v1 matrices.
+        let mut sample: Vec<Vec<f32>> = Vec::new();
+        let mut v1: Vec<(String, Vec<f32>, usize)> = Vec::new();
+        for (id, blob) in &blobs {
+            let Ok(packed) = self.vault.tokens_from_rest(id, blob) else {
+                continue;
+            };
+            let Some((matrix, dim)) = dequantize_tokens(&packed) else {
+                continue; // already v2, or garbage — skip
+            };
+            v1.push((id.clone(), matrix, dim));
+        }
+        let total_rows: usize = v1.iter().map(|(_, m, d)| m.len() / (*d).max(1)).sum();
+        if total_rows == 0 {
+            return Ok(false);
+        }
+        let stride = total_rows.div_ceil(TOK_PQ_SAMPLE).max(1);
+        let mut i = 0usize;
+        for (_, matrix, dim) in &v1 {
+            for row in matrix.chunks_exact(*dim) {
+                if i.is_multiple_of(stride) {
+                    sample.push(row.to_vec());
+                }
+                i += 1;
+            }
+        }
+        let dim = v1[0].2;
+        let Some(m) = [8usize, 4]
+            .iter()
+            .find(|&&d| dim.is_multiple_of(d))
+            .map(|&d| dim / d)
+        else {
+            return Ok(false);
+        };
+        let Some(pq) = ProductQuantizer::train(&sample, m, TOK_PQ_ITERS) else {
+            return Ok(false);
+        };
+        // Persist (sealed on sealed vaults), then repack every v1 row.
+        let blob = self.vault.tokens_at_rest("tok/codebook", &pq.to_bytes());
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook', ?1)",
+            params![blob],
+        )?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook_model', ?1)",
+            params![model.as_bytes()],
+        )?;
+        for (id, matrix, dim) in &v1 {
+            let rows = matrix.len() / dim;
+            let mut codes = Vec::with_capacity(rows * pq.code_len());
+            for row in matrix.chunks_exact(*dim) {
+                codes.extend(pq.encode(row));
+            }
+            let blob = self.vault.tokens_at_rest(id, &pack_v2(*dim, rows, &codes));
+            self.conn.execute(
+                "UPDATE drawer_tok SET tok = ?1 WHERE id = ?2",
+                params![blob, id],
+            )?;
+        }
+        *self.tok_pq.borrow_mut() = Some(pq);
+        Ok(true)
     }
 
     /// Encode + store one written drawer's token matrix (called from
@@ -62,12 +237,30 @@ impl PalaceStore {
         if matrix.is_empty() {
             return;
         }
-        let packed = quantize_tokens(&matrix, late.dim());
+        let packed = self.late_pack(&matrix, late.dim());
         let blob = self.vault.tokens_at_rest(id, &packed);
         let _ = self.conn.execute(
             "INSERT OR REPLACE INTO drawer_tok (id, model, tok) VALUES (?1, ?2, ?3)",
             params![id, late.model_name(), blob],
         );
+    }
+
+    /// Pack a token matrix in the best live format: v2 (PQ codes, ~8× below
+    /// int8) when the token codebook is cached, v1 (int8) otherwise. The two
+    /// coexist and rescoring reads both, so packing upgrades are never a
+    /// migration event.
+    fn late_pack(&self, matrix: &[f32], dim: usize) -> Vec<u8> {
+        match self.tok_pq.borrow().as_ref() {
+            Some(pq) if dim > 0 && matrix.len().is_multiple_of(dim) => {
+                let rows = matrix.len() / dim;
+                let mut codes = Vec::with_capacity(rows * pq.code_len());
+                for row in matrix.chunks_exact(dim) {
+                    codes.extend(pq.encode(row));
+                }
+                pack_v2(dim, rows, &codes)
+            }
+            _ => quantize_tokens(matrix, dim),
+        }
     }
 
     /// Purge a deleted drawer's token row (mirrors the PQ purge).
@@ -103,6 +296,30 @@ impl PalaceStore {
                     id: id.to_string(),
                     reason: e.to_string(),
                 })?;
+        // Artifacts travel in the universal v1 (int8) packing: v2 needs this
+        // vault's codebook, which doesn't leave the vault. Decode PQ rows
+        // back to their centroid reconstruction and re-quantize.
+        if packed.first() == Some(&2) {
+            self.tok_pq_ensure(&model);
+            let tok_pq = self.tok_pq.borrow();
+            let Some(pq) = tok_pq.as_ref() else {
+                return Err(StoreError::CorruptRow {
+                    id: id.to_string(),
+                    reason: "v2 token matrix without a codebook".into(),
+                });
+            };
+            let Some((dim, rows, codes)) = unpack_v2(&packed, pq.code_len()) else {
+                return Err(StoreError::CorruptRow {
+                    id: id.to_string(),
+                    reason: "v2 token matrix does not parse".into(),
+                });
+            };
+            let mut matrix = Vec::with_capacity(rows * dim);
+            for code in codes.chunks_exact(pq.code_len()) {
+                matrix.extend(pq.decode(code));
+            }
+            return Ok(Some((model, quantize_tokens(&matrix, dim))));
+        }
         Ok(Some((model, packed)))
     }
 
@@ -168,7 +385,7 @@ impl PalaceStore {
             if matrix.is_empty() {
                 continue;
             }
-            let packed = quantize_tokens(&matrix, late.dim());
+            let packed = self.late_pack(&matrix, late.dim());
             let blob = self.vault.tokens_at_rest(&id, &packed);
             self.conn.execute(
                 "INSERT OR REPLACE INTO drawer_tok (id, model, tok) VALUES (?1, ?2, ?3)",
@@ -208,7 +425,19 @@ impl PalaceStore {
         // scored hit trample the unscored ones. Normalize by query rows so
         // a MaxSim score is a mean cosine in [-1,1], then map into [0,1] —
         // same scale as fusion, comparable with unscored hits.
-        let qrows = (qmatrix.len() / late.dim().max(1)).max(1) as f32;
+        let dim = late.dim().max(1);
+        let qrows = (qmatrix.len() / dim).max(1) as f32;
+        // The LUT kernel: with PQ-packed (v2) matrices, each query row's
+        // dot-product tables are built ONCE here, and scoring a candidate
+        // token is `m` table adds instead of a `dim`-wide dot product.
+        self.tok_pq_ensure(late.model_name());
+        let tok_pq = self.tok_pq.borrow();
+        let qtables: Option<Vec<Vec<f32>>> = tok_pq.as_ref().map(|pq| {
+            qmatrix
+                .chunks_exact(dim)
+                .map(|q| pq.dot_tables(q).unwrap_or_default())
+                .collect()
+        });
         for h in hits[..pool].iter_mut() {
             let blob: Option<Vec<u8>> = stmt
                 .query_row(params![h.drawer.id, late.model_name()], |r| r.get(0))
@@ -219,13 +448,45 @@ impl PalaceStore {
             let Ok(packed) = self.vault.tokens_from_rest(&h.drawer.id, &blob) else {
                 continue;
             };
-            let Some((matrix, dim)) = dequantize_tokens(&packed) else {
-                continue;
+            let s = match packed.first() {
+                Some(2) => {
+                    // v2: PQ codes + per-query-row LUTs.
+                    let (Some(pq), Some(qtables)) = (tok_pq.as_ref(), qtables.as_ref()) else {
+                        continue;
+                    };
+                    let Some((vdim, rows, codes)) = unpack_v2(&packed, pq.code_len()) else {
+                        continue;
+                    };
+                    if vdim != dim || rows == 0 {
+                        continue;
+                    }
+                    let mut total = 0f32;
+                    for tables in qtables {
+                        if tables.is_empty() {
+                            continue;
+                        }
+                        let mut best = f32::NEG_INFINITY;
+                        for code in codes.chunks_exact(pq.code_len()) {
+                            let d = pq.adc_dot(tables, code);
+                            if d > best {
+                                best = d;
+                            }
+                        }
+                        total += best;
+                    }
+                    total / qrows
+                }
+                _ => {
+                    // v1: int8 → f32 MaxSim.
+                    let Some((matrix, vdim)) = dequantize_tokens(&packed) else {
+                        continue;
+                    };
+                    if vdim != dim {
+                        continue;
+                    }
+                    maxsim(&qmatrix, &matrix, dim) / qrows
+                }
             };
-            if dim != late.dim() {
-                continue;
-            }
-            let s = maxsim(&qmatrix, &matrix, dim) / qrows;
             h.score = ((s + 1.0) / 2.0).clamp(0.0, 1.0);
         }
         hits[..pool].sort_by(|a, b| {

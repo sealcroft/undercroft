@@ -266,6 +266,15 @@ pub struct PalaceStore {
     /// Sealed vaults only: `(seq, list, code)` rows decrypted once per open
     /// (~52 B per drawer — bounded), scanned in RAM. See `pqidx`.
     pq_cache: std::cell::RefCell<Option<Vec<PqCacheRow>>>,
+    /// Token-matrix product quantizer (v2 pack format) — trained from the
+    /// vault's own stored matrices once they cross `tok_pq_min`, cached
+    /// here, persisted sealed in `tok_meta`. See `latestage`.
+    tok_pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
+    /// Whether this session already tried to load/train the token codebook.
+    tok_pq_checked: std::cell::Cell<bool>,
+    /// Stored-matrix count at which the token codebook trains
+    /// (`UNDERCROFT_TOK_PQ_MIN`, `off` ⇒ never — v1 int8 packing only).
+    tok_pq_min: usize,
     /// Whether the PQ index passed its coherence check since the last event
     /// that could break it (open, or a write that failed to encode). While
     /// true, searches skip the O(corpus) verification entirely. See `pqidx`.
@@ -410,6 +419,13 @@ impl PalaceStore {
             pq: std::cell::RefCell::new(None),
             ivf: std::cell::RefCell::new(None),
             pq_cache: std::cell::RefCell::new(None),
+            tok_pq: std::cell::RefCell::new(None),
+            tok_pq_checked: std::cell::Cell::new(false),
+            tok_pq_min: match std::env::var("UNDERCROFT_TOK_PQ_MIN") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(latestage::TOK_PQ_MIN_DEFAULT),
+                Err(_) => latestage::TOK_PQ_MIN_DEFAULT,
+            },
             pq_verified: std::cell::Cell::new(false),
             pq_live: std::cell::Cell::new(0),
             ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
@@ -1962,6 +1978,79 @@ mod tests {
         // The drawer is still found with its fusion score intact (not sunk).
         assert!(!hits.is_empty());
         assert!(hits[0].score > 0.0);
+    }
+
+    #[test]
+    fn token_pq_trains_repacks_and_scores_with_luts() {
+        for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+            let (_d, mut s) = store(level);
+            s.tok_pq_min = 4; // train immediately for the test
+            s.set_late(Some(Box::new(WordLate)));
+            for i in 0..6 {
+                s.upsert(&drawer("w", "r", &format!("filler note number {i}"), i))
+                    .unwrap();
+            }
+            s.upsert(&drawer("w", "r", "kafka stream backlog rework", 50))
+                .unwrap();
+            s.upsert(&drawer("w", "r", "kafka pipeline notes", 51))
+                .unwrap();
+
+            // First search trains the codebook, repacks every row to v2,
+            // and MaxSim ordering still holds through the LUT path.
+            let hits = s
+                .search("kafka stream backlog", &SearchOptions::default())
+                .unwrap();
+            assert!(hits[0].drawer.content.contains("backlog"), "at {level:?}");
+            assert!(s.tok_pq.borrow().is_some(), "codebook trained");
+            let v2: i64 = {
+                let blobs: Vec<(String, Vec<u8>)> = s
+                    .conn
+                    .prepare("SELECT id, tok FROM drawer_tok")
+                    .unwrap()
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                blobs
+                    .iter()
+                    .filter(|(id, b)| s.vault.tokens_from_rest(id, b).unwrap().first() == Some(&2))
+                    .count() as i64
+            };
+            assert_eq!(v2, 8, "every stored matrix repacked to v2 at {level:?}");
+
+            // New writes pack v2 directly, and remain findable via LUTs.
+            s.upsert(&drawer("w", "r", "zebra migration ledger", 60))
+                .unwrap();
+            let blob: Vec<u8> = s
+                .conn
+                .query_row(
+                    "SELECT tok FROM drawer_tok WHERE id = (SELECT id FROM drawers WHERE seq = (SELECT MAX(seq) FROM drawers))",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let last_id: String = s
+                .conn
+                .query_row(
+                    "SELECT id FROM drawers WHERE seq = (SELECT MAX(seq) FROM drawers)",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                s.vault.tokens_from_rest(&last_id, &blob).unwrap().first(),
+                Some(&2)
+            );
+            let hits = s
+                .search("zebra migration ledger", &SearchOptions::default())
+                .unwrap();
+            assert!(hits[0].drawer.content.contains("zebra"));
+
+            // Artifacts still travel as universal v1 (importable anywhere).
+            let (_, packed) = s.token_artifact(&last_id).unwrap().unwrap();
+            assert_eq!(packed.first(), Some(&1), "artifact must be v1");
+            assert!(undercroft_core::late::dequantize_tokens(&packed).is_some());
+        }
     }
 
     #[test]
