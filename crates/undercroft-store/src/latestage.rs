@@ -24,7 +24,7 @@
 //! silently mixed). `delete_drawer` purges the row.
 
 use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInteraction};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::{rerank_top_n, PalaceStore, SearchHit, StoreError};
 
@@ -75,6 +75,108 @@ impl PalaceStore {
         let _ = self
             .conn
             .execute("DELETE FROM drawer_tok WHERE id = ?1", params![id]);
+    }
+
+    /// Export one drawer's stored token matrix as a **portable artifact**:
+    /// `(model_name, packed_plaintext)`. Token matrices are the expensive
+    /// derived data (one transformer forward per drawer at ingest), and they
+    /// are a pure function of `(content, model)` — so a migration bundle
+    /// that carries them makes restore a copy instead of a recompute.
+    /// `None` when the drawer has no stored matrix.
+    pub fn token_artifact(&self, id: &str) -> Result<Option<(String, Vec<u8>)>, StoreError> {
+        self.late_schema()?;
+        let row: Option<(String, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT model, tok FROM drawer_tok WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((model, blob)) = row else {
+            return Ok(None);
+        };
+        let packed =
+            self.vault
+                .tokens_from_rest(id, &blob)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.to_string(),
+                    reason: e.to_string(),
+                })?;
+        Ok(Some((model, packed)))
+    }
+
+    /// Import a portable token artifact for `id`, re-sealed under **this**
+    /// vault's key. Safe by construction: the packed matrix must parse, it
+    /// is stored under its `model` name (rescoring only ever reads matrices
+    /// whose model matches the attached encoder), and served results are
+    /// still HMAC-verified — a wrong or malicious artifact can only
+    /// mis-rank, never forge content. Restore therefore skips the
+    /// per-drawer encode forward entirely.
+    pub fn import_token_artifact(
+        &mut self,
+        id: &str,
+        model: &str,
+        packed: &[u8],
+    ) -> Result<(), StoreError> {
+        if dequantize_tokens(packed).is_none() {
+            return Err(StoreError::CorruptRow {
+                id: id.to_string(),
+                reason: "token artifact does not parse".into(),
+            });
+        }
+        self.late_schema()?;
+        let blob = self.vault.tokens_at_rest(id, packed);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO drawer_tok (id, model, tok) VALUES (?1, ?2, ?3)",
+            params![id, model, blob],
+        )?;
+        Ok(())
+    }
+
+    /// Backfill token matrices for up to `limit` drawers that lack one under
+    /// the attached encoder's model — the recovery path for palaces ingested
+    /// before the encoder was attached, or restored from artifact-less
+    /// bundles. Each pass is bounded so callers (CLI `repair`, a daemon
+    /// tick) can spread the transformer forwards over time; searches served
+    /// meanwhile keep fusion rank for unencoded drawers and improve as
+    /// coverage grows. Returns `(encoded_this_pass, still_missing)`.
+    pub fn late_backfill(&mut self, limit: usize) -> Result<(u64, u64), StoreError> {
+        let Some(late) = &self.late else {
+            return Err(StoreError::CorruptRow {
+                id: "-".into(),
+                reason: "no late-interaction encoder attached (set UNDERCROFT_RERANKER=colbert)"
+                    .into(),
+            });
+        };
+        self.late_schema()?;
+        let missing: Vec<String> = self
+            .conn
+            .prepare(
+                "SELECT d.id FROM drawers d
+                 LEFT JOIN drawer_tok t ON t.id = d.id AND t.model = ?1
+                 WHERE t.id IS NULL ORDER BY d.seq",
+            )?
+            .query_map(params![late.model_name()], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let total = missing.len() as u64;
+        let mut encoded = 0u64;
+        for id in missing.into_iter().take(limit) {
+            let Some(d) = self.get(&id)? else { continue };
+            let late = self.late.as_ref().expect("checked above");
+            let matrix = late.encode_doc(&d.content);
+            if matrix.is_empty() {
+                continue;
+            }
+            let packed = quantize_tokens(&matrix, late.dim());
+            let blob = self.vault.tokens_at_rest(&id, &packed);
+            self.conn.execute(
+                "INSERT OR REPLACE INTO drawer_tok (id, model, tok) VALUES (?1, ?2, ?3)",
+                params![id, late.model_name(), blob],
+            )?;
+            encoded += 1;
+        }
+        Ok((encoded, total - encoded))
     }
 
     /// Re-score the fusion top-N hits by MaxSim over stored matrices, then

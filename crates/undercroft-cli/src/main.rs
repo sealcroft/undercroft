@@ -275,6 +275,12 @@ enum Command {
     Repair {
         #[arg(long, default_value = "default")]
         vault: String,
+        /// Backfill late-interaction token matrices instead (requires
+        /// UNDERCROFT_RERANKER=colbert): encodes every drawer missing one,
+        /// in bounded batches. Restores from artifact-less bundles serve at
+        /// fusion quality immediately and improve as this progresses.
+        #[arg(long)]
+        tokens: bool,
     },
     /// Vault backups: create, list, restore
     Backup {
@@ -1410,8 +1416,20 @@ fn main() -> Result<()> {
                 }
             );
         }
-        Command::Repair { vault } => {
+        Command::Repair { vault, tokens } => {
             let mut store = open_store(&cli, vault)?;
+            if *tokens {
+                let mut done = 0u64;
+                loop {
+                    let (encoded, remaining) = store.late_backfill(64)?;
+                    done += encoded;
+                    println!("token matrices encoded: {done} (remaining: {remaining})");
+                    if remaining == 0 || encoded == 0 {
+                        break;
+                    }
+                }
+                return Ok(());
+            }
             let (report, backfilled) = store.repair()?;
             println!("fingerprints backfilled: {backfilled}");
             println!("records checked: {}", report.records_checked);

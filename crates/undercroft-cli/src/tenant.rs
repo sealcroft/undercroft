@@ -441,10 +441,18 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         let records = store.export_all_with_vectors().map_err(store_err)?;
-        // JSONL: one {drawer, vector} object per line.
+        // JSONL: one {drawer, vector[, tok]} object per line. `tok` is the
+        // drawer's late-interaction token matrix as a portable artifact
+        // (model name + base64 of the packed plaintext) — the expensive
+        // derived data, carried so an import restores it by copy instead of
+        // re-running one transformer forward per drawer.
         let mut out = String::new();
         for (drawer, vector) in records {
-            out.push_str(&json!({ "drawer": drawer, "vector": vector }).to_string());
+            let mut line = json!({ "drawer": drawer, "vector": vector });
+            if let Some((model, packed)) = store.token_artifact(&drawer.id).map_err(store_err)? {
+                line["tok"] = json!({ "model": model, "b64": b64encode(&packed) });
+            }
+            out.push_str(&line.to_string());
             out.push('\n');
         }
         Ok((200, Body::Ndjson(out)))
@@ -455,7 +463,8 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         // Parse every line before writing anything, so a malformed body
         // fails cleanly without a partial import.
-        let mut records: Vec<(Drawer, Option<Vec<f32>>)> = Vec::new();
+        type ImportLine = (Drawer, Option<Vec<f32>>, Option<(String, Vec<u8>)>);
+        let mut records: Vec<ImportLine> = Vec::new();
         for (n, line) in body.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
@@ -471,14 +480,45 @@ impl Tenancy {
                     .filter_map(|v| v.as_f64().map(|f| f as f32))
                     .collect()
             });
-            records.push((drawer, vector));
+            // Optional portable token artifact: {"model": "...", "b64": "..."}.
+            let tok = match obj.get("tok") {
+                Some(t) => {
+                    let model = t.get("model").and_then(Value::as_str).ok_or_else(|| {
+                        RestError::new(400, format!("line {}: tok.model missing", n + 1))
+                    })?;
+                    let b64 = t.get("b64").and_then(Value::as_str).ok_or_else(|| {
+                        RestError::new(400, format!("line {}: tok.b64 missing", n + 1))
+                    })?;
+                    let packed = b64decode(b64).map_err(|e| {
+                        RestError::new(400, format!("line {}: tok.b64: {e}", n + 1))
+                    })?;
+                    // Validate here so a bad artifact fails the whole body
+                    // cleanly (parse-before-write), not mid-import.
+                    if undercroft_core::late::dequantize_tokens(&packed).is_none() {
+                        return Err(RestError::new(
+                            400,
+                            format!("line {}: tok artifact does not parse", n + 1),
+                        ));
+                    }
+                    Some((model.to_string(), packed))
+                }
+                None => None,
+            };
+            records.push((drawer, vector, tok));
         }
         let store = self.store_for(id)?;
         let mut imported = 0u64;
-        for (drawer, vector) in &records {
+        for (drawer, vector, tok) in &records {
             store
                 .import_record(drawer, vector.clone())
                 .map_err(store_err)?;
+            if let Some((model, packed)) = tok {
+                // Re-sealed under this vault's key; restore skips the
+                // per-drawer encode forward.
+                store
+                    .import_token_artifact(&drawer.id, model, packed)
+                    .map_err(store_err)?;
+            }
             imported += 1;
         }
         Ok((200, Body::Json(json!({ "imported": imported }))))
@@ -566,6 +606,16 @@ fn rest_route_label(url: &str) -> &'static str {
     } else {
         "v1_vaults"
     }
+}
+
+fn b64encode(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn b64decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(s)
 }
 
 fn store_err(e: StoreError) -> RestError {

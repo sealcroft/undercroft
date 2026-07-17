@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.18.0 — Portable derived artifacts & token backfill
+
+Restore economics, tiers 1–2. Token matrices are the expensive derived data
+(one transformer forward per drawer — ~2 h per 20k drawers on tract) and a
+pure function of `(content, model)`: legitimate content-addressed cache. So
+migrations now carry them, and palaces that don't have them recover in
+bounded background passes instead of blocking.
+
+- **Portable artifacts**: `/v1` export lines gain optional
+  `tok = {model, b64(packed)}`; import validates in the parse phase
+  (bad artifacts fail the whole body cleanly) and re-seals each matrix
+  under the **destination** vault's key. Store API:
+  `token_artifact(id)` / `import_token_artifact(id, model, packed)`.
+  Safe by construction: artifacts are advisory, model-matched at rescore
+  time, and results are still HMAC-verified — a wrong or malicious
+  artifact can only mis-rank, never forge. Test-asserted: a destination
+  whose encoder panics on any doc-encode rescores correctly from imported
+  artifacts alone, with at-rest bytes differing from both the source's and
+  plaintext.
+- **Bounded backfill**: `undercroft repair --tokens` (store:
+  `late_backfill(limit)`) encodes drawers missing a matrix under the
+  attached encoder's model, in batches — a restored or pre-encoder palace
+  serves at fusion quality immediately and climbs to late-interaction
+  quality as coverage grows.
+
 ## 0.17.0 — Sealed-tier encrypted-at-rest index
 
 Sealed vaults had one retrieval mode: decrypt-scan every embedding on every
