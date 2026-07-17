@@ -44,6 +44,53 @@ const DEFAULT_RERANK_TOP_N: usize = 50;
 /// One decrypted sealed-PQ cache row: `(seq, list, code)`.
 pub(crate) type PqCacheRow = (i64, i64, Vec<u8>);
 
+/// Append an audit entry **and** advance the committed chain head, inside
+/// the caller's open transaction (a [`rusqlite::Transaction`] derefs to
+/// `Connection`, so both work). Returns `(new_head_hex, writes)` for the
+/// post-commit [`Vault::anchor_manifest`] call. Every mutation site pairs
+/// its data statements with exactly one `chain_append` in one transaction —
+/// the invariant that makes a crash unable to separate a record from its
+/// chain entry.
+pub(crate) fn chain_append(
+    conn: &rusqlite::Connection,
+    vault: &Vault,
+    record_id: &str,
+    tag: &[u8],
+    at: &str,
+) -> Result<(String, u64), StoreError> {
+    conn.execute(
+        "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
+        params![record_id, tag, at],
+    )?;
+    let head: String = conn.query_row(
+        "SELECT value FROM chain_meta WHERE key = 'head'",
+        [],
+        |r| r.get(0),
+    )?;
+    let next = vault.chain_next_hex(&head, tag)?;
+    let writes: u64 = conn
+        .query_row(
+            "SELECT value FROM chain_meta WHERE key = 'writes'",
+            [],
+            |r| r.get::<_, String>(0),
+        )?
+        .parse::<u64>()
+        .map_err(|e| StoreError::CorruptRow {
+            id: "chain_meta/writes".into(),
+            reason: e.to_string(),
+        })?
+        + 1;
+    conn.execute(
+        "UPDATE chain_meta SET value = ?1 WHERE key = 'head'",
+        params![next],
+    )?;
+    conn.execute(
+        "UPDATE chain_meta SET value = ?1 WHERE key = 'writes'",
+        params![writes.to_string()],
+    )?;
+    Ok((next, writes))
+}
+
 pub(crate) fn rerank_top_n() -> usize {
     std::env::var("UNDERCROFT_RERANK_TOP_N")
         .ok()
@@ -379,7 +426,90 @@ impl PalaceStore {
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
         store.init_manage_schema()?;
+        store.init_chain()?;
         Ok(store)
+    }
+
+    /// Initialize (or reconcile) the transactional chain head.
+    ///
+    /// The committed head lives in `chain_meta` and advances **inside the
+    /// same SQLite transaction** as the data + audit row it covers, so a
+    /// crash can never separate a record from its chain entry. The manifest
+    /// keeps a MAC'd copy as an *out-of-database rollback anchor*, written
+    /// after each commit — which means a crash between commit and anchor
+    /// legitimately leaves the manifest **behind**. Reconciliation:
+    ///
+    /// * manifest head == database head → nothing to do;
+    /// * manifest head appears in the chain the audit rows reproduce
+    ///   (strictly behind) → crash artifact → fast-forward the anchor;
+    /// * anything else → the database was rolled back or forked relative to
+    ///   an anchor it never produced → `ManifestTampered`.
+    ///
+    /// A power loss is not a tamper alarm; a restored old database still is.
+    fn init_chain(&mut self) -> Result<(), StoreError> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS chain_meta (
+                 key   TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );",
+        )?;
+        let db_head: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM chain_meta WHERE key = 'head'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(db_head) = db_head else {
+            // Legacy adoption (pre-chain_meta database) or a fresh vault:
+            // seed from the manifest, which was authoritative until now.
+            self.conn.execute(
+                "INSERT INTO chain_meta (key, value) VALUES ('head', ?1), ('writes', ?2)",
+                params![self.vault.chain_head_hex(), self.vault.writes().to_string()],
+            )?;
+            return Ok(());
+        };
+        let anchor = self.vault.chain_head_hex().to_string();
+        if anchor == db_head {
+            return Ok(());
+        }
+        // Heads differ: replay the audit rows and decide crash vs rollback.
+        let mut stmt = self.conn.prepare("SELECT tag FROM audit ORDER BY seq")?;
+        let tags: Vec<Vec<u8>> = stmt
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        let mut head = undercroft_vault::Vault::chain_genesis_hex();
+        let mut anchor_seen = head == anchor;
+        for tag in &tags {
+            head = self.vault.chain_next_hex(&head, tag)?;
+            if head == anchor {
+                anchor_seen = true;
+            }
+        }
+        if head != db_head {
+            // The committed head doesn't match its own audit rows — this is
+            // in-database corruption, not an anchoring artifact.
+            return Err(StoreError::Integrity("audit-chain head".into()));
+        }
+        if !anchor_seen {
+            return Err(StoreError::Vault(
+                undercroft_vault::VaultError::ManifestTampered,
+            ));
+        }
+        // Crash artifact: the anchor is a strict ancestor. Fast-forward it.
+        let writes: u64 = self
+            .conn
+            .query_row(
+                "SELECT value FROM chain_meta WHERE key = 'writes'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?
+            .parse()
+            .unwrap_or(tags.len() as u64);
+        self.vault.anchor_manifest(&db_head, writes)?;
+        Ok(())
     }
 
     /// hmac-only vaults keep a plaintext FTS5 index over drawer content as
@@ -677,12 +807,9 @@ impl PalaceStore {
                 now,
             ],
         )?;
-        tx.execute(
-            "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-            params![drawer.id, tag.as_slice(), now],
-        )?;
+        let (head, writes) = chain_append(&tx, &self.vault, &drawer.id, &tag, &now)?;
         tx.commit()?;
-        self.vault.commit_write(&tag)?;
+        self.vault.anchor_manifest(&head, writes)?;
         // Keep the on-disk PQ codes coherent (advisory; self-heals on search).
         self.pq_encode_row(&drawer.id, &embedding, existing.is_none());
         // Store the late-interaction token matrix (advisory; a drawer
@@ -1301,7 +1428,32 @@ impl PalaceStore {
         let tags: Vec<Vec<u8>> = stmt
             .query_map([], |r| r.get::<_, Vec<u8>>(0))?
             .collect::<Result<_, _>>()?;
-        let chain_ok = self.vault.verify_chain(&tags);
+        drop(stmt);
+        // Two-part chain check. (1) The audit rows must reproduce exactly
+        // the committed head in chain_meta — they advanced in the same
+        // transactions, so any mismatch is corruption, not timing. (2) The
+        // manifest anchor must appear somewhere in that chain: equal in
+        // steady state, strictly behind after a crash-before-anchor (legal),
+        // and absent only when the database was rolled back or forked
+        // relative to an anchor it never produced.
+        let anchor = self.vault.chain_head_hex().to_string();
+        let mut head = Vault::chain_genesis_hex();
+        let mut anchor_seen = head == anchor;
+        for tag in &tags {
+            head = self.vault.chain_next_hex(&head, tag)?;
+            if head == anchor {
+                anchor_seen = true;
+            }
+        }
+        let db_head: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM chain_meta WHERE key = 'head'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let chain_ok = db_head.as_deref() == Some(head.as_str()) && anchor_seen;
         Ok(VerifyReport {
             records_checked: checked,
             bad_records: bad,
@@ -2009,6 +2161,83 @@ mod tests {
         assert!(o.deduped);
         let back = s.get(&o.id).unwrap().unwrap();
         assert_eq!(back.content, "alice works at acme corporation now");
+    }
+
+    #[test]
+    fn crash_before_anchor_heals_without_alarm() {
+        let (dir, mut s) = store(SecurityLevel::HmacOnly);
+        s.upsert(&drawer("w", "r", "first fact", 0)).unwrap();
+        let old_head = s.vault.chain_head_hex().to_string();
+        s.upsert(&drawer("w", "r", "second fact", 1)).unwrap();
+        s.upsert(&drawer("w", "r", "third fact", 2)).unwrap();
+
+        // Simulate a crash between transaction commit and manifest anchor:
+        // the database holds three chained writes, the manifest only saw
+        // the first. A power loss must NOT read as tampering.
+        s.vault.anchor_manifest(&old_head, 1).unwrap();
+        assert!(
+            s.verify().unwrap().chain_ok,
+            "a behind-anchor (crash artifact) must not fail verification"
+        );
+        drop(s);
+
+        // Reopen: reconciliation fast-forwards the anchor to the committed
+        // head and the palace is fully healthy again.
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        assert_eq!(s.vault.writes(), 3, "anchor fast-forwarded");
+        let db_head: String = s
+            .conn
+            .query_row(
+                "SELECT value FROM chain_meta WHERE key = 'head'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(s.vault.chain_head_hex(), db_head);
+        assert!(s.verify().unwrap().chain_ok);
+    }
+
+    #[test]
+    fn database_rollback_is_detected_at_open() {
+        let (dir, mut s) = store(SecurityLevel::HmacOnly);
+        s.upsert(&drawer("w", "r", "first fact", 0)).unwrap();
+        s.upsert(&drawer("w", "r", "second fact", 1)).unwrap();
+        let h2 = s.vault.chain_head_hex().to_string();
+        s.upsert(&drawer("w", "r", "third fact", 2)).unwrap();
+        drop(s);
+
+        // Restore-an-old-database attack in miniature: erase the third
+        // write from the db (data + audit + committed head) while the
+        // manifest anchor still points at a head this database never
+        // produces. Internally the rolled-back db is self-consistent — only
+        // the out-of-database anchor exposes it.
+        let db = rusqlite::Connection::open(dir.path().join("vaults/test/palace.db")).unwrap();
+        db.execute(
+            "DELETE FROM audit WHERE seq = (SELECT MAX(seq) FROM audit)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "DELETE FROM drawers WHERE seq = (SELECT MAX(seq) FROM drawers)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE chain_meta SET value = ?1 WHERE key = 'head'",
+            params![h2],
+        )
+        .unwrap();
+        db.execute("UPDATE chain_meta SET value = '2' WHERE key = 'writes'", [])
+            .unwrap();
+        drop(db);
+
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        match PalaceStore::open(mgr.unlock("test").unwrap()) {
+            Err(StoreError::Vault(VaultError::ManifestTampered)) => {}
+            Err(e) => panic!("rollback must map to ManifestTampered, got: {e}"),
+            Ok(_) => panic!("rollback must be detected at open"),
+        }
     }
 
     #[test]

@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{PalaceStore, StoreError};
+use crate::{chain_append, PalaceStore, StoreError};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Triple {
@@ -186,7 +186,8 @@ impl PalaceStore {
             confidence,
         ));
         let now = now_rfc3339();
-        self.conn.execute(
+        let tx = self.conn.transaction()?;
+        tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
                                      confidence, source_drawer_id, tag, extracted_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -209,11 +210,9 @@ impl PalaceStore {
                 now
             ],
         )?;
-        self.conn.execute(
-            "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-            params![format!("kg/{id}"), tag.as_slice(), now],
-        )?;
-        self.vault.commit_write(&tag)?;
+        let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
         undercroft_obs::kg_write(undercroft_obs::KgKind::Triple);
         undercroft_obs::event_kg_triple(self.vault.id());
         Ok(id)
@@ -345,15 +344,20 @@ impl PalaceStore {
                 &vt,
                 t.confidence,
             ));
-            self.conn.execute(
+            let tx = self.conn.transaction()?;
+            tx.execute(
                 "UPDATE kg_triples SET object = ?1, valid_to = ?2, tag = ?3 WHERE id = ?4",
                 params![object_rest, ended, tag.as_slice(), t.id],
             )?;
-            self.conn.execute(
-                "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-                params![format!("kg/{}", t.id), tag.as_slice(), now_rfc3339()],
+            let (head, writes) = chain_append(
+                &tx,
+                &self.vault,
+                &format!("kg/{}", t.id),
+                &tag,
+                &now_rfc3339(),
             )?;
-            self.vault.commit_write(&tag)?;
+            tx.commit()?;
+            self.vault.anchor_manifest(&head, writes)?;
             undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);
             undercroft_obs::event_kg_triple(self.vault.id());
             count += 1;

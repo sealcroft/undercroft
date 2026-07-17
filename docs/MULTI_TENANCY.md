@@ -108,9 +108,10 @@ The reference proposes `[0x01][nonce][ciphertext]`. Undercroft's
 - **AAD binds the vault id** into every sealing operation, so ciphertext
   from vault A cannot be verified or opened as vault B — cross-vault access
   fails *cryptographically*.
-- A **tamper-evident audit chain**: every write advances the chain
-  (`Vault::commit_write`), every read verifies the record HMAC before
-  returning.
+- A **tamper-evident audit chain**: every write advances the committed head
+  in the same SQLite transaction as its data (`chain_append` + the
+  `chain_meta` row; the manifest keeps a lagging out-of-database rollback
+  anchor), and every read verifies the record HMAC before returning.
 - Sealed vaults never persist plaintext or any plaintext-derived index
   (embeddings, FTS) to disk — enforced by tests.
 
