@@ -117,6 +117,49 @@ impl ProductQuantizer {
         d
     }
 
+    /// Per-subspace **dot-product** tables for `query` (NOT normalized —
+    /// callers pass unit vectors when they mean cosine): `tables[s*K + c]` is
+    /// `dot(query_sub_s, centroid_{s,c})`. Summing the entries a code selects
+    /// approximates `dot(query, decoded_vector)` — the MaxSim LUT kernel:
+    /// tables are built once per query row, then each candidate token costs
+    /// `m` adds instead of a full-dimension dot product.
+    pub fn dot_tables(&self, query: &[f32]) -> Option<Vec<f32>> {
+        if query.len() != self.m * self.dsub {
+            return None;
+        }
+        let mut tables = vec![0f32; self.m * K];
+        for s in 0..self.m {
+            let sub = &query[s * self.dsub..(s + 1) * self.dsub];
+            let book = &self.codebooks[s];
+            for c in 0..K {
+                let centroid = &book[c * self.dsub..(c + 1) * self.dsub];
+                tables[s * K + c] = sub.iter().zip(centroid).map(|(a, b)| a * b).sum();
+            }
+        }
+        Some(tables)
+    }
+
+    /// Approximate dot product of an encoded `code` given [`dot_tables`](Self::dot_tables).
+    pub fn adc_dot(&self, tables: &[f32], code: &[u8]) -> f32 {
+        let mut d = 0f32;
+        for (s, &c) in code.iter().enumerate() {
+            d += tables[s * K + c as usize];
+        }
+        d
+    }
+
+    /// Decode a code back to its centroid reconstruction (row-major
+    /// concatenation of the selected centroids) — used to convert PQ-packed
+    /// token matrices back to a universal format for export.
+    pub fn decode(&self, code: &[u8]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.m * self.dsub);
+        for (s, &c) in code.iter().enumerate().take(self.m) {
+            let centroid = &self.codebooks[s][c as usize * self.dsub..(c as usize + 1) * self.dsub];
+            out.extend_from_slice(centroid);
+        }
+        out
+    }
+
     /// Serialize the trained codebooks: `[version:1][m:u32][dsub:u32]` then
     /// `m × K × dsub` little-endian f32s. Stable across platforms so on-disk
     /// codes stay decodable.
@@ -446,6 +489,33 @@ mod tests {
         let mut ragged = synth(10, 16);
         ragged.push(vec![0.0; 8]);
         assert!(CoarseQuantizer::train(&ragged, 4, 5, 11).is_none());
+    }
+
+    #[test]
+    fn dot_tables_match_decoded_dot_products() {
+        let dim = 32;
+        let data = synth(300, dim);
+        let pq = ProductQuantizer::train(&data, 8, 15).unwrap();
+        let q = {
+            // Unit query, like a token row.
+            let mut v = data[7].clone();
+            let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            v.iter_mut().for_each(|x| *x /= n);
+            v
+        };
+        let tables = pq.dot_tables(&q).expect("dim matches");
+        for v in data.iter().take(40) {
+            let code = pq.encode(v);
+            let via_lut = pq.adc_dot(&tables, &code);
+            let decoded = pq.decode(&code);
+            let direct: f32 = q.iter().zip(&decoded).map(|(a, b)| a * b).sum();
+            assert!(
+                (via_lut - direct).abs() < 1e-4,
+                "LUT and decoded dot must agree: {via_lut} vs {direct}"
+            );
+        }
+        // Wrong dimension is a clean None, not a panic.
+        assert!(pq.dot_tables(&[1.0; 5]).is_none());
     }
 
     #[test]

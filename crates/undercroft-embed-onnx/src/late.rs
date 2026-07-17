@@ -88,7 +88,7 @@ impl OnnxColbert {
             name: model_name.to_string(),
         };
         let probe = me
-            .run(&me.query_model, &[CLS, Q_MARKER, SEP], QUERY_LEN, true)
+            .run(&me.query_model, &[CLS, Q_MARKER, SEP], QUERY_LEN, true, &[])
             .map_err(|e| OnnxError::Model(format!("probe forward failed: {e}")))?;
         if probe.1 == 0 {
             return Err(OnnxError::Model(
@@ -99,24 +99,36 @@ impl OnnxColbert {
         Ok(me)
     }
 
-    /// Tokenize `text` without special tokens, returning raw ids.
-    fn word_ids(&self, text: &str) -> Result<Vec<i64>, OnnxError> {
+    /// Tokenize `text` without special tokens, returning raw ids plus a
+    /// per-token "punctuation-only" flag (the token string, minus any
+    /// wordpiece `##` prefix, contains no alphanumeric character).
+    fn word_ids(&self, text: &str) -> Result<(Vec<i64>, Vec<bool>), OnnxError> {
         let enc = self
             .tokenizer
             .encode(text, false)
             .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        Ok(enc.get_ids().iter().map(|&v| v as i64).collect())
+        let ids = enc.get_ids().iter().map(|&v| v as i64).collect();
+        let punct = enc
+            .get_tokens()
+            .iter()
+            .map(|t| !t.trim_start_matches("##").chars().any(|c| c.is_alphanumeric()))
+            .collect();
+        Ok((ids, punct))
     }
 
     /// Run one forward over `ids` padded/framed to `len`. `augment` = pad
     /// with attending `[MASK]` tokens (query side) instead of ignored zeros
-    /// (doc side). Returns `(row-major matrix of kept rows, dim)`.
+    /// (doc side). `skip` marks positions that attend normally but are
+    /// **excluded from the output matrix** — ColBERT's doc-side punctuation
+    /// filter (fewer stored rows, and the noise tokens can't win a MaxSim).
+    /// Returns `(row-major matrix of kept rows, dim)`.
     fn run(
         &self,
         model: &RunnableOnnx,
         ids: &[i64],
         len: usize,
         augment: bool,
+        skip: &[bool],
     ) -> Result<(Vec<f32>, usize), OnnxError> {
         let mut input: Vec<i64> = ids.to_vec();
         input.truncate(len);
@@ -140,8 +152,9 @@ impl OnnxColbert {
         let (seq, dim) = (shape[1], shape[2]);
         let mut matrix = Vec::with_capacity(seq * dim);
         for t in 0..seq.min(len) {
-            if mask[t] == 0 {
-                continue; // pad rows never participate
+            if mask[t] == 0 || skip.get(t).copied().unwrap_or(false) {
+                continue; // pad rows never participate; skipped rows attend
+                          // but aren't stored
             }
             for d in 0..dim {
                 matrix.push(hidden[[0, t, d]]);
@@ -150,15 +163,30 @@ impl OnnxColbert {
         Ok((matrix, dim))
     }
 
-    fn frame(&self, marker: i64, text: &str, len: usize) -> Result<Vec<i64>, OnnxError> {
-        let mut ids = self.word_ids(text)?;
+    /// Frame `text` as `[CLS] marker tokens… [SEP]`, returning the ids and
+    /// the aligned skip flags (special tokens are always kept; word tokens
+    /// inherit their punctuation flag when `filter_punct`).
+    fn frame(
+        &self,
+        marker: i64,
+        text: &str,
+        len: usize,
+        filter_punct: bool,
+    ) -> Result<(Vec<i64>, Vec<bool>), OnnxError> {
+        let (mut ids, mut punct) = self.word_ids(text)?;
         ids.truncate(len - 3);
+        punct.truncate(len - 3);
         let mut framed = Vec::with_capacity(ids.len() + 3);
+        let mut skip = Vec::with_capacity(ids.len() + 3);
         framed.push(CLS);
+        skip.push(false);
         framed.push(marker);
+        skip.push(false);
         framed.extend(ids);
+        skip.extend(punct.into_iter().map(|p| filter_punct && p));
         framed.push(SEP);
-        Ok(framed)
+        skip.push(false);
+        Ok((framed, skip))
     }
 }
 
@@ -174,15 +202,16 @@ impl LateInteraction for OnnxColbert {
     fn encode_doc(&self, text: &str) -> Vec<f32> {
         // Infallible like the Embedder: failure degrades to an empty matrix
         // (the candidate keeps its fusion rank; `repair` can re-encode).
-        self.frame(D_MARKER, text, DOC_LEN)
-            .and_then(|ids| self.run(&self.doc_model, &ids, DOC_LEN, false))
+        // Punctuation rows attend but aren't stored (ColBERT convention).
+        self.frame(D_MARKER, text, DOC_LEN, true)
+            .and_then(|(ids, skip)| self.run(&self.doc_model, &ids, DOC_LEN, false, &skip))
             .map(|(m, _)| m)
             .unwrap_or_default()
     }
 
     fn encode_query(&self, text: &str) -> Vec<f32> {
-        self.frame(Q_MARKER, text, QUERY_LEN)
-            .and_then(|ids| self.run(&self.query_model, &ids, QUERY_LEN, true))
+        self.frame(Q_MARKER, text, QUERY_LEN, false)
+            .and_then(|(ids, _)| self.run(&self.query_model, &ids, QUERY_LEN, true, &[]))
             .map(|(m, _)| m)
             .unwrap_or_default()
     }
