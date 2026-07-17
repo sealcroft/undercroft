@@ -6,23 +6,30 @@
 //! under the same invariant (*sealed vaults never persist plaintext-derived
 //! data in clear*):
 //!
-//! * **hmac-only** — plain codes, streamed from SQLite per query (content is
-//!   already plaintext on disk; mirrors FTS5).
+//! * **hmac-only** — plain codes on disk (content is already plaintext;
+//!   mirrors FTS5).
 //! * **sealed** — every code row is AEAD-sealed (`list ‖ code`, bound to its
 //!   seq under the `/pq` AAD domain; the plaintext `list` column stays `-1`
 //!   because a clear list id would leak semantic clustering), and the
-//!   codebook + IVF centroids in `pq_meta` are sealed likewise. Search
-//!   decrypts all rows **once per open** into a bounded RAM cache
-//!   (~52 B/drawer — 2.6 MB at N=50k) and ADC-scans there; an offline
+//!   codebook + IVF centroids in `pq_meta` are sealed likewise; an offline
 //!   attacker sees only fixed-size sealed blobs, i.e. the drawer count it
 //!   already knows.
 //!
+//! **Both levels ADC-scan the same load-once RAM cache** (~52 B/drawer —
+//! 2.6 MB at N=50k, bounded): sealed vaults decrypt their rows into it once
+//! per open, hmac-only vaults load the plain rows the same way. The cache
+//! started as the sealed tier's workaround for opaque on-disk rows; a
+//! controlled before/after at N=20–50k measured the hmac switch as
+//! **performance parity within run-to-run noise** (an earlier loaded-host
+//! run had suggested a win), so it is kept as the single scan path for the
+//! simpler reason: one code path, no per-query SQLite iteration, identical
+//! recall.
+//!
 //! Each drawer's embedding is product-quantized to a few dozen bytes
 //! ([`crate::pq`]) and stored in a `drawer_pq` table; the trained codebook
-//! (~hundreds of KB) is persisted once in `pq_meta` and cached in RAM. A
-//! search computes per-query ADC tables and streams the codes from SQLite —
-//! resident memory is the codebook + tables, **not** O(corpus) vectors, unlike
-//! the in-memory HNSW prototype.
+//! (~hundreds of KB) is persisted once in `pq_meta` and cached in RAM.
+//! Resident memory is the codebook + tables + code cache, **not** O(corpus)
+//! f32 vectors, unlike the in-memory HNSW prototype.
 //!
 //! **IVF inverted lists** make the scan sub-linear above `ivf_min` drawers:
 //! a coarse quantizer ([`crate::pq::CoarseQuantizer`], `nlist ≈ √N` centroids)
@@ -67,11 +74,12 @@ const IVF_TRAIN_ITERS: usize = 10;
 
 impl PalaceStore {
     /// Enable (or disable) the on-disk PQ ANN prefilter — both security
-    /// levels. hmac-only vaults store plain codes and stream them from
-    /// SQLite; **sealed vaults store every row, the codebook, and the IVF
-    /// centroids AEAD-sealed** (`/pq` AAD domain, rows bound to their seq)
-    /// and scan a bounded RAM cache decrypted once per open — the
+    /// levels. hmac-only vaults store plain codes; **sealed vaults store
+    /// every row, the codebook, and the IVF centroids AEAD-sealed** (`/pq`
+    /// AAD domain, rows bound to their seq) — the
     /// no-plaintext-derived-data-in-clear invariant holds at both levels.
+    /// Search ADC-scans a bounded RAM cache loaded (sealed: decrypted) once
+    /// per open, at either level.
     pub fn set_pq(&mut self, on: bool) {
         self.pq_enabled = on;
     }
@@ -250,74 +258,40 @@ impl PalaceStore {
             None
         };
 
+        // Both levels ADC-scan the load-once RAM cache (sealed rows decrypt
+        // into it; plain rows load as stored — measured before/after at
+        // N=20–50k: parity with the old per-query SQLite streaming, kept
+        // for the single code path). No `JOIN drawers` here: delete-orphans
+        // are purged by
+        // `delete_drawer`, and any crash-window survivor merely wastes a
+        // candidate slot downstream — the hydration query filters
+        // `seq IN (...)` against live drawers — until the next rebuild.
+        // Probes filter the cache in RAM; if the probed lists hold fewer
+        // than `k` rows (skewed partitions, tiny corpus), widen to the full
+        // scan rather than starve the fusion stage.
+        self.pq_cache_ensure()?;
+        let cache_ref = self.pq_cache.borrow();
+        let Some(cache) = cache_ref.as_ref() else {
+            return Ok(None);
+        };
         let mut scored: Option<Vec<(f32, i64)>> = None;
-        if self.pq_sealed() {
-            // Sealed vaults: the on-disk rows are AEAD blobs; ADC runs over
-            // a RAM cache decrypted once per open (48 B + list per drawer —
-            // ~2.6 MB at N=50k, bounded). Probes filter the cache in RAM;
-            // SQLite layout is irrelevant here.
-            self.pq_cache_ensure()?;
-            let cache_ref = self.pq_cache.borrow();
-            let Some(cache) = cache_ref.as_ref() else {
-                return Ok(None);
-            };
-            if let Some(lists) = &probe {
-                let probed: Vec<(f32, i64)> = cache
+        if let Some(lists) = &probe {
+            let probed: Vec<(f32, i64)> = cache
+                .iter()
+                .filter(|(_, list, _)| lists.contains(list))
+                .map(|(seq, _, code)| (pq.adc(&tables, code), *seq))
+                .collect();
+            if probed.len() >= k {
+                scored = Some(probed);
+            }
+        }
+        if scored.is_none() {
+            scored = Some(
+                cache
                     .iter()
-                    .filter(|(_, list, _)| lists.contains(list))
                     .map(|(seq, _, code)| (pq.adc(&tables, code), *seq))
-                    .collect();
-                if probed.len() >= k {
-                    scored = Some(probed);
-                }
-            }
-            if scored.is_none() {
-                scored = Some(
-                    cache
-                        .iter()
-                        .map(|(seq, _, code)| (pq.adc(&tables, code), *seq))
-                        .collect(),
-                );
-            }
-        } else {
-            // hmac-only: stream plain codes from SQLite. The scan reads
-            // codes only — no `JOIN drawers` (measured at N=50k, the per-row
-            // join cost several times the ADC arithmetic). Delete-orphans
-            // are purged by `delete_drawer`; any survivor (crash window)
-            // wastes a candidate slot downstream — the hydration query
-            // filters `seq IN (...)` against live drawers — and is swept by
-            // the next rebuild. Each probed list is one sequential PK range
-            // scan in the clustered layout; if the probed lists hold fewer
-            // than `k` rows (skewed partitions, tiny corpus), widen to the
-            // full scan rather than starve the fusion stage.
-            let scan = |sql: &str| -> Result<Vec<(f32, i64)>, StoreError> {
-                let mut stmt = self.conn.prepare(sql)?;
-                let rows =
-                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
-                let mut scored: Vec<(f32, i64)> = Vec::new();
-                for row in rows {
-                    let (seq, code) = row?;
-                    scored.push((pq.adc(&tables, &code), seq));
-                }
-                Ok(scored)
-            };
-            if let Some(lists) = &probe {
-                // Safe to inline: list ids are integers, not user input.
-                let in_list = lists
-                    .iter()
-                    .map(|l| l.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let probed = scan(&format!(
-                    "SELECT seq, code FROM drawer_pq WHERE list IN ({in_list})"
-                ))?;
-                if probed.len() >= k {
-                    scored = Some(probed);
-                }
-            }
-            if scored.is_none() {
-                scored = Some(scan("SELECT seq, code FROM drawer_pq")?);
-            }
+                    .collect(),
+            );
         }
         let mut scored = scored.unwrap_or_default();
         if scored.len() > k {
@@ -329,29 +303,38 @@ impl PalaceStore {
         Ok(Some(scored.into_iter().map(|(_, seq)| seq).collect()))
     }
 
-    /// Decrypt-and-cache the sealed code rows (no-op if already cached).
-    /// One pass per open: each row's blob opens under its seq-bound AAD,
-    /// yielding `(seq, list, code)` in RAM. Rows that fail to open are
-    /// skipped — the matched-count verify catches real drift; a skipped row
-    /// only costs its candidate slot.
+    /// Build the RAM code cache (no-op if already cached): one pass over
+    /// `drawer_pq` per open. Sealed vaults open each row's AEAD blob under
+    /// its seq-bound AAD; hmac-only rows load as stored. Sealed rows that
+    /// fail to open are skipped — the matched-count verify catches real
+    /// drift; a skipped row only costs its candidate slot.
     fn pq_cache_ensure(&self) -> Result<(), StoreError> {
         if self.pq_cache.borrow().is_some() {
             return Ok(());
         }
-        let mut stmt = self.conn.prepare("SELECT seq, code FROM drawer_pq")?;
-        let rows: Vec<(i64, Vec<u8>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<_, _>>()?;
-        let mut cache = Vec::with_capacity(rows.len());
-        for (seq, blob) in rows {
-            let Ok(plain) = self.vault.index_from_rest(&format!("pqrow/{seq}"), &blob) else {
-                continue;
-            };
-            let Some((list, code)) = Self::pq_row_unpack(&plain) else {
-                continue;
-            };
-            cache.push((seq, list, code));
-        }
+        let cache = if self.pq_sealed() {
+            let mut stmt = self.conn.prepare("SELECT seq, code FROM drawer_pq")?;
+            let rows: Vec<(i64, Vec<u8>)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            let mut cache = Vec::with_capacity(rows.len());
+            for (seq, blob) in rows {
+                let Ok(plain) = self.vault.index_from_rest(&format!("pqrow/{seq}"), &blob) else {
+                    continue;
+                };
+                let Some((list, code)) = Self::pq_row_unpack(&plain) else {
+                    continue;
+                };
+                cache.push((seq, list, code));
+            }
+            cache
+        } else {
+            let mut stmt = self.conn.prepare("SELECT seq, list, code FROM drawer_pq")?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
         *self.pq_cache.borrow_mut() = Some(cache);
         Ok(())
     }
@@ -482,30 +465,27 @@ impl PalaceStore {
             .prepare("INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (?1, ?2, ?3)")?;
         let sealed = self.pq_sealed();
         let ivf_ref = self.ivf.borrow();
-        let mut cache = sealed.then(|| Vec::with_capacity(items.len()));
+        let mut cache = Vec::with_capacity(items.len());
         for (seq, vec) in &items {
             let list: i64 = ivf_ref.as_ref().map_or(-1, |cq| cq.assign(vec) as i64);
             let code = pq.encode(vec);
             if sealed {
                 // Sealed row: list id + code AEAD-sealed together, bound to
                 // this seq; the plaintext list column stays -1 (a clear list
-                // id would leak semantic clustering). The RAM cache is
-                // populated from the plaintext already in hand.
+                // id would leak semantic clustering).
                 let blob = self
                     .vault
                     .index_at_rest(&format!("pqrow/{seq}"), &Self::pq_row_pack(list, &code));
                 ins.execute(params![-1i64, seq, blob])?;
-                if let Some(c) = cache.as_mut() {
-                    c.push((*seq, list, code));
-                }
             } else {
                 ins.execute(params![list, seq, code])?;
             }
+            // Either level's RAM cache is populated from the plaintext
+            // already in hand — no re-read, no re-decrypt.
+            cache.push((*seq, list, code));
         }
         drop(ivf_ref);
-        if let Some(c) = cache {
-            *self.pq_cache.borrow_mut() = Some(c);
-        }
+        *self.pq_cache.borrow_mut() = Some(cache);
         *self.pq.borrow_mut() = Some(pq);
         Ok(true)
     }
@@ -532,58 +512,49 @@ impl PalaceStore {
             .borrow()
             .as_ref()
             .map_or(-1, |cq| cq.assign(embedding) as i64);
-        // Updates keep their `seq` (drawers upsert is ON CONFLICT DO UPDATE),
-        // so a re-embedded drawer may move lists — drop the old row or it
-        // would live on as a stale (list, seq) duplicate.
-        let deleted = self.conn.execute(
-            "DELETE FROM drawer_pq WHERE seq = (SELECT seq FROM drawers WHERE id = ?1)",
-            params![id],
-        );
-        let inserted = if self.pq_sealed() {
-            // Sealed: the blob is bound to the row's seq, so fetch it first,
-            // then keep the RAM cache coherent with the plaintext in hand.
-            let seq: Result<i64, _> =
+        // Both the sealed AAD binding and the RAM-cache update need the
+        // row's seq, so resolve it first. Updates keep their `seq` (drawers
+        // upsert is ON CONFLICT DO UPDATE), so a re-embedded drawer may move
+        // lists — drop the old row or it would live on as a stale
+        // (list, seq) duplicate.
+        let outcome = self
+            .conn
+            .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
+                r.get::<_, i64>(0)
+            })
+            .and_then(|seq| {
                 self.conn
-                    .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
-                        r.get(0)
-                    });
-            match seq {
-                Ok(seq) => {
+                    .execute("DELETE FROM drawer_pq WHERE seq = ?1", params![seq])?;
+                if self.pq_sealed() {
                     let blob = self
                         .vault
                         .index_at_rest(&format!("pqrow/{seq}"), &Self::pq_row_pack(list, &code));
-                    let ins = self.conn.execute(
+                    self.conn.execute(
                         "INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (-1, ?1, ?2)",
                         params![seq, blob],
-                    );
-                    if ins.is_ok() {
-                        if let Some(cache) = self.pq_cache.borrow_mut().as_mut() {
-                            cache.retain(|(s, _, _)| *s != seq);
-                            cache.push((seq, list, code));
-                        }
-                    }
-                    ins.map(|_| ())
+                    )?;
+                } else {
+                    self.conn.execute(
+                        "INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (?1, ?2, ?3)",
+                        params![list, seq, code],
+                    )?;
                 }
-                Err(e) => Err(e),
-            }
-        } else {
-            self.conn
-                .execute(
-                    "INSERT OR REPLACE INTO drawer_pq (list, seq, code)
-                     SELECT ?3, seq, ?2 FROM drawers WHERE id = ?1",
-                    params![id, code, list],
-                )
-                .map(|_| ())
-        };
-        match (deleted, inserted) {
-            (Ok(_), Ok(_)) => {
+                Ok(seq)
+            });
+        match outcome {
+            Ok(seq) => {
+                // Keep the RAM cache coherent with the plaintext in hand.
+                if let Some(cache) = self.pq_cache.borrow_mut().as_mut() {
+                    cache.retain(|(s, _, _)| *s != seq);
+                    cache.push((seq, list, code));
+                }
                 if created {
                     self.pq_live.set(self.pq_live.get() + 1);
                 }
             }
             // The index may now be missing this row — re-verify on the next
             // search rather than serve from a silently stale index.
-            _ => self.pq_verified.set(false),
+            Err(_) => self.pq_verified.set(false),
         }
     }
 }
