@@ -294,14 +294,20 @@ pub struct PalaceStore {
     /// The deterministic FDE encoder (params persisted sealed in `fde_meta`).
     fde_encoder: std::cell::RefCell<Option<undercroft_core::fde::FdeEncoder>>,
     /// `(seq, fde)` rows loaded once per open (sealed rows decrypt).
-    fde_cache: std::cell::RefCell<Option<Vec<(i64, Vec<f32>)>>>,
+    fde_cache: std::cell::RefCell<Option<Vec<FdeCacheRow>>>,
     /// Whether this session already ran the FDE backfill pass.
     fde_checked: std::cell::Cell<bool>,
     /// The current query's token matrix, stashed by FDE candidate
     /// generation and consumed by the MaxSim rescore — the query forward is
     /// the expensive part of both stages, and one search must pay it once.
-    qmatrix_cache: std::cell::RefCell<Option<(String, Vec<f32>)>>,
+    qmatrix_cache: std::cell::RefCell<Option<EncodedQuery>>,
 }
+
+/// A query's encoded token matrix, keyed by the query text it encodes.
+type EncodedQuery = (String, Vec<f32>);
+
+/// One FDE cache row: `(seq, fde)`.
+type FdeCacheRow = (i64, Vec<f32>);
 
 impl PalaceStore {
     /// Open with the default deterministic hashed n-gram embedder.
