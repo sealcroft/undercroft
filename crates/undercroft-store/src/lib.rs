@@ -62,14 +62,13 @@ pub(crate) fn chain_append(
         "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
         params![record_id, tag, at],
     )?;
-    let head: String = conn.query_row(
-        "SELECT value FROM chain_meta WHERE key = 'head'",
-        [],
-        |r| r.get(0),
-    )?;
+    let head: String =
+        conn.query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
+            r.get(0)
+        })?;
     let next = vault.chain_next_hex(&head, tag)?;
-    let writes: u64 = conn
-        .query_row(
+    let writes: u64 =
+        conn.query_row(
             "SELECT value FROM chain_meta WHERE key = 'writes'",
             [],
             |r| r.get::<_, String>(0),
@@ -78,8 +77,7 @@ pub(crate) fn chain_append(
         .map_err(|e| StoreError::CorruptRow {
             id: "chain_meta/writes".into(),
             reason: e.to_string(),
-        })?
-        + 1;
+        })? + 1;
     conn.execute(
         "UPDATE chain_meta SET value = ?1 WHERE key = 'head'",
         params![next],
@@ -455,11 +453,9 @@ impl PalaceStore {
         )?;
         let db_head: Option<String> = self
             .conn
-            .query_row(
-                "SELECT value FROM chain_meta WHERE key = 'head'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
+                r.get(0)
+            })
             .optional()?;
         let Some(db_head) = db_head else {
             // Legacy adoption (pre-chain_meta database) or a fresh vault:
@@ -1447,11 +1443,9 @@ impl PalaceStore {
         }
         let db_head: Option<String> = self
             .conn
-            .query_row(
-                "SELECT value FROM chain_meta WHERE key = 'head'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
+                r.get(0)
+            })
             .optional()?;
         let chain_ok = db_head.as_deref() == Some(head.as_str()) && anchor_seen;
         Ok(VerifyReport {
@@ -2188,11 +2182,9 @@ mod tests {
         assert_eq!(s.vault.writes(), 3, "anchor fast-forwarded");
         let db_head: String = s
             .conn
-            .query_row(
-                "SELECT value FROM chain_meta WHERE key = 'head'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(s.vault.chain_head_hex(), db_head);
         assert!(s.verify().unwrap().chain_ok);

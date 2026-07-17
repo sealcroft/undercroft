@@ -277,8 +277,7 @@ impl Vault {
     /// owns the key. See [`anchor_manifest`](Self::anchor_manifest) for the
     /// out-of-database half.
     pub fn chain_next_hex(&self, prev_hex: &str, record_tag: &[u8]) -> Result<String, VaultError> {
-        let prev =
-            hex::decode(prev_hex).map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        let prev = hex::decode(prev_hex).map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
         Ok(hex::encode(chain_next(&self.mac_key, &prev, record_tag)))
     }
 
