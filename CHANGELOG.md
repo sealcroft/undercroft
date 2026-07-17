@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.20.0 — Token-store PQ & LUT MaxSim
+
+Restore economics tier 3 — the PLAID move on our own primitive. The
+late-interaction token store compresses **8.2×** (16 PQ bytes per token vs
+128 int8 — a ~150-token drawer drops 19.8 KB → 2.4 KB) at **−0.2 pts** on
+LoCoMo (96.57% vs 96.77%, above the ≥96.5% gate).
+
+- **v2 pack format**: per-token PQ codes (`pq.rs` re-used at `m=16`). The
+  codebook trains event-driven from the vault's own stored matrices once
+  they cross `UNDERCROFT_TOK_PQ_MIN` (default 256; `off` keeps int8),
+  persists **sealed** in `tok_meta` like every derived artifact, and every
+  stored v1 row repacks in the same pass — no transformer forwards, no
+  migration event; v1/v2 coexist and rescoring reads both.
+- **LUT MaxSim**: per query row, dot-product tables over the codebook are
+  built once (for all candidates); scoring a candidate token is then 16
+  table adds instead of a 128-dim dot product (`dot_tables`/`adc_dot`).
+  Honest timing note: LoCoMo search is 96.7 vs 92.7 ms/q — the bench
+  amortizes each store's one-time train+repack into its query phase, and
+  the ~80 ms tract query forward dominates either way; the LUT win becomes
+  visible when the `ort` query-forward follow-up (~40 ms) lands.
+- **Punctuation pruning** (ColBERT convention): doc-side punctuation rows
+  attend normally but are excluded from the stored matrix.
+- **Portable artifacts stay universal**: v2 matrices export decoded back to
+  v1 int8 — the codebook never leaves the vault; imports work anywhere.
+
 ## 0.19.0 — Atomic audit chain
 
 Durability: the last known correctness gap. The audit-chain head used to

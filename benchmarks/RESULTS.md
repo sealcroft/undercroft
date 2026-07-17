@@ -140,6 +140,23 @@ point costs many-core parallelism it doesn't have. Ingest carries the moved
 cost (~0.37 s/drawer on tract). Off by default; the cross-encoder wins when
 both are configured.
 
+**Token-store PQ (v2 packing, run 2026-07-17):** the stored matrices
+PQ-compress to 16 B/token — **8.2× below int8** (a ~150-token drawer:
+19.8 KB → 2.4 KB) — with MaxSim scored via per-query-row dot-product LUTs
+and punctuation rows pruned at encode:
+
+| Token store | LoCoMo R@10 | search ms/q | bytes/drawer (~150 tok) |
+|---|---|---|---|
+| int8 (v1) | 96.77% | 92.7 | ~19.8 KB |
+| **PQ codes (v2) + punct pruning** | **96.57%** | 96.7¹ | **~2.4 KB** |
+
+¹ Includes each store's one-time codebook train + repack amortized into the
+bench's query phase; per-query cost is dominated by the ~80 ms tract query
+forward either way — the LUT win becomes visible when the `ort` query
+forward (~40 ms) lands. **Impact:** 8× smaller late-interaction store at
+−0.2 pts. **Recommendation:** on by default above `UNDERCROFT_TOK_PQ_MIN`
+(256 matrices; `off` keeps int8).
+
 ## Retrieval fusion
 
 Ablation on the default hash embedder, all three fusion modes, full suites

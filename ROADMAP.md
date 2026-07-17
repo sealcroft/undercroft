@@ -257,12 +257,15 @@ Also closes the v0.13.0 follow-up items:
   A power loss is no longer a false tamper alarm; a restored old database
   still alarms. Both crash states test-simulated.
 
-## Next
+## v0.20.0 — Token-store PQ & LUT MaxSim (done)
 
-- **Restore economics tier 3**: token-store PQ with register-LUT MaxSim
-  (PLAID-style — 8× smaller *and* faster scoring, FAISS 4-bit fast-scan
-  technique in pure-Rust `std::arch`) + doc-token pruning; shared codebooks
-  shipped with models. Accuracy gate: LoCoMo ≥96.5%.
+- Late-interaction matrices PQ-compress **8.2×** (16 B/token; ~150-token
+  drawer 19.8 KB → 2.4 KB) at −0.2 pts on LoCoMo (96.57%, gate ≥96.5% met).
+  Codebook trains from the vault's own tokens, persists sealed, repacks
+  in-place; MaxSim scores v2 via per-query-row dot LUTs; punctuation rows
+  pruned at encode; artifacts still export as universal v1.
+
+## Next
 - **ColBERT follow-ups**: `ort` backend for the query forward (~93 → ~40
   ms/q); punctuation-filtered doc rows.
 - **PQ cache for hmac-only**: the sealed RAM cache out-ran per-query SQLite
