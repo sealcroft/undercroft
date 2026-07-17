@@ -131,9 +131,33 @@ re-orders them. Point `UNDERCROFT_RERANK_MODEL` / `UNDERCROFT_RERANK_TOKENIZER`
 at a user-supplied cross-encoder ONNX export (a **BERT-family** model such as
 `cross-encoder/ms-marco-MiniLM-L-6-v2`; note tract 0.22 does not run
 DeBERTa-based rerankers) and set `UNDERCROFT_RERANKER=onnx`. Pairs with either
-embedder; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds the added latency. It
-applies to `search`, `serve-mcp`, and the daemon; the multi-tenant `/v1`
-surface is a follow-up (shares one model across vaults).
+embedder; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds the added latency.
+Applies to `search`, `serve-mcp`, the daemon, and the multi-tenant `/v1`
+surface (one shared model across vaults). Measured: LoCoMo R@10 94.6 →
+**97.68%** at 101–327 ms/query on 24 cores (ONNX Runtime backend + int8).
+
+### ColBERT late interaction (optional, `onnx` feature)
+
+The core-count-independent second stage: drawers are encoded **once at
+ingest** into per-token matrices (PQ-compressed to ~16 bytes/token on disk,
+AEAD-sealed in sealed vaults) and a search runs **one** query forward plus a
+MaxSim re-score — no transformer per candidate. Measured: LoCoMo R@10 94.6 →
+**96.6–96.8%** at a flat ~93 ms/query on *any* core count. Set
+`UNDERCROFT_RERANKER=colbert` + `UNDERCROFT_COLBERT_MODEL` (doc export) /
+`_QUERY_MODEL` / `_TOKENIZER` (fixed-shape ONNX exports; recipe in
+[docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md)). Token matrices ride
+export bundles as portable artifacts (restore = copy, not re-encode);
+`repair --tokens` backfills palaces that predate the encoder.
+
+### Scaling retrieval (PQ / IVF, both vault levels)
+
+Large corpora can cut candidate generation from a full scan to a bounded-RAM
+**product-quantization index with IVF inverted lists**
+(`UNDERCROFT_RETRIEVAL=pq`): ~48 bytes/vector on disk, recall flat in corpus
+size (99+% R@5 at N=50k). **Sealed vaults get it too** — code rows, codebook,
+and centroids are AEAD-sealed and scanned via a decrypt-once RAM cache;
+measured sealed search went from 2.1 → 33.4 q/s at N=20k (×16), parity with
+the plaintext index. Full numbers: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Quickstart (Docker — recommended)
 

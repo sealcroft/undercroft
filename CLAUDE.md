@@ -7,16 +7,25 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 ## Layout
 
-- `Cargo.toml` — workspace root (9 crates; `undercroft-embed-onnx` excluded from
-  default-members — it pulls heavy ML deps and is built explicitly)
+- `Cargo.toml` — workspace root (10 crates; `undercroft-embed-onnx` and
+  `undercroft-embed-ort` excluded from default-members — heavy ML deps,
+  built explicitly)
 - `crates/undercroft-core` — domain model, chunking, ids, normalization, hashed
   n-gram embedder (`embed.rs`: `Embedder` trait + `HashEmbedder`), reranker
-  trait (`rerank.rs`: `Reranker`), conversation parsing, entities
+  trait (`rerank.rs`: `Reranker`), late-interaction trait + MaxSim + int8
+  token packing (`late.rs`: `LateInteraction`), conversation parsing, entities
 - `crates/undercroft-vault` — security layer (keys.rs: master key + HKDF;
-  seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest + chain)
+  seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
+  anchor + pure chain arithmetic; at-rest AAD domains: content, `/emb`,
+  `/tok` token matrices, `/pq` index artifacts)
 - `crates/undercroft-store` — per-vault SQLite storage, hybrid search (cosine +
-  BM25 fusion) + optional cross-encoder rerank, verify, knowledge graph
-  (kg.rs), management surface (manage.rs), remote-index integration (remote.rs)
+  BM25 fusion) + optional cross-encoder rerank + ColBERT late-interaction
+  stage (latestage.rs: token store, event-driven token-PQ codebook, LUT
+  MaxSim), PQ/IVF candidate prefilter for both vault levels (pq.rs primitive,
+  pqidx.rs index; sealed rows via decrypt-once RAM cache), experimental
+  in-memory HNSW (hnsw.rs, `hnsw` feature), transactional audit chain
+  (`chain_meta` + `chain_append`), verify, knowledge graph (kg.rs),
+  management surface (manage.rs), remote-index integration (remote.rs)
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
   OTLP traces (metadata-only spans), and the live SSE broker
@@ -24,10 +33,14 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
   `refine` → KG extraction; no external API by default
-- `crates/undercroft-embed-onnx` — feature-gated ONNX embedder **and**
-  cross-encoder reranker (tract, pure Rust); built via the `onnx-build` compose
-  service. Models are user-supplied; tract 0.22 runs BERT-family models, **not**
-  DeBERTa rerankers
+- `crates/undercroft-embed-onnx` — feature-gated ONNX embedder, cross-encoder
+  reranker, **and** ColBERT late-interaction encoder (tract, pure Rust; two
+  fixed-shape plans per ColBERT export — dynamic-axis exports carry ops tract
+  rejects); built via the `onnx-build` compose service. Models are
+  user-supplied; tract 0.22 runs BERT-family models, **not** DeBERTa rerankers
+- `crates/undercroft-embed-ort` — opt-in ONNX Runtime backend (C++ dep;
+  `ort-build` compose service): session-pool embedder + reranker, ~2.5× tract
+  per forward, int8 model support; pinned `ort = 2.0.0-rc.10`
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI; mcp.rs: MCP stdio;
   http.rs/tenant.rs: HTTP + multi-tenant `/v1`; monitor.html: the Palace Monitor
   UI, `include_str!`'d and served at `GET /monitor` on telemetry builds);
@@ -75,8 +88,11 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 - Drawer ids are deterministic over (wing, room, source, chunk_index,
   normalize_version); re-mining must stay idempotent and append-only — a crash
   mid-operation must leave the existing palace untouched.
-- Sealed vaults must never persist plaintext or plaintext-derived indexes
-  (including embeddings and FTS) to disk; there are tests asserting this.
+- Sealed vaults must never persist plaintext or plaintext-derived data **in
+  clear** on disk: FTS never exists for them; embeddings, PQ code rows and
+  codebooks, and ColBERT token matrices are AEAD-sealed under distinct AAD
+  domains (search uses decrypt-once RAM caches). Tests assert the at-rest
+  bytes; new derived artifacts must follow the same pattern.
 - Every write must update the audit chain **atomically with its data**: the
   committed head lives in `chain_meta` and advances via `chain_append` inside
   the same SQLite transaction (the manifest holds a lagging rollback anchor,
