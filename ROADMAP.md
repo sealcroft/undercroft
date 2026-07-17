@@ -295,11 +295,18 @@ Also closes the v0.13.0 follow-up items:
   at **52.9 vs 70.3 ms/q (−25%)**; mechanics at N=2k/50k/200k: exact
   top-10 ⊆ FDE top-100 = **100%** at every size, 38–40× below exact cost.
 
+## v0.24.0 — Bounded-RAM FDE tier (done)
+
+- FDE rows PQ-compress 32× event-driven (codebook sealed in `fde_meta`,
+  one-pass repack); containment held **perfect** through compression at
+  N=2k/50k/200k, ADC scan ~8× faster, LoCoMo gate identical (1913/1982,
+  fourth consecutive configuration). IVF over FDE space measured
+  net-negative (containment loss + O(N·nprobe) filter cost) and
+  deliberately not shipped; the pack format reserves its list field.
+
 ## Next
-- **PQ/IVF over FDEs**: bounded-RAM, sub-linear FDE candidates (they are
-  ordinary vectors — the existing prefilter machinery composes); needed
-  past ~10⁵–10⁶ drawers where the linear FDE scan and 8 KB/drawer cache
-  start to bite.
+- **Inverted FDE tier** (list-grouped RAM slices, no per-row membership
+  test) — the correct sub-linear construction, pays past ~10⁶ drawers.
 - **Sealed-tier page-level decryption** (research): decrypt only probed
   lists — matters past multi-million drawers.
 - **Retrieval wiring**: env surface for the ort backend outside the bench.

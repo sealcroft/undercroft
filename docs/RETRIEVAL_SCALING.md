@@ -425,13 +425,35 @@ the FDE top-100, so the rescore restores exact order — held **perfectly at
 every size**, at 38–40× below exact cost. (FDE-alone top-10 hovers ~60%,
 which is precisely why the MaxSim rescore stays.)
 
-Honest limits, and the designed next tier: the FDE scan is still **linear**
-(O(N × 2048) — 4.1 q/s at N=200k) and the cache is O(corpus) RAM at
-8 KB/drawer. Both have the same known answer as every other vector here:
-**PQ/IVF over the FDEs** (an FDE is just a vector — the existing bounded-RAM
-prefilter machinery composes directly). That lands when a corpus actually
-needs it; the artifacts and construction shipped now are already the
-compatible substrate.
+**The bounded-RAM tier (v0.24.0, measured):** FDE rows now upgrade
+event-driven exactly like the token store — raw f32 (v1) below
+`UNDERCROFT_FDE_PQ_MIN` (256), then a codebook trains from the palace's own
+FDEs (sealed in `fde_meta`), every row repacks to `dim/8`-byte PQ codes
+(**32×**, 8 KB → 256 B/drawer) and the scan switches to per-query dot LUTs:
+
+| N docs | raw scan ms/q | **PQ-ADC ms/q** | exact top-10 ⊆ coded top-100 | RAM raw → PQ |
+|---|---|---|---|---|
+| 2,000 | 2.8 | 0.5 | **100%** | 16 → 1 MB |
+| 50,000 | 97.3 | 11.5 | **100%** | 410 → 13 MB |
+| 200,000 | 275.8 | 33.2 | **100%** | 1,638 → 51 MB |
+
+Containment stayed **perfect through 32× compression at every size**, ~8×
+faster than the raw scan. End-to-end, the LoCoMo gate holds exactly: R@10
+96.5% — the **identical 1913/1982** across fusion, raw-FDE, and PQ-FDE
+candidates — at 61.2 ms/q (parity with raw's 52.9 within the run-to-run
+noise band; the fixed per-query LUT build offsets the ADC savings at
+small per-store corpora, which is why the 256-row threshold keeps small
+palaces raw).
+
+**IVF over FDE space: measured net-negative, deliberately not shipped.**
+At every benchable size the coarse-partition probe *lost* containment
+(1.000 → 0.84 at 2k, 0.99 at 50k, 0.98 at 200k probing half the lists)
+*and* cost more than the flat ADC scan it replaced — the RAM-side list
+filter is O(N·nprobe) against ADC's 256 adds/doc. A properly *inverted*
+in-RAM layout (list-grouped slices, no per-row membership test) is the
+correct construction and only pays past ~10⁶ docs; the v2 pack format
+reserves a list field inside the sealed blob so that tier needs no
+migration when a corpus warrants it.
 
 ## Configurable — pick per deployment, not one-size-fits-all
 
