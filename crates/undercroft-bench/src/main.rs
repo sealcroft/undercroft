@@ -1373,10 +1373,39 @@ fn run_fde_synth(
         scored.iter().map(|&(_, j)| j).collect()
     };
 
+    // PQ compression of the FDEs (the bounded-RAM tier): codebook trained
+    // on an even sample, every FDE encoded to m = dim/8 bytes, scanning via
+    // per-query dot-product LUTs. IVF partitions on top (RAM-side probe —
+    // the FDE cache lives in RAM, so no disk layout is involved).
+    use undercroft_store::pq::{CoarseQuantizer, ProductQuantizer};
+    let sample_stride = n.div_ceil(4096).max(1);
+    let sample: Vec<Vec<f32>> = fdes.iter().step_by(sample_stride).cloned().collect();
+    let t0 = Instant::now();
+    let pq = ProductQuantizer::train(&sample, enc.dim() / 8, 10)
+        .ok_or_else(|| anyhow::anyhow!("FDE codebook failed to train"))?;
+    let codes: Vec<Vec<u8>> = fdes.iter().map(|f| pq.encode(f)).collect();
+    let pq_build_secs = t0.elapsed().as_secs_f64();
+    let pq_ram_mb = (n * pq.code_len()) as f64 / 1e6;
+    let nlist = ((n as f64).sqrt() as usize).clamp(16, 1024);
+    let t0 = Instant::now();
+    let ivf = CoarseQuantizer::train(&sample, nlist, 10, n as u64)
+        .ok_or_else(|| anyhow::anyhow!("FDE IVF failed to train"))?;
+    let lists: Vec<u32> = fdes.iter().map(|f| ivf.assign(f)).collect();
+    let ivf_build_secs = t0.elapsed().as_secs_f64();
+    // Two probe fractions: the pqidx default (a quarter of the lists) and
+    // half — FDE space may cluster differently from embedding space, so
+    // measure where the containment knee sits rather than assume.
+    let nprobe = (ivf.nlist() / 4).max(8);
+    let nprobe2 = (ivf.nlist() / 2).max(8);
+
     let queries = queries.max(1);
     let stride = (n / queries).max(1);
     let (mut in10, mut in100, mut denom) = (0usize, 0usize, 0usize);
+    let (mut pq100_hits, mut ivf100_hits) = (0usize, 0usize);
+    let mut ivf2_100_hits = 0usize;
+    let mut ivf2_secs = 0f64;
     let (mut scan_secs, mut exact_secs) = (0f64, 0f64);
+    let (mut pq_secs, mut ivf_secs) = (0f64, 0f64);
     for qi in 0..queries {
         // Query drawn from an evenly-sampled home doc's first topic.
         let topic = ((qi * stride % n) as u64) % topics;
@@ -1393,7 +1422,7 @@ fn run_fde_synth(
             .collect();
         exact_secs += t0.elapsed().as_secs_f64();
         let exact10 = top(&mut exact, 10);
-        // FDE candidates.
+        // Raw-FDE candidates.
         let qfde = enc.encode_query(&qm);
         let t0 = Instant::now();
         let mut scored: Vec<(f32, usize)> = fdes
@@ -1404,6 +1433,39 @@ fn run_fde_synth(
         scan_secs += t0.elapsed().as_secs_f64();
         let fde100 = top(&mut scored, 100);
         let fde10 = &fde100[..10.min(fde100.len())];
+        // PQ-FDE candidates: one LUT per query, 256 table adds per doc.
+        let t0 = Instant::now();
+        let tables = pq
+            .dot_tables(&qfde)
+            .ok_or_else(|| anyhow::anyhow!("dot_tables dim mismatch"))?;
+        let mut pq_scored: Vec<(f32, usize)> = codes
+            .iter()
+            .enumerate()
+            .map(|(j, c)| (pq.adc_dot(&tables, c), j))
+            .collect();
+        pq_secs += t0.elapsed().as_secs_f64();
+        let pq100 = top(&mut pq_scored, 100);
+        // PQ + IVF-probed candidates (RAM-side list filter).
+        let t0 = Instant::now();
+        let probed = ivf.probe(&qfde, nprobe);
+        let mut ivf_scored: Vec<(f32, usize)> = codes
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| probed.contains(&lists[*j]))
+            .map(|(j, c)| (pq.adc_dot(&tables, c), j))
+            .collect();
+        ivf_secs += t0.elapsed().as_secs_f64();
+        let ivf100 = top(&mut ivf_scored, 100);
+        let t0 = Instant::now();
+        let probed2 = ivf.probe(&qfde, nprobe2);
+        let mut ivf2_scored: Vec<(f32, usize)> = codes
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| probed2.contains(&lists[*j]))
+            .map(|(j, c)| (pq.adc_dot(&tables, c), j))
+            .collect();
+        ivf2_secs += t0.elapsed().as_secs_f64();
+        let ivf2_100 = top(&mut ivf2_scored, 100);
         for e in &exact10 {
             denom += 1;
             if fde10.contains(e) {
@@ -1411,6 +1473,15 @@ fn run_fde_synth(
             }
             if fde100.contains(e) {
                 in100 += 1;
+            }
+            if pq100.contains(e) {
+                pq100_hits += 1;
+            }
+            if ivf100.contains(e) {
+                ivf100_hits += 1;
+            }
+            if ivf2_100.contains(e) {
+                ivf2_100_hits += 1;
             }
         }
     }
@@ -1424,6 +1495,21 @@ fn run_fde_synth(
         queries as f64 / scan_secs.max(1e-9),
         in10 as f64 / denom.max(1) as f64,
         in100 as f64 / denom.max(1) as f64,
+    );
+    println!(
+        "FDE_SYNTH_PQ n={n} code_b={} pq_build_s={pq_build_secs:.1} \
+         ivf_build_s={ivf_build_secs:.1} nlist={} nprobe={nprobe}/{nprobe2} \
+         pq_ms_per_q={:.1} ivf_ms_per_q={:.1} ivf2_ms_per_q={:.1} \
+         r10_in_pq100={:.3} r10_in_ivf100={:.3} r10_in_ivf2_100={:.3} \
+         ram_mb={pq_ram_mb:.0}",
+        pq.code_len(),
+        ivf.nlist(),
+        1000.0 * pq_secs / queries as f64,
+        1000.0 * ivf_secs / queries as f64,
+        1000.0 * ivf2_secs / queries as f64,
+        pq100_hits as f64 / denom.max(1) as f64,
+        ivf100_hits as f64 / denom.max(1) as f64,
+        ivf2_100_hits as f64 / denom.max(1) as f64,
     );
     Ok(())
 }

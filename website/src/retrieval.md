@@ -195,7 +195,9 @@ shared query forward per search. Measured: LoCoMo recall
 **question-for-question identical** to the fusion pipeline at **52.9 vs
 70.3 ms/query (−25%)**; on synthetic corpora up to N=200,000 the exact
 MaxSim top-10 survived the FDE top-100 **100% of the time** at 38–40× below
-exact-scan cost.
+exact-scan cost. Above a few hundred drawers the FDEs PQ-compress **32×**
+(256 B each, 51 MB at N=200k) with containment still perfect and the scan
+~8× faster — the same bounded-RAM story as every other index tier.
 
 ## Configurable — choose per deployment
 

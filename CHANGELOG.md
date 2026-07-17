@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.24.0 — Bounded-RAM FDE tier (PQ codes)
+
+The v0.23.0 honest-limits follow-up: FDE rows now upgrade event-driven
+exactly like the token store. Raw f32 (v1) below `UNDERCROFT_FDE_PQ_MIN`
+(256; `off` disables), then a codebook trains from the palace's own FDEs
+(persisted sealed in `fde_meta`), every row repacks to `dim/8`-byte PQ
+codes — **32× smaller** (8 KB → 256 B/drawer) — and the scan switches to
+per-query dot-product LUTs. Legacy v0.23.0 rows are recognized and repack
+in the same pass; a row that fails to open deletes back to "missing" and
+the next backfill recreates it.
+
+Measured (`fde-synth`, exact-MaxSim ground truth):
+
+- Candidate containment stayed **perfect through the compression at every
+  size** (exact top-10 ⊆ coded top-100 = 100% at N=2k/50k/200k), with the
+  ADC scan ~8× faster than the raw dot scan (11.5 vs 97.3 ms/q @50k;
+  33.2 vs 275.8 @200k) and RAM down 32× (51 MB at N=200k).
+- End-to-end LoCoMo gate holds exactly: R@10 96.5% — the **identical
+  1913/1982 for the fourth consecutive configuration** (fusion, raw FDE,
+  PQ-coded FDE) — at 61.2 ms/q, parity-within-noise vs raw FDE's 52.9
+  (the fixed per-query LUT build offsets ADC savings at small per-store
+  corpora; the 256-row threshold keeps small palaces raw for exactly this
+  reason).
+- **IVF over FDE space: measured net-negative and deliberately not
+  shipped** — it lost containment (0.84–0.99) *and* cost more than the
+  flat ADC scan it replaced at every benchable size (the RAM-side list
+  filter is O(N·nprobe)). The v2 pack format reserves a list field inside
+  the sealed blob so a future properly-inverted tier (pays past ~10⁶
+  docs) needs no migration. The bench cells recording this stay in
+  `fde-synth`.
+
 ## 0.23.0 — MUVERA FDE candidate generation
 
 The v0.22.0 research note, implemented and measured: token-aware candidate

@@ -293,10 +293,18 @@ pub struct PalaceStore {
     fde_enabled: bool,
     /// The deterministic FDE encoder (params persisted sealed in `fde_meta`).
     fde_encoder: std::cell::RefCell<Option<undercroft_core::fde::FdeEncoder>>,
-    /// `(seq, fde)` rows loaded once per open (sealed rows decrypt).
-    fde_cache: std::cell::RefCell<Option<Vec<FdeCacheRow>>>,
+    /// FDE rows loaded once per open (sealed rows decrypt): raw vectors
+    /// below the codebook threshold, PQ codes above it. See `fdeidx`.
+    fde_cache: std::cell::RefCell<Option<fdeidx::FdeCache>>,
     /// Whether this session already ran the FDE backfill pass.
     fde_checked: std::cell::Cell<bool>,
+    /// The FDE codebook (v2 packing; persisted sealed in `fde_meta`).
+    fde_pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
+    /// Whether this session already tried to load/train the FDE codebook.
+    fde_pq_checked: std::cell::Cell<bool>,
+    /// Stored-FDE count at which the codebook trains
+    /// (`UNDERCROFT_FDE_PQ_MIN`, `off` ⇒ never — raw v1 rows only).
+    fde_pq_min: usize,
     /// The current query's token matrix, stashed by FDE candidate
     /// generation and consumed by the MaxSim rescore — the query forward is
     /// the expensive part of both stages, and one search must pay it once.
@@ -305,9 +313,6 @@ pub struct PalaceStore {
 
 /// A query's encoded token matrix, keyed by the query text it encodes.
 type EncodedQuery = (String, Vec<f32>);
-
-/// One FDE cache row: `(seq, fde)`.
-type FdeCacheRow = (i64, Vec<f32>);
 
 impl PalaceStore {
     /// Open with the default deterministic hashed n-gram embedder.
@@ -460,6 +465,13 @@ impl PalaceStore {
             fde_encoder: std::cell::RefCell::new(None),
             fde_cache: std::cell::RefCell::new(None),
             fde_checked: std::cell::Cell::new(false),
+            fde_pq: std::cell::RefCell::new(None),
+            fde_pq_checked: std::cell::Cell::new(false),
+            fde_pq_min: match std::env::var("UNDERCROFT_FDE_PQ_MIN") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(fdeidx::FDE_PQ_MIN_DEFAULT),
+                Err(_) => fdeidx::FDE_PQ_MIN_DEFAULT,
+            },
             qmatrix_cache: std::cell::RefCell::new(None),
         };
         store.fts = store.init_fts_schema()?;
@@ -1951,7 +1963,7 @@ mod tests {
                 .unwrap();
             assert_eq!(rows, 31, "every drawer must carry an FDE");
 
-            // At rest: the sealed blob must not be the plain f32 packing.
+            // At rest: the sealed blob must not be the plain v1 packing.
             let expected_plain: Vec<u8> = {
                 let enc = undercroft_core::fde::FdeEncoder::new(
                     16,
@@ -1961,9 +1973,8 @@ mod tests {
                     &WordLate,
                     "kafka stream backlog rework",
                 );
-                enc.encode_doc(&m)
-                    .iter()
-                    .flat_map(|v| v.to_le_bytes())
+                std::iter::once(1u8)
+                    .chain(enc.encode_doc(&m).iter().flat_map(|v| v.to_le_bytes()))
                     .collect()
             };
             let blob: Vec<u8> = s
@@ -2001,6 +2012,106 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(left, 0, "delete must purge the FDE row");
+        }
+    }
+
+    #[test]
+    fn fde_codebook_trains_repacks_and_candidates_agree() {
+        for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+            let (_d, mut s) = store(level);
+            s.set_late(Some(Box::new(WordLate)));
+            s.set_fde(true);
+            s.fde_pq_min = 8; // train immediately at test scale
+            for i in 0..30 {
+                s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                    .unwrap();
+            }
+            let target = drawer("w", "r", "kafka stream backlog rework", 100);
+            s.upsert(&target).unwrap();
+
+            let cands = s
+                .fde_candidates("kafka stream backlog", 5)
+                .unwrap()
+                .expect("FDE index must serve");
+            let target_seq: i64 = s
+                .conn
+                .query_row("SELECT seq FROM drawers WHERE id = ?1", [&target.id], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert!(
+                cands.contains(&target_seq),
+                "target must survive the PQ-coded head at level {level:?}"
+            );
+
+            // The codebook trained and every row repacked to v2 codes:
+            // hmac-only rows are plain (version byte 2, dim/8 + 5 bytes);
+            // sealed rows must be opaque (AEAD ≠ the plain packing size).
+            let meta: i64 = s
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM fde_meta WHERE key = 'codebook'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(meta, 1, "codebook must persist");
+            let fde_dim = s.fde_encoder.borrow().as_ref().unwrap().dim();
+            let blob: Vec<u8> = s
+                .conn
+                .query_row(
+                    "SELECT fde FROM drawer_fde WHERE id = ?1",
+                    [&target.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let plain_v2_len = 5 + fde_dim / 8;
+            match level {
+                SecurityLevel::HmacOnly => {
+                    assert_eq!(blob.first(), Some(&2u8), "row must be v2 codes");
+                    assert_eq!(blob.len(), plain_v2_len, "32× packing expected");
+                }
+                SecurityLevel::Sealed => {
+                    assert_ne!(
+                        blob.len(),
+                        plain_v2_len,
+                        "sealed row must not be the plain packing"
+                    );
+                    assert_ne!(
+                        blob.len(),
+                        1 + fde_dim * 4,
+                        "sealed row must not be the raw packing either"
+                    );
+                }
+            }
+
+            // Cache rebuild parity first (before any further writes — an
+            // extra row could legitimately reshuffle a top-5 tie).
+            s.fde_cache.borrow_mut().take();
+            let again = s
+                .fde_candidates("kafka stream backlog", 5)
+                .unwrap()
+                .expect("cache rebuild");
+            assert_eq!(
+                cands, again,
+                "coded cache rebuild must reproduce candidates"
+            );
+
+            // A write AFTER the codebook exists stores v2 directly and
+            // stays findable.
+            s.upsert(&drawer("w", "api", "zookeeper quorum flapped again", 200))
+                .unwrap();
+            let hits = s
+                .fde_candidates("zookeeper quorum flapped", 5)
+                .unwrap()
+                .expect("post-train writes must serve");
+            let zk_seq: i64 = s
+                .conn
+                .query_row("SELECT seq FROM drawers WHERE room = 'api'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert!(hits.contains(&zk_seq));
         }
     }
 

@@ -156,7 +156,10 @@ vector (sealed at rest, built with zero extra forwards) whose dot product
 approximates MaxSim — measured on LoCoMo: recall identical to fusion,
 question-for-question, at **−25% search latency**; at N=200k synthetic
 docs the exact top-10 survives the FDE top-100 100% of the time at 40×
-below exact-scan cost.
+below exact-scan cost. Above a few hundred drawers the FDEs PQ-compress
+**32×** (256 B/drawer, 51 MB RAM at N=200k) with containment still
+perfect and the scan ~8× faster — bounded RAM like every other index
+here.
 
 ### Scaling retrieval (PQ / IVF, both vault levels)
 
