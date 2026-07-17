@@ -187,7 +187,11 @@ impl PalaceStore {
             }
         }
         let dim = v1[0].2;
-        let Some(m) = [8usize, 4].iter().find(|&&d| dim % d == 0).map(|&d| dim / d) else {
+        let Some(m) = [8usize, 4]
+            .iter()
+            .find(|&&d| dim % d == 0)
+            .map(|&d| dim / d)
+        else {
             return Ok(false);
         };
         let Some(pq) = ProductQuantizer::train(&sample, m, TOK_PQ_ITERS) else {
@@ -209,9 +213,7 @@ impl PalaceStore {
             for row in matrix.chunks_exact(*dim) {
                 codes.extend(pq.encode(row));
             }
-            let blob = self
-                .vault
-                .tokens_at_rest(id, &pack_v2(*dim, rows, &codes));
+            let blob = self.vault.tokens_at_rest(id, &pack_v2(*dim, rows, &codes));
             self.conn.execute(
                 "UPDATE drawer_tok SET tok = ?1 WHERE id = ?2",
                 params![blob, id],

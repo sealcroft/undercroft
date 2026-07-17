@@ -1992,7 +1992,8 @@ mod tests {
             }
             s.upsert(&drawer("w", "r", "kafka stream backlog rework", 50))
                 .unwrap();
-            s.upsert(&drawer("w", "r", "kafka pipeline notes", 51)).unwrap();
+            s.upsert(&drawer("w", "r", "kafka pipeline notes", 51))
+                .unwrap();
 
             // First search trains the codebook, repacks every row to v2,
             // and MaxSim ordering still holds through the LUT path.
@@ -2012,15 +2013,14 @@ mod tests {
                     .unwrap();
                 blobs
                     .iter()
-                    .filter(|(id, b)| {
-                        s.vault.tokens_from_rest(id, b).unwrap().first() == Some(&2)
-                    })
+                    .filter(|(id, b)| s.vault.tokens_from_rest(id, b).unwrap().first() == Some(&2))
                     .count() as i64
             };
             assert_eq!(v2, 8, "every stored matrix repacked to v2 at {level:?}");
 
             // New writes pack v2 directly, and remain findable via LUTs.
-            s.upsert(&drawer("w", "r", "zebra migration ledger", 60)).unwrap();
+            s.upsert(&drawer("w", "r", "zebra migration ledger", 60))
+                .unwrap();
             let blob: Vec<u8> = s
                 .conn
                 .query_row(

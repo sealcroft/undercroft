@@ -111,7 +111,11 @@ impl OnnxColbert {
         let punct = enc
             .get_tokens()
             .iter()
-            .map(|t| !t.trim_start_matches("##").chars().any(|c| c.is_alphanumeric()))
+            .map(|t| {
+                !t.trim_start_matches("##")
+                    .chars()
+                    .any(|c| c.is_alphanumeric())
+            })
             .collect();
         Ok((ids, punct))
     }
