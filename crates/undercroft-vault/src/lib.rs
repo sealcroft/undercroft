@@ -270,12 +270,32 @@ impl Vault {
     }
 
     /// Advance the audit chain for one write and persist the manifest.
-    pub fn commit_write(&mut self, record_tag: &[u8]) -> Result<(), VaultError> {
-        let prev = hex::decode(&self.manifest.chain_head_hex)
-            .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
-        let next = chain_next(&self.mac_key, &prev, record_tag);
-        self.manifest.chain_head_hex = hex::encode(next);
-        self.manifest.writes += 1;
+    /// One pure chain step over hex heads: `next = HMAC(prev ‖ tag)`. The
+    /// store owns *where* the committed head lives (a `chain_meta` row that
+    /// advances inside the same SQLite transaction as the data it covers —
+    /// a crash can never separate a record from its chain entry); the vault
+    /// owns the key. See [`anchor_manifest`](Self::anchor_manifest) for the
+    /// out-of-database half.
+    pub fn chain_next_hex(&self, prev_hex: &str, record_tag: &[u8]) -> Result<String, VaultError> {
+        let prev = hex::decode(prev_hex).map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        Ok(hex::encode(chain_next(&self.mac_key, &prev, record_tag)))
+    }
+
+    /// The all-zero head every chain starts from.
+    pub fn chain_genesis_hex() -> String {
+        hex::encode([0u8; HMAC_LEN])
+    }
+
+    /// Re-anchor the manifest to the committed chain state, **after** the
+    /// database transaction that produced it. The manifest is deliberately
+    /// allowed to lag: a crash between commit and anchor leaves it *behind*
+    /// the database, which open-time reconciliation distinguishes from a
+    /// rollback (an anchor the database chain never produced) and heals by
+    /// fast-forwarding — a power loss is not a tamper alarm, a restored old
+    /// database still is.
+    pub fn anchor_manifest(&mut self, head_hex: &str, writes: u64) -> Result<(), VaultError> {
+        self.manifest.chain_head_hex = head_hex.to_string();
+        self.manifest.writes = writes;
         self.save_manifest()?;
         undercroft_obs::chain_commit();
         undercroft_obs::event_chain_commit(self.id());
@@ -586,8 +606,11 @@ mod tests {
         let mut v = mgr.create("c", SecurityLevel::HmacOnly).unwrap();
         let t1 = v.tag(b"record-one").to_vec();
         let t2 = v.tag(b"record-two").to_vec();
-        v.commit_write(&t1).unwrap();
-        v.commit_write(&t2).unwrap();
+        // The store advances heads transactionally via chain_next_hex and
+        // anchors the manifest afterwards — same arithmetic, split API.
+        let h1 = v.chain_next_hex(&Vault::chain_genesis_hex(), &t1).unwrap();
+        let h2 = v.chain_next_hex(&h1, &t2).unwrap();
+        v.anchor_manifest(&h2, 2).unwrap();
         assert!(v.verify_chain(&[t1.clone(), t2.clone()]));
         assert!(!v.verify_chain(&[t2, t1]));
         assert_eq!(v.writes(), 2);

@@ -77,7 +77,10 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   mid-operation must leave the existing palace untouched.
 - Sealed vaults must never persist plaintext or plaintext-derived indexes
   (including embeddings and FTS) to disk; there are tests asserting this.
-- Every write must update the audit chain (`Vault::commit_write`); every read
+- Every write must update the audit chain **atomically with its data**: the
+  committed head lives in `chain_meta` and advances via `chain_append` inside
+  the same SQLite transaction (the manifest holds a lagging rollback anchor,
+  reconciled at open — crash ⇒ fast-forward, rollback ⇒ tamper). Every read
   must verify the record HMAC before returning data.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.

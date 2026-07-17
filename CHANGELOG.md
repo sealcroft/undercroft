@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.19.0 — Atomic audit chain
+
+Durability: the last known correctness gap. The audit-chain head used to
+live only in the vault manifest, written *after* the SQLite commit — so a
+power loss in between left the chain and the data disagreeing, and the next
+`verify` raised a **false tamper alarm** for a mere crash. Worse, several
+mutation paths (delete, KG, tunnels) didn't even wrap their own data+audit
+statement pairs in a transaction.
+
+- **The committed head now lives in SQLite** (`chain_meta`) and advances via
+  `chain_append` **inside the same transaction** as the data and audit row
+  it covers — at all six mutation sites (drawer write, drawer delete, KG
+  add, KG supersede/invalidate, tunnel create, tunnel delete). A crash can
+  never separate a record from its chain entry.
+- **The manifest becomes a lagging out-of-database rollback anchor**
+  (`Vault::anchor_manifest`, written post-commit). Open-time reconciliation
+  distinguishes the two failure shapes: an anchor **behind** the database
+  chain is a crash artifact and is fast-forwarded silently; an anchor the
+  database chain **never produced** means the database was rolled back or
+  forked — `ManifestTampered`. A power loss is not a tamper alarm; a
+  restored old database still is (both crash states are test-simulated).
+- `verify` applies the same two-part check: audit rows must reproduce the
+  committed head exactly, and the anchor must appear in that chain.
+- Vault API: `commit_write` is replaced by pure `chain_next_hex` +
+  `chain_genesis_hex` + `anchor_manifest` (the store owns *where* the head
+  lives; the vault owns the key). Existing databases adopt `chain_meta`
+  from the manifest on first open — no migration step.
+- Known residual (documented): an attacker replacing db **and** manifest
+  together with a mutually-consistent older pair remains undetectable
+  without an external witness — unchanged from before, noted for a future
+  remote-anchor option.
+
 ## 0.18.0 — Portable derived artifacts & token backfill
 
 Restore economics, tiers 1–2. Token matrices are the expensive derived data

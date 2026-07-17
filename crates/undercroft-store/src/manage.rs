@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 
 use undercroft_core::{entity::extract_entities, Drawer};
 
-use crate::{PalaceStore, StoreError};
+use crate::{chain_append, PalaceStore, StoreError};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DrawerSummary {
@@ -185,23 +185,31 @@ impl PalaceStore {
         // wholesale (deletes are rare; the next search re-decrypts once).
         self.pq_cache.borrow_mut().take();
         self.late_purge_row(id);
-        let n = self
-            .conn
-            .execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
-        if n > 0 {
+        // Delete + tombstone + chain advance are one transaction: a crash
+        // can't leave a deletion the audit chain never heard about.
+        let tag = self.vault.tag(format!("del\x1f{id}").as_bytes());
+        let tx = self.conn.transaction()?;
+        let n = tx.execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
+        let anchor = if n > 0 {
+            Some(chain_append(
+                &tx,
+                &self.vault,
+                &format!("del/{id}"),
+                &tag,
+                &now_rfc3339(),
+            )?)
+        } else {
+            None
+        };
+        tx.commit()?;
+        if let Some((head, writes)) = anchor {
+            self.vault.anchor_manifest(&head, writes)?;
             if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
                 cache.remove(id);
             }
             // Drop the stale ANN index; rebuilt on the next search.
             #[cfg(feature = "hnsw")]
             self.hnsw.borrow_mut().take();
-            let marker = format!("del\x1f{id}");
-            let tag = self.vault.tag(marker.as_bytes());
-            self.conn.execute(
-                "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-                params![format!("del/{id}"), tag.as_slice(), now_rfc3339()],
-            )?;
-            self.vault.commit_write(&tag)?;
             undercroft_obs::drawer_delete();
             undercroft_obs::event_drawer_deleted(self.vault.id());
         }
@@ -419,17 +427,17 @@ impl PalaceStore {
         let tag = self
             .vault
             .tag(&tunnel_canonical(&id, from_wing, to_wing, label, &created));
-        self.conn.execute(
+        let tx = self.conn.transaction()?;
+        tx.execute(
             "INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO NOTHING",
             params![id, from_wing, to_wing, label, tag.as_slice(), created],
         )?;
-        self.conn.execute(
-            "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-            params![format!("tunnel/{id}"), tag.as_slice(), created],
-        )?;
-        self.vault.commit_write(&tag)?;
+        let (head, writes) =
+            chain_append(&tx, &self.vault, &format!("tunnel/{id}"), &tag, &created)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
         Ok(id)
     }
 
@@ -472,16 +480,23 @@ impl PalaceStore {
     }
 
     pub fn delete_tunnel(&mut self, id: &str) -> Result<bool, StoreError> {
-        let n = self
-            .conn
-            .execute("DELETE FROM tunnels WHERE id = ?1", params![id])?;
-        if n > 0 {
-            let tag = self.vault.tag(format!("del\x1ftunnel/{id}").as_bytes());
-            self.conn.execute(
-                "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-                params![format!("del/tunnel/{id}"), tag.as_slice(), now_rfc3339()],
-            )?;
-            self.vault.commit_write(&tag)?;
+        let tag = self.vault.tag(format!("del\x1ftunnel/{id}").as_bytes());
+        let tx = self.conn.transaction()?;
+        let n = tx.execute("DELETE FROM tunnels WHERE id = ?1", params![id])?;
+        let anchor = if n > 0 {
+            Some(chain_append(
+                &tx,
+                &self.vault,
+                &format!("del/tunnel/{id}"),
+                &tag,
+                &now_rfc3339(),
+            )?)
+        } else {
+            None
+        };
+        tx.commit()?;
+        if let Some((head, writes)) = anchor {
+            self.vault.anchor_manifest(&head, writes)?;
         }
         Ok(n > 0)
     }

@@ -248,6 +248,15 @@ Also closes the v0.13.0 follow-up items:
   forward per drawer); `repair --tokens` backfills artifact-less palaces in
   bounded batches while searches serve at fusion quality and climb.
 
+## v0.19.0 — Atomic audit chain (done)
+
+- The committed chain head lives in `chain_meta` and advances inside the
+  same SQLite transaction as the data + audit row at every mutation site;
+  the manifest is a lagging out-of-database rollback anchor, reconciled at
+  open (crash ⇒ silent fast-forward, rollback/fork ⇒ `ManifestTampered`).
+  A power loss is no longer a false tamper alarm; a restored old database
+  still alarms. Both crash states test-simulated.
+
 ## Next
 
 - **Restore economics tier 3**: token-store PQ with register-LUT MaxSim
