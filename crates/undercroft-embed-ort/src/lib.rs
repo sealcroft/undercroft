@@ -156,7 +156,15 @@ impl OrtEmbedder {
         let (ids, mask, types) = encode(&self.tokenizer, text, None)?;
         let (dims, data) = {
             let mut guard = self.session.lock().expect("ort session mutex");
-            run_batch(&mut guard, self.n_inputs, 1, MAX_LEN, ids, mask.clone(), types)?
+            run_batch(
+                &mut guard,
+                self.n_inputs,
+                1,
+                MAX_LEN,
+                ids,
+                mask.clone(),
+                types,
+            )?
         };
         // dims: (1, seq, dim) — masked mean pool + L2 normalize.
         if dims.len() < 3 {

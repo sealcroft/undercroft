@@ -54,8 +54,7 @@ impl OrtColbert {
     ) -> Result<Self, OrtError> {
         let tokenizer =
             Tokenizer::from_file(tokenizer_path).map_err(|e| OrtError::Tokenizer(e.to_string()))?;
-        let (doc_session, doc_inputs) =
-            build_session(&doc_model_path.to_string_lossy(), cores())?;
+        let (doc_session, doc_inputs) = build_session(&doc_model_path.to_string_lossy(), cores())?;
         let (query_session, query_inputs) =
             build_session(&query_model_path.to_string_lossy(), cores())?;
         let mut me = Self {
@@ -198,7 +197,14 @@ impl LateInteraction for OrtColbert {
         // Punctuation rows attend but aren't stored (ColBERT convention).
         self.frame(D_MARKER, text, DOC_LEN, true)
             .and_then(|(ids, skip)| {
-                self.run(&self.doc_session, self.doc_inputs, &ids, DOC_LEN, false, &skip)
+                self.run(
+                    &self.doc_session,
+                    self.doc_inputs,
+                    &ids,
+                    DOC_LEN,
+                    false,
+                    &skip,
+                )
             })
             .map(|(m, _)| m)
             .unwrap_or_default()
