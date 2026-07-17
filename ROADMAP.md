@@ -265,23 +265,41 @@ Also closes the v0.13.0 follow-up items:
   in-place; MaxSim scores v2 via per-query-row dot LUTs; punctuation rows
   pruned at encode; artifacts still export as universal v1.
 
+## v0.21.0 — ColBERT forwards on ONNX Runtime (done)
+
+- `OrtColbert` in `undercroft-embed-ort`: same fixed-shape exports, framing,
+  and env as the tract encoder, forwards on ORT. LoCoMo search 96.7 →
+  **70.3 ms/q** (tok-PQ LUT), ingest 3.3×, recall gate met and
+  runtime-invariant (int8 path identical 1918/1982). Unmasked the v0.20
+  LUT win (+4 ms under tract → −11 ms under ORT) and corrected the
+  estimate: the query forward was ~11 ms of search, the residual ~70 ms/q
+  is store-side — the next lever.
+
+## v0.22.0 — Unified PQ cache, HNSW ef-scaling, MUVERA note (done)
+
+- hmac-only PQ scan moved onto the sealed tier's load-once RAM cache:
+  measured **parity within run-to-run noise** (the loaded-host win didn't
+  reproduce) — kept for the single code path.
+- HNSW recall collapse root-caused (fixed `ef_search=100` beam under a
+  ≥256-candidate request) and fixed with corpus-scaled `ef`: R@5
+  71.7→**96.3%** at N=50k, LoCoMo parity with the scan.
+- MUVERA/FDE research note in RETRIEVAL_SCALING — the "beyond MaxSim"
+  candidate, deferred below multi-million-drawer scale.
+
 ## Next
-- **ColBERT follow-ups**: `ort` backend for the query forward (~93 → ~40
-  ms/q); punctuation-filtered doc rows.
-- **PQ cache for hmac-only**: the sealed RAM cache out-ran per-query SQLite
-  streaming at N=50k — adopt it for both levels.
-- **Sealed-tier encrypted-at-rest index** (research): an ANN index sealed
-  vaults can persist without violating the no-plaintext-derived-index
-  invariant — PQ/ColBERT stores AEAD-sealed at rest.
-- **Retrieval wiring**: env surface for the ort backend outside the bench;
-  HNSW `ef`/over-fetch scaling with corpus size.
-- **Durability**: ingest fsync + audit-chain atomicity design (chain head
-  and SQLite must move together across power loss).
+- **Store-side rescore cost** (the dominant ~70 ms/q term v0.21.0 exposed):
+  profile the candidate token fetch/decode + MaxSim + fusion path.
+- **Sealed-tier page-level decryption** (research): decrypt only probed
+  lists — matters past multi-million drawers.
+- **Retrieval wiring**: env surface for the ort backend outside the bench.
+- **Durability**: ingest fsync (audit-chain atomicity shipped in v0.19.0).
 - **Orchestrator**: the multi-tenant routing/migration/key-minting layer as
   a separate optional tool (`examples/orchestrator/` or sibling crate),
-  keeping the engine tree-blind — see [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
+  keeping the engine tree-blind — see [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md);
+  v0.18.0's artifact-carrying export/import is its migration primitive.
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
+- **MUVERA FDEs** when corpus scale warrants (see the research note).
 
 ---
 

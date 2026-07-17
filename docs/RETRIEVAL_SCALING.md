@@ -51,10 +51,18 @@ real and grows without bound — **but** the in-memory prototype has two flaws:
 - **RAM is O(corpus)** (~1.5 KB/vector + graph edges → ~2–2.5 GB per million
   vectors), plus a full-corpus decrypt + rebuild on every open. Infeasible for
   IoT or billion-scale. *In-memory solves latency by creating a memory problem.*
-- **Recall collapses at a fixed over-fetch** (256): fine to ~5k, then 92% at
-  20k, 60% at 50k. `ef_search`/over-fetch must scale with n.
+- **Recall collapsed at a fixed search beam** — root cause: the store asks the
+  index for ≥256 candidates but `instant-distance` builds with `ef_search=100`,
+  so every query's candidate tail came from an exhausted beam, and it worsened
+  with n. **Fixed in v0.22.0** by scaling `ef_search` ~n/64 (floor 320, cap
+  1024) and `ef_construction` ~n/256 at build: R@5 93.1→**98.8%** at 20k,
+  71.7→**96.3%** at 50k, still 126–186 q/s (the bigger beam trades raw speed
+  — previously 378 q/s at 50k *with unusable recall* — for accuracy that
+  degrades gently instead of collapsing). LoCoMo real-data parity: R@10
+  94.6% identical to the full scan at 6.7 vs 5.3 ms/q.
 
-So in-memory HNSW is a **proof the algorithm helps**, not the destination.
+So in-memory HNSW is a **fast option when RAM allows**, not the destination —
+the O(corpus) RAM flaw stands.
 
 ## The architecture: two costs, two purpose-built fixes
 
@@ -80,9 +88,11 @@ write with FTS-style self-heal. Measured (synth, hmac-only, N=20k):
 
 The differentiator, now confirmed at both sizes: **PQ recall is flat in N**
 (98.6% → 98.9% — ADC is exhaustive over the codes, quantization error only),
-where HNSW's graph approximation collapses without per-N tuning (93% → 72%).
-PQ's flat scan is still O(n) — q/s falls ~linearly (59 → 19), ~3–9× the true
-scan. HNSW stays the raw-speed option when RAM allows and its `ef` is tuned.
+where HNSW's graph approximation collapsed without per-N tuning (93% → 72%
+in this table's run; the v0.22.0 ef-scaling fix lifts it to 98.8%/96.3% at
+~126–164 q/s — see the flaws list above). PQ's flat scan is still O(n) —
+q/s falls ~linearly (59 → 19), ~3–9× the true scan. HNSW is the raw-speed
+option when O(corpus) RAM is acceptable.
 **Still open:** the sealed-tier encrypted index.
 
 ### IVF inverted lists — and the three scan bottlenecks the sweeps exposed

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.22.0 — Unified PQ cache, HNSW ef-scaling, MUVERA note
+
+Three follow-ups from the retrieval-scaling track, each measured.
+
+- **PQ scan unified on the RAM code cache (both vault levels).** hmac-only
+  vaults now ADC-scan the same load-once cache the sealed tier uses instead
+  of streaming codes from SQLite per query. Honest result: a controlled
+  before/after at N=20k/50k measured **parity within run-to-run noise**
+  (hmac 36.1→34.1 q/s @20k, 14.3→15.2 @50k, while *unchanged* sealed cells
+  swung ±8–10% between the same runs; recall identical everywhere) — the
+  earlier loaded-host run that suggested a cache win did not reproduce.
+  Kept for the simplification: one scan path, no per-query SQLite
+  iteration, coherent cache updates from plaintext in hand.
+- **HNSW recall collapse fixed.** Root cause: the store requests ≥256
+  candidates but `instant-distance` builds with `ef_search=100` — every
+  query tail came from an exhausted beam. `ef_search` now scales ~n/64
+  (floor 320, cap 1024), `ef_construction` ~n/256. Measured: R@5
+  93.1→**98.8%** at N=20k, 71.7→**96.3%** at N=50k, at 126–186 q/s (the
+  bigger beam trades raw q/s for recall that degrades gently instead of
+  collapsing); LoCoMo real-data parity with the full scan (R@10 94.6%
+  both, 6.7 vs 5.3 ms/q). The `hnsw` feature stays experimental/off by
+  default — O(corpus) RAM.
+- **MUVERA research note** (docs/RETRIEVAL_SCALING.md): fixed-dimensional
+  encodings as the honest "beyond MaxSim" candidate — token-aware
+  candidate generation through the existing single-vector PQ/IVF + sealing
+  machinery, attacking the store-side rescore cost v0.21.0 measured as
+  dominant. Deliberately deferred below multi-million-drawer scale.
+
 ## 0.21.0 — ColBERT forwards on ONNX Runtime
 
 The v0.20.0 follow-up: `OrtColbert` moves the ColBERT query/doc forwards
