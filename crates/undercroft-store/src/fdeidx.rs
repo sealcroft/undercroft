@@ -338,6 +338,9 @@ impl PalaceStore {
         if qmatrix.is_empty() {
             return Ok(None);
         }
+        // Stash the encoded query for the MaxSim rescore stage: the forward
+        // is the expensive part of both stages, and one search pays it once.
+        *self.qmatrix_cache.borrow_mut() = Some((query.to_string(), qmatrix.clone()));
         let enc_ref = self.fde_encoder.borrow();
         let Some(enc) = enc_ref.as_ref() else {
             return Ok(None);

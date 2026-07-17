@@ -297,6 +297,10 @@ pub struct PalaceStore {
     fde_cache: std::cell::RefCell<Option<Vec<(i64, Vec<f32>)>>>,
     /// Whether this session already ran the FDE backfill pass.
     fde_checked: std::cell::Cell<bool>,
+    /// The current query's token matrix, stashed by FDE candidate
+    /// generation and consumed by the MaxSim rescore — the query forward is
+    /// the expensive part of both stages, and one search must pay it once.
+    qmatrix_cache: std::cell::RefCell<Option<(String, Vec<f32>)>>,
 }
 
 impl PalaceStore {
@@ -450,6 +454,7 @@ impl PalaceStore {
             fde_encoder: std::cell::RefCell::new(None),
             fde_cache: std::cell::RefCell::new(None),
             fde_checked: std::cell::Cell::new(false),
+            qmatrix_cache: std::cell::RefCell::new(None),
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;

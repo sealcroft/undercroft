@@ -414,7 +414,14 @@ impl PalaceStore {
         if self.late_schema().is_err() {
             return;
         }
-        let qmatrix = late.encode_query(query);
+        // Reuse the query matrix FDE candidate generation already encoded
+        // for this exact query, if present (take() so a stale entry can
+        // never leak across searches); otherwise pay the one forward here.
+        let cached = self.qmatrix_cache.borrow_mut().take();
+        let qmatrix = match cached {
+            Some((q, m)) if q == query => m,
+            _ => late.encode_query(query),
+        };
         if qmatrix.is_empty() {
             return;
         }
