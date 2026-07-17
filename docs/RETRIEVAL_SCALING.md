@@ -292,9 +292,15 @@ knows.
 Encryption stops being a query-time cost: at 20k the sealed path runs at
 ~90% of the plaintext index, and at 50k it *beat* the within-run plaintext
 reference — the decrypt-once RAM cache skips the per-query SQLite code
-streaming that hmac-only still pays (cross-run note: a quieter v0.15 run
+streaming that hmac-only paid (cross-run note: a quieter v0.15 run
 measured hmac@50k at 14.8 q/s, so treat the 50k ordering as parity, not a
-sealed win). Obvious follow-up: give hmac-only the same RAM cache.
+sealed win). The obvious follow-up — give hmac-only the same cache — landed
+in v0.22.0 and the cross-run caveat proved right: a controlled before/after
+(same host, back-to-back builds) measured **parity within run-to-run noise**
+at both sizes (hmac 36.1→34.1 q/s @20k, 14.3→15.2 @50k, while *unchanged*
+sealed cells swung ±8–10% between the same two runs), identical recall
+everywhere. Both levels now share the one cache-scan code path — kept for
+the simplification, not a claimed speedup.
 
 hmac-only content is already unencrypted on disk, so on-disk indexes are
 invariant-consistent — this mirrors the existing on-disk FTS5, which sealed
@@ -354,6 +360,54 @@ entire derived state is **AEAD-sealed at rest, content-addressed, portable
 across backups, self-healing, and scored via register-LUT MaxSim over PQ
 codes**. Recompute-everything is slow; plaintext indexes are leaky; this is
 neither.
+
+### Beyond MaxSim: MUVERA fixed-dimensional encodings (research note, deferred)
+
+Our late-interaction stage still *scores* every fusion candidate with MaxSim —
+cheap arithmetic, but linear in the candidate pool, and the pool itself comes
+from the single-vector fusion stage, which knows nothing about token-level
+similarity. The honest "beyond MaxSim" candidate is **MUVERA** (Dhulipala,
+Jayaram et al., Google Research — arXiv:2405.19504): compress each token
+*matrix* into one **fixed-dimensional encoding** (FDE) such that a plain inner
+product of two FDEs approximates the Chamfer/MaxSim similarity, with proven
+ε-approximation bounds. The construction is model-free randomization —
+SimHash-partition the embedding space into B buckets, aggregate each bucket's
+token vectors (sum on the query side, centroid on the doc side), concatenate,
+then randomly project down — so it needs no training and composes with any
+ColBERT-style encoder.
+
+Why it fits this architecture unusually well:
+
+- **An FDE is just a vector**, so the entire existing single-vector machinery
+  applies unchanged: the PQ/IVF prefilter (both vault levels), AAD-domain
+  sealing, portable export artifacts, the load-once RAM caches. Candidate
+  generation would become *token-aware* without a transformer or a per-token
+  index anywhere in the hot path.
+- **MaxSim stays** as the exact rescorer over the FDE top-N (MUVERA's own
+  pipeline re-ranks with exact Chamfer) — verbatim-retrieval quality is
+  gated by the same final stage we already ship, so the gate methodology
+  (LoCoMo ≥96.5) transfers directly.
+- The measured v0.21.0 finding makes the case concrete: search latency is now
+  dominated by the **store-side rescore** (~70 ms/q), not the query forward.
+  FDE-quality candidates would let the rescore pool shrink (MUVERA reports
+  2–5× fewer candidates for equal recall vs PLAID-style pipelines), attacking
+  exactly the dominant term.
+
+Why it is deliberately **deferred**:
+
+- At our measured scales (≤50k drawers per vault) the fusion prefilter +
+  flat MaxSim already meets the recall gate at ~70 ms/q; FDEs add a second
+  derived artifact per drawer (storage, sealing, export, backfill surface)
+  whose payoff only materializes when the rescore pool must shrink or corpora
+  reach the multi-million range where the remote-index tier begins to matter.
+- The FDE dimension MUVERA reports as competitive (≈1–10k before projection)
+  interacts with our PQ codebooks and sealed-row sizes in ways that deserve
+  their own measured sweep, not a rider on another release.
+
+When it lands, the shape is: FDE column beside the embedding (sealed under its
+own AAD domain), FDE-driven PQ/IVF candidates, existing MaxSim rescore, gate
+re-run — no changes to the trait surface (`LateInteraction` already owns both
+encode paths).
 
 ## Configurable — pick per deployment, not one-size-fits-all
 
@@ -415,7 +469,8 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    *rescore* store shipped sealed in (4), and the IVF-PQ *prefilter* now
    ships sealed too — AEAD rows + decrypt-once RAM cache; sealed search
    **2.1 → 33.4 q/s at N=20k (×16)**, parity with the plaintext index.
-   Remaining refinements: the hmac-only path can adopt the same RAM cache;
+   The hmac-only path adopted the same RAM cache in v0.22.0 — measured
+   parity within noise, kept as the single scan path. Remaining refinement:
    page-level decryption matters only past multi-million drawers.
 6. **Restore economics** (next): portable derived artifacts in export
    bundles, background backfill, token-store PQ with register-LUT MaxSim —
