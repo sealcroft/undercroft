@@ -20,12 +20,15 @@
 //!   `UNDERCROFT_FDE_PQ_MIN` rows exist, a product-quantizer codebook
 //!   trains from the palace's own FDEs (persisted sealed in `fde_meta`),
 //!   every row repacks to `dim/8` bytes (**32×**), and the scan switches
-//!   to per-query dot-product LUTs. Above the shared `UNDERCROFT_IVF_MIN`,
-//!   coarse centroids partition the FDE space and each query probes only
-//!   the nearest lists — **in RAM**: unlike the drawer-PQ index there is
-//!   no clustered disk layout to maintain, the list id just rides inside
-//!   the (sealed) blob, because a plaintext list column would leak which
-//!   drawers are semantically similar.
+//!   to per-query dot-product LUTs. **Deliberately no IVF tier**: measured
+//!   at N=2k–200k, IVF over FDE space was net-negative — candidate
+//!   containment dropped (1.000 → 0.84–0.99) *and* the RAM-side list
+//!   filter cost more than the flat 256-add ADC scan it replaced
+//!   (O(N·nprobe) vs O(N·m)); a properly inverted layout only pays past
+//!   ~10⁶ docs. The `list` field in the pack format is reserved (-1) so a
+//!   future inverted tier needs no migration; it rides *inside* the
+//!   sealed blob because a plaintext list column would leak which drawers
+//!   are semantically similar.
 //!
 //! Storage mirrors the token store it derives from: rows live in
 //! `drawer_fde` keyed by drawer id + model, AEAD-sealed on sealed vaults
@@ -46,7 +49,7 @@ use undercroft_core::fde::{fde_dot, FdeEncoder, FdeParams};
 use undercroft_core::late::dequantize_tokens;
 use rusqlite::{params, OptionalExtension};
 
-use crate::pq::{CoarseQuantizer, ProductQuantizer};
+use crate::pq::ProductQuantizer;
 use crate::{PalaceStore, StoreError};
 
 /// Stored-FDE count at which the FDE codebook trains (v2 packing).
@@ -54,7 +57,6 @@ pub(crate) const FDE_PQ_MIN_DEFAULT: usize = 256;
 /// Sampling cap and k-means iterations for FDE-codebook training.
 const FDE_PQ_SAMPLE: usize = 4096;
 const FDE_PQ_ITERS: usize = 10;
-const FDE_IVF_ITERS: usize = 10;
 
 /// The FDE RAM cache: raw vectors below the codebook threshold, PQ codes
 /// (+ IVF list) above it. One variant at a time — the train pass repacks
@@ -236,7 +238,6 @@ impl PalaceStore {
                         .execute("DELETE FROM fde_meta WHERE key != 'params'", [])?;
                     self.fde_cache.borrow_mut().take();
                     *self.fde_pq.borrow_mut() = None;
-                    *self.fde_ivf.borrow_mut() = None;
                 }
                 let p = params_from_env();
                 self.fde_meta_put("params", &params_pack(p, tokdim))?;
@@ -255,13 +256,10 @@ impl PalaceStore {
     fn fde_store_row(&self, id: &str, model: &str, fde: &[f32]) {
         let (payload, cache_row) = match self.fde_pq.borrow().as_ref() {
             Some(pq) => {
-                let list: i64 = self
-                    .fde_ivf
-                    .borrow()
-                    .as_ref()
-                    .map_or(-1, |cq| cq.assign(fde) as i64);
+                // List -1: reserved for a future inverted tier (see the
+                // module docs for why IVF is deliberately absent today).
                 let code = pq.encode(fde);
-                (fde_row_pack_coded(list, &code), Some((list, code)))
+                (fde_row_pack_coded(-1, &code), Some((-1i64, code)))
             }
             None => (fde_row_pack_raw(fde), None),
         };
@@ -387,12 +385,11 @@ impl PalaceStore {
         Ok(())
     }
 
-    /// Load-or-train the FDE codebook (+ IVF centroids) once per session.
-    /// Training fires when at least `fde_pq_min` rows exist: every raw row
-    /// repacks to v2 codes (**32× smaller**) in one pass — pure
-    /// re-encoding. IVF centroids train alongside when the corpus crosses
-    /// the shared `ivf_min`. A stored codebook trained for another model is
-    /// dropped with the rows (see `fde_encoder_ensure`).
+    /// Load-or-train the FDE codebook once per session. Training fires when
+    /// at least `fde_pq_min` rows exist: every raw row repacks to v2 codes
+    /// (**32× smaller**) in one pass — pure re-encoding. A stored codebook
+    /// trained for another model is dropped with the rows (see
+    /// `fde_encoder_ensure`).
     fn fde_pq_ensure(&self, model: &str, fde_dim: usize) -> Result<(), StoreError> {
         if self.fde_pq.borrow().is_some() || self.fde_pq_checked.get() {
             return Ok(());
@@ -404,12 +401,6 @@ impl PalaceStore {
             .and_then(|b| ProductQuantizer::from_bytes(&b))
         {
             *self.fde_pq.borrow_mut() = Some(pq);
-            if let Some(cq) = self
-                .fde_meta_get("ivf")?
-                .and_then(|b| CoarseQuantizer::from_bytes(&b))
-            {
-                *self.fde_ivf.borrow_mut() = Some(cq);
-            }
             return Ok(());
         }
         let rows: i64 = self.conn.query_row(
@@ -460,28 +451,16 @@ impl PalaceStore {
             return Ok(());
         };
         self.fde_meta_put("codebook", &pq.to_bytes())?;
-        // IVF centroids over FDE space when the corpus warrants them —
-        // probed **in RAM**, so no disk layout is involved.
-        if raw.len() >= self.ivf_min {
-            let nlist = ((raw.len() as f64).sqrt() as usize).clamp(16, 1024);
-            if let Some(cq) = CoarseQuantizer::train(&sample, nlist, FDE_IVF_ITERS, raw.len() as u64)
-            {
-                self.fde_meta_put("ivf", &cq.to_bytes())?;
-                *self.fde_ivf.borrow_mut() = Some(cq);
-            }
-        }
-        // Repack every raw row to v2 with the codebook in hand.
-        let ivf_ref = self.fde_ivf.borrow();
+        // Repack every raw row to v2 with the codebook in hand (list -1 —
+        // reserved, see the module docs).
         for (id, fde) in &raw {
-            let list: i64 = ivf_ref.as_ref().map_or(-1, |cq| cq.assign(fde) as i64);
-            let payload = fde_row_pack_coded(list, &pq.encode(fde));
+            let payload = fde_row_pack_coded(-1, &pq.encode(fde));
             let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
             let _ = self.conn.execute(
                 "UPDATE drawer_fde SET fde = ?1 WHERE id = ?2",
                 params![blob, id],
             );
         }
-        drop(ivf_ref);
         *self.fde_pq.borrow_mut() = Some(pq);
         self.fde_cache.borrow_mut().take(); // rebuild coded
         Ok(())
@@ -573,6 +552,9 @@ impl PalaceStore {
                 .map(|(seq, fde)| (fde_dot(&qfde, fde), *seq))
                 .collect(),
             Some(FdeCache::Coded(rows)) if !rows.is_empty() => {
+                // Flat ADC over the codes: per-query dot LUTs, 256 table
+                // adds per doc. Measured the honest winner over IVF at
+                // every benchable scale (see the module docs).
                 let pq_ref = self.fde_pq.borrow();
                 let Some(pq) = pq_ref.as_ref() else {
                     return Ok(None);
@@ -580,32 +562,9 @@ impl PalaceStore {
                 let Some(tables) = pq.dot_tables(&qfde) else {
                     return Ok(None);
                 };
-                // IVF probe (RAM-side list filter), widened to the full
-                // scan if the probed lists can't fill `k` — narrowing may
-                // never empty the candidate set.
-                let probe: Option<Vec<i64>> = self.fde_ivf.borrow().as_ref().map(|cq| {
-                    let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 2).max(8));
-                    let mut lists: Vec<i64> =
-                        cq.probe(&qfde, nprobe).into_iter().map(i64::from).collect();
-                    lists.push(-1); // pre-IVF rows ride along
-                    lists
-                });
-                let mut out: Option<Vec<(f32, i64)>> = None;
-                if let Some(lists) = &probe {
-                    let probed: Vec<(f32, i64)> = rows
-                        .iter()
-                        .filter(|(_, list, _)| lists.contains(list))
-                        .map(|(seq, _, code)| (pq.adc_dot(&tables, code), *seq))
-                        .collect();
-                    if probed.len() >= k {
-                        out = Some(probed);
-                    }
-                }
-                out.unwrap_or_else(|| {
-                    rows.iter()
-                        .map(|(seq, _, code)| (pq.adc_dot(&tables, code), *seq))
-                        .collect()
-                })
+                rows.iter()
+                    .map(|(seq, _, code)| (pq.adc_dot(&tables, code), *seq))
+                    .collect()
             }
             _ => return Ok(None),
         };

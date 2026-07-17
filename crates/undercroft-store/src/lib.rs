@@ -300,8 +300,6 @@ pub struct PalaceStore {
     fde_checked: std::cell::Cell<bool>,
     /// The FDE codebook (v2 packing; persisted sealed in `fde_meta`).
     fde_pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
-    /// IVF centroids over FDE space (RAM-side probing; sealed in `fde_meta`).
-    fde_ivf: std::cell::RefCell<Option<pq::CoarseQuantizer>>,
     /// Whether this session already tried to load/train the FDE codebook.
     fde_pq_checked: std::cell::Cell<bool>,
     /// Stored-FDE count at which the codebook trains
@@ -468,7 +466,6 @@ impl PalaceStore {
             fde_cache: std::cell::RefCell::new(None),
             fde_checked: std::cell::Cell::new(false),
             fde_pq: std::cell::RefCell::new(None),
-            fde_ivf: std::cell::RefCell::new(None),
             fde_pq_checked: std::cell::Cell::new(false),
             fde_pq_min: match std::env::var("UNDERCROFT_FDE_PQ_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
@@ -2095,7 +2092,10 @@ mod tests {
                 .fde_candidates("kafka stream backlog", 5)
                 .unwrap()
                 .expect("cache rebuild");
-            assert_eq!(cands, again, "coded cache rebuild must reproduce candidates");
+            assert_eq!(
+                cands, again,
+                "coded cache rebuild must reproduce candidates"
+            );
 
             // A write AFTER the codebook exists stores v2 directly and
             // stays findable.
