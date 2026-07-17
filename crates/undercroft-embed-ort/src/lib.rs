@@ -13,7 +13,11 @@
 //! The reranker overrides [`Reranker::score_batch`] to score the whole pool in
 //! **one batched forward** (ORT handles a dynamic batch dimension natively,
 //! unlike tract's fixed batch-1 load) — the store calls `score_batch`, so the
-//! backend picks its own parallel strategy.
+//! backend picks its own parallel strategy. The ColBERT late-interaction
+//! encoder lives in [`late`] (same fixed-shape exports as the tract backend).
+
+mod late;
+pub use late::{colbert_from_env, OrtColbert};
 
 use std::sync::Mutex;
 
@@ -83,17 +87,18 @@ fn build_session(path: &str, threads: usize) -> Result<(Session, usize), OrtErro
     Ok((session, n_inputs))
 }
 
-/// Run a `[b, MAX_LEN]` batch → `(output dims, flat output data)`.
+/// Run a `[b, len]` batch → `(output dims, flat output data)`.
 fn run_batch(
     session: &mut Session,
     n_inputs: usize,
     b: usize,
+    len: usize,
     ids: Vec<i64>,
     mask: Vec<i64>,
     types: Vec<i64>,
 ) -> Result<(Vec<usize>, Vec<f32>), OrtError> {
     let mk = |v: Vec<i64>| {
-        Tensor::from_array(([b, MAX_LEN], v)).map_err(|e| OrtError::Inference(e.to_string()))
+        Tensor::from_array(([b, len], v)).map_err(|e| OrtError::Inference(e.to_string()))
     };
     let outputs = if n_inputs >= 3 {
         session.run(ort::inputs![
@@ -151,7 +156,15 @@ impl OrtEmbedder {
         let (ids, mask, types) = encode(&self.tokenizer, text, None)?;
         let (dims, data) = {
             let mut guard = self.session.lock().expect("ort session mutex");
-            run_batch(&mut guard, self.n_inputs, 1, ids, mask.clone(), types)?
+            run_batch(
+                &mut guard,
+                self.n_inputs,
+                1,
+                MAX_LEN,
+                ids,
+                mask.clone(),
+                types,
+            )?
         };
         // dims: (1, seq, dim) — masked mean pool + L2 normalize.
         if dims.len() < 3 {
@@ -272,7 +285,7 @@ impl OrtReranker {
         let (ids, mask, types) = encode(&self.tokenizer, query, Some(passage))?;
         let (dims, data) = {
             let mut guard = self.sessions[slot].lock().expect("ort session mutex");
-            run_batch(&mut guard, self.n_inputs, 1, ids, mask, types)?
+            run_batch(&mut guard, self.n_inputs, 1, MAX_LEN, ids, mask, types)?
         };
         // dims: (1, num_labels) — take the last (positive) logit.
         let labels = if dims.len() >= 2 { dims[1].max(1) } else { 1 };
