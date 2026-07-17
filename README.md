@@ -241,6 +241,15 @@ caller-supplied embeddings, dedup-refresh on save, and lossless
 export/import for migrating a tenant between instances. See
 [the remote-server guide](docs/remote-server.md).
 
+Fleets of engines get the **optional orchestrator**
+(`undercroft-orchestrator`): instance registry, tenant creation with
+one-time token minting, a routing proxy that maps each tenant token to
+exactly its own vault, and count-verified live migration between
+instances — a separate control plane speaking only the public `/v1`
+surface, with engine credentials sealed at rest and tenant tokens stored
+only as HMACs. Design + surface:
+[docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
+
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 

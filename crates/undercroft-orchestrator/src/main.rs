@@ -181,7 +181,10 @@ fn main() -> Result<()> {
             let creds = orch.instance_creds(&tenant.instance)?;
             engine::delete_vault(&creds, &tenant.vault).map_err(|e| anyhow::anyhow!(e))?;
             orch.tenant_delete(&id)?;
-            println!("deleted {id} (vault {} on {})", tenant.vault, tenant.instance);
+            println!(
+                "deleted {id} (vault {} on {})",
+                tenant.vault, tenant.instance
+            );
             Ok(())
         }
         Command::Migrate {

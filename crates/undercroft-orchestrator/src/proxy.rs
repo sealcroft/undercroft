@@ -79,7 +79,10 @@ pub fn serve(orch: &Orch, addr: &str, admin_token: &str) -> anyhow::Result<()> {
         let path = url.split('?').next().unwrap_or("").to_string();
         let mut body = Vec::new();
         use std::io::Read;
-        let _ = request.as_reader().take(256 * 1024 * 1024).read_to_end(&mut body);
+        let _ = request
+            .as_reader()
+            .take(256 * 1024 * 1024)
+            .read_to_end(&mut body);
 
         let response = route(orch, admin_token, &request, &method, &path, &body);
         let _ = request.respond(response);
@@ -157,10 +160,13 @@ fn data_plane(
         &content_type,
         body,
     ) {
-        Ok(r) => Response::from_data(r.body).with_status_code(r.status).with_header(
-            Header::from_bytes("Content-Type", r.content_type.as_bytes())
-                .unwrap_or_else(|_| Header::from_bytes("Content-Type", "application/json").unwrap()),
-        ),
+        Ok(r) => Response::from_data(r.body)
+            .with_status_code(r.status)
+            .with_header(
+                Header::from_bytes("Content-Type", r.content_type.as_bytes()).unwrap_or_else(
+                    |_| Header::from_bytes("Content-Type", "application/json").unwrap(),
+                ),
+            ),
         Err(e) => err_response(502, &e),
     }
 }
@@ -174,11 +180,12 @@ fn admin_plane(
     body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
-    let body_json = || -> serde_json::Value {
-        serde_json::from_slice(body).unwrap_or(serde_json::Value::Null)
-    };
+    let body_json =
+        || -> serde_json::Value { serde_json::from_slice(body).unwrap_or(serde_json::Value::Null) };
     let s = |v: &serde_json::Value, k: &str| -> Option<String> {
-        v.get(k).and_then(serde_json::Value::as_str).map(str::to_string)
+        v.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
     };
 
     match (method.as_str(), segs.as_slice()) {
@@ -325,7 +332,8 @@ pub(crate) fn migrate_tenant(
             "import count mismatch ({imported} of {exported}) — source left authoritative"
         ));
     }
-    orch.tenant_set_instance(id, to).map_err(|e| e.to_string())?;
+    orch.tenant_set_instance(id, to)
+        .map_err(|e| e.to_string())?;
     let source_deleted = if keep_source {
         false
     } else {

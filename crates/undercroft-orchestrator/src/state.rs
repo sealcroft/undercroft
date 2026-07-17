@@ -81,9 +81,9 @@ impl Orch {
     pub fn open(path: &std::path::Path, key_hex: &str) -> Result<Self, StateError> {
         let bytes = hex::decode(key_hex.trim())
             .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY is not hex".into()))?;
-        let key: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into()))?;
+        let key: [u8; 32] = bytes.try_into().map_err(|_| {
+            StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into())
+        })?;
         let conn = Connection::open(path)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS instances (
@@ -166,7 +166,10 @@ impl Orch {
             ));
         }
         let cred = serde_json::json!({ "bearer": bearer, "assertion_secret": assertion_secret });
-        let blob = self.seal(&format!("orch/instance/{name}"), cred.to_string().as_bytes());
+        let blob = self.seal(
+            &format!("orch/instance/{name}"),
+            cred.to_string().as_bytes(),
+        );
         self.conn.execute(
             "INSERT OR REPLACE INTO instances (name, url, cred) VALUES (?1, ?2, ?3)",
             params![name, url.trim_end_matches('/'), blob],
@@ -258,7 +261,11 @@ impl Orch {
     /// Create the tenant row and mint its token (returned exactly once —
     /// only the MAC is stored). The caller creates the engine vault first;
     /// this only records the mapping.
-    pub fn tenant_create(&self, name: &str, instance: &str) -> Result<(Tenant, String), StateError> {
+    pub fn tenant_create(
+        &self,
+        name: &str,
+        instance: &str,
+    ) -> Result<(Tenant, String), StateError> {
         let mut id_bytes = [0u8; 8];
         rand::thread_rng().fill_bytes(&mut id_bytes);
         let id = hex::encode(id_bytes);
@@ -276,7 +283,14 @@ impl Orch {
         self.conn.execute(
             "INSERT INTO tenants (id, name, instance, vault, token_mac, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![t.id, t.name, t.instance, t.vault, self.token_mac(&token), t.created_at],
+            params![
+                t.id,
+                t.name,
+                t.instance,
+                t.vault,
+                self.token_mac(&token),
+                t.created_at
+            ],
         )?;
         Ok((t, token))
     }

@@ -43,6 +43,7 @@ FROM debian:bookworm-slim AS runtime
 RUN useradd --create-home --uid 10001 undercroft \
     && mkdir -p /data && chown undercroft:undercroft /data
 COPY --from=builder /src/target/release/undercroft /usr/local/bin/undercroft
+COPY --from=builder /src/target/release/undercroft-orchestrator /usr/local/bin/undercroft-orchestrator
 USER undercroft
 ENV UNDERCROFT_HOME=/data
 VOLUME ["/data"]

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.25.0 — Multi-tenant orchestrator
+
+The control plane docs/MULTI_TENANCY.md reserved: routing, tenant→vault
+mapping, token minting, and live migration for fleets of engine
+instances, shipped as the **separate optional `undercroft-orchestrator`
+binary**. It is a pure client of the public `/v1` surface — the engine
+stays tree-blind and never links it.
+
+- **State** (own SQLite): instance registry + tenant→vault map. Engine
+  credentials are **sealed at rest** (XChaCha20-Poly1305 under
+  `UNDERCROFT_ORCH_KEY`, AAD-bound to the instance name — a blob copied
+  onto another row fails to open); tenant tokens are **never stored**
+  (domain-separated HMAC only; the token appears once, in the create
+  response).
+- **Data plane** `/t/<subpath>`: a tenant token routes to exactly its own
+  vault as `/v1/vaults/{vault}/<subpath>` with the engine bearer + a
+  freshly minted per-vault assertion; the subpath allowlist keeps vault
+  lifecycle off the data plane (the vault root is unroutable). Even a
+  routing bug downstream fails cryptographically — assertion and vault
+  AAD both carry the vault id.
+- **Admin plane** `/admin/*` (`UNDERCROFT_ORCH_ADMIN_TOKEN`, uniform
+  401s): instance add/list/remove (+ live health probes; removal refused
+  while tenants map to it), tenant lifecycle with least-loaded placement,
+  and **migration**: artifact-carrying export (v0.18) → import →
+  **count-verified** → mapping flip → source delete (`keep_source` opts
+  out); any failure before the flip leaves the source authoritative.
+- **CLI** mirrors the admin plane (`instance-add`, `tenant-create`,
+  `migrate`, …) plus `keygen`; the runtime image now carries both
+  binaries.
+- **Verified**: 7 unit tests (AAD binding, wrong-key unsealable, token
+  MAC resolution, placement + removal guard, assertion contract, subpath
+  allowlist) + a 24-check e2e suite (`orchestrator-e2e` compose service)
+  running two live engine instances through the whole story, including a
+  migration after which the source engine provably no longer serves the
+  vault.
+
 ## 0.24.0 — Bounded-RAM FDE tier (PQ codes)
 
 The v0.23.0 honest-limits follow-up: FDE rows now upgrade event-driven

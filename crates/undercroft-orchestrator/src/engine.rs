@@ -182,9 +182,6 @@ mod tests {
         assert_eq!(mac_hex, hex::encode(mac.finalize().into_bytes()));
         // And a different vault yields a different MAC (the core guarantee).
         let h2 = mint_assertion("sekrit", "tenant-xyz");
-        assert_ne!(
-            h.split_once(':').unwrap().1,
-            h2.split_once(':').unwrap().1
-        );
+        assert_ne!(h.split_once(':').unwrap().1, h2.split_once(':').unwrap().1);
     }
 }

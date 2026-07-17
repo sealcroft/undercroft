@@ -25,11 +25,13 @@ them apart on purpose:
   `undercroft-store` (per-vault SQLite + hybrid search), `undercroft-vault`
   (keys, sealing, audit chain), and the `/v1` REST surface in
   `crates/undercroft-cli/src/tenant.rs`.
-- **Orchestrator** — routing, tenant→vault mapping, key minting, migration,
+- **Orchestrator** — routing, tenant→vault mapping, token minting, migration,
   instance-pool provisioning, blast-radius isolation. This layer stays
   **out of the engine** so the engine remains tree-blind and portable. It
-  ships later as a *separate, optional* tool (an `examples/orchestrator/`
-  or a sibling crate), never as a dependency of the engine.
+  **ships as the separate, optional `undercroft-orchestrator` binary**
+  (`crates/undercroft-orchestrator`) — a pure client of the `/v1` surface,
+  never a dependency of the engine. See
+  [The orchestrator](#the-orchestrator) below.
 
 Keeping the orchestrator outside the engine means a single-instance
 deployment carries none of its weight, and the engine stays a
@@ -196,6 +198,52 @@ Reranking is CPU-bound and single-threaded (tract), so on a single instance
 it bounds throughput; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds
 per-query latency. Measured lift: LoCoMo R@10 94.6 → **97.68** (see
 [benchmarks/RESULTS.md](../benchmarks/RESULTS.md)).
+
+## The orchestrator
+
+`undercroft-orchestrator` (shipped v0.25.0) is the control plane the design
+above reserved: one binary, its **own** SQLite state, talking to engines
+exactly like any other `/v1` caller — palace bearer + freshly minted
+per-vault assertion per request. Nothing in it links engine crates.
+
+**Surface** (single-threaded `tiny_http`, the engine's serving model):
+
+| Route | Plane | Purpose |
+|---|---|---|
+| `GET /healthz` | — | unauthenticated liveness |
+| `POST/GET /admin/instances`, `DELETE /admin/instances/{name}`, `GET .../{name}/health` | admin | instance registry (+ live engine probe); removal refused while tenants map to it |
+| `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
+| `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
+| `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>` |
+
+The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
+failure is a uniform 401. The CLI (`instance-add`, `tenant-create`,
+`migrate`, …) mirrors the admin plane for scripted use, plus `keygen`.
+
+**Security model** — the orchestrator state is credential-bearing, so it is
+hardened the way the engine hardens its own secrets:
+
+- Engine credentials (bearer + assertion secret) are **sealed at rest**
+  (XChaCha20-Poly1305 under `UNDERCROFT_ORCH_KEY`, AAD-bound to the instance
+  name — a blob copied onto another row fails to open, mirroring the
+  engine's vault-id AAD binding).
+- Tenant tokens are **never stored** — only a domain-separated HMAC; the
+  token appears exactly once, in the create response.
+- The data plane maps a token to **its own vault only**: there is no path
+  shape that reaches another tenant, the subpath allowlist keeps vault
+  lifecycle off the data plane (the vault root is unroutable), and even a
+  routing bug downstream fails cryptographically — the assertion and the
+  vault AAD both carry the vault id.
+
+**Migration** (`POST /admin/tenants/{id}/migrate {"to": …}`): export from
+the source (the v0.18 artifact-carrying NDJSON, so token matrices restore
+by copy, not re-encode) → import on the target → **count-verified** →
+mapping flip → source vault delete (`keep_source` opts out). Any failure
+before the flip leaves the source authoritative and removes the partial
+copy. The e2e suite (`tests/e2e-orchestrator.sh`, 24 checks,
+`docker compose run --rm orchestrator-e2e`) exercises the whole story
+against two live engine instances, including the source engine provably
+losing the vault after migration.
 
 ## Latency and the orchestrator compose cleanly
 
