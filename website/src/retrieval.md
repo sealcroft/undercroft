@@ -79,9 +79,13 @@ Full-scan is O(n) per query; an ANN index (HNSW prototype) stays flat:
 | 20,000 | ~3 q/s | 321 q/s | ~100× | 92.4% |
 | 50,000 | ~1 q/s | 271 q/s | ~225× | 60.3% |
 
-The speedup is real and grows without bound. The in-memory HNSW is a *proof the
-algorithm helps*, but it costs O(corpus) RAM and its recall falls off at a fixed
-over-fetch. The durable, bounded-RAM design is the **on-disk PQ prefilter**
+The speedup is real and grows without bound. The recall fall-off in this
+table was a fixed search beam (`ef_search=100` vs the ≥256 candidates the
+store requests) — since fixed by scaling `ef` with the corpus: R@5
+93→**98.8%** at 20k and 72→**96.3%** at 50k, at 126–186 q/s (accuracy now
+degrades gently instead of collapsing). The in-memory HNSW still costs
+O(corpus) RAM, though. The durable, bounded-RAM design is the **on-disk PQ
+prefilter**
 (shipped for hmac-only vaults, mirroring the on-disk FTS5 rule): Product
 Quantization compresses each vector ~32× (1.5 KB → 48 B), the codes live on
 disk, and only a ~400 KB codebook stays resident. Measured at N=20,000
@@ -95,8 +99,8 @@ disk, and only a ~400 KB codebook stays resident. Measured at N=20,000
 | in-memory HNSW | 454.1 | 93.1% | 377.7 | 71.7% | O(corpus) |
 
 **PQ's recall is flat in N** (98.6% → 98.9% — it scans every code, so the only
-error is quantization), where the graph-based HNSW collapses without per-size
-tuning (93% → 72%).
+error is quantization), where the graph-based HNSW collapsed without per-size
+tuning in this run (93% → 72%; fixed since by corpus-scaled `ef` — see above).
 
 **Sealed vaults now get the index too — encrypted at rest.** Every code row,
 the codebook, and the IVF centroids are AEAD-sealed (list ids never stored in

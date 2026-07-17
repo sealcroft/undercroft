@@ -2699,6 +2699,14 @@ mod tests {
             .search("kafka event stream backlog", &SearchOptions::default())
             .unwrap();
         assert!(hits[0].drawer.content.contains("kafka"));
+        // Reopen semantics: a fresh RAM cache (load-on-open path) reproduces
+        // the same candidates — hmac-only scans the cache too now.
+        s.pq_cache.borrow_mut().take();
+        s.pq_verified.set(false);
+        let again = s
+            .search("why did we switch to graphql", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(again[0].drawer.id, full[0].drawer.id);
     }
 
     #[test]

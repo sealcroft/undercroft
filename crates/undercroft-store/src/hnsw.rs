@@ -43,14 +43,30 @@ pub(crate) struct HnswIndex {
 impl HnswIndex {
     /// Build from `(seq, embedding)` pairs. Caller guarantees a non-empty set
     /// (an empty corpus needs no prefilter — the caller falls back to a scan).
+    ///
+    /// The search beam (`ef_search`) is fixed at build time by
+    /// `instant-distance` and its default (100) is *smaller than the ≥256
+    /// candidates the store asks for* — the tail of every query came from an
+    /// exhausted beam, which is why recall collapsed as the corpus grew
+    /// (R@5 93% at N=20k → 72% at N=50k, measured on synth). Scale the beam
+    /// with the corpus instead: floored well above the requested candidate
+    /// count, growing ~N/64, capped so a query stays a bounded graph walk.
+    /// Construction effort scales the same way (better graphs pay off at
+    /// exactly the sizes where the beam alone stops being enough).
     pub(crate) fn build(items: Vec<(i64, Vec<f32>)>) -> Self {
+        let n = items.len();
+        let ef_search = (n / 64).clamp(320, 1024);
+        let ef_construction = (n / 256).clamp(100, 256);
         let mut points = Vec::with_capacity(items.len());
         let mut values = Vec::with_capacity(items.len());
         for (seq, vec) in items {
             points.push(Emb(vec));
             values.push(seq);
         }
-        let map = Builder::default().build(points, values);
+        let map = Builder::default()
+            .ef_search(ef_search)
+            .ef_construction(ef_construction)
+            .build(points, values);
         Self { map }
     }
 
