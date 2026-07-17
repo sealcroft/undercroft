@@ -1,5 +1,5 @@
 //! MUVERA FDE candidate generation — token-aware retrieval through a
-//! single-vector index (arXiv:2405.19504; design in
+//! single-vector index (arXiv:2405.19504; design + measurements in
 //! docs/RETRIEVAL_SCALING.md "Beyond MaxSim").
 //!
 //! Every drawer's stored ColBERT token matrix compresses into one
@@ -10,11 +10,26 @@
 //! per-token work in the hot path** (one query forward total, shared with
 //! the MaxSim rescore that still runs over the top pool).
 //!
-//! Storage mirrors the token store it derives from: FDE rows live in
+//! **Two storage tiers, upgraded event-driven** (the token store's PQ
+//! pattern, applied to FDEs):
+//!
+//! * **v1 (raw)** — `[1][f32le…]`: exact FDEs, 4 B/dim (8 KB at the
+//!   default 2048). What small palaces keep. (Headerless v0.23.0 rows are
+//!   recognized by length and read as v1.)
+//! * **v2 (PQ codes)** — `[2][list:i32le][code…]`: once at least
+//!   `UNDERCROFT_FDE_PQ_MIN` rows exist, a product-quantizer codebook
+//!   trains from the palace's own FDEs (persisted sealed in `fde_meta`),
+//!   every row repacks to `dim/8` bytes (**32×**), and the scan switches
+//!   to per-query dot-product LUTs. Above the shared `UNDERCROFT_IVF_MIN`,
+//!   coarse centroids partition the FDE space and each query probes only
+//!   the nearest lists — **in RAM**: unlike the drawer-PQ index there is
+//!   no clustered disk layout to maintain, the list id just rides inside
+//!   the (sealed) blob, because a plaintext list column would leak which
+//!   drawers are semantically similar.
+//!
+//! Storage mirrors the token store it derives from: rows live in
 //! `drawer_fde` keyed by drawer id + model, AEAD-sealed on sealed vaults
-//! under the `/tok` domain with `fde/{id}` labels (an FDE is
-//! plaintext-derived exactly like the matrix it summarizes; hmac-only
-//! vaults store it plain like their other on-disk indexes). The encoder's
+//! under the `/tok` domain with `fde/{id}` labels. The encoder's
 //! parameters + seed persist sealed in `fde_meta` — query-side and
 //! doc-side encoders must agree bit-for-bit, and a palace restored from
 //! backup keeps scoring identically.
@@ -23,22 +38,34 @@
 //! attached store their FDE from the matrix already in hand; the first
 //! FDE search backfills any drawer that has a token matrix but no FDE —
 //! **pure arithmetic from the stored matrix, no transformer forwards** —
-//! and loads the `(seq, fde)` cache once per open. Drawers with no token
-//! matrix at all have no FDE and are simply invisible to FDE candidate
-//! generation (they keep appearing through full-scan search until token
-//! backfill covers them — same advisory posture as the rescore stage).
-//!
-//! RAM: the cache holds `dim×4` bytes per drawer (default 2048-dim FDEs →
-//! 8 KB/drawer, ~400 MB at N=50k). Honest note: this v1 is the *quality*
-//! tier — PQ-compressing FDE rows (the codes-not-vectors trick the
-//! retrieval PQ already uses) is the designed follow-up if the measured
-//! quality warrants it.
+//! and loads the cache once per open. A row that fails to open during the
+//! v2 repack is deleted, which turns it back into "missing" for the next
+//! backfill; nothing is ever silently mixed across formats or models.
 
 use undercroft_core::fde::{fde_dot, FdeEncoder, FdeParams};
 use undercroft_core::late::dequantize_tokens;
 use rusqlite::{params, OptionalExtension};
 
+use crate::pq::{CoarseQuantizer, ProductQuantizer};
 use crate::{PalaceStore, StoreError};
+
+/// Stored-FDE count at which the FDE codebook trains (v2 packing).
+pub(crate) const FDE_PQ_MIN_DEFAULT: usize = 256;
+/// Sampling cap and k-means iterations for FDE-codebook training.
+const FDE_PQ_SAMPLE: usize = 4096;
+const FDE_PQ_ITERS: usize = 10;
+const FDE_IVF_ITERS: usize = 10;
+
+/// The FDE RAM cache: raw vectors below the codebook threshold, PQ codes
+/// (+ IVF list) above it. One variant at a time — the train pass repacks
+/// every row in one sweep, so formats never mix.
+pub(crate) enum FdeCache {
+    /// `(seq, fde)` — exact vectors, dot-product scan.
+    Raw(Vec<(i64, Vec<f32>)>),
+    /// `(seq, list, code)` — ADC scan via per-query dot LUTs; `list` is -1
+    /// until IVF centroids exist.
+    Coded(Vec<(i64, i64, Vec<u8>)>),
+}
 
 fn f32s_to_bytes(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
@@ -57,6 +84,43 @@ fn bytes_to_f32s(b: &[u8]) -> Option<Vec<f32>> {
             .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
             .collect(),
     )
+}
+
+/// One parsed FDE row payload.
+enum FdeRow {
+    Raw(Vec<f32>),
+    Coded(i64, Vec<u8>),
+}
+
+fn fde_row_pack_raw(fde: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + fde.len() * 4);
+    out.push(1u8);
+    out.extend(f32s_to_bytes(fde));
+    out
+}
+
+fn fde_row_pack_coded(list: i64, code: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5 + code.len());
+    out.push(2u8);
+    out.extend((list as i32).to_le_bytes());
+    out.extend_from_slice(code);
+    out
+}
+
+/// Parse a row payload. `fde_dim` recognizes legacy (v0.23.0) headerless
+/// f32 rows by exact length; `code_len` validates v2 rows.
+fn fde_row_unpack(plain: &[u8], fde_dim: usize, code_len: usize) -> Option<FdeRow> {
+    match plain.first() {
+        Some(1) if (plain.len() - 1).is_multiple_of(4) => {
+            bytes_to_f32s(&plain[1..]).map(FdeRow::Raw)
+        }
+        Some(2) if code_len > 0 && plain.len() == 5 + code_len => {
+            let list = i32::from_le_bytes(plain[1..5].try_into().ok()?) as i64;
+            Some(FdeRow::Coded(list, plain[5..].to_vec()))
+        }
+        _ if plain.len() == fde_dim * 4 => bytes_to_f32s(plain).map(FdeRow::Raw),
+        _ => None,
+    }
 }
 
 /// Pack `(params, token_dim)`:
@@ -134,41 +198,48 @@ impl PalaceStore {
         Ok(())
     }
 
+    fn fde_meta_get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        let stored: Option<Vec<u8>> = self
+            .conn
+            .query_row("SELECT value FROM fde_meta WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(stored.and_then(|b| self.vault.tokens_from_rest(&format!("fde/{key}"), &b).ok()))
+    }
+
+    fn fde_meta_put(&self, key: &str, value: &[u8]) -> Result<(), StoreError> {
+        let blob = self.vault.tokens_at_rest(&format!("fde/{key}"), value);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO fde_meta (key, value) VALUES (?1, ?2)",
+            params![key, blob],
+        )?;
+        Ok(())
+    }
+
     /// Load-or-create the encoder for token dim `tokdim` (once per session).
     /// Persisted params win over env; a token-dim change (different late
-    /// model) drops every stored FDE — mixing constructions would score
-    /// garbage silently.
+    /// model) drops every stored FDE and the codebook — mixing
+    /// constructions would score garbage silently.
     fn fde_encoder_ensure(&self, tokdim: usize) -> Result<bool, StoreError> {
         if let Some(enc) = self.fde_encoder.borrow().as_ref() {
             return Ok(enc.token_dim() == tokdim);
         }
         self.fde_schema()?;
-        let stored: Option<Vec<u8>> = self
-            .conn
-            .query_row("SELECT value FROM fde_meta WHERE key = 'params'", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        let stored = stored
-            .and_then(|b| self.vault.tokens_from_rest("fde/params", &b).ok())
-            .and_then(|b| params_unpack(&b));
+        let stored = self.fde_meta_get("params")?.and_then(|b| params_unpack(&b));
         let params = match stored {
             Some((p, d)) if d == tokdim => p,
             other => {
                 if other.is_some() {
-                    // Token dim changed (new late model): stored FDEs are
-                    // unscorable — drop them and re-persist.
                     self.conn.execute("DELETE FROM drawer_fde", [])?;
+                    self.conn
+                        .execute("DELETE FROM fde_meta WHERE key != 'params'", [])?;
                     self.fde_cache.borrow_mut().take();
+                    *self.fde_pq.borrow_mut() = None;
+                    *self.fde_ivf.borrow_mut() = None;
                 }
                 let p = params_from_env();
-                let blob = self
-                    .vault
-                    .tokens_at_rest("fde/params", &params_pack(p, tokdim));
-                self.conn.execute(
-                    "INSERT OR REPLACE INTO fde_meta (key, value) VALUES ('params', ?1)",
-                    params![blob],
-                )?;
+                self.fde_meta_put("params", &params_pack(p, tokdim))?;
                 p
             }
         };
@@ -176,26 +247,25 @@ impl PalaceStore {
         Ok(true)
     }
 
-    /// Store one drawer's FDE from the token matrix already in hand (called
-    /// from the token write/backfill paths — no extra forwards, no re-read).
-    /// Advisory like every derived artifact: failure leaves the drawer
-    /// FDE-less, which candidate generation treats as invisible and the
-    /// next build pass repairs.
-    pub(crate) fn fde_encode_row(&self, id: &str, model: &str, matrix: &[f32], tokdim: usize) {
-        if !self.fde_enabled || matrix.is_empty() {
-            return;
-        }
-        if !matches!(self.fde_encoder_ensure(tokdim), Ok(true)) {
-            return;
-        }
-        let enc_ref = self.fde_encoder.borrow();
-        let Some(enc) = enc_ref.as_ref() else {
-            return;
+    /// Pack an FDE in the best live format (v2 codes when the codebook is
+    /// cached, v1 raw otherwise) and upsert the row; keeps the RAM cache
+    /// coherent from the plaintext in hand. Advisory like every derived
+    /// artifact: failure leaves the drawer FDE-less, repaired by the next
+    /// backfill pass.
+    fn fde_store_row(&self, id: &str, model: &str, fde: &[f32]) {
+        let (payload, cache_row) = match self.fde_pq.borrow().as_ref() {
+            Some(pq) => {
+                let list: i64 = self
+                    .fde_ivf
+                    .borrow()
+                    .as_ref()
+                    .map_or(-1, |cq| cq.assign(fde) as i64);
+                let code = pq.encode(fde);
+                (fde_row_pack_coded(list, &code), Some((list, code)))
+            }
+            None => (fde_row_pack_raw(fde), None),
         };
-        let fde = enc.encode_doc(matrix);
-        let blob = self
-            .vault
-            .tokens_at_rest(&format!("fde/{id}"), &f32s_to_bytes(&fde));
+        let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
         let ok = self
             .conn
             .execute(
@@ -203,20 +273,54 @@ impl PalaceStore {
                 params![id, model, blob],
             )
             .is_ok();
-        if ok {
-            let seq: Option<i64> = self
-                .conn
-                .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
-                    r.get(0)
-                })
-                .optional()
-                .ok()
-                .flatten();
-            if let (Some(seq), Some(cache)) = (seq, self.fde_cache.borrow_mut().as_mut()) {
-                cache.retain(|(s, _)| *s != seq);
-                cache.push((seq, fde));
-            }
+        if !ok {
+            return;
         }
+        let seq: Option<i64> = self
+            .conn
+            .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        let Some(seq) = seq else { return };
+        let mut cache = self.fde_cache.borrow_mut();
+        match (cache.as_mut(), cache_row) {
+            (Some(FdeCache::Raw(rows)), None) => {
+                rows.retain(|(s, _)| *s != seq);
+                rows.push((seq, fde.to_vec()));
+            }
+            (Some(FdeCache::Coded(rows)), Some((list, code))) => {
+                rows.retain(|(s, _, _)| *s != seq);
+                rows.push((seq, list, code));
+            }
+            (Some(_), _) => {
+                // Format transition mid-write (shouldn't happen — the train
+                // pass rebuilds the cache) — drop and reload lazily.
+                *cache = None;
+            }
+            (None, _) => {}
+        }
+    }
+
+    /// Store one drawer's FDE from the token matrix already in hand (called
+    /// from the token write/backfill paths — no extra forwards, no re-read).
+    pub(crate) fn fde_encode_row(&self, id: &str, model: &str, matrix: &[f32], tokdim: usize) {
+        if !self.fde_enabled || matrix.is_empty() {
+            return;
+        }
+        if !matches!(self.fde_encoder_ensure(tokdim), Ok(true)) {
+            return;
+        }
+        let fde = {
+            let enc_ref = self.fde_encoder.borrow();
+            let Some(enc) = enc_ref.as_ref() else {
+                return;
+            };
+            enc.encode_doc(matrix)
+        };
+        self.fde_store_row(id, model, &fde);
     }
 
     /// Purge a deleted drawer's FDE row (called beside the token purge; the
@@ -271,30 +375,126 @@ impl PalaceStore {
             if !matches!(self.fde_encoder_ensure(tokdim), Ok(true)) {
                 continue;
             }
-            let enc_ref = self.fde_encoder.borrow();
-            let Some(enc) = enc_ref.as_ref() else {
-                continue;
+            let fde = {
+                let enc_ref = self.fde_encoder.borrow();
+                let Some(enc) = enc_ref.as_ref() else {
+                    continue;
+                };
+                enc.encode_doc(&matrix)
             };
-            let fde = enc.encode_doc(&matrix);
-            let blob = self
-                .vault
-                .tokens_at_rest(&format!("fde/{id}"), &f32s_to_bytes(&fde));
-            drop(enc_ref);
-            let _ = self.conn.execute(
-                "INSERT OR REPLACE INTO drawer_fde (id, model, fde) VALUES (?1, ?2, ?3)",
-                params![id, model, blob],
-            );
+            self.fde_store_row(&id, model, &fde);
         }
         Ok(())
     }
 
-    /// Load the `(seq, fde)` cache (no-op if present): one pass per open,
-    /// sealed rows decrypt through the vault. Rows that fail to open or
-    /// parse are skipped — they only cost their candidate slot.
-    fn fde_cache_ensure(&self, model: &str) -> Result<(), StoreError> {
+    /// Load-or-train the FDE codebook (+ IVF centroids) once per session.
+    /// Training fires when at least `fde_pq_min` rows exist: every raw row
+    /// repacks to v2 codes (**32× smaller**) in one pass — pure
+    /// re-encoding. IVF centroids train alongside when the corpus crosses
+    /// the shared `ivf_min`. A stored codebook trained for another model is
+    /// dropped with the rows (see `fde_encoder_ensure`).
+    fn fde_pq_ensure(&self, model: &str, fde_dim: usize) -> Result<(), StoreError> {
+        if self.fde_pq.borrow().is_some() || self.fde_pq_checked.get() {
+            return Ok(());
+        }
+        self.fde_pq_checked.set(true);
+        // Stored codebook?
+        if let Some(pq) = self
+            .fde_meta_get("codebook")?
+            .and_then(|b| ProductQuantizer::from_bytes(&b))
+        {
+            *self.fde_pq.borrow_mut() = Some(pq);
+            if let Some(cq) = self
+                .fde_meta_get("ivf")?
+                .and_then(|b| CoarseQuantizer::from_bytes(&b))
+            {
+                *self.fde_ivf.borrow_mut() = Some(cq);
+            }
+            return Ok(());
+        }
+        let rows: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM drawer_fde WHERE model = ?1",
+            params![model],
+            |r| r.get(0),
+        )?;
+        if (rows as usize) < self.fde_pq_min {
+            return Ok(());
+        }
+        // Collect the raw FDEs (v1/legacy rows) for training + repack.
+        let all: Vec<(String, Vec<u8>)> = self
+            .conn
+            .prepare("SELECT id, fde FROM drawer_fde WHERE model = ?1")?
+            .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut raw: Vec<(String, Vec<f32>)> = Vec::with_capacity(all.len());
+        for (id, blob) in all {
+            let parsed = self
+                .vault
+                .tokens_from_rest(&format!("fde/{id}"), &blob)
+                .ok()
+                .and_then(|p| fde_row_unpack(&p, fde_dim, 0));
+            match parsed {
+                Some(FdeRow::Raw(f)) if f.len() == fde_dim => raw.push((id, f)),
+                _ => {
+                    // Unreadable or mis-shaped: delete → "missing" → the
+                    // next backfill recreates it (as v2, post-train).
+                    let _ = self
+                        .conn
+                        .execute("DELETE FROM drawer_fde WHERE id = ?1", params![id]);
+                }
+            }
+        }
+        if raw.len() < self.fde_pq_min {
+            return Ok(());
+        }
+        let stride = raw.len().div_ceil(FDE_PQ_SAMPLE).max(1);
+        let sample: Vec<Vec<f32>> = raw.iter().step_by(stride).map(|(_, f)| f.clone()).collect();
+        let Some(m) = [8usize, 4]
+            .iter()
+            .find(|&&d| fde_dim.is_multiple_of(d))
+            .map(|&d| fde_dim / d)
+        else {
+            return Ok(());
+        };
+        let Some(pq) = ProductQuantizer::train(&sample, m, FDE_PQ_ITERS) else {
+            return Ok(());
+        };
+        self.fde_meta_put("codebook", &pq.to_bytes())?;
+        // IVF centroids over FDE space when the corpus warrants them —
+        // probed **in RAM**, so no disk layout is involved.
+        if raw.len() >= self.ivf_min {
+            let nlist = ((raw.len() as f64).sqrt() as usize).clamp(16, 1024);
+            if let Some(cq) = CoarseQuantizer::train(&sample, nlist, FDE_IVF_ITERS, raw.len() as u64)
+            {
+                self.fde_meta_put("ivf", &cq.to_bytes())?;
+                *self.fde_ivf.borrow_mut() = Some(cq);
+            }
+        }
+        // Repack every raw row to v2 with the codebook in hand.
+        let ivf_ref = self.fde_ivf.borrow();
+        for (id, fde) in &raw {
+            let list: i64 = ivf_ref.as_ref().map_or(-1, |cq| cq.assign(fde) as i64);
+            let payload = fde_row_pack_coded(list, &pq.encode(fde));
+            let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
+            let _ = self.conn.execute(
+                "UPDATE drawer_fde SET fde = ?1 WHERE id = ?2",
+                params![blob, id],
+            );
+        }
+        drop(ivf_ref);
+        *self.fde_pq.borrow_mut() = Some(pq);
+        self.fde_cache.borrow_mut().take(); // rebuild coded
+        Ok(())
+    }
+
+    /// Load the FDE cache (no-op if present): one pass per open, sealed
+    /// rows decrypt through the vault. Rows that fail to open or parse are
+    /// skipped — they only cost their candidate slot.
+    fn fde_cache_ensure(&self, model: &str, fde_dim: usize) -> Result<(), StoreError> {
         if self.fde_cache.borrow().is_some() {
             return Ok(());
         }
+        let code_len = self.fde_pq.borrow().as_ref().map_or(0, |pq| pq.code_len());
         let rows: Vec<(String, i64, Vec<u8>)> = self
             .conn
             .prepare(
@@ -303,21 +503,29 @@ impl PalaceStore {
             )?
             .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
-        let mut cache = Vec::with_capacity(rows.len());
+        let (mut raw, mut coded) = (Vec::new(), Vec::new());
         for (id, seq, blob) in rows {
             let Ok(plain) = self.vault.tokens_from_rest(&format!("fde/{id}"), &blob) else {
                 continue;
             };
-            let Some(fde) = bytes_to_f32s(&plain) else {
-                continue;
-            };
-            cache.push((seq, fde));
+            match fde_row_unpack(&plain, fde_dim, code_len) {
+                Some(FdeRow::Raw(f)) => raw.push((seq, f)),
+                Some(FdeRow::Coded(list, code)) => coded.push((seq, list, code)),
+                None => {}
+            }
         }
-        *self.fde_cache.borrow_mut() = Some(cache);
+        // One variant at a time (the train pass repacks wholesale); if both
+        // somehow appear, the coded majority wins and stragglers cost their
+        // candidate slot until the next backfill sweep.
+        *self.fde_cache.borrow_mut() = Some(if coded.len() >= raw.len() {
+            FdeCache::Coded(coded)
+        } else {
+            FdeCache::Raw(raw)
+        });
         Ok(())
     }
 
-    /// Top-`k` candidate seqs by FDE dot product, or `None` when FDE
+    /// Top-`k` candidate seqs by FDE similarity, or `None` when FDE
     /// retrieval can't serve this query (no late encoder, no FDE rows, or
     /// an empty query encode) — the caller falls back to the fusion scan.
     pub(crate) fn fde_candidates(
@@ -332,12 +540,18 @@ impl PalaceStore {
         if !matches!(self.fde_encoder_ensure(late.dim()), Ok(true)) {
             return Ok(None);
         }
+        let fde_dim = self
+            .fde_encoder
+            .borrow()
+            .as_ref()
+            .map_or(0, |enc| enc.dim());
         if !self.fde_checked.get() {
             self.fde_checked.set(true);
             self.fde_backfill(&model)?;
             self.fde_cache.borrow_mut().take(); // rebuild below with new rows
         }
-        self.fde_cache_ensure(&model)?;
+        self.fde_pq_ensure(&model, fde_dim)?;
+        self.fde_cache_ensure(&model, fde_dim)?;
         let qmatrix = late.encode_query(query);
         if qmatrix.is_empty() {
             return Ok(None);
@@ -345,20 +559,56 @@ impl PalaceStore {
         // Stash the encoded query for the MaxSim rescore stage: the forward
         // is the expensive part of both stages, and one search pays it once.
         *self.qmatrix_cache.borrow_mut() = Some((query.to_string(), qmatrix.clone()));
-        let enc_ref = self.fde_encoder.borrow();
-        let Some(enc) = enc_ref.as_ref() else {
-            return Ok(None);
+        let qfde = {
+            let enc_ref = self.fde_encoder.borrow();
+            let Some(enc) = enc_ref.as_ref() else {
+                return Ok(None);
+            };
+            enc.encode_query(&qmatrix)
         };
-        let qfde = enc.encode_query(&qmatrix);
         let cache_ref = self.fde_cache.borrow();
-        let cache = match cache_ref.as_ref() {
-            Some(c) if !c.is_empty() => c,
+        let mut scored: Vec<(f32, i64)> = match cache_ref.as_ref() {
+            Some(FdeCache::Raw(rows)) if !rows.is_empty() => rows
+                .iter()
+                .map(|(seq, fde)| (fde_dot(&qfde, fde), *seq))
+                .collect(),
+            Some(FdeCache::Coded(rows)) if !rows.is_empty() => {
+                let pq_ref = self.fde_pq.borrow();
+                let Some(pq) = pq_ref.as_ref() else {
+                    return Ok(None);
+                };
+                let Some(tables) = pq.dot_tables(&qfde) else {
+                    return Ok(None);
+                };
+                // IVF probe (RAM-side list filter), widened to the full
+                // scan if the probed lists can't fill `k` — narrowing may
+                // never empty the candidate set.
+                let probe: Option<Vec<i64>> = self.fde_ivf.borrow().as_ref().map(|cq| {
+                    let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 2).max(8));
+                    let mut lists: Vec<i64> =
+                        cq.probe(&qfde, nprobe).into_iter().map(i64::from).collect();
+                    lists.push(-1); // pre-IVF rows ride along
+                    lists
+                });
+                let mut out: Option<Vec<(f32, i64)>> = None;
+                if let Some(lists) = &probe {
+                    let probed: Vec<(f32, i64)> = rows
+                        .iter()
+                        .filter(|(_, list, _)| lists.contains(list))
+                        .map(|(seq, _, code)| (pq.adc_dot(&tables, code), *seq))
+                        .collect();
+                    if probed.len() >= k {
+                        out = Some(probed);
+                    }
+                }
+                out.unwrap_or_else(|| {
+                    rows.iter()
+                        .map(|(seq, _, code)| (pq.adc_dot(&tables, code), *seq))
+                        .collect()
+                })
+            }
             _ => return Ok(None),
         };
-        let mut scored: Vec<(f32, i64)> = cache
-            .iter()
-            .map(|(seq, fde)| (fde_dot(&qfde, fde), *seq))
-            .collect();
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {
                 b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
