@@ -286,9 +286,20 @@ Also closes the v0.13.0 follow-up items:
 - MUVERA/FDE research note in RETRIEVAL_SCALING — the "beyond MaxSim"
   candidate, deferred below multi-million-drawer scale.
 
+## v0.23.0 — MUVERA FDE candidate generation (done)
+
+- Token-aware candidates through fixed-dimensional encodings
+  (`UNDERCROFT_RETRIEVAL=fde`): seed-deterministic construction, sealed
+  `drawer_fde` rows + `fde_meta` params, transformer-free backfill, shared
+  query forward. Measured: LoCoMo R@10 **identical** to fusion (1913/1982)
+  at **52.9 vs 70.3 ms/q (−25%)**; mechanics at N=2k/50k/200k: exact
+  top-10 ⊆ FDE top-100 = **100%** at every size, 38–40× below exact cost.
+
 ## Next
-- **Store-side rescore cost** (the dominant ~70 ms/q term v0.21.0 exposed):
-  profile the candidate token fetch/decode + MaxSim + fusion path.
+- **PQ/IVF over FDEs**: bounded-RAM, sub-linear FDE candidates (they are
+  ordinary vectors — the existing prefilter machinery composes); needed
+  past ~10⁵–10⁶ drawers where the linear FDE scan and 8 KB/drawer cache
+  start to bite.
 - **Sealed-tier page-level decryption** (research): decrypt only probed
   lists — matters past multi-million drawers.
 - **Retrieval wiring**: env surface for the ort backend outside the bench.
@@ -299,7 +310,6 @@ Also closes the v0.13.0 follow-up items:
   v0.18.0's artifact-carrying export/import is its migration primitive.
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
-- **MUVERA FDEs** when corpus scale warrants (see the research note).
 
 ---
 

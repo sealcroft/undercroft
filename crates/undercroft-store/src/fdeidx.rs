@@ -193,7 +193,9 @@ impl PalaceStore {
             return;
         };
         let fde = enc.encode_doc(matrix);
-        let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &f32s_to_bytes(&fde));
+        let blob = self
+            .vault
+            .tokens_at_rest(&format!("fde/{id}"), &f32s_to_bytes(&fde));
         let ok = self
             .conn
             .execute(
@@ -270,7 +272,9 @@ impl PalaceStore {
                 continue;
             }
             let enc_ref = self.fde_encoder.borrow();
-            let Some(enc) = enc_ref.as_ref() else { continue };
+            let Some(enc) = enc_ref.as_ref() else {
+                continue;
+            };
             let fde = enc.encode_doc(&matrix);
             let blob = self
                 .vault

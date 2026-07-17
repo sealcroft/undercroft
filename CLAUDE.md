@@ -22,10 +22,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   BM25 fusion) + optional cross-encoder rerank + ColBERT late-interaction
   stage (latestage.rs: token store, event-driven token-PQ codebook, LUT
   MaxSim), PQ/IVF candidate prefilter for both vault levels (pq.rs primitive,
-  pqidx.rs index; sealed rows via decrypt-once RAM cache), experimental
-  in-memory HNSW (hnsw.rs, `hnsw` feature), transactional audit chain
-  (`chain_meta` + `chain_append`), verify, knowledge graph (kg.rs),
-  management surface (manage.rs), remote-index integration (remote.rs)
+  pqidx.rs index; both levels scan a load-once RAM code cache), MUVERA FDE
+  token-aware candidates (fdeidx.rs; core fde.rs construction; sealed
+  `drawer_fde` + `fde_meta`), experimental in-memory HNSW (hnsw.rs, `hnsw`
+  feature), transactional audit chain (`chain_meta` + `chain_append`),
+  verify, knowledge graph (kg.rs), management surface (manage.rs),
+  remote-index integration (remote.rs)
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
   OTLP traces (metadata-only spans), and the live SSE broker

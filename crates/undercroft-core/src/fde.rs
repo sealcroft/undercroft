@@ -105,7 +105,12 @@ impl FdeEncoder {
                 })
                 .collect()
         };
-        Self { params, d, planes, proj }
+        Self {
+            params,
+            d,
+            planes,
+            proj,
+        }
     }
 
     pub fn params(&self) -> FdeParams {

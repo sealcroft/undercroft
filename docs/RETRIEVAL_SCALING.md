@@ -371,53 +371,67 @@ across backups, self-healing, and scored via register-LUT MaxSim over PQ
 codes**. Recompute-everything is slow; plaintext indexes are leaky; this is
 neither.
 
-### Beyond MaxSim: MUVERA fixed-dimensional encodings (research note, deferred)
+### Beyond MaxSim: MUVERA fixed-dimensional encodings (shipped, measured)
 
-Our late-interaction stage still *scores* every fusion candidate with MaxSim —
-cheap arithmetic, but linear in the candidate pool, and the pool itself comes
-from the single-vector fusion stage, which knows nothing about token-level
-similarity. The honest "beyond MaxSim" candidate is **MUVERA** (Dhulipala,
-Jayaram et al., Google Research — arXiv:2405.19504): compress each token
-*matrix* into one **fixed-dimensional encoding** (FDE) such that a plain inner
-product of two FDEs approximates the Chamfer/MaxSim similarity, with proven
+Our late-interaction stage *scores* candidates with MaxSim — cheap
+arithmetic, but the candidate pool came from the single-vector fusion stage,
+which knows nothing about token-level similarity, and hydrating+verifying
+that pool was the measured ~70 ms/q dominant term. **MUVERA** (Dhulipala,
+Jayaram et al., Google Research — arXiv:2405.19504) closes the gap: compress
+each token *matrix* into one **fixed-dimensional encoding** (FDE) such that
+a plain inner product of two FDEs approximates Chamfer/MaxSim, with proven
 ε-approximation bounds. The construction is model-free randomization —
-SimHash-partition the embedding space into B buckets, aggregate each bucket's
-token vectors (sum on the query side, centroid on the doc side), concatenate,
-then randomly project down — so it needs no training and composes with any
-ColBERT-style encoder.
+SimHash buckets, per-bucket aggregation (query sums, doc centroids with
+Hamming `fill_empty_clusters`), a ±1 projection — no training, composes with
+any ColBERT-style encoder.
 
-Why it fits this architecture unusually well:
+**Shipped** (`undercroft-core/src/fde.rs` + `undercroft-store/src/fdeidx.rs`,
+`UNDERCROFT_RETRIEVAL=fde`): seed-deterministic encoders (params + seed
+persist sealed in `fde_meta` — query and doc sides must agree bit-for-bit,
+and restores keep scoring identically); `drawer_fde` rows written from the
+token matrix already in hand at ingest, AEAD-sealed on sealed vaults under
+the `/tok` domain (`fde/{id}` labels); event-driven backfill from stored
+matrices (pure arithmetic — **no transformer**); a load-once `(seq, fde)`
+RAM cache; candidates by FDE dot ahead of fusion, MaxSim rescore unchanged.
+The query forward is shared between candidate generation and rescore — one
+search, one forward. Default params `8 reps × 16 buckets × 16 proj` →
+2048-dim FDEs (8 KB/drawer; `UNDERCROFT_FDE_REPS/_KSIM/_DPROJ/_SEED`).
 
-- **An FDE is just a vector**, so the entire existing single-vector machinery
-  applies unchanged: the PQ/IVF prefilter (both vault levels), AAD-domain
-  sealing, portable export artifacts, the load-once RAM caches. Candidate
-  generation would become *token-aware* without a transformer or a per-token
-  index anywhere in the hot path.
-- **MaxSim stays** as the exact rescorer over the FDE top-N (MUVERA's own
-  pipeline re-ranks with exact Chamfer) — verbatim-retrieval quality is
-  gated by the same final stage we already ship, so the gate methodology
-  (LoCoMo ≥96.5) transfers directly.
-- The measured v0.21.0 finding makes the case concrete: search latency is now
-  dominated by the **store-side rescore** (~70 ms/q), not the query forward.
-  FDE-quality candidates would let the rescore pool shrink (MUVERA reports
-  2–5× fewer candidates for equal recall vs PLAID-style pipelines), attacking
-  exactly the dominant term.
+**Measured, end-to-end** (LoCoMo full 1,982 QA, hash embedder + ort
+colbertv2.0 + token-PQ LUT, same host as the v0.21.0 rows):
 
-Why it is deliberately **deferred**:
+| Candidate stage | R@10 | search ms/q |
+|---|---|---|
+| fusion (v0.21.0 baseline) | 96.5% (1913) | 70.3 |
+| **MUVERA FDE top-256** | **96.5% (identical 1913)** | **52.9 (−25%)** |
 
-- At our measured scales (≤50k drawers per vault) the fusion prefilter +
-  flat MaxSim already meets the recall gate at ~70 ms/q; FDEs add a second
-  derived artifact per drawer (storage, sealing, export, backfill surface)
-  whose payoff only materializes when the rescore pool must shrink or corpora
-  reach the multi-million range where the remote-index tier begins to matter.
-- The FDE dimension MUVERA reports as competitive (≈1–10k before projection)
-  interacts with our PQ codebooks and sealed-row sizes in ways that deserve
-  their own measured sweep, not a rider on another release.
+Recall is question-for-question identical — the FDE head kept everything the
+pipeline needed — and latency drops because the fusion stage now hydrates
+and verifies 256 candidates instead of the whole store: the FDE attacks
+exactly the term v0.21.0 exposed.
 
-When it lands, the shape is: FDE column beside the embedding (sealed under its
-own AAD domain), FDE-driven PQ/IVF candidates, existing MaxSim rescore, gate
-re-run — no changes to the trait surface (`LateInteraction` already owns both
-encode paths).
+**Measured, mechanics at scale** (`undercroft-bench fde-synth`: synthetic
+clustered token matrices, 32 tokens/doc, dim 128; ground truth = exact
+MaxSim over every doc):
+
+| N docs | exact MaxSim ms/q | FDE scan ms/q | exact top-10 ⊆ FDE top-100 | FDE RAM |
+|---|---|---|---|---|
+| 2,000 | 98 | 2.5 | 100% | 16 MB |
+| 50,000 | 2,459 | 64 | **100%** | 410 MB |
+| 200,000 | 9,807 | 246 | **100%** | 1.6 GB |
+
+The property the pipeline needs — the exact-MaxSim top-10 surviving inside
+the FDE top-100, so the rescore restores exact order — held **perfectly at
+every size**, at 38–40× below exact cost. (FDE-alone top-10 hovers ~60%,
+which is precisely why the MaxSim rescore stays.)
+
+Honest limits, and the designed next tier: the FDE scan is still **linear**
+(O(N × 2048) — 4.1 q/s at N=200k) and the cache is O(corpus) RAM at
+8 KB/drawer. Both have the same known answer as every other vector here:
+**PQ/IVF over the FDEs** (an FDE is just a vector — the existing bounded-RAM
+prefilter machinery composes directly). That lands when a corpus actually
+needs it; the artifacts and construction shipped now are already the
+compatible substrate.
 
 ## Configurable — pick per deployment, not one-size-fits-all
 

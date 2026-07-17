@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.23.0 — MUVERA FDE candidate generation
+
+The v0.22.0 research note, implemented and measured: token-aware candidate
+generation through **fixed-dimensional encodings** (arXiv:2405.19504) —
+each drawer's ColBERT token matrix compresses into one 2048-dim vector
+whose dot product approximates MaxSim.
+
+- **`undercroft-core/src/fde.rs`**: seed-deterministic, dependency-free
+  MUVERA construction (SimHash buckets; query-side sums, doc-side
+  centroids with Hamming `fill_empty_clusters`; ±1 projection). Same
+  `(seed, params, dim)` ⇒ bit-identical encoders — restores keep scoring.
+- **`undercroft-store/src/fdeidx.rs`** (`UNDERCROFT_RETRIEVAL=fde`):
+  `drawer_fde` rows written from the token matrix already in hand at
+  ingest, AEAD-sealed on sealed vaults (`/tok` domain, `fde/{id}` labels);
+  params sealed in `fde_meta`; event-driven backfill from stored matrices
+  (pure arithmetic, no transformer); load-once RAM cache; FDE dot
+  candidates ahead of fusion, MaxSim rescore unchanged. The query forward
+  is **shared** between candidate generation and rescore (the first run
+  measured the duplication: 95.5 ms/q → 52.9 after the fix).
+- **Measured, end-to-end** (LoCoMo full 1,982 QA, ort colbert + tok-PQ
+  LUT): R@10 **96.5% — question-for-question identical** to the fusion
+  baseline (1913/1982 both) at **52.9 vs 70.3 ms/q (−25%)** — the FDE head
+  prunes the hydrate+verify pool that v0.21.0 measured as the dominant
+  cost.
+- **Measured, mechanics at scale** (`undercroft-bench fde-synth`, exact
+  MaxSim ground truth): exact top-10 ⊆ FDE top-100 = **100% at N=2k, 50k,
+  and 200k**, at 38–40× below exact scan cost (64 ms/q @50k, 246 @200k;
+  8 KB/drawer RAM). FDE-alone top-10 ~60% — the MaxSim rescore stays, by
+  design.
+- Honest limits documented: the FDE scan is linear and the cache is
+  O(corpus) RAM; the designed next tier is PQ/IVF over the FDEs (they are
+  ordinary vectors — the bounded-RAM machinery composes directly).
+
 ## 0.22.0 — Unified PQ cache, HNSW ef-scaling, MUVERA note
 
 Three follow-ups from the retrieval-scaling track, each measured.

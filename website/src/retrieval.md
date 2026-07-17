@@ -187,6 +187,16 @@ query-time forwards**:
 So the cross-encoder + rayon path is a *many-core* optimization; ColBERT is the
 *portable, core-independent* option for constrained boxes.
 
+**MUVERA FDE candidates** (`UNDERCROFT_RETRIEVAL=fde`) extend token-awareness
+to the *candidate* stage: each stored token matrix compresses into one
+fixed-dimensional vector (arXiv:2405.19504) whose dot product approximates
+MaxSim — sealed at rest, built with zero extra transformer forwards, one
+shared query forward per search. Measured: LoCoMo recall
+**question-for-question identical** to the fusion pipeline at **52.9 vs
+70.3 ms/query (−25%)**; on synthetic corpora up to N=200,000 the exact
+MaxSim top-10 survived the FDE top-100 **100% of the time** at 38–40× below
+exact-scan cost.
+
 ## Configurable — choose per deployment
 
 Retrieval, scoring, and runtime are **independent, user-selectable axes**.
