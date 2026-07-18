@@ -361,6 +361,8 @@ LLM (optional, for `refine`): `UNDERCROFT_LLM_URL` · `UNDERCROFT_LLM_MODEL`
 
 Telemetry builds: `UNDERCROFT_LOG` · `UNDERCROFT_LOG_FORMAT` (`json`) ·
 `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process) ·
+`UNDERCROFT_OTLP_HEADERS` (comma-separated `key=value` export headers,
+e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 `UNDERCROFT_SERVICE_NAME`.
 
 Orchestrator: `UNDERCROFT_ORCH_DB` · `UNDERCROFT_ORCH_KEY` (required) ·

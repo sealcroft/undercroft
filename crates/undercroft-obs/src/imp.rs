@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::Sample;
 
 use opentelemetry::{global, KeyValue};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
@@ -188,10 +188,26 @@ fn real_init() {
         } else {
             format!("{}/v1/traces", endpoint.trim_end_matches('/'))
         };
+        // UNDERCROFT_OTLP_HEADERS: comma-separated `key=value` pairs sent
+        // with every export request (e.g. `authorization=Bearer tok`) —
+        // how authenticated collectors are reached. Values may contain
+        // `=`; pairs without one are ignored.
+        let headers: std::collections::HashMap<String, String> = env("UNDERCROFT_OTLP_HEADERS")
+            .map(|raw| {
+                raw.split(',')
+                    .filter_map(|pair| {
+                        let (k, v) = pair.split_once('=')?;
+                        let k = k.trim();
+                        (!k.is_empty()).then(|| (k.to_string(), v.trim().to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         if let Ok(span_exporter) = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
             .with_endpoint(traces_endpoint)
             .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+            .with_headers(headers)
             .build()
         {
             tracer_provider = Some(

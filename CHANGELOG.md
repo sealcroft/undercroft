@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.32.0 — Agents guide, landing walkthrough, OTLP headers
+
+- **`docs/AGENTS.md`** — a scenario-driven implementation guide written
+  for AI agents: a deployment decision table and seven scenarios
+  (single-agent memory, team server, multi-tenant engine, orchestrator
+  fleet, retrieval-tier selection, security operations, telemetry),
+  followed by the complete machine-facing reference — all 32 MCP tools
+  (write tools marked), every `/v1` and orchestrator route with its auth,
+  every `UNDERCROFT_*` variable with defaults — and a verification
+  checklist. Published in the book as `docs/agents.html`; linked from
+  the README header and the landing page.
+- **Landing page**: six use-case cards ("what to build with it"), a
+  7-step hands-on walkthrough with copyable real commands (install →
+  init → feed → ask → wire an agent → share → operate), a closing CTA,
+  and refreshed stat counters (176 cargo tests, 228 e2e checks across
+  the four suites).
+- **`UNDERCROFT_OTLP_HEADERS` implemented** (was documented but not read
+  anywhere): comma-separated `key=value` pairs attached to every OTLP
+  trace export — authenticated collectors (e.g.
+  `authorization=Bearer <token>`) now work as the docs always claimed.
+  Telemetry builds only; still nothing leaves the process without
+  `UNDERCROFT_OTLP_ENDPOINT`.
+
 ## 0.31.0 — Bulk-ingest transaction batching
 
 Follow-up to v0.28.0's durability work, which made every commit a real
