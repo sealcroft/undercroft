@@ -126,11 +126,37 @@ pub fn new_vault_salt() -> [u8; SALT_LEN] {
 }
 
 fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
-    fs::write(path, data)?;
+    // Key material is written once and is unrecoverable if lost — fsync the
+    // file and its directory entry so creation survives power loss.
+    {
+        use std::io::Write;
+        let mut f = fs::File::create(path)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+    }
+    if let Some(parent) = path.parent() {
+        sync_dir(parent)?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// fsync a directory so a just-created or just-renamed entry inside it
+/// survives power loss. Directories cannot be opened for sync on Windows;
+/// there the rename itself is the strongest primitive available, so this
+/// is a no-op.
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
     }
     Ok(())
 }

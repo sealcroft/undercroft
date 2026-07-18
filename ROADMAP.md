@@ -330,6 +330,15 @@ Also closes the v0.13.0 follow-up items:
   multi-tenant server shares one session pool across all vaults;
   `ort-build` now compile-checks the CLI with both backends.
 
+## v0.28.0 — Ingest durability (done)
+
+- SQLite pinned WAL + `synchronous=FULL` on both the engine store and
+  the orchestrator control plane; manifest anchor fsync'd through an
+  atomic rename (+ directory sync); key material fsync'd at creation.
+  Completes the durability arc the v0.19.0 chain atomicity started: a
+  power loss now always lands in the reconciler's healed crash case,
+  never the tamper case.
+
 ## Next
 - **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
   fleet actually needs it (deliberately deferred; single-writer stance
@@ -338,7 +347,6 @@ Also closes the v0.13.0 follow-up items:
   test) — the correct sub-linear construction, pays past ~10⁶ drawers.
 - **Sealed-tier page-level decryption** (research): decrypt only probed
   lists — matters past multi-million drawers.
-- **Durability**: ingest fsync (audit-chain atomicity shipped in v0.19.0).
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
 
