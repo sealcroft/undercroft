@@ -19,6 +19,24 @@ The engineering rationale is in
 3. **Scoring (optional)** — a second stage that re-orders the top candidates
    for accuracy.
 
+```mermaid
+flowchart TB
+    subgraph c["Candidate tier — pick one (UNDERCROFT_RETRIEVAL)"]
+        scan["full cosine scan<br/><i>default, small palaces</i>"]
+        ftsx["FTS5 BM25 prefilter<br/><i>hmac-only, ≥2k drawers</i>"]
+        pqx["PQ / IVF ADC<br/><i>48 B/vector, RAM code cache,<br/>sealed rows AEAD</i>"]
+        fdex["MUVERA FDE dot<br/><i>token-aware; 256 B PQ codes,<br/>sealed rows AEAD</i>"]
+        hnswx["HNSW (feature)<br/><i>RAM-only, ef scales with N</i>"]
+    end
+    c --> fusion["Fusion — cosine + BM25 + recency<br/><i>HMAC-verified, decrypted candidates</i>"]
+    fusion --> r
+    subgraph r["Rescore tier — optional (UNDERCROFT_RERANKER)"]
+        cex["cross-encoder<br/><i>top-N forwards, many-core</i>"]
+        msx["ColBERT MaxSim<br/><i>stored token matrices → tok-PQ LUT,<br/>one query forward, core-independent</i>"]
+    end
+    r --> hits["verbatim hits"]
+```
+
 The two dominant costs — *candidate generation at scale* and *scoring* — are
 **independent**, and each has its own purpose-built option.
 
