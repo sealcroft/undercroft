@@ -22,6 +22,7 @@
 //! defend against an attacker who can read process memory while a vault is
 //! unlocked.
 
+pub mod bundle;
 pub mod keys;
 pub mod seal;
 

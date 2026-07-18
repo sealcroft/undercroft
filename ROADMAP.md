@@ -347,7 +347,14 @@ Also closes the v0.13.0 follow-up items:
   manifest swap (`vault.json.next` + db `keycheck` marker) — crash-safe
   at any instant, on both vault levels.
 
-## Next
+## v0.30.0 — Recipient-encrypted export bundles (done)
+
+- `bundle keygen` + `export --to <recipient> --out <file>` +
+  `import --identity <keyfile>`: X25519 ephemeral-static → HKDF →
+  XChaCha20-Poly1305 sealed bundles; a backup never exists in
+  plaintext. Closes the ecosystem track (key rotation + bundles).
+
+## Next (all demand-driven)
 - **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
   fleet actually needs it (deliberately deferred; single-writer stance
   documented in MULTI_TENANCY.md).
@@ -355,8 +362,6 @@ Also closes the v0.13.0 follow-up items:
   test) — the correct sub-linear construction, pays past ~10⁶ drawers.
 - **Sealed-tier page-level decryption** (research): decrypt only probed
   lists — matters past multi-million drawers.
-- **Ecosystem**: export bundles with recipient encryption (key rotation
-  shipped in v0.29.0).
 
 ---
 

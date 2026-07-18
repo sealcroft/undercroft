@@ -81,6 +81,13 @@ stateDiagram-v2
   preserved verbatim (their plaintext is gone by design); the chain over
   them is what rotates. Remote-index copies hold old-key ciphertext
   afterwards — re-run `index push`.
+- **Encrypted export bundles** (`undercroft export --to <recipient>`): a
+  backup or migration file never exists in plaintext. Recipient identity
+  is an X25519 keypair (`bundle keygen`); each bundle uses a fresh
+  ephemeral key (age-style ephemeral-static ECDH → HKDF-SHA256 →
+  XChaCha20-Poly1305, header bound as AAD). A bundle alone reveals
+  nothing without the identity key, and the identity key is unrelated to
+  the palace's own at-rest keys. `import --identity <keyfile>` opens it.
 - **Remote indexes** receive sealed bytes + plaintext embeddings only;
   results are re-verified locally. See the trade-off note in the README.
 - **HTTP server**: refuses non-loopback binds without a bearer token;

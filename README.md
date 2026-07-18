@@ -235,7 +235,10 @@ undercroft backup create|list|restore # verified snapshots, keeps last 10
 undercroft repair                     # backfill + vacuum + re-verify
 undercroft verify [--vault]           # HMAC every record + replay audit chain
 undercroft export [--vault]           # decrypted JSONL to stdout
+undercroft export --to <pub> --out f  # sealed bundle only that recipient can open
 undercroft import <file.jsonl>        # migrate from undercroft or mempalace exports
+undercroft import <bundle> --identity <key>  # open + import an encrypted bundle
+undercroft bundle keygen|recipient    # X25519 identities for sealed exports
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet

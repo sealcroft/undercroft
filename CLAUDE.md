@@ -18,8 +18,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
-  vault.json.next staging, keycheck marker); at-rest AAD domains:
-  content, `/emb`, `/tok` token matrices, `/pq` index artifacts)
+  vault.json.next staging, keycheck marker); bundle.rs:
+  recipient-encrypted export bundles (X25519 ephemeral-static → HKDF →
+  XChaCha20-Poly1305); at-rest AAD domains: content, `/emb`, `/tok`
+  token matrices, `/pq` index artifacts)
 - `crates/undercroft-store` — per-vault SQLite storage, hybrid search (cosine +
   BM25 fusion) + optional cross-encoder rerank + ColBERT late-interaction
   stage (latestage.rs: token store, event-driven token-PQ codebook, LUT
