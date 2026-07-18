@@ -43,13 +43,11 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-/// Tokenize `a` (and optional pair `b`) → `(ids, mask, type_ids)` each padded /
-/// truncated to `MAX_LEN`.
-fn encode(
-    tok: &Tokenizer,
-    a: &str,
-    b: Option<&str>,
-) -> Result<(Vec<i64>, Vec<i64>, Vec<i64>), OrtError> {
+/// `(ids, mask, type_ids)`, each padded / truncated to `MAX_LEN`.
+type Encoded = (Vec<i64>, Vec<i64>, Vec<i64>);
+
+/// Tokenize `a` (and optional pair `b`) → [`Encoded`].
+fn encode(tok: &Tokenizer, a: &str, b: Option<&str>) -> Result<Encoded, OrtError> {
     let enc = match b {
         Some(bb) => tok.encode((a, bb), true),
         None => tok.encode(a, true),
