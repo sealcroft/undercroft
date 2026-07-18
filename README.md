@@ -4,7 +4,15 @@
 
 **Hardened, local-first AI memory: encrypted, integrity-verified memory vaults with verbatim recall.**
 
-[Website](https://compufreq.github.io/undercroft/) · [Documentation](https://compufreq.github.io/undercroft/docs/) · [Security model](https://compufreq.github.io/undercroft/docs/security.html)
+[Website](https://compufreq.github.io/undercroft/) · [Documentation](https://compufreq.github.io/undercroft/docs/) · [Agents implementation guide](https://compufreq.github.io/undercroft/docs/agents.html) · [Security model](https://compufreq.github.io/undercroft/docs/security.html)
+
+> **Implementing with an AI agent?** Point it at
+> [docs/AGENTS.md](https://github.com/compufreq/undercroft/blob/main/docs/AGENTS.md) —
+> a scenario-driven guide (personal agent memory, team server, multi-tenant
+> engine, fleet orchestration, retrieval tiers, security operations) written
+> so an agent can pick the right deployment shape and implement it
+> correctly, with the full tool/route/env reference and a verification
+> checklist.
 
 </div>
 

@@ -2,6 +2,7 @@
 
 - [Introduction](introduction.md)
 - [Getting started](getting-started.md)
+- [Agents implementation guide](agents.md)
 - [Architecture](architecture.md)
 - [Retrieval, scoring & scaling](retrieval.md)
 - [Security model](security.md)
