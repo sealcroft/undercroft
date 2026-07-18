@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.31.0 — Bulk-ingest transaction batching
+
+Follow-up to v0.28.0's durability work, which made every commit a real
+disk sync and exposed that one drawer write paid **several syncs**
+(row+chain transaction, then each advisory derived-index statement as
+its own implicit transaction, plus the manifest anchor).
+
+- **New `PalaceStore::upsert_many`**: a batch of drawers commits in
+  **one transaction** — rows, audit-chain advances, and derived-index
+  writes (PQ codes, token matrices, FDEs) all join it — and the
+  manifest anchors once after the commit. A mid-batch failure rolls the
+  entire batch back (the existing palace is untouched); the anchor
+  still never runs ahead of the database.
+- **CLI bulk paths batched** (256/chunk): `import`, `mine` (files and
+  convos), `sweep`, and the daemon's sweep loop. Single-drawer
+  `remember` and the server save paths are unchanged. Duplicate
+  detection gains an in-batch set so unflushed duplicates are still
+  skipped.
+- **Measured** (same binary, same container, back-to-back): importing
+  200 drawers into a sealed vault = **26 fsyncs total (0.13/drawer)**
+  vs ~7 fsyncs/drawer on the per-item path — **~55× fewer disk
+  syncs** — completing in 0.7 s with `VERIFY OK` and the chain intact.
+- Durability semantics preserved: `synchronous=FULL` still syncs every
+  commit; batching changes how many commits there are, not whether
+  they reach disk.
+
 ## 0.30.0 — Recipient-encrypted export bundles
 
 The second ecosystem item: `undercroft export --to <recipient>` seals the

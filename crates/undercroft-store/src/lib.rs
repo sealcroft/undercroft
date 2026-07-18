@@ -852,6 +852,32 @@ impl PalaceStore {
     /// embedding source (local embedder or caller-supplied) is the caller's
     /// concern; the at-rest sealing and integrity handling are identical.
     fn write_drawer(&mut self, drawer: &Drawer, embedding: Vec<f32>) -> Result<bool, StoreError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let (is_new, head, writes) = match self.write_drawer_stmts(drawer, &embedding) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+        };
+        if let Err(e) = self.conn.execute_batch("COMMIT") {
+            let _ = self.conn.execute_batch("ROLLBACK");
+            return Err(e.into());
+        }
+        self.vault.anchor_manifest(&head, writes)?;
+        self.post_write(drawer, embedding, is_new);
+        Ok(is_new)
+    }
+
+    /// The row + audit-chain statements of one drawer write, executed on
+    /// the connection's **current transaction** (the caller owns
+    /// BEGIN/COMMIT). Returns `(is_new, chain_head, writes)` for the
+    /// caller to anchor after its commit.
+    fn write_drawer_stmts(
+        &mut self,
+        drawer: &Drawer,
+        embedding: &[f32],
+    ) -> Result<(bool, String, u64), StoreError> {
         let meta_json =
             serde_json::to_string(&drawer.meta).map_err(|e| StoreError::CorruptRow {
                 id: drawer.id.clone(),
@@ -860,7 +886,7 @@ impl PalaceStore {
         let content_rest = self
             .vault
             .content_at_rest(&drawer.id, drawer.content.as_bytes());
-        let emb_rest = self.vault.embedding_at_rest(&drawer.id, &embedding);
+        let emb_rest = self.vault.embedding_at_rest(&drawer.id, embedding);
         let tag = self
             .vault
             .tag(&canonical(&drawer.id, meta_json.as_bytes(), &content_rest));
@@ -877,8 +903,7 @@ impl PalaceStore {
                 |r| r.get(0),
             )
             .optional()?;
-        let tx = self.conn.transaction()?;
-        tx.execute(
+        self.conn.execute(
             "INSERT INTO drawers (id, wing, room, meta_json, content, embedding, tag, fp, filed_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
              ON CONFLICT(id) DO UPDATE SET
@@ -902,11 +927,16 @@ impl PalaceStore {
                 now,
             ],
         )?;
-        let (head, writes) = chain_append(&tx, &self.vault, &drawer.id, &tag, &now)?;
-        tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        let (head, writes) = chain_append(&self.conn, &self.vault, &drawer.id, &tag, &now)?;
+        Ok((existing.is_none(), head, writes))
+    }
+
+    /// Post-commit bookkeeping for one written drawer: derived indexes and
+    /// RAM caches. In a batch these statements join the caller's open
+    /// transaction instead of each paying their own WAL sync.
+    fn post_write(&mut self, drawer: &Drawer, embedding: Vec<f32>, is_new: bool) {
         // Keep the on-disk PQ codes coherent (advisory; self-heals on search).
-        self.pq_encode_row(&drawer.id, &embedding, existing.is_none());
+        self.pq_encode_row(&drawer.id, &embedding, is_new);
         // Store the late-interaction token matrix (advisory; a drawer
         // without one keeps its fusion rank at rescore time).
         self.late_encode_row(&drawer.id, &drawer.content);
@@ -916,7 +946,65 @@ impl PalaceStore {
         // The ANN index is now stale; drop it so the next search rebuilds.
         #[cfg(feature = "hnsw")]
         self.hnsw.borrow_mut().take();
-        Ok(existing.is_none())
+    }
+
+    /// Insert or replace a batch of drawers in **one transaction**: rows,
+    /// audit-chain advances, and derived-index writes all commit together
+    /// with a single WAL sync, and the manifest anchors once at the end —
+    /// under `synchronous=FULL` this is the difference between several disk
+    /// syncs per drawer and one per batch. A mid-batch failure rolls the
+    /// whole batch back (the existing palace is untouched — the append-only
+    /// crash invariant), and the anchor never runs ahead because it is
+    /// written only after the commit it describes. Returns how many ids
+    /// were new. Refused on external vaults.
+    pub fn upsert_many(&mut self, drawers: &[Drawer]) -> Result<usize, StoreError> {
+        if self.external_dim.is_some() {
+            return Err(StoreError::ExternalVault);
+        }
+        if drawers.is_empty() {
+            return Ok(0);
+        }
+        let _span = undercroft_obs::scope("save", self.vault.id());
+        // Embedding is CPU work — do it before taking the write lock.
+        let embeddings: Vec<Vec<f32>> = drawers
+            .iter()
+            .map(|d| self.embedder.embed(&d.content))
+            .collect();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let mut created = 0usize;
+        let mut anchor: Option<(String, u64)> = None;
+        for (drawer, embedding) in drawers.iter().zip(embeddings) {
+            let (is_new, head, writes) = match self.write_drawer_stmts(drawer, &embedding) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(e);
+                }
+            };
+            if is_new {
+                created += 1;
+            }
+            anchor = Some((head, writes));
+            self.post_write(drawer, embedding, is_new);
+        }
+        if let Err(e) = self.conn.execute_batch("COMMIT") {
+            let _ = self.conn.execute_batch("ROLLBACK");
+            return Err(e.into());
+        }
+        if let Some((head, writes)) = anchor {
+            self.vault.anchor_manifest(&head, writes)?;
+        }
+        for drawer in drawers {
+            undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
+            undercroft_obs::event_drawer_saved(
+                self.vault.id(),
+                &drawer.meta.wing,
+                &drawer.meta.room,
+                false,
+                self.is_sealed(),
+            );
+        }
+        Ok(created)
     }
 
     /// Save a drawer, collapsing near-duplicates. If some existing drawer
@@ -1894,6 +1982,42 @@ mod tests {
         let vault = mgr.create("test", level).unwrap();
         let emb = Box::new(undercroft_core::ExternalEmbedder::new("acme-embed", dim));
         (dir, PalaceStore::open_with_embedder(vault, emb).unwrap())
+    }
+
+    /// Bulk path: the whole batch commits in one transaction, the chain
+    /// advances per drawer, and the anchor written after the commit
+    /// matches the database head at a cold reopen (no divergence window).
+    #[test]
+    fn upsert_many_batches_atomically() {
+        for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+            let (dir, mut store) = store(level);
+            let batch: Vec<Drawer> = (0..10u32)
+                .map(|i| drawer("w", "r", &format!("bulk drawer number {i}"), i))
+                .collect();
+            assert_eq!(store.upsert_many(&batch).unwrap(), 10);
+            assert_eq!(store.count().unwrap(), 10);
+            assert!(store.verify().unwrap().ok());
+            // Re-upserting the same batch updates in place — nothing new —
+            // and every update still advances the audit chain.
+            assert_eq!(store.upsert_many(&batch).unwrap(), 0);
+            assert!(store.verify().unwrap().ok());
+            let hits = store
+                .search(
+                    "bulk drawer number",
+                    &SearchOptions {
+                        wing: None,
+                        room: None,
+                        limit: 5,
+                    },
+                )
+                .unwrap();
+            assert!(!hits.is_empty());
+            drop(store);
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let store2 = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+            assert!(store2.verify().unwrap().ok());
+            assert_eq!(store2.count().unwrap(), 10);
+        }
     }
 
     /// A deterministic reranker that scores purely by passage length — used to
