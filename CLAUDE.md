@@ -7,7 +7,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 ## Layout
 
-- `Cargo.toml` — workspace root (10 crates; `undercroft-embed-onnx` and
+- `Cargo.toml` — workspace root (11 crates; `undercroft-embed-onnx` and
   `undercroft-embed-ort` excluded from default-members — heavy ML deps,
   built explicitly)
 - `crates/undercroft-core` — domain model, chunking, ids, normalization, hashed
@@ -74,8 +74,11 @@ Build and test **inside containers**, not on the host (project policy):
 docker compose run --rm test          # cargo unit + integration tests
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (30 checks)
 docker compose run --rm onnx-build    # compile-check the ONNX embedder+reranker feature
-docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5.4)
+docker compose run --rm ort-build     # compile-check the ONNX Runtime backend
+docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5.4;
+                                      # mermaid via vendored website/assets/mermaid.min.js)
 docker build -t undercroft .           # runtime image
 ```
 
