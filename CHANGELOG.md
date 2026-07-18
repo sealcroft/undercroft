@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.30.0 — Recipient-encrypted export bundles
+
+The second ecosystem item: `undercroft export --to <recipient>` seals the
+export so a backup or migration file **never exists in plaintext**.
+
+- **`bundle keygen`**: X25519 recipient identity — the secret key goes
+  to a private file (0600, refuses overwrite), the shareable public
+  recipient string prints once. `bundle recipient <keyfile>` re-prints
+  it.
+- **`export --to <recipient> --out <file>`**: age-style construction —
+  fresh ephemeral X25519 key per bundle, file key =
+  HKDF-SHA256(salt = eph_pub ‖ recipient_pub, ikm = DH, info =
+  `undercroft.v1/bundle`), payload sealed XChaCha20-Poly1305 with the
+  magic + ephemeral key bound as AAD (a spliced header fails to open).
+- **`import <bundle> --identity <keyfile>`**: bundles are detected by
+  magic; plaintext JSONL imports are unchanged. Wrong identity or a
+  tampered file is a clean refusal, not a partial import.
+- The bundle identity is unrelated to the palace's at-rest keys —
+  compromise of one does not touch the other.
+- New dep: `x25519-dalek` 2 (pure Rust, zeroize-on-drop secrets), in
+  `undercroft-vault` only.
+- Tests: roundtrip, wrong-identity, tamper + header-splice, per-bundle
+  ephemeral freshness, junk-input errors; e2e +6 checks (keygen →
+  sealed export → not-plaintext assertion → import-needs-key →
+  identity import → wrong-key refusal → overwrite refusal).
+
 ## 0.29.0 — Key rotation
 
 `undercroft vault rotate <name>`: move a vault onto fresh derived keys

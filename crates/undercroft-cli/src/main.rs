@@ -144,10 +144,19 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
-    /// Export all memories as decrypted JSONL (backup / migration)
+    /// Export all memories as decrypted JSONL (backup / migration). With
+    /// --to, the export is sealed to a recipient's public key instead —
+    /// the file never exists in plaintext (see `bundle keygen`).
     Export {
         #[arg(long, default_value = "default")]
         vault: String,
+        /// Recipient public key (hex, from `bundle keygen`): write an
+        /// encrypted bundle only that identity can open
+        #[arg(long)]
+        to: Option<String>,
+        /// Output file for the encrypted bundle (required with --to)
+        #[arg(long, requires = "to")]
+        out: Option<PathBuf>,
     },
     /// Serve the MCP stdio server (full palace / KG / diary tool surface)
     ServeMcp {
@@ -187,14 +196,23 @@ enum Command {
         action: TranscriptAction,
     },
     /// Import memories from a JSONL export (undercroft or mempalace format)
+    /// or an encrypted bundle (`export --to`; pass --identity)
     Import {
-        /// JSONL file (one drawer per line)
+        /// JSONL file (one drawer per line) or encrypted bundle
         file: PathBuf,
         #[arg(long, default_value = "default")]
         vault: String,
         /// Wing for records that do not carry one
         #[arg(long, default_value = "imported")]
         wing: String,
+        /// Identity key file (from `bundle keygen`) for encrypted bundles
+        #[arg(long)]
+        identity: Option<PathBuf>,
+    },
+    /// Recipient identities for encrypted export bundles
+    Bundle {
+        #[command(subcommand)]
+        action: BundleAction,
     },
     /// Knowledge graph: temporal facts with validity windows
     Kg {
@@ -502,6 +520,44 @@ enum VaultAction {
     /// vault was pushed to a remote index (remote copies hold old-key
     /// ciphertext). Do not rotate a vault another process is serving.
     Rotate { name: String },
+}
+
+#[derive(clap::Subcommand)]
+enum BundleAction {
+    /// Generate a recipient identity: the secret key goes to a private
+    /// file, the shareable public recipient string prints to stdout
+    Keygen {
+        /// Where to write the identity secret (default: <data-dir>/bundle.key)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Print the public recipient string for an identity file
+    Recipient {
+        /// Identity key file written by `bundle keygen`
+        identity: PathBuf,
+    },
+}
+
+/// Write a secret to `path` with owner-only permissions (like the palace
+/// master key). Refuses to overwrite an existing identity.
+fn write_identity(path: &std::path::Path, secret_hex: &str) -> Result<()> {
+    if path.exists() {
+        bail!(
+            "{} already exists — refusing to overwrite an identity key \
+             (bundles sealed to it would become unreadable)",
+            path.display()
+        );
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, secret_hex.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 fn data_dir(cli: &Cli) -> PathBuf {
@@ -875,6 +931,28 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Bundle { action } => match action {
+            BundleAction::Keygen { out } => {
+                let path = out
+                    .clone()
+                    .unwrap_or_else(|| data_dir(&cli).join("bundle.key"));
+                let (secret_hex, recipient_hex) = undercroft_vault::bundle::keygen();
+                write_identity(&path, &secret_hex)?;
+                println!(
+                    "Identity key written to {} (keep it private).",
+                    path.display()
+                );
+                println!("Recipient (shareable): {recipient_hex}");
+                println!("Seal an export with: undercroft export --to {recipient_hex} --out palace.bundle");
+            }
+            BundleAction::Recipient { identity } => {
+                let secret = std::fs::read_to_string(identity)
+                    .with_context(|| format!("reading identity {}", identity.display()))?;
+                let recipient = undercroft_vault::bundle::recipient_of(&secret)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                println!("{recipient}");
+            }
+        },
         Command::Vault { action } => match action {
             VaultAction::Create { name, level } => {
                 let mgr = manager(&cli)?;
@@ -1098,13 +1176,37 @@ fn main() -> Result<()> {
                 std::process::exit(2);
             }
         }
-        Command::Export { vault } => {
+        Command::Export { vault, to, out } => {
             let store = open_store(&cli, vault)?;
-            let stdout = std::io::stdout();
-            let mut out = stdout.lock();
-            for drawer in store.export_all()? {
-                serde_json::to_writer(&mut out, &drawer)?;
-                out.write_all(b"\n")?;
+            match to {
+                Some(recipient) => {
+                    let path = out
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("--to requires --out <file>"))?;
+                    let mut plain = Vec::new();
+                    for drawer in store.export_all()? {
+                        serde_json::to_writer(&mut plain, &drawer)?;
+                        plain.push(b'\n');
+                    }
+                    let sealed = undercroft_vault::bundle::encrypt_for(recipient, &plain)
+                        .map_err(|e| anyhow::anyhow!("sealing bundle: {e}"))?;
+                    std::fs::write(path, &sealed)?;
+                    println!(
+                        "Sealed bundle written to {} ({} drawers, {} bytes) — only the \
+                         matching identity key can open it.",
+                        path.display(),
+                        store.count()?,
+                        sealed.len()
+                    );
+                }
+                None => {
+                    let stdout = std::io::stdout();
+                    let mut out = stdout.lock();
+                    for drawer in store.export_all()? {
+                        serde_json::to_writer(&mut out, &drawer)?;
+                        out.write_all(b"\n")?;
+                    }
+                }
             }
         }
         Command::ServeMcp { vault } => {
@@ -1193,11 +1295,31 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Command::Import { file, vault, wing } => {
+        Command::Import {
+            file,
+            vault,
+            wing,
+            identity,
+        } => {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
-            let text = std::fs::read_to_string(file)
-                .with_context(|| format!("reading {}", file.display()))?;
+            let raw = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+            let text = if undercroft_vault::bundle::is_bundle(&raw) {
+                let id_path = identity.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{} is an encrypted bundle — pass --identity <keyfile> to open it",
+                        file.display()
+                    )
+                })?;
+                let secret = std::fs::read_to_string(id_path)
+                    .with_context(|| format!("reading identity {}", id_path.display()))?;
+                let plain = undercroft_vault::bundle::decrypt_with(&secret, &raw)
+                    .map_err(|e| anyhow::anyhow!("opening bundle: {e}"))?;
+                String::from_utf8(plain).context("bundle payload is not UTF-8 JSONL")?
+            } else {
+                String::from_utf8(raw)
+                    .with_context(|| format!("{} is not UTF-8 text", file.display()))?
+            };
             let mut imported = 0usize;
             let mut skipped = 0usize;
             for (lineno, line) in text.lines().enumerate() {

@@ -239,6 +239,29 @@ else
   echo "FAIL  mempalace-format import"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 
+echo "== Encrypted export bundles =="
+BUNDLE_KEY="$(mktemp -u)"
+RECIPIENT="$("$BIN" bundle keygen --out "$BUNDLE_KEY" | grep "Recipient" | awk '{print $3}')"
+check "keygen prints recipient"   0 "$RECIPIENT"                     -- "$BIN" bundle recipient "$BUNDLE_KEY"
+BUNDLE_FILE="$(mktemp -u)"
+check "sealed export writes"      0 "Sealed bundle written"          -- "$BIN" export --to "$RECIPIENT" --out "$BUNDLE_FILE"
+if ! grep -q "retro-2026-07" "$BUNDLE_FILE" 2>/dev/null; then
+  echo "ok    bundle is not plaintext"; PASS=$((PASS+1))
+else
+  echo "FAIL  bundle leaked plaintext"; FAIL=$((FAIL+1))
+fi
+check "bundle import needs key"   1 "encrypted bundle"               -- env UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$BUNDLE_FILE"
+out="$(UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$BUNDLE_FILE" --identity "$BUNDLE_KEY" 2>&1)"; code=$?
+if [ $code -eq 0 ] && grep -q "Imported" <<<"$out"; then
+  echo "ok    bundle import with identity"; PASS=$((PASS+1))
+else
+  echo "FAIL  bundle import with identity"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+WRONG_KEY="$(mktemp -u)"
+"$BIN" bundle keygen --out "$WRONG_KEY" >/dev/null
+check "wrong identity refused"    1 "wrong identity key"             -- env UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$BUNDLE_FILE" --identity "$WRONG_KEY"
+check "keygen refuses overwrite"  1 "refusing to overwrite"          -- "$BIN" bundle keygen --out "$BUNDLE_KEY"
+
 echo "== HTTP MCP server =="
 # Non-loopback bind without token must be refused.
 check "http refuses tokenless 0.0.0.0" 1 "UNDERCROFT_MCP_HTTP_TOKEN" -- "$BIN" serve-http --host 0.0.0.0 --port 18765
