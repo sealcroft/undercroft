@@ -1,0 +1,13 @@
+flowchart LR
+    subgraph write["write (sealed vault)"]
+        c["content"] --> z["zstd compress"] --> e["XChaCha20-Poly1305<br/><i>AAD: vault id + record id</i>"]
+        c --> h["HMAC-SHA256 tag<br/><i>id ␟ meta ␟ content</i>"]
+        e --> row["SQLite row"]
+        h --> row
+        row --> chain["audit row + chain head<br/><i>same transaction</i>"]
+    end
+    subgraph read["read"]
+        row2["row"] --> v{"HMAC verifies?"}
+        v -- yes --> d["decrypt → verbatim content"]
+        v -- no --> alarm["Integrity error<br/><i>never partial data</i>"]
+    end

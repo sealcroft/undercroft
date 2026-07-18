@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant A as admin
+    participant O as orchestrator
+    participant S as source engine
+    participant D as target engine
+    A->>O: POST /admin/tenants/{id}/migrate {to}
+    O->>S: GET /v1/vaults/{v}/export (NDJSON + token artifacts)
+    O->>D: POST /v1/vaults (create)
+    O->>D: POST /v1/vaults/{v}/import
+    D-->>O: {imported: n}
+    alt n == exported lines
+        O->>O: flip tenant→instance mapping
+        O->>S: DELETE /v1/vaults/{v} (unless keep_source)
+        O-->>A: {records, source_deleted}
+    else count mismatch
+        O->>D: DELETE partial copy
+        O-->>A: error — source left authoritative
+    end

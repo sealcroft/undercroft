@@ -1,0 +1,40 @@
+flowchart TB
+    subgraph engine["Engine (ships in the box)"]
+        core["undercroft-core<br/><i>domain, chunking, ids,<br/>hash embedder, FDE, MaxSim</i>"]
+        vault["undercroft-vault<br/><i>HKDF keys, AEAD sealing,<br/>HMAC tags, audit chain</i>"]
+        store["undercroft-store<br/><i>per-vault SQLite, hybrid search,<br/>PQ/IVF, ColBERT stage, FDE index, KG</i>"]
+        index["undercroft-index<br/><i>remote vector backends<br/>(untrusted accelerators)</i>"]
+        llm["undercroft-llm<br/><i>local LLM runtimes<br/>(refine → KG)</i>"]
+        obs["undercroft-obs<br/><i>observability shim<br/>(no-op by default)</i>"]
+        cli["undercroft-cli<br/><b>undercroft</b> binary<br/><i>CLI + MCP + HTTP /v1</i>"]
+    end
+    subgraph optional["Opt-in inference backends"]
+        onnx["undercroft-embed-onnx<br/><i>tract: embedder, reranker, ColBERT</i>"]
+        ort["undercroft-embed-ort<br/><i>ONNX Runtime: same trio, faster</i>"]
+    end
+    bench["undercroft-bench<br/><i>LongMemEval / LoCoMo /<br/>fde-synth harnesses</i>"]
+    orch["undercroft-orchestrator<br/><b>undercroft-orchestrator</b> binary<br/><i>multi-tenant control plane</i>"]
+
+    vault --> core
+    vault --> obs
+    store --> core
+    store --> vault
+    store --> index
+    store --> obs
+    cli --> core
+    cli --> vault
+    cli --> store
+    cli --> index
+    cli --> llm
+    cli --> obs
+    cli -. "feature onnx" .-> onnx
+    onnx --> core
+    ort --> core
+    bench --> core
+    bench --> vault
+    bench --> store
+    bench --> index
+    bench --> llm
+    bench -. "features onnx / ort" .-> onnx
+    bench -. "features onnx / ort" .-> ort
+    orch -. "HTTP /v1 only —<br/>no crate dependency" .-> cli

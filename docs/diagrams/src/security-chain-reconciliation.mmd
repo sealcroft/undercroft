@@ -1,0 +1,8 @@
+stateDiagram-v2
+    [*] --> Compare: open — replay audit rows,<br/>compare manifest anchor vs chain_meta head
+    Compare --> Clean: anchor == db head
+    Compare --> FastForward: anchor appears earlier<br/>in the replayed chain
+    Compare --> Tampered: anchor not in the<br/>replayed chain at all
+    FastForward --> Clean: crash artifact —<br/>anchor silently re-advanced
+    Tampered --> [*]: ManifestTampered —<br/>rollback or fork detected
+    Clean --> [*]

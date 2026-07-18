@@ -1,0 +1,17 @@
+flowchart LR
+    q["query"] --> cand{{"candidate stage"}}
+    cand -- "UNDERCROFT_RETRIEVAL=fde" --> fde["FDE dot product<br/><i>token-aware, PQ-coded cache</i>"]
+    cand -- "=pq" --> pq["PQ / IVF ADC scan<br/><i>bounded RAM</i>"]
+    cand -- "=hnsw" --> hnsw["in-memory HNSW<br/><i>experimental</i>"]
+    cand -- "default" --> fts["FTS5 BM25 prefilter<br/><i>hmac-only, large corpora</i><br/>or full cosine scan"]
+    fde --> hyd
+    pq --> hyd
+    hnsw --> hyd
+    fts --> hyd
+    hyd["hydrate candidates<br/>+ <b>HMAC verify each</b><br/>+ decrypt (sealed)"] --> fuse["fusion score<br/><i>cosine + BM25 + recency</i>"]
+    fuse --> second{{"second stage"}}
+    second -- "UNDERCROFT_RERANKER=onnx" --> ce["cross-encoder rerank<br/><i>top-N forwards</i>"]
+    second -- "=colbert" --> ms["MaxSim rescore<br/><i>stored token matrices,<br/>PQ-LUT, one query forward</i>"]
+    second -- "unset" --> out
+    ce --> out["verbatim hits"]
+    ms --> out

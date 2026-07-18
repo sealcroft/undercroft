@@ -15,6 +15,22 @@ export. It is built to preserve the project's stance:
   already exposes, and key material are **never** emitted. Sealed vaults
   expose only aggregate counts.
 
+The full opt-in pipeline — every edge exists only when its gate is set,
+and every signal is metadata/counts only:
+
+```mermaid
+flowchart LR
+    e["undercroft engine<br/><i>--features telemetry</i>"]
+    e -- "UNDERCROFT_METRICS=1<br/>bearer-gated /metrics" --> prom["Prometheus"]
+    prom --> am["Alertmanager<br/><i>PalaceTamperDetected,<br/>chain stalls, latency</i>"] --> hook["webhook sink"]
+    e -- "UNDERCROFT_LOG_FORMAT=json<br/>stdout" --> promtail["promtail"] --> loki["Loki"]
+    e -- "UNDERCROFT_OTLP_ENDPOINT<br/><i>metadata-only spans</i>" --> tempo["Tempo"]
+    e -- "SSE /v1/vaults/{id}/stream<br/><i>bearer + assertion</i>" --> monitor["Palace Monitor<br/><i>GET /monitor</i>"]
+    prom --> graf["Grafana"]
+    loki --> graf
+    tempo --> graf
+```
+
 ## Building with telemetry
 
 ```bash
