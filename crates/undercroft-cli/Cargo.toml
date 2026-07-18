@@ -15,6 +15,12 @@ path = "src/main.rs"
 # Enables the ONNX sentence-embedder (UNDERCROFT_EMBEDDER=onnx).
 # Off by default to keep the standard build lean and fully offline.
 onnx = ["dep:undercroft-embed-onnx"]
+# Enables the ONNX Runtime backend (UNDERCROFT_EMBEDDER=ort,
+# UNDERCROFT_RERANKER=ort|colbert-ort). Same user-supplied models and
+# UNDERCROFT_ONNX_*/RERANK_*/COLBERT_* variables as the tract backend,
+# ~2.5× faster per forward — but links ONNX Runtime's C++ library, so it
+# is opt-in like `onnx` (see the ort-build compose service).
+ort = ["dep:undercroft-embed-ort"]
 # Enables the experimental in-memory HNSW ANN prefilter
 # (UNDERCROFT_RETRIEVAL=hnsw). RAM-only, never persisted.
 hnsw = ["undercroft-store/hnsw"]
@@ -30,6 +36,7 @@ undercroft-index = { path = "../undercroft-index" }
 undercroft-llm = { path = "../undercroft-llm" }
 undercroft-obs = { path = "../undercroft-obs" }
 undercroft-embed-onnx = { path = "../undercroft-embed-onnx", optional = true }
+undercroft-embed-ort = { path = "../undercroft-embed-ort", optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }

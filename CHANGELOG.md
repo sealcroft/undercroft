@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.27.0 — ONNX Runtime backend in the CLI
+
+The measured ORT wins (reranker ~100–160× end to end, ColBERT 96.7 →
+70.3 ms/q, ingest embed ~4–5×) existed only behind the bench harness;
+this release wires them into the `undercroft` binary for real
+deployments.
+
+- **New `ort` cargo feature on `undercroft-cli`** (opt-in, like `onnx`):
+  links `undercroft-embed-ort` and exposes the backend at runtime —
+  - `UNDERCROFT_EMBEDDER=ort` — session-pool sentence embedder;
+  - `UNDERCROFT_RERANKER=ort` — cross-encoder scoring the whole pool in
+    one batched forward (`score_batch` forwarded end to end);
+  - `UNDERCROFT_RERANKER=colbert-ort` — the ColBERT late-interaction
+    encoder (search + `repair --tokens` backfill).
+  Same user-supplied model files and `UNDERCROFT_ONNX_*` / `RERANK_*` /
+  `COLBERT_*` variables as the tract backend — switching runtimes is
+  one env change, no re-ingest (identical weights ⇒ identical vectors).
+- **Multi-tenant `/v1` server**: `ort` embedder and reranker load
+  **once** and are shared across every tenant vault (the ORT session
+  pool holds a model copy per core — per-vault loads would multiply
+  RAM for identical weights). ColBERT stays single-vault-serve only,
+  now with an explicit error instead of "unknown value".
+- `ort-build` compose service now compile-checks the full CLI with
+  `--features onnx,ort` (both backends coexisting) instead of the
+  backend crate alone.
+- Unknown-value errors for `UNDERCROFT_EMBEDDER` / `UNDERCROFT_RERANKER`
+  enumerate the new values; docs updated (README, RETRIEVAL_SCALING,
+  website retrieval page).
+
 ## 0.26.0 — Orchestrator hardening
 
 The follow-ups queued at v0.25.0, minus one deliberately deferred.

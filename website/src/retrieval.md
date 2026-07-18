@@ -166,7 +166,10 @@ Per-forward latency, same ONNX models, seq 256, on a CPU with `avx512_vnni`
 
 ONNX Runtime is **~2.5× faster than tract** at the same precision, and int8
 (VNNI) more again — validated in Rust via the `ort` crate (`undercroft-embed-ort`,
-opt-in; tract stays the pure-Rust default). fp32 accuracy is
+opt-in; tract stays the pure-Rust default). The CLI wires it end to end:
+build with `--features ort`, then `UNDERCROFT_EMBEDDER=ort` /
+`UNDERCROFT_RERANKER=ort` / `UNDERCROFT_RERANKER=colbert-ort` select it at
+runtime (same model files and env variables as tract). fp32 accuracy is
 **runtime-invariant** (identical weights); int8 is within noise. Measured
 end-to-end on LoCoMo, the ORT backend with a **session pool** (independent
 forwards fanned across single-thread sessions; `pool=1` = one batched all-core

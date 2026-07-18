@@ -122,15 +122,23 @@ set, after which `undercroft repair` re-embeds every drawer.
   `UNDERCROFT_ONNX_TOKENIZER` at a user-supplied `model.onnx` +
   `tokenizer.json` and set `UNDERCROFT_EMBEDDER=onnx`. Undercroft never
   downloads models itself.
+- **`ort`** — the same models through **ONNX Runtime** (~2.5× faster per
+  forward, int8/VNNI support, ~4–5× faster ingest embed). Build with
+  `--features ort` and set `UNDERCROFT_EMBEDDER=ort`; reads the same
+  `UNDERCROFT_ONNX_*` variables, so switching backends is one env change.
+  Opt-in because it links ONNX Runtime's C++ library — tract stays the
+  pure-Rust default.
 
-### Cross-encoder reranker (optional, `onnx` feature)
+### Cross-encoder reranker (optional, `onnx` / `ort` features)
 
 A second retrieval stage: after hybrid search surfaces a candidate pool, a
 cross-encoder re-scores the top-N with the full `(query, passage)` pair and
 re-orders them. Point `UNDERCROFT_RERANK_MODEL` / `UNDERCROFT_RERANK_TOKENIZER`
 at a user-supplied cross-encoder ONNX export (a **BERT-family** model such as
 `cross-encoder/ms-marco-MiniLM-L-6-v2`; note tract 0.22 does not run
-DeBERTa-based rerankers) and set `UNDERCROFT_RERANKER=onnx`. Pairs with either
+DeBERTa-based rerankers) and set `UNDERCROFT_RERANKER=onnx` (tract) or
+`UNDERCROFT_RERANKER=ort` (ONNX Runtime: one batched forward for the whole
+pool + a session-pool fan-out, `--features ort`). Pairs with either
 embedder; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds the added latency.
 Applies to `search`, `serve-mcp`, the daemon, and the multi-tenant `/v1`
 surface (one shared model across vaults). Measured: LoCoMo R@10 94.6 →
@@ -145,7 +153,8 @@ MaxSim re-score — no transformer per candidate. Measured: LoCoMo R@10 94.6 →
 **96.5–96.8%** at a flat ~93 ms/query on *any* core count with the pure-Rust
 tract runtime, **~70 ms/query** (and 3.3× faster ingest) on the opt-in ONNX
 Runtime backend — recall identical across runtimes. Set
-`UNDERCROFT_RERANKER=colbert` + `UNDERCROFT_COLBERT_MODEL` (doc export) /
+`UNDERCROFT_RERANKER=colbert` (tract) or `colbert-ort` (ONNX Runtime,
+`--features ort`) + `UNDERCROFT_COLBERT_MODEL` (doc export) /
 `_QUERY_MODEL` / `_TOKENIZER` (fixed-shape ONNX exports; recipe in
 [docs/RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)). Token matrices ride
 export bundles as portable artifacts (restore = copy, not re-encode);
