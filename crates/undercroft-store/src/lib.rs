@@ -391,6 +391,14 @@ impl PalaceStore {
     fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
         let conn = Connection::open(vault.db_path())?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // Pinned explicitly rather than left to the compile-time default: the
+        // manifest anchor is written *after* the transaction that produced a
+        // chain head, and open-time reconciliation treats an anchor the
+        // database chain never produced as tamper. FULL guarantees the
+        // data+chain commit reaches disk before its anchor possibly can, so a
+        // power loss always leaves the anchor equal or *behind* (the healed
+        // crash case) — never ahead (the alarm case).
+        conn.pragma_update(None, "synchronous", "FULL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS meta (
@@ -1803,6 +1811,43 @@ mod tests {
             idx,
             "test",
         )
+    }
+
+    /// Durability contract: WAL + synchronous=FULL, pinned — not left to the
+    /// compile-time default — so the data+chain commit is always on disk
+    /// before its manifest anchor can be (anchor never runs ahead).
+    #[test]
+    fn connection_pins_wal_and_full_synchronous() {
+        for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+            let (_dir, store) = store(level);
+            let journal: String = store
+                .conn
+                .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(journal.to_ascii_lowercase(), "wal");
+            let sync: i64 = store
+                .conn
+                .query_row("PRAGMA synchronous", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(sync, 2, "synchronous must be FULL");
+        }
+    }
+
+    /// A manifest anchor write must never leave its temp file behind — the
+    /// durable-replace path renames it into place every time.
+    #[test]
+    fn manifest_anchor_leaves_no_temp_file() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let vault_dir = dir.path().join("vaults/test");
+        let mut store = PalaceStore::open(vault).unwrap();
+        store.upsert(&drawer("w", "r", "durable words", 0)).unwrap();
+        assert!(vault_dir.join("vault.json").exists());
+        assert!(
+            !vault_dir.join("vault.json.tmp").exists(),
+            "anchor temp file must be renamed away"
+        );
     }
 
     fn external_store(level: SecurityLevel, dim: usize) -> (TempDir, PalaceStore) {

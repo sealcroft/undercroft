@@ -317,9 +317,18 @@ impl Vault {
             hex::encode(record_hmac(&self.manifest_key, &self.manifest.canonical()));
         let json = serde_json::to_vec_pretty(&self.manifest)
             .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        // Durable atomic replace: fsync the bytes before the rename and the
+        // directory entry after it, or a power loss can reorder the rename
+        // ahead of the data and leave a torn anchor that reads as tamper.
         let tmp = self.dir.join("vault.json.tmp");
-        fs::write(&tmp, &json)?;
+        {
+            use std::io::Write;
+            let mut f = fs::File::create(&tmp)?;
+            f.write_all(&json)?;
+            f.sync_all()?;
+        }
         fs::rename(&tmp, self.dir.join("vault.json"))?;
+        keys::sync_dir(&self.dir)?;
         Ok(())
     }
 }

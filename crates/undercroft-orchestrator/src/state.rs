@@ -85,6 +85,11 @@ impl Orch {
             StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into())
         })?;
         let conn = Connection::open(path)?;
+        // Control-plane state must survive power loss: a token shown once at
+        // create/rotate is gone forever if the row that recorded its HMAC is
+        // lost, and a half-durable migration flip would leave routing wrong.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS instances (
                  name TEXT PRIMARY KEY,
@@ -401,6 +406,24 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let o = Orch::open(&dir.path().join("orch.db"), KEY).unwrap();
         (dir, o)
+    }
+
+    /// Durability contract: the control-plane db runs WAL + synchronous=FULL
+    /// — a minted token's HMAC row and a migration flip must survive power
+    /// loss the moment they are acknowledged.
+    #[test]
+    fn state_db_pins_wal_and_full_synchronous() {
+        let (_d, o) = orch();
+        let journal: String = o
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(journal.to_ascii_lowercase(), "wal");
+        let sync: i64 = o
+            .conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(sync, 2, "synchronous must be FULL");
     }
 
     #[test]

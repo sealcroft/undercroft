@@ -63,6 +63,12 @@ stateDiagram-v2
     Tampered --> [*]: ManifestTampered —<br/>rollback or fork detected
     Clean --> [*]
 ```
+- **Durability backs the reconciliation story**: the store pins SQLite to
+  WAL + `synchronous=FULL`, so a data+chain commit is on disk before its
+  manifest anchor can be — a power loss leaves the anchor equal or behind
+  (the healed crash case), never ahead (the alarm case). The anchor itself
+  is written durably (fsync before the atomic rename, directory synced
+  after), and key material is fsynced at creation.
 - **Remote indexes** receive sealed bytes + plaintext embeddings only;
   results are re-verified locally. See the trade-off note in the README.
 - **HTTP server**: refuses non-loopback binds without a bearer token;

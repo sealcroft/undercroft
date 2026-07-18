@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.28.0 — Ingest durability (fsync)
+
+The durability refinement queued since the audit-chain atomicity work
+(v0.19.0): every acknowledgement now implies bytes on disk, and a power
+loss can only produce the healed crash case — never a false tamper
+alarm.
+
+- **SQLite pinned to WAL + `synchronous=FULL`** (was the compile-time
+  default): the data+chain commit reaches disk before its post-commit
+  manifest anchor possibly can, so the anchor can end up equal or
+  *behind* the database (open-time reconciliation fast-forwards) but
+  never *ahead* (which reads as rollback/tamper).
+- **Manifest anchor written durably**: fsync the temp file before the
+  atomic rename, fsync the directory entry after — a torn or reordered
+  `vault.json` after power loss can no longer masquerade as tamper.
+- **Key material fsynced at creation** (master key, KDF salt): written
+  once, unrecoverable if lost.
+- **Orchestrator control-plane db** gets the same WAL + FULL pin: a
+  tenant token is shown exactly once — the row recording its HMAC must
+  survive the moment it is acknowledged, as must a migration flip.
+- Tests: pragma pins asserted on both engines' connections (both vault
+  levels) and the anchor's durable-replace path leaves no temp file.
+
 ## 0.27.0 — ONNX Runtime backend in the CLI
 
 The measured ORT wins (reranker ~100–160× end to end, ColBERT 96.7 →
