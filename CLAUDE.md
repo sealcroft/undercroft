@@ -16,8 +16,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   token packing (`late.rs`: `LateInteraction`), conversation parsing, entities
 - `crates/undercroft-vault` — security layer (keys.rs: master key + HKDF;
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
-  anchor + pure chain arithmetic; at-rest AAD domains: content, `/emb`,
-  `/tok` token matrices, `/pq` index artifacts)
+  anchor + pure chain arithmetic + key rotation primitives
+  (rotation_candidate, byte-exact reseal_at_rest, two-phase
+  vault.json.next staging, keycheck marker); at-rest AAD domains:
+  content, `/emb`, `/tok` token matrices, `/pq` index artifacts)
 - `crates/undercroft-store` — per-vault SQLite storage, hybrid search (cosine +
   BM25 fusion) + optional cross-encoder rerank + ColBERT late-interaction
   stage (latestage.rs: token store, event-driven token-PQ codebook, LUT

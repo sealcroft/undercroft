@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.29.0 — Key rotation
+
+`undercroft vault rotate <name>`: move a vault onto fresh derived keys
+in place — first of the two ecosystem items (recipient-encrypted export
+bundles are next).
+
+- **Fresh salt ⇒ fresh enc/mac/manifest keys** (HKDF re-derivation);
+  every AEAD blob is re-sealed **byte-exact at the seal layer** — no
+  decompress/requantize round trips, AAD domains preserved — across all
+  sealed stores: drawer content + embeddings, KG triple objects, ColBERT
+  token matrices, PQ code rows + codebook + IVF centroids, FDE rows +
+  params + codebook. Every HMAC tag (drawers, KG, tunnels), keyed
+  fingerprint, and the audit chain are re-keyed.
+- **Single-transaction, crash-safe anywhere**: the next manifest is
+  staged durably as `vault.json.next`, the re-seal transaction flips a
+  `keycheck` marker as its committed witness, and open-time
+  reconciliation either promotes the staged manifest (crash after
+  commit) or discards it (crash before) — a crashed rotation is never a
+  tamper alarm, and the palace always opens under exactly one key
+  generation.
+- **Audit history semantics**: tags of superseded/deleted content are
+  preserved verbatim (their plaintext is gone by design); the chain over
+  them is what rotates. `verify` replays the same bytes to the new head.
+- Remote-index copies hold old-key ciphertext after a rotation — the CLI
+  reminds you to re-run `index push`.
+- Tests: full-fidelity rotation on both vault levels (drawers, KG,
+  tunnels, dedup fingerprints, cold reopen), plus both crash windows
+  (staging discarded / staging promoted). e2e: rotate → verify → search
+  → KG → dup-lookup → rotate again, 8 new checks.
+
 ## 0.28.0 — Ingest durability (fsync)
 
 The durability refinement queued since the audit-chain atomicity work

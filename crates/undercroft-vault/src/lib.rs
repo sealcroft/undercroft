@@ -76,7 +76,7 @@ impl std::fmt::Display for SecurityLevel {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Manifest {
     version: u32,
     id: String,
@@ -116,6 +116,11 @@ pub struct Vault {
     mac_key: SecretKey,
     manifest_key: SecretKey,
     manifest: Manifest,
+    /// A pending key-rotation manifest (`vault.json.next`), attached at
+    /// unlock when one exists so the store's open path can reconcile it
+    /// against the database's keycheck: rotation committed ⇒ promote,
+    /// not committed ⇒ discard.
+    pending: Option<Box<Vault>>,
 }
 
 impl Vault {
@@ -312,6 +317,87 @@ impl Vault {
         hex::encode(head) == self.manifest.chain_head_hex
     }
 
+    /// Value proving which key generation a database was last sealed under:
+    /// a fixed-domain HMAC under the vault's mac key. The store keeps it in
+    /// its `meta` table and flips it inside the rotation transaction — the
+    /// committed marker that open-time reconciliation compares against.
+    pub fn keycheck_hex(&self) -> String {
+        hex::encode(record_hmac(&self.mac_key, b"undercroft.v1/keycheck"))
+    }
+
+    /// Re-seal one at-rest blob from this vault's keys to `next`'s, without
+    /// interpreting the plaintext (byte-exact inner bytes — no
+    /// decompress/requantize round trips). `full_record_id` is the seal-layer
+    /// record id including any domain suffix (`{id}`, `{id}/emb`, `{id}/tok`,
+    /// `pqrow/{seq}/pq`, `fde/{id}/tok`, …). Hmac-only vaults store these
+    /// blobs in clear, so the blob passes through unchanged.
+    pub fn reseal_at_rest(
+        &self,
+        next: &Vault,
+        full_record_id: &str,
+        blob: &[u8],
+    ) -> Result<Vec<u8>, VaultError> {
+        match self.level {
+            SecurityLevel::Sealed => {
+                let inner = seal::open_content(&self.enc_key, &self.id, full_record_id, blob)?;
+                Ok(seal::seal_content(
+                    &next.enc_key,
+                    &next.id,
+                    full_record_id,
+                    &inner,
+                ))
+            }
+            SecurityLevel::HmacOnly => Ok(blob.to_vec()),
+        }
+    }
+
+    /// Take the pending rotation twin attached at unlock, if any.
+    pub fn take_pending(&mut self) -> Option<Box<Vault>> {
+        self.pending.take()
+    }
+
+    fn pending_path(&self) -> PathBuf {
+        self.dir.join("vault.json.next")
+    }
+
+    /// Fill this rotation candidate's chain state and durably stage it as
+    /// `vault.json.next` (fsync + directory sync). Called by the store
+    /// *before* the re-seal transaction commits; a crash before commit
+    /// leaves a stale staging file that reconciliation discards.
+    pub fn save_manifest_pending(&mut self, head_hex: &str, writes: u64) -> Result<(), VaultError> {
+        self.manifest.chain_head_hex = head_hex.to_string();
+        self.manifest.writes = writes;
+        self.manifest.manifest_mac_hex =
+            hex::encode(record_hmac(&self.manifest_key, &self.manifest.canonical()));
+        let json = serde_json::to_vec_pretty(&self.manifest)
+            .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        {
+            use std::io::Write;
+            let mut f = fs::File::create(self.pending_path())?;
+            f.write_all(&json)?;
+            f.sync_all()?;
+        }
+        keys::sync_dir(&self.dir)?;
+        Ok(())
+    }
+
+    /// Promote a committed rotation: `vault.json.next` becomes the manifest.
+    pub fn promote_manifest(&self) -> Result<(), VaultError> {
+        fs::rename(self.pending_path(), self.dir.join("vault.json"))?;
+        keys::sync_dir(&self.dir)?;
+        Ok(())
+    }
+
+    /// Remove a staging manifest from a rotation that never committed.
+    pub fn discard_pending_file(&self) -> Result<(), VaultError> {
+        let p = self.pending_path();
+        if p.exists() {
+            fs::remove_file(&p)?;
+            keys::sync_dir(&self.dir)?;
+        }
+        Ok(())
+    }
+
     fn save_manifest(&mut self) -> Result<(), VaultError> {
         self.manifest.manifest_mac_hex =
             hex::encode(record_hmac(&self.manifest_key, &self.manifest.canonical()));
@@ -441,7 +527,7 @@ impl VaultManager {
         if manifest.id != id {
             return Err(VaultError::CorruptManifest("manifest id mismatch".into()));
         }
-        let vault = self.assemble(dir, manifest)?;
+        let mut vault = self.assemble(dir, manifest)?;
         // Verify the manifest itself before trusting level / chain head.
         let expected = record_hmac(&vault.manifest_key, &vault.manifest.canonical());
         let stored = hex::decode(&vault.manifest.manifest_mac_hex)
@@ -451,6 +537,28 @@ impl VaultManager {
             undercroft_obs::hmac_verify_failed("manifest");
             undercroft_obs::event_hmac_fail(vault.id(), "manifest");
             return Err(VaultError::ManifestTampered);
+        }
+        // Attach a pending rotation manifest (vault.json.next) for the
+        // store's open-time reconciliation. An unreadable, mismatched, or
+        // MAC-invalid staging file is a torn leftover — remove it here.
+        let pending_path = vault.pending_path();
+        if pending_path.exists() {
+            vault.pending = fs::read(&pending_path)
+                .ok()
+                .and_then(|raw| serde_json::from_slice::<Manifest>(&raw).ok())
+                .filter(|pm| pm.id == vault.id)
+                .and_then(|pm| self.assemble(vault.dir.clone(), pm).ok())
+                .filter(|pv| {
+                    hex::decode(&pv.manifest.manifest_mac_hex)
+                        .map(|mac| {
+                            verify_hmac(&pv.manifest_key, &pv.manifest.canonical(), &mac).is_ok()
+                        })
+                        .unwrap_or(false)
+                })
+                .map(Box::new);
+            if vault.pending.is_none() {
+                let _ = fs::remove_file(&pending_path);
+            }
         }
         Ok(vault)
     }
@@ -470,7 +578,19 @@ impl VaultManager {
             id,
             dir,
             manifest,
+            pending: None,
         })
+    }
+
+    /// Build the next key generation for a vault: same identity, level, and
+    /// history metadata, **fresh salt** ⇒ fresh enc/mac/manifest keys.
+    /// Nothing is written here — the store's rotation stages the manifest
+    /// once it has replayed the chain under the new keys.
+    pub fn rotation_candidate(&self, id: &str) -> Result<Vault, VaultError> {
+        let current = self.unlock(id)?;
+        let mut manifest = current.manifest.clone();
+        manifest.salt_hex = hex::encode(keys::new_vault_salt());
+        self.assemble(current.dir.clone(), manifest)
     }
 }
 

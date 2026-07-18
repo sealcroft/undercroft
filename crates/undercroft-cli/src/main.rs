@@ -496,6 +496,12 @@ enum VaultAction {
     List,
     /// Show one vault's status (level, records, writes, chain head)
     Status { name: String },
+    /// Rotate the vault onto fresh derived keys: every sealed blob is
+    /// re-encrypted and every integrity tag re-keyed, in one transaction.
+    /// Crash-safe at any point. Re-run `index push` afterwards if this
+    /// vault was pushed to a remote index (remote copies hold old-key
+    /// ciphertext). Do not rotate a vault another process is serving.
+    Rotate { name: String },
 }
 
 fn data_dir(cli: &Cli) -> PathBuf {
@@ -910,6 +916,31 @@ fn main() -> Result<()> {
                 println!("writes:     {}", v.writes());
                 println!("chain head: {}", v.chain_head_hex());
                 println!("db:         {}", v.db_path().display());
+            }
+            VaultAction::Rotate { name } => {
+                let mgr = manager(&cli)?;
+                let candidate = mgr.rotation_candidate(name)?;
+                let mut store = open_store(&cli, name)?;
+                let report = store.rotate_keys(candidate)?;
+                println!("Rotated vault '{name}' onto fresh keys.");
+                println!("  drawers re-sealed:   {}", report.drawers);
+                println!(
+                    "  kg entities/triples: {}/{}",
+                    report.kg_entities, report.kg_triples
+                );
+                println!("  tunnels:             {}", report.tunnels);
+                println!(
+                    "  derived artifacts:   {} token, {} pq, {} fde, {} meta",
+                    report.token_matrices, report.pq_rows, report.fde_rows, report.meta_artifacts
+                );
+                println!(
+                    "  chain re-keyed over: {} audit entries",
+                    report.audit_entries
+                );
+                println!("  new chain head:      {}", store.vault().chain_head_hex());
+                println!(
+                    "If this vault was pushed to a remote index, re-run: undercroft index push"
+                );
             }
         },
         Command::Remember {

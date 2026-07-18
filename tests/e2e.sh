@@ -180,6 +180,15 @@ check "closets show counts"       0 "n="                             -- "$BIN" c
 check "fuzzy search one typo"     0 "eng/decisions"                  -- "$BIN" search "migrated the serch stack"
 check "refine needs llm url"      1 "UNDERCROFT_LLM_URL"              -- "$BIN" refine
 
+echo "== Key rotation =="
+check "rotate default vault"      0 "Rotated vault 'default'"        -- "$BIN" vault rotate default
+check "verify ok after rotate"    0 "VERIFY OK"                      -- "$BIN" verify
+check "search ok after rotate"    0 "eng/decisions"                  -- "$BIN" search "migrated the search stack"
+check "kg survives rotate"        0 "triples"                        -- "$BIN" stats
+check "dup lookup after rotate"   0 "duplicate of"                   -- "$BIN" drawer check-dup "We migrated the search stack to Rust for speed and memory safety"
+check "second rotate idempotent"  0 "Rotated vault 'default'"        -- "$BIN" vault rotate default
+check "verify ok after 2nd rotate" 0 "VERIFY OK"                     -- "$BIN" verify
+
 echo "== Backups & repair =="
 check "backup create"             0 "Backup created"                 -- "$BIN" backup create
 check "backup list"               0 "default-"                       -- "$BIN" backup list

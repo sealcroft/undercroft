@@ -216,6 +216,7 @@ Or build natively: `cargo build --release` → `target/release/undercroft`.
 undercroft init                       # master key + 'default' sealed vault
 undercroft vault create work          # new isolated vault (own keys, own DB)
 undercroft vault list | status <name>
+undercroft vault rotate <name>        # fresh derived keys; re-seals everything, crash-safe
 undercroft remember <text> [--vault --wing --room]
 undercroft mine <dir> [--mode files|convos]  # documents, or Claude Code/Codex JSONL sessions
 undercroft sweep <dir>                # one verbatim drawer per transcript message (idempotent)
