@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant C as Caller (CLI / MCP / REST)
+    participant S as store
+    participant V as vault
+    participant DB as SQLite (one transaction)
+    C->>S: save(content, wing, room)
+    S->>S: normalize (verbatim-preserving) → chunk → deterministic id
+    S->>S: embed (hash / onnx / external vector)
+    S->>V: seal content + embedding (sealed vaults — AAD binds vault id + label)
+    S->>V: HMAC tag over id ␟ meta ␟ content
+    S->>DB: BEGIN
+    DB->>DB: drawer row (sealed blobs + tag)
+    DB->>DB: audit row + chain_append → chain_meta head advances
+    DB->>DB: COMMIT  — data and chain move together or not at all
+    S->>V: anchor manifest (lagging rollback anchor, post-commit)
+    Note over S: derived artifacts, advisory, from plaintext in hand:<br/>token matrix (ColBERT) → FDE → PQ code row

@@ -1,0 +1,8 @@
+flowchart TB
+    req["request to /v1/vaults/{id}/…"] --> b{"palace bearer<br/>valid?"}
+    b -- no --> r401a["401"]
+    b -- yes --> a{"assertion secret<br/>configured?"}
+    a -- no --> serve["serve<br/><i>single-operator mode</i>"]
+    a -- yes --> m{"X-Vault-Assertion:<br/>ts within ±120 s AND<br/>HMAC(secret, ts pipe vault-id)<br/>matches, constant-time?"}
+    m -- no --> r401b["401 — bare, reason<br/>only logged server-side"]
+    m -- yes --> serve2["serve <b>this vault only</b><br/><i>the id is inside the MAC</i>"]

@@ -147,7 +147,7 @@ tract runtime, **~70 ms/query** (and 3.3× faster ingest) on the opt-in ONNX
 Runtime backend — recall identical across runtimes. Set
 `UNDERCROFT_RERANKER=colbert` + `UNDERCROFT_COLBERT_MODEL` (doc export) /
 `_QUERY_MODEL` / `_TOKENIZER` (fixed-shape ONNX exports; recipe in
-[docs/RETRIEVAL_SCALING.md](docs/RETRIEVAL_SCALING.md)). Token matrices ride
+[docs/RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)). Token matrices ride
 export bundles as portable artifacts (restore = copy, not re-encode);
 `repair --tokens` backfills palaces that predate the encoder.
 **MUVERA FDE candidates** (`UNDERCROFT_RETRIEVAL=fde`) make the candidate
@@ -169,7 +169,7 @@ Large corpora can cut candidate generation from a full scan to a bounded-RAM
 size (99+% R@5 at N=50k). **Sealed vaults get it too** — code rows, codebook,
 and centroids are AEAD-sealed and scanned via a decrypt-once RAM cache;
 measured sealed search went from 2.1 → 33.4 q/s at N=20k (×16), parity with
-the plaintext index. Full numbers: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+the plaintext index. Full numbers: [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md).
 
 ## Quickstart (Docker — recommended)
 
@@ -239,7 +239,7 @@ a multi-tenant memory engine: a versioned `/v1` REST surface with vault
 lifecycle, per-vault HMAC assertions (`UNDERCROFT_ASSERTION_SECRET`),
 caller-supplied embeddings, dedup-refresh on save, and lossless
 export/import for migrating a tenant between instances. See
-[the remote-server guide](docs/remote-server.md).
+[the remote-server guide](https://github.com/compufreq/undercroft/blob/main/docs/remote-server.md).
 
 Fleets of engines get the **optional orchestrator**
 (`undercroft-orchestrator`): instance registry, tenant creation with
@@ -248,7 +248,7 @@ exactly its own vault, and count-verified live migration between
 instances — a separate control plane speaking only the public `/v1`
 surface, with engine credentials sealed at rest and tenant tokens stored
 only as HMACs. Design + surface:
-[docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
+[docs/MULTI_TENANCY.md](https://github.com/compufreq/undercroft/blob/main/docs/MULTI_TENANCY.md).
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
@@ -316,7 +316,7 @@ the bundled SQLite store fills that role).
 
 ## Benchmarks (measured, not inherited)
 
-Full methodology and reproduce commands: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+Full methodology and reproduce commands: [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md).
 Matched-model conditions (all-MiniLM-L6-v2, the class upstream used):
 **LoCoMo session R@10 93.8%** (upstream: 60.3% raw / 88.9% hybrid) and
 **LongMemEval-S R@5 97.4%** on the full 500 (upstream raw: 96.6%; their
@@ -336,16 +336,16 @@ faster — holds 92.7% / 90.4% respectively.
 
 ## More
 
-- [Getting started](docs/getting-started.md) · [Architecture](docs/architecture.md) ·
-  [Security model](docs/security.md) · [Integrations](docs/integrations.md) ·
-  [Remote team server](docs/remote-server.md)
-- [Parity with upstream MemPalace](docs/PARITY.md) — what's ported, what's
+- [Getting started](https://github.com/compufreq/undercroft/blob/main/docs/getting-started.md) · [Architecture](https://github.com/compufreq/undercroft/blob/main/docs/architecture.md) ·
+  [Security model](https://github.com/compufreq/undercroft/blob/main/docs/security.md) · [Integrations](https://github.com/compufreq/undercroft/blob/main/docs/integrations.md) ·
+  [Remote team server](https://github.com/compufreq/undercroft/blob/main/docs/remote-server.md)
+- [Parity with upstream MemPalace](https://github.com/compufreq/undercroft/blob/main/docs/PARITY.md) — what's ported, what's
   deliberately different, what's pending
-- [Benchmarks](benchmarks/README.md) — LongMemEval harness + synthetic CI benchmark
-- [Deploy](deploy/README.md) — compose team server, systemd units
-- Claude Code plugin: [.claude-plugin/](.claude-plugin/) · hooks: [hooks/](hooks/) ·
-  examples: [examples/](examples/)
+- [Benchmarks](https://github.com/compufreq/undercroft/blob/main/benchmarks/README.md) — LongMemEval harness + synthetic CI benchmark
+- [Deploy](https://github.com/compufreq/undercroft/blob/main/deploy/README.md) — compose team server, systemd units
+- Claude Code plugin: [.claude-plugin/](https://github.com/compufreq/undercroft/tree/main/.claude-plugin) · hooks: [hooks/](https://github.com/compufreq/undercroft/tree/main/hooks) ·
+  examples: [examples/](https://github.com/compufreq/undercroft/tree/main/examples)
 
 ## License
 
-BUSL-1.1 — see [LICENSE](LICENSE). Original work © MemPalace contributors.
+BUSL-1.1 — see [LICENSE](https://github.com/compufreq/undercroft/blob/main/LICENSE). Original work © MemPalace contributors.

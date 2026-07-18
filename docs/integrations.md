@@ -1,5 +1,34 @@
 # Integrations
 
+Every integration reaches the same engine through one of three surfaces —
+interactive MCP, HTTP, or background ingestion — and they all end at the
+same vault-sealed store:
+
+```mermaid
+flowchart LR
+    subgraph clients["Clients"]
+        cc["Claude Code<br/><i>MCP + hooks/plugin</i>"]
+        cur["Cursor<br/><i>rules + MCP</i>"]
+        gem["Gemini CLI / Codex /<br/>any MCP client"]
+        team["Team callers<br/><i>REST /v1</i>"]
+    end
+    subgraph ingest["Background ingestion"]
+        mine["mine / sweep<br/><i>transcript backfill</i>"]
+        daemon["daemon --watch<br/><i>systemd unit</i>"]
+    end
+    cc --> mcp["MCP stdio<br/><i>serve-mcp, 32 tools</i>"]
+    cur --> mcp
+    gem --> mcp
+    cc -. "shared server" .-> http["HTTP<br/><i>serve-http: MCP /mcp +<br/>REST /v1, bearer + assertions</i>"]
+    team --> http
+    mcp --> store["palace store<br/><i>sealed vaults, audit chain</i>"]
+    http --> store
+    mine --> store
+    daemon --> store
+    store -. "sealed content only,<br/>re-verified locally" .-> remote["remote vector indexes<br/><i>Qdrant / Chroma / pgvector /<br/>Milvus / Weaviate — untrusted<br/>accelerators</i>"]
+    llmx["local LLM<br/><i>Ollama / OpenAI-compatible</i>"] -. "refine → KG<br/>(opt-in, local)" .-> store
+```
+
 ## Claude Code
 
 MCP server: `claude mcp add undercroft -- undercroft serve-mcp`

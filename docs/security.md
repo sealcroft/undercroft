@@ -31,6 +31,38 @@ modification: every read verifies, `verify` audits everything.
   log keyed tombstones. KG triples and tunnels carry tags too.
 - **Duplicate detection** uses keyed fingerprints (truncated HMAC), so
   stored fingerprints reveal nothing offline.
+
+What one record goes through, at rest and on read:
+
+```mermaid
+flowchart LR
+    subgraph write["write (sealed vault)"]
+        c["content"] --> z["zstd compress"] --> e["XChaCha20-Poly1305<br/><i>AAD: vault id + record id</i>"]
+        c --> h["HMAC-SHA256 tag<br/><i>id ␟ meta ␟ content</i>"]
+        e --> row["SQLite row"]
+        h --> row
+        row --> chain["audit row + chain head<br/><i>same transaction</i>"]
+    end
+    subgraph read["read"]
+        row2["row"] --> v{"HMAC verifies?"}
+        v -- yes --> d["decrypt → verbatim content"]
+        v -- no --> alarm["Integrity error<br/><i>never partial data</i>"]
+    end
+```
+
+The audit chain reconciles at every open — a crash is never a false
+alarm, a rollback always is one:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Compare: open — replay audit rows,<br/>compare manifest anchor vs chain_meta head
+    Compare --> Clean: anchor == db head
+    Compare --> FastForward: anchor appears earlier<br/>in the replayed chain
+    Compare --> Tampered: anchor not in the<br/>replayed chain at all
+    FastForward --> Clean: crash artifact —<br/>anchor silently re-advanced
+    Tampered --> [*]: ManifestTampered —<br/>rollback or fork detected
+    Clean --> [*]
+```
 - **Remote indexes** receive sealed bytes + plaintext embeddings only;
   results are re-verified locally. See the trade-off note in the README.
 - **HTTP server**: refuses non-loopback binds without a bearer token;
@@ -57,6 +89,17 @@ tenant*:
    not the caller, enforces per-tenant access on every request. Failures
    return a bare 401; the reason is logged server-side, never returned (it
    would leak vault existence or how close a forgery got).
+
+```mermaid
+flowchart TB
+    req["request to /v1/vaults/{id}/…"] --> b{"palace bearer<br/>valid?"}
+    b -- no --> r401a["401"]
+    b -- yes --> a{"assertion secret<br/>configured?"}
+    a -- no --> serve["serve<br/><i>single-operator mode</i>"]
+    a -- yes --> m{"X-Vault-Assertion:<br/>ts within ±120 s AND<br/>HMAC(secret, ts pipe vault-id)<br/>matches, constant-time?"}
+    m -- no --> r401b["401 — bare, reason<br/>only logged server-side"]
+    m -- yes --> serve2["serve <b>this vault only</b><br/><i>the id is inside the MAC</i>"]
+```
 
 Fusion and external-embedding vaults do not change any of this: search only
 re-ranks already-HMAC-verified candidates, and caller-supplied vectors are

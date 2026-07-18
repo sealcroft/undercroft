@@ -1,0 +1,13 @@
+sequenceDiagram
+    participant T as tenant (token)
+    participant O as orchestrator
+    participant E as engine /v1
+    T->>O: POST /t/search — Bearer tenant-token
+    O->>O: token → HMAC → tenant row (vault, instance)
+    O->>O: subpath allowlist (vault root unroutable)
+    O->>O: unseal instance creds, mint X-Vault-Assertion(vault)
+    O->>E: POST /v1/vaults/tenant-a/search — engine bearer + assertion
+    E->>E: verify bearer + assertion (vault id inside the MAC)
+    E->>E: search → HMAC-verify every hit → decrypt
+    E-->>O: verbatim hits
+    O-->>T: relayed response

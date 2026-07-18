@@ -39,6 +39,60 @@ mod subtle_ct {
     }
 }
 
+/// Per-tenant fixed-window rate limiter (requests per minute). Off unless
+/// `UNDERCROFT_ORCH_RATE_LIMIT` is set to a positive integer. Single-writer
+/// like the serve loop itself, so plain interior state suffices. Windows
+/// are keyed by tenant id — one noisy tenant is throttled, the rest are
+/// untouched (the blast-radius posture, applied to request volume).
+pub(crate) struct RateLimiter {
+    per_minute: u64,
+    windows: std::cell::RefCell<std::collections::HashMap<String, (u64, u64)>>,
+}
+
+impl RateLimiter {
+    pub(crate) fn from_env() -> Self {
+        let per_minute = std::env::var("UNDERCROFT_ORCH_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        Self {
+            per_minute,
+            windows: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_limit(per_minute: u64) -> Self {
+        Self {
+            per_minute,
+            windows: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Record one request for `tenant` at unix-minute `minute`; `false` ⇒
+    /// over the limit (the request should 429).
+    fn allow_at(&self, tenant: &str, minute: u64) -> bool {
+        if self.per_minute == 0 {
+            return true;
+        }
+        let mut windows = self.windows.borrow_mut();
+        let entry = windows.entry(tenant.to_string()).or_insert((minute, 0));
+        if entry.0 != minute {
+            *entry = (minute, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= self.per_minute
+    }
+
+    pub(crate) fn allow(&self, tenant: &str) -> bool {
+        let minute = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() / 60)
+            .unwrap_or(0);
+        self.allow_at(tenant, minute)
+    }
+}
+
 /// Subpath allowlist for the data plane: the first segment must be one of
 /// the engine's vault subroutes. An empty subpath (the vault root — its
 /// DELETE endpoint) is refused: vault lifecycle belongs to the admin
@@ -72,6 +126,7 @@ fn err_response(status: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
 /// Run the proxy loop forever. `admin_token` gates `/admin/*`.
 pub fn serve(orch: &Orch, addr: &str, admin_token: &str) -> anyhow::Result<()> {
     let server = Server::http(addr).map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
+    let limiter = RateLimiter::from_env();
     eprintln!("undercroft-orchestrator listening on http://{addr}");
     for mut request in server.incoming_requests() {
         let method = request.method().clone();
@@ -84,7 +139,7 @@ pub fn serve(orch: &Orch, addr: &str, admin_token: &str) -> anyhow::Result<()> {
             .take(256 * 1024 * 1024)
             .read_to_end(&mut body);
 
-        let response = route(orch, admin_token, &request, &method, &path, &body);
+        let response = route(orch, admin_token, &limiter, &request, &method, &path, &body);
         let _ = request.respond(response);
     }
     Ok(())
@@ -93,6 +148,7 @@ pub fn serve(orch: &Orch, addr: &str, admin_token: &str) -> anyhow::Result<()> {
 fn route(
     orch: &Orch,
     admin_token: &str,
+    limiter: &RateLimiter,
     request: &tiny_http::Request,
     method: &Method,
     path: &str,
@@ -104,7 +160,7 @@ fn route(
     }
 
     if let Some(sub) = path.strip_prefix("/t/") {
-        return data_plane(orch, request, method, sub, body);
+        return data_plane(orch, limiter, request, method, sub, body);
     }
     if path == "/t" || path == "/t/" {
         return err_response(404, "missing subpath");
@@ -126,6 +182,7 @@ fn route(
 
 fn data_plane(
     orch: &Orch,
+    limiter: &RateLimiter,
     request: &tiny_http::Request,
     method: &Method,
     subpath: &str,
@@ -139,6 +196,11 @@ fn data_plane(
         Ok(None) => return err_response(401, "unauthorized"),
         Err(_) => return err_response(500, "state error"),
     };
+    // Rate limit after auth (unauthenticated traffic never occupies a
+    // window), per tenant — one noisy tenant can't starve the rest.
+    if !limiter.allow(&tenant.id) {
+        return err_response(429, "rate limited");
+    }
     if !data_subpath_ok(subpath) {
         return err_response(404, "unknown route");
     }
@@ -240,6 +302,12 @@ fn admin_plane(
             Err(e) => err_response(500, &e.to_string()),
         },
         ("DELETE", ["admin", "tenants", id]) => delete_tenant(orch, id),
+        ("POST", ["admin", "tenants", id, "rotate"]) => match orch.tenant_rotate_token(id) {
+            // The fresh token appears in this response and nowhere else;
+            // the old one is already dead.
+            Ok(token) => json_response(200, &serde_json::json!({ "tenant": id, "token": token })),
+            Err(e) => err_response(404, &e.to_string()),
+        },
         ("POST", ["admin", "tenants", id, "migrate"]) => {
             let v = body_json();
             let Some(to) = s(&v, "to") else {
@@ -370,5 +438,22 @@ mod tests {
         assert!(ct_eq("abc", "abc"));
         assert!(!ct_eq("abc", "abd"));
         assert!(!ct_eq("abc", "ab"));
+    }
+
+    #[test]
+    fn rate_limiter_is_per_tenant_and_per_window() {
+        let l = RateLimiter::with_limit(2);
+        assert!(l.allow_at("acme", 100));
+        assert!(l.allow_at("acme", 100));
+        assert!(!l.allow_at("acme", 100), "third request in-window trips");
+        // Another tenant is untouched by acme's window.
+        assert!(l.allow_at("globex", 100));
+        // A new minute resets acme.
+        assert!(l.allow_at("acme", 101));
+        // Limit 0 = disabled.
+        let off = RateLimiter::with_limit(0);
+        for _ in 0..100 {
+            assert!(off.allow_at("acme", 100));
+        }
     }
 }

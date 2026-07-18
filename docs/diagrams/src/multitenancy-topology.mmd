@@ -1,0 +1,14 @@
+flowchart LR
+    ta["tenant acme<br/><i>token A (HMAC-stored)</i>"] --> o
+    tb["tenant globex<br/><i>token B</i>"] --> o
+    admin["operator<br/><i>admin token / CLI</i>"] --> o
+    o["<b>undercroft-orchestrator</b><br/>own SQLite:<br/>instances (creds sealed) ·<br/>tenant→vault map"]
+    o -- "bearer + minted assertion<br/>/v1/vaults/tenant-a/…" --> e1
+    o -- "bearer + minted assertion<br/>/v1/vaults/tenant-b/…" --> e2
+    subgraph e1["engine instance 1"]
+        v1["vault tenant-a<br/><i>own HKDF keys, AAD, chain</i>"]
+        v3["vault tenant-c"]
+    end
+    subgraph e2["engine instance 2"]
+        v2["vault tenant-b"]
+    end

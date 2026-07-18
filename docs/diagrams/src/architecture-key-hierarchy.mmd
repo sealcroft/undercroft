@@ -1,0 +1,6 @@
+flowchart TB
+    master["Master key<br/><i>file or Argon2id passphrase</i>"]
+    master -- "HKDF(vault A)" --> ka["vault A keys<br/>enc · mac · fingerprint"]
+    master -- "HKDF(vault B)" --> kb["vault B keys<br/>enc · mac · fingerprint"]
+    ka --> doms["AAD domains (vault A)<br/><br/>content — drawer text<br/>{id}/emb — embeddings<br/>{id}/tok — token matrices<br/>fde/{id}/tok — FDE rows<br/>{rec}/pq — PQ index artifacts"]
+    kb -. "vault B ciphertext under<br/>vault A keys ⇒ fails to open" .-> ka
