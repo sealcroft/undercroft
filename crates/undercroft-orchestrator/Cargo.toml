@@ -1,0 +1,31 @@
+[package]
+name = "undercroft-orchestrator"
+description = "Multi-tenant orchestrator for Undercroft — routing, tenant→vault mapping, key minting, and migration as a separate optional control plane; the engine stays tree-blind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "undercroft-orchestrator"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+chacha20poly1305 = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+tiny_http = "0.12"
+ureq = { version = "2.10", features = ["json"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

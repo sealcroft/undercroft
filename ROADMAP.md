@@ -304,17 +304,24 @@ Also closes the v0.13.0 follow-up items:
   net-negative (containment loss + O(N·nprobe) filter cost) and
   deliberately not shipped; the pack format reserves its list field.
 
+## v0.25.0 — Multi-tenant orchestrator (done)
+
+- `undercroft-orchestrator`: the separate optional control plane from
+  [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md) — instance registry,
+  tenant→vault mapping (creds sealed, tokens HMAC-only), the `/t/*`
+  routing proxy, and count-verified live migration on the v0.18
+  export/import primitive. Pure `/v1` client; engine stays tree-blind.
+  24-check e2e against two live engines.
+
 ## Next
+- **Orchestrator hardening follow-ups**: TLS guidance, per-tenant rate
+  limits, token rotation, multi-orchestrator state replication.
 - **Inverted FDE tier** (list-grouped RAM slices, no per-row membership
   test) — the correct sub-linear construction, pays past ~10⁶ drawers.
 - **Sealed-tier page-level decryption** (research): decrypt only probed
   lists — matters past multi-million drawers.
 - **Retrieval wiring**: env surface for the ort backend outside the bench.
 - **Durability**: ingest fsync (audit-chain atomicity shipped in v0.19.0).
-- **Orchestrator**: the multi-tenant routing/migration/key-minting layer as
-  a separate optional tool (`examples/orchestrator/` or sibling crate),
-  keeping the engine tree-blind — see [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md);
-  v0.18.0's artifact-carrying export/import is its migration primitive.
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.
 

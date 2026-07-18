@@ -48,14 +48,19 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   http.rs/tenant.rs: HTTP + multi-tenant `/v1`; monitor.html: the Palace Monitor
   UI, `include_str!`'d and served at `GET /monitor` on telemetry builds);
   integration tests in `tests/cli.rs`
+- `crates/undercroft-orchestrator` — `undercroft-orchestrator` binary: the
+  optional multi-tenant control plane (docs/MULTI_TENANCY.md) — instance
+  registry + tenant→vault map in its own SQLite (engine creds sealed,
+  tokens stored as HMACs), `/t/*` routing proxy, `/admin/*` plane,
+  count-verified migration. Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
   under `src/`
-- `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh` — end-to-end
-  suites (run in Docker)
+- `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,
+  `tests/e2e-orchestrator.sh` — end-to-end suites (run in Docker)
 
 The upstream Python implementation (the MemPalace project) is *not* in
 this repo and no longer linked as a fork; its behavior is documented in

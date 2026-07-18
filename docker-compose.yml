@@ -34,6 +34,17 @@ services:
     volumes:
       - ./tests/e2e.sh:/src/tests/e2e.sh:ro
 
+  # Multi-tenant orchestrator suite: two engine instances + the
+  # orchestrator control plane in one container.
+  #   docker compose run --rm orchestrator-e2e
+  orchestrator-e2e:
+    build:
+      context: .
+      target: builder
+    entrypoint: ["bash", "/src/tests/e2e-orchestrator.sh"]
+    volumes:
+      - ./tests/e2e-orchestrator.sh:/src/tests/e2e-orchestrator.sh:ro
+
   backends-e2e:
     build:
       context: .

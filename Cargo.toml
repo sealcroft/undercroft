@@ -9,6 +9,7 @@ members = [
     "crates/undercroft-obs",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
+    "crates/undercroft-orchestrator",
     "crates/undercroft-embed-onnx",
     "crates/undercroft-embed-ort",
 ]
@@ -24,10 +25,11 @@ default-members = [
     "crates/undercroft-obs",
     "crates/undercroft-cli",
     "crates/undercroft-bench",
+    "crates/undercroft-orchestrator",
 ]
 
 [workspace.package]
-version = "0.24.0"
+version = "0.25.0"
 edition = "2021"
 license = "BUSL-1.1"
 repository = "https://github.com/compufreq/undercroft"
