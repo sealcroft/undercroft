@@ -21,9 +21,11 @@ pub mod manage;
 pub mod pq;
 mod pqidx;
 pub mod remote;
+mod rotate;
 
 pub use kg::{KgStats, Triple};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
+pub use rotate::RotationReport;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use time::format_description::well_known::Rfc3339;
@@ -166,6 +168,8 @@ pub enum StoreError {
     NotExternalVault,
     #[error("embedding dimension mismatch: vault expects {expected}, got {got}")]
     EmbeddingDim { expected: usize, got: usize },
+    #[error("invalid operation: {0}")]
+    Invalid(String),
 }
 
 /// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
@@ -388,6 +392,39 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Reconcile a pending key rotation (`vault.json.next`) against the
+    /// database's `keycheck` marker, and keep that marker seeded. The
+    /// keycheck flips inside the rotation transaction, so it says exactly
+    /// whether the re-seal committed: match ⇒ the crash happened after
+    /// commit, promote the staged manifest and adopt the new keys;
+    /// mismatch ⇒ before commit, discard the staging file and stay on the
+    /// current keys. Runs before any read so a crashed rotation can never
+    /// masquerade as tamper.
+    fn reconcile_rotation(conn: &Connection, mut vault: Vault) -> Result<Vault, StoreError> {
+        let db_kc: Option<String> = conn
+            .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if let Some(pending) = vault.take_pending() {
+            if db_kc.as_deref() == Some(pending.keycheck_hex().as_str()) {
+                pending.promote_manifest()?;
+                vault = *pending;
+            } else {
+                vault.discard_pending_file()?;
+            }
+        }
+        let want = vault.keycheck_hex();
+        if db_kc.as_deref() != Some(want.as_str()) {
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('keycheck', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![want],
+            )?;
+        }
+        Ok(vault)
+    }
+
     fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
         let conn = Connection::open(vault.db_path())?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -425,6 +462,7 @@ impl PalaceStore {
                  at        TEXT NOT NULL
              );",
         )?;
+        let vault = Self::reconcile_rotation(&conn, vault)?;
         let fts_min = match std::env::var("UNDERCROFT_FTS_PREFILTER_MIN") {
             Ok(v) if v.eq_ignore_ascii_case("off") => None,
             Ok(v) => Some(v.parse().unwrap_or(DEFAULT_FTS_PREFILTER_MIN)),

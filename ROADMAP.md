@@ -339,6 +339,14 @@ Also closes the v0.13.0 follow-up items:
   power loss now always lands in the reconciler's healed crash case,
   never the tamper case.
 
+## v0.29.0 — Key rotation (done)
+
+- `undercroft vault rotate`: fresh salt ⇒ fresh derived keys; every
+  sealed blob re-sealed byte-exact (all AAD domains), every tag /
+  fingerprint / chain re-keyed, in one transaction with a two-phase
+  manifest swap (`vault.json.next` + db `keycheck` marker) — crash-safe
+  at any instant, on both vault levels.
+
 ## Next
 - **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
   fleet actually needs it (deliberately deferred; single-writer stance
@@ -347,8 +355,8 @@ Also closes the v0.13.0 follow-up items:
   test) — the correct sub-linear construction, pays past ~10⁶ drawers.
 - **Sealed-tier page-level decryption** (research): decrypt only probed
   lists — matters past multi-million drawers.
-- **Ecosystem**: key rotation (re-seal under new derived keys); export
-  bundles with recipient encryption.
+- **Ecosystem**: export bundles with recipient encryption (key rotation
+  shipped in v0.29.0).
 
 ---
 

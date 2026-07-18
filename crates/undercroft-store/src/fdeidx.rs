@@ -185,7 +185,7 @@ impl PalaceStore {
         self.fde_enabled = on;
     }
 
-    fn fde_schema(&self) -> Result<(), StoreError> {
+    pub(crate) fn fde_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS drawer_fde (
                  id    TEXT PRIMARY KEY,

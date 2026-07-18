@@ -117,7 +117,7 @@ impl PalaceStore {
         self.ivf_nprobe = nprobe;
     }
 
-    fn pq_schema(&self) -> Result<(), StoreError> {
+    pub(crate) fn pq_schema(&self) -> Result<(), StoreError> {
         // The code table is **physically clustered by inverted list**
         // (`WITHOUT ROWID`, PK `(list, seq)`): a probe reads each list as a
         // sequential B-tree range scan instead of one random row fetch per

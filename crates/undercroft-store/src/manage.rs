@@ -72,7 +72,13 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
-fn tunnel_canonical(id: &str, from: &str, to: &str, label: &str, created: &str) -> Vec<u8> {
+pub(crate) fn tunnel_canonical(
+    id: &str,
+    from: &str,
+    to: &str,
+    label: &str,
+    created: &str,
+) -> Vec<u8> {
     format!("tunnel\x1f{id}\x1f{from}\x1f{to}\x1f{label}\x1f{created}").into_bytes()
 }
 

@@ -67,7 +67,7 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
-fn triple_canonical(
+pub(crate) fn triple_canonical(
     id: &str,
     subject: &str,
     predicate: &str,

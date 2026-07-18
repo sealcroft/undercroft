@@ -72,7 +72,7 @@ impl PalaceStore {
         self.late = late;
     }
 
-    fn late_schema(&self) -> Result<(), StoreError> {
+    pub(crate) fn late_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS drawer_tok (
                  id    TEXT PRIMARY KEY,

@@ -69,6 +69,18 @@ stateDiagram-v2
   (the healed crash case), never ahead (the alarm case). The anchor itself
   is written durably (fsync before the atomic rename, directory synced
   after), and key material is fsynced at creation.
+- **Key rotation** (`undercroft vault rotate <name>`): the vault gets a
+  fresh salt ⇒ fresh enc/mac/manifest keys; every sealed blob is
+  re-encrypted byte-exact at the seal layer (AAD domains preserved) and
+  every integrity tag, keyed fingerprint, and the audit chain re-keyed —
+  all in **one transaction**, with a two-phase manifest swap
+  (`vault.json.next` staged durably, promoted only after the commit; a
+  `keycheck` marker in the database tells a crashed rotation's reopen
+  which side committed). A crash at any moment leaves the vault openable
+  under exactly one key generation. Audit tags of superseded content are
+  preserved verbatim (their plaintext is gone by design); the chain over
+  them is what rotates. Remote-index copies hold old-key ciphertext
+  afterwards — re-run `index push`.
 - **Remote indexes** receive sealed bytes + plaintext embeddings only;
   results are re-verified locally. See the trade-off note in the README.
 - **HTTP server**: refuses non-loopback binds without a bearer token;
