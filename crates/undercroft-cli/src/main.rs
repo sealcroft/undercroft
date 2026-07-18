@@ -560,6 +560,20 @@ fn write_identity(path: &std::path::Path, secret_hex: &str) -> Result<()> {
     Ok(())
 }
 
+/// Bulk-ingest batch size: bounds RAM (embeddings in flight) and how long
+/// one transaction holds the write lock.
+const INGEST_BATCH: usize = 256;
+
+/// Flush drawers through the store's single-transaction bulk path in
+/// bounded chunks. Returns how many were newly created.
+fn upsert_batched(store: &mut undercroft_store::PalaceStore, drawers: &[Drawer]) -> Result<usize> {
+    let mut created = 0;
+    for chunk in drawers.chunks(INGEST_BATCH) {
+        created += store.upsert_many(chunk)?;
+    }
+    Ok(created)
+}
+
 fn data_dir(cli: &Cli) -> PathBuf {
     cli.data_dir.clone().unwrap_or_else(|| {
         let home = std::env::var_os("HOME")
@@ -1320,8 +1334,9 @@ fn main() -> Result<()> {
                 String::from_utf8(raw)
                     .with_context(|| format!("{} is not UTF-8 text", file.display()))?
             };
-            let mut imported = 0usize;
             let mut skipped = 0usize;
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut batch: Vec<Drawer> = Vec::new();
             for (lineno, line) in text.lines().enumerate() {
                 let line = line.trim();
                 if line.is_empty() {
@@ -1358,13 +1373,17 @@ fn main() -> Result<()> {
                         lineno + 1
                     );
                 };
-                if store.check_duplicate(&drawer.content)?.is_some() {
+                if seen.contains(&drawer.content)
+                    || store.check_duplicate(&drawer.content)?.is_some()
+                {
                     skipped += 1;
                     continue;
                 }
-                store.upsert(&drawer)?;
-                imported += 1;
+                seen.insert(drawer.content.clone());
+                batch.push(drawer);
             }
+            let imported = batch.len();
+            upsert_batched(&mut store, &batch)?;
             println!(
                 "{}",
                 fill(
@@ -1847,6 +1866,7 @@ fn mine_files(
         bail!("no minable text files under {}", path.display());
     }
     let mut drawers = 0usize;
+    let mut batch: Vec<Drawer> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
@@ -1857,18 +1877,22 @@ fn mine_files(
             .into_iter()
             .enumerate()
         {
-            let drawer = Drawer::new(
+            batch.push(Drawer::new(
                 wing,
                 &room,
                 chunk,
                 Some(file.display().to_string()),
                 idx as u32,
                 "miner",
-            );
-            store.upsert(&drawer)?;
+            ));
             drawers += 1;
+            if batch.len() >= INGEST_BATCH {
+                upsert_batched(store, &batch)?;
+                batch.clear();
+            }
         }
     }
+    upsert_batched(store, &batch)?;
     Ok((files.len(), drawers))
 }
 
@@ -1882,6 +1906,7 @@ fn mine_convos(
         bail!("no .jsonl transcripts under {}", path.display());
     }
     let mut drawers = 0usize;
+    let mut batch: Vec<Drawer> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
@@ -1895,18 +1920,22 @@ fn mine_convos(
             .into_iter()
             .enumerate()
         {
-            let drawer = Drawer::new(
+            batch.push(Drawer::new(
                 wing,
                 &room,
                 normalize_content(&chunk),
                 Some(file.display().to_string()),
                 idx as u32,
                 "convo-miner",
-            );
-            store.upsert(&drawer)?;
+            ));
             drawers += 1;
+            if batch.len() >= INGEST_BATCH {
+                upsert_batched(store, &batch)?;
+                batch.clear();
+            }
         }
     }
+    upsert_batched(store, &batch)?;
     Ok((files.len(), drawers))
 }
 
@@ -1929,6 +1958,8 @@ fn sweep_path(
     }
     let mut filed = 0usize;
     let mut skipped = 0usize;
+    let mut batch: Vec<Drawer> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
@@ -1946,23 +1977,29 @@ fn sweep_path(
             );
             let normalized = normalize_content(&content);
             // One drawer per message, keyed by (file, line) — re-sweeps
-            // are no-ops for already-filed messages.
-            if store.check_duplicate(&normalized)?.is_some() {
+            // are no-ops for already-filed messages. The in-batch set
+            // covers duplicates not yet flushed to the store.
+            if seen.contains(&normalized) || store.check_duplicate(&normalized)?.is_some() {
                 skipped += 1;
                 continue;
             }
-            let drawer = Drawer::new(
+            seen.insert(normalized.clone());
+            batch.push(Drawer::new(
                 wing,
                 &room,
                 normalized,
                 Some(file.display().to_string()),
                 msg.line,
                 "sweeper",
-            );
-            store.upsert(&drawer)?;
+            ));
             filed += 1;
+            if batch.len() >= INGEST_BATCH {
+                upsert_batched(store, &batch)?;
+                batch.clear();
+            }
         }
     }
+    upsert_batched(store, &batch)?;
     Ok((files.len(), filed, skipped))
 }
 

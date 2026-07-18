@@ -354,6 +354,14 @@ Also closes the v0.13.0 follow-up items:
   XChaCha20-Poly1305 sealed bundles; a backup never exists in
   plaintext. Closes the ecosystem track (key rotation + bundles).
 
+## v0.31.0 — Bulk-ingest transaction batching (done)
+
+- `upsert_many`: one transaction (+ one manifest anchor) per batch
+  across import/mine/sweep — measured 26 fsyncs for a 200-drawer
+  import (0.13/drawer) vs ~7/drawer per-item, ~55× fewer disk syncs,
+  chain + verify intact. The durability model is unchanged — fewer
+  commits, not weaker ones.
+
 ## Next (all demand-driven)
 - **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
   fleet actually needs it (deliberately deferred; single-writer stance
