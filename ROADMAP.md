@@ -320,6 +320,16 @@ Also closes the v0.13.0 follow-up items:
   hardening docs (TLS both hops, secrets hygiene, state backup, the
   documented single-writer stance). e2e grown to 30 checks.
 
+## v0.27.0 — ONNX Runtime backend in the CLI (done)
+
+- The `ort` cargo feature on `undercroft-cli`: `UNDERCROFT_EMBEDDER=ort`,
+  `UNDERCROFT_RERANKER=ort` (batched cross-encoder) and `colbert-ort`
+  (late interaction) select ONNX Runtime at runtime — same models and
+  env variables as tract, so the measured wins (reranker ~100–160×,
+  ColBERT 70.3 ms/q, ingest embed 4–5×) reach real deployments. The
+  multi-tenant server shares one session pool across all vaults;
+  `ort-build` now compile-checks the CLI with both backends.
+
 ## Next
 - **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
   fleet actually needs it (deliberately deferred; single-writer stance
@@ -328,7 +338,6 @@ Also closes the v0.13.0 follow-up items:
   test) — the correct sub-linear construction, pays past ~10⁶ drawers.
 - **Sealed-tier page-level decryption** (research): decrypt only probed
   lists — matters past multi-million drawers.
-- **Retrieval wiring**: env surface for the ort backend outside the bench.
 - **Durability**: ingest fsync (audit-chain atomicity shipped in v0.19.0).
 - **Ecosystem**: key rotation (re-seal under new derived keys); export
   bundles with recipient encryption.

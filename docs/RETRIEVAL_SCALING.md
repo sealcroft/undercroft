@@ -253,7 +253,11 @@ Accuracy is **runtime-invariant** (identical weights). Tradeoff: `ort` links
 ORT's **C++** library, breaking the pure-Rust / zero-C-dep property (audit
 surface, wasm/IoT — though ORT ships mobile/wasm builds). Offered
 **feature-gated (`ort`), tract kept as the pure-Rust fallback**
-([`undercroft-embed-ort`](../crates/undercroft-embed-ort)).
+([`undercroft-embed-ort`](../crates/undercroft-embed-ort)). The CLI wires it
+end to end: build with `--features ort` and select at runtime with
+`UNDERCROFT_EMBEDDER=ort` / `UNDERCROFT_RERANKER=ort` (cross-encoder) /
+`UNDERCROFT_RERANKER=colbert-ort` (late interaction) — same model files and
+`UNDERCROFT_ONNX_*` / `RERANK_*` / `COLBERT_*` variables as tract.
 
 Measured **end-to-end** on LoCoMo (convos 0-1, 302 QA), this 24-core host.
 `OrtReranker` holds a **session pool** (default = core count,

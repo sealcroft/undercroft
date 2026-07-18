@@ -276,7 +276,8 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
         /// Backfill late-interaction token matrices instead (requires
-        /// UNDERCROFT_RERANKER=colbert): encodes every drawer missing one,
+        /// UNDERCROFT_RERANKER=colbert or colbert-ort): encodes every drawer
+        /// missing one,
         /// in bounded batches. Restores from artifact-less bundles serve at
         /// fusion quality immediately and improve as this progresses.
         #[arg(long)]
@@ -536,8 +537,21 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
                  (cargo build -p undercroft-cli --features onnx)"
             );
         }
+        Ok("ort") => {
+            #[cfg(feature = "ort")]
+            {
+                let embedder = undercroft_embed_ort::embedder_from_env()
+                    .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+                PalaceStore::open_with_embedder(v, Box::new(embedder))?
+            }
+            #[cfg(not(feature = "ort"))]
+            bail!(
+                "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
+                 (cargo build -p undercroft-cli --features ort)"
+            );
+        }
         Ok("hash") | Ok("") | Err(_) => PalaceStore::open(v)?,
-        Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx)"),
+        Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx, ort)"),
     };
     attach_reranker(&mut store)?;
     attach_retrieval(&mut store)?;
@@ -568,9 +582,12 @@ fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
     Ok(())
 }
 
-/// Attach the second-stage cross-encoder reranker when `UNDERCROFT_RERANKER=onnx`
-/// (requires the `onnx` feature). Unset ⇒ first-pass ranking only.
-#[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
+/// Attach the second retrieval stage via `UNDERCROFT_RERANKER`: `onnx` /
+/// `colbert` load the tract backend (`onnx` feature), `ort` / `colbert-ort`
+/// the ONNX Runtime backend (`ort` feature) — same model files and
+/// `UNDERCROFT_RERANK_*` / `UNDERCROFT_COLBERT_*` variables either way.
+/// Unset ⇒ first-pass ranking only.
+#[cfg_attr(not(any(feature = "onnx", feature = "ort")), allow(unused_variables))]
 fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
     match std::env::var("UNDERCROFT_RERANKER").as_deref() {
         Ok("onnx") => {
@@ -601,9 +618,40 @@ fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
                  (cargo build -p undercroft-cli --features onnx)"
             );
         }
+        Ok("ort") => {
+            #[cfg(feature = "ort")]
+            {
+                let rr = undercroft_embed_ort::reranker_from_env()
+                    .map_err(|e| anyhow::anyhow!("loading ORT reranker: {e}"))?;
+                store.set_reranker(Some(Box::new(rr)));
+                Ok(())
+            }
+            #[cfg(not(feature = "ort"))]
+            bail!(
+                "UNDERCROFT_RERANKER=ort requires a build with the 'ort' feature \
+                 (cargo build -p undercroft-cli --features ort)"
+            );
+        }
+        Ok("colbert-ort") => {
+            #[cfg(feature = "ort")]
+            {
+                let c = undercroft_embed_ort::colbert_from_env()
+                    .map_err(|e| anyhow::anyhow!("loading ORT ColBERT encoder: {e}"))?;
+                store.set_late(Some(Box::new(c)));
+                Ok(())
+            }
+            #[cfg(not(feature = "ort"))]
+            bail!(
+                "UNDERCROFT_RERANKER=colbert-ort requires a build with the 'ort' feature \
+                 (cargo build -p undercroft-cli --features ort)"
+            );
+        }
         Ok("") | Err(_) => Ok(()),
         Ok(other) => {
-            bail!("unknown UNDERCROFT_RERANKER {other:?} (expected: onnx, colbert, or unset)")
+            bail!(
+                "unknown UNDERCROFT_RERANKER {other:?} \
+                 (expected: onnx, ort, colbert, colbert-ort, or unset)"
+            )
         }
     }
 }
@@ -638,11 +686,56 @@ fn embedder_factory() -> tenant::EmbedderFactory {
                          (cargo build -p undercroft-cli --features onnx)"
                     )
                 }
+                Ok("ort") => {
+                    #[cfg(feature = "ort")]
+                    {
+                        // One session pool shared across every tenant vault —
+                        // the pool holds a model copy per core, so per-vault
+                        // loads would multiply RAM for identical weights.
+                        use std::sync::{Arc, OnceLock};
+                        static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtEmbedder>> =
+                            OnceLock::new();
+                        let arc = match SHARED.get() {
+                            Some(a) => a.clone(),
+                            None => {
+                                let e = undercroft_embed_ort::embedder_from_env()
+                                    .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+                                SHARED.get_or_init(|| Arc::new(e)).clone()
+                            }
+                        };
+                        Ok(Box::new(SharedOrtEmbedder(arc)))
+                    }
+                    #[cfg(not(feature = "ort"))]
+                    bail!(
+                        "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
+                         (cargo build -p undercroft-cli --features ort)"
+                    )
+                }
                 Ok("hash") | Ok("") | Err(_) => Ok(Box::new(undercroft_core::HashEmbedder)),
-                Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx)"),
+                Ok(other) => {
+                    bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx, ort)")
+                }
             }
         },
     )
+}
+
+/// A cheap handle onto the one shared [`undercroft_embed_ort::OrtEmbedder`]
+/// session pool the multi-tenant server loaded.
+#[cfg(feature = "ort")]
+struct SharedOrtEmbedder(std::sync::Arc<undercroft_embed_ort::OrtEmbedder>);
+
+#[cfg(feature = "ort")]
+impl undercroft_core::embed::Embedder for SharedOrtEmbedder {
+    fn model_name(&self) -> &str {
+        self.0.model_name()
+    }
+    fn dimension(&self) -> usize {
+        self.0.dimension()
+    }
+    fn embed(&self, text: &str) -> Vec<f32> {
+        self.0.embed(text)
+    }
 }
 
 /// Build the shared reranker factory for the multi-tenant server. When
@@ -651,7 +744,7 @@ fn embedder_factory() -> tenant::EmbedderFactory {
 /// cheap `Arc`-clone handle) — mirroring how a single-vault server attaches
 /// its reranker, without loading a copy per vault. Unset ⇒ `None` (first-pass
 /// ranking only, the default).
-#[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
+#[cfg_attr(not(any(feature = "onnx", feature = "ort")), allow(unused_variables))]
 fn reranker_factory() -> Result<Option<tenant::RerankerFactory>> {
     match std::env::var("UNDERCROFT_RERANKER").as_deref() {
         Ok("onnx") => {
@@ -672,8 +765,50 @@ fn reranker_factory() -> Result<Option<tenant::RerankerFactory>> {
                  (cargo build -p undercroft-cli --features onnx)"
             );
         }
+        Ok("ort") => {
+            #[cfg(feature = "ort")]
+            {
+                use std::sync::Arc;
+                let shared = Arc::new(
+                    undercroft_embed_ort::reranker_from_env()
+                        .map_err(|e| anyhow::anyhow!("loading ORT reranker: {e}"))?,
+                );
+                let factory: tenant::RerankerFactory =
+                    Box::new(move || Box::new(SharedOrtReranker(shared.clone())));
+                Ok(Some(factory))
+            }
+            #[cfg(not(feature = "ort"))]
+            bail!(
+                "UNDERCROFT_RERANKER=ort requires a build with the 'ort' feature \
+                 (cargo build -p undercroft-cli --features ort)"
+            );
+        }
+        Ok("colbert") | Ok("colbert-ort") => bail!(
+            "the ColBERT late-interaction stage is not available on the \
+             multi-tenant server (use UNDERCROFT_RERANKER=onnx or ort, or serve \
+             a single vault)"
+        ),
         Ok("") | Err(_) => Ok(None),
-        Ok(other) => bail!("unknown UNDERCROFT_RERANKER {other:?} (expected: onnx or unset)"),
+        Ok(other) => bail!("unknown UNDERCROFT_RERANKER {other:?} (expected: onnx, ort, or unset)"),
+    }
+}
+
+/// A cheap handle onto the one shared [`undercroft_embed_ort::OrtReranker`] the
+/// multi-tenant server loaded. Forwards `score_batch` — the ORT backend scores
+/// the whole pool in one batched forward, which is where its speedup lives.
+#[cfg(feature = "ort")]
+struct SharedOrtReranker(std::sync::Arc<undercroft_embed_ort::OrtReranker>);
+
+#[cfg(feature = "ort")]
+impl undercroft_core::rerank::Reranker for SharedOrtReranker {
+    fn model_name(&self) -> &str {
+        self.0.model_name()
+    }
+    fn score(&self, query: &str, passage: &str) -> f32 {
+        self.0.score(query, passage)
+    }
+    fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
+        self.0.score_batch(query, passages)
     }
 }
 
