@@ -128,6 +128,37 @@ echo "== Instance removal guard =="
 body_has "empty instance removes"    '"removed":true' -- -X DELETE "${ADMIN[@]}" "$O/admin/instances/engine-a"
 code_is  "hosting instance refuses"  409              -- -X DELETE "${ADMIN[@]}" "$O/admin/instances/engine-b"
 
+echo "== Token rotation =="
+ROT="$(curl -s -X POST "${ADMIN[@]}" "$O/admin/tenants/$ACME_ID/rotate")"
+ACME_TOKEN2="$(sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p' <<<"$ROT")"
+[ -n "$ACME_TOKEN2" ] && [ "$ACME_TOKEN2" != "$ACME_TOKEN" ] && ok "rotation mints a fresh token" \
+  || fail "rotation mints a fresh token" "$ROT"
+code_is  "old token revoked immediately" 401 -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"query":"flux"}' "$O/t/search"
+AUTH_ACME2=(-H "Authorization: Bearer $ACME_TOKEN2")
+body_has "rotated token serves" 'gigawatts' -- -X POST "${AUTH_ACME2[@]}" \
+  -d '{"query":"flux capacitor power"}' "$O/t/search"
+code_is  "rotate unknown tenant is 404" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/ffffffffffffffff/rotate"
+
+echo "== Per-tenant rate limiting =="
+kill $ORCH_PID 2>/dev/null; wait $ORCH_PID 2>/dev/null
+UNDERCROFT_ORCH_RATE_LIMIT=3 "$ORCH" serve --addr "127.0.0.1:$PORT_O" >>/tmp/orch.log 2>&1 &
+ORCH_PID=$!
+for _ in $(seq 1 100); do
+  curl -sf "http://127.0.0.1:$PORT_O/healthz" >/dev/null 2>&1 && break; sleep 0.1
+done
+# 8 rapid requests against a limit of 3/min: even if a minute boundary
+# rolls mid-burst, one window necessarily holds >=4 of them, so at least
+# one 429 is guaranteed — deterministic, no timing flake.
+LIMITED=0
+for i in 1 2 3 4 5 6 7 8; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${AUTH_ACME2[@]}" -d '{"query":"flux"}' "$O/t/search")"
+  [ "$code" = "429" ] && LIMITED=1
+done
+[ "$LIMITED" = "1" ] && ok "burst over the limit trips 429" || fail "burst over the limit trips 429"
+code_is "another tenant is untouched" 200 -- -X POST "${AUTH_GLOBEX[@]}" \
+  -d '{"query":"anything"}' "$O/t/search"
+
 echo ""
 echo "orchestrator e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] && echo "ORCHESTRATOR E2E OK" || exit 1

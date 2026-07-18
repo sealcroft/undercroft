@@ -310,6 +310,38 @@ copy. The e2e suite (`tests/e2e-orchestrator.sh`, 24 checks,
 against two live engine instances, including the source engine provably
 losing the vault after migration.
 
+### Deploying the orchestrator (hardening)
+
+- **Bind loopback, terminate TLS in front.** The orchestrator (like the
+  engine) listens on `127.0.0.1` by default and speaks plain HTTP; put a
+  reverse proxy (Caddy, nginx, or your ingress) in front for TLS and let
+  it forward to the loopback port. The same applies to the
+  orchestrator→engine hop when engines live on other hosts: point the
+  instance `url` at an HTTPS reverse proxy in front of each engine.
+  Everything auth-bearing (tenant tokens, engine bearers, assertions)
+  must only ever transit inside TLS or on loopback.
+- **Rate limiting** (`UNDERCROFT_ORCH_RATE_LIMIT`, requests/minute per
+  tenant, off by default): applied on the data plane *after* token
+  resolution, keyed per tenant — one noisy tenant is throttled (429),
+  the rest are untouched. Blast-radius isolation, applied to request
+  volume.
+- **Token rotation** (`POST /admin/tenants/{id}/rotate` or
+  `tenant-rotate`): mints a fresh token and revokes the old one **in the
+  same statement** — rotation *is* the revocation primitive; there is no
+  grace window. The new token appears once, in the response.
+- **State backup and the single-writer stance.** The orchestrator state
+  is one SQLite file: credentials sealed, tokens MAC-only — a copied
+  file without `UNDERCROFT_ORCH_KEY` yields nothing. Back it up like any
+  file; losing it strands no data (tenant data lives in engine vaults —
+  re-register instances, re-mint tokens). It is deliberately
+  **single-writer**: run one orchestrator per fleet. Multi-orchestrator
+  replication is deferred until a fleet actually needs it — a
+  read-replica proxy is the likely shape, not multi-master.
+- **Secrets hygiene**: generate `UNDERCROFT_ORCH_KEY` and the admin token
+  with `keygen`; pass them as environment, never in URLs. On shared
+  hosts prefer the HTTP admin plane over CLI flags for instance
+  registration (argv is visible to other local users).
+
 ## Latency and the orchestrator compose cleanly
 
 The single-threaded `/v1` loop with reranking has a throughput ceiling

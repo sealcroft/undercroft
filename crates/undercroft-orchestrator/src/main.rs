@@ -71,6 +71,9 @@ enum Command {
     TenantList,
     /// Delete a tenant (engine vault + mapping)
     TenantDelete { id: String },
+    /// Rotate a tenant's token (the old one dies immediately; the new one
+    /// prints once)
+    TenantRotate { id: String },
     /// Migrate a tenant's vault to another instance (export → import →
     /// count-verified → mapping flip → source delete)
     Migrate {
@@ -185,6 +188,13 @@ fn main() -> Result<()> {
                 "deleted {id} (vault {} on {})",
                 tenant.vault, tenant.instance
             );
+            Ok(())
+        }
+        Command::TenantRotate { id } => {
+            let orch = Orch::open(&cli.db, &orch_key()?)?;
+            let token = orch.tenant_rotate_token(&id)?;
+            println!("token   {token}");
+            println!("(the old token is revoked; this one is shown once)");
             Ok(())
         }
         Command::Migrate {

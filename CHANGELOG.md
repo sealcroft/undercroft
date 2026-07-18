@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.26.0 — Orchestrator hardening
+
+The follow-ups queued at v0.25.0, minus one deliberately deferred.
+
+- **Token rotation**: `POST /admin/tenants/{id}/rotate` + `tenant-rotate`
+  CLI — a fresh token is minted and the old one revoked **in the same
+  statement** (rotation is the revocation primitive; no grace window).
+  Shown once, like at create.
+- **Per-tenant rate limiting** (`UNDERCROFT_ORCH_RATE_LIMIT`,
+  requests/minute, off by default): fixed-window, keyed per tenant,
+  applied on the data plane after token resolution — one noisy tenant
+  429s, the rest are untouched.
+- **Deployment hardening docs** (MULTI_TENANCY.md): TLS via reverse
+  proxy on both hops, loopback defaults, secrets hygiene, state
+  backup, and the documented **single-writer stance** — multi-
+  orchestrator replication is deferred until a fleet needs it, with the
+  likely shape (read-replica proxy) recorded.
+- Verified: 9 unit tests (+ rotation revocation, per-tenant/per-window
+  limiter), e2e grown to **30 checks** including a deterministic
+  burst-over-limit test (8 rapid requests across ≤2 windows guarantee a
+  429 — no timing flake) and old-token-revoked-immediately.
+
 ## 0.25.0 — Multi-tenant orchestrator
 
 The control plane docs/MULTI_TENANCY.md reserved: routing, tenant→vault

@@ -313,9 +313,17 @@ Also closes the v0.13.0 follow-up items:
   export/import primitive. Pure `/v1` client; engine stays tree-blind.
   24-check e2e against two live engines.
 
+## v0.26.0 — Orchestrator hardening (done)
+
+- Token rotation (revocation-in-the-same-statement), per-tenant
+  fixed-window rate limiting (`UNDERCROFT_ORCH_RATE_LIMIT`), deployment
+  hardening docs (TLS both hops, secrets hygiene, state backup, the
+  documented single-writer stance). e2e grown to 30 checks.
+
 ## Next
-- **Orchestrator hardening follow-ups**: TLS guidance, per-tenant rate
-  limits, token rotation, multi-orchestrator state replication.
+- **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
+  fleet actually needs it (deliberately deferred; single-writer stance
+  documented in MULTI_TENANCY.md).
 - **Inverted FDE tier** (list-grouped RAM slices, no per-row membership
   test) — the correct sub-linear construction, pays past ~10⁶ drawers.
 - **Sealed-tier page-level decryption** (research): decrypt only probed

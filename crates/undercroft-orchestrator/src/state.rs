@@ -354,6 +354,24 @@ impl Orch {
         Ok(rows)
     }
 
+    /// Rotate a tenant's token: mint a fresh one, replace the stored MAC.
+    /// The old token stops resolving in the same statement — there is no
+    /// grace window (rotation is the revocation primitive). Returned once,
+    /// like at create.
+    pub fn tenant_rotate_token(&self, id: &str) -> Result<String, StateError> {
+        let mut token_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+        let token = hex::encode(token_bytes);
+        let n = self.conn.execute(
+            "UPDATE tenants SET token_mac = ?1 WHERE id = ?2",
+            params![self.token_mac(&token), id],
+        )?;
+        if n == 0 {
+            return Err(StateError::Invalid(format!("unknown tenant {id:?}")));
+        }
+        Ok(token)
+    }
+
     pub fn tenant_set_instance(&self, id: &str, instance: &str) -> Result<(), StateError> {
         let n = self.conn.execute(
             "UPDATE tenants SET instance = ?1 WHERE id = ?2",
@@ -452,6 +470,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn token_rotation_revokes_the_old_token_immediately() {
+        let (_d, o) = orch();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let (t, old) = o.tenant_create("acme", "alpha").unwrap();
+        let new = o.tenant_rotate_token(&t.id).unwrap();
+        assert_ne!(old, new);
+        assert!(o.tenant_by_token(&old).unwrap().is_none(), "old token dead");
+        assert_eq!(o.tenant_by_token(&new).unwrap().unwrap().id, t.id);
+        assert!(o.tenant_rotate_token("nope").is_err());
     }
 
     #[test]
