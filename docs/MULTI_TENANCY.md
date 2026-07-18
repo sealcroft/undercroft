@@ -206,6 +206,71 @@ above reserved: one binary, its **own** SQLite state, talking to engines
 exactly like any other `/v1` caller — palace bearer + freshly minted
 per-vault assertion per request. Nothing in it links engine crates.
 
+**Topology** — tenants talk to the orchestrator; the orchestrator talks
+to engines over their public `/v1` surface; every engine hosts many
+cryptographically isolated vaults:
+
+```mermaid
+flowchart LR
+    ta["tenant acme<br/><i>token A (HMAC-stored)</i>"] --> o
+    tb["tenant globex<br/><i>token B</i>"] --> o
+    admin["operator<br/><i>admin token / CLI</i>"] --> o
+    o["<b>undercroft-orchestrator</b><br/>own SQLite:<br/>instances (creds sealed) ·<br/>tenant→vault map"]
+    o -- "bearer + minted assertion<br/>/v1/vaults/tenant-a/…" --> e1
+    o -- "bearer + minted assertion<br/>/v1/vaults/tenant-b/…" --> e2
+    subgraph e1["engine instance 1"]
+        v1["vault tenant-a<br/><i>own HKDF keys, AAD, chain</i>"]
+        v3["vault tenant-c"]
+    end
+    subgraph e2["engine instance 2"]
+        v2["vault tenant-b"]
+    end
+```
+
+**Data-plane request** — one hop, auth swapped at the boundary, and the
+engine still verifies everything independently:
+
+```mermaid
+sequenceDiagram
+    participant T as tenant (token)
+    participant O as orchestrator
+    participant E as engine /v1
+    T->>O: POST /t/search — Bearer tenant-token
+    O->>O: token → HMAC → tenant row (vault, instance)
+    O->>O: subpath allowlist (vault root unroutable)
+    O->>O: unseal instance creds, mint X-Vault-Assertion(vault)
+    O->>E: POST /v1/vaults/tenant-a/search — engine bearer + assertion
+    E->>E: verify bearer + assertion (vault id inside the MAC)
+    E->>E: search → HMAC-verify every hit → decrypt
+    E-->>O: verbatim hits
+    O-->>T: relayed response
+```
+
+**Migration** — the v0.18 artifact-carrying export/import as a live
+control-plane operation; any failure before the mapping flip leaves the
+source authoritative:
+
+```mermaid
+sequenceDiagram
+    participant A as admin
+    participant O as orchestrator
+    participant S as source engine
+    participant D as target engine
+    A->>O: POST /admin/tenants/{id}/migrate {to}
+    O->>S: GET /v1/vaults/{v}/export (NDJSON + token artifacts)
+    O->>D: POST /v1/vaults (create)
+    O->>D: POST /v1/vaults/{v}/import
+    D-->>O: {imported: n}
+    alt n == exported lines
+        O->>O: flip tenant→instance mapping
+        O->>S: DELETE /v1/vaults/{v} (unless keep_source)
+        O-->>A: {records, source_deleted}
+    else count mismatch
+        O->>D: DELETE partial copy
+        O-->>A: error — source left authoritative
+    end
+```
+
 **Surface** (single-threaded `tiny_http`, the engine's serving model):
 
 | Route | Plane | Purpose |
