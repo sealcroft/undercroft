@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.34.1 — Multi-arch distribution + weaviate readiness fix
+
+- **linux/arm64 everywhere**: the GHCR image is now a multi-arch
+  manifest (amd64 + arm64, each built natively on GitHub's arm runners —
+  no QEMU), and releases gain an `aarch64-unknown-linux-gnu` binary
+  (Raspberry Pi, Graviton, and other ARM servers).
+- **backends-e2e flake fixed**: weaviate answers HTTP before its Raft
+  leader is elected, so the readiness probe could pass and the first
+  schema write then failed 422 "leader not found" (flaked the v0.34.0
+  post-merge CI and one local run, 5 checks each time). The probe now
+  gates on `/v1/schema` returning 200 — the exact surface the suite
+  writes to first.
+
 ## 0.34.0 — Distribution & security policy
 
 Adoption no longer requires building from source, and vulnerability
