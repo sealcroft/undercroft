@@ -376,6 +376,44 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
   #rain { display: none; }
   .reveal { opacity: 1; transform: none; }
 }
+/* ============ guided walkthrough ============ */
+.guide-grid { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; }
+.guide-steps { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 18px; }
+.guide-step {
+  text-align: left; font-family: var(--mono); font-size: .82rem; padding: 9px 12px;
+  background: rgba(13,27,30,.6); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--ink-dim); cursor: pointer; transition: all .15s;
+}
+.guide-step:hover { color: var(--ink); border-color: var(--teal-dark); }
+.guide-step.active { color: var(--teal); border-color: var(--teal); background: rgba(20,60,54,.35); }
+.guide-step .gs-n { color: var(--gold); margin-right: 8px; }
+.guide-panel {
+  background: rgba(8,16,18,.82); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px 22px; min-height: 320px;
+}
+.guide-panel h3 { margin: 0 0 8px; color: var(--ink); font-size: 1.05rem; }
+.guide-panel p { color: var(--ink-dim); font-size: .92rem; line-height: 1.55; margin: 0 0 12px; }
+.guide-code { position: relative; background: #05090b; border: 1px solid var(--line);
+  border-radius: 8px; padding: 12px 14px; margin: 0 0 12px; overflow-x: auto; }
+.guide-code pre { margin: 0; font-family: var(--mono); font-size: .8rem; line-height: 1.6;
+  color: var(--teal); white-space: pre; }
+.guide-code .gc-copy {
+  position: absolute; top: 8px; right: 8px; font-family: var(--mono); font-size: .68rem;
+  background: rgba(13,27,30,.9); color: var(--ink-dim); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 9px; cursor: pointer;
+}
+.guide-code .gc-copy:hover { color: var(--teal); border-color: var(--teal-dark); }
+.guide-panel .gp-links { font-size: .8rem; font-family: var(--mono); }
+.guide-panel .gp-links a { color: var(--gold); text-decoration: none; margin-right: 16px; }
+.guide-panel .gp-links a:hover { text-decoration: underline; }
+@media (max-width: 720px) {
+  .guide-grid { grid-template-columns: 1fr; }
+  .guide-steps { flex-direction: row; flex-wrap: wrap; position: static; }
+}
+/* ============ closing CTA ============ */
+.cta-final { text-align: center; padding: 26px 0 8px; }
+.cta-final h2 { margin-bottom: 10px; }
+.cta-final .cta-sub { color: var(--ink-dim); max-width: 560px; margin: 0 auto 18px; }
 </style>
 </head>
 <body>
@@ -393,7 +431,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="cta-row">
       <a class="btn" href="docs/">Read the docs</a>
       <a class="btn gold" href="https://github.com/compufreq/undercroft">Source on GitHub</a>
-      <a class="btn ghost" href="https://github.com/compufreq/undercroft/releases/latest">v0.31.0 · releases</a>
+      <a class="btn ghost" href="https://github.com/compufreq/undercroft/releases/latest">v0.32.0 · releases</a>
     </div>
     <div class="scroll-hint">descend</div>
   </header>
@@ -672,11 +710,76 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
     </div>
     <div class="stats">
-      <div class="stat"><div class="n" data-count="103">0</div><div class="l">cargo tests</div></div>
-      <div class="stat"><div class="n" data-count="94">0</div><div class="l">e2e checks</div></div>
+      <div class="stat"><div class="n" data-count="176">0</div><div class="l">cargo tests</div></div>
+      <div class="stat"><div class="n" data-count="228">0</div><div class="l">e2e checks</div></div>
       <div class="stat"><div class="n" data-count="5">0</div><div class="l">live backends</div></div>
       <div class="stat"><div class="n" data-count="32">0</div><div class="l">mcp tools</div></div>
       <div class="stat"><div class="n" data-count="0">0</div><div class="l">bytes phoned home</div></div>
+    </div>
+  </section>
+
+  <section class="wrap reveal" id="uses">
+    <div class="sec-label">What to build with it</div>
+    <h2>Use cases it covers today</h2>
+    <div class="feat-grid">
+      <div class="feat" data-glyph="Α">
+        <h3>A coding agent that remembers</h3>
+        <p>MCP stdio server + auto-save hooks: every session's decisions survive the
+           crossing. <code>wake-up</code> loads identity and the essential story;
+           <code>search</code> returns the exact words, one-typo tolerant.</p>
+      </div>
+      <div class="feat" data-glyph="Β">
+        <h3>A team's shared memory</h3>
+        <p>One <code>serve-http</code> instance, bearer-enforced beyond loopback,
+           read-only mode for consumers. Same MCP tools over HTTP — every teammate's
+           agent shares one sealed palace.</p>
+      </div>
+      <div class="feat" data-glyph="Γ">
+        <h3>A multi-tenant memory product</h3>
+        <p>The versioned <code>/v1</code> REST engine: per-vault assertions, external
+           embeddings, count-verified migration — and an optional orchestrator that
+           routes fleets of engines with HMAC-only tenant tokens.</p>
+      </div>
+      <div class="feat" data-glyph="Δ">
+        <h3>An auditable record of what was said</h3>
+        <p>Verbatim storage, HMAC on every record, a tamper-evident audit chain, and
+           crash-safe key rotation. <code>verify</code> replays it all; a rollback is
+           an alarm, a crash never is.</p>
+      </div>
+      <div class="feat" data-glyph="Ε">
+        <h3>Backups that never leak</h3>
+        <p>Encrypted export bundles sealed to an X25519 recipient — a migration file
+           never exists in plaintext. Restore is <code>import --identity</code>;
+           token matrices ride along as portable artifacts.</p>
+      </div>
+      <div class="feat" data-glyph="Ζ">
+        <h3>Offline retrieval that scales</h3>
+        <p>Deterministic hash embedder by default; opt-in ONNX / ONNX Runtime models,
+           cross-encoder rerank, ColBERT late interaction, PQ/IVF and MUVERA FDE
+           tiers — every number on this page measured, never promised.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap reveal" id="guide">
+    <div class="sec-label">Hands on</div>
+    <h2>From zero to a remembering agent</h2>
+    <div class="guide-grid">
+      <div class="guide-steps" id="guide-steps" role="tablist" aria-label="guide steps"></div>
+      <div class="guide-panel" id="guide-panel"></div>
+    </div>
+  </section>
+
+  <section class="wrap reveal cta-final" id="start">
+    <div class="sec-label">Begin</div>
+    <h2>Give your agent a memory</h2>
+    <p class="cta-sub">Local-first, sealed by default, zero bytes phoned home.
+       One binary, one command to start — and a guide written for the AI that
+       will operate it.</p>
+    <div class="cta-row" style="justify-content:center">
+      <a class="btn" href="docs/getting-started.html">Get started</a>
+      <a class="btn gold" href="docs/agents.html">Agents implementation guide</a>
+      <a class="btn ghost" href="https://github.com/compufreq/undercroft">Source on GitHub</a>
     </div>
   </section>
 
@@ -688,6 +791,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       <a href="#operate">operate</a>
       <a href="#bench">benchmarks</a>
       <a href="docs/security.html">security model</a>
+      <a href="docs/agents.html">agents guide</a>
       <a href="docs/parity.html">parity</a>
       <a href="https://github.com/compufreq/undercroft">github</a>
       <span class="foot-license">BUSL-1.1 · rust · μηδὲν λήθῃ — let nothing be forgotten</span>
@@ -942,6 +1046,63 @@ document.body.classList.add('js');
     }
   }, {threshold: .6});
   document.querySelectorAll('.stat .n').forEach(el => cio.observe(el));
+})();
+
+/* ============ guided walkthrough ============ */
+(() => {
+  const stepsEl = document.getElementById('guide-steps');
+  const panelEl = document.getElementById('guide-panel');
+  if (!stepsEl || !panelEl) return;
+  const STEPS = [
+    { t: 'Install', p: 'One Rust binary. Build it in Docker (the project’s own path) or natively — no services, no accounts, no network.',
+      c: 'git clone https://github.com/compufreq/undercroft\ncd undercroft\ndocker build -t undercroft .          # runtime image\n# or natively:\ncargo build --release                # → target/release/undercroft',
+      l: [['docs/getting-started.html','getting started →']] },
+    { t: 'Initialize', p: 'A palace holds isolated vaults — each with its own database and its own HKDF-derived keys. Sealed is the default: content and embeddings encrypted at rest.',
+      c: 'undercroft init\n# Palace initialized at ~/.undercroft\n# Created vault \'default\' (level: sealed)\nundercroft vault create work          # more isolated namespaces',
+      l: [['docs/security.html','security model →']] },
+    { t: 'Feed it', p: 'Verbatim in, always. One memory, a directory of documents, a folder of agent transcripts, or a JSONL export — ingest is idempotent and batched in one transaction.',
+      c: 'undercroft remember "We chose GraphQL over REST" --wing backend --room decisions\nundercroft mine ~/notes               # documents → chunked drawers\nundercroft sweep ~/.claude/projects   # transcripts → one drawer per message\nundercroft import backup.jsonl',
+      l: [['docs/agents.html','agents guide: ingestion →']] },
+    { t: 'Ask it', p: 'Hybrid semantic + lexical + recency search returns your exact words (one typo tolerated). wake-up loads a session’s worth of identity and recent essentials.',
+      c: 'undercroft search "why did we pick graphql"\nundercroft wake-up                    # L0 identity + L1 essential story\nundercroft kg query alice --as-of 2024-06-15',
+      l: [['docs/retrieval.html','retrieval & scaling →']] },
+    { t: 'Wire an agent', p: 'The MCP stdio server exposes 32 tools; hooks print ready-to-paste auto-save settings so every session files its own memories.',
+      c: '# claude_desktop_config.json / .mcp.json\n{ "mcpServers": { "undercroft": {\n    "command": "undercroft", "args": ["serve-mcp"] } } }\n\nundercroft hooks claude-code          # auto-save hook snippet',
+      l: [['docs/integrations.html','integrations →'],['docs/agents.html','agents guide →']] },
+    { t: 'Share it', p: 'One server, a whole team — or a whole product. Bearer beyond loopback, per-vault assertions, read-only mode, and an orchestrator for fleets.',
+      c: 'UNDERCROFT_MCP_HTTP_TOKEN=$(openssl rand -hex 24) \\\n  undercroft serve-http --host 0.0.0.0 --port 8800\n# per-tenant: UNDERCROFT_ASSERTION_SECRET=... + X-Vault-Assertion',
+      l: [['docs/remote-server.html','team server →'],['docs/agents.html','multi-tenant →']] },
+    { t: 'Operate', p: 'Integrity is a command, not a hope. Verify replays every HMAC and the audit chain; rotation re-seals under fresh keys; bundles back up without plaintext.',
+      c: 'undercroft verify                     # HMAC every record + replay chain\nundercroft backup create\nundercroft vault rotate default       # fresh keys, crash-safe\nundercroft bundle keygen --out me.key\nundercroft export --to <recipient> --out palace.bundle',
+      l: [['docs/runbook.html','tamper runbook →']] },
+  ];
+  let cur = 0;
+  STEPS.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'guide-step'; b.setAttribute('role','tab');
+    b.innerHTML = '<span class="gs-n">' + String(i+1).padStart(2,'0') + '</span>' + s.t;
+    b.onclick = () => render(i);
+    stepsEl.appendChild(b);
+  });
+  const btns = [...stepsEl.children];
+  function esc(x){ return x.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+  function render(i){
+    cur = i;
+    btns.forEach((b, j) => b.classList.toggle('active', j === i));
+    const s = STEPS[i];
+    panelEl.innerHTML =
+      '<h3>' + String(i+1).padStart(2,'0') + ' · ' + s.t + '</h3>' +
+      '<p>' + s.p + '</p>' +
+      '<div class="guide-code"><button class="gc-copy">copy</button><pre>' + esc(s.c) + '</pre></div>' +
+      '<div class="gp-links">' + s.l.map(([h, t]) => '<a href="' + h + '">' + t + '</a>').join('') + '</div>';
+    panelEl.querySelector('.gc-copy').onclick = (ev) => {
+      navigator.clipboard.writeText(s.c).then(() => {
+        ev.target.textContent = 'copied';
+        setTimeout(() => { ev.target.textContent = 'copy'; }, 1400);
+      });
+    };
+  }
+  render(0);
 })();
 </script>
 </body>

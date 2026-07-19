@@ -362,6 +362,13 @@ Also closes the v0.13.0 follow-up items:
   chain + verify intact. The durability model is unchanged — fewer
   commits, not weaker ones.
 
+## v0.32.0 — Agents guide + landing walkthrough + OTLP headers (done)
+
+- docs/AGENTS.md (scenario-driven, full tool/route/env reference,
+  verification checklist) published as docs/agents.html; landing
+  use-cases + 7-step walkthrough + CTA; UNDERCROFT_OTLP_HEADERS
+  implemented (was documented-only).
+
 ## Next (all demand-driven)
 - **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
   fleet actually needs it (deliberately deferred; single-writer stance
