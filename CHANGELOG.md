@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.34.2 — Container image metadata
+
+- OCI labels on the runtime image and index-level annotations on the
+  multi-arch manifest (title, description, source, docs, license) — the
+  GHCR package page now shows a description and links back to the
+  repository.
+
 ## 0.34.1 — Multi-arch distribution + weaviate readiness fix
 
 - **linux/arm64 everywhere**: the GHCR image is now a multi-arch
