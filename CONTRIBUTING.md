@@ -1,7 +1,16 @@
 # Contributing to Undercroft
 
-Thanks for wanting to help. Undercroft is source-available (BUSL-1.1) and welcomes
-contributions of all sizes.
+Thanks for wanting to help. Undercroft is **source-available** under the
+[Business Source License 1.1](LICENSE): free to use, modify, and run —
+including in production — with one carve-out (no offering it as a
+competing hosted/embedded product), and every release automatically
+becomes MPL 2.0 four years after publication.
+
+**Contribution licensing**: by submitting a contribution you agree to
+license it to the project's Licensor under the same Business Source
+License 1.1 terms (including the Licensor's right to relicense on the
+Change Date and to offer commercial licenses). If that doesn't work for
+you, open an issue to discuss before writing code.
 
 ## Getting started
 

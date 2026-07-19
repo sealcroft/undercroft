@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.33.0 — License change: MIT → Business Source License 1.1
+
+Undercroft is now **source-available under BUSL 1.1** (the
+MariaDB/HashiCorp license), effective this release and applied to the
+repository's entire history.
+
+- **What stays free**: use, modification, self-hosting, and production
+  use — personal, internal, and commercial — at no cost.
+- **The one restriction**: offering Undercroft itself to third parties as
+  a paid hosted or embedded product competing with the Licensor's
+  commercial offerings requires a commercial license.
+- **The open-source guarantee**: each release automatically converts to
+  **MPL 2.0** four years after publication (rolling, per release).
+- **Heritage**: Undercroft remains a from-scratch Rust implementation of
+  concepts from the MIT-licensed MemPalace project, containing none of
+  its code; that attribution now lives in `NOTICE`, and
+  `docs/PARITY.md` gained a comprehensive "what exists only here"
+  section (security layer, retrieval stack, multi-tenancy/fleet,
+  operations) plus a license-lineage note.
+- Mechanics: `LICENSE` replaced (canonical BUSL 1.1 text, parameters:
+  Licensor compufreq, Change Date four years from publication, Change
+  License MPL 2.0), `NOTICE` added, workspace `license = "BUSL-1.1"`,
+  CONTRIBUTING contribution-licensing terms, README license section,
+  landing footer.
+
 ## 0.32.0 — Agents guide, landing walkthrough, OTLP headers
 
 - **`docs/AGENTS.md`** — a scenario-driven implementation guide written

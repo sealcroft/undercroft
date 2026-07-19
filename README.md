@@ -369,4 +369,21 @@ faster — holds 92.7% / 90.4% respectively.
 
 ## License
 
-BUSL-1.1 — see [LICENSE](https://github.com/compufreq/undercroft/blob/main/LICENSE). Original work © MemPalace contributors.
+**Business Source License 1.1** — see
+[LICENSE](https://github.com/compufreq/undercroft/blob/main/LICENSE).
+In practice:
+
+- **Free for almost everything**: use, modify, self-host, and run in
+  production — personal, internal, and commercial — at no cost.
+- **The one carve-out**: you may not offer Undercroft itself to third
+  parties as a paid hosted or embedded product that competes with the
+  Licensor's commercial offerings.
+- **Time-limited by design**: each release automatically converts to the
+  open-source **MPL 2.0** four years after publication.
+
+Undercroft is a from-scratch Rust implementation of concepts from the
+MIT-licensed MemPalace project and contains no code from it — see
+[NOTICE](https://github.com/compufreq/undercroft/blob/main/NOTICE) for the
+heritage attribution and
+[docs/PARITY.md](https://github.com/compufreq/undercroft/blob/main/docs/PARITY.md)
+for the full feature-by-feature relationship.
