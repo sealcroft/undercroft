@@ -431,7 +431,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="cta-row">
       <a class="btn" href="docs/">Read the docs</a>
       <a class="btn gold" href="https://github.com/compufreq/undercroft">Source on GitHub</a>
-      <a class="btn ghost" href="https://github.com/compufreq/undercroft/releases/latest">v0.33.0 · releases</a>
+      <a class="btn ghost" href="https://github.com/compufreq/undercroft/releases/latest">v0.34.0 · releases</a>
     </div>
     <div class="scroll-hint">descend</div>
   </header>
@@ -1055,7 +1055,7 @@ document.body.classList.add('js');
   if (!stepsEl || !panelEl) return;
   const STEPS = [
     { t: 'Install', p: 'One Rust binary. Build it in Docker (the project’s own path) or natively — no services, no accounts, no network.',
-      c: 'git clone https://github.com/compufreq/undercroft\ncd undercroft\ndocker build -t undercroft .          # runtime image\n# or natively:\ncargo build --release                # → target/release/undercroft',
+      c: 'docker pull ghcr.io/compufreq/undercroft:latest\n# or: prebuilt binaries on every GitHub release (linux/macos/windows)\n# or build from source:\ngit clone https://github.com/compufreq/undercroft && cd undercroft\ndocker build -t undercroft .          # or: cargo build --release',
       l: [['docs/getting-started.html','getting started →']] },
     { t: 'Initialize', p: 'A palace holds isolated vaults — each with its own database and its own HKDF-derived keys. Sealed is the default: content and embeddings encrypted at rest.',
       c: 'undercroft init\n# Palace initialized at ~/.undercroft\n# Created vault \'default\' (level: sealed)\nundercroft vault create work          # more isolated namespaces',
