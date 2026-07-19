@@ -1,5 +1,9 @@
 # Integrations
 
+> The [agents implementation guide](https://compufreq.github.io/undercroft/docs/agents.html)
+> covers each of these surfaces as a step-by-step scenario, with the full
+> MCP tool, REST route, and environment-variable reference.
+
 Every integration reaches the same engine through one of three surfaces —
 interactive MCP, HTTP, or background ingestion — and they all end at the
 same vault-sealed store:

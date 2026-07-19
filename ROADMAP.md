@@ -369,14 +369,70 @@ Also closes the v0.13.0 follow-up items:
   use-cases + 7-step walkthrough + CTA; UNDERCROFT_OTLP_HEADERS
   implemented (was documented-only).
 
-## Next (all demand-driven)
-- **Orchestrator, later**: multi-orchestrator read-replica proxy — when a
-  fleet actually needs it (deliberately deferred; single-writer stance
-  documented in MULTI_TENANCY.md).
-- **Inverted FDE tier** (list-grouped RAM slices, no per-row membership
-  test) — the correct sub-linear construction, pays past ~10⁶ drawers.
-- **Sealed-tier page-level decryption** (research): decrypt only probed
-  lists — matters past multi-million drawers.
+## Next (all demand-driven — planned, not scheduled)
+
+Nothing below should be built until its trigger fires; each entry
+records the design so a future session starts from a plan, not a blank
+page.
+
+### 1. Inverted FDE tier
+
+- **Trigger**: a real palace approaching ~10⁶ drawers where the flat
+  PQ-ADC FDE scan (measured 33 ms/q @ 200k, linear in N) exceeds the
+  latency budget. Below that scale it measured net-negative — the
+  O(N·nprobe) membership filter loses to flat 256-add ADC (v0.24.0
+  finding; bench evidence in `.handover/fde_pq_sweep.log`).
+- **Design**: group the RAM code cache by IVF list (contiguous
+  per-list slices built once at load — no per-row `lists.contains`
+  test at query time), coarse-quantize the query FDE, scan only the
+  probed lists' slices. The v2 on-disk pack already reserves the list
+  field (written as `-1` today), so rows re-partition by rewriting
+  that field only — **no format migration**.
+- **Steps**: (1) event-driven list assignment past a threshold
+  (mirror `tok_pq_ensure`'s train-and-repack pattern); (2) slice-grouped
+  cache in `fdeidx.rs`; (3) `UNDERCROFT_FDE_NPROBE` (default nlist/4,
+  mirroring PQ/IVF); (4) fde-synth sweep at N=200k/10⁶ — gate:
+  containment must stay ≥ flat's (it degraded to 0.84–0.99 in the
+  naive attempt; the slice construction must not repeat that).
+- **Effort**: ~1 release; the risky part is proving containment, not
+  the code.
+
+### 2. Orchestrator read-replica proxy
+
+- **Trigger**: a deployment that needs orchestrator availability beyond
+  one process, or read throughput beyond one proxy (single-writer
+  stance documented in MULTI_TENANCY.md holds until then).
+- **Design**: keep exactly one writer (all `/admin/*` mutations);
+  replicas open the state db read-only (SQLite WAL supports concurrent
+  readers; ship the db via litestream-style file replication or a
+  shared volume) and serve only the `/t/*` data plane. Token
+  resolution is a pure HMAC lookup — replicas never mint or rotate.
+  Stale-read window = replication lag; acceptable because tokens die
+  by row deletion (a revoked token fails on the replica after lag, and
+  rotation already treats old-token death as immediate only on the
+  writer — document the lag as the availability trade).
+- **Steps**: (1) `--read-replica` serve mode refusing `/admin/*`;
+  (2) health/lag surface in `/healthz`; (3) e2e: writer + replica,
+  rotate on writer, assert replica converges; (4) MULTI_TENANCY.md
+  deployment section.
+- **Effort**: ~1 release, mostly e2e work.
+
+### 3. Sealed-tier page-level decryption (research)
+
+- **Trigger**: sealed vaults at multi-million drawers where the
+  decrypt-once RAM caches (PQ ~52 B/drawer, FDE 256 B/drawer) stop
+  fitting, i.e. RAM budget — not latency — becomes the binding
+  constraint.
+- **Design question to answer first**: seal per-list *pages* (one AEAD
+  blob per IVF list, AAD `pqpage/{list}`) so a probe decrypts only its
+  lists, vs. the current per-row seals. Trade: page-level AAD loses
+  per-row replay binding inside a page — needs a per-page Merkle or
+  row-count commitment to keep the cross-vault/cross-slot guarantees.
+  Prototype in a branch, measure decrypt cost per probe at 10⁶–10⁷
+  synthetic drawers, and only then decide the at-rest format (which
+  WILL need a migration, unlike item 1).
+- **Effort**: research spike first (no ship commitment), then likely
+  2 releases (format + migration).
 
 ---
 
