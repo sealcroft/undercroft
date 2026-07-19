@@ -376,6 +376,12 @@ Also closes the v0.13.0 follow-up items:
   4-year conversion to MPL 2.0. MemPalace heritage attribution moved to
   NOTICE; PARITY gained the full "what exists only here" inventory.
 
+## v0.34.0 — Distribution & security policy (done)
+
+- Release workflow: prebuilt binaries (linux/macos×2/windows, sha256) on
+  every tag + `ghcr.io/compufreq/undercroft` image; SECURITY.md expanded
+  to a full disclosure policy with private reporting enabled.
+
 ## Next (all demand-driven — planned, not scheduled)
 
 Nothing below should be built until its trigger fires; each entry

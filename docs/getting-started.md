@@ -11,11 +11,14 @@
 Docker (recommended — nothing touches the host):
 
 ```bash
-docker build -t undercroft .
-alias undercroft='docker run --rm -v undercroft-data:/data undercroft'
+docker pull ghcr.io/compufreq/undercroft:latest    # or: docker build -t undercroft .
+alias undercroft='docker run --rm -v undercroft-data:/data ghcr.io/compufreq/undercroft:latest'
 ```
 
-Or native: `cargo build --release` → `target/release/undercroft`.
+Prebuilt binaries (Linux x86_64, macOS Intel/Apple Silicon, Windows) are
+attached to every [release](https://github.com/compufreq/undercroft/releases/latest),
+with SHA-256 checksums. Or native: `cargo build --release` →
+`target/release/undercroft`.
 
 ## First palace
 

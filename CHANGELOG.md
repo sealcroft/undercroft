@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.34.0 — Distribution & security policy
+
+Adoption no longer requires building from source, and vulnerability
+reporting has a real front door.
+
+- **Prebuilt release binaries**: every version tag now builds and
+  attaches `undercroft` + `undercroft-orchestrator` archives for Linux
+  x86_64, macOS Intel, macOS Apple Silicon, and Windows x86_64 — with
+  SHA-256 checksums, LICENSE/NOTICE included, default features (offline,
+  zero telemetry deps).
+- **Published container image**: `ghcr.io/compufreq/undercroft:<tag>` and
+  `:latest`, built from the same Dockerfile as always, pushed by the
+  release workflow.
+- **SECURITY.md expanded** into a full policy: GitHub private
+  vulnerability reporting (now enabled on the repo) + email channel,
+  response expectations (72 h acknowledgment / 7-day assessment /
+  coordinated disclosure), latest-release support statement, and an
+  explicit in-scope / out-of-scope list matching the documented threat
+  model.
+- Install docs updated everywhere (README, getting-started, agents
+  guide, landing walkthrough) to lead with `docker pull` and release
+  binaries.
+
 ## 0.33.0 — License change: MIT → Business Source License 1.1
 
 Undercroft is now **source-available under BUSL 1.1** (the

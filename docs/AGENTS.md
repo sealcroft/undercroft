@@ -58,8 +58,10 @@ HKDF-derived keys). When you build on it:
 All scenarios start the same way:
 
 ```bash
-git clone https://github.com/compufreq/undercroft && cd undercroft
-docker build -t undercroft .        # or: cargo build --release
+docker pull ghcr.io/compufreq/undercroft:latest   # published image
+# or: prebuilt binaries on every GitHub release (linux/macos/windows, sha256)
+# or: git clone https://github.com/compufreq/undercroft && docker build -t undercroft .
+# or: cargo build --release
 undercroft init                     # palace at ~/.undercroft (override: UNDERCROFT_HOME)
 ```
 
