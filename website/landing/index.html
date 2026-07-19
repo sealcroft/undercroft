@@ -410,6 +410,41 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
   .guide-grid { grid-template-columns: 1fr; }
   .guide-steps { flex-direction: row; flex-wrap: wrap; position: static; }
 }
+/* ============ section rail + progress ============ */
+#progressbar {
+  position: fixed; top: 0; left: 0; height: 2px; width: 0;
+  background: linear-gradient(90deg, var(--teal), var(--gold));
+  z-index: 60; pointer-events: none;
+  box-shadow: 0 0 8px rgba(53,224,194,.5);
+}
+#secnav {
+  position: fixed; right: 16px; top: 50%; transform: translateY(-50%);
+  z-index: 50; display: flex; flex-direction: column; gap: 4px;
+}
+#secnav a {
+  display: flex; align-items: center; justify-content: flex-end; gap: 9px;
+  padding: 4px 0; text-decoration: none; color: var(--ink-dim);
+}
+#secnav .sn-label {
+  font-family: var(--mono); font-size: .66rem; letter-spacing: .14em;
+  text-transform: uppercase; opacity: 0; transform: translateX(6px);
+  transition: opacity .18s ease, transform .18s ease;
+  background: rgba(4,8,10,.82); padding: 2px 7px; border-radius: 4px;
+}
+#secnav .sn-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  border: 1px solid var(--teal-dark); background: transparent;
+  transition: background .18s ease, box-shadow .18s ease;
+}
+#secnav a:hover .sn-label, #secnav a.active .sn-label { opacity: 1; transform: none; }
+#secnav a:hover { color: var(--ink); }
+#secnav a.active { color: var(--teal); }
+#secnav a.active .sn-dot {
+  background: var(--teal);
+  box-shadow: 0 0 10px rgba(53,224,194,.8);
+}
+@media (max-width: 900px) { #secnav { display: none; } }
+
 /* ============ closing CTA ============ */
 .cta-final { text-align: center; padding: 26px 0 8px; }
 .cta-final h2 { margin-bottom: 10px; }
@@ -421,6 +456,8 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
 <div class="veil" aria-hidden="true"></div>
 
 <main>
+<div id="progressbar" aria-hidden="true"></div>
+<nav id="secnav" aria-label="page sections"></nav>
   <header class="hero wrap">
     <div class="eyebrow">ΜΝΗΜΟΣΥΝΗ · TITANESS OF MEMORY</div>
     <h1 class="title"><span id="scramble">UNDERCROFT</span><span class="cursor-block"></span></h1>
@@ -449,7 +486,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     </div>
   </section>
 
-  <section class="wrap reveal">
+  <section class="wrap reveal" id="seal">
     <div class="sec-label">Seal &amp; verify</div>
     <h2>Try the vault</h2>
     <div class="seal-grid">
@@ -672,7 +709,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <a class="bench-link" href="https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md">full numbers, per-type breakdowns, exact commands →</a>
   </section>
 
-  <section class="wrap reveal">
+  <section class="wrap reveal" id="rooms">
     <div class="sec-label">Architecture</div>
     <h2>Six rooms of the machine</h2>
     <div class="feat-grid">
@@ -1103,6 +1140,46 @@ document.body.classList.add('js');
     };
   }
   render(0);
+})();
+
+/* ============ section rail: scroll-spy + progress ============ */
+(() => {
+  const nav = document.getElementById('secnav');
+  const bar = document.getElementById('progressbar');
+  if (!nav || !bar) return;
+  const SECTIONS = [
+    ['demo', 'live'], ['seal', 'vault'], ['monitor', 'monitor'],
+    ['operate', 'operate'], ['bench', 'proofs'], ['rooms', 'rooms'],
+    ['uses', 'uses'], ['guide', 'guide'], ['start', 'begin'],
+  ];
+  const links = new Map();
+  for (const [id, label] of SECTIONS) {
+    if (!document.getElementById(id)) continue;
+    const a = document.createElement('a');
+    a.href = '#' + id;
+    a.innerHTML = '<span class="sn-label">' + label + '</span><span class="sn-dot"></span>';
+    nav.appendChild(a);
+    links.set(id, a);
+  }
+  // Active = the section crossing the middle band of the viewport.
+  const spy = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      links.forEach((a, id) => a.classList.toggle('active', id === e.target.id));
+    }
+  }, { rootMargin: '-40% 0px -55% 0px' });
+  links.forEach((_, id) => spy.observe(document.getElementById(id)));
+  // Reading progress.
+  let ticking = false;
+  addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const max = document.documentElement.scrollHeight - innerHeight;
+      bar.style.width = (max > 0 ? (scrollY / max) * 100 : 0) + '%';
+      ticking = false;
+    });
+  }, { passive: true });
 })();
 </script>
 </body>

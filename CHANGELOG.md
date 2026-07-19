@@ -1,11 +1,15 @@
 # Changelog
 
-## 0.34.2 — Container image metadata
+## 0.34.2 — Container image metadata + landing navigation
 
 - OCI labels on the runtime image and index-level annotations on the
   multi-arch manifest (title, description, source, docs, license) — the
   GHCR package page now shows a description and links back to the
   repository.
+- **Landing page navigation**: a fixed scroll-spy rail on the right edge
+  (per-section dots, active section lit with its label, click to jump)
+  plus a reading-progress bar along the top — the long page now always
+  shows where you are. Desktop only; hidden under 900 px.
 
 ## 0.34.1 — Multi-arch distribution + weaviate readiness fix
 
