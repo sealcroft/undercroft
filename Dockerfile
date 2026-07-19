@@ -40,6 +40,13 @@ FROM builder AS test
 CMD ["cargo", "test", "--release"]
 
 FROM debian:bookworm-slim AS runtime
+LABEL org.opencontainers.image.title="Undercroft" \
+      org.opencontainers.image.description="Hardened local-first AI memory: encrypted, integrity-verified vaults with verbatim recall, hybrid retrieval, MCP + multi-tenant REST" \
+      org.opencontainers.image.source="https://github.com/compufreq/undercroft" \
+      org.opencontainers.image.url="https://compufreq.github.io/undercroft/" \
+      org.opencontainers.image.documentation="https://compufreq.github.io/undercroft/docs/" \
+      org.opencontainers.image.licenses="BUSL-1.1" \
+      org.opencontainers.image.vendor="compufreq"
 RUN useradd --create-home --uid 10001 undercroft \
     && mkdir -p /data && chown undercroft:undercroft /data
 COPY --from=builder /src/target/release/undercroft /usr/local/bin/undercroft

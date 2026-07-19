@@ -120,7 +120,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           IMG="ghcr.io/compufreq/undercroft"
+          # Image labels do not surface on a multi-arch index — GHCR reads
+          # the description from an index-level annotation.
           docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.description=Hardened local-first AI memory: encrypted, integrity-verified vaults with verbatim recall, hybrid retrieval, MCP + multi-tenant REST" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/compufreq/undercroft" \
+            --annotation "index:org.opencontainers.image.licenses=BUSL-1.1" \
             -t "${IMG}:${TAG}" -t "${IMG}:latest" \
             "${IMG}:${TAG}-amd64" "${IMG}:${TAG}-arm64"
           docker buildx imagetools inspect "${IMG}:${TAG}"
