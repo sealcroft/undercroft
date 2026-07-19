@@ -219,7 +219,7 @@ Wire it into an MCP client (e.g. Claude Code):
 }
 ```
 
-No Docker? **Prebuilt binaries** for Linux (x86_64), macOS (Intel +
+No Docker? **Prebuilt binaries** for Linux (x86_64 + arm64), macOS (Intel +
 Apple Silicon), and Windows are attached to every
 [release](https://github.com/compufreq/undercroft/releases/latest)
 (`undercroft` + `undercroft-orchestrator`, SHA-256 checksums included).

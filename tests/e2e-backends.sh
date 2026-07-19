@@ -58,12 +58,27 @@ probe_pg() {
   return 0
 }
 
+probe_http_200() { # probe_http_200 <url> <path> — up only when <path> answers 200
+  local url="$1" path="$2" host port
+  host="$(sed -E 's|https?://([^:/]+).*|\1|' <<<"$url")"
+  port="$(sed -E 's|https?://[^:/]+:([0-9]+).*|\1|' <<<"$url")"
+  exec 3<>"/dev/tcp/$host/$port" || return 1
+  printf 'GET %s HTTP/1.0\r\nHost: %s\r\n\r\n' "$path" "$host" >&3
+  head -1 <&3 | grep -q " 200 "; local rc=$?
+  exec 3<&- 3>&-
+  return $rc
+}
+
 echo "== Service readiness =="
 wait_for "qdrant"   probe_http "$UNDERCROFT_QDRANT_URL"
 wait_for "chroma"   probe_http "$UNDERCROFT_CHROMA_URL"
 wait_for "pgvector" probe_pg
 wait_for "milvus"   probe_http "http://milvus:9091"
-wait_for "weaviate" probe_http "$UNDERCROFT_WEAVIATE_URL"
+# Weaviate answers plain HTTP before its Raft leader is elected — schema
+# writes 422 "leader not found" until then (flaked CI + local runs). Gate
+# on the schema endpoint actually serving 200: the exact surface the
+# suite writes to first.
+wait_for "weaviate" probe_http_200 "$UNDERCROFT_WEAVIATE_URL" /v1/schema
 
 run_backend_suite() { # run_backend_suite <backend>
   local be="$1"

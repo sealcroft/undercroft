@@ -20,6 +20,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - os: macos-13
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -70,9 +72,20 @@ jobs:
             gh release create "$TAG" --title "$TAG" --notes "Release $TAG" || true
           gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
 
+  # Each architecture builds natively (no QEMU emulation — a full Rust
+  # build under emulation is unreasonably slow), then one job merges the
+  # per-arch images into a single multi-arch manifest.
   docker:
-    name: GHCR image
-    runs-on: ubuntu-latest
+    name: GHCR image (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
@@ -85,8 +98,25 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/compufreq/undercroft:${{ github.ref_name }}
-            ghcr.io/compufreq/undercroft:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ghcr.io/compufreq/undercroft:${{ github.ref_name }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  manifest:
+    name: Multi-arch manifest
+    needs: docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Merge per-arch images
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          IMG="ghcr.io/compufreq/undercroft"
+          docker buildx imagetools create \
+            -t "${IMG}:${TAG}" -t "${IMG}:latest" \
+            "${IMG}:${TAG}-amd64" "${IMG}:${TAG}-arm64"
+          docker buildx imagetools inspect "${IMG}:${TAG}"
