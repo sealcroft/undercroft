@@ -127,3 +127,6 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   enums, `anyhow` only in the CLI.
 - Keys live in `SecretKey` (zeroize-on-drop); never `Debug`-print key material.
 - Git identity for this repo: compufreq <compufreq@proton.me>.
+- License: **BUSL-1.1** (source-available; rolling 4-year conversion to
+  MPL 2.0; `NOTICE` carries the MemPalace MIT heritage attribution).
+  Never reintroduce MIT as the project license or publish under it.

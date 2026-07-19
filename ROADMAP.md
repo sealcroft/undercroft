@@ -369,6 +369,13 @@ Also closes the v0.13.0 follow-up items:
   use-cases + 7-step walkthrough + CTA; UNDERCROFT_OTLP_HEADERS
   implemented (was documented-only).
 
+## v0.33.0 — License change to BUSL 1.1 (done)
+
+- MIT → Business Source License 1.1 across the project and its history:
+  free production use, hosted/embedded non-compete carve-out, rolling
+  4-year conversion to MPL 2.0. MemPalace heritage attribution moved to
+  NOTICE; PARITY gained the full "what exists only here" inventory.
+
 ## Next (all demand-driven — planned, not scheduled)
 
 Nothing below should be built until its trigger fires; each entry

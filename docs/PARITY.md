@@ -37,15 +37,80 @@ original this repo was forked from), updated 2026-07-13.
 | Deploy (compose server, systemd) | `deploy/` |
 | Docs / examples | `docs/`, `examples/` |
 
-**Capabilities that exist only here:** Weaviate backend; zstd
-compress-then-encrypt for sealed content; int8 embedding quantization
-(4x smaller vectors); measured benchmark results in-repo
-(benchmarks/RESULTS.md).
+## What exists only here (updated for v0.33.0)
 
-**Security features that exist only here:** vault isolation with per-vault
-HKDF keys, XChaCha20-Poly1305 sealing, HMAC record tags, tamper-evident
-audit chain, MAC'd manifests, keyed dup fingerprints, token-mandatory HTTP
-bind, read-only serving. Upstream stored everything in plaintext.
+Everything below has **no upstream equivalent** — it is original work of
+this project, which is why the two codebases share concepts but not code
+(and why this project's license is independent of upstream's; see the
+"License lineage" section at the end).
+
+**Security layer** (upstream stored everything in plaintext):
+
+- Vault isolation: per-vault SQLite databases with per-vault
+  HKDF-SHA256-derived keys (enc/mac/manifest domains) from one master key
+  (file or Argon2id passphrase).
+- Sealed-at-rest storage: XChaCha20-Poly1305 over content *and*
+  embeddings *and* every derived artifact (ColBERT token matrices, PQ
+  code rows + codebooks + IVF centroids, MUVERA FDE rows + params), each
+  under its own AAD domain bound to vault + record id — cross-vault
+  replay fails cryptographically.
+- Integrity: HMAC-SHA256 tag on every drawer, KG entity/triple, and
+  tunnel; a tamper-evident audit chain advancing **inside the same
+  transaction** as each write; a MAC'd manifest as an out-of-database
+  rollback anchor with open-time crash-vs-rollback reconciliation.
+- Durability: WAL + `synchronous=FULL` pinned, fsynced manifest anchor
+  (atomic rename + directory sync), fsynced key material; bulk ingest
+  batches whole transactions (measured ~55× fewer disk syncs).
+- **Key rotation** (`vault rotate`): fresh derived keys, every sealed
+  blob re-encrypted byte-exact and every tag/chain re-keyed in one
+  transaction; crash-safe at any instant via a two-phase manifest swap.
+- **Recipient-encrypted export bundles** (`bundle keygen`,
+  `export --to`): X25519 ephemeral-static → HKDF → XChaCha20-Poly1305 —
+  a backup never exists in plaintext.
+- Keyed duplicate fingerprints, token-mandatory non-loopback HTTP bind,
+  per-vault request assertions, read-only serving mode.
+
+**Retrieval stack beyond upstream's cosine search:**
+
+- Hybrid semantic + lexical (BM25) + recency fusion with typo tolerance.
+- Optional ONNX embedders on two runtimes (pure-Rust tract, or ONNX
+  Runtime at ~2.5×/forward with int8) selected by env at runtime.
+- Cross-encoder reranking (measured LoCoMo R@10 94.6 → 97.7%).
+- ColBERT late interaction: encode-at-ingest token matrices
+  (PQ-compressed ~16 B/token), one query forward + MaxSim at search
+  (~96.5–96.8% at a flat ~70–93 ms/q independent of core count).
+- Bounded-RAM candidate tiers: PQ/IVF prefilter (~48 B/vector, recall
+  flat in corpus size, sealed-vault-capable) and MUVERA FDE token-aware
+  candidates (recall measured identical to fusion at −25% latency, rows
+  PQ-compressed 32×).
+- Every number above is measured and reproduced in
+  [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md)
+  and [RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
+
+**Multi-tenancy & fleet operation:**
+
+- Versioned `/v1` REST engine: per-vault assertions, external
+  embeddings, dedup-refresh, lossless export/import (vectors + token
+  artifacts ride along — restore is a copy, not a re-embed).
+- `undercroft-orchestrator`: a separate control plane (instance registry
+  with sealed credentials, HMAC-only tenant tokens shown once, routing
+  proxy with subpath allowlist, token rotation, per-tenant rate limits,
+  count-verified live migration) — the engine never links it.
+
+**Operations:**
+
+- Opt-in, metadata-only observability: Prometheus `/metrics`, OTLP
+  traces (with header auth), structured logs, live SSE, the Palace
+  Monitor UI, and a full Grafana/Alertmanager/Loki/Tempo deploy stack
+  with a tamper runbook. Zero telemetry deps in default builds.
+- Scenario-driven [agents implementation guide](https://compufreq.github.io/undercroft/docs/agents.html)
+  covering every deployment shape with the complete tool/route/env
+  reference.
+
+**Also only here:** Weaviate backend; sealed-client remote indexing (all
+five backends receive ciphertext; upstream uploaded plaintext); zstd
+compress-then-encrypt; int8 embedding quantization; deterministic
+offline hash embedder as the default.
 
 ## Ported in v0.5.0 (previously listed as gaps)
 
@@ -79,3 +144,16 @@ the bundled SQLite store and the in-memory embedding cache respectively.
 - Benchmark numbers with the default hash embedder are not comparable to
   upstream's published model-based numbers — use `--features onnx` with a
   MiniLM-class model for like-for-like conditions.
+
+## License lineage
+
+Upstream MemPalace is Python, published under the MIT License. Undercroft
+is a from-scratch Rust implementation of the *concepts* documented in
+this file and **contains no MemPalace source code** — the two projects
+share behavior specifications, not expression. Undercroft is therefore
+licensed independently, under the
+[Business Source License 1.1](https://github.com/compufreq/undercroft/blob/main/LICENSE)
+(free use including production, one hosted/embedded non-compete
+carve-out, automatic conversion to MPL 2.0 four years after each
+release). The MIT notice for MemPalace's conceptual heritage is
+preserved in [NOTICE](https://github.com/compufreq/undercroft/blob/main/NOTICE).
