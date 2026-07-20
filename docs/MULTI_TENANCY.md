@@ -280,6 +280,7 @@ sequenceDiagram
 | Route | Plane | Purpose |
 |---|---|---|
 | `GET /healthz` | — | unauthenticated liveness |
+| `GET /ui` | — | the fleet console: a static page driving the whole admin plane (instances, tenants with one-time token reveal, guarded rotation/deletion, migration); the admin token is entered in the page |
 | `POST/GET /admin/instances`, `DELETE /admin/instances/{name}`, `GET .../{name}/health` | admin | instance registry (+ live engine probe); removal refused while tenants map to it |
 | `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |

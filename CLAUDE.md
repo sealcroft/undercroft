@@ -66,7 +66,8 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   optional multi-tenant control plane (docs/MULTI_TENANCY.md) — instance
   registry + tenant→vault map in its own SQLite (engine creds sealed,
   tokens stored as HMACs), `/t/*` routing proxy, `/admin/*` plane,
-  count-verified migration. Pure `/v1` client; never linked by the engine
+  count-verified migration, fleet console (ui.html at `GET /ui`).
+  Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
