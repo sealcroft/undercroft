@@ -430,22 +430,32 @@ page.
   deployment section.
 - **Effort**: ~1 release, mostly e2e work.
 
-### 3. Sealed-tier page-level decryption (research)
+### 3. Sealed-tier page-level decryption (research spike DONE — format deferred to trigger)
 
-- **Trigger**: sealed vaults at multi-million drawers where the
+- **Trigger** (stands): sealed vaults at multi-million drawers where the
   decrypt-once RAM caches (PQ ~52 B/drawer, FDE 256 B/drawer) stop
   fitting, i.e. RAM budget — not latency — becomes the binding
   constraint.
-- **Design question to answer first**: seal per-list *pages* (one AEAD
-  blob per IVF list, AAD `pqpage/{list}`) so a probe decrypts only its
-  lists, vs. the current per-row seals. Trade: page-level AAD loses
-  per-row replay binding inside a page — needs a per-page Merkle or
-  row-count commitment to keep the cross-vault/cross-slot guarantees.
-  Prototype in a branch, measure decrypt cost per probe at 10⁶–10⁷
-  synthetic drawers, and only then decide the at-rest format (which
-  WILL need a migration, unlike item 1).
-- **Effort**: research spike first (no ship commitment), then likely
-  2 releases (format + migration).
+- **Spike result** (`undercroft-bench pqpage-synth`, 10⁶–10⁷ synthetic
+  drawers; measured section in RETRIEVAL_SCALING.md, raw log
+  `.handover/pqpage_spike.log`): pages (one AEAD blob per IVF list,
+  AAD `pqpage/{list}`) win on at-rest size (2.1×), open cost
+  (22 s → 0 at 10⁷) and RAM (630 MB warm vs ~1 GB) once the trigger
+  fires — but the *urgent* 10⁶+ problem is the flat cache's O(N·nprobe)
+  per-query list filter, fixed by slab-grouping the existing cache with
+  **no format change**. Design questions answered: integrity needs only
+  a row-count commitment inside the sealed page + a sealed total-count
+  in `pq_meta` (no Merkle — the page is one AEAD unit, which is
+  *stronger* than per-row against intra-page tampering; stale-page
+  replay is the same advisory-index trust class as today's stale-row
+  replay); the real new cost is **write amplification** (~550 KB reseal
+  per single-drawer write at 10⁷/1024), so the format needs per-row
+  tail rows compacted per `upsert_many` batch and/or `(list, pageno)`
+  page caps, and the nlist clamp (1024) must lift to ~√N.
+- **Next when triggered**: slab-grouped RAM cache first (cheap,
+  format-neutral, also prescribed by item 1); then the page format +
+  event-driven repack migration. Effort: likely 2 releases (format +
+  migration), as planned.
 
 ---
 

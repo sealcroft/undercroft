@@ -346,6 +346,72 @@ refinement is *page-level* decryption (decrypt only probed lists instead of
 all codes at open) — worthwhile only past the multi-million-drawer mark where
 the cache warmup itself gets heavy.
 
+### Page-level decryption at 10⁶–10⁷ (research spike, measured)
+
+The spike (`undercroft-bench pqpage-synth`) put numbers on that refinement:
+today's per-row seals + decrypt-once cache versus **one AEAD page per IVF
+list** (AAD `pqpage/{list}`; sealed plaintext `count ‖ (seq ‖ code)*` — the
+count is a row-count commitment, covered by the AEAD) decrypted lazily per
+probe. Both variants scan byte-identical synthetic codes, so recall is
+invariant by construction and only the costs differ. Three shapes per cell:
+**A-flat** (the shipped format and cache verbatim), **A-grouped** (same
+at-rest format, cache regrouped into per-list slabs at open — the
+no-migration fix), **B-pages** (cold = decrypt probed pages per query;
+warm = decrypt-once page cache). Within-run, one 24-core host, dim 384
+(48 B codes), k=256, uniform list assignment (real clusters skew, which
+widens per-probe tails but not the bytes-per-probe mean):
+
+| n, nlist | at-rest row/page | A open (decrypt-all) | A-flat ms/q | A-grouped ms/q | B-cold ms/q (MB dec/q) | B-warm ms/q | RSS A / B warm |
+|---|---|---|---|---|---|---|---|
+| 10⁶, 1000 | 117 / 57 MB | 2.4 s | 36.6–128.7 | 0.9–18.5 | 2.2–46.3 (0.8–14) | 0.8–15.2 | 111 / 76 MB |
+| 10⁷, 1024 | 1178 / 561 MB | 22.3 s | 333–1415 | 10.0–248 | 18.5–332 (8.7–140) | 8.5–136 | 1008 / 630 MB |
+| 10⁷, 3162 (√N) | 1178 / 563 MB | 20.1 s | 228–543 | 7.5–105 | 27.3–403 (8.7–140) | 7.5–131 | 1008 / 629 MB |
+
+(Ranges span probed fractions 1.5% → 25% of the corpus; raw log
+`.handover/pqpage_spike.log`.)
+
+What the numbers decide:
+
+- **The urgent problem is the cache layout, not the format.** A-flat's
+  per-query list filter over the whole flat cache is already 37–129 ms/q at
+  10⁶ and 0.3–1.4 s/q at 10⁷ — and the shipped code path uses a linear
+  `Vec::contains` where the spike used binary search, so reality is worse.
+  Grouping the existing cache into per-list slabs (A-grouped) recovers
+  10–36 ms/q at 10⁷'s sane fractions with **zero at-rest change** — the
+  same slice-grouping fix the inverted-FDE plan already prescribes.
+- **Pages pay on three axes once RAM binds**: at-rest size **2.1× smaller**
+  (40 B seal overhead × nlist instead of × N, ~470 MB saved at 10⁷), open
+  cost **22 s → 0** (lazy decrypt; a cold 1.5%-fraction probe costs
+  ~20 ms), and RAM **630 MB warm-full vs ~1 GB** for the verbatim cache
+  (partial-coverage working sets proportionally less; a cold scan needs
+  ~0). Warm query latency matches A-grouped. Single-thread AEAD throughput
+  measured ~700 MB/s — decrypt cost per probe is bytes-bound, so it tracks
+  the probed fraction, not nlist (the 1024-vs-3162 cells decrypt the same
+  MB at the same fraction).
+- **Integrity resolves to the row-count commitment, not a Merkle tree.**
+  The whole page is one AEAD unit — intra-page splicing, reordering, or
+  selective row deletion is impossible without the key (*stronger* than
+  per-row seals, where dropping individual rows is only caught by the
+  matched-count verify). Whole-page replay of a stale page for the same
+  list is the same trust class as today's stale-row replay: the PQ index
+  is advisory and every candidate's record HMAC is verified downstream.
+  The count verify keeps working via a sealed total-row-count in `pq_meta`
+  written in the same transaction.
+- **The plan's missing cost is write amplification**: one-page-per-list
+  turns a single-drawer write into a read-modify-reseal of its whole list
+  page (~550 KB at 10⁷/1024). A real implementation needs per-row *tail*
+  rows (today's format, riding along like list -1 does) compacted per bulk
+  batch, and/or `(list, pageno)` page caps; `upsert_many` already provides
+  the batch boundary. Page blob lengths also newly reveal the cluster-size
+  histogram (not membership) — pad to buckets if that ever matters.
+
+**Decision**: stay on the shipped per-row format for now and take the
+slab-grouped cache as the cheap unblocking fix; adopt the page format only
+when a deployment actually hits the RAM/open-time wall (the trigger stands),
+using tail rows + sealed total-count, with the migration shaped as
+event-driven repack (the same train-and-repack seam every other derived
+artifact already uses).
+
 ## Restore economics — derived data is a portable, verifiable cache
 
 Restoring or importing a shard today rebuilds the derived artifacts, and they

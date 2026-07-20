@@ -129,6 +129,15 @@ search went from **2.1 → 33.4 q/s at N=20k (×16)** and 1.1 → 11.8 at 50k
 a query-time cost. An offline attacker sees fixed-size sealed blobs: the
 drawer count it already knows.
 
+A research spike (`undercroft-bench pqpage-synth`) priced the multi-million
+follow-up — sealing one AEAD *page per IVF list* and decrypting only probed
+lists: at 10⁷ synthetic drawers pages cut at-rest size 2.1×, drop the 22 s
+open-time decrypt-all to zero, and run warm at 630 MB vs ~1 GB — but the
+urgent fix at that scale is slab-grouping the existing RAM cache (no format
+change), so the page format stays demand-driven with its design questions
+answered (measured details in
+[`docs/RETRIEVAL_SCALING.md`](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)).
+
 **IVF inverted lists** now sit on top of the codes: a coarse quantizer
 (`√N` centroids) partitions the corpus, codes are physically clustered by
 list on disk, and a query ADC-scans only the quarter of lists nearest it —
