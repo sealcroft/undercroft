@@ -466,9 +466,12 @@ DRAWER_ID="$(curl -s "$API/vaults/acme/drawers?room=decisions" \
   -H "X-Vault-Assertion: $(sign acme)" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p' | head -1)"
 rest_body "get drawer verbatim" 'postgres'        -- "$API/vaults/acme/drawers/$DRAWER_ID" \
   -H "X-Vault-Assertion: $(sign acme)"
+# The replacement keeps the query's lexical terms (billing) — search's
+# relevance gate drops rows with no lexical overlap and a neutral cosine,
+# so an update that removed them would (correctly) vanish from this query.
 rest_body "update drawer"       '"updated":true'  -- -X PUT "$API/vaults/acme/drawers/$DRAWER_ID" \
-  -H "X-Vault-Assertion: $(sign acme)" -d '{"text":"we picked postgres, then confirmed it in review"}'
-rest_body "update round-trips"  'confirmed it in review' -- "$API/vaults/acme/drawers/$DRAWER_ID" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"text":"we picked postgres for the billing service, confirmed in review"}'
+rest_body "update round-trips"  'confirmed in review' -- "$API/vaults/acme/drawers/$DRAWER_ID" \
   -H "X-Vault-Assertion: $(sign acme)"
 rest_code "update missing drawer 404" 404 -- -X PUT "$API/vaults/acme/drawers/00000000000000000000000000000000" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"text":"x"}'
