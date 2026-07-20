@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.38.0 — Fleet live-ops
+
+- **The fleet console goes live**: a 10 s sweep auto-refreshes engine
+  health (UP/DOWN pills, no clicking), pulls per-tenant metadata stats
+  (drawer counts, store size), and keeps a fleet totals bar — engines
+  up, tenants, Σ drawers, Σ store, last-sweep clock. An engine outage
+  and its recovery both surface within one sweep.
+- **New admin route** `GET /admin/tenants/{id}/stats`: relays the
+  tenant vault's metadata stats using the orchestrator's stored engine
+  credentials — counts, sizes, and the chain head only; tenant content
+  remains reachable solely through the tenant's own token on the data
+  plane.
+- Completes the advanced-console arc (v0.37.0 was the engine half).
+
 ## 0.37.0 — Console monitoring + knowledge-graph explorer
 
 - **MONITOR tab** in the vault admin console: live sparkline charts

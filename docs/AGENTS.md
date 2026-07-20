@@ -340,9 +340,10 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 
 Orchestrator: tenant data plane `/t/<drawers|search|stats|export|import>`
 with the tenant bearer; admin plane `/admin/instances[…]`,
-`/admin/tenants[…]` (+ `/rotate`, `/migrate`) with
-`UNDERCROFT_ORCH_ADMIN_TOKEN`; `GET /ui` serves the fleet console
-(static page, no auth to load — the admin token is entered in the page).
+`/admin/tenants[…]` (+ `/rotate`, `/migrate`, `/stats` — metadata-only
+relay) with `UNDERCROFT_ORCH_ADMIN_TOKEN`; `GET /ui` serves the fleet
+console (static page, no auth to load — the admin token is entered in
+the page; live 10 s health + stats sweep).
 
 ## 10. Reference — environment variables
 

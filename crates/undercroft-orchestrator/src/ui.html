@@ -54,6 +54,10 @@
   .pill.inst{background:#0b2632;color:var(--cyan)} .pill.vault{background:#241634;color:var(--violet)}
   .pill.ok{background:#0c2a1c;color:var(--phos)} .pill.bad{background:#2a0e10;color:var(--red)}
   td .ctl{padding:2px 7px;font-size:10px}
+  .gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:12px}
+  .g{border:1px solid var(--edge);background:var(--panel2);border-radius:6px;padding:8px 10px}
+  .g .k{font-size:9px;letter-spacing:1.5px;color:var(--ink)}
+  .g .v{font-size:17px;color:#fff;margin-top:2px}
 
   .sect{margin-top:12px;border-top:1px solid var(--grid);padding-top:9px}
   .mini{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
@@ -109,6 +113,14 @@
     <p>Copy it now and hand it to the tenant. The orchestrator keeps only an HMAC; this value can never be recovered. <button class="ctl" id="tokenCopy" style="margin-left:6px">COPY</button> <button class="ctl" id="tokenDismiss">DISMISS</button></p>
   </div>
 
+  <div class="gauges" id="fleetTotals" style="display:none">
+    <div class="g"><div class="k">ENGINES UP</div><div class="v" id="fInst">—</div></div>
+    <div class="g"><div class="k">TENANTS</div><div class="v" id="fTen">—</div></div>
+    <div class="g"><div class="k">DRAWERS (Σ)</div><div class="v" id="fDrawers">—</div></div>
+    <div class="g"><div class="k">STORE (Σ)</div><div class="v" id="fBytes">—</div></div>
+    <div class="g"><div class="k">LAST SWEEP</div><div class="v" id="fTick" style="font-size:11px;color:var(--ink)">—</div></div>
+  </div>
+
   <div class="cols" id="main" style="display:none">
 
     <div class="panel">
@@ -131,7 +143,7 @@
 
     <div class="panel">
       <div class="h">◂ TENANTS</div>
-      <table><thead><tr><th>NAME</th><th>INSTANCE</th><th>VAULT</th><th></th></tr></thead><tbody id="tenRows"></tbody></table>
+      <table><thead><tr><th>NAME</th><th>INSTANCE</th><th>DRAWERS</th><th>STORE</th><th></th></tr></thead><tbody id="tenRows"></tbody></table>
       <div class="sect">
         <div class="h">CREATE TENANT</div>
         <div class="mini">
@@ -185,8 +197,9 @@
 (() => {
 "use strict";
 const $ = id => document.getElementById(id);
-const state = { token:"", instances:[], tenants:[] };
+const state = { token:"", instances:[], tenants:[], health:{}, stats:{}, liveTimer:null };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtBytes = n => n>=1e9 ? (n/1e9).toFixed(1)+" GB" : n>=1e6 ? (n/1e6).toFixed(1)+" MB" : n>=1e3 ? (n/1e3).toFixed(1)+" KB" : n+" B";
 let toastTimer = null;
 function toast(msg, err) {
   const t = $("toast");
@@ -254,12 +267,51 @@ async function connect() {
   try {
     await refresh();
     $("main").style.display = "grid";
+    $("fleetTotals").style.display = "grid";
     setStatus("CONNECTED", "live");
     toast("connected — " + state.instances.length + " instance(s), " + state.tenants.length + " tenant(s)");
+    startLive();
   } catch (e) {
     setStatus("DISCONNECTED", "alert");
     $("connMsg").textContent = e.message;
   }
+}
+
+// ---- live sweep: health + per-tenant metadata stats every 10 s ----------
+function startLive() {
+  if (state.liveTimer) clearInterval(state.liveTimer);
+  sweep();
+  state.liveTimer = setInterval(sweep, 10000);
+}
+async function sweep() {
+  try { await refresh(); } catch (_) { return; }
+  await Promise.all(state.instances.map(async i => {
+    try {
+      const r = await api("GET", "/admin/instances/" + encodeURIComponent(i.name) + "/health");
+      state.health[i.name] = !!r.healthy;
+    } catch (_) { state.health[i.name] = false; }
+  }));
+  await Promise.all(state.tenants.map(async t => {
+    try {
+      state.stats[t.id] = await api("GET", "/admin/tenants/" + encodeURIComponent(t.id) + "/stats");
+    } catch (_) { delete state.stats[t.id]; }
+  }));
+  renderInstances();
+  renderTenants();
+  renderTotals();
+  $("fTick").textContent = new Date().toLocaleTimeString();
+}
+function renderTotals() {
+  const up = state.instances.filter(i => state.health[i.name] === true).length;
+  $("fInst").textContent = up + "/" + state.instances.length;
+  $("fTen").textContent = state.tenants.length;
+  let drawers = 0, bytes = 0, seen = 0;
+  for (const t of state.tenants) {
+    const s = state.stats[t.id];
+    if (s) { drawers += s.drawers || 0; bytes += s.db_bytes || 0; seen++; }
+  }
+  $("fDrawers").textContent = seen ? drawers : "—";
+  $("fBytes").textContent = seen ? fmtBytes(bytes) : "—";
 }
 
 async function refresh() {
@@ -271,15 +323,16 @@ async function refresh() {
 }
 
 function renderInstances() {
-  const rows = state.instances.map(i =>
-    "<tr><td><span class='pill inst'>" + esc(i.name) + "</span><div class='kv'>" + esc(i.url || "") + "</div></td>" +
-    "<td>" + (i.tenants ?? "—") + "</td>" +
-    "<td id='health-" + esc(i.name) + "'>—</td>" +
-    "<td><button class='ctl' data-health='" + esc(i.name) + "'>CHECK</button> " +
-    "<button class='ctl danger' data-rm='" + esc(i.name) + "'>✕</button></td></tr>");
+  const rows = state.instances.map(i => {
+    const h = state.health[i.name];
+    const lamp = h === true ? "<span class='pill ok'>UP</span>"
+               : h === false ? "<span class='pill bad'>DOWN</span>" : "—";
+    return "<tr><td><span class='pill inst'>" + esc(i.name) + "</span><div class='kv'>" + esc(i.url || "") + "</div></td>" +
+      "<td>" + (i.tenants ?? "—") + "</td>" +
+      "<td>" + lamp + "</td>" +
+      "<td><button class='ctl danger' data-rm='" + esc(i.name) + "'>✕</button></td></tr>";
+  });
   $("instRows").innerHTML = rows.join("") || "<tr><td colspan=4 class='kv'>no instances registered</td></tr>";
-  for (const b of $("instRows").querySelectorAll("[data-health]"))
-    b.onclick = () => checkHealth(b.dataset.health);
   for (const b of $("instRows").querySelectorAll("[data-rm]"))
     b.onclick = () => removeInstance(b.dataset.rm);
   // Instance pickers for tenant create + migrate target.
@@ -289,29 +342,22 @@ function renderInstances() {
 }
 
 function renderTenants() {
-  const rows = state.tenants.map(t =>
-    "<tr><td>" + esc(t.name) + "<div class='kv'>" + esc(t.id) + "</div></td>" +
-    "<td><span class='pill inst'>" + esc(t.instance) + "</span></td>" +
-    "<td><span class='pill vault'>" + esc(t.vault) + "</span></td>" +
-    "<td><button class='ctl' data-rot='" + esc(t.id) + "' data-name='" + esc(t.name) + "'>ROTATE TOKEN</button> " +
-    "<button class='ctl danger' data-del='" + esc(t.id) + "' data-name='" + esc(t.name) + "'>✕</button></td></tr>");
-  $("tenRows").innerHTML = rows.join("") || "<tr><td colspan=4 class='kv'>no tenants</td></tr>";
+  const rows = state.tenants.map(t => {
+    const s = state.stats[t.id];
+    return "<tr><td>" + esc(t.name) + "<div class='kv'>" + esc(t.id) + " · " + esc(t.vault) + "</div></td>" +
+      "<td><span class='pill inst'>" + esc(t.instance) + "</span></td>" +
+      "<td>" + (s ? s.drawers : "—") + "</td>" +
+      "<td>" + (s ? fmtBytes(s.db_bytes || 0) : "—") + "</td>" +
+      "<td><button class='ctl' data-rot='" + esc(t.id) + "' data-name='" + esc(t.name) + "'>ROTATE TOKEN</button> " +
+      "<button class='ctl danger' data-del='" + esc(t.id) + "' data-name='" + esc(t.name) + "'>✕</button></td></tr>";
+  });
+  $("tenRows").innerHTML = rows.join("") || "<tr><td colspan=5 class='kv'>no tenants</td></tr>";
   for (const b of $("tenRows").querySelectorAll("[data-rot]"))
     b.onclick = () => rotateTenant(b.dataset.rot, b.dataset.name);
   for (const b of $("tenRows").querySelectorAll("[data-del]"))
     b.onclick = () => deleteTenant(b.dataset.del, b.dataset.name);
   $("mTenant").innerHTML = state.tenants.map(t =>
     "<option value='" + esc(t.id) + "'>" + esc(t.name) + " (" + esc(t.instance) + ")</option>").join("");
-}
-
-// ---- instances -----------------------------------------------------------
-async function checkHealth(name) {
-  const cell = $("health-" + name);
-  cell.textContent = "…";
-  try {
-    const r = await api("GET", "/admin/instances/" + encodeURIComponent(name) + "/health");
-    cell.innerHTML = r.healthy ? "<span class='pill ok'>UP</span>" : "<span class='pill bad'>DOWN</span>";
-  } catch (e) { cell.innerHTML = "<span class='pill bad'>ERR</span>"; toast("health failed — " + e.message, true); }
 }
 
 async function addInstance() {
