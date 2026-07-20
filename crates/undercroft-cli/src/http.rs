@@ -127,6 +127,20 @@ pub fn serve_http(
             undercroft_obs::http_request("monitor", 200, start.elapsed());
             continue;
         }
+        // /ui serves the admin console — like /monitor, a self-contained
+        // static page carrying no secrets: the operator pastes the bearer
+        // (and, under assertion isolation, the assertion secret) into the
+        // page, which attaches them to its /v1 fetches. Served on every
+        // build — management is core function, unlike the telemetry-gated
+        // monitor.
+        if request.method() == &Method::Get && path == "/ui" {
+            let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+                .expect("static header");
+            let _ =
+                request.respond(Response::from_string(include_str!("ui.html")).with_header(ct));
+            undercroft_obs::http_request("ui", 200, start.elapsed());
+            continue;
+        }
         // Palace-wide bearer gates every non-health route (MCP and REST).
         if let Some(expected) = &token {
             let ok = request

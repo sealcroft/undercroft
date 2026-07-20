@@ -148,10 +148,20 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "stats"]) => self.stats(id, req, now),
             ("GET", &["v1", "vaults", id, "stats", "history"]) => self.stats_history(id, req, now),
             ("POST", &["v1", "vaults", id, "drawers"]) => self.save_drawer(id, req, body, now),
+            ("GET", &["v1", "vaults", id, "drawers"]) => self.list_drawers(id, req, now),
             ("POST", &["v1", "vaults", id, "search"]) => self.search(id, req, body, now),
+            ("GET", &["v1", "vaults", id, "drawers", drawer_id]) => {
+                self.get_drawer(id, drawer_id, req, now)
+            }
+            ("PUT", &["v1", "vaults", id, "drawers", drawer_id]) => {
+                self.update_drawer(id, drawer_id, req, body, now)
+            }
             ("DELETE", &["v1", "vaults", id, "drawers", drawer_id]) => {
                 self.delete_drawer(id, drawer_id, req, now)
             }
+            ("GET", &["v1", "vaults", id, "taxonomy"]) => self.taxonomy(id, req, now),
+            ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
+            ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
             ("POST", &["v1", "vaults", id, "import"]) => self.import(id, req, body, now),
             _ => Err(RestError::new(404, "no such route")),
@@ -232,20 +242,32 @@ impl Tenancy {
     fn stats(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
-        let count = store.count().map_err(err500)?;
+        let full = store.stats().map_err(store_err)?;
         let external = store.is_external();
         let vault = store.vault();
-        undercroft_obs::set_gauge("drawers", id, count as f64);
+        undercroft_obs::set_gauge("drawers", id, full.records as f64);
         undercroft_obs::set_gauge("audit_chain_height", id, vault.writes() as f64);
+        // Original fields kept verbatim (clients depend on them); the
+        // management fields ride along. Wing names are fine here — this
+        // route is authorized per vault, unlike the telemetry sampler which
+        // withholds them for sealed vaults.
         Ok((
             200,
             Body::Json(json!({
                 "id": id,
-                "drawers": count,
+                "drawers": full.records,
                 "level": vault.level().to_string(),
                 "external": external,
                 "writes": vault.writes(),
                 "chain_head": vault.chain_head_hex(),
+                "wings": full.wings
+                    .iter()
+                    .map(|(w, c)| json!({ "wing": w, "count": c }))
+                    .collect::<Vec<_>>(),
+                "rooms": full.rooms,
+                "kg": serde_json::to_value(&full.kg).unwrap_or_else(|_| json!({})),
+                "tunnels": full.tunnels,
+                "db_bytes": full.db_bytes,
             })),
         ))
     }
@@ -435,6 +457,144 @@ impl Tenancy {
         ))
     }
 
+    // ---- management (admin UI surface) --------------------------------
+
+    /// `GET /v1/vaults/{id}/drawers?wing=&room=&limit=&offset=` — page
+    /// through drawer summaries (id, wing/room, 120-char preview). Every
+    /// row's HMAC is verified on the way out, like every other read.
+    fn list_drawers(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let wing = query_param(req, "wing");
+        let room = query_param(req, "room");
+        let limit = query_param(req, "limit")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(50)
+            .min(500);
+        let offset = query_param(req, "offset")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let store = self.store_for(id)?;
+        let rows = store
+            .list_drawers(wing.as_deref(), room.as_deref(), limit, offset)
+            .map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "drawers": serde_json::to_value(rows).unwrap_or_else(|_| json!([]))
+            })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/drawers/{drawer_id}` — one full drawer
+    /// (verbatim content), HMAC-verified.
+    fn get_drawer(&mut self, id: &str, drawer_id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        match store.get(drawer_id).map_err(store_err)? {
+            Some(d) => Ok((200, Body::Json(json!({ "drawer": d })))),
+            None => Err(RestError::new(404, "no such drawer")),
+        }
+    }
+
+    /// `PUT /v1/vaults/{id}/drawers/{drawer_id}` — replace one drawer's
+    /// content (`{text}`). The content is stored verbatim (normalized like
+    /// every other write path); id, wing, and room are immutable.
+    fn update_drawer(
+        &mut self,
+        id: &str,
+        drawer_id: &str,
+        req: &Request,
+        body: &str,
+        now: i64,
+    ) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let text = body_str(&body, "text")?;
+        let normalized = normalize_content(&text);
+        if normalized.is_empty() {
+            return Err(RestError::new(400, "text is empty after normalization"));
+        }
+        let store = self.store_for(id)?;
+        let updated = store
+            .update_drawer(drawer_id, &normalized)
+            .map_err(store_err)?;
+        if updated {
+            Ok((
+                200,
+                Body::Json(json!({ "id": drawer_id, "updated": true })),
+            ))
+        } else {
+            Err(RestError::new(404, "no such drawer"))
+        }
+    }
+
+    /// `GET /v1/vaults/{id}/taxonomy` — the wing → room tree with drawer
+    /// counts.
+    fn taxonomy(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let tree = store.taxonomy().map_err(store_err)?;
+        let wings: Vec<Value> = tree
+            .into_iter()
+            .map(|(wing, rooms)| {
+                json!({
+                    "wing": wing,
+                    "rooms": rooms
+                        .into_iter()
+                        .map(|(room, count)| json!({ "room": room, "count": count }))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok((200, Body::Json(json!({ "wings": wings }))))
+    }
+
+    /// `POST /v1/vaults/{id}/verify` — walk every record verifying its
+    /// HMAC and replay the audit chain. Read-only despite the verb (POST
+    /// because it is an expensive action, not a resource read).
+    fn verify(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let report = store.verify().map_err(store_err)?;
+        let ok = report.ok();
+        Ok((
+            200,
+            Body::Json(json!({
+                "ok": ok,
+                "records_checked": report.records_checked,
+                "bad_records": report.bad_records,
+                "chain_ok": report.chain_ok,
+            })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/rotate` — rotate the vault onto fresh keys
+    /// (fresh salt ⇒ all three derived keys change; every artifact is
+    /// re-sealed in one transaction). The caller must be the only writer —
+    /// same contract as the CLI `vault rotate`. Remote-index copies go
+    /// stale; the response says so.
+    fn rotate(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let candidate = self
+            .manager
+            .rotation_candidate(id)
+            .map_err(|e| RestError::new(400, e.to_string()))?;
+        let store = self.store_for(id)?;
+        let report = store.rotate_keys(candidate).map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "id": id,
+                "rotated": true,
+                "report": serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
+                "chain_head": store.vault().chain_head_hex(),
+                "note": "remote index copies are stale; re-run `undercroft index push` if used",
+            })),
+        ))
+    }
+
     // ---- migration ----------------------------------------------------
 
     fn export(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
@@ -601,11 +761,27 @@ fn rest_route_label(url: &str) -> &'static str {
         "v1_export"
     } else if path.ends_with("/import") {
         "v1_import"
+    } else if path.ends_with("/taxonomy") {
+        "v1_taxonomy"
+    } else if path.ends_with("/verify") {
+        "v1_verify"
+    } else if path.ends_with("/rotate") {
+        "v1_rotate"
     } else if path.contains("/drawers") {
         "v1_drawers"
     } else {
         "v1_vaults"
     }
+}
+
+/// First value of a query-string key (raw; no percent-decoding — vault,
+/// wing, and room names are `validate_name`-restricted anyway).
+fn query_param(req: &Request, key: &str) -> Option<String> {
+    req.url().split('?').nth(1)?.split('&').find_map(|kv| {
+        kv.strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(String::from)
+    })
 }
 
 fn b64encode(data: &[u8]) -> String {

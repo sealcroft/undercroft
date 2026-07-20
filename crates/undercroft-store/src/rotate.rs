@@ -37,7 +37,7 @@ use rusqlite::{params, OptionalExtension};
 use crate::{canonical, PalaceStore, StoreError};
 
 /// What one rotation re-sealed / re-tagged.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct RotationReport {
     pub drawers: usize,
     pub kg_entities: usize,

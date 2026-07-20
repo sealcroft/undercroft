@@ -210,7 +210,7 @@ pub struct SearchOptions {
     pub limit: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
     pub records_checked: u64,
     pub bad_records: Vec<String>,
