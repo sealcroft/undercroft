@@ -108,6 +108,8 @@
   .ticker .save{color:var(--phos)} .ticker .chain{color:var(--gold)}
   .ticker .kgev{color:var(--violet)} .ticker .info{color:var(--ink)}
   .pill.open{background:#0c2a1c;color:var(--phos)} .pill.closed{background:#241a0c;color:var(--amber)}
+  .frame{width:100%;height:640px;border:1px solid var(--edge);border-radius:8px;background:#000;margin-top:10px}
+  a.ctl{display:inline-block}
   .overlay{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:10}
   .overlay.on{display:flex}
   .modal{border:2px solid var(--red);background:var(--panel);border-radius:8px;padding:16px 18px;max-width:440px;width:92%}
@@ -166,6 +168,8 @@
       <div class="tabs">
         <button data-tab="overview" class="sel">OVERVIEW</button>
         <button data-tab="monitor">MONITOR</button>
+        <button data-tab="palace">PALACE</button>
+        <button data-tab="grafana">GRAFANA</button>
         <button data-tab="knowledge">KNOWLEDGE</button>
         <button data-tab="browse">BROWSE</button>
         <button data-tab="search">SEARCH</button>
@@ -268,6 +272,35 @@
             <div class="h">◂ ACTIVITY</div>
             <div class="ticker" id="ticker"></div>
           </div>
+        </div>
+
+        <div id="tab-palace" style="display:none">
+          <div class="rowflex">
+            <span class="kv">The Palace Monitor — the live pixel-art view of this palace (archivist, wings, tamper beacon). Telemetry builds only.</span>
+            <span class="spacer"></span>
+            <a class="ctl" id="palaceOpen" href="/monitor" target="_blank" style="text-decoration:none;display:none">⧉ OPEN FULL PAGE</a>
+          </div>
+          <div class="kv" id="palaceNote" style="display:none;margin-top:10px;color:var(--amber)">
+            This build was compiled without <code style="color:var(--ink)">--features telemetry</code>, so
+            <code style="color:var(--ink)">/monitor</code> (and its SSE stream) is not present. Run a telemetry build to get the palace view.
+          </div>
+          <iframe class="frame" id="palaceFrame" style="display:none" title="Palace Monitor"></iframe>
+        </div>
+
+        <div id="tab-grafana" style="display:none">
+          <div class="rowflex">
+            <label class="kv">grafana url</label>
+            <input id="grafanaUrl" placeholder="http://localhost:3000" style="width:220px">
+            <button class="ctl" id="grafanaEmbedBtn">▶ EMBED DASHBOARD</button>
+            <a class="ctl" id="grafanaOpen" target="_blank" style="text-decoration:none">⧉ OPEN IN GRAFANA</a>
+          </div>
+          <p class="kv" style="margin-top:8px">
+            Embeds the <b>Undercroft — Palace</b> dashboard from the
+            <code style="color:var(--ink)">deploy/observability</code> stack (Prometheus + Loki + Tempo + Grafana;
+            anonymous viewer + embedding are pre-enabled there). The engine must run with
+            <code style="color:var(--ink)">--features telemetry</code> and <code style="color:var(--ink)">UNDERCROFT_METRICS=1</code> for Prometheus to have data.
+          </p>
+          <iframe class="frame" id="grafanaFrame" style="display:none" title="Grafana dashboard"></iframe>
         </div>
 
         <div id="tab-knowledge" style="display:none">
@@ -507,12 +540,54 @@ function showTab(tab) {
   state.tab = tab;
   for (const b of document.querySelectorAll(".tabs button"))
     b.className = b.dataset.tab === tab ? "sel" : "";
-  for (const t of ["overview","monitor","knowledge","browse","search","transfer"])
+  for (const t of ["overview","monitor","palace","grafana","knowledge","browse","search","transfer"])
     $("tab-" + t).style.display = t === tab ? "block" : "none";
   if (tab === "overview") loadOverview();
   if (tab === "monitor") startMonitor();
+  if (tab === "palace") loadPalace();
+  if (tab === "grafana") loadGrafana();
   if (tab === "knowledge") loadKg();
   if (tab === "browse") { loadTaxonomy(); loadDrawers(); }
+}
+
+// ---- palace monitor (pixel-art page, telemetry builds) -------------------
+// /monitor is a same-origin static page; probe once, then embed it. On
+// default builds the route does not exist — say so instead of a broken frame.
+let palaceProbed = false;
+async function loadPalace() {
+  if (palaceProbed) return;
+  try {
+    const res = await fetch("/monitor", { method: "GET" });
+    if (res.ok) {
+      $("palaceFrame").src = "/monitor";
+      $("palaceFrame").style.display = "block";
+      $("palaceOpen").style.display = "inline-block";
+    } else {
+      $("palaceNote").style.display = "block";
+    }
+  } catch (_) { $("palaceNote").style.display = "block"; }
+  palaceProbed = true;
+}
+
+// ---- grafana embed -------------------------------------------------------
+// The deploy/observability stack serves the "Undercroft — Palace" dashboard
+// (uid undercroft-palace) with anonymous viewer + embedding enabled. The URL
+// is remembered in this browser only.
+function grafanaBase() {
+  return ($("grafanaUrl").value.trim() || "http://localhost:3000").replace(/\/+$/, "");
+}
+function grafanaDashUrl(kiosk) {
+  return grafanaBase() + "/d/undercroft-palace/undercroft-palace?refresh=10s" + (kiosk ? "&kiosk" : "");
+}
+function loadGrafana() {
+  $("grafanaUrl").value = localStorage.getItem("undercroft.grafana") || "http://localhost:3000";
+  $("grafanaOpen").href = grafanaDashUrl(false);
+}
+function embedGrafana() {
+  localStorage.setItem("undercroft.grafana", grafanaBase());
+  $("grafanaOpen").href = grafanaDashUrl(false);
+  $("grafanaFrame").src = grafanaDashUrl(true);
+  $("grafanaFrame").style.display = "block";
 }
 
 // ---- monitor -----------------------------------------------------------
@@ -938,6 +1013,8 @@ $("nextBtn").onclick = () => { state.page++; loadDrawers(); };
 $("kPrevBtn").onclick = () => { if (kg.page > 0) { kg.page--; loadEntities(); } };
 $("kNextBtn").onclick = () => { kg.page++; loadEntities(); };
 $("timelineBtn").onclick = loadTimeline;
+$("grafanaEmbedBtn").onclick = embedGrafana;
+$("grafanaUrl").addEventListener("keydown", e => { if (e.key === "Enter") embedGrafana(); });
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
 $("bearer").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
 $("asecret").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });

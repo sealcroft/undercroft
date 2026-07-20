@@ -15,6 +15,13 @@
 - **New read-only `/v1` KG routes** backing it: `kg/stats`,
   `kg/entities` (paged, tag-verified), `kg/query?entity=&direction=&as_of=`,
   `kg/timeline?entity=`. Mutations stay on the CLI/MCP surface.
+- **PALACE tab**: the pixel-art Palace Monitor embedded in the console
+  (telemetry builds; default builds get a clear note instead of a
+  broken frame).
+- **GRAFANA tab**: embed the "Undercroft — Palace" dashboard from the
+  `deploy/observability` stack (URL remembered per-browser; the stack
+  now ships with `GF_SECURITY_ALLOW_EMBEDDING` so the iframe works out
+  of the box).
 
 ## 0.36.0 — Fleet console
 

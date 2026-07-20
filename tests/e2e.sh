@@ -505,6 +505,8 @@ rest_code "kg query needs entity" 400 -- "$API/vaults/acme/kg/query" \
 # The console page carries the new tabs.
 rest_body "/ui has monitor tab"  'MONITOR'        -- "http://127.0.0.1:$PORT/ui"
 rest_body "/ui has knowledge tab" 'KNOWLEDGE'     -- "http://127.0.0.1:$PORT/ui"
+rest_body "/ui has palace tab"   'PALACE'         -- "http://127.0.0.1:$PORT/ui"
+rest_body "/ui has grafana tab"  'GRAFANA'        -- "http://127.0.0.1:$PORT/ui"
 
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 
