@@ -269,6 +269,14 @@ caller-supplied embeddings, dedup-refresh on save, and lossless
 export/import for migrating a tenant between instances. See
 [the remote-server guide](https://github.com/compufreq/undercroft/blob/main/docs/remote-server.md).
 
+It also serves a **vault admin console at `GET /ui`** — one static,
+dependency-free page (every build, no telemetry feature needed): vault
+lifecycle, stats, one-click HMAC + chain verification, key rotation, a
+taxonomy-driven drawer browser with verbatim view/edit/delete, search, and
+export/import. Credentials stay in the browser tab (assertions are minted
+client-side via WebCrypto), and destructive operations require typing the
+target's name.
+
 Fleets of engines get the **optional orchestrator**
 (`undercroft-orchestrator`): instance registry, tenant creation with
 one-time token minting, a routing proxy that maps each tenant token to

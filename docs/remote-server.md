@@ -34,14 +34,30 @@ the model — tenancy is vaults, not palaces.
 ```text
 POST   /v1/vaults                      {id, level?, embedder?}   create vault
 DELETE /v1/vaults/{id}                                           delete vault
-GET    /v1/vaults/{id}/stats
+GET    /v1/vaults/{id}/stats            (records, level, writes, chain head,
+                                         wings, rooms, kg, tunnels, db_bytes)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}
+GET    /v1/vaults/{id}/drawers          ?wing=&room=&limit=&offset=  paged summaries
+GET    /v1/vaults/{id}/drawers/{drawer_id}                       one full drawer
+PUT    /v1/vaults/{id}/drawers/{drawer_id}  {text}               replace content
 POST   /v1/vaults/{id}/search          {query, wing?, room?, limit?, vector?}
 DELETE /v1/vaults/{id}/drawers/{drawer_id}
+GET    /v1/vaults/{id}/taxonomy         (wing → room tree with counts)
+POST   /v1/vaults/{id}/verify           (HMAC + audit-chain report)
+POST   /v1/vaults/{id}/rotate           (re-key the vault; sole-writer contract)
 GET    /v1/vaults/{id}/export           (decrypted NDJSON: {drawer, vector} per line)
 POST   /v1/vaults/{id}/import           (NDJSON body; returns {imported: N})
+GET    /ui                              (vault admin console; unauthenticated static page)
 GET    /healthz                         (unauthenticated)
 ```
+
+The **admin console** at `/ui` drives this whole surface from a browser:
+vault lifecycle, stats, verification, key rotation, drawer browsing with
+verbatim view/edit/delete, search, and export/import. The page itself
+carries no secrets — the bearer (and the assertion secret, under per-vault
+isolation) are entered in the page and never leave the tab; assertions are
+minted in-browser with WebCrypto. Destructive operations require typing the
+target's name.
 
 Vault lifecycle over HTTP lets an orchestrator auto-provision a dedicated
 memory instance per tenant and migrate a vault between instances:

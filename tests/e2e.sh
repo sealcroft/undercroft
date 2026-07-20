@@ -453,6 +453,39 @@ rest_code "vault list 403 under assertions" 403 -- "$API/vaults"
 # The Palace Monitor UI is telemetry-only; absent from this default build.
 rest_code "/monitor 404 without telemetry" 404 -- "http://127.0.0.1:$PORT/monitor"
 
+echo "== Management surface (admin UI routes) =="
+# The admin console is served on every build (static page, no secrets).
+rest_body "/ui serves admin console" 'Vault Admin' -- "http://127.0.0.1:$PORT/ui"
+rest_body "taxonomy tree"       '"wing":"eng"'    -- "$API/vaults/acme/taxonomy" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "list drawers"        '"preview"'       -- "$API/vaults/acme/drawers" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "list drawers scoped" 'postgres'        -- "$API/vaults/acme/drawers?wing=eng&room=decisions" \
+  -H "X-Vault-Assertion: $(sign acme)"
+DRAWER_ID="$(curl -s "$API/vaults/acme/drawers?room=decisions" \
+  -H "X-Vault-Assertion: $(sign acme)" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p' | head -1)"
+rest_body "get drawer verbatim" 'postgres'        -- "$API/vaults/acme/drawers/$DRAWER_ID" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# The replacement keeps the query's lexical terms (billing) — search's
+# relevance gate drops rows with no lexical overlap and a neutral cosine,
+# so an update that removed them would (correctly) vanish from this query.
+rest_body "update drawer"       '"updated":true'  -- -X PUT "$API/vaults/acme/drawers/$DRAWER_ID" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"text":"we picked postgres for the billing service, confirmed in review"}'
+rest_body "update round-trips"  'confirmed in review' -- "$API/vaults/acme/drawers/$DRAWER_ID" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_code "update missing drawer 404" 404 -- -X PUT "$API/vaults/acme/drawers/00000000000000000000000000000000" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"text":"x"}'
+rest_body "verify over http"    '"ok":true'       -- -X POST "$API/vaults/acme/verify" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "rotate over http"    '"rotated":true'  -- -X POST "$API/vaults/acme/rotate" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "verify after rotate" '"ok":true'       -- -X POST "$API/vaults/acme/verify" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "search after rotate" 'postgres'        -- -X POST "$API/vaults/acme/search" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"which database for billing"}'
+rest_body "stats carries management fields" '"db_bytes"' -- "$API/vaults/acme/stats" \
+  -H "X-Vault-Assertion: $(sign acme)"
+
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 
 echo

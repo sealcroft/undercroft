@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.35.0 — Vault admin console
+
+- **`GET /ui` — a vault administration console** served by `serve-http`
+  on every build: one self-contained static page (no dependencies, no
+  telemetry requirement) in the Palace Monitor's phosphor-terminal
+  style. Vault list/create/delete, live stats dashboard, one-click
+  HMAC + audit-chain verification, key rotation, a taxonomy-driven
+  drawer browser with verbatim view/edit/delete, a search console, and
+  NDJSON export/import. The bearer — and, under per-vault isolation,
+  the assertion secret — stay in the browser tab; assertions are
+  minted client-side with WebCrypto. Every destructive operation
+  requires typing the target's name.
+- **New `/v1` management routes** backing the console (and any other
+  client): `GET …/drawers` (paged summaries with wing/room filters),
+  `GET`/`PUT …/drawers/{id}` (full drawer, verbatim content replace),
+  `GET …/taxonomy`, `POST …/verify`, `POST …/rotate`, and stats
+  extended with wings, rooms, KG counts, tunnels, and store size. Same
+  auth model as the rest of `/v1`; mutations 403 on read-only servers.
+- Research spike shipped alongside (merged separately): sealed-tier
+  page-level decryption measured at 10⁶–10⁷ drawers — see
+  `docs/RETRIEVAL_SCALING.md`; format deferred to its RAM trigger.
+
 ## 0.34.2 — Container image metadata + landing navigation
 
 - OCI labels on the runtime image and index-level annotations on the

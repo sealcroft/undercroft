@@ -319,12 +319,19 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | POST | `/v1/vaults` | create vault (`level`, optional `embedder`) |
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
-| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head |
+| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes |
 | POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `vector`, `dedup_threshold`) |
+| GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
+| GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim |
+| PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`) |
 | POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
+| GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
+| POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
+| POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON (vectors + token artifacts) |
 | POST | `/v1/vaults/{id}/import` | parse-before-write import |
+| GET | `/ui` | vault admin console (static page; every build) |
 | GET | `/metrics`, `/monitor`, `/v1/…/stream` | telemetry builds only |
 
 Orchestrator: tenant data plane `/t/<drawers|search|stats|export|import>`

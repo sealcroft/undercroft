@@ -56,7 +56,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `UNDERCROFT_RERANKER=ort|colbert-ort`; multi-tenant server shares one
   session pool across vaults)
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI; mcp.rs: MCP stdio;
-  http.rs/tenant.rs: HTTP + multi-tenant `/v1`; monitor.html: the Palace Monitor
+  http.rs/tenant.rs: HTTP + multi-tenant `/v1` incl. management routes
+  (drawers list/get/update, taxonomy, verify, rotate); ui.html: the vault
+  admin console, `include_str!`'d and served at `GET /ui` on every build;
+  monitor.html: the Palace Monitor
   UI, `include_str!`'d and served at `GET /monitor` on telemetry builds);
   integration tests in `tests/cli.rs`
 - `crates/undercroft-orchestrator` — `undercroft-orchestrator` binary: the

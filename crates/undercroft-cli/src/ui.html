@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Undercroft · Vault Admin</title>
+<style>
+  :root{
+    --bg:#080b10; --panel:#0e141c; --panel2:#131c27; --edge:#22303f; --grid:#16202b;
+    --phos:#5ef0a8; --phos-dim:#2d7a56; --amber:#ffb43a; --cyan:#57d8ff;
+    --violet:#b98bff; --red:#ff3b46; --red-deep:#7a0d13; --gold:#f6c358; --ink:#8fa6b8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--phos);
+    font-family:"DejaVu Sans Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+  .wrap{max-width:1180px;margin:0 auto;padding:14px 14px 40px;}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    border:1px solid var(--edge);background:linear-gradient(180deg,var(--panel2),var(--panel));
+    padding:10px 14px;border-radius:8px;}
+  .logo{font-size:18px;letter-spacing:2px;color:var(--phos);text-shadow:0 0 8px rgba(94,240,168,.4)}
+  .logo b{color:#fff}
+  .spacer{flex:1}
+  .status{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:1.5px}
+  .lamp{width:12px;height:12px;border-radius:50%;background:var(--phos-dim);box-shadow:0 0 0 2px #0006 inset;transition:background .15s}
+  .lamp.live{background:var(--phos)}
+  .lamp.alert{background:var(--red);animation:blink .25s steps(2) infinite}
+  @keyframes blink{50%{opacity:.25}}
+
+  .conn{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;
+    border:1px solid var(--edge);background:var(--panel);border-radius:8px;padding:9px 12px;font-size:11px}
+  .conn label{color:var(--ink);letter-spacing:1px}
+  input,select,textarea{background:var(--bg);color:var(--phos);border:1px solid var(--edge);
+    font-family:inherit;font-size:11px;padding:5px 7px;border-radius:5px}
+  input:focus,select:focus,textarea:focus{outline:1px solid var(--phos-dim)}
+  #bearer{width:210px} #asecret{width:180px}
+  button.ctl{font-family:inherit;font-size:11px;letter-spacing:.5px;cursor:pointer;
+    background:var(--panel2);color:var(--phos);border:1px solid var(--edge);padding:6px 11px;border-radius:5px;transition:.12s}
+  button.ctl:hover{background:#1b2734;border-color:var(--phos-dim)}
+  button.ctl.on{background:#123;border-color:var(--cyan);color:var(--cyan)}
+  button.ctl.danger{color:var(--red);border-color:#5a1a1f}
+  button.ctl.danger:hover{background:#1d0d0f;border-color:var(--red)}
+  button.ctl:disabled{opacity:.4;cursor:default}
+  .msg{color:var(--amber);font-size:10px}
+
+  .cols{display:grid;grid-template-columns:230px 1fr;gap:12px;margin-top:12px;align-items:start}
+  @media (max-width:800px){.cols{grid-template-columns:1fr}}
+  .panel{border:1px solid var(--edge);background:var(--panel);border-radius:8px;padding:10px 12px}
+  .panel .h{font-size:9px;letter-spacing:1.5px;color:var(--ink);margin-bottom:7px}
+  .vlist{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
+  .vlist button{text-align:left;font-family:inherit;font-size:11px;cursor:pointer;border-radius:5px;
+    background:none;color:var(--phos);border:1px solid transparent;padding:5px 8px}
+  .vlist button:hover{border-color:var(--edge);background:var(--panel2)}
+  .vlist button.sel{border-color:var(--phos-dim);background:#0c2a1c;color:#fff}
+  .mini{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center}
+  .mini input{flex:1;min-width:80px}
+
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tabs button{font-family:inherit;font-size:11px;letter-spacing:1px;cursor:pointer;
+    background:none;color:var(--ink);border:1px solid var(--edge);border-radius:6px 6px 0 0;padding:7px 14px;border-bottom:none}
+  .tabs button.sel{color:var(--phos);background:var(--panel);border-color:var(--phos-dim)}
+  .tabbody{border:1px solid var(--edge);background:var(--panel);border-radius:0 8px 8px 8px;padding:12px}
+
+  .gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+  .g{border:1px solid var(--edge);background:var(--panel2);border-radius:6px;padding:8px 10px}
+  .g .k{font-size:9px;letter-spacing:1.5px;color:var(--ink)}
+  .g .v{font-size:17px;color:#fff;margin-top:2px;word-break:break-all}
+  .g.chain .v{font-size:10px;color:var(--gold)}
+  .g.lvl .v{color:var(--cyan);font-size:13px}
+
+  table{width:100%;border-collapse:collapse;font-size:11px;margin-top:8px}
+  th{color:var(--ink);font-size:9px;letter-spacing:1.5px;text-align:left;padding:4px 6px;border-bottom:1px solid var(--edge)}
+  td{padding:4px 6px;border-bottom:1px solid var(--grid);vertical-align:top}
+  tr.click{cursor:pointer} tr.click:hover td{background:var(--panel2)}
+  .pill{padding:1px 6px;border-radius:3px;font-size:9px}
+  .pill.wing{background:#0b2632;color:var(--cyan)} .pill.room{background:#241634;color:var(--violet)}
+  .score{color:var(--gold)}
+
+  .sect{margin-top:14px;border-top:1px solid var(--grid);padding-top:10px}
+  .sect .h{font-size:9px;letter-spacing:1.5px;color:var(--ink);margin-bottom:7px}
+  .danger-zone{border:1px solid #5a1a1f;border-radius:6px;padding:10px;margin-top:14px}
+  .danger-zone .h{color:var(--red)}
+  .rowflex{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  pre.report{background:var(--bg);border:1px solid var(--edge);border-radius:6px;padding:8px 10px;
+    font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--ink);max-height:260px;overflow:auto}
+  pre.content{background:var(--bg);border:1px solid var(--edge);border-radius:6px;padding:10px;
+    font-size:12px;white-space:pre-wrap;word-break:break-word;color:#dfe9e4;max-height:340px;overflow:auto}
+  textarea.edit{width:100%;min-height:160px;font-size:12px;margin-top:6px}
+  .kv{font-size:10px;color:var(--ink);margin:2px 0}
+  .kv b{color:var(--phos)}
+
+  .tax{display:flex;flex-direction:column;gap:2px;font-size:11px;max-height:300px;overflow:auto}
+  .tax .wingrow{color:var(--cyan);cursor:pointer;padding:2px 4px;border-radius:4px}
+  .tax .roomrow{color:var(--violet);cursor:pointer;padding:2px 4px 2px 18px;border-radius:4px}
+  .tax .wingrow:hover,.tax .roomrow:hover{background:var(--panel2)}
+  .tax .sel{background:#0c2a1c}
+  .browse{display:grid;grid-template-columns:200px 1fr;gap:12px}
+  @media (max-width:800px){.browse{grid-template-columns:1fr}}
+
+  .overlay{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:10}
+  .overlay.on{display:flex}
+  .modal{border:2px solid var(--red);background:var(--panel);border-radius:8px;padding:16px 18px;max-width:440px;width:92%}
+  .modal .h{color:var(--red);letter-spacing:1.5px;font-size:12px;margin-bottom:8px}
+  .modal p{font-size:11px;color:var(--ink);line-height:1.5;margin:6px 0}
+  .modal input{width:100%;margin:8px 0}
+  .modal .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+
+  .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:11;display:none;
+    border:1px solid var(--edge);background:var(--panel2);color:var(--phos);border-radius:6px;
+    padding:8px 14px;font-size:11px;max-width:80%;word-break:break-word}
+  .toast.err{border-color:var(--red);color:var(--red)}
+  .toast.on{display:block}
+  .foot{margin-top:14px;font-size:10px;color:#4d6070;line-height:1.6}
+  .foot code{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="logo">◈ UNDERCROFT <b>VAULT&nbsp;ADMIN</b></span>
+    <span class="spacer"></span>
+    <span class="status"><span id="lamp" class="lamp"></span><span id="statusText">DISCONNECTED</span></span>
+  </header>
+
+  <div class="conn">
+    <label>bearer</label>
+    <input id="bearer" type="password" placeholder="UNDERCROFT_MCP_HTTP_TOKEN" autocomplete="off">
+    <label>assertion secret</label>
+    <input id="asecret" type="password" placeholder="(only if isolation is on)" autocomplete="off">
+    <button class="ctl" id="connectBtn">▶ CONNECT</button>
+    <span class="msg" id="connMsg"></span>
+  </div>
+
+  <div class="cols">
+    <div>
+      <div class="panel">
+        <div class="h">◂ VAULTS</div>
+        <div class="vlist" id="vaultList"></div>
+        <div class="mini" id="attachRow" style="display:none">
+          <input id="attachId" placeholder="vault id">
+          <button class="ctl" id="attachBtn">ATTACH</button>
+        </div>
+        <div class="sect">
+          <div class="h">CREATE VAULT</div>
+          <div class="mini">
+            <input id="newVaultId" placeholder="vault id">
+            <select id="newVaultLevel"><option value="sealed">sealed</option><option value="hmac-only">hmac-only</option></select>
+            <button class="ctl" id="createBtn">+ CREATE</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="main" style="display:none">
+      <div class="tabs">
+        <button data-tab="overview" class="sel">OVERVIEW</button>
+        <button data-tab="browse">BROWSE</button>
+        <button data-tab="search">SEARCH</button>
+        <button data-tab="transfer">TRANSFER</button>
+      </div>
+      <div class="tabbody">
+
+        <div id="tab-overview">
+          <div class="gauges">
+            <div class="g"><div class="k">DRAWERS</div><div class="v" id="sDrawers">—</div></div>
+            <div class="g lvl"><div class="k">LEVEL</div><div class="v" id="sLevel">—</div></div>
+            <div class="g"><div class="k">WRITES</div><div class="v" id="sWrites">—</div></div>
+            <div class="g"><div class="k">ROOMS</div><div class="v" id="sRooms">—</div></div>
+            <div class="g"><div class="k">KG TRIPLES</div><div class="v" id="sKgT">—</div></div>
+            <div class="g"><div class="k">TUNNELS</div><div class="v" id="sTun">—</div></div>
+            <div class="g"><div class="k">STORE</div><div class="v" id="sBytes">—</div></div>
+            <div class="g chain"><div class="k">CHAIN HEAD</div><div class="v" id="sChain">—</div></div>
+          </div>
+          <div class="sect">
+            <div class="h">WINGS</div>
+            <table><thead><tr><th>WING</th><th>DRAWERS</th></tr></thead><tbody id="wingRows"></tbody></table>
+          </div>
+          <div class="sect">
+            <div class="h">INTEGRITY</div>
+            <div class="rowflex">
+              <button class="ctl" id="verifyBtn">⛨ VERIFY (HMAC + CHAIN)</button>
+              <span class="msg" id="verifyMsg"></span>
+            </div>
+            <pre class="report" id="verifyReport" style="display:none"></pre>
+          </div>
+          <div class="danger-zone">
+            <div class="h">▲ DANGER ZONE</div>
+            <div class="rowflex" style="margin-top:6px">
+              <button class="ctl danger" id="rotateBtn">↻ ROTATE KEYS</button>
+              <button class="ctl danger" id="deleteVaultBtn">✕ DELETE VAULT</button>
+            </div>
+            <pre class="report" id="rotateReport" style="display:none"></pre>
+          </div>
+        </div>
+
+        <div id="tab-browse" style="display:none">
+          <div class="browse">
+            <div>
+              <div class="h" style="font-size:9px;letter-spacing:1.5px;color:var(--ink)">TAXONOMY</div>
+              <div class="tax" id="tax"></div>
+            </div>
+            <div>
+              <div class="rowflex">
+                <span class="kv" id="browseScope">all drawers</span>
+                <span class="spacer"></span>
+                <button class="ctl" id="prevBtn">◂ PREV</button>
+                <span class="kv" id="pageInfo">page 1</span>
+                <button class="ctl" id="nextBtn">NEXT ▸</button>
+              </div>
+              <table><thead><tr><th>ID</th><th>WING/ROOM</th><th>PREVIEW</th></tr></thead><tbody id="drawerRows"></tbody></table>
+              <div id="drawerDetail" style="display:none" class="sect">
+                <div class="h">DRAWER <span id="dId" style="color:var(--gold)"></span></div>
+                <div class="kv" id="dMeta"></div>
+                <pre class="content" id="dContent"></pre>
+                <div class="rowflex" style="margin-top:8px">
+                  <button class="ctl" id="editBtn">✎ EDIT</button>
+                  <button class="ctl danger" id="deleteDrawerBtn">✕ DELETE DRAWER</button>
+                </div>
+                <div id="editArea" style="display:none">
+                  <textarea class="edit" id="editText"></textarea>
+                  <div class="rowflex" style="margin-top:6px">
+                    <button class="ctl on" id="saveEditBtn">SAVE</button>
+                    <button class="ctl" id="cancelEditBtn">CANCEL</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-search" style="display:none">
+          <div class="rowflex">
+            <input id="q" placeholder="query" style="flex:1;min-width:160px">
+            <input id="qWing" placeholder="wing (optional)" style="width:120px">
+            <input id="qRoom" placeholder="room (optional)" style="width:120px">
+            <input id="qLimit" type="number" value="10" min="1" max="100" style="width:60px">
+            <button class="ctl on" id="searchBtn">⌕ SEARCH</button>
+          </div>
+          <table><thead><tr><th>SCORE</th><th>WING/ROOM</th><th>CONTENT</th></tr></thead><tbody id="hitRows"></tbody></table>
+        </div>
+
+        <div id="tab-transfer" style="display:none">
+          <div class="sect" style="border-top:none;margin-top:0;padding-top:0">
+            <div class="h">EXPORT</div>
+            <p class="kv">Lossless NDJSON: every drawer verbatim + vector + portable token artifacts. Re-sealed under the destination vault's keys on import.</p>
+            <button class="ctl" id="exportBtn">⇓ DOWNLOAD EXPORT</button>
+          </div>
+          <div class="sect">
+            <div class="h">IMPORT</div>
+            <p class="kv">Upload an NDJSON export. Parsed fully before anything is written — a malformed file imports nothing. Encrypted <code>bundle</code> files need the CLI (<code>undercroft import file --identity key</code>): the recipient key must never enter a browser.</p>
+            <div class="rowflex">
+              <input type="file" id="importFile">
+              <button class="ctl" id="importBtn">⇑ IMPORT</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="guard">
+    <div class="modal">
+      <div class="h" id="guardTitle">CONFIRM</div>
+      <p id="guardText"></p>
+      <p>Type <b id="guardWord" style="color:#fff"></b> to confirm:</p>
+      <input id="guardInput" autocomplete="off">
+      <div class="btns">
+        <button class="ctl" id="guardCancel">CANCEL</button>
+        <button class="ctl danger" id="guardOk" disabled>CONFIRM</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="foot">
+    Vault administration over the <code>/v1</code> REST surface. This page is static and stores nothing
+    server-side; the bearer (<code>UNDERCROFT_MCP_HTTP_TOKEN</code>) stays in this tab. Under per-vault
+    isolation (<code>UNDERCROFT_ASSERTION_SECRET</code>) vault listing is disabled — paste the secret and
+    attach vaults by id; assertions are minted in-browser (WebCrypto HMAC-SHA256, requires localhost or
+    HTTPS). Destructive operations require typing the target's name. Content is verbatim: what you see in
+    a drawer is byte-for-byte what was filed.
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const state = { bearer:"", secret:"", vaults:[], vault:null, tab:"overview",
+                wing:null, room:null, page:0, pageSize:50, drawer:null, assertions:{} };
+
+// ---- helpers --------------------------------------------------------
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtBytes = n => n>=1e9 ? (n/1e9).toFixed(1)+" GB" : n>=1e6 ? (n/1e6).toFixed(1)+" MB" : n>=1e3 ? (n/1e3).toFixed(1)+" KB" : n+" B";
+let toastTimer = null;
+function toast(msg, err) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast on" + (err ? " err" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = "toast", 4200);
+}
+function setStatus(text, cls) { $("statusText").textContent = text; $("lamp").className = "lamp " + (cls||""); }
+
+// Mint an X-Vault-Assertion in-browser: ts:hex(HMAC-SHA256(secret, "ts|vault")).
+// Cached ~60s per vault (the server accepts ±120s).
+async function assertionFor(vault) {
+  const now = Math.floor(Date.now()/1000);
+  const c = state.assertions[vault];
+  if (c && now - c.ts < 60) return c.header;
+  if (!crypto.subtle) throw new Error("WebCrypto unavailable — open this page over localhost or HTTPS");
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(state.secret), {name:"HMAC", hash:"SHA-256"}, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(now + "|" + vault));
+  const hex = [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2,"0")).join("");
+  const header = now + ":" + hex;
+  state.assertions[vault] = { ts: now, header };
+  return header;
+}
+
+async function api(method, path, opts) {
+  opts = opts || {};
+  const headers = {};
+  if (state.bearer) headers["Authorization"] = "Bearer " + state.bearer;
+  if (state.secret && opts.vault) headers["X-Vault-Assertion"] = await assertionFor(opts.vault);
+  let body = opts.body;
+  if (body !== undefined && typeof body === "object") { headers["Content-Type"] = "application/json"; body = JSON.stringify(body); }
+  if (typeof body === "string" && opts.ndjson) headers["Content-Type"] = "application/x-ndjson";
+  const res = await fetch(path, { method, headers, body });
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch (_) {}
+    throw new Error(res.status + ": " + msg);
+  }
+  if (opts.raw) return text;
+  try { return JSON.parse(text); } catch (_) { return text; }
+}
+
+// Type-the-name guard for destructive operations.
+function guard(title, text, word) {
+  return new Promise(resolve => {
+    $("guardTitle").textContent = title;
+    $("guardText").textContent = text;
+    $("guardWord").textContent = word;
+    $("guardInput").value = "";
+    $("guardOk").disabled = true;
+    $("guard").className = "overlay on";
+    $("guardInput").focus();
+    const done = ok => { $("guard").className = "overlay"; cleanup(); resolve(ok); };
+    const onInput = () => { $("guardOk").disabled = $("guardInput").value !== word; };
+    const onOk = () => done(true);
+    const onCancel = () => done(false);
+    function cleanup() {
+      $("guardInput").removeEventListener("input", onInput);
+      $("guardOk").removeEventListener("click", onOk);
+      $("guardCancel").removeEventListener("click", onCancel);
+    }
+    $("guardInput").addEventListener("input", onInput);
+    $("guardOk").addEventListener("click", onOk);
+    $("guardCancel").addEventListener("click", onCancel);
+  });
+}
+
+// ---- connection & vault list ----------------------------------------
+async function connect() {
+  state.bearer = $("bearer").value.trim();
+  state.secret = $("asecret").value.trim();
+  state.assertions = {};
+  $("connMsg").textContent = "";
+  try {
+    const r = await api("GET", "/v1/vaults");
+    state.vaults = r.vaults || [];
+    $("attachRow").style.display = "none";
+    setStatus("CONNECTED", "live");
+    renderVaults();
+    toast("connected — " + state.vaults.length + " vault(s)");
+  } catch (e) {
+    if (String(e.message).startsWith("403")) {
+      // Assertion isolation: listing is disabled by design; attach by id.
+      state.vaults = [];
+      $("attachRow").style.display = "flex";
+      setStatus("ISOLATED", "live");
+      renderVaults();
+      toast("per-vault isolation is on — attach vaults by id");
+    } else {
+      setStatus("DISCONNECTED", "alert");
+      $("connMsg").textContent = e.message;
+    }
+  }
+}
+
+async function attach() {
+  const id = $("attachId").value.trim();
+  if (!id) return;
+  try {
+    await api("GET", "/v1/vaults/" + encodeURIComponent(id) + "/stats", { vault: id });
+    if (!state.vaults.includes(id)) state.vaults.push(id);
+    $("attachId").value = "";
+    renderVaults();
+    selectVault(id);
+  } catch (e) { toast("attach failed — " + e.message, true); }
+}
+
+function renderVaults() {
+  const el = $("vaultList");
+  el.innerHTML = "";
+  if (!state.vaults.length) {
+    el.innerHTML = '<span class="kv">' + ($("attachRow").style.display === "none" ? "no vaults yet" : "attach a vault by id") + "</span>";
+  }
+  for (const v of state.vaults) {
+    const b = document.createElement("button");
+    b.textContent = "▸ " + v;
+    if (v === state.vault) b.className = "sel";
+    b.onclick = () => selectVault(v);
+    el.appendChild(b);
+  }
+}
+
+async function createVault() {
+  const id = $("newVaultId").value.trim();
+  if (!id) return;
+  try {
+    const r = await api("POST", "/v1/vaults", { vault: id, body: { id, level: $("newVaultLevel").value } });
+    toast("created vault " + r.id + " (" + r.level + ")");
+    $("newVaultId").value = "";
+    if (!state.vaults.includes(id)) state.vaults.push(id);
+    renderVaults();
+    selectVault(id);
+  } catch (e) { toast("create failed — " + e.message, true); }
+}
+
+function selectVault(id) {
+  state.vault = id;
+  state.wing = state.room = null; state.page = 0; state.drawer = null;
+  $("main").style.display = "block";
+  renderVaults();
+  showTab(state.tab);
+}
+
+// ---- tabs ------------------------------------------------------------
+function showTab(tab) {
+  state.tab = tab;
+  for (const b of document.querySelectorAll(".tabs button"))
+    b.className = b.dataset.tab === tab ? "sel" : "";
+  for (const t of ["overview","browse","search","transfer"])
+    $("tab-" + t).style.display = t === tab ? "block" : "none";
+  if (tab === "overview") loadOverview();
+  if (tab === "browse") { loadTaxonomy(); loadDrawers(); }
+}
+
+// ---- overview ---------------------------------------------------------
+async function loadOverview() {
+  const v = state.vault;
+  $("verifyReport").style.display = "none";
+  $("rotateReport").style.display = "none";
+  $("verifyMsg").textContent = "";
+  try {
+    const s = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/stats", { vault: v });
+    $("sDrawers").textContent = s.drawers;
+    $("sLevel").textContent = s.level + (s.external ? " · ext" : "");
+    $("sWrites").textContent = s.writes;
+    $("sRooms").textContent = s.rooms;
+    $("sKgT").textContent = (s.kg && s.kg.triples !== undefined) ? s.kg.triples : "—";
+    $("sTun").textContent = s.tunnels;
+    $("sBytes").textContent = fmtBytes(s.db_bytes || 0);
+    $("sChain").textContent = s.chain_head ? s.chain_head.slice(0, 24) + "…" : "—";
+    const rows = (s.wings || []).map(w => "<tr><td><span class='pill wing'>" + esc(w.wing) + "</span></td><td>" + w.count + "</td></tr>");
+    $("wingRows").innerHTML = rows.join("") || "<tr><td colspan=2 class='kv'>empty</td></tr>";
+  } catch (e) { toast("stats failed — " + e.message, true); }
+}
+
+async function runVerify() {
+  const v = state.vault;
+  $("verifyMsg").textContent = "verifying…";
+  $("verifyMsg").style.color = "";
+  try {
+    const r = await api("POST", "/v1/vaults/" + encodeURIComponent(v) + "/verify", { vault: v });
+    $("verifyMsg").textContent = r.ok ? "✔ OK" : "✘ FAILED";
+    $("verifyMsg").style.color = r.ok ? "var(--phos)" : "var(--red)";
+    $("verifyReport").style.display = "block";
+    $("verifyReport").textContent =
+      "records checked: " + r.records_checked +
+      "\nchain ok:        " + r.chain_ok +
+      "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none");
+  } catch (e) { $("verifyMsg").textContent = ""; toast("verify failed — " + e.message, true); }
+}
+
+async function runRotate() {
+  const v = state.vault;
+  const ok = await guard("ROTATE VAULT KEYS",
+    "Every artifact in '" + v + "' is re-sealed onto fresh keys in one transaction. " +
+    "Do this only when no other process is serving the vault. Remote-index copies go stale.", v);
+  if (!ok) return;
+  toast("rotating " + v + "…");
+  try {
+    const r = await api("POST", "/v1/vaults/" + encodeURIComponent(v) + "/rotate", { vault: v });
+    $("rotateReport").style.display = "block";
+    $("rotateReport").textContent = "rotated onto fresh keys\n" + JSON.stringify(r.report, null, 2) +
+      "\nnew chain head: " + r.chain_head + "\n" + (r.note || "");
+    toast("rotated " + v);
+    loadOverview();
+  } catch (e) { toast("rotate failed — " + e.message, true); }
+}
+
+async function deleteVault() {
+  const v = state.vault;
+  const ok = await guard("DELETE VAULT",
+    "Permanently deletes vault '" + v + "' and every drawer in it. There is no undo.", v);
+  if (!ok) return;
+  try {
+    await api("DELETE", "/v1/vaults/" + encodeURIComponent(v), { vault: v });
+    toast("deleted vault " + v);
+    state.vaults = state.vaults.filter(x => x !== v);
+    state.vault = null;
+    $("main").style.display = "none";
+    renderVaults();
+  } catch (e) { toast("delete failed — " + e.message, true); }
+}
+
+// ---- browse ------------------------------------------------------------
+async function loadTaxonomy() {
+  const v = state.vault;
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/taxonomy", { vault: v });
+    const el = $("tax");
+    el.innerHTML = "";
+    const all = document.createElement("div");
+    all.className = "wingrow" + (state.wing === null ? " sel" : "");
+    all.textContent = "◈ all";
+    all.onclick = () => { state.wing = state.room = null; state.page = 0; showTab("browse"); };
+    el.appendChild(all);
+    for (const w of (r.wings || [])) {
+      const wr = document.createElement("div");
+      wr.className = "wingrow" + (state.wing === w.wing && !state.room ? " sel" : "");
+      wr.textContent = "▾ " + w.wing;
+      wr.onclick = () => { state.wing = w.wing; state.room = null; state.page = 0; showTab("browse"); };
+      el.appendChild(wr);
+      for (const room of (w.rooms || [])) {
+        const rr = document.createElement("div");
+        rr.className = "roomrow" + (state.wing === w.wing && state.room === room.room ? " sel" : "");
+        rr.textContent = room.room + " (" + room.count + ")";
+        rr.onclick = () => { state.wing = w.wing; state.room = room.room; state.page = 0; showTab("browse"); };
+        el.appendChild(rr);
+      }
+    }
+  } catch (e) { toast("taxonomy failed — " + e.message, true); }
+}
+
+async function loadDrawers() {
+  const v = state.vault;
+  $("drawerDetail").style.display = "none";
+  const qs = new URLSearchParams();
+  if (state.wing) qs.set("wing", state.wing);
+  if (state.room) qs.set("room", state.room);
+  qs.set("limit", state.pageSize);
+  qs.set("offset", state.page * state.pageSize);
+  $("browseScope").textContent = (state.wing ? state.wing + (state.room ? "/" + state.room : "") : "all drawers");
+  $("pageInfo").textContent = "page " + (state.page + 1);
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/drawers?" + qs, { vault: v });
+    const rows = (r.drawers || []).map(d =>
+      "<tr class='click' data-id='" + esc(d.id) + "'><td>" + esc(d.id.slice(0, 14)) + "…</td>" +
+      "<td><span class='pill wing'>" + esc(d.wing) + "</span> <span class='pill room'>" + esc(d.room) + "</span></td>" +
+      "<td>" + esc(d.preview) + "</td></tr>");
+    $("drawerRows").innerHTML = rows.join("") || "<tr><td colspan=3 class='kv'>no drawers</td></tr>";
+    $("nextBtn").disabled = (r.drawers || []).length < state.pageSize;
+    $("prevBtn").disabled = state.page === 0;
+    for (const tr of $("drawerRows").querySelectorAll("tr.click"))
+      tr.onclick = () => openDrawer(tr.dataset.id);
+  } catch (e) { toast("list failed — " + e.message, true); }
+}
+
+async function openDrawer(id) {
+  const v = state.vault;
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/drawers/" + encodeURIComponent(id), { vault: v });
+    const d = r.drawer;
+    state.drawer = d;
+    $("drawerDetail").style.display = "block";
+    $("editArea").style.display = "none";
+    $("dId").textContent = d.id;
+    $("dMeta").innerHTML = "wing <b>" + esc(d.meta.wing) + "</b> · room <b>" + esc(d.meta.room) + "</b> · filed <b>" +
+      esc(d.meta.filed_at) + "</b>" + (d.meta.source_file ? " · source <b>" + esc(d.meta.source_file) + "</b>" : "");
+    $("dContent").textContent = d.content;
+    $("drawerDetail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) { toast("get failed — " + e.message, true); }
+}
+
+async function saveEdit() {
+  const v = state.vault, d = state.drawer;
+  if (!d) return;
+  try {
+    await api("PUT", "/v1/vaults/" + encodeURIComponent(v) + "/drawers/" + encodeURIComponent(d.id),
+      { vault: v, body: { text: $("editText").value } });
+    toast("updated " + d.id.slice(0, 14) + "…");
+    $("editArea").style.display = "none";
+    openDrawer(d.id);
+    loadDrawers();
+  } catch (e) { toast("update failed — " + e.message, true); }
+}
+
+async function deleteDrawer() {
+  const v = state.vault, d = state.drawer;
+  if (!d) return;
+  const word = d.id.slice(0, 8);
+  const ok = await guard("DELETE DRAWER",
+    "Permanently deletes drawer " + d.id + " from '" + v + "'. A keyed tombstone lands in the audit chain.", word);
+  if (!ok) return;
+  try {
+    await api("DELETE", "/v1/vaults/" + encodeURIComponent(v) + "/drawers/" + encodeURIComponent(d.id), { vault: v });
+    toast("deleted " + d.id.slice(0, 14) + "…");
+    state.drawer = null;
+    loadDrawers();
+  } catch (e) { toast("delete failed — " + e.message, true); }
+}
+
+// ---- search -------------------------------------------------------------
+async function runSearch() {
+  const v = state.vault;
+  const body = { query: $("q").value, limit: parseInt($("qLimit").value, 10) || 10 };
+  if ($("qWing").value.trim()) body.wing = $("qWing").value.trim();
+  if ($("qRoom").value.trim()) body.room = $("qRoom").value.trim();
+  try {
+    const r = await api("POST", "/v1/vaults/" + encodeURIComponent(v) + "/search", { vault: v, body });
+    const rows = (r.hits || []).map(h =>
+      "<tr><td class='score'>" + h.score.toFixed(3) + "</td>" +
+      "<td><span class='pill wing'>" + esc(h.wing) + "</span> <span class='pill room'>" + esc(h.room) + "</span></td>" +
+      "<td>" + esc(h.content) + "</td></tr>");
+    $("hitRows").innerHTML = rows.join("") || "<tr><td colspan=3 class='kv'>no hits</td></tr>";
+  } catch (e) { toast("search failed — " + e.message, true); }
+}
+
+// ---- transfer -------------------------------------------------------------
+async function runExport() {
+  const v = state.vault;
+  try {
+    const text = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/export", { vault: v, raw: true });
+    const blob = new Blob([text], { type: "application/x-ndjson" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = v + "-export.ndjson";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("export downloaded");
+  } catch (e) { toast("export failed — " + e.message, true); }
+}
+
+async function runImport() {
+  const v = state.vault;
+  const f = $("importFile").files[0];
+  if (!f) { toast("choose a file first", true); return; }
+  try {
+    const text = await f.text();
+    if (text.startsWith("UNDERCROFT-BUNDLE-1")) {
+      toast("this is an encrypted bundle — import it with the CLI and your identity key", true);
+      return;
+    }
+    const r = await api("POST", "/v1/vaults/" + encodeURIComponent(v) + "/import", { vault: v, body: text, ndjson: true });
+    toast("imported " + r.imported + " record(s)");
+    loadOverview();
+  } catch (e) { toast("import failed — " + e.message, true); }
+}
+
+// ---- wiring -----------------------------------------------------------
+$("connectBtn").onclick = connect;
+$("attachBtn").onclick = attach;
+$("createBtn").onclick = createVault;
+$("verifyBtn").onclick = runVerify;
+$("rotateBtn").onclick = runRotate;
+$("deleteVaultBtn").onclick = deleteVault;
+$("editBtn").onclick = () => { if (state.drawer) { $("editArea").style.display = "block"; $("editText").value = state.drawer.content; } };
+$("cancelEditBtn").onclick = () => $("editArea").style.display = "none";
+$("saveEditBtn").onclick = saveEdit;
+$("deleteDrawerBtn").onclick = deleteDrawer;
+$("searchBtn").onclick = runSearch;
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") runSearch(); });
+$("exportBtn").onclick = runExport;
+$("importBtn").onclick = runImport;
+$("prevBtn").onclick = () => { if (state.page > 0) { state.page--; loadDrawers(); } };
+$("nextBtn").onclick = () => { state.page++; loadDrawers(); };
+for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
+$("bearer").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
+$("asecret").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
+$("attachId").addEventListener("keydown", e => { if (e.key === "Enter") attach(); });
+})();
+</script>
+</body>
+</html>

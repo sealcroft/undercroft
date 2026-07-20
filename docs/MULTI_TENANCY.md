@@ -51,8 +51,12 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup) |
 | `POST /v1/vaults/{id}/search` | hybrid search (cosine + BM25, optional reranker) |
 | `DELETE /v1/vaults/{id}/drawers/{drawer_id}` | delete a drawer |
-| `GET /v1/vaults/{id}/stats` · `.../stats/history` | metadata-only stats + sample ring |
+| `GET /v1/vaults/{id}/stats` · `.../stats/history` | stats (records, wings, rooms, kg, tunnels, db size, chain head) + sample ring |
+| `GET /v1/vaults/{id}/drawers` · `GET`/`PUT .../drawers/{drawer_id}` | paged browse, full drawer, verbatim content replace |
+| `GET /v1/vaults/{id}/taxonomy` | wing → room tree with counts |
+| `POST /v1/vaults/{id}/verify` · `POST .../rotate` | integrity report · key rotation (sole-writer contract) |
 | `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair |
+| `GET /ui` | vault admin console (static page, every build) |
 
 Stores are opened on demand and cached in a `HashMap` — the `tiny_http`
 request loop is sequential (single-threaded), so the cache needs no locking
