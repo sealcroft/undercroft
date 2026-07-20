@@ -136,8 +136,7 @@ pub fn serve_http(
         if request.method() == &Method::Get && path == "/ui" {
             let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
                 .expect("static header");
-            let _ =
-                request.respond(Response::from_string(include_str!("ui.html")).with_header(ct));
+            let _ = request.respond(Response::from_string(include_str!("ui.html")).with_header(ct));
             undercroft_obs::http_request("ui", 200, start.elapsed());
             continue;
         }

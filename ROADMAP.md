@@ -382,6 +382,17 @@ Also closes the v0.13.0 follow-up items:
   every tag + `ghcr.io/compufreq/undercroft` image; SECURITY.md expanded
   to a full disclosure policy with private reporting enabled.
 
+## v0.35.0 — Vault admin console (done)
+
+- `GET /ui`: self-contained admin console on every `serve-http` build —
+  vault lifecycle, stats, verify, key rotation, taxonomy-driven drawer
+  browser (verbatim view/edit/delete), search, export/import. Bearer +
+  assertion secret stay client-side (WebCrypto-minted assertions);
+  type-the-name guards on destructive operations.
+- `/v1` management routes: drawers list/get/update, taxonomy, verify,
+  rotate, full-stats. First release of the admin-UI arc; the
+  orchestrator fleet console is the second.
+
 ## Next (all demand-driven — planned, not scheduled)
 
 Nothing below should be built until its trigger fires; each entry

@@ -520,10 +520,7 @@ impl Tenancy {
             .update_drawer(drawer_id, &normalized)
             .map_err(store_err)?;
         if updated {
-            Ok((
-                200,
-                Body::Json(json!({ "id": drawer_id, "updated": true })),
-            ))
+            Ok((200, Body::Json(json!({ "id": drawer_id, "updated": true }))))
         } else {
             Err(RestError::new(404, "no such drawer"))
         }
