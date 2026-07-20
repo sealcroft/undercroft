@@ -96,6 +96,18 @@
   .browse{display:grid;grid-template-columns:200px 1fr;gap:12px}
   @media (max-width:800px){.browse{grid-template-columns:1fr}}
 
+  .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-top:10px}
+  .chart{border:1px solid var(--edge);background:var(--panel2);border-radius:6px;padding:8px 10px}
+  .chart .k{font-size:9px;letter-spacing:1.5px;color:var(--ink)}
+  .chart .cur{color:#fff;font-size:12px;margin-left:6px}
+  .chart canvas{display:block;width:100%;height:56px;margin-top:5px}
+  .ticker{border:1px solid var(--edge);background:var(--bg);border-radius:6px;padding:6px 9px;
+    height:120px;overflow:auto;font-size:10px}
+  .ticker .row{display:flex;gap:8px;padding:1px 0;white-space:nowrap}
+  .ticker .t{color:#4d6070}
+  .ticker .save{color:var(--phos)} .ticker .chain{color:var(--gold)}
+  .ticker .kgev{color:var(--violet)} .ticker .info{color:var(--ink)}
+  .pill.open{background:#0c2a1c;color:var(--phos)} .pill.closed{background:#241a0c;color:var(--amber)}
   .overlay{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:10}
   .overlay.on{display:flex}
   .modal{border:2px solid var(--red);background:var(--panel);border-radius:8px;padding:16px 18px;max-width:440px;width:92%}
@@ -153,6 +165,8 @@
     <div id="main" style="display:none">
       <div class="tabs">
         <button data-tab="overview" class="sel">OVERVIEW</button>
+        <button data-tab="monitor">MONITOR</button>
+        <button data-tab="knowledge">KNOWLEDGE</button>
         <button data-tab="browse">BROWSE</button>
         <button data-tab="search">SEARCH</button>
         <button data-tab="transfer">TRANSFER</button>
@@ -236,6 +250,52 @@
             <button class="ctl on" id="searchBtn">⌕ SEARCH</button>
           </div>
           <table><thead><tr><th>SCORE</th><th>WING/ROOM</th><th>CONTENT</th></tr></thead><tbody id="hitRows"></tbody></table>
+        </div>
+
+        <div id="tab-monitor" style="display:none">
+          <div class="rowflex">
+            <span class="kv">mode: <b id="monMode">—</b></span>
+            <span class="spacer"></span>
+            <span class="kv" id="monLast"></span>
+          </div>
+          <div class="charts">
+            <div class="chart"><div class="k">DRAWERS <span class="cur" id="cDrawers">—</span></div><canvas id="chDrawers" width="320" height="56"></canvas></div>
+            <div class="chart"><div class="k">CHAIN HEIGHT <span class="cur" id="cChain">—</span></div><canvas id="chChain" width="320" height="56"></canvas></div>
+            <div class="chart"><div class="k">KG TRIPLES <span class="cur" id="cKg">—</span></div><canvas id="chKg" width="320" height="56"></canvas></div>
+            <div class="chart"><div class="k">STORE BYTES <span class="cur" id="cBytes">—</span></div><canvas id="chBytes" width="320" height="56"></canvas></div>
+          </div>
+          <div class="sect">
+            <div class="h">◂ ACTIVITY</div>
+            <div class="ticker" id="ticker"></div>
+          </div>
+        </div>
+
+        <div id="tab-knowledge" style="display:none">
+          <div class="gauges">
+            <div class="g"><div class="k">ENTITIES</div><div class="v" id="kEnt">—</div></div>
+            <div class="g"><div class="k">TRIPLES</div><div class="v" id="kTri">—</div></div>
+            <div class="g"><div class="k">ACTIVE</div><div class="v" id="kAct">—</div></div>
+            <div class="g"><div class="k">CLOSED</div><div class="v" id="kClo">—</div></div>
+          </div>
+          <div class="browse" style="margin-top:12px">
+            <div>
+              <div class="rowflex">
+                <span class="h" style="margin:0">ENTITIES</span>
+                <span class="spacer"></span>
+                <button class="ctl" id="kPrevBtn">◂</button>
+                <button class="ctl" id="kNextBtn">▸</button>
+              </div>
+              <div class="tax" id="entityList" style="max-height:380px"></div>
+            </div>
+            <div>
+              <div class="rowflex">
+                <span class="kv" id="factsScope">select an entity — or show the full timeline</span>
+                <span class="spacer"></span>
+                <button class="ctl" id="timelineBtn">◷ FULL TIMELINE</button>
+              </div>
+              <table><thead><tr><th>SUBJECT</th><th>PREDICATE</th><th>OBJECT</th><th>VALIDITY</th><th>CONF</th></tr></thead><tbody id="tripleRows"></tbody></table>
+            </div>
+          </div>
         </div>
 
         <div id="tab-transfer" style="display:none">
@@ -432,8 +492,10 @@ async function createVault() {
 }
 
 function selectVault(id) {
+  stopMonitor();
   state.vault = id;
   state.wing = state.room = null; state.page = 0; state.drawer = null;
+  kg.page = 0; kg.entity = null;
   $("main").style.display = "block";
   renderVaults();
   showTab(state.tab);
@@ -441,13 +503,206 @@ function selectVault(id) {
 
 // ---- tabs ------------------------------------------------------------
 function showTab(tab) {
+  if (state.tab === "monitor" && tab !== "monitor") stopMonitor();
   state.tab = tab;
   for (const b of document.querySelectorAll(".tabs button"))
     b.className = b.dataset.tab === tab ? "sel" : "";
-  for (const t of ["overview","browse","search","transfer"])
+  for (const t of ["overview","monitor","knowledge","browse","search","transfer"])
     $("tab-" + t).style.display = t === tab ? "block" : "none";
   if (tab === "overview") loadOverview();
+  if (tab === "monitor") startMonitor();
+  if (tab === "knowledge") loadKg();
   if (tab === "browse") { loadTaxonomy(); loadDrawers(); }
+}
+
+// ---- monitor -----------------------------------------------------------
+// Live series from whichever source this build offers: the telemetry SSE
+// stream (with a stats/history backfill) when present, a 3 s /stats poll
+// otherwise. Both normalize into {ts, drawers, chain, kg, bytes} points.
+const mon = { timer:null, abort:null, pts:[] };
+function stopMonitor() {
+  if (mon.timer) { clearInterval(mon.timer); mon.timer = null; }
+  if (mon.abort) { mon.abort.abort(); mon.abort = null; }
+}
+function spark(id, data) {
+  const cv = $(id), ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (data.length < 2) return;
+  const min = Math.min.apply(null, data), max = Math.max.apply(null, data);
+  const span = (max - min) || 1;
+  ctx.strokeStyle = "#5ef0a8";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = i / (data.length - 1) * (cv.width - 4) + 2;
+    const y = cv.height - 4 - ((v - min) / span) * (cv.height - 8);
+    if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+}
+function drawCharts() {
+  if (!mon.pts.length) return;
+  const last = mon.pts[mon.pts.length - 1];
+  spark("chDrawers", mon.pts.map(p => p.drawers));
+  spark("chChain", mon.pts.map(p => p.chain));
+  spark("chKg", mon.pts.map(p => p.kg));
+  spark("chBytes", mon.pts.map(p => p.bytes));
+  $("cDrawers").textContent = last.drawers;
+  $("cChain").textContent = "#" + last.chain;
+  $("cKg").textContent = last.kg;
+  $("cBytes").textContent = fmtBytes(last.bytes);
+  $("monLast").textContent = "updated " + new Date(last.ts * 1000).toLocaleTimeString();
+}
+function tick(msg, cls) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = "<span class='t'>" + new Date().toLocaleTimeString() + "</span><span class='" + cls + "'>" + esc(msg) + "</span>";
+  const el = $("ticker");
+  el.insertBefore(row, el.firstChild);
+  while (el.children.length > 80) el.removeChild(el.lastChild);
+}
+function pushPoint(p) {
+  const prev = mon.pts[mon.pts.length - 1];
+  mon.pts.push(p);
+  if (mon.pts.length > 150) mon.pts.shift();
+  drawCharts();
+  if (prev) {
+    if (p.drawers !== prev.drawers) {
+      const d = p.drawers - prev.drawers;
+      tick((d > 0 ? "+" + d : d) + " drawer(s) → " + p.drawers, d > 0 ? "save" : "info");
+    }
+    if (p.chain !== prev.chain) tick("chain #" + prev.chain + " → #" + p.chain, "chain");
+    if (p.kg !== prev.kg) tick("kg triples → " + p.kg, "kgev");
+  }
+}
+async function pollOnce() {
+  const v = state.vault;
+  if (!v) return;
+  try {
+    const s = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/stats", { vault: v });
+    pushPoint({ ts: Math.floor(Date.now() / 1000), drawers: s.drawers, chain: s.writes,
+                kg: (s.kg && s.kg.triples) || 0, bytes: s.db_bytes || 0 });
+  } catch (_) {}
+}
+function startPolling() {
+  if (mon.timer) return;
+  $("monMode").textContent = "POLLING /stats every 3 s";
+  pollOnce();
+  mon.timer = setInterval(pollOnce, 3000);
+}
+async function startMonitor() {
+  stopMonitor();
+  mon.pts = [];
+  $("ticker").innerHTML = "";
+  const v = state.vault;
+  // Backfill from the telemetry ring buffer, when this build carries it.
+  try {
+    const h = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/stats/history?window=150", { vault: v });
+    if (Array.isArray(h)) {
+      for (const s of h) mon.pts.push({ ts: s.ts, drawers: s.drawers, chain: s.chain_height, kg: s.kg_triples, bytes: s.db_bytes });
+      drawCharts();
+    }
+  } catch (_) {}
+  // Live source: SSE stream (telemetry builds) with polling as the fallback.
+  try {
+    mon.abort = new AbortController();
+    const headers = {};
+    if (state.bearer) headers["Authorization"] = "Bearer " + state.bearer;
+    if (state.secret) headers["X-Vault-Assertion"] = await assertionFor(v);
+    const res = await fetch("/v1/vaults/" + encodeURIComponent(v) + "/stream", { headers, signal: mon.abort.signal });
+    if (!res.ok || !res.body) throw new Error("no stream");
+    $("monMode").textContent = "LIVE STREAM (SSE)";
+    tick("connected to live stream", "info");
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    (async () => {
+      try {
+        for (;;) {
+          const r = await reader.read();
+          if (r.done) break;
+          buf += dec.decode(r.value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const chunk = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const line = chunk.split("\n").find(l => l.startsWith("data:"));
+            if (!line) continue;
+            try {
+              const s = JSON.parse(line.slice(5));
+              pushPoint({ ts: s.ts, drawers: s.drawers, chain: s.chain_height, kg: s.kg_triples, bytes: s.db_bytes });
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      if (state.tab === "monitor" && state.vault === v) startPolling();
+    })();
+  } catch (_) { startPolling(); }
+}
+
+// ---- knowledge graph ----------------------------------------------------
+const kg = { page: 0, entity: null };
+function tripleRow(t) {
+  const validity = t.valid_to
+    ? esc(t.valid_from || "?") + " → " + esc(t.valid_to) + " <span class='pill closed'>closed</span>"
+    : (t.valid_from ? esc(t.valid_from) + " → " : "") + "<span class='pill open'>active</span>";
+  return "<tr><td>" + esc(t.subject) + "</td><td><span class='pill room'>" + esc(t.predicate) + "</span></td>" +
+    "<td>" + esc(t.object) + "</td><td>" + validity + "</td>" +
+    "<td class='score'>" + (t.confidence != null ? t.confidence.toFixed(2) : "—") + "</td></tr>";
+}
+async function loadKg() {
+  const v = state.vault;
+  try {
+    const s = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/kg/stats", { vault: v });
+    $("kEnt").textContent = s.entities;
+    $("kTri").textContent = s.triples;
+    $("kAct").textContent = s.active;
+    $("kClo").textContent = s.closed;
+  } catch (e) { toast("kg stats failed — " + e.message, true); }
+  loadEntities();
+  if (kg.entity) loadFacts(kg.entity);
+}
+async function loadEntities() {
+  const v = state.vault;
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/kg/entities?limit=50&offset=" + (kg.page * 50), { vault: v });
+    const list = r.entities || [];
+    const el = $("entityList");
+    el.innerHTML = "";
+    for (const e of list) {
+      const d = document.createElement("div");
+      d.className = "wingrow" + (kg.entity === e.name ? " sel" : "");
+      d.textContent = "▸ " + e.name;
+      d.title = e.etype + " · " + e.created_at;
+      d.onclick = () => { kg.entity = e.name; loadEntities(); loadFacts(e.name); };
+      el.appendChild(d);
+    }
+    if (!list.length) {
+      el.innerHTML = "<span class='kv'>" + (kg.page ? "no entities on this page" :
+        "graph is empty — facts arrive via kg add, refine, or agent tools") + "</span>";
+    }
+    $("kNextBtn").disabled = list.length < 50;
+    $("kPrevBtn").disabled = kg.page === 0;
+  } catch (e) { toast("entities failed — " + e.message, true); }
+}
+async function loadFacts(name) {
+  const v = state.vault;
+  $("factsScope").textContent = "facts about: " + name;
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/kg/query?entity=" + encodeURIComponent(name) + "&direction=both", { vault: v });
+    $("tripleRows").innerHTML = (r.triples || []).map(tripleRow).join("") ||
+      "<tr><td colspan=5 class='kv'>no facts for this entity</td></tr>";
+  } catch (e) { toast("kg query failed — " + e.message, true); }
+}
+async function loadTimeline() {
+  const v = state.vault;
+  const q = kg.entity ? "?entity=" + encodeURIComponent(kg.entity) : "";
+  $("factsScope").textContent = kg.entity ? "timeline: " + kg.entity : "full temporal timeline";
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/kg/timeline" + q, { vault: v });
+    $("tripleRows").innerHTML = (r.triples || []).map(tripleRow).join("") ||
+      "<tr><td colspan=5 class='kv'>no facts</td></tr>";
+  } catch (e) { toast("timeline failed — " + e.message, true); }
 }
 
 // ---- overview ---------------------------------------------------------
@@ -680,6 +935,9 @@ $("exportBtn").onclick = runExport;
 $("importBtn").onclick = runImport;
 $("prevBtn").onclick = () => { if (state.page > 0) { state.page--; loadDrawers(); } };
 $("nextBtn").onclick = () => { state.page++; loadDrawers(); };
+$("kPrevBtn").onclick = () => { if (kg.page > 0) { kg.page--; loadEntities(); } };
+$("kNextBtn").onclick = () => { kg.page++; loadEntities(); };
+$("timelineBtn").onclick = loadTimeline;
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
 $("bearer").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
 $("asecret").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
