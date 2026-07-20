@@ -159,6 +159,16 @@ fn route(
         return json_response(200, &serde_json::json!({ "ok": true }));
     }
 
+    // The fleet console — like the engine's /ui, a self-contained static
+    // page carrying no secrets: the operator pastes the admin token into
+    // the page, which attaches it to its /admin/* fetches.
+    if method == &Method::Get && path == "/ui" {
+        return Response::from_data(include_str!("ui.html").as_bytes().to_vec()).with_header(
+            Header::from_bytes("Content-Type", "text/html; charset=utf-8")
+                .expect("static header"),
+        );
+    }
+
     if let Some(sub) = path.strip_prefix("/t/") {
         return data_plane(orch, limiter, request, method, sub, body);
     }

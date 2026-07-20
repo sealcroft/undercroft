@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Undercroft · Fleet Console</title>
+<style>
+  :root{
+    --bg:#080b10; --panel:#0e141c; --panel2:#131c27; --edge:#22303f; --grid:#16202b;
+    --phos:#5ef0a8; --phos-dim:#2d7a56; --amber:#ffb43a; --cyan:#57d8ff;
+    --violet:#b98bff; --red:#ff3b46; --red-deep:#7a0d13; --gold:#f6c358; --ink:#8fa6b8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--cyan);
+    font-family:"DejaVu Sans Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+  .wrap{max-width:1180px;margin:0 auto;padding:14px 14px 40px;}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    border:1px solid var(--edge);background:linear-gradient(180deg,var(--panel2),var(--panel));
+    padding:10px 14px;border-radius:8px;}
+  .logo{font-size:18px;letter-spacing:2px;color:var(--cyan);text-shadow:0 0 8px rgba(87,216,255,.4)}
+  .logo b{color:#fff}
+  .spacer{flex:1}
+  .status{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:1.5px}
+  .lamp{width:12px;height:12px;border-radius:50%;background:var(--phos-dim);box-shadow:0 0 0 2px #0006 inset;transition:background .15s}
+  .lamp.live{background:var(--cyan)}
+  .lamp.alert{background:var(--red);animation:blink .25s steps(2) infinite}
+  @keyframes blink{50%{opacity:.25}}
+
+  .conn{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;
+    border:1px solid var(--edge);background:var(--panel);border-radius:8px;padding:9px 12px;font-size:11px}
+  .conn label{color:var(--ink);letter-spacing:1px}
+  input,select{background:var(--bg);color:var(--cyan);border:1px solid var(--edge);
+    font-family:inherit;font-size:11px;padding:5px 7px;border-radius:5px}
+  input:focus,select:focus{outline:1px solid var(--cyan)}
+  #atoken{width:240px}
+  button.ctl{font-family:inherit;font-size:11px;letter-spacing:.5px;cursor:pointer;
+    background:var(--panel2);color:var(--cyan);border:1px solid var(--edge);padding:6px 11px;border-radius:5px;transition:.12s}
+  button.ctl:hover{background:#1b2734;border-color:var(--cyan)}
+  button.ctl.on{background:#0c2a1c;border-color:var(--phos-dim);color:var(--phos)}
+  button.ctl.danger{color:var(--red);border-color:#5a1a1f}
+  button.ctl.danger:hover{background:#1d0d0f;border-color:var(--red)}
+  button.ctl:disabled{opacity:.4;cursor:default}
+  .msg{color:var(--amber);font-size:10px}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;align-items:start}
+  @media (max-width:900px){.cols{grid-template-columns:1fr}}
+  .panel{border:1px solid var(--edge);background:var(--panel);border-radius:8px;padding:10px 12px}
+  .panel .h{font-size:9px;letter-spacing:1.5px;color:var(--ink);margin-bottom:7px}
+
+  table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+  th{color:var(--ink);font-size:9px;letter-spacing:1.5px;text-align:left;padding:4px 6px;border-bottom:1px solid var(--edge)}
+  td{padding:4px 6px;border-bottom:1px solid var(--grid);vertical-align:top;word-break:break-all}
+  .pill{padding:1px 6px;border-radius:3px;font-size:9px;white-space:nowrap}
+  .pill.inst{background:#0b2632;color:var(--cyan)} .pill.vault{background:#241634;color:var(--violet)}
+  .pill.ok{background:#0c2a1c;color:var(--phos)} .pill.bad{background:#2a0e10;color:var(--red)}
+  td .ctl{padding:2px 7px;font-size:10px}
+
+  .sect{margin-top:12px;border-top:1px solid var(--grid);padding-top:9px}
+  .mini{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .mini input{min-width:70px}
+  .kv{font-size:10px;color:var(--ink);margin:2px 0}
+  .kv b{color:var(--cyan)}
+
+  .tokenbox{display:none;margin-top:10px;border:1px solid var(--amber);border-radius:6px;
+    background:#241a0c;padding:10px 12px}
+  .tokenbox .h{color:var(--amber);font-size:10px;letter-spacing:1.5px;margin-bottom:5px}
+  .tokenbox code{display:block;color:#fff;font-size:12px;word-break:break-all;background:var(--bg);
+    border:1px solid var(--edge);border-radius:5px;padding:7px 9px;margin:5px 0}
+  .tokenbox p{font-size:10px;color:var(--amber);margin:4px 0 0}
+
+  pre.report{background:var(--bg);border:1px solid var(--edge);border-radius:6px;padding:8px 10px;
+    font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--ink);max-height:200px;overflow:auto;margin-top:8px}
+
+  .overlay{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:10}
+  .overlay.on{display:flex}
+  .modal{border:2px solid var(--red);background:var(--panel);border-radius:8px;padding:16px 18px;max-width:440px;width:92%}
+  .modal .h{color:var(--red);letter-spacing:1.5px;font-size:12px;margin-bottom:8px}
+  .modal p{font-size:11px;color:var(--ink);line-height:1.5;margin:6px 0}
+  .modal input{width:100%;margin:8px 0}
+  .modal .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+
+  .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:11;display:none;
+    border:1px solid var(--edge);background:var(--panel2);color:var(--cyan);border-radius:6px;
+    padding:8px 14px;font-size:11px;max-width:80%;word-break:break-word}
+  .toast.err{border-color:var(--red);color:var(--red)}
+  .toast.on{display:block}
+  .foot{margin-top:14px;font-size:10px;color:#4d6070;line-height:1.6}
+  .foot code{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="logo">◈ UNDERCROFT <b>FLEET&nbsp;CONSOLE</b></span>
+    <span class="spacer"></span>
+    <span class="status"><span id="lamp" class="lamp"></span><span id="statusText">DISCONNECTED</span></span>
+  </header>
+
+  <div class="conn">
+    <label>admin token</label>
+    <input id="atoken" type="password" placeholder="UNDERCROFT_ORCH_ADMIN_TOKEN" autocomplete="off">
+    <button class="ctl" id="connectBtn">▶ CONNECT</button>
+    <span class="msg" id="connMsg"></span>
+  </div>
+
+  <div class="tokenbox" id="tokenbox">
+    <div class="h">⚠ TENANT TOKEN — SHOWN ONCE, STORED NOWHERE</div>
+    <code id="tokenValue"></code>
+    <p>Copy it now and hand it to the tenant. The orchestrator keeps only an HMAC; this value can never be recovered. <button class="ctl" id="tokenCopy" style="margin-left:6px">COPY</button> <button class="ctl" id="tokenDismiss">DISMISS</button></p>
+  </div>
+
+  <div class="cols" id="main" style="display:none">
+
+    <div class="panel">
+      <div class="h">◂ INSTANCES (engines)</div>
+      <table><thead><tr><th>NAME</th><th>TENANTS</th><th>HEALTH</th><th></th></tr></thead><tbody id="instRows"></tbody></table>
+      <div class="sect">
+        <div class="h">REGISTER INSTANCE</div>
+        <div class="mini">
+          <input id="iName" placeholder="name" style="width:90px">
+          <input id="iUrl" placeholder="http://engine:8765" style="flex:1;min-width:140px">
+        </div>
+        <div class="mini" style="margin-top:6px">
+          <input id="iBearer" type="password" placeholder="engine bearer" style="flex:1;min-width:110px">
+          <input id="iSecret" type="password" placeholder="assertion secret" style="flex:1;min-width:110px">
+          <button class="ctl" id="addInstBtn">+ REGISTER</button>
+        </div>
+        <p class="kv">Credentials are sealed at rest in the orchestrator's state db (XChaCha20-Poly1305 under <code>UNDERCROFT_ORCH_KEY</code>).</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="h">◂ TENANTS</div>
+      <table><thead><tr><th>NAME</th><th>INSTANCE</th><th>VAULT</th><th></th></tr></thead><tbody id="tenRows"></tbody></table>
+      <div class="sect">
+        <div class="h">CREATE TENANT</div>
+        <div class="mini">
+          <input id="tName" placeholder="tenant name" style="flex:1;min-width:100px">
+          <select id="tLevel"><option value="sealed">sealed</option><option value="hmac-only">hmac-only</option></select>
+          <select id="tInstance"><option value="">least-loaded</option></select>
+          <button class="ctl on" id="addTenBtn">+ CREATE</button>
+        </div>
+        <p class="kv">The tenant's bearer token appears exactly once, in the box above the panels — copy it immediately.</p>
+      </div>
+      <div class="sect">
+        <div class="h">MIGRATE</div>
+        <div class="mini">
+          <select id="mTenant"></select>
+          <span class="kv">→</span>
+          <select id="mTarget"></select>
+          <label class="kv"><input type="checkbox" id="mKeep" style="width:auto"> keep source</label>
+          <button class="ctl danger" id="migrateBtn">⇄ MIGRATE</button>
+        </div>
+        <pre class="report" id="migrateReport" style="display:none"></pre>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="overlay" id="guard">
+    <div class="modal">
+      <div class="h" id="guardTitle">CONFIRM</div>
+      <p id="guardText"></p>
+      <p>Type <b id="guardWord" style="color:#fff"></b> to confirm:</p>
+      <input id="guardInput" autocomplete="off">
+      <div class="btns">
+        <button class="ctl" id="guardCancel">CANCEL</button>
+        <button class="ctl danger" id="guardOk" disabled>CONFIRM</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="foot">
+    Fleet administration over the orchestrator's <code>/admin/*</code> plane. The admin token
+    (<code>UNDERCROFT_ORCH_ADMIN_TOKEN</code>) stays in this tab. Tenant tokens are shown exactly once at
+    create/rotate — the orchestrator stores only HMACs. Migration is count-verified: any failure before
+    the mapping flip leaves the source authoritative. Destructive operations require typing the
+    target's name.
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const state = { token:"", instances:[], tenants:[] };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let toastTimer = null;
+function toast(msg, err) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast on" + (err ? " err" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = "toast", 4200);
+}
+function setStatus(text, cls) { $("statusText").textContent = text; $("lamp").className = "lamp " + (cls||""); }
+
+async function api(method, path, body) {
+  const headers = { "Authorization": "Bearer " + state.token };
+  if (body !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(body); }
+  const res = await fetch(path, { method, headers, body });
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch (_) {}
+    throw new Error(res.status + ": " + msg);
+  }
+  try { return JSON.parse(text); } catch (_) { return text; }
+}
+
+function guard(title, text, word) {
+  return new Promise(resolve => {
+    $("guardTitle").textContent = title;
+    $("guardText").textContent = text;
+    $("guardWord").textContent = word;
+    $("guardInput").value = "";
+    $("guardOk").disabled = true;
+    $("guard").className = "overlay on";
+    $("guardInput").focus();
+    const done = ok => { $("guard").className = "overlay"; cleanup(); resolve(ok); };
+    const onInput = () => { $("guardOk").disabled = $("guardInput").value !== word; };
+    const onOk = () => done(true);
+    const onCancel = () => done(false);
+    function cleanup() {
+      $("guardInput").removeEventListener("input", onInput);
+      $("guardOk").removeEventListener("click", onOk);
+      $("guardCancel").removeEventListener("click", onCancel);
+    }
+    $("guardInput").addEventListener("input", onInput);
+    $("guardOk").addEventListener("click", onOk);
+    $("guardCancel").addEventListener("click", onCancel);
+  });
+}
+
+// One-time tenant-token reveal.
+function showToken(token) {
+  $("tokenValue").textContent = token;
+  $("tokenbox").style.display = "block";
+  $("tokenbox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+$("tokenCopy").onclick = () => {
+  navigator.clipboard.writeText($("tokenValue").textContent)
+    .then(() => toast("token copied"))
+    .catch(() => toast("copy failed — select it manually", true));
+};
+$("tokenDismiss").onclick = () => { $("tokenValue").textContent = ""; $("tokenbox").style.display = "none"; };
+
+// ---- data loads --------------------------------------------------------
+async function connect() {
+  state.token = $("atoken").value.trim();
+  $("connMsg").textContent = "";
+  try {
+    await refresh();
+    $("main").style.display = "grid";
+    setStatus("CONNECTED", "live");
+    toast("connected — " + state.instances.length + " instance(s), " + state.tenants.length + " tenant(s)");
+  } catch (e) {
+    setStatus("DISCONNECTED", "alert");
+    $("connMsg").textContent = e.message;
+  }
+}
+
+async function refresh() {
+  const [i, t] = await Promise.all([api("GET", "/admin/instances"), api("GET", "/admin/tenants")]);
+  state.instances = i.instances || [];
+  state.tenants = t.tenants || [];
+  renderInstances();
+  renderTenants();
+}
+
+function renderInstances() {
+  const rows = state.instances.map(i =>
+    "<tr><td><span class='pill inst'>" + esc(i.name) + "</span><div class='kv'>" + esc(i.url || "") + "</div></td>" +
+    "<td>" + (i.tenants ?? "—") + "</td>" +
+    "<td id='health-" + esc(i.name) + "'>—</td>" +
+    "<td><button class='ctl' data-health='" + esc(i.name) + "'>CHECK</button> " +
+    "<button class='ctl danger' data-rm='" + esc(i.name) + "'>✕</button></td></tr>");
+  $("instRows").innerHTML = rows.join("") || "<tr><td colspan=4 class='kv'>no instances registered</td></tr>";
+  for (const b of $("instRows").querySelectorAll("[data-health]"))
+    b.onclick = () => checkHealth(b.dataset.health);
+  for (const b of $("instRows").querySelectorAll("[data-rm]"))
+    b.onclick = () => removeInstance(b.dataset.rm);
+  // Instance pickers for tenant create + migrate target.
+  const opts = state.instances.map(i => "<option value='" + esc(i.name) + "'>" + esc(i.name) + "</option>");
+  $("tInstance").innerHTML = "<option value=''>least-loaded</option>" + opts.join("");
+  $("mTarget").innerHTML = opts.join("");
+}
+
+function renderTenants() {
+  const rows = state.tenants.map(t =>
+    "<tr><td>" + esc(t.name) + "<div class='kv'>" + esc(t.id) + "</div></td>" +
+    "<td><span class='pill inst'>" + esc(t.instance) + "</span></td>" +
+    "<td><span class='pill vault'>" + esc(t.vault) + "</span></td>" +
+    "<td><button class='ctl' data-rot='" + esc(t.id) + "' data-name='" + esc(t.name) + "'>ROTATE TOKEN</button> " +
+    "<button class='ctl danger' data-del='" + esc(t.id) + "' data-name='" + esc(t.name) + "'>✕</button></td></tr>");
+  $("tenRows").innerHTML = rows.join("") || "<tr><td colspan=4 class='kv'>no tenants</td></tr>";
+  for (const b of $("tenRows").querySelectorAll("[data-rot]"))
+    b.onclick = () => rotateTenant(b.dataset.rot, b.dataset.name);
+  for (const b of $("tenRows").querySelectorAll("[data-del]"))
+    b.onclick = () => deleteTenant(b.dataset.del, b.dataset.name);
+  $("mTenant").innerHTML = state.tenants.map(t =>
+    "<option value='" + esc(t.id) + "'>" + esc(t.name) + " (" + esc(t.instance) + ")</option>").join("");
+}
+
+// ---- instances -----------------------------------------------------------
+async function checkHealth(name) {
+  const cell = $("health-" + name);
+  cell.textContent = "…";
+  try {
+    const r = await api("GET", "/admin/instances/" + encodeURIComponent(name) + "/health");
+    cell.innerHTML = r.healthy ? "<span class='pill ok'>UP</span>" : "<span class='pill bad'>DOWN</span>";
+  } catch (e) { cell.innerHTML = "<span class='pill bad'>ERR</span>"; toast("health failed — " + e.message, true); }
+}
+
+async function addInstance() {
+  const name = $("iName").value.trim(), url = $("iUrl").value.trim();
+  const bearer = $("iBearer").value.trim(), secret = $("iSecret").value.trim();
+  if (!name || !url || !bearer || !secret) { toast("name, url, bearer, and assertion secret are all required", true); return; }
+  try {
+    await api("POST", "/admin/instances", { name, url, bearer, assertion_secret: secret });
+    toast("registered instance " + name);
+    $("iName").value = $("iUrl").value = $("iBearer").value = $("iSecret").value = "";
+    refresh();
+  } catch (e) { toast("register failed — " + e.message, true); }
+}
+
+async function removeInstance(name) {
+  const ok = await guard("REMOVE INSTANCE",
+    "Deregisters engine '" + name + "' from the fleet (refused while tenants still map to it). " +
+    "The engine itself and its data are not touched.", name);
+  if (!ok) return;
+  try {
+    await api("DELETE", "/admin/instances/" + encodeURIComponent(name));
+    toast("removed " + name);
+    refresh();
+  } catch (e) { toast("remove failed — " + e.message, true); }
+}
+
+// ---- tenants -------------------------------------------------------------
+async function addTenant() {
+  const name = $("tName").value.trim();
+  if (!name) return;
+  const body = { name, level: $("tLevel").value };
+  if ($("tInstance").value) body.instance = $("tInstance").value;
+  try {
+    const r = await api("POST", "/admin/tenants", body);
+    $("tName").value = "";
+    showToken(r.token);
+    toast("created tenant " + (r.tenant && r.tenant.name || name));
+    refresh();
+  } catch (e) { toast("create failed — " + e.message, true); }
+}
+
+async function rotateTenant(id, name) {
+  const ok = await guard("ROTATE TENANT TOKEN",
+    "Issues a fresh bearer for '" + name + "' and kills the old one immediately — anything still " +
+    "using it starts failing now. The new token is shown once.", name);
+  if (!ok) return;
+  try {
+    const r = await api("POST", "/admin/tenants/" + encodeURIComponent(id) + "/rotate");
+    showToken(r.token);
+    toast("rotated token for " + name);
+  } catch (e) { toast("rotate failed — " + e.message, true); }
+}
+
+async function deleteTenant(id, name) {
+  const ok = await guard("DELETE TENANT",
+    "Permanently deletes tenant '" + name + "' AND its vault on the engine — every drawer in it. " +
+    "There is no undo.", name);
+  if (!ok) return;
+  try {
+    await api("DELETE", "/admin/tenants/" + encodeURIComponent(id));
+    toast("deleted " + name);
+    refresh();
+  } catch (e) { toast("delete failed — " + e.message, true); }
+}
+
+async function migrate() {
+  const id = $("mTenant").value, to = $("mTarget").value;
+  if (!id || !to) { toast("pick a tenant and a target instance", true); return; }
+  const t = state.tenants.find(x => x.id === id);
+  const keep = $("mKeep").checked;
+  const ok = await guard("MIGRATE TENANT",
+    "Moves '" + (t ? t.name : id) + "' to '" + to + "': export → import → count-verified → mapping flip" +
+    (keep ? " (source kept)." : " → SOURCE VAULT DELETED."), t ? t.name : id);
+  if (!ok) return;
+  toast("migrating…");
+  try {
+    const r = await api("POST", "/admin/tenants/" + encodeURIComponent(id) + "/migrate", { to, keep_source: keep });
+    $("migrateReport").style.display = "block";
+    $("migrateReport").textContent = JSON.stringify(r, null, 2);
+    toast("migrated — " + r.records + " record(s), count-verified");
+    refresh();
+  } catch (e) { toast("migrate failed — " + e.message, true); }
+}
+
+// ---- wiring -----------------------------------------------------------
+$("connectBtn").onclick = connect;
+$("atoken").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
+$("addInstBtn").onclick = addInstance;
+$("addTenBtn").onclick = addTenant;
+$("migrateBtn").onclick = migrate;
+})();
+</script>
+</body>
+</html>
