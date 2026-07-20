@@ -31,7 +31,11 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `drawer_fde` + `fde_meta`), experimental in-memory HNSW (hnsw.rs, `hnsw`
   feature), transactional audit chain (`chain_meta` + `chain_append`),
   verify, knowledge graph (kg.rs), management surface (manage.rs),
-  remote-index integration (remote.rs)
+  remote-index integration (remote.rs), in-place key rotation
+  (rotate.rs: one-transaction re-seal of every artifact + chain re-key
+  over preserved audit bytes, crash-reconciled at open), bulk ingest
+  (`upsert_many`: one transaction + one manifest anchor per batch —
+  advisory encode paths must never BEGIN or batching breaks)
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
   OTLP traces (metadata-only spans), and the live SSE broker
@@ -68,6 +72,19 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   under `src/`
 - `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,
   `tests/e2e-orchestrator.sh` — end-to-end suites (run in Docker)
+- `docs/AGENTS.md` — the scenario-driven agent implementation guide
+  (published as docs/agents.html); its tool/route/env reference must be
+  kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
+  variables change
+- `SECURITY.md` (disclosure policy; private vulnerability reporting is
+  enabled on the repo), `NOTICE` (MemPalace MIT heritage attribution),
+  `LICENSE` (BUSL 1.1 — see Conventions)
+- `.github/workflows/release.yml` — on every `v*` tag: five binary
+  targets (linux x86_64/arm64 native, macOS Intel cross-compiled on
+  macos-latest + Apple Silicon, windows) uploaded to the release with
+  sha256, and the multi-arch `ghcr.io/compufreq/undercroft` image
+  (per-arch native builds merged into one manifest; index annotations
+  carry the package description)
 
 The upstream Python implementation (the MemPalace project) is *not* in
 this repo and no longer linked as a fork; its behavior is documented in
@@ -78,12 +95,18 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests
+docker compose run --rm test          # cargo unit + integration tests (176)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (135 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (30 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
+docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
+                                      # readiness gates on /v1/schema==200 — it
+                                      # answers HTTP before its Raft leader exists)
 docker compose run --rm onnx-build    # compile-check the ONNX embedder+reranker feature
-docker compose run --rm ort-build     # compile-check the ONNX Runtime backend
+docker compose run --rm ort-build    # compile-check CLI with --features onnx,ort
+                                      # (CI clippy never sees non-default features —
+                                      # clippy ort-gated code here explicitly)
 docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5.4;
                                       # mermaid via vendored website/assets/mermaid.min.js)
 docker build -t undercroft .           # runtime image
@@ -116,6 +139,11 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   the same SQLite transaction (the manifest holds a lagging rollback anchor,
   reconciled at open — crash ⇒ fast-forward, rollback ⇒ tamper). Every read
   must verify the record HMAC before returning data.
+- Durability is pinned, not assumed: SQLite runs WAL + `synchronous=FULL`
+  on both binaries, the manifest anchor is fsynced through an atomic
+  rename (+ dir sync), and key material is fsynced at creation. The
+  anchor must never run **ahead** of the database — that combination is
+  what makes a power loss reconcile as a crash instead of a tamper alarm.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path
@@ -130,3 +158,11 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 - License: **BUSL-1.1** (source-available; rolling 4-year conversion to
   MPL 2.0; `NOTICE` carries the MemPalace MIT heritage attribution).
   Never reintroduce MIT as the project license or publish under it.
+- Release flow: full Docker battery (always `--build`) → PR → CI green →
+  explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
+  create` (the tag also fires release.yml: binaries + GHCR image) →
+  post-merge CI green → Pages live-verified. Version bumps touch
+  workspace `Cargo.toml` + `Cargo.lock` (via a Docker `cargo update
+  --workspace` — battery images COPY source and never update the host
+  lock), `.claude-plugin/plugin.json`, CHANGELOG, ROADMAP, and the
+  landing hero release button.
