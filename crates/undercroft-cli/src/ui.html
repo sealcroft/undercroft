@@ -109,6 +109,7 @@
   .ticker .kgev{color:var(--violet)} .ticker .info{color:var(--ink)}
   .pill.open{background:#0c2a1c;color:var(--phos)} .pill.closed{background:#241a0c;color:var(--amber)}
   .frame{width:100%;height:640px;border:1px solid var(--edge);border-radius:8px;background:#000;margin-top:10px}
+  .frame.theatre{position:fixed;inset:0;width:100vw;height:100vh;z-index:9;border:none;border-radius:0;margin:0}
   a.ctl{display:inline-block}
   .overlay{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:10}
   .overlay.on{display:flex}
@@ -279,7 +280,8 @@
             <span class="kv">The Palace Monitor — the live pixel-art view (archivist, wings, tamper beacon), connected automatically to the selected vault with your session. Telemetry builds only.</span>
             <span class="spacer"></span>
             <span class="status" id="palaceStatusRow" style="display:none"><span id="palaceLamp" class="lamp"></span><span id="palaceStatus">—</span></span>
-            <a class="ctl" id="palaceOpen" href="/monitor" target="_blank" style="text-decoration:none;display:none">⧉ OPEN FULL PAGE</a>
+            <button class="ctl" id="palaceOpen" style="display:none">⛶ THEATRE</button>
+            <button class="ctl" id="palaceExit" style="display:none;position:fixed;top:10px;right:14px;z-index:10">✕ EXIT THEATRE (ESC)</button>
           </div>
           <div class="kv" id="palaceNote" style="display:none;margin-top:10px;color:var(--amber)">
             This build was compiled without <code style="color:var(--ink)">--features telemetry</code>, so
@@ -602,6 +604,16 @@ async function loadPalace() {
   // itself reads nothing from it.
   frame.src = "/monitor?vault=" + encodeURIComponent(state.vault);
 }
+// Theatre mode: expand the already-authenticated embed to the full
+// viewport in place — no window.open (popup heuristics vary and a fresh
+// window would start in demo mode), no credentials leaving this page.
+function setTheatre(on) {
+  $("palaceFrame").classList.toggle("theatre", on);
+  $("palaceExit").style.display = on ? "block" : "none";
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("palaceFrame").classList.contains("theatre")) setTheatre(false);
+});
 
 // ---- grafana embed -------------------------------------------------------
 // The deploy/observability stack serves the "Undercroft — Palace" dashboard
@@ -1047,6 +1059,8 @@ $("nextBtn").onclick = () => { state.page++; loadDrawers(); };
 $("kPrevBtn").onclick = () => { if (kg.page > 0) { kg.page--; loadEntities(); } };
 $("kNextBtn").onclick = () => { kg.page++; loadEntities(); };
 $("timelineBtn").onclick = loadTimeline;
+$("palaceOpen").onclick = () => setTheatre(true);
+$("palaceExit").onclick = () => setTheatre(false);
 $("grafanaEmbedBtn").onclick = embedGrafana;
 $("grafanaUrl").addEventListener("keydown", e => { if (e.key === "Enter") embedGrafana(); });
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
