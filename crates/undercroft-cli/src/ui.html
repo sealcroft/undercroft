@@ -276,7 +276,7 @@
 
         <div id="tab-palace" style="display:none">
           <div class="rowflex">
-            <span class="kv">The Palace Monitor — the live pixel-art view of this palace (archivist, wings, tamper beacon). Telemetry builds only.</span>
+            <span class="kv">The Palace Monitor — the live pixel-art view (archivist, wings, tamper beacon), connected automatically to the selected vault with your session. Telemetry builds only.</span>
             <span class="spacer"></span>
             <a class="ctl" id="palaceOpen" href="/monitor" target="_blank" style="text-decoration:none;display:none">⧉ OPEN FULL PAGE</a>
           </div>
@@ -552,21 +552,38 @@ function showTab(tab) {
 
 // ---- palace monitor (pixel-art page, telemetry builds) -------------------
 // /monitor is a same-origin static page; probe once, then embed it. On
-// default builds the route does not exist — say so instead of a broken frame.
-let palaceProbed = false;
+// default builds the route does not exist — say so instead of a broken
+// frame. Same-origin means the console can hand the monitor its bearer and
+// the selected vault and connect it, hiding the monitor's own credential
+// bar — no window-inside-a-window. Under per-vault isolation the bar stays
+// (the monitor's stream cannot mint assertions).
+const palaceState = { available: null, vault: null };
 async function loadPalace() {
-  if (palaceProbed) return;
-  try {
-    const res = await fetch("/monitor", { method: "GET" });
-    if (res.ok) {
-      $("palaceFrame").src = "/monitor";
-      $("palaceFrame").style.display = "block";
-      $("palaceOpen").style.display = "inline-block";
-    } else {
-      $("palaceNote").style.display = "block";
-    }
-  } catch (_) { $("palaceNote").style.display = "block"; }
-  palaceProbed = true;
+  if (palaceState.available === null) {
+    try {
+      palaceState.available = (await fetch("/monitor", { method: "GET" })).ok;
+    } catch (_) { palaceState.available = false; }
+  }
+  if (!palaceState.available) { $("palaceNote").style.display = "block"; return; }
+  $("palaceOpen").style.display = "inline-block";
+  const frame = $("palaceFrame");
+  if (palaceState.vault === state.vault && frame.style.display === "block") return;
+  palaceState.vault = state.vault;
+  frame.style.display = "block";
+  frame.onload = () => {
+    try {
+      const doc = frame.contentDocument;
+      if (state.secret) return; // isolation: leave the monitor's own bar
+      doc.getElementById("token").value = state.bearer;
+      doc.getElementById("vault").value = state.vault;
+      const conn = doc.querySelector(".conn");
+      if (conn) conn.style.display = "none";
+      doc.getElementById("connectBtn").click();
+    } catch (_) {}
+  };
+  // Vault rides in the query only to force a per-vault reload; the page
+  // itself reads nothing from it.
+  frame.src = "/monitor?vault=" + encodeURIComponent(state.vault);
 }
 
 // ---- grafana embed -------------------------------------------------------
