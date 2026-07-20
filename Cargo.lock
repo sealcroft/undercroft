@@ -1518,6 +1518,7 @@ dependencies = [
  "undercroft-llm",
  "undercroft-store",
  "undercroft-vault",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

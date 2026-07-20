@@ -74,6 +74,29 @@ enum Command {
         #[arg(long, default_value_t = 128)]
         dim: usize,
     },
+    /// Sealed-tier page-level decryption spike (research): today's per-row
+    /// seals + decrypt-once full RAM cache vs one AEAD page per IVF list
+    /// (AAD `pqpage/{list}`) decrypted lazily per probe. Codes are synthetic
+    /// random bytes — both variants scan byte-identical codes, so recall is
+    /// invariant by construction; the questions are cost-shaped: at-rest
+    /// size, open cost, per-probe decrypt cost, resident RAM.
+    PqpageSynth {
+        /// Corpus size (drawers); the trigger zone is 10⁶–10⁷
+        #[arg(long, default_value_t = 1_000_000)]
+        n: usize,
+        /// Embedding dim (fixes the PQ code length at dim/8 bytes)
+        #[arg(long, default_value_t = 384)]
+        dim: usize,
+        /// Queries per probe-fraction cell
+        #[arg(long, default_value_t = 30)]
+        queries: usize,
+        /// IVF list count (0 = the store's default: √N clamped to 16..=1024)
+        #[arg(long, default_value_t = 0)]
+        nlist: usize,
+        /// Candidate pool per query (the store requests ≥256)
+        #[arg(long, default_value_t = 256)]
+        k: usize,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -1514,6 +1537,381 @@ fn run_fde_synth(
     Ok(())
 }
 
+/// Page-level decryption spike (ROADMAP sealed-tier research item).
+///
+/// Three shapes over byte-identical synthetic codes, per probe fraction:
+///
+/// * **A-flat** — today's sealed format verbatim: one AEAD blob per row
+///   (AAD `pqrow/{seq}`), decrypt-once flat RAM cache, per-query list
+///   filter over the whole cache.
+/// * **A-grouped** — same at-rest format, cache regrouped by list once at
+///   open (the incremental fix that needs no format change): a probe scans
+///   only its lists' contiguous code slabs.
+/// * **B-pages** — one AEAD blob per IVF list (AAD `pqpage/{list}`,
+///   plaintext `count u32le ++ (seq i64le ++ code)*count` — the count is
+///   the row-count commitment, covered by the AEAD), decrypted lazily per
+///   probe; measured cold (no cache) and warm (decrypt-once page cache).
+///
+/// Recall is out of scope by construction (identical codes ⇒ identical
+/// candidates); the measured axes are at-rest size, open cost, per-probe
+/// decrypt cost, and resident RAM. List assignment is uniform — real
+/// clusters skew, which widens per-probe tail latency but leaves the
+/// bytes-per-probe mean (n/nlist × nprobe) unchanged.
+fn run_pqpage_synth(
+    n: usize,
+    dim: usize,
+    queries: usize,
+    nlist_arg: usize,
+    k: usize,
+) -> Result<()> {
+    use undercroft_store::pq::ProductQuantizer;
+    use undercroft_vault::keys::{derive_vault_key, load_or_create_master, new_vault_salt};
+    use undercroft_vault::seal::{open_content, seal_content};
+    use rusqlite::{params, Connection};
+    use std::collections::HashMap;
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+    fn gaussian(state: &mut u64) -> f32 {
+        let u1 = ((splitmix(state) >> 11) as f64 + 1.0) / (1u64 << 53) as f64;
+        let u2 = ((splitmix(state) >> 11) as f64 + 1.0) / (1u64 << 53) as f64;
+        ((-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()) as f32
+    }
+    fn unit_vec(state: &mut u64, dim: usize) -> Vec<f32> {
+        let mut v: Vec<f32> = (0..dim).map(|_| gaussian(state)).collect();
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+        v.iter_mut().for_each(|x| *x /= norm);
+        v
+    }
+    /// Resident set from /proc/self/status (Linux — the bench runs in the
+    /// Docker battery). None elsewhere; deltas are reported best-effort.
+    fn vm_rss_mb() -> Option<f64> {
+        let s = std::fs::read_to_string("/proc/self/status").ok()?;
+        let kb: f64 = s
+            .lines()
+            .find(|l| l.starts_with("VmRSS:"))?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()?;
+        Some(kb / 1024.0)
+    }
+    fn rss_str(v: Option<f64>) -> String {
+        v.map_or_else(|| "n/a".into(), |m| format!("{m:.0}"))
+    }
+    fn top_k(scored: &mut Vec<(f32, i64)>, k: usize) {
+        if scored.len() > k {
+            scored.select_nth_unstable_by(k - 1, |a, b| {
+                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scored.truncate(k);
+        }
+    }
+
+    let m = dim / 8;
+    anyhow::ensure!(m > 0 && dim.is_multiple_of(8), "dim must divide by 8");
+    let nlist = if nlist_arg == 0 {
+        ((n as f64).sqrt() as usize).clamp(16, 1024)
+    } else {
+        nlist_arg
+    };
+    let rows_per_list = n / nlist;
+    println!(
+        "PQPAGE spike: n={n} dim={dim} code={m}B nlist={nlist} \
+         (~{rows_per_list} rows/list, ~{:.0} KB plaintext/page) k={k} queries={queries}",
+        (rows_per_list * (8 + m)) as f64 / 1e3,
+    );
+
+    // Real derived key + real seal/open code path.
+    let dir = tempfile::TempDir::new()?;
+    let master = load_or_create_master(dir.path(), None)?;
+    let salt = new_vault_salt();
+    let enc = derive_vault_key(&master, &salt, "spike", "enc");
+
+    // Real codebook trained on a small gaussian sample so distance_tables/
+    // adc exercise the real scan path; the corpus codes are random bytes.
+    let mut rng = 0x9a9e_5eed_u64;
+    let sample: Vec<Vec<f32>> = (0..2048).map(|_| unit_vec(&mut rng, dim)).collect();
+    let pq = ProductQuantizer::train(&sample, m, 8)
+        .ok_or_else(|| anyhow::anyhow!("codebook failed to train"))?;
+    drop(sample);
+
+    // Synthetic corpus, generated once and shared by both builds.
+    let t0 = Instant::now();
+    let mut codes = vec![0u8; n * m];
+    for chunk in codes.chunks_mut(8) {
+        let bytes = splitmix(&mut rng).to_le_bytes();
+        chunk.copy_from_slice(&bytes[..chunk.len()]);
+    }
+    let lists: Vec<u32> = (0..n)
+        .map(|_| (splitmix(&mut rng) % nlist as u64) as u32)
+        .collect();
+    println!("corpus gen: {:.1}s", t0.elapsed().as_secs_f64());
+
+    let bench_conn = |path: &std::path::Path| -> Result<Connection> {
+        let conn = Connection::open(path)?;
+        // Synthetic cost bench, not a durability test.
+        conn.execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=OFF;")?;
+        Ok(conn)
+    };
+
+    // ---- Build A: per-row seals (today's drawer_pq shape verbatim). ----
+    let row_db = dir.path().join("rows.sqlite");
+    let t0 = Instant::now();
+    let conn_a = bench_conn(&row_db)?;
+    conn_a.execute_batch(
+        "CREATE TABLE drawer_pq (
+             list INTEGER NOT NULL, seq INTEGER NOT NULL, code BLOB NOT NULL,
+             PRIMARY KEY (list, seq)) WITHOUT ROWID;",
+    )?;
+    conn_a.execute("BEGIN", [])?;
+    {
+        let mut ins =
+            conn_a.prepare("INSERT INTO drawer_pq (list, seq, code) VALUES (-1, ?1, ?2)")?;
+        let mut plain = Vec::with_capacity(4 + m);
+        for seq in 0..n {
+            plain.clear();
+            plain.extend((lists[seq] as i32).to_le_bytes());
+            plain.extend_from_slice(&codes[seq * m..(seq + 1) * m]);
+            let blob = seal_content(&enc, "spike", &format!("pqrow/{seq}"), &plain);
+            ins.execute(params![seq as i64, blob])?;
+        }
+    }
+    conn_a.execute("COMMIT", [])?;
+    let a_build_secs = t0.elapsed().as_secs_f64();
+    let a_bytes = std::fs::metadata(&row_db)?.len();
+
+    // ---- Build B: one sealed page per list. ----
+    let page_db = dir.path().join("pages.sqlite");
+    let t0 = Instant::now();
+    let conn_b = bench_conn(&page_db)?;
+    conn_b
+        .execute_batch("CREATE TABLE pq_pages (list INTEGER PRIMARY KEY, page BLOB NOT NULL);")?;
+    {
+        let mut bodies: Vec<Vec<u8>> = vec![Vec::new(); nlist];
+        let mut counts: Vec<u32> = vec![0; nlist];
+        for seq in 0..n {
+            let l = lists[seq] as usize;
+            bodies[l].extend((seq as i64).to_le_bytes());
+            bodies[l].extend_from_slice(&codes[seq * m..(seq + 1) * m]);
+            counts[l] += 1;
+        }
+        conn_b.execute("BEGIN", [])?;
+        let mut ins = conn_b.prepare("INSERT INTO pq_pages (list, page) VALUES (?1, ?2)")?;
+        for (l, body) in bodies.iter().enumerate() {
+            let mut plain = Vec::with_capacity(4 + body.len());
+            plain.extend(counts[l].to_le_bytes());
+            plain.extend_from_slice(body);
+            let blob = seal_content(&enc, "spike", &format!("pqpage/{l}"), &plain);
+            ins.execute(params![l as i64, blob])?;
+        }
+        conn_b.execute("COMMIT", [])?;
+    }
+    let b_build_secs = t0.elapsed().as_secs_f64();
+    let b_bytes = std::fs::metadata(&page_db)?.len();
+    println!(
+        "at-rest: per-row {:.0} MB (build {a_build_secs:.1}s) | per-page {:.0} MB \
+         (build {b_build_secs:.1}s) — seal overhead 40 B × {} vs 40 B × {nlist}",
+        a_bytes as f64 / 1e6,
+        b_bytes as f64 / 1e6,
+        n,
+    );
+
+    // The generator arrays are not part of any measured variant.
+    drop(codes);
+    drop(lists);
+    let rss_base = vm_rss_mb();
+
+    // Shared per-(query, fraction) probe sets: sorted random distinct lists.
+    // A real probe ranks lists by centroid distance; a random subset costs
+    // the same to decrypt and scan.
+    let fractions: [usize; 3] = [4, 16, 64];
+    let mut probe_sets: HashMap<(usize, usize), Vec<i64>> = HashMap::new();
+    for &div in &fractions {
+        let nprobe = (nlist / div).max(1);
+        for q in 0..queries {
+            let mut set = std::collections::BTreeSet::new();
+            while set.len() < nprobe {
+                set.insert((splitmix(&mut rng) % nlist as u64) as i64);
+            }
+            probe_sets.insert((q, div), set.into_iter().collect());
+        }
+    }
+    // One query vector per query index → one LUT per query, as in the store.
+    let tables: Vec<Vec<f32>> = (0..queries)
+        .map(|_| pq.distance_tables(&unit_vec(&mut rng, dim)))
+        .collect();
+
+    // ---- A: open cost (decrypt-once full cache, verbatim repr). ----
+    let t0 = Instant::now();
+    let mut cache: Vec<(i64, i64, Vec<u8>)> = Vec::with_capacity(n);
+    {
+        let mut stmt = conn_a.prepare("SELECT seq, code FROM drawer_pq")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let seq: i64 = r.get(0)?;
+            let blob: Vec<u8> = r.get(1)?;
+            let plain = open_content(&enc, "spike", &format!("pqrow/{seq}"), &blob)
+                .map_err(|e| anyhow::anyhow!("row open: {e}"))?;
+            let list = i32::from_le_bytes(plain[..4].try_into().unwrap()) as i64;
+            cache.push((seq, list, plain[4..].to_vec()));
+        }
+    }
+    let a_open_secs = t0.elapsed().as_secs_f64();
+    let rss_a = vm_rss_mb();
+    println!(
+        "A open (decrypt-all {n} rows): {a_open_secs:.1}s | RSS {} MB (base {})",
+        rss_str(rss_a),
+        rss_str(rss_base),
+    );
+
+    // A-grouped: regroup the cache by list into contiguous slabs.
+    let t0 = Instant::now();
+    let mut grouped: HashMap<i64, (Vec<i64>, Vec<u8>)> = HashMap::new();
+    for (seq, list, code) in &cache {
+        let e = grouped.entry(*list).or_default();
+        e.0.push(*seq);
+        e.1.extend_from_slice(code);
+    }
+    let regroup_secs = t0.elapsed().as_secs_f64();
+    let rss_grouped = vm_rss_mb();
+
+    for &div in &fractions {
+        let nprobe = (nlist / div).max(1);
+
+        // A-flat: filter the whole flat cache per query (today's scan).
+        let t0 = Instant::now();
+        for q in 0..queries {
+            let probe = &probe_sets[&(q, div)];
+            let lut = &tables[q];
+            let mut scored: Vec<(f32, i64)> = cache
+                .iter()
+                .filter(|(_, list, _)| probe.binary_search(list).is_ok())
+                .map(|(seq, _, code)| (pq.adc(lut, code), *seq))
+                .collect();
+            top_k(&mut scored, k);
+        }
+        let a_flat_ms = 1000.0 * t0.elapsed().as_secs_f64() / queries as f64;
+
+        // A-grouped: scan only the probed lists' slabs.
+        let t0 = Instant::now();
+        for q in 0..queries {
+            let probe = &probe_sets[&(q, div)];
+            let lut = &tables[q];
+            let mut scored: Vec<(f32, i64)> = Vec::new();
+            for l in probe {
+                if let Some((seqs, slab)) = grouped.get(l) {
+                    for (i, seq) in seqs.iter().enumerate() {
+                        scored.push((pq.adc(lut, &slab[i * m..(i + 1) * m]), *seq));
+                    }
+                }
+            }
+            top_k(&mut scored, k);
+        }
+        let a_grp_ms = 1000.0 * t0.elapsed().as_secs_f64() / queries as f64;
+        println!(
+            "nprobe={nprobe} ({:.1}% of corpus): A-flat {a_flat_ms:.1} ms/q | \
+             A-grouped {a_grp_ms:.2} ms/q",
+            100.0 * nprobe as f64 / nlist as f64,
+        );
+    }
+    drop(cache);
+    drop(grouped);
+    println!(
+        "A-grouped regroup: {regroup_secs:.1}s, RSS after {} MB",
+        rss_str(rss_grouped)
+    );
+    let rss_pre_b = vm_rss_mb();
+
+    // ---- B: lazy page decryption, cold then warm. ----
+    let mut page_stmt = conn_b.prepare("SELECT page FROM pq_pages WHERE list = ?1")?;
+    let mut open_page = |l: i64| -> Result<(Vec<i64>, Vec<u8>)> {
+        let blob: Vec<u8> = page_stmt.query_row(params![l], |r| r.get(0))?;
+        let plain = open_content(&enc, "spike", &format!("pqpage/{l}"), &blob)
+            .map_err(|e| anyhow::anyhow!("page open: {e}"))?;
+        let count = u32::from_le_bytes(plain[..4].try_into().unwrap()) as usize;
+        anyhow::ensure!(
+            plain.len() == 4 + count * (8 + m),
+            "row-count commitment mismatch"
+        );
+        let mut seqs = Vec::with_capacity(count);
+        let mut slab = Vec::with_capacity(count * m);
+        for i in 0..count {
+            let off = 4 + i * (8 + m);
+            seqs.push(i64::from_le_bytes(plain[off..off + 8].try_into().unwrap()));
+            slab.extend_from_slice(&plain[off + 8..off + 8 + m]);
+        }
+        Ok((seqs, slab))
+    };
+
+    for &div in &fractions {
+        let nprobe = (nlist / div).max(1);
+
+        // Cold: decrypt every probed page, scan, drop.
+        let t0 = Instant::now();
+        let mut bytes_dec = 0usize;
+        for q in 0..queries {
+            let probe = &probe_sets[&(q, div)];
+            let lut = &tables[q];
+            let mut scored: Vec<(f32, i64)> = Vec::new();
+            for &l in probe {
+                let (seqs, slab) = open_page(l)?;
+                bytes_dec += slab.len() + seqs.len() * 8;
+                for (i, seq) in seqs.iter().enumerate() {
+                    scored.push((pq.adc(lut, &slab[i * m..(i + 1) * m]), *seq));
+                }
+            }
+            top_k(&mut scored, k);
+        }
+        let b_cold_ms = 1000.0 * t0.elapsed().as_secs_f64() / queries as f64;
+        let mb_per_q = bytes_dec as f64 / queries as f64 / 1e6;
+
+        // Warm: decrypt-once page cache; populate on the same probe sets,
+        // then measure the second pass.
+        let mut pcache: HashMap<i64, (Vec<i64>, Vec<u8>)> = HashMap::new();
+        for q in 0..queries {
+            for &l in &probe_sets[&(q, div)] {
+                if let std::collections::hash_map::Entry::Vacant(e) = pcache.entry(l) {
+                    e.insert(open_page(l)?);
+                }
+            }
+        }
+        let coverage = pcache.len() as f64 / nlist as f64;
+        let rss_warm = vm_rss_mb();
+        let t0 = Instant::now();
+        for q in 0..queries {
+            let probe = &probe_sets[&(q, div)];
+            let lut = &tables[q];
+            let mut scored: Vec<(f32, i64)> = Vec::new();
+            for l in probe {
+                if let Some((seqs, slab)) = pcache.get(l) {
+                    for (i, seq) in seqs.iter().enumerate() {
+                        scored.push((pq.adc(lut, &slab[i * m..(i + 1) * m]), *seq));
+                    }
+                }
+            }
+            top_k(&mut scored, k);
+        }
+        let b_warm_ms = 1000.0 * t0.elapsed().as_secs_f64() / queries as f64;
+        println!(
+            "nprobe={nprobe} ({:.1}% of corpus): B-cold {b_cold_ms:.1} ms/q \
+             ({mb_per_q:.1} MB decrypted/q) | B-warm {b_warm_ms:.2} ms/q \
+             (page cache {:.0}% of lists, RSS {} MB, pre-B {})",
+            100.0 * nprobe as f64 / nlist as f64,
+            100.0 * coverage,
+            rss_str(rss_warm),
+            rss_str(rss_pre_b),
+        );
+    }
+    println!("PQPAGE spike done.");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -1525,6 +1923,13 @@ fn main() -> Result<()> {
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
+        Command::PqpageSynth {
+            n,
+            dim,
+            queries,
+            nlist,
+            k,
+        } => run_pqpage_synth(n, dim, queries, nlist, k),
         Command::FdeSynth {
             n,
             queries,
