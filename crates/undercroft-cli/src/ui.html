@@ -278,6 +278,7 @@
           <div class="rowflex">
             <span class="kv">The Palace Monitor — the live pixel-art view (archivist, wings, tamper beacon), connected automatically to the selected vault with your session. Telemetry builds only.</span>
             <span class="spacer"></span>
+            <span class="status" id="palaceStatusRow" style="display:none"><span id="palaceLamp" class="lamp"></span><span id="palaceStatus">—</span></span>
             <a class="ctl" id="palaceOpen" href="/monitor" target="_blank" style="text-decoration:none;display:none">⧉ OPEN FULL PAGE</a>
           </div>
           <div class="kv" id="palaceNote" style="display:none;margin-top:10px;color:var(--amber)">
@@ -573,12 +574,28 @@ async function loadPalace() {
   frame.onload = () => {
     try {
       const doc = frame.contentDocument;
-      if (state.secret) return; // isolation: leave the monitor's own bar
+      if (state.secret) return; // isolation: leave the monitor's own chrome
       doc.getElementById("token").value = state.bearer;
       doc.getElementById("vault").value = state.vault;
+      // The console already provides branding, credentials, and a status
+      // row — strip the monitor's duplicates so the embed reads as a
+      // stage, not a page within a page.
       const conn = doc.querySelector(".conn");
       if (conn) conn.style.display = "none";
+      const head = doc.querySelector("header");
+      if (head) head.style.display = "none";
+      // Mirror the monitor's status (LIVE / DEMO / alerts) into our row.
+      const src = doc.getElementById("statusText");
+      const lamp = doc.getElementById("lamp");
+      const mirror = () => {
+        $("palaceStatusRow").style.display = "flex";
+        $("palaceStatus").textContent = src.textContent;
+        $("palaceLamp").className = "lamp" +
+          (lamp.className.includes("live") ? " live" : lamp.className.includes("alert") ? " alert" : "");
+      };
+      new MutationObserver(mirror).observe(src, { childList: true, characterData: true, subtree: true });
       doc.getElementById("connectBtn").click();
+      mirror();
     } catch (_) {}
   };
   // Vault rides in the query only to force a per-vault reload; the page
