@@ -400,6 +400,14 @@ Also closes the v0.13.0 follow-up items:
   rotation/deletion, count-verified migration with keep-source choice.
   Completes the admin-UI arc — both binaries now carry their console.
 
+## v0.37.0 — Console monitoring + KG explorer (done)
+
+- Vault console MONITOR tab (live charts + ticker; SSE on telemetry
+  builds, 3 s polling everywhere) and KNOWLEDGE tab (entity browser,
+  valid-now facts, temporal timeline) over new read-only `/v1` KG
+  routes (stats, entities, query, timeline). First release of the
+  advanced-console arc; fleet live-ops (v0.38.0) is the second.
+
 ## Next (all demand-driven — planned, not scheduled)
 
 Nothing below should be built until its trigger fires; each entry

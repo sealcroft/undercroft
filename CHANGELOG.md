@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.37.0 — Console monitoring + knowledge-graph explorer
+
+- **MONITOR tab** in the vault admin console: live sparkline charts
+  (drawers, chain height, KG triples, store size) and an activity
+  ticker. The data source auto-negotiates — telemetry builds backfill
+  from the stats ring buffer and ride the SSE stream; default builds
+  poll `/stats` every 3 s — so **every build gets a live view**,
+  metadata only, per the observability invariant.
+- **KNOWLEDGE tab**: the temporal knowledge graph is finally visible
+  outside the CLI — paged entity browser, per-entity facts (valid
+  now), and the full temporal timeline with open/closed validity
+  pills and confidence.
+- **New read-only `/v1` KG routes** backing it: `kg/stats`,
+  `kg/entities` (paged, tag-verified), `kg/query?entity=&direction=&as_of=`,
+  `kg/timeline?entity=`. Mutations stay on the CLI/MCP surface.
+
 ## 0.36.0 — Fleet console
 
 - **`GET /ui` on the orchestrator** — a fleet administration console in

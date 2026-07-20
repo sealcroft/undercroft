@@ -327,6 +327,10 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
+| GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |
+| GET | `/v1/vaults/{id}/kg/entities` | paged entity summaries (`limit`, `offset`) |
+| GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`) |
+| GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`) |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON (vectors + token artifacts) |

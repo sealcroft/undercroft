@@ -57,9 +57,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   session pool across vaults)
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI; mcp.rs: MCP stdio;
   http.rs/tenant.rs: HTTP + multi-tenant `/v1` incl. management routes
-  (drawers list/get/update, taxonomy, verify, rotate); ui.html: the vault
-  admin console, `include_str!`'d and served at `GET /ui` on every build;
-  monitor.html: the Palace Monitor
+  (drawers list/get/update, taxonomy, verify, rotate, read-only kg
+  browse); ui.html: the vault admin console (incl. live MONITOR +
+  KNOWLEDGE tabs), `include_str!`'d and served at `GET /ui` on every
+  build; monitor.html: the Palace Monitor
   UI, `include_str!`'d and served at `GET /monitor` on telemetry builds);
   integration tests in `tests/cli.rs`
 - `crates/undercroft-orchestrator` — `undercroft-orchestrator` binary: the

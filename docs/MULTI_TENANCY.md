@@ -54,6 +54,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `GET /v1/vaults/{id}/stats` · `.../stats/history` | stats (records, wings, rooms, kg, tunnels, db size, chain head) + sample ring |
 | `GET /v1/vaults/{id}/drawers` · `GET`/`PUT .../drawers/{drawer_id}` | paged browse, full drawer, verbatim content replace |
 | `GET /v1/vaults/{id}/taxonomy` | wing → room tree with counts |
+| `GET /v1/vaults/{id}/kg/stats` · `.../kg/entities` · `.../kg/query` · `.../kg/timeline` | read-only knowledge-graph browse (mutations stay on CLI/MCP) |
 | `POST /v1/vaults/{id}/verify` · `POST .../rotate` | integrity report · key rotation (sole-writer contract) |
 | `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair |
 | `GET /ui` | vault admin console (static page, every build) |
