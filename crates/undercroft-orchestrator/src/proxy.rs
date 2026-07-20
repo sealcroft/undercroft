@@ -164,8 +164,7 @@ fn route(
     // the page, which attaches it to its /admin/* fetches.
     if method == &Method::Get && path == "/ui" {
         return Response::from_data(include_str!("ui.html").as_bytes().to_vec()).with_header(
-            Header::from_bytes("Content-Type", "text/html; charset=utf-8")
-                .expect("static header"),
+            Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("static header"),
         );
     }
 

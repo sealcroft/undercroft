@@ -283,7 +283,9 @@ one-time token minting, a routing proxy that maps each tenant token to
 exactly its own vault, and count-verified live migration between
 instances — a separate control plane speaking only the public `/v1`
 surface, with engine credentials sealed at rest and tenant tokens stored
-only as HMACs. Design + surface:
+only as HMACs. It carries its own **fleet console at `GET /ui`** —
+instances, tenants, token rotation, migration — in the same
+self-contained style as the engine's admin console. Design + surface:
 [docs/MULTI_TENANCY.md](https://github.com/compufreq/undercroft/blob/main/docs/MULTI_TENANCY.md).
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).

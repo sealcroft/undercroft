@@ -393,6 +393,13 @@ Also closes the v0.13.0 follow-up items:
   rotate, full-stats. First release of the admin-UI arc; the
   orchestrator fleet console is the second.
 
+## v0.36.0 — Fleet console (done)
+
+- `GET /ui` on the orchestrator: instance registry with health checks,
+  tenant lifecycle with the one-time token reveal, guarded token
+  rotation/deletion, count-verified migration with keep-source choice.
+  Completes the admin-UI arc — both binaries now carry their console.
+
 ## Next (all demand-driven — planned, not scheduled)
 
 Nothing below should be built until its trigger fires; each entry

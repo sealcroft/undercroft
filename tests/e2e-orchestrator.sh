@@ -65,6 +65,7 @@ ADMIN=(-H "Authorization: Bearer $UNDERCROFT_ORCH_ADMIN_TOKEN")
 
 echo "== Liveness and admin gate =="
 body_has "orchestrator healthz"        '"ok":true'    -- "$O/healthz"
+body_has "/ui serves fleet console"    'Fleet Console' -- "$O/ui"
 code_is  "admin without token is 401"  401            -- "$O/admin/instances"
 code_is  "admin with wrong token 401"  401            -- -H "Authorization: Bearer wrong-token-aaaaaaaa" "$O/admin/instances"
 

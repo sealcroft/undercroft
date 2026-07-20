@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.36.0 — Fleet console
+
+- **`GET /ui` on the orchestrator** — a fleet administration console in
+  the same self-contained single-page style as the engine's vault
+  console (v0.35.0): register engines (credentials sealed into the
+  orchestrator's state db), per-instance health checks, tenant creation
+  with the **one-time token reveal** (the orchestrator stores only an
+  HMAC — the page makes that unmissable), guarded token rotation
+  (old bearer dies instantly), guarded tenant deletion, and
+  **count-verified migration** between engines with a keep-source
+  choice. The admin token stays in the browser tab; destructive
+  operations require typing the target's name.
+
 ## 0.35.0 — Vault admin console
 
 - **`GET /ui` — a vault administration console** served by `serve-http`
