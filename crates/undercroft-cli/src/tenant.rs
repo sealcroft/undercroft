@@ -160,6 +160,10 @@ impl Tenancy {
                 self.delete_drawer(id, drawer_id, req, now)
             }
             ("GET", &["v1", "vaults", id, "taxonomy"]) => self.taxonomy(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "stats"]) => self.kg_stats(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "entities"]) => self.kg_entities(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "query"]) => self.kg_query(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "timeline"]) => self.kg_timeline(id, req, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
@@ -592,6 +596,79 @@ impl Tenancy {
         ))
     }
 
+    // ---- knowledge graph (read-only browse) ---------------------------
+
+    /// `GET /v1/vaults/{id}/kg/stats` — entity/triple/active/closed counts.
+    fn kg_stats(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let stats = store.kg_stats().map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(serde_json::to_value(&stats).unwrap_or_else(|_| json!({}))),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/kg/entities?limit=&offset=` — paged entity
+    /// summaries, tag-verified.
+    fn kg_entities(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let limit = query_param(req, "limit")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(100)
+            .min(500);
+        let offset = query_param(req, "offset")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let store = self.store_for(id)?;
+        let rows = store.kg_entities(limit, offset).map_err(store_err)?;
+        let entities: Vec<Value> = rows
+            .into_iter()
+            .map(|(name, etype, created)| {
+                json!({ "name": name, "etype": etype, "created_at": created })
+            })
+            .collect();
+        Ok((200, Body::Json(json!({ "entities": entities }))))
+    }
+
+    /// `GET /v1/vaults/{id}/kg/query?entity=&direction=&as_of=` — facts
+    /// about one entity (direction outgoing|incoming|both; `as_of` filters
+    /// to facts valid at that instant).
+    fn kg_query(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let entity = query_param(req, "entity")
+            .map(|v| pct_decode(&v))
+            .ok_or_else(|| RestError::new(400, "entity query parameter required"))?;
+        let direction = query_param(req, "direction").unwrap_or_else(|| "both".into());
+        let as_of = query_param(req, "as_of").map(|v| pct_decode(&v));
+        let store = self.store_for(id)?;
+        let triples = store
+            .kg_query_entity(&entity, as_of.as_deref(), &direction)
+            .map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "entity": entity,
+                "triples": serde_json::to_value(triples).unwrap_or_else(|_| json!([]))
+            })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/kg/timeline?entity=` — every fact (open and
+    /// closed) in temporal order, optionally scoped to one entity.
+    fn kg_timeline(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let entity = query_param(req, "entity").map(|v| pct_decode(&v));
+        let store = self.store_for(id)?;
+        let triples = store.kg_timeline(entity.as_deref()).map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "triples": serde_json::to_value(triples).unwrap_or_else(|_| json!([]))
+            })),
+        ))
+    }
+
     // ---- migration ----------------------------------------------------
 
     fn export(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
@@ -760,6 +837,8 @@ fn rest_route_label(url: &str) -> &'static str {
         "v1_import"
     } else if path.ends_with("/taxonomy") {
         "v1_taxonomy"
+    } else if path.contains("/kg/") {
+        "v1_kg"
     } else if path.ends_with("/verify") {
         "v1_verify"
     } else if path.ends_with("/rotate") {
@@ -772,13 +851,40 @@ fn rest_route_label(url: &str) -> &'static str {
 }
 
 /// First value of a query-string key (raw; no percent-decoding — vault,
-/// wing, and room names are `validate_name`-restricted anyway).
+/// wing, and room names are `validate_name`-restricted anyway; values that
+/// can hold free text go through [`pct_decode`] at the call site).
 fn query_param(req: &Request, key: &str) -> Option<String> {
     req.url().split('?').nth(1)?.split('&').find_map(|kv| {
         kv.strip_prefix(key)
             .and_then(|rest| rest.strip_prefix('='))
             .map(String::from)
     })
+}
+
+/// Minimal percent-decoding for query values that carry free text (entity
+/// names): `%XX` escapes and `+` as space. Invalid escapes pass through.
+fn pct_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(b) => {
+                        out.push(b);
+                        i += 2;
+                    }
+                    None => out.push(b'%'),
+                }
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn b64encode(data: &[u8]) -> String {

@@ -43,6 +43,10 @@ PUT    /v1/vaults/{id}/drawers/{drawer_id}  {text}               replace content
 POST   /v1/vaults/{id}/search          {query, wing?, room?, limit?, vector?}
 DELETE /v1/vaults/{id}/drawers/{drawer_id}
 GET    /v1/vaults/{id}/taxonomy         (wing → room tree with counts)
+GET    /v1/vaults/{id}/kg/stats         (entity/triple/active/closed counts)
+GET    /v1/vaults/{id}/kg/entities      ?limit=&offset=              paged entities
+GET    /v1/vaults/{id}/kg/query         ?entity=&direction=&as_of=   facts about one entity
+GET    /v1/vaults/{id}/kg/timeline      ?entity=                     temporal fact timeline
 POST   /v1/vaults/{id}/verify           (HMAC + audit-chain report)
 POST   /v1/vaults/{id}/rotate           (re-key the vault; sole-writer contract)
 GET    /v1/vaults/{id}/export           (decrypted NDJSON: {drawer, vector} per line)

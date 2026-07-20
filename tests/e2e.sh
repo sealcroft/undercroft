@@ -486,6 +486,28 @@ rest_body "search after rotate" 'postgres'        -- -X POST "$API/vaults/acme/s
 rest_body "stats carries management fields" '"db_bytes"' -- "$API/vaults/acme/stats" \
   -H "X-Vault-Assertion: $(sign acme)"
 
+echo "== Knowledge graph over HTTP =="
+# Seed facts via the CLI (the /v1 KG surface is read-only browse by
+# design); the second add auto-supersedes the first, so the timeline
+# carries a closed fact.
+UNDERCROFT_HOME="$REST_HOME" "$BIN" kg add "Alice" works_at "Initech" --from 2024-03-01 --vault acme >/dev/null
+UNDERCROFT_HOME="$REST_HOME" "$BIN" kg add "Alice" works_at "Acme Corp" --from 2026-01-15 --vault acme >/dev/null
+rest_body "kg stats over http"  '"triples"'       -- "$API/vaults/acme/kg/stats" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "kg entities listed"  'Alice'           -- "$API/vaults/acme/kg/entities" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "kg query valid-now"  'Acme Corp'       -- "$API/vaults/acme/kg/query?entity=Alice" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "kg timeline has closed fact" 'Initech' -- "$API/vaults/acme/kg/timeline?entity=Alice" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_code "kg query needs entity" 400 -- "$API/vaults/acme/kg/query" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# The console page carries the new tabs.
+rest_body "/ui has monitor tab"  'MONITOR'        -- "http://127.0.0.1:$PORT/ui"
+rest_body "/ui has knowledge tab" 'KNOWLEDGE'     -- "http://127.0.0.1:$PORT/ui"
+rest_body "/ui has palace tab"   'PALACE'         -- "http://127.0.0.1:$PORT/ui"
+rest_body "/ui has grafana tab"  'GRAFANA'        -- "http://127.0.0.1:$PORT/ui"
+
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 
 echo

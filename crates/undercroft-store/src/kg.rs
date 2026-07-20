@@ -408,6 +408,33 @@ impl PalaceStore {
         Ok(out)
     }
 
+    /// Paged entity summaries `(name, etype, created_at)`, tag-verified on
+    /// the way out like every other read.
+    pub fn kg_entities(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, String, String)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, etype, tag, created_at FROM kg_entities \
+             ORDER BY name LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows: Vec<(String, String, String, Vec<u8>, String)> = stmt
+            .query_map(params![limit as i64, offset as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (id, name, etype, tag, created) in rows {
+            let canonical = format!("{id}\x1f{name}\x1f{etype}\x1f{created}");
+            self.vault
+                .verify_tag(canonical.as_bytes(), &tag)
+                .map_err(|_| StoreError::Integrity(id.clone()))?;
+            out.push((name, etype, created));
+        }
+        Ok(out)
+    }
+
     pub fn kg_stats(&self) -> Result<KgStats, StoreError> {
         let entities: i64 = self
             .conn
