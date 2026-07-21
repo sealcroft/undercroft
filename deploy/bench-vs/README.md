@@ -8,17 +8,28 @@ published benchmark row is reproducible, image-pinned, and cloud-free.
 ## Shared local model backend
 
 Extraction-based systems need an LLM and an embedder on every write.
-All rows use one Ollama instance so no competitor pays a different
-model tax:
+All competitor rows in one published run use the **same** local
+OpenAI-compatible backend so no system pays a different model tax. Two
+supported shapes:
 
-```bash
-docker compose -f docker-compose.yml up -d ollama
-docker compose -f docker-compose.yml exec ollama ollama pull llama3.2:3b
-docker compose -f docker-compose.yml exec ollama ollama pull nomic-embed-text
-```
+- **LM Studio on the host** (preferred when available — GPU-accelerated,
+  so competitor ingest isn't throttled by our benchmark rig): serve at
+  the default `http://localhost:1234/v1`; containers reach it as
+  `http://host.docker.internal:1234/v1`. Load one chat model (e.g. a
+  qwen3.5-9b-class instruct) and one embedding model (e.g.
+  `text-embedding-nomic-embed-text-v1.5`).
+- **Ollama in Docker** (fully containerized alternative):
 
-The exact model tags used for a published row are recorded in that
-row's notes column.
+  ```bash
+  docker compose -f docker-compose.yml up -d ollama
+  docker compose -f docker-compose.yml exec ollama ollama pull llama3.2:3b
+  docker compose -f docker-compose.yml exec ollama ollama pull nomic-embed-text
+  ```
+
+Either way, the exact backend + model tags used for a published row are
+recorded in that row's notes column. Note the deliberate asymmetry:
+competitors get the *fastest* local backend available while the
+undercroft rows use no LLM at all — generosity runs toward them.
 
 ## mem0 (OSS server)
 

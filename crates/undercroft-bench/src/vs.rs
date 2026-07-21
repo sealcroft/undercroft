@@ -264,11 +264,11 @@ pub fn sessions_from_results(v: &Value) -> Vec<String> {
 
 // -- mem0 (OSS server / OpenMemory) ----------------------------------------
 
-/// mem0's REST surface: `POST /v1/memories/` with `messages` + `user_id`
-/// + `metadata`, `POST /v1/memories/search/` with `query` + `user_id`.
-/// Extraction happens server-side with whatever LLM/embedder the server
-/// was configured with (the vs compose file pins a fully local Ollama
-/// config — documented in the methodology page).
+/// mem0's REST surface: `POST /v1/memories/` with `messages`, `user_id`,
+/// and `metadata`; `POST /v1/memories/search/` with `query` and
+/// `user_id`. Extraction happens server-side with whatever LLM/embedder
+/// the server was configured with (the bench-vs deployment pins a fully
+/// local backend — documented in the methodology page).
 pub struct Mem0 {
     cfg: HttpConfig,
     user: String,
@@ -444,7 +444,7 @@ mod tests {
         let score = vs_eval(&mut sys, std::slice::from_ref(&sample), 10, 0).unwrap();
         assert_eq!(score.evaluated, 2, "no-evidence QA is skipped");
         assert_eq!(score.recall_sum, 2.0, "both answerable questions hit");
-        assert_eq!(score.ingest_chunks > 0, true);
+        assert!(score.ingest_chunks > 0);
     }
 
     #[test]
