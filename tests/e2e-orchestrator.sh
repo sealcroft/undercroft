@@ -2,8 +2,9 @@
 # End-to-end suite for the multi-tenant orchestrator: two real engine
 # instances + the orchestrator control plane in one container. Exercises
 # the whole story — instance registry, tenant creation with token minting,
-# the routed data plane, cross-tenant isolation through the proxy, and a
-# count-verified live migration between instances.
+# the routed data plane, cross-tenant isolation through the proxy, a
+# count-verified live migration between instances, and a read replica
+# converging on the writer's state.
 
 set -uo pipefail
 
@@ -52,7 +53,7 @@ export UNDERCROFT_ORCH_KEY="00112233445566778899aabbccddeeff00112233445566778899
 export UNDERCROFT_ORCH_ADMIN_TOKEN="e2e-admin-token-0123456789"
 "$ORCH" serve --addr "127.0.0.1:$PORT_O" >/tmp/orch.log 2>&1 &
 ORCH_PID=$!
-trap 'kill $ENGINE_A $ENGINE_B $ORCH_PID 2>/dev/null' EXIT
+trap 'kill $ENGINE_A $ENGINE_B $ORCH_PID ${REPLICA_PID:-} 2>/dev/null' EXIT
 
 for p in $PORT_A $PORT_B $PORT_O; do
   for _ in $(seq 1 100); do
@@ -165,6 +166,45 @@ done
 [ "$LIMITED" = "1" ] && ok "burst over the limit trips 429" || fail "burst over the limit trips 429"
 code_is "another tenant is untouched" 200 -- -X POST "${AUTH_GLOBEX[@]}" \
   -d '{"query":"anything"}' "$O/t/search"
+
+echo "== Read replica (shared state volume) =="
+PORT_R=18901
+R="http://127.0.0.1:$PORT_R"
+"$ORCH" serve --addr "127.0.0.1:$PORT_R" --read-replica >/tmp/orch-replica.log 2>&1 &
+REPLICA_PID=$!
+for _ in $(seq 1 100); do
+  curl -sf "$R/healthz" >/dev/null 2>&1 && break; sleep 0.1
+done
+body_has "replica healthz declares mode"  '"mode":"read-replica"' -- "$R/healthz"
+body_has "writer healthz declares mode"   '"mode":"writer"'       -- "$O/healthz"
+body_has "healthz carries last_write"     '"last_write":1'        -- "$O/healthz"
+code_is  "replica refuses admin plane"    403 -- "${ADMIN[@]}" "$R/admin/instances"
+code_is  "replica refuses the console"    403 -- "$R/ui"
+# The replica's own limiter is off (no env), so the data plane serves even
+# though the writer's window for acme is still hot from the burst above.
+body_has "replica serves the data plane"  'gigawatts' -- -X POST "${AUTH_ACME2[@]}" \
+  -d '{"query":"flux capacitor power"}' "$R/t/search"
+# Rotate on the writer; the replica converges immediately (same file —
+# the zero-lag bound of the shared-volume deployment).
+ROT2="$(curl -s -X POST "${ADMIN[@]}" "$O/admin/tenants/$ACME_ID/rotate")"
+ACME_TOKEN3="$(sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p' <<<"$ROT2")"
+code_is  "replica converges: rotated-out token dies" 401 -- -X POST "${AUTH_ACME2[@]}" \
+  -d '{"query":"flux"}' "$R/t/search"
+body_has "replica converges: fresh token serves" 'gigawatts' -- -X POST \
+  -H "Authorization: Bearer $ACME_TOKEN3" \
+  -d '{"query":"flux capacitor power"}' "$R/t/search"
+# A tenant minted on the writer after replica start resolves through it.
+INITECH="$(curl -s -X POST "${ADMIN[@]}" -d '{"name":"initech"}' "$O/admin/tenants")"
+INITECH_TOKEN="$(sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p' <<<"$INITECH")"
+body_has "new tenant resolves via replica" '"id":"tenant-' -- \
+  -H "Authorization: Bearer $INITECH_TOKEN" "$R/t/stats"
+# A replica never creates state: pointing it at a missing db must fail.
+if UNDERCROFT_ORCH_DB=/tmp/definitely-absent/orch.db "$ORCH" serve \
+     --addr 127.0.0.1:18999 --read-replica >/dev/null 2>&1; then
+  fail "replica refuses a missing state db"
+else
+  ok "replica refuses a missing state db"
+fi
 
 echo ""
 echo "orchestrator e2e results: $PASS passed, $FAIL failed"

@@ -63,6 +63,7 @@ pub struct Tenant {
 pub struct Orch {
     conn: Connection,
     key: Zeroizing<[u8; 32]>,
+    read_only: bool,
 }
 
 fn now_rfc3339() -> String {
@@ -103,12 +104,92 @@ impl Orch {
                  vault      TEXT NOT NULL,
                  token_mac  BLOB NOT NULL UNIQUE,
                  created_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS meta (
+                 k TEXT PRIMARY KEY,
+                 v TEXT NOT NULL
              );",
         )?;
         Ok(Self {
             conn,
             key: Zeroizing::new(key),
+            read_only: false,
         })
+    }
+
+    /// Open an existing state database strictly read-only — the replica
+    /// serve mode. No pragma writes, no schema creation; every mutating
+    /// method refuses before SQLite would. WAL databases read fine here:
+    /// on a shared volume the writer maintains the `-shm` file, and a
+    /// replicated snapshot is a checkpointed plain file.
+    pub fn open_read_only(path: &std::path::Path, key_hex: &str) -> Result<Self, StateError> {
+        let bytes = hex::decode(key_hex.trim())
+            .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY is not hex".into()))?;
+        let key: [u8; 32] = bytes.try_into().map_err(|_| {
+            StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into())
+        })?;
+        if !path.exists() {
+            return Err(StateError::Invalid(format!(
+                "state database {path:?} does not exist (a read replica never creates one)"
+            )));
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        // Belt over the read-only fd: refuse writes at the connection level
+        // too, so a future code path can't accidentally mutate through it.
+        conn.pragma_update(None, "query_only", "ON")?;
+        Ok(Self {
+            conn,
+            key: Zeroizing::new(key),
+            read_only: true,
+        })
+    }
+
+    fn require_writable(&self) -> Result<(), StateError> {
+        if self.read_only {
+            return Err(StateError::Invalid(
+                "state database is open read-only (read replica) — mutations belong to the writer"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Stamp the moment of the last successful mutation (unix seconds) into
+    /// the `meta` table. Surfaced on `/healthz` so an operator can compare
+    /// a replica's view against the writer's and read the replication lag.
+    fn touch_last_write(&self) -> Result<(), StateError> {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (k, v) VALUES ('last_write', ?1)",
+            params![secs.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The unix-seconds stamp of the last mutation this database has seen,
+    /// if any. Tolerates databases from before the `meta` table existed.
+    pub fn last_write(&self) -> Result<Option<u64>, StateError> {
+        let has_meta: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_meta == 0 {
+            return Ok(None);
+        }
+        let v: Option<String> = self
+            .conn
+            .query_row("SELECT v FROM meta WHERE k = 'last_write'", [], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(v.and_then(|s| s.parse().ok()))
     }
 
     // -- sealing -----------------------------------------------------------
@@ -165,6 +246,7 @@ impl Orch {
         bearer: &str,
         assertion_secret: &str,
     ) -> Result<(), StateError> {
+        self.require_writable()?;
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return Err(StateError::Invalid(
                 "instance name must be non-empty alphanumeric/dash".into(),
@@ -179,7 +261,7 @@ impl Orch {
             "INSERT OR REPLACE INTO instances (name, url, cred) VALUES (?1, ?2, ?3)",
             params![name, url.trim_end_matches('/'), blob],
         )?;
-        Ok(())
+        self.touch_last_write()
     }
 
     pub fn instance_list(&self) -> Result<Vec<Instance>, StateError> {
@@ -231,6 +313,7 @@ impl Orch {
     /// Remove an instance. Refused while tenants still map to it — losing
     /// the mapping would strand their vaults.
     pub fn instance_remove(&self, name: &str) -> Result<bool, StateError> {
+        self.require_writable()?;
         let tenants: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM tenants WHERE instance = ?1",
             params![name],
@@ -241,10 +324,14 @@ impl Orch {
                 "instance {name:?} still hosts {tenants} tenant(s) — migrate them first"
             )));
         }
-        Ok(self
+        let removed = self
             .conn
             .execute("DELETE FROM instances WHERE name = ?1", params![name])?
-            > 0)
+            > 0;
+        if removed {
+            self.touch_last_write()?;
+        }
+        Ok(removed)
     }
 
     /// The registered instance with the fewest tenants (placement default).
@@ -271,6 +358,7 @@ impl Orch {
         name: &str,
         instance: &str,
     ) -> Result<(Tenant, String), StateError> {
+        self.require_writable()?;
         let mut id_bytes = [0u8; 8];
         rand::thread_rng().fill_bytes(&mut id_bytes);
         let id = hex::encode(id_bytes);
@@ -297,6 +385,7 @@ impl Orch {
                 t.created_at
             ],
         )?;
+        self.touch_last_write()?;
         Ok((t, token))
     }
 
@@ -364,6 +453,7 @@ impl Orch {
     /// grace window (rotation is the revocation primitive). Returned once,
     /// like at create.
     pub fn tenant_rotate_token(&self, id: &str) -> Result<String, StateError> {
+        self.require_writable()?;
         let mut token_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut token_bytes);
         let token = hex::encode(token_bytes);
@@ -374,10 +464,12 @@ impl Orch {
         if n == 0 {
             return Err(StateError::Invalid(format!("unknown tenant {id:?}")));
         }
+        self.touch_last_write()?;
         Ok(token)
     }
 
     pub fn tenant_set_instance(&self, id: &str, instance: &str) -> Result<(), StateError> {
+        self.require_writable()?;
         let n = self.conn.execute(
             "UPDATE tenants SET instance = ?1 WHERE id = ?2",
             params![instance, id],
@@ -385,14 +477,19 @@ impl Orch {
         if n == 0 {
             return Err(StateError::Invalid(format!("unknown tenant {id:?}")));
         }
-        Ok(())
+        self.touch_last_write()
     }
 
     pub fn tenant_delete(&self, id: &str) -> Result<bool, StateError> {
-        Ok(self
+        self.require_writable()?;
+        let deleted = self
             .conn
             .execute("DELETE FROM tenants WHERE id = ?1", params![id])?
-            > 0)
+            > 0;
+        if deleted {
+            self.touch_last_write()?;
+        }
+        Ok(deleted)
     }
 }
 
@@ -505,6 +602,40 @@ mod tests {
         assert!(o.tenant_by_token(&old).unwrap().is_none(), "old token dead");
         assert_eq!(o.tenant_by_token(&new).unwrap().unwrap().id, t.id);
         assert!(o.tenant_rotate_token("nope").is_err());
+    }
+
+    /// The read-replica contract at the state layer: a read-only handle on
+    /// the writer's live database resolves tokens and opens sealed creds,
+    /// refuses every mutation with a clear error, and observes the writer's
+    /// changes (here: a rotation) immediately — shared-volume convergence.
+    #[test]
+    fn read_only_handle_serves_lookups_and_refuses_mutations() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("orch.db");
+        let writer = Orch::open(&path, KEY).unwrap();
+        writer.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let (t, token) = writer.tenant_create("acme", "alpha").unwrap();
+
+        let replica = Orch::open_read_only(&path, KEY).unwrap();
+        assert_eq!(replica.tenant_by_token(&token).unwrap().unwrap().id, t.id);
+        assert_eq!(&*replica.instance_creds("alpha").unwrap().bearer, "b");
+        assert!(replica.last_write().unwrap().is_some());
+        for err in [
+            replica.instance_add("x", "http://x", "b", "s").unwrap_err(),
+            replica.tenant_create("x", "alpha").map(|_| ()).unwrap_err(),
+            replica.tenant_rotate_token(&t.id).map(|_| ()).unwrap_err(),
+            replica.tenant_delete(&t.id).map(|_| ()).unwrap_err(),
+            replica.instance_remove("alpha").map(|_| ()).unwrap_err(),
+            replica.tenant_set_instance(&t.id, "alpha").unwrap_err(),
+        ] {
+            assert!(err.to_string().contains("read-only"), "got: {err}");
+        }
+        // The writer rotates; the replica's very next lookup converges.
+        let fresh = writer.tenant_rotate_token(&t.id).unwrap();
+        assert!(replica.tenant_by_token(&token).unwrap().is_none());
+        assert_eq!(replica.tenant_by_token(&fresh).unwrap().unwrap().id, t.id);
+        // A replica never creates state.
+        assert!(Orch::open_read_only(&dir.path().join("absent.db"), KEY).is_err());
     }
 
     #[test]

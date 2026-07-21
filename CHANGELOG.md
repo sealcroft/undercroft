@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.40.0 — Orchestrator read replicas
+
+- `undercroft-orchestrator serve --read-replica`: opens the state
+  database **read-only** and serves only `/healthz` and the `/t/*`
+  data plane — token resolution is a pure HMAC lookup, so replicas
+  scale read routing horizontally while the fleet keeps exactly one
+  writer. `/admin/*` and `/ui` answer 403 pointing at the writer, a
+  replica never creates or mutates state (guarded at the state layer
+  *and* by a read-only connection), and it refuses to start on a
+  missing database.
+- `/healthz` on both roles now reports `mode`
+  (`writer`/`read-replica`) and `last_write` — the unix-seconds stamp
+  of the last control-plane mutation, maintained by the writer — so
+  replication lag is directly observable by diffing a replica against
+  the writer.
+- Deployment shapes documented in MULTI_TENANCY.md: shared volume
+  (zero lag; SQLite WAL supports concurrent readers) or
+  litestream-style replicated snapshots (lag = replication interval;
+  a revoked token dies on a replica after at most that window).
+- Orchestrator e2e grows 34 → 44 checks: writer+replica convergence
+  (rotation kills the old token through the replica immediately),
+  admin refusal, and the missing-db guard.
+
 ## 0.39.0 — Inverted FDE tier (opt-in)
 
 - The MUVERA FDE index gains an **inverted tier**: coarse centroids

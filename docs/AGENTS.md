@@ -197,6 +197,10 @@ undercroft-orchestrator serve                                 # 127.0.0.1:8900 (
 undercroft-orchestrator instance-add engine-a http://a:8800 <bearer> <assertion-secret>
 undercroft-orchestrator tenant-create acme
 undercroft-orchestrator migrate acme engine-b     # export→import→count-verify→flip→delete
+
+# scale read routing: replicas serve /t/* from a read-only state db
+# (shared volume or replicated snapshot); /admin and /ui stay on the writer
+undercroft-orchestrator serve --read-replica --addr 0.0.0.0:8901
 ```
 
 Tenants call `/t/<subpath>` with their own bearer; the orchestrator
@@ -206,7 +210,10 @@ assertion. The subpath allowlist is `drawers | search | stats | export |
 import` — vault lifecycle is deliberately unreachable with a tenant token.
 Optional per-tenant rate limiting: `UNDERCROFT_ORCH_RATE_LIMIT=<req/min>`.
 Rotate a tenant token with `tenant-rotate` (the old one dies in the same
-statement). Deploy TLS on both hops; back up the orchestrator's SQLite.
+statement — immediately on the writer, within the replication window on
+replicas). `GET /healthz` reports `mode` and `last_write` on writer and
+replicas so lag is observable. Deploy TLS on both hops; back up the
+orchestrator's SQLite.
 
 ---
 
@@ -343,7 +350,10 @@ with the tenant bearer; admin plane `/admin/instances[…]`,
 `/admin/tenants[…]` (+ `/rotate`, `/migrate`, `/stats` — metadata-only
 relay) with `UNDERCROFT_ORCH_ADMIN_TOKEN`; `GET /ui` serves the fleet
 console (static page, no auth to load — the admin token is entered in
-the page; live 10 s health + stats sweep).
+the page; live 10 s health + stats sweep). `GET /healthz` reports
+`mode` (`writer`/`read-replica`) + `last_write`; on a read replica
+(`serve --read-replica`) only `/healthz` and `/t/*` serve — `/admin/*`
+and `/ui` answer 403.
 
 ## 10. Reference — environment variables
 
@@ -383,9 +393,10 @@ e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 `UNDERCROFT_SERVICE_NAME`.
 
 Orchestrator: `UNDERCROFT_ORCH_DB` · `UNDERCROFT_ORCH_KEY` (required) ·
-`UNDERCROFT_ORCH_ADMIN_TOKEN` (required, ≥16 chars) ·
-`UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) · `UNDERCROFT_ORCH_RATE_LIMIT`
-(req/min, 0 = off).
+`UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, ≥16 chars; unused
+by `serve --read-replica`) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
+`UNDERCROFT_ORCH_RATE_LIMIT` (req/min, 0 = off; per-process — each
+replica enforces its own windows).
 
 ## 11. Verify your implementation
 

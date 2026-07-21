@@ -417,6 +417,14 @@ Also closes the v0.13.0 follow-up items:
   `GET /admin/tenants/{id}/stats` (metadata relay via stored creds).
   Completes the advanced-console arc.
 
+## v0.40.0 — Orchestrator read replicas (done)
+
+- `serve --read-replica`: state db opened read-only, data plane only
+  (`/t/*` + `/healthz`); admin plane and console 403 to the writer.
+  `/healthz` gains `mode` + `last_write` on both roles so lag is
+  observable. Shared-volume (zero lag) and replicated-snapshot
+  deployment shapes documented; single-writer stance unchanged.
+
 ## Next (all demand-driven — planned, not scheduled)
 
 Nothing below should be built until its trigger fires; each entry
@@ -457,9 +465,16 @@ page.
 - **Effort**: ~1 release; the risky part is proving containment, not
   the code.
 
-### 2. Orchestrator read-replica proxy
+### 2. Orchestrator read-replica proxy (SHIPPED v0.40.0)
 
-- **Trigger**: a deployment that needs orchestrator availability beyond
+- **Outcome**: built to this plan — `--read-replica` serve mode over a
+  read-only state handle (mutations refused at the state layer and by
+  the connection), `/healthz` mode + `last_write` lag surface, e2e
+  writer+replica convergence (44 checks). The lag trade documented as
+  designed: a revoked token dies on a replica after at most the
+  replication window; the writer stays the only place rotation is
+  immediate.
+- **Trigger** (original): a deployment that needs orchestrator availability beyond
   one process, or read throughput beyond one proxy (single-writer
   stance documented in MULTI_TENANCY.md holds until then).
 - **Design**: keep exactly one writer (all `/admin/*` mutations);
