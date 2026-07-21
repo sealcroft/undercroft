@@ -44,7 +44,6 @@ const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 /// runs per candidate, so this bounds the added latency.
 const DEFAULT_RERANK_TOP_N: usize = 50;
 
-
 /// Append an audit entry **and** advance the committed chain head, inside
 /// the caller's open transaction (a [`rusqlite::Transaction`] derefs to
 /// `Connection`, so both work). Returns `(new_head_hex, writes)` for the
