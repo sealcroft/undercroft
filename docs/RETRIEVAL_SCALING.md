@@ -415,9 +415,21 @@ artifact already uses).
 **Shipped (v0.41.0)**: the A-grouped layout is now the store's PQ cache —
 slab-grouped by IVF list at both vault levels, probe scans touch only
 their lists' contiguous slabs, and the IVF `nlist` clamp lifted
-1024 → 4096 so √N keeps tracking the corpus past 10⁶. At-rest format
-unchanged; the B-pages format and its repack migration remain gated on
-the RAM trigger above.
+1024 → 4096 so √N keeps tracking the corpus past 10⁶.
+
+**Shipped (v0.42.0)**: the B-pages format, **opt-in and default off**
+(`UNDERCROFT_PQ_PAGE_MIN=<rows>` / `set_pq_pages`; sealed vaults only).
+One AEAD page per IVF list under AAD `pqpage/{list}/{pageno}` (4096-row
+page caps), sealed plaintext `count ‖ (seq ‖ code)*`, lazy per-probe
+decryption, sealed total-count + deleted-count in `pq_meta` keeping the
+matched-count self-heal exact without page rewrites on delete/update.
+Single writes ride a per-row tail folded into pages once per
+`upsert_many` batch — the write-amplification bound designed above. The
+migration is the event-driven repack in both directions: flipping the
+setting converts at the next search's verify pass, no re-embedding. Key
+rotation re-seals pages byte-exact. The per-row default remains the
+recommendation until the RAM trigger fires; adopting pages is now a
+config flip, not a format change.
 
 ## Restore economics — derived data is a portable, verifiable cache
 

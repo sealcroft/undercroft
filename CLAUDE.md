@@ -27,7 +27,9 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stage (latestage.rs: token store, event-driven token-PQ codebook, LUT
   MaxSim), PQ/IVF candidate prefilter for both vault levels (pq.rs primitive,
   pqidx.rs index; both levels scan a load-once RAM code cache, slab-grouped
-  by IVF list since v0.41.0), MUVERA FDE
+  by IVF list since v0.41.0; opt-in sealed page tier since v0.42.0 —
+  `UNDERCROFT_PQ_PAGE_MIN`, one AEAD page per list + lazy per-probe
+  decrypt + tail fold per batch, default off), MUVERA FDE
   token-aware candidates (fdeidx.rs; core fde.rs construction; sealed
   `drawer_fde` + `fde_meta`; opt-in inverted tier via
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
@@ -140,10 +142,11 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   normalize_version); re-mining must stay idempotent and append-only — a crash
   mid-operation must leave the existing palace untouched.
 - Sealed vaults must never persist plaintext or plaintext-derived data **in
-  clear** on disk: FTS never exists for them; embeddings, PQ code rows and
-  codebooks, and ColBERT token matrices are AEAD-sealed under distinct AAD
-  domains (search uses decrypt-once RAM caches). Tests assert the at-rest
-  bytes; new derived artifacts must follow the same pattern.
+  clear** on disk: FTS never exists for them; embeddings, PQ code rows/pages
+  and codebooks, and ColBERT token matrices are AEAD-sealed under distinct
+  AAD domains (search uses decrypt-once RAM caches; the opt-in PQ page tier
+  decrypts lazily per probed list). Tests assert the at-rest bytes; new
+  derived artifacts must follow the same pattern.
 - Every write must update the audit chain **atomically with its data**: the
   committed head lives in `chain_meta` and advances via `chain_append` inside
   the same SQLite transaction (the manifest holds a lagging rollback anchor,

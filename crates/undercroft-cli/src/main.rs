@@ -1022,8 +1022,12 @@ fn main() -> Result<()> {
                 );
                 println!("  tunnels:             {}", report.tunnels);
                 println!(
-                    "  derived artifacts:   {} token, {} pq, {} fde, {} meta",
-                    report.token_matrices, report.pq_rows, report.fde_rows, report.meta_artifacts
+                    "  derived artifacts:   {} token, {} pq (+{} pages), {} fde, {} meta",
+                    report.token_matrices,
+                    report.pq_rows,
+                    report.pq_pages,
+                    report.fde_rows,
+                    report.meta_artifacts
                 );
                 println!(
                     "  chain re-keyed over: {} audit entries",

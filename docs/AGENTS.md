@@ -372,6 +372,8 @@ Models: `UNDERCROFT_EMBEDDER` (`hash`|`onnx`|`ort`) ·
 Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw`) · `UNDERCROFT_FUSION`
 (`bm25` default |`rrf`|`legacy`) · `UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
 `UNDERCROFT_IVF_MIN` (8192) · `UNDERCROFT_IVF_NPROBE` ·
+`UNDERCROFT_PQ_PAGE_MIN` (off by default — sealed page tier: one AEAD
+page per IVF list, lazy per-probe decrypt) ·
 `UNDERCROFT_TOK_PQ_MIN` (256) · `UNDERCROFT_FDE_PQ_MIN` (256) ·
 `UNDERCROFT_FDE_IVF_MIN` (off by default — opt-in inverted tier) ·
 `UNDERCROFT_FDE_NPROBE` (max(8, nlist/4)) ·

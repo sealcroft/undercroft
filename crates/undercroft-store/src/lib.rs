@@ -290,6 +290,11 @@ pub struct PalaceStore {
     ivf_min: usize,
     /// Inverted lists probed per query (`None` ⇒ `max(8, nlist/4)`).
     ivf_nprobe: Option<usize>,
+    /// Sealed vaults: corpus size at which PQ codes keep to one AEAD page
+    /// per IVF list instead of per-row seals (`usize::MAX` ⇒ never — the
+    /// default; the page tier is opt-in until the RAM trigger fires).
+    /// `UNDERCROFT_PQ_PAGE_MIN` / [`PalaceStore::set_pq_pages`]. See `pqidx`.
+    pq_page_min: usize,
     /// When true, search generates candidates by MUVERA FDE dot product
     /// (`UNDERCROFT_RETRIEVAL=fde`; needs the late encoder). See `fdeidx`.
     fde_enabled: bool,
@@ -515,6 +520,11 @@ impl PalaceStore {
             ivf_nprobe: std::env::var("UNDERCROFT_IVF_NPROBE")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            pq_page_min: match std::env::var("UNDERCROFT_PQ_PAGE_MIN") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(usize::MAX),
+                Err(_) => usize::MAX,
+            },
             fde_enabled: false,
             fde_encoder: std::cell::RefCell::new(None),
             fde_cache: std::cell::RefCell::new(None),
@@ -1015,6 +1025,21 @@ impl PalaceStore {
         }
         if let Some((head, writes)) = anchor {
             self.vault.anchor_manifest(&head, writes)?;
+        }
+        // Page-tier batch boundary: fold the tail rows this batch wrote
+        // into their lists' pages — one reseal per touched list per batch,
+        // the write-amplification bound the format was designed around.
+        // Runs after COMMIT (it manages its own writes); advisory.
+        if self.pq_enabled && self.is_sealed() {
+            match self.pq_pages_present() {
+                Ok(true) => {
+                    if self.pq_compact_tail().is_err() {
+                        self.pq_verified.set(false);
+                    }
+                }
+                Ok(false) => {}
+                Err(_) => {}
+            }
         }
         for drawer in drawers {
             undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
@@ -3562,6 +3587,142 @@ mod tests {
             )
             .unwrap();
         assert_eq!(orphans, 0, "delete must purge the PQ code row");
+    }
+
+    /// The opt-in sealed page tier end to end: pages at rest with an empty
+    /// tail, sealed row-count commitment, lazy per-probe decryption,
+    /// single writes riding the tail until a batch folds them, updates and
+    /// deletes balancing through the sealed counters without rebuilds, and
+    /// event-driven format migration in both directions.
+    #[test]
+    fn sealed_pq_page_tier_agrees_folds_and_migrates() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.set_pq(true);
+        s.set_ivf(8, None);
+        s.set_pq_pages(1);
+        for i in 0..40 {
+            s.upsert(&drawer("w", "r", &format!("page tier note number {i}"), i))
+                .unwrap();
+        }
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the flux capacitor needs a gigawatt of power",
+            99,
+        ))
+        .unwrap();
+        let hits = s
+            .search("flux capacitor power", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("flux"));
+        let page_count = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM pq_page", [], |r| r.get(0))
+                .unwrap()
+        };
+        let tail_count = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert!(page_count(&s) > 0, "codes live in sealed pages");
+        assert_eq!(tail_count(&s), 0, "a fresh build leaves no tail");
+        assert_eq!(s.pq_count_get("rowcount").unwrap(), 41);
+        // No page blob may contain a plaintext-packed code.
+        {
+            let pq_ref = s.pq.borrow();
+            let pq = pq_ref.as_ref().expect("codebook cached");
+            let code = pq.encode(&s.embedder.embed("page tier note number 7"));
+            let blobs: Vec<Vec<u8>> = s
+                .conn
+                .prepare("SELECT blob FROM pq_page")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert!(
+                blobs
+                    .iter()
+                    .all(|b| !b.windows(code.len()).any(|w| w == code.as_slice())),
+                "sealed pages must be opaque"
+            );
+        }
+        // Lazy mode: a fresh cache decrypts only the probed lists' pages
+        // (nprobe = max(8, nlist/4) = 8, plus the -1 rider).
+        s.pq_cache.borrow_mut().take();
+        let q = s.embedder.embed("page tier note number 7");
+        let got = s.pq_candidates(&q, 1).unwrap().expect("index usable");
+        assert!(!got.is_empty());
+        let loaded = s.pq_cache.borrow().as_ref().unwrap().loaded_count();
+        assert!(
+            matches!(loaded, Some(n) if (1..=9).contains(&n)),
+            "probe must stay lazy (loaded {loaded:?})"
+        );
+
+        // A single write rides the tail — searchable immediately.
+        s.upsert(&drawer("w", "r", "tail rider about quantum tunneling", 200))
+            .unwrap();
+        assert_eq!(tail_count(&s), 1);
+        let hits = s
+            .search("quantum tunneling", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("quantum"));
+        // The next batch folds the tail into pages.
+        let batch: Vec<Drawer> = (300..332)
+            .map(|i| drawer("w", "r", &format!("batch fold note {i}"), i))
+            .collect();
+        s.upsert_many(&batch).unwrap();
+        assert_eq!(tail_count(&s), 0, "batch boundary folds the tail");
+        assert_eq!(s.pq_count_get("rowcount").unwrap(), 74);
+
+        // Update a paged drawer: its stale page copy is counted out of the
+        // commitment; delete another: same. No page is rewritten and the
+        // next verify must NOT rebuild.
+        let mut upd = drawer("w", "r", "page tier note number 3", 3);
+        upd.content = "entirely new content about zeppelins".into();
+        s.upsert(&upd).unwrap();
+        assert_eq!(s.pq_count_get("deleted").unwrap(), 1);
+        let victim = drawer("w", "r", "page tier note number 5", 5);
+        assert!(s.delete_drawer(&victim.id).unwrap());
+        assert_eq!(s.pq_count_get("deleted").unwrap(), 2);
+        let pages_before = page_count(&s);
+        s.pq_verified.set(false);
+        let hits = s.search("zeppelins", &SearchOptions::default()).unwrap();
+        assert!(hits[0].drawer.content.contains("zeppelins"));
+        assert_eq!(
+            page_count(&s),
+            pages_before,
+            "balanced counters must not trigger a rebuild"
+        );
+
+        // Event-driven migration OFF: pages unpack back into sealed rows.
+        s.set_pq_pages(usize::MAX);
+        s.pq_verified.set(false);
+        let hits = s
+            .search("flux capacitor power", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("flux"));
+        assert_eq!(page_count(&s), 0, "pages cleared on downgrade");
+        assert!(tail_count(&s) > 0, "rows restored");
+        assert_eq!(s.pq_count_get("rowcount").unwrap(), 0);
+        // …and back ON: rows repack into pages (orphans stay out).
+        s.set_pq_pages(1);
+        s.pq_verified.set(false);
+        let hits = s
+            .search("batch fold note 310", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("batch fold"));
+        assert!(page_count(&s) > 0, "pages restored on upgrade");
+        assert_eq!(tail_count(&s), 0);
+        assert_eq!(s.pq_count_get("rowcount").unwrap(), 73);
+        // Cold reopen sanity: everything reloads from the sealed pages.
+        s.pq_cache.borrow_mut().take();
+        s.pq_verified.set(false);
+        let hits = s
+            .search("quantum tunneling", &SearchOptions::default())
+            .unwrap();
+        assert!(hits[0].drawer.content.contains("quantum"));
     }
 
     #[test]

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.42.0 — Sealed PQ page tier (opt-in)
+
+- Sealed vaults can now keep their PQ codes as **one AEAD page per IVF
+  list** (`pq_page` table, AAD `pqpage/{list}/{pageno}`, capped at 4096
+  rows/page) instead of per-row seals — the format the page-level spike
+  measured at **2.1× smaller at rest, 22 s → 0 open cost, and 630 MB vs
+  ~1 GB warm RAM at 10⁷ drawers**. Probed lists decrypt **lazily**: a
+  query touches only its lists' pages, never the whole index.
+- **Integrity = the row-count commitment**: each page seals
+  `count ‖ (seq ‖ code)*` as one AEAD unit (intra-page splicing or
+  selective deletion is impossible without the key — stronger than
+  per-row seals), and a sealed total-count in `pq_meta` keeps the
+  matched-count self-heal exact. Deletes and updates of paged rows
+  balance through a sealed `deleted` counter — no page rewrite, no
+  spurious rebuilds.
+- **Write amplification is bounded by design**: single writes land as
+  per-row *tail* rows (searchable immediately) and fold into their
+  lists' pages once per `upsert_many` batch (or past 256 tail rows at
+  a verify pass) — one reseal per touched list per batch.
+- **Event-driven migration, both directions**: flipping
+  `UNDERCROFT_PQ_PAGE_MIN` (or `set_pq_pages`) repacks per-row ⇄ pages
+  at the next search's verify pass without re-embedding anything.
+  Key rotation re-seals pages byte-exact like every other artifact
+  (`RotationReport.pq_pages`).
+- **Default off** (`UNDERCROFT_PQ_PAGE_MIN` unset ⇒ never): per the
+  spike's decision the per-row format stays recommended until a
+  deployment's RAM/open-time wall actually bites — this ships the
+  format and its migration so that trigger is a config flip, not a
+  release. Completes ROADMAP item 3.
+
 ## 0.41.0 — Slab-grouped PQ cache
 
 - The PQ RAM code cache (both vault levels) is now **slab-grouped by

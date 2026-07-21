@@ -75,6 +75,10 @@ use crate::{PalaceStore, StoreError};
 pub(crate) struct PqCache {
     code_len: usize,
     slabs: std::collections::HashMap<i64, (Vec<i64>, Vec<u8>)>,
+    /// Page-tier bookkeeping: which lists' pages have been decrypted into
+    /// `slabs` so far. `None` ⇒ everything is resident (per-row mode, or a
+    /// completed full load) — the pre-page behavior.
+    loaded: Option<std::collections::HashSet<i64>>,
 }
 
 impl PqCache {
@@ -82,6 +86,17 @@ impl PqCache {
         Self {
             code_len,
             slabs: std::collections::HashMap::new(),
+            loaded: None,
+        }
+    }
+
+    /// A paged cache starts empty (tail rows aside) and fills lazily,
+    /// list by probed list.
+    fn new_paged(code_len: usize) -> Self {
+        Self {
+            code_len,
+            slabs: std::collections::HashMap::new(),
+            loaded: Some(std::collections::HashSet::new()),
         }
     }
 
@@ -112,6 +127,13 @@ impl PqCache {
     #[cfg(test)]
     fn rows(&self) -> usize {
         self.slabs.values().map(|(s, _)| s.len()).sum()
+    }
+
+    /// Test visibility into lazy mode: `Some(n)` = paged, `n` lists loaded
+    /// so far; `None` = fully resident.
+    #[cfg(test)]
+    pub(crate) fn loaded_count(&self) -> Option<usize> {
+        self.loaded.as_ref().map(|s| s.len())
     }
 
     /// Rows across the given lists only (the widen-when-<k check).
@@ -167,6 +189,17 @@ const PQ_TRAIN_SAMPLE: usize = 4096;
 pub(crate) const IVF_MIN_DEFAULT: usize = 8192;
 const IVF_TRAIN_ITERS: usize = 10;
 
+/// Rows per sealed page. Caps the read-modify-reseal cost of folding a
+/// tail batch into a list (~200 KB at 48-B codes) — the write-amplification
+/// bound the page-level spike priced (`(list, pageno)` caps).
+const PQ_PAGE_CAP: usize = 4096;
+
+/// Tail rows accumulated before a search's verify pass folds them into
+/// pages. `upsert_many` folds at its batch boundary regardless; this bound
+/// only limits how long a trickle of single writes rides in per-row form
+/// (they are fully searchable either way).
+const PQ_TAIL_FOLD: usize = 256;
+
 impl PalaceStore {
     /// Enable (or disable) the on-disk PQ ANN prefilter — both security
     /// levels. hmac-only vaults store plain codes; **sealed vaults store
@@ -201,6 +234,130 @@ impl PalaceStore {
         Some((list, plain[4..].to_vec()))
     }
 
+    // -- sealed page tier (opt-in, `UNDERCROFT_PQ_PAGE_MIN`) -----------------
+
+    /// Whether the page tier applies at this corpus size: sealed vaults
+    /// only (hmac-only rows are plaintext — pages would only add seal
+    /// overhead they don't carry today).
+    fn pq_pages_on(&self, rows: usize) -> bool {
+        self.pq_sealed() && rows >= self.pq_page_min
+    }
+
+    /// Sealed-page plaintext: `count:u32le ‖ (seq:i64le ‖ code)*`. The
+    /// count is the row-count commitment — the page is one AEAD unit, so
+    /// intra-page splicing or selective row deletion cannot happen without
+    /// the key (stronger than per-row seals against that class).
+    fn pq_page_pack(rows: &[(i64, Vec<u8>)]) -> Vec<u8> {
+        let code_len = rows.first().map_or(0, |(_, c)| c.len());
+        let mut out = Vec::with_capacity(4 + rows.len() * (8 + code_len));
+        out.extend((rows.len() as u32).to_le_bytes());
+        for (seq, code) in rows {
+            out.extend(seq.to_le_bytes());
+            out.extend_from_slice(code);
+        }
+        out
+    }
+
+    /// Inverse of [`Self::pq_page_pack`]; `None` on any structural
+    /// mismatch (wrong count, truncated rows, stride disagreement).
+    fn pq_page_unpack(plain: &[u8], code_len: usize) -> Option<Vec<(i64, Vec<u8>)>> {
+        if plain.len() < 4 || code_len == 0 {
+            return None;
+        }
+        let count = u32::from_le_bytes(plain[..4].try_into().ok()?) as usize;
+        let stride = 8 + code_len;
+        if plain.len() != 4 + count * stride {
+            return None;
+        }
+        let mut rows = Vec::with_capacity(count);
+        for i in 0..count {
+            let at = 4 + i * stride;
+            let seq = i64::from_le_bytes(plain[at..at + 8].try_into().ok()?);
+            rows.push((seq, plain[at + 8..at + stride].to_vec()));
+        }
+        Some(rows)
+    }
+
+    /// Sealed u64 counters in `pq_meta` (`rowcount` = live rows committed
+    /// to pages, `deleted` = paged rows since orphaned by delete/update).
+    /// Written through the same sealing as every other pq_meta artifact.
+    pub(crate) fn pq_count_get(&self, key: &str) -> Result<u64, StoreError> {
+        Ok(self
+            .pq_meta_get(key)?
+            .and_then(|b| b.try_into().ok().map(u64::from_le_bytes))
+            .unwrap_or(0))
+    }
+
+    fn pq_count_put(&self, key: &str, v: u64) -> Result<(), StoreError> {
+        self.pq_meta_put(key, &v.to_le_bytes())
+    }
+
+    /// Whether any sealed pages exist (the "paged mode" probe used by the
+    /// verify pass, the write path, the delete path, and the batch fold).
+    pub(crate) fn pq_pages_present(&self) -> Result<bool, StoreError> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM pq_page", [], |r| r.get(0))?;
+        Ok(n > 0)
+    }
+
+    /// Write `rows` (already grouped however the caller likes) into sealed
+    /// pages, appending after each list's current last page and respecting
+    /// the per-page cap. Advances `rowcount` by the number of rows written.
+    fn pq_page_append(
+        &self,
+        mut by_list: std::collections::HashMap<i64, Vec<(i64, Vec<u8>)>>,
+    ) -> Result<(), StoreError> {
+        let mut written = 0u64;
+        for (list, mut rows) in by_list.drain() {
+            written += rows.len() as u64;
+            // The list's last page may still have room — fold into it.
+            let last: Option<(i64, Vec<u8>)> = self
+                .conn
+                .query_row(
+                    "SELECT pageno, blob FROM pq_page WHERE list = ?1 \
+                     ORDER BY pageno DESC LIMIT 1",
+                    params![list],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let mut pageno = match last {
+                Some((no, blob)) => {
+                    let plain = self
+                        .vault
+                        .index_from_rest(&format!("pqpage/{list}/{no}"), &blob)
+                        .ok();
+                    let code_len = rows.first().map_or(0, |(_, c)| c.len());
+                    match plain.and_then(|p| Self::pq_page_unpack(&p, code_len)) {
+                        Some(mut existing) if existing.len() < PQ_PAGE_CAP => {
+                            // Rewrite this page with the fold appended.
+                            existing.append(&mut rows);
+                            rows = existing;
+                            no
+                        }
+                        // Full (or unreadable — the verify equation will
+                        // catch real drift): start the next page.
+                        _ => no + 1,
+                    }
+                }
+                None => 0,
+            };
+            for chunk in rows.chunks(PQ_PAGE_CAP) {
+                let blob = self.vault.index_at_rest(
+                    &format!("pqpage/{list}/{pageno}"),
+                    &Self::pq_page_pack(chunk),
+                );
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO pq_page (list, pageno, blob) VALUES (?1, ?2, ?3)",
+                    params![list, pageno, blob],
+                )?;
+                pageno += 1;
+            }
+        }
+        let rowcount = self.pq_count_get("rowcount")?;
+        self.pq_count_put("rowcount", rowcount + written)
+    }
+
     /// Tune the IVF layer of the PQ prefilter: `min` is the corpus size at
     /// which partitioning kicks in (`usize::MAX` ⇒ never — flat scan only),
     /// `nprobe` the number of inverted lists a query scans (`None` ⇒ the
@@ -210,6 +367,15 @@ impl PalaceStore {
     pub fn set_ivf(&mut self, min: usize, nprobe: Option<usize>) {
         self.ivf_min = min;
         self.ivf_nprobe = nprobe;
+    }
+
+    /// Tune the sealed page tier: `min` is the corpus size at which PQ
+    /// codes keep to one AEAD page per IVF list instead of per-row seals
+    /// (`usize::MAX` ⇒ never — the default). Takes effect event-driven: the
+    /// next search's verify pass repacks in either direction. Default from
+    /// `UNDERCROFT_PQ_PAGE_MIN` at open (`off` ⇒ never).
+    pub fn set_pq_pages(&mut self, min: usize) {
+        self.pq_page_min = min;
     }
 
     pub(crate) fn pq_schema(&self) -> Result<(), StoreError> {
@@ -243,7 +409,17 @@ impl PalaceStore {
              CREATE TABLE IF NOT EXISTS pq_meta (
                  key   TEXT PRIMARY KEY,
                  value BLOB NOT NULL
-             );",
+             );
+             -- Sealed page tier (opt-in): one AEAD blob per (list, pageno).
+             -- The plaintext (list, pageno) key is what lets a probe fetch
+             -- its lists without decrypting the world; blob lengths reveal
+             -- the cluster-size histogram, never membership (spike-accepted).
+             CREATE TABLE IF NOT EXISTS pq_page (
+                 list   INTEGER NOT NULL,
+                 pageno INTEGER NOT NULL,
+                 blob   BLOB NOT NULL,
+                 PRIMARY KEY (list, pageno)
+             ) WITHOUT ROWID;",
         )?;
         Ok(())
     }
@@ -278,12 +454,25 @@ impl PalaceStore {
             // Self-heal: every live drawer must have a code row (orphans
             // from deletes are excluded by the join and are harmless), and —
             // when the corpus is IVF-sized — the partitions must exist and
-            // not be outgrown (2× their training size).
-            let matched: i64 = self.conn.query_row(
+            // not be outgrown (2× their training size). On the page tier
+            // the equation extends: matched = tail rows (joined against
+            // live drawers, as always) + the sealed page commitment
+            // (`rowcount` − `deleted`) — pages can't be joined without
+            // decrypting the world, which is exactly what lazy mode avoids.
+            let tail_matched: i64 = self.conn.query_row(
                 "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
                 [],
                 |r| r.get(0),
             )?;
+            let pages = self.pq_pages_present()?;
+            let matched = if pages {
+                let live = self
+                    .pq_count_get("rowcount")?
+                    .saturating_sub(self.pq_count_get("deleted")?);
+                tail_matched + live as i64
+            } else {
+                tail_matched
+            };
             let want_ivf = (drawers as usize) >= self.ivf_min;
             let ivf_stale = want_ivf && {
                 if self.ivf.borrow().is_none() {
@@ -294,10 +483,27 @@ impl PalaceStore {
                     Some(cq) => drawers as u64 > cq.trained_n().saturating_mul(2),
                 }
             };
-            if (self.pq.borrow().is_none() || matched != drawers || ivf_stale)
-                && !self.pq_build()?
-            {
-                return Ok(None);
+            if self.pq.borrow().is_none() || matched != drawers || ivf_stale {
+                if !self.pq_build()? {
+                    return Ok(None);
+                }
+            } else {
+                // Coherent index — reconcile the *format* with the page
+                // setting (event-driven migration, both directions), and
+                // fold an accumulated single-write tail into its pages.
+                let want_pages = self.pq_pages_on(drawers as usize);
+                if want_pages && !pages {
+                    self.pq_repack_rows_to_pages()?;
+                } else if !want_pages && pages {
+                    self.pq_repack_pages_to_rows()?;
+                } else if pages {
+                    let tails: i64 =
+                        self.conn
+                            .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))?;
+                    if tails as usize >= PQ_TAIL_FOLD {
+                        self.pq_compact_tail()?;
+                    }
+                }
             }
             self.pq_live.set(drawers);
             self.pq_verified.set(true);
@@ -365,17 +571,32 @@ impl PalaceStore {
         // membership filter was the O(N·nprobe) cost the page-level spike
         // measured at 0.3–1.4 s/q at 10⁷); if the probed lists hold fewer
         // than `k` rows (skewed partitions, tiny corpus), widen to the full
-        // scan rather than starve the fusion stage.
-        self.pq_cache_ensure()?;
+        // scan rather than starve the fusion stage. On the sealed page
+        // tier, only the scanned lists' pages are ever decrypted — that
+        // lazy load is the open-time/RAM win the spike measured.
+        self.pq_cache_ensure(pq.code_len())?;
+        match &probe {
+            Some(lists) => self.pq_cache_load_lists(lists)?,
+            None => self.pq_cache_load_all()?,
+        }
+        let widen = match &probe {
+            Some(lists) => self
+                .pq_cache
+                .borrow()
+                .as_ref()
+                .is_none_or(|c| c.rows_in(lists) < k),
+            None => true,
+        };
+        if widen {
+            self.pq_cache_load_all()?;
+        }
         let cache_ref = self.pq_cache.borrow();
         let Some(cache) = cache_ref.as_ref() else {
             return Ok(None);
         };
         let mut scored: Vec<(f32, i64)> = Vec::new();
         match &probe {
-            Some(lists) if cache.rows_in(lists) >= k => {
-                cache.scan(pq, &tables, Some(lists), &mut scored)
-            }
+            Some(lists) if !widen => cache.scan(pq, &tables, Some(lists), &mut scored),
             _ => cache.scan(pq, &tables, None, &mut scored),
         }
         if scored.len() > k {
@@ -392,36 +613,120 @@ impl PalaceStore {
     /// its seq-bound AAD; hmac-only rows load as stored. Sealed rows that
     /// fail to open are skipped — the matched-count verify catches real
     /// drift; a skipped row only costs its candidate slot.
-    fn pq_cache_ensure(&self) -> Result<(), StoreError> {
+    fn pq_cache_ensure(&self, code_len: usize) -> Result<(), StoreError> {
         if self.pq_cache.borrow().is_some() {
             return Ok(());
         }
-        // Decode into flat rows first, then slab-group: the stride
-        // (code_len) comes from the first decoded row.
-        let rows: Vec<(i64, i64, Vec<u8>)> = if self.pq_sealed() {
-            let mut stmt = self.conn.prepare("SELECT seq, code FROM drawer_pq")?;
-            let sealed: Vec<(i64, Vec<u8>)> = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<Result<_, _>>()?;
-            sealed
-                .into_iter()
-                .filter_map(|(seq, blob)| {
-                    let plain = self
-                        .vault
-                        .index_from_rest(&format!("pqrow/{seq}"), &blob)
-                        .ok()?;
-                    let (list, code) = Self::pq_row_unpack(&plain)?;
-                    Some((seq, list, code))
-                })
-                .collect()
+        // Per-row rows load eagerly (in paged mode these are the tail —
+        // the recent single writes); pages decrypt lazily per probed list.
+        let rows = if self.pq_sealed() {
+            self.pq_rows_sealed()?
         } else {
             self.pq_rows_plain()?
         };
-        let mut cache = PqCache::new(rows.first().map_or(0, |(_, _, c)| c.len()));
+        let stride = if code_len > 0 {
+            code_len
+        } else {
+            rows.first().map_or(0, |(_, _, c)| c.len())
+        };
+        let paged = self.pq_sealed() && self.pq_pages_present()?;
+        let mut cache = if paged {
+            PqCache::new_paged(stride)
+        } else {
+            PqCache::new(stride)
+        };
         for (seq, list, code) in &rows {
             cache.push(*seq, *list, code);
         }
         *self.pq_cache.borrow_mut() = Some(cache);
+        Ok(())
+    }
+
+    /// The sealed per-row load: decrypt each `drawer_pq` blob under its
+    /// seq-bound AAD. Rows that fail to open are skipped — the verify
+    /// equation catches real drift; a skipped row costs a candidate slot.
+    fn pq_rows_sealed(&self) -> Result<Vec<(i64, i64, Vec<u8>)>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT seq, code FROM drawer_pq")?;
+        let sealed: Vec<(i64, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(sealed
+            .into_iter()
+            .filter_map(|(seq, blob)| {
+                let plain = self
+                    .vault
+                    .index_from_rest(&format!("pqrow/{seq}"), &blob)
+                    .ok()?;
+                let (list, code) = Self::pq_row_unpack(&plain)?;
+                Some((seq, list, code))
+            })
+            .collect())
+    }
+
+    /// Decrypt the given lists' pages into the cache. No-op for lists
+    /// already loaded, and for non-paged caches (`loaded == None`).
+    fn pq_cache_load_lists(&self, lists: &[i64]) -> Result<(), StoreError> {
+        let mut cache_ref = self.pq_cache.borrow_mut();
+        let Some(cache) = cache_ref.as_mut() else {
+            return Ok(());
+        };
+        let Some(loaded) = &cache.loaded else {
+            return Ok(());
+        };
+        let missing: Vec<i64> = lists
+            .iter()
+            .copied()
+            .filter(|l| !loaded.contains(l))
+            .collect();
+        for list in missing {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT pageno, blob FROM pq_page WHERE list = ?1")?;
+            let pages: Vec<(i64, Vec<u8>)> = stmt
+                .query_map(params![list], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            for (pageno, blob) in pages {
+                let Ok(plain) = self
+                    .vault
+                    .index_from_rest(&format!("pqpage/{list}/{pageno}"), &blob)
+                else {
+                    continue;
+                };
+                let Some(rows) = Self::pq_page_unpack(&plain, cache.code_len) else {
+                    continue;
+                };
+                for (seq, code) in rows {
+                    cache.push(seq, list, &code);
+                }
+            }
+            cache
+                .loaded
+                .as_mut()
+                .expect("paged cache checked above")
+                .insert(list);
+        }
+        Ok(())
+    }
+
+    /// Decrypt every remaining page (flat scans, or a probe that came up
+    /// short and widened). Afterwards the cache is fully resident.
+    fn pq_cache_load_all(&self) -> Result<(), StoreError> {
+        {
+            let cache_ref = self.pq_cache.borrow();
+            match cache_ref.as_ref() {
+                Some(c) if c.loaded.is_some() => {}
+                _ => return Ok(()),
+            }
+        }
+        let mut stmt = self.conn.prepare("SELECT DISTINCT list FROM pq_page")?;
+        let lists: Vec<i64> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        self.pq_cache_load_lists(&lists)?;
+        if let Some(cache) = self.pq_cache.borrow_mut().as_mut() {
+            cache.loaded = None;
+        }
         Ok(())
     }
 
@@ -559,17 +864,29 @@ impl PalaceStore {
             *self.ivf.borrow_mut() = None;
         }
 
+        // A rebuild always writes the target format from scratch — it is
+        // also the migration path of last resort (any drift lands here).
         self.conn.execute("DELETE FROM drawer_pq", [])?;
+        self.conn.execute("DELETE FROM pq_page", [])?;
+        self.conn.execute(
+            "DELETE FROM pq_meta WHERE key IN ('rowcount', 'deleted')",
+            [],
+        )?;
         let mut ins = self
             .conn
             .prepare("INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (?1, ?2, ?3)")?;
         let sealed = self.pq_sealed();
+        let paged = self.pq_pages_on(items.len());
         let ivf_ref = self.ivf.borrow();
         let mut cache = PqCache::new(pq.code_len());
+        let mut by_list: std::collections::HashMap<i64, Vec<(i64, Vec<u8>)>> =
+            std::collections::HashMap::new();
         for (seq, vec) in &items {
             let list: i64 = ivf_ref.as_ref().map_or(-1, |cq| cq.assign(vec) as i64);
             let code = pq.encode(vec);
-            if sealed {
+            if paged {
+                by_list.entry(list).or_default().push((*seq, code.clone()));
+            } else if sealed {
                 // Sealed row: list id + code AEAD-sealed together, bound to
                 // this seq; the plaintext list column stays -1 (a clear list
                 // id would leak semantic clustering).
@@ -581,10 +898,15 @@ impl PalaceStore {
                 ins.execute(params![list, seq, code])?;
             }
             // Either level's RAM cache is populated from the plaintext
-            // already in hand — no re-read, no re-decrypt.
+            // already in hand — no re-read, no re-decrypt. After a paged
+            // build the cache is fully resident (`loaded = None`).
             cache.push(*seq, list, &code);
         }
         drop(ivf_ref);
+        drop(ins);
+        if paged {
+            self.pq_page_append(by_list)?;
+        }
         *self.pq_cache.borrow_mut() = Some(cache);
         *self.pq.borrow_mut() = Some(pq);
         Ok(true)
@@ -616,14 +938,17 @@ impl PalaceStore {
         // row's seq, so resolve it first. Updates keep their `seq` (drawers
         // upsert is ON CONFLICT DO UPDATE), so a re-embedded drawer may move
         // lists — drop the old row or it would live on as a stale
-        // (list, seq) duplicate.
+        // (list, seq) duplicate. On the page tier a single write always
+        // lands as a *tail* row (today's per-row form) — never a page
+        // reseal; the fold happens per batch / per verify pass.
         let outcome = self
             .conn
             .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
                 r.get::<_, i64>(0)
             })
             .and_then(|seq| {
-                self.conn
+                let tail_dropped = self
+                    .conn
                     .execute("DELETE FROM drawer_pq WHERE seq = ?1", params![seq])?;
                 if self.pq_sealed() {
                     let blob = self
@@ -639,10 +964,26 @@ impl PalaceStore {
                         params![list, seq, code],
                     )?;
                 }
-                Ok(seq)
+                Ok((seq, tail_dropped))
             });
         match outcome {
-            Ok(seq) => {
+            Ok((seq, tail_dropped)) => {
+                // An updated drawer whose previous code lives inside a page
+                // leaves it there as a stale copy (rewriting the page per
+                // single write is the amplification the tail exists to
+                // avoid). Count it out of the sealed commitment so the
+                // verify equation stays balanced; the copy wastes one
+                // candidate slot until the next rebuild repacks.
+                if !created && tail_dropped == 0 {
+                    if let Ok(true) = self.pq_pages_present() {
+                        let bumped = self
+                            .pq_count_get("deleted")
+                            .and_then(|d| self.pq_count_put("deleted", d + 1));
+                        if bumped.is_err() {
+                            self.pq_verified.set(false);
+                        }
+                    }
+                }
                 // Keep the RAM cache coherent with the plaintext in hand.
                 if let Some(cache) = self.pq_cache.borrow_mut().as_mut() {
                     cache.remove_seq(seq);
@@ -656,6 +997,146 @@ impl PalaceStore {
             // search rather than serve from a silently stale index.
             Err(_) => self.pq_verified.set(false),
         }
+    }
+
+    /// Purge one drawer's code on delete (called by `delete_drawer` with
+    /// the drawer row still live). Tail rows delete directly; a code inside
+    /// a sealed page is instead counted out of the commitment (`deleted`) —
+    /// the page itself is rewritten only by fold/rebuild, never per delete.
+    /// Advisory: any failure arms the next search's verification.
+    pub(crate) fn pq_purge_row(&self, id: &str) {
+        let outcome: Result<(), StoreError> = (|| {
+            let seq: Option<i64> = self
+                .conn
+                .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            let Some(seq) = seq else { return Ok(()) };
+            let tail = self
+                .conn
+                .execute("DELETE FROM drawer_pq WHERE seq = ?1", params![seq])?;
+            if tail == 0 && self.pq_pages_present()? {
+                let d = self.pq_count_get("deleted")?;
+                self.pq_count_put("deleted", d + 1)?;
+            }
+            Ok(())
+        })();
+        if outcome.is_err() {
+            self.pq_verified.set(false);
+        }
+    }
+
+    /// Fold the accumulated tail into its lists' pages (the batch-boundary
+    /// compaction `upsert_many` triggers, and the verify pass once the
+    /// tail passes [`PQ_TAIL_FOLD`]). The cache reloads on next use — the
+    /// folded rows would otherwise double once their lists lazily load.
+    pub(crate) fn pq_compact_tail(&self) -> Result<(), StoreError> {
+        let rows = self.pq_rows_sealed()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        // Fold only rows for live drawers: committing an orphan (crash
+        // window) into `rowcount` would unbalance the verify equation and
+        // force a needless full rebuild.
+        let live = self.pq_live_seqs()?;
+        let mut by_list: std::collections::HashMap<i64, Vec<(i64, Vec<u8>)>> =
+            std::collections::HashMap::new();
+        for (seq, list, code) in rows {
+            if live.contains(&seq) {
+                by_list.entry(list).or_default().push((seq, code));
+            }
+        }
+        self.pq_page_append(by_list)?;
+        self.conn.execute("DELETE FROM drawer_pq", [])?;
+        self.pq_cache.borrow_mut().take();
+        Ok(())
+    }
+
+    fn pq_live_seqs(&self) -> Result<std::collections::HashSet<i64>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT seq FROM drawers")?;
+        let live: std::collections::HashSet<i64> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(live)
+    }
+
+    /// Event-driven migration, per-row → pages: regroup the existing sealed
+    /// rows without touching embeddings or the codebook. Runs from the
+    /// verify pass when the page setting turns on over a coherent index.
+    fn pq_repack_rows_to_pages(&self) -> Result<(), StoreError> {
+        let rows = self.pq_rows_sealed()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        // Orphans (rows whose drawer is gone) stay out of the commitment —
+        // packing them in would immediately re-trigger a full rebuild.
+        let live = self.pq_live_seqs()?;
+        self.pq_count_put("rowcount", 0)?;
+        self.pq_count_put("deleted", 0)?;
+        let mut by_list: std::collections::HashMap<i64, Vec<(i64, Vec<u8>)>> =
+            std::collections::HashMap::new();
+        for (seq, list, code) in rows {
+            if live.contains(&seq) {
+                by_list.entry(list).or_default().push((seq, code));
+            }
+        }
+        self.pq_page_append(by_list)?;
+        self.conn.execute("DELETE FROM drawer_pq", [])?;
+        self.pq_cache.borrow_mut().take();
+        Ok(())
+    }
+
+    /// Event-driven migration, pages → per-row: unpack every page back
+    /// into sealed rows (tail rows win over their stale page copies) and
+    /// clear the page tier. Runs when the setting turns off.
+    fn pq_repack_pages_to_rows(&self) -> Result<(), StoreError> {
+        let Some(code_len) = self.pq.borrow().as_ref().map(|p| p.code_len()) else {
+            return Ok(());
+        };
+        let mut tail_stmt = self.conn.prepare("SELECT seq FROM drawer_pq")?;
+        let tail_seqs: std::collections::HashSet<i64> = tail_stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(tail_stmt);
+        let mut page_stmt = self
+            .conn
+            .prepare("SELECT list, pageno, blob FROM pq_page")?;
+        let pages: Vec<(i64, i64, Vec<u8>)> = page_stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        drop(page_stmt);
+        let mut ins = self
+            .conn
+            .prepare("INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (-1, ?1, ?2)")?;
+        for (list, pageno, blob) in pages {
+            let Ok(plain) = self
+                .vault
+                .index_from_rest(&format!("pqpage/{list}/{pageno}"), &blob)
+            else {
+                continue;
+            };
+            let Some(rows) = Self::pq_page_unpack(&plain, code_len) else {
+                continue;
+            };
+            for (seq, code) in rows {
+                if tail_seqs.contains(&seq) {
+                    continue;
+                }
+                let sealed = self
+                    .vault
+                    .index_at_rest(&format!("pqrow/{seq}"), &Self::pq_row_pack(list, &code));
+                ins.execute(params![seq, sealed])?;
+            }
+        }
+        drop(ins);
+        self.conn.execute("DELETE FROM pq_page", [])?;
+        self.conn.execute(
+            "DELETE FROM pq_meta WHERE key IN ('rowcount', 'deleted')",
+            [],
+        )?;
+        self.pq_cache.borrow_mut().take();
+        Ok(())
     }
 }
 
