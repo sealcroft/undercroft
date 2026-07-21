@@ -309,6 +309,16 @@ pub struct PalaceStore {
     /// Stored-FDE count at which the codebook trains
     /// (`UNDERCROFT_FDE_PQ_MIN`, `off` ⇒ never — raw v1 rows only).
     fde_pq_min: usize,
+    /// Inverted-tier coarse centroids over FDE space, trained event-driven
+    /// past `fde_ivf_min` coded rows (persisted sealed in `fde_meta`).
+    fde_ivf: std::cell::RefCell<Option<pq::CoarseQuantizer>>,
+    fde_ivf_checked: std::cell::Cell<bool>,
+    /// (`UNDERCROFT_FDE_IVF_MIN`, `off` ⇒ never.) Below this the flat ADC
+    /// scan stays — it was the measured winner at every small-N scale.
+    fde_ivf_min: usize,
+    /// `UNDERCROFT_FDE_NPROBE` (default `max(8, nlist/4)` — recall tracks
+    /// the probed fraction, mirroring the embedding-space PQ/IVF tier).
+    fde_nprobe: Option<usize>,
     /// The current query's token matrix, stashed by FDE candidate
     /// generation and consumed by the MaxSim rescore — the query forward is
     /// the expensive part of both stages, and one search must pay it once.
@@ -518,6 +528,20 @@ impl PalaceStore {
                 Ok(v) => v.parse().unwrap_or(fdeidx::FDE_PQ_MIN_DEFAULT),
                 Err(_) => fdeidx::FDE_PQ_MIN_DEFAULT,
             },
+            fde_ivf: std::cell::RefCell::new(None),
+            fde_ivf_checked: std::cell::Cell::new(false),
+            // Default OFF: the containment gate measured probed containment
+            // below flat's at every fraction (0.96 quarter / 0.993 half at
+            // 500k vs flat 1.000) — opting in trades a small tail of exact
+            // top-10 members for scan time; the operator makes that call.
+            fde_ivf_min: match std::env::var("UNDERCROFT_FDE_IVF_MIN") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(fdeidx::FDE_IVF_MIN_DEFAULT),
+                Err(_) => usize::MAX,
+            },
+            fde_nprobe: std::env::var("UNDERCROFT_FDE_NPROBE")
+                .ok()
+                .and_then(|v| v.parse().ok()),
             qmatrix_cache: std::cell::RefCell::new(None),
         };
         store.fts = store.init_fts_schema()?;
@@ -2319,6 +2343,122 @@ mod tests {
                 })
                 .unwrap();
             assert!(hits.contains(&zk_seq));
+        }
+    }
+
+    #[test]
+    fn fde_inverted_tier_partitions_and_agrees() {
+        for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+            let (_d, mut s) = store(level);
+            s.set_late(Some(Box::new(WordLate)));
+            s.set_fde(true);
+            s.fde_pq_min = 8; // train immediately at test scale
+            s.fde_ivf_min = 16; // invert immediately at test scale
+            for i in 0..80 {
+                s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                    .unwrap();
+            }
+            let target = drawer("w", "r", "kafka stream backlog rework", 100);
+            s.upsert(&target).unwrap();
+            let target_seq: i64 = s
+                .conn
+                .query_row("SELECT seq FROM drawers WHERE id = ?1", [&target.id], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+
+            let cands = s
+                .fde_candidates("kafka stream backlog", 5)
+                .unwrap()
+                .expect("FDE index must serve");
+            assert!(
+                cands.contains(&target_seq),
+                "target must survive the probed head at level {level:?}"
+            );
+
+            // Centroids trained + persisted; every cached row carries a
+            // real list (nothing left in -1 after the in-place rewrite).
+            assert!(s.fde_ivf.borrow().is_some(), "inverted tier must train");
+            let meta: i64 = s
+                .conn
+                .query_row("SELECT COUNT(*) FROM fde_meta WHERE key = 'ivf'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(meta, 1, "centroids must persist");
+            match s.fde_cache.borrow().as_ref() {
+                Some(fdeidx::FdeCache::Coded { slabs, .. }) => {
+                    assert!(
+                        slabs.keys().all(|l| *l >= 0),
+                        "every row must be list-assigned after inversion"
+                    );
+                }
+                _ => panic!("cache must be coded"),
+            }
+
+            // Rows rewrote in place — sealed rows stay opaque.
+            let fde_dim = s.fde_encoder.borrow().as_ref().unwrap().dim();
+            let blob: Vec<u8> = s
+                .conn
+                .query_row(
+                    "SELECT fde FROM drawer_fde WHERE id = ?1",
+                    [&target.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            match level {
+                SecurityLevel::HmacOnly => {
+                    assert_eq!(blob.first(), Some(&2u8), "row must stay v2 codes");
+                    let list = i32::from_le_bytes(blob[1..5].try_into().unwrap());
+                    assert!(list >= 0, "row must carry a real list id");
+                }
+                SecurityLevel::Sealed => {
+                    assert_ne!(
+                        blob.len(),
+                        5 + fde_dim / 8,
+                        "sealed row must not be the plain packing"
+                    );
+                }
+            }
+
+            // Cold rebuild reproduces the probed candidates (lists persist
+            // inside the sealed rows).
+            s.fde_cache.borrow_mut().take();
+            let again = s
+                .fde_candidates("kafka stream backlog", 5)
+                .unwrap()
+                .expect("slab rebuild");
+            assert_eq!(cands, again, "slab rebuild must reproduce candidates");
+
+            // The unit-scale containment gate: the full slab scan (probe
+            // disabled) must agree on the target.
+            *s.fde_ivf.borrow_mut() = None;
+            let full = s
+                .fde_candidates("kafka stream backlog", 5)
+                .unwrap()
+                .expect("full scan");
+            assert!(full.contains(&target_seq), "probe must not beat full scan");
+
+            // Centroids reload from sealed meta; a post-invert write gets a
+            // real list and stays findable.
+            s.fde_ivf_checked.set(false);
+            s.upsert(&drawer("w", "api", "zookeeper quorum flapped again", 200))
+                .unwrap();
+            let hits = s
+                .fde_candidates("zookeeper quorum flapped", 5)
+                .unwrap()
+                .expect("post-invert writes must serve");
+            let zk_seq: i64 = s
+                .conn
+                .query_row("SELECT seq FROM drawers WHERE room = 'api'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert!(hits.contains(&zk_seq));
+            assert!(
+                s.fde_ivf.borrow().is_some(),
+                "centroids must reload from meta"
+            );
         }
     }
 

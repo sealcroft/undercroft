@@ -20,15 +20,20 @@
 //!   `UNDERCROFT_FDE_PQ_MIN` rows exist, a product-quantizer codebook
 //!   trains from the palace's own FDEs (persisted sealed in `fde_meta`),
 //!   every row repacks to `dim/8` bytes (**32×**), and the scan switches
-//!   to per-query dot-product LUTs. **Deliberately no IVF tier**: measured
-//!   at N=2k–200k, IVF over FDE space was net-negative — candidate
-//!   containment dropped (1.000 → 0.84–0.99) *and* the RAM-side list
-//!   filter cost more than the flat 256-add ADC scan it replaced
-//!   (O(N·nprobe) vs O(N·m)); a properly inverted layout only pays past
-//!   ~10⁶ docs. The `list` field in the pack format is reserved (-1) so a
-//!   future inverted tier needs no migration; it rides *inside* the
-//!   sealed blob because a plaintext list column would leak which drawers
-//!   are semantically similar.
+//!   to per-query dot-product LUTs.
+//!
+//! **The inverted tier** activates past `UNDERCROFT_FDE_IVF_MIN` coded
+//! rows: coarse centroids (`nlist ≈ √N`, clamp 16..=4096) train over the
+//! palace's own decoded FDEs, each row's `list` field (reserved as -1
+//! since v0.24.0 — no migration) rewrites in place, and the RAM cache
+//! groups into per-list **slabs** so a probe scans only its lists
+//! contiguously. The naive attempt (flat cache + per-row membership
+//! filter) measured net-negative at N≤200k — containment dropped to
+//! 0.84–0.99 and the O(N·nprobe) filter cost more than the flat ADC scan
+//! — which is why the threshold defaults high and the flat scan remains
+//! the small-N path. The list id rides *inside* the sealed blob because a
+//! plaintext list column would leak which drawers are semantically
+//! similar.
 //!
 //! Storage mirrors the token store it derives from: rows live in
 //! `drawer_fde` keyed by drawer id + model, AEAD-sealed on sealed vaults
@@ -49,7 +54,7 @@ use undercroft_core::fde::{fde_dot, FdeEncoder, FdeParams};
 use undercroft_core::late::dequantize_tokens;
 use rusqlite::{params, OptionalExtension};
 
-use crate::pq::ProductQuantizer;
+use crate::pq::{CoarseQuantizer, ProductQuantizer};
 use crate::{PalaceStore, StoreError};
 
 /// Stored-FDE count at which the FDE codebook trains (v2 packing).
@@ -57,16 +62,39 @@ pub(crate) const FDE_PQ_MIN_DEFAULT: usize = 256;
 /// Sampling cap and k-means iterations for FDE-codebook training.
 const FDE_PQ_SAMPLE: usize = 4096;
 const FDE_PQ_ITERS: usize = 10;
+/// Suggested coded-row count for opting the inverted tier in
+/// (`UNDERCROFT_FDE_IVF_MIN` set without a parseable number falls back
+/// here). The tier is **off by default**: the containment gate measured
+/// probed containment below flat's at every fraction (0.960 quarter /
+/// 0.993 half at N=500k vs flat 1.000), so activating it is an explicit
+/// operator trade of a small exact-top-10 tail for scan time.
+pub(crate) const FDE_IVF_MIN_DEFAULT: usize = 500_000;
+const FDE_IVF_ITERS: usize = 10;
 
 /// The FDE RAM cache: raw vectors below the codebook threshold, PQ codes
-/// (+ IVF list) above it. One variant at a time — the train pass repacks
-/// every row in one sweep, so formats never mix.
+/// above it. One variant at a time — the train pass repacks every row in
+/// one sweep, so formats never mix.
 pub(crate) enum FdeCache {
     /// `(seq, fde)` — exact vectors, dot-product scan.
     Raw(Vec<(i64, Vec<f32>)>),
-    /// `(seq, list, code)` — ADC scan via per-query dot LUTs; `list` is -1
-    /// until IVF centroids exist.
-    Coded(Vec<(i64, i64, Vec<u8>)>),
+    /// Slab-grouped codes: `list → (seqs, contiguous codes)`. A probe
+    /// scans only its lists' slabs — no per-row membership test, which is
+    /// the O(N·nprobe) cost that sank the naive inverted attempt. All rows
+    /// sit in list -1 until the inverted tier trains; -1 also rides along
+    /// in every probe afterwards (rows written before partitions existed).
+    Coded {
+        code_len: usize,
+        slabs: std::collections::HashMap<i64, (Vec<i64>, Vec<u8>)>,
+    },
+}
+
+impl FdeCache {
+    fn coded_rows(&self) -> usize {
+        match self {
+            FdeCache::Raw(_) => 0,
+            FdeCache::Coded { slabs, .. } => slabs.values().map(|(s, _)| s.len()).sum(),
+        }
+    }
 }
 
 fn f32s_to_bytes(v: &[f32]) -> Vec<u8> {
@@ -256,10 +284,15 @@ impl PalaceStore {
     fn fde_store_row(&self, id: &str, model: &str, fde: &[f32]) {
         let (payload, cache_row) = match self.fde_pq.borrow().as_ref() {
             Some(pq) => {
-                // List -1: reserved for a future inverted tier (see the
-                // module docs for why IVF is deliberately absent today).
+                // List-assign against the live centroids; -1 until the
+                // inverted tier has trained (it rides in every probe).
+                let list = self
+                    .fde_ivf
+                    .borrow()
+                    .as_ref()
+                    .map_or(-1, |cq| cq.assign(fde) as i64);
                 let code = pq.encode(fde);
-                (fde_row_pack_coded(-1, &code), Some((-1i64, code)))
+                (fde_row_pack_coded(list, &code), Some((list, code)))
             }
             None => (fde_row_pack_raw(fde), None),
         };
@@ -289,9 +322,22 @@ impl PalaceStore {
                 rows.retain(|(s, _)| *s != seq);
                 rows.push((seq, fde.to_vec()));
             }
-            (Some(FdeCache::Coded(rows)), Some((list, code))) => {
-                rows.retain(|(s, _, _)| *s != seq);
-                rows.push((seq, list, code));
+            (Some(FdeCache::Coded { code_len, slabs }), Some((list, code)))
+                if *code_len == code.len() =>
+            {
+                // Drop any previous position first — a re-embedded drawer
+                // may have moved lists.
+                let cl = *code_len;
+                for (seqs, codes) in slabs.values_mut() {
+                    if let Some(i) = seqs.iter().position(|s| *s == seq) {
+                        seqs.remove(i);
+                        codes.drain(i * cl..(i + 1) * cl);
+                        break;
+                    }
+                }
+                let (seqs, codes) = slabs.entry(list).or_default();
+                seqs.push(seq);
+                codes.extend_from_slice(&code);
             }
             (Some(_), _) => {
                 // Format transition mid-write (shouldn't happen — the train
@@ -482,25 +528,132 @@ impl PalaceStore {
             )?
             .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
-        let (mut raw, mut coded) = (Vec::new(), Vec::new());
+        let mut raw = Vec::new();
+        let mut slabs: std::collections::HashMap<i64, (Vec<i64>, Vec<u8>)> =
+            std::collections::HashMap::new();
+        let mut coded_n = 0usize;
         for (id, seq, blob) in rows {
             let Ok(plain) = self.vault.tokens_from_rest(&format!("fde/{id}"), &blob) else {
                 continue;
             };
             match fde_row_unpack(&plain, fde_dim, code_len) {
                 Some(FdeRow::Raw(f)) => raw.push((seq, f)),
-                Some(FdeRow::Coded(list, code)) => coded.push((seq, list, code)),
+                Some(FdeRow::Coded(list, code)) => {
+                    let (seqs, codes) = slabs.entry(list).or_default();
+                    seqs.push(seq);
+                    codes.extend_from_slice(&code);
+                    coded_n += 1;
+                }
                 None => {}
             }
         }
         // One variant at a time (the train pass repacks wholesale); if both
         // somehow appear, the coded majority wins and stragglers cost their
         // candidate slot until the next backfill sweep.
-        *self.fde_cache.borrow_mut() = Some(if coded.len() >= raw.len() {
-            FdeCache::Coded(coded)
+        *self.fde_cache.borrow_mut() = Some(if coded_n >= raw.len() {
+            FdeCache::Coded { code_len, slabs }
         } else {
             FdeCache::Raw(raw)
         });
+        Ok(())
+    }
+
+    /// Load-or-train the inverted tier once per session. Past `fde_ivf_min`
+    /// coded rows, coarse centroids (`nlist ≈ √N`, clamp 16..=4096) train
+    /// over the palace's own decoded FDEs, every row's reserved list field
+    /// rewrites in place (the v2 pack anticipated this — no migration), and
+    /// the cache regroups. Centroids retrain when the corpus doubles past
+    /// their training size. Advisory like every derived artifact — and like
+    /// every advisory encode path it must never open a transaction.
+    fn fde_ivf_ensure(&self, model: &str) -> Result<(), StoreError> {
+        if self.fde_ivf_checked.get() {
+            return Ok(());
+        }
+        self.fde_ivf_checked.set(true);
+        if self.fde_ivf.borrow().is_none() {
+            if let Some(cq) = self
+                .fde_meta_get("ivf")?
+                .and_then(|b| CoarseQuantizer::from_bytes(&b))
+            {
+                *self.fde_ivf.borrow_mut() = Some(cq);
+            }
+        }
+        let n = self
+            .fde_cache
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.coded_rows());
+        let fresh = matches!(
+            self.fde_ivf.borrow().as_ref(),
+            Some(cq) if (n as u64) <= cq.trained_n().saturating_mul(2)
+        );
+        if n < self.fde_ivf_min || fresh {
+            return Ok(());
+        }
+        // Decode every cached code back to FDE space for training +
+        // assignment (one pass, RAM only — the codes are already in hand).
+        let mut rows: Vec<(i64, Vec<u8>, Vec<f32>)> = Vec::with_capacity(n);
+        {
+            let cache_ref = self.fde_cache.borrow();
+            let Some(FdeCache::Coded { code_len, slabs }) = cache_ref.as_ref() else {
+                return Ok(());
+            };
+            let pq_ref = self.fde_pq.borrow();
+            let Some(pq) = pq_ref.as_ref() else {
+                return Ok(());
+            };
+            let cl = *code_len;
+            if cl == 0 {
+                return Ok(());
+            }
+            for (seqs, codes) in slabs.values() {
+                for (i, seq) in seqs.iter().enumerate() {
+                    let code = &codes[i * cl..(i + 1) * cl];
+                    rows.push((*seq, code.to_vec(), pq.decode(code)));
+                }
+            }
+        }
+        let stride = rows.len().div_ceil(FDE_PQ_SAMPLE).max(1);
+        let sample: Vec<Vec<f32>> = rows
+            .iter()
+            .step_by(stride)
+            .map(|(_, _, f)| f.clone())
+            .collect();
+        let nlist = ((n as f64).sqrt() as usize).clamp(16, 4096);
+        let Some(cq) = CoarseQuantizer::train(&sample, nlist, FDE_IVF_ITERS, n as u64) else {
+            return Ok(());
+        };
+        self.fde_meta_put("ivf", &cq.to_bytes())?;
+        // Rewrite every row's list field in place, re-sealed; regroup the
+        // cache from the assignments in hand.
+        let id_of: std::collections::HashMap<i64, String> = self
+            .conn
+            .prepare(
+                "SELECT d.seq, f.id FROM drawer_fde f
+                 JOIN drawers d ON d.id = f.id WHERE f.model = ?1",
+            )?
+            .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut slabs: std::collections::HashMap<i64, (Vec<i64>, Vec<u8>)> =
+            std::collections::HashMap::new();
+        let mut code_len = 0usize;
+        for (seq, code, fde) in rows {
+            let list = cq.assign(&fde) as i64;
+            if let Some(id) = id_of.get(&seq) {
+                let payload = fde_row_pack_coded(list, &code);
+                let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
+                let _ = self.conn.execute(
+                    "UPDATE drawer_fde SET fde = ?1 WHERE id = ?2",
+                    params![blob, id],
+                );
+            }
+            code_len = code.len();
+            let (seqs, codes) = slabs.entry(list).or_default();
+            seqs.push(seq);
+            codes.extend_from_slice(&code);
+        }
+        *self.fde_cache.borrow_mut() = Some(FdeCache::Coded { code_len, slabs });
+        *self.fde_ivf.borrow_mut() = Some(cq);
         Ok(())
     }
 
@@ -531,6 +684,7 @@ impl PalaceStore {
         }
         self.fde_pq_ensure(&model, fde_dim)?;
         self.fde_cache_ensure(&model, fde_dim)?;
+        self.fde_ivf_ensure(&model)?;
         let qmatrix = late.encode_query(query);
         if qmatrix.is_empty() {
             return Ok(None);
@@ -551,10 +705,12 @@ impl PalaceStore {
                 .iter()
                 .map(|(seq, fde)| (fde_dot(&qfde, fde), *seq))
                 .collect(),
-            Some(FdeCache::Coded(rows)) if !rows.is_empty() => {
-                // Flat ADC over the codes: per-query dot LUTs, 256 table
-                // adds per doc. Measured the honest winner over IVF at
-                // every benchable scale (see the module docs).
+            Some(FdeCache::Coded { code_len, slabs }) if !slabs.is_empty() && *code_len > 0 => {
+                // ADC over the codes: per-query dot LUTs, 16 table adds per
+                // doc. With live centroids only the probed lists' slabs are
+                // scanned (plus -1); skewed partitions that return fewer
+                // than `k` rows widen to the full scan rather than starve
+                // the candidate pool.
                 let pq_ref = self.fde_pq.borrow();
                 let Some(pq) = pq_ref.as_ref() else {
                     return Ok(None);
@@ -562,9 +718,46 @@ impl PalaceStore {
                 let Some(tables) = pq.dot_tables(&qfde) else {
                     return Ok(None);
                 };
-                rows.iter()
-                    .map(|(seq, _, code)| (pq.adc_dot(&tables, code), *seq))
-                    .collect()
+                let cl = *code_len;
+                let scan = |lists: Option<&[i64]>| -> Vec<(f32, i64)> {
+                    let mut out = Vec::new();
+                    let mut slab = |seqs: &Vec<i64>, codes: &Vec<u8>| {
+                        for (i, seq) in seqs.iter().enumerate() {
+                            out.push((pq.adc_dot(&tables, &codes[i * cl..(i + 1) * cl]), *seq));
+                        }
+                    };
+                    match lists {
+                        Some(ls) => {
+                            for l in ls {
+                                if let Some((seqs, codes)) = slabs.get(l) {
+                                    slab(seqs, codes);
+                                }
+                            }
+                        }
+                        None => {
+                            for (seqs, codes) in slabs.values() {
+                                slab(seqs, codes);
+                            }
+                        }
+                    }
+                    out
+                };
+                let ivf_ref = self.fde_ivf.borrow();
+                match ivf_ref.as_ref() {
+                    Some(cq) => {
+                        let nprobe = self.fde_nprobe.unwrap_or_else(|| (cq.nlist() / 4).max(8));
+                        let mut lists: Vec<i64> =
+                            cq.probe(&qfde, nprobe).into_iter().map(i64::from).collect();
+                        lists.push(-1);
+                        let probed = scan(Some(&lists));
+                        if probed.len() >= k {
+                            probed
+                        } else {
+                            scan(None)
+                        }
+                    }
+                    None => scan(None),
+                }
             }
             _ => return Ok(None),
         };

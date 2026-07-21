@@ -363,6 +363,8 @@ Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw`) · `UNDERCROFT_FUSION`
 (`bm25` default |`rrf`|`legacy`) · `UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
 `UNDERCROFT_IVF_MIN` (8192) · `UNDERCROFT_IVF_NPROBE` ·
 `UNDERCROFT_TOK_PQ_MIN` (256) · `UNDERCROFT_FDE_PQ_MIN` (256) ·
+`UNDERCROFT_FDE_IVF_MIN` (off by default — opt-in inverted tier) ·
+`UNDERCROFT_FDE_NPROBE` (max(8, nlist/4)) ·
 `UNDERCROFT_FDE_REPS`/`_KSIM`/`_DPROJ`/`_SEED` (first build only, then
 persisted per vault) · remote backends:
 `UNDERCROFT_QDRANT_URL`/`_CHROMA_URL`/`_PGVECTOR_DSN`/`_MILVUS_URL`/`_WEAVIATE_URL`.
