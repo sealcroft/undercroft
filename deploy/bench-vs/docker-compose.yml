@@ -5,10 +5,45 @@
 services:
   ollama:
     image: ollama/ollama:latest
+    profiles: ["ollama"]
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
       - bench-vs-ollama:/root/.ollama
 
+  # mem0's local server (OpenMemory) + its qdrant. The service name
+  # `mem0_store` is what the server expects to resolve. LLM/embedder are
+  # configured post-start via the server's own config API to point at the
+  # local OpenAI-compatible backend (LM Studio on the host by default) —
+  # see README.md; the exact config used for a published row is recorded
+  # with that row.
+  mem0_store:
+    image: qdrant/qdrant:latest
+    volumes:
+      - bench-vs-qdrant:/qdrant/storage
+
+  # OpenMemory's mem0 `lmstudio` provider is hardwired to
+  # localhost:1234; this socat bridge owns the network namespace the
+  # server shares, forwarding in-container localhost:1234 to the host's
+  # LM Studio — a pure transport shim, zero changes to mem0's code.
+  lmstudio-bridge:
+    image: alpine/socat
+    command: tcp-listen:1234,fork,reuseaddr tcp-connect:host.docker.internal:1234
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8765:8765"
+
+  openmemory-mcp:
+    image: mem0/openmemory-mcp:latest
+    network_mode: "service:lmstudio-bridge"
+    depends_on:
+      - mem0_store
+      - lmstudio-bridge
+    environment:
+      - OPENAI_API_KEY=lm-studio
+      - USER=bench
+
 volumes:
   bench-vs-ollama:
+  bench-vs-qdrant:
