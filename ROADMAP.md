@@ -703,11 +703,22 @@ release with the usual battery + measured gates.
   trust filters, and a review/promote flow. First-mover answer to the
   documented memory-poisoning attack class: memory that can't be
   silently seeded *or* silently altered.
-- **C3.4 Post-quantum export bundles.** Hybrid KEM (X25519 + ML-KEM)
-  option in `bundle.rs` for recipient-encrypted exports; PQ notes for
-  the at-rest layer (XChaCha20-Poly1305 is already PQ-comfortable).
-  "Quantum-resistant memory vault" on the label before anyone asks
-  the competitors the question.
+- **C3.4 Post-quantum posture.** The stack is symmetric-first, so most
+  of it is **already PQ-safe by construction**: XChaCha20-Poly1305
+  sealing (256-bit keys — Grover-limited to ~128-bit effective, the
+  accepted PQ bar), HMAC-SHA256 tags/chain/tokens/assertions,
+  HKDF/Argon2id derivation. The **single quantum-vulnerable spot in
+  the codebase** is `bundle.rs`'s X25519 exchange — exported bundles
+  are exposed to harvest-now-decrypt-later. Ship: (1) hybrid KEM
+  (X25519 + ML-KEM-768) bundle format, old format still importable;
+  (2) a PQ posture page documenting the inventory above plus
+  deployment guidance (hybrid-KEM TLS at the reverse proxy) and the
+  release-signing path; (3) the honest boundary stated in writing —
+  this is quantum-resistant **cryptography**; "quantum processing"
+  for retrieval is vapor and we do not claim it. Competitors would
+  have to retrofit PQ onto stacks they haven't encrypted at all; we
+  touch one file. *Gate*: bundle round-trip + downgrade-refusal
+  tests; RustSec-clean ML-KEM dependency (FIPS 203 final).
 
 Sequencing note: C1 needs no code beyond bench runners and can start
 immediately; C2 items are independent of each other; C3.1 depends on
