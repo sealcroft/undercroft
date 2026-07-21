@@ -109,6 +109,7 @@ impl PqCache {
         });
     }
 
+    #[cfg(test)]
     fn rows(&self) -> usize {
         self.slabs.values().map(|(s, _)| s.len()).sum()
     }
@@ -397,13 +398,12 @@ impl PalaceStore {
         }
         // Decode into flat rows first, then slab-group: the stride
         // (code_len) comes from the first decoded row.
-        let rows: Vec<(i64, i64, Vec<u8>)>;
-        if self.pq_sealed() {
+        let rows: Vec<(i64, i64, Vec<u8>)> = if self.pq_sealed() {
             let mut stmt = self.conn.prepare("SELECT seq, code FROM drawer_pq")?;
             let sealed: Vec<(i64, Vec<u8>)> = stmt
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<Result<_, _>>()?;
-            rows = sealed
+            sealed
                 .into_iter()
                 .filter_map(|(seq, blob)| {
                     let plain = self
@@ -413,19 +413,25 @@ impl PalaceStore {
                     let (list, code) = Self::pq_row_unpack(&plain)?;
                     Some((seq, list, code))
                 })
-                .collect();
+                .collect()
         } else {
-            let mut stmt = self.conn.prepare("SELECT seq, list, code FROM drawer_pq")?;
-            rows = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<Result<Vec<_>, _>>()?;
-        }
+            self.pq_rows_plain()?
+        };
         let mut cache = PqCache::new(rows.first().map_or(0, |(_, _, c)| c.len()));
         for (seq, list, code) in &rows {
             cache.push(*seq, *list, code);
         }
         *self.pq_cache.borrow_mut() = Some(cache);
         Ok(())
+    }
+
+    /// The hmac-only cache load: plain `(seq, list, code)` rows as stored.
+    fn pq_rows_plain(&self) -> Result<Vec<(i64, i64, Vec<u8>)>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT seq, list, code FROM drawer_pq")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Read a pq_meta value through the vault's index sealing (identity on
