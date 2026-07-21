@@ -29,6 +29,7 @@ undercroft-index = { path = "../undercroft-index" }
 undercroft-llm = { path = "../undercroft-llm" }
 anyhow = { workspace = true }
 clap = { workspace = true }
+ureq = { version = "2.10", features = ["json"] }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
