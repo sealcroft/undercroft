@@ -125,6 +125,10 @@ services:
       # Let the vault admin console (GET /ui, GRAFANA tab) iframe the
       # dashboard; without this Grafana sends X-Frame-Options: deny.
       GF_SECURITY_ALLOW_EMBEDDING: "true"
+      # Let the anonymous viewer open Explore — the dashboard's trace and
+      # log panels deep-link there, and without this a click bounces to
+      # the Grafana welcome page instead of the trace view.
+      GF_USERS_VIEWERS_CAN_EDIT: "true"
       # Server-side PNG rendering (for exported screenshots) via the sidecar.
       GF_RENDERING_SERVER_URL: http://renderer:8081/render
       GF_RENDERING_CALLBACK_URL: http://grafana:3000/
