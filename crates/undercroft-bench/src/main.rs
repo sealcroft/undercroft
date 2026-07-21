@@ -1414,12 +1414,16 @@ fn run_fde_synth(
     let ivf = CoarseQuantizer::train(&sample, nlist, 10, n as u64)
         .ok_or_else(|| anyhow::anyhow!("FDE IVF failed to train"))?;
     let lists: Vec<u32> = fdes.iter().map(|f| ivf.assign(f)).collect();
-    // Slab-grouped doc indices per list — the shipped layout: a probe
-    // scans only its lists' slabs, no per-doc membership test (the
-    // O(N·nprobe) filter that made the naive attempt net-negative).
-    let mut slabs: std::collections::HashMap<u32, Vec<usize>> = Default::default();
+    // Slab-grouped codes per list — the shipped layout: each list's codes
+    // sit in one contiguous buffer, so a probe scans sequentially with no
+    // per-doc membership test and no pointer-chasing (an index-only
+    // grouping measured slower than flat purely from cache misses).
+    let cl = pq.code_len();
+    let mut slabs: std::collections::HashMap<u32, (Vec<usize>, Vec<u8>)> = Default::default();
     for (j, l) in lists.iter().enumerate() {
-        slabs.entry(*l).or_default().push(j);
+        let e = slabs.entry(*l).or_default();
+        e.0.push(j);
+        e.1.extend_from_slice(&codes[j]);
     }
     let ivf_build_secs = t0.elapsed().as_secs_f64();
     // Two probe fractions: the pqidx default (a quarter of the lists) and
@@ -1481,9 +1485,9 @@ fn run_fde_synth(
         let probed = ivf.probe(&qfde, nprobe);
         let mut ivf_scored: Vec<(f32, usize)> = Vec::new();
         for l in &probed {
-            if let Some(idxs) = slabs.get(l) {
-                for &j in idxs {
-                    ivf_scored.push((pq.adc_dot(&tables, &codes[j]), j));
+            if let Some((idxs, buf)) = slabs.get(l) {
+                for (i, &j) in idxs.iter().enumerate() {
+                    ivf_scored.push((pq.adc_dot(&tables, &buf[i * cl..(i + 1) * cl]), j));
                 }
             }
         }
@@ -1493,9 +1497,9 @@ fn run_fde_synth(
         let probed2 = ivf.probe(&qfde, nprobe2);
         let mut ivf2_scored: Vec<(f32, usize)> = Vec::new();
         for l in &probed2 {
-            if let Some(idxs) = slabs.get(l) {
-                for &j in idxs {
-                    ivf2_scored.push((pq.adc_dot(&tables, &codes[j]), j));
+            if let Some((idxs, buf)) = slabs.get(l) {
+                for (i, &j) in idxs.iter().enumerate() {
+                    ivf2_scored.push((pq.adc_dot(&tables, &buf[i * cl..(i + 1) * cl]), j));
                 }
             }
         }

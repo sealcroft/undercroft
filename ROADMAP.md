@@ -423,9 +423,21 @@ Nothing below should be built until its trigger fires; each entry
 records the design so a future session starts from a plan, not a blank
 page.
 
-### 1. Inverted FDE tier
+### 1. Inverted FDE tier (BUILT v0.39.0 — measured, shipped OPT-IN)
 
-- **Trigger**: a real palace approaching ~10⁶ drawers where the flat
+- **Outcome** (fde-synth, contiguous-slab harness, within-run): the
+  machinery shipped — event-driven centroids over decoded FDEs, in-place
+  list rewrite (no migration), slab-grouped cache,
+  `UNDERCROFT_FDE_IVF_MIN` / `UNDERCROFT_FDE_NPROBE` — but the gate
+  FAILED on both axes at N=200k/500k: containment 0.960–0.967
+  (quarter-probe) / 0.993–1.000 (half-probe) vs flat's 1.000, and the
+  probed scan measured slower than flat ADC (243 vs 79 ms/q at 500k).
+  Flat ADC + LUT stays the recommended configuration at every measured
+  scale; the tier is **default OFF** — opt in via
+  `UNDERCROFT_FDE_IVF_MIN=<n>` past ~10⁶ only after validating
+  containment on the real corpus. Logs
+  `.handover/fde_slab_sweep{,2}.log`.
+- **Trigger** (original): a real palace approaching ~10⁶ drawers where the flat
   PQ-ADC FDE scan (measured 33 ms/q @ 200k, linear in N) exceeds the
   latency budget. Below that scale it measured net-negative — the
   O(N·nprobe) membership filter loses to flat 256-add ADC (v0.24.0

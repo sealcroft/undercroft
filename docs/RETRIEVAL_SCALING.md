@@ -546,6 +546,20 @@ correct construction and only pays past ~10⁶ docs; the v2 pack format
 reserves a list field inside the sealed blob so that tier needs no
 migration when a corpus warrants it.
 
+That tier **shipped in v0.39.0 — and its own gate keeps it opt-in**.
+The proper construction (event-driven centroids over the palace's own
+decoded FDEs, in-place list rewrite, contiguous per-list slabs, probe +
+widen-on-skew) was measured with a contiguous-slab harness at
+N=200k/500k, within-run: probed containment stayed *below* flat's
+(0.960–0.967 at quarter-probe, 0.993–1.000 at half, vs flat's 1.000)
+and the probed scan ran slower than the flat ADC scan (243 vs 79 ms/q
+at 500k — high-dimensional FDE space clusters poorly for coarse
+quantization at these scales). Flat ADC + LUT therefore remains the
+recommended configuration everywhere measured; `UNDERCROFT_FDE_IVF_MIN`
+activates the inverted tier only for operators past ~10⁶ drawers who
+have validated containment on their real corpus
+(`UNDERCROFT_FDE_NPROBE` sets the probed fraction).
+
 ## Configurable — pick per deployment, not one-size-fits-all
 
 Retrieval, scoring, and runtime are **independent, user-selectable axes**. The

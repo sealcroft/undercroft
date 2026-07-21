@@ -62,10 +62,12 @@ pub(crate) const FDE_PQ_MIN_DEFAULT: usize = 256;
 /// Sampling cap and k-means iterations for FDE-codebook training.
 const FDE_PQ_SAMPLE: usize = 4096;
 const FDE_PQ_ITERS: usize = 10;
-/// Coded-row count at which the inverted tier trains. Below this the flat
-/// ADC scan is the measured winner (the naive filter layout was
-/// net-negative at every scale up to 200k); the slab layout pays past the
-/// point where scanning every code dominates the latency budget.
+/// Suggested coded-row count for opting the inverted tier in
+/// (`UNDERCROFT_FDE_IVF_MIN` set without a parseable number falls back
+/// here). The tier is **off by default**: the containment gate measured
+/// probed containment below flat's at every fraction (0.960 quarter /
+/// 0.993 half at N=500k vs flat 1.000), so activating it is an explicit
+/// operator trade of a small exact-top-10 tail for scan time.
 pub(crate) const FDE_IVF_MIN_DEFAULT: usize = 500_000;
 const FDE_IVF_ITERS: usize = 10;
 

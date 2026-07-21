@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.39.0 — Inverted FDE tier (opt-in)
+
+- The MUVERA FDE index gains an **inverted tier**: coarse centroids
+  train event-driven over the palace's own decoded FDEs, every v2
+  row's reserved list field rewrites in place (**no migration** — the
+  pack anticipated this since v0.24.0), and the RAM cache groups into
+  per-list slabs so a probe scans only its lists contiguously.
+  Centroids persist sealed in `fde_meta` and are covered by key
+  rotation; skewed probes widen to the full scan.
+- **Shipped opt-in, default off** — the honest result of its own gate:
+  measured on synthetic corpora at N=200k/500k, probed containment
+  stayed *below* the flat scan's (0.960–0.993 vs 1.000) and the probed
+  scan ran slower than flat ADC (243 vs 79 ms/q at 500k). Flat ADC +
+  LUT remains the recommended configuration at every measured scale.
+  Operators past ~10⁶ drawers can opt in with
+  `UNDERCROFT_FDE_IVF_MIN=<n>` (+ `UNDERCROFT_FDE_NPROBE`) after
+  validating containment on their corpus.
+
 ## 0.38.0 — Fleet live-ops
 
 - **The fleet console goes live**: a 10 s sweep auto-refreshes engine

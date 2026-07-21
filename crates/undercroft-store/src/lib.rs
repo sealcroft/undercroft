@@ -530,10 +530,14 @@ impl PalaceStore {
             },
             fde_ivf: std::cell::RefCell::new(None),
             fde_ivf_checked: std::cell::Cell::new(false),
+            // Default OFF: the containment gate measured probed containment
+            // below flat's at every fraction (0.96 quarter / 0.993 half at
+            // 500k vs flat 1.000) — opting in trades a small tail of exact
+            // top-10 members for scan time; the operator makes that call.
             fde_ivf_min: match std::env::var("UNDERCROFT_FDE_IVF_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
                 Ok(v) => v.parse().unwrap_or(fdeidx::FDE_IVF_MIN_DEFAULT),
-                Err(_) => fdeidx::FDE_IVF_MIN_DEFAULT,
+                Err(_) => usize::MAX,
             },
             fde_nprobe: std::env::var("UNDERCROFT_FDE_NPROBE")
                 .ok()
