@@ -305,6 +305,7 @@
             <label class="kv">grafana url</label>
             <input id="grafanaUrl" placeholder="http://localhost:3000" style="width:220px">
             <button class="ctl" id="grafanaEmbedBtn">▶ EMBED DASHBOARD</button>
+            <button class="ctl" id="grafanaBack" style="display:none">◂ DASHBOARD</button>
             <a class="ctl" id="grafanaOpen" target="_blank" style="text-decoration:none">⧉ OPEN IN GRAFANA</a>
           </div>
           <p class="kv" style="margin-top:8px">
@@ -644,6 +645,10 @@ function embedGrafana() {
   $("grafanaOpen").href = grafanaDashUrl(false);
   $("grafanaFrame").src = grafanaDashUrl(true);
   $("grafanaFrame").style.display = "block";
+  // Drill-downs (trace/log clicks) navigate the iframe into Explore,
+  // which has no way back in kiosk mode — this button snaps the embed
+  // back to the dashboard.
+  $("grafanaBack").style.display = "inline-block";
 }
 
 // ---- monitor -----------------------------------------------------------
@@ -1103,6 +1108,7 @@ $("timelineBtn").onclick = loadTimeline;
 $("palaceOpen").onclick = () => setTheatre(true);
 $("palaceExit").onclick = () => setTheatre(false);
 $("grafanaEmbedBtn").onclick = embedGrafana;
+$("grafanaBack").onclick = embedGrafana;
 $("grafanaUrl").addEventListener("keydown", e => { if (e.key === "Enter") embedGrafana(); });
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
 $("bearer").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
