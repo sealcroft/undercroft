@@ -312,10 +312,11 @@ the source (the v0.18 artifact-carrying NDJSON, so token matrices restore
 by copy, not re-encode) → import on the target → **count-verified** →
 mapping flip → source vault delete (`keep_source` opts out). Any failure
 before the flip leaves the source authoritative and removes the partial
-copy. The e2e suite (`tests/e2e-orchestrator.sh`, 24 checks,
+copy. The e2e suite (`tests/e2e-orchestrator.sh`, 44 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
-losing the vault after migration.
+losing the vault after migration and a read replica converging on the
+writer's rotations.
 
 ### Deploying the orchestrator (hardening)
 
@@ -341,9 +342,33 @@ losing the vault after migration.
   file without `UNDERCROFT_ORCH_KEY` yields nothing. Back it up like any
   file; losing it strands no data (tenant data lives in engine vaults —
   re-register instances, re-mint tokens). It is deliberately
-  **single-writer**: run one orchestrator per fleet. Multi-orchestrator
-  replication is deferred until a fleet actually needs it — a
-  read-replica proxy is the likely shape, not multi-master.
+  **single-writer**: run exactly one orchestrator that mutates state.
+  For availability and read throughput beyond that one process, add
+  **read replicas** (below) — never a second writer.
+- **Read replicas** (`serve --read-replica`, v0.40.0): a replica opens
+  the state database **read-only** and serves only `/healthz` and the
+  `/t/*` data plane — token resolution is a pure HMAC lookup, so
+  replicas scale routing horizontally while minting, rotation, and
+  migration stay on the writer (`/admin/*` and `/ui` answer 403
+  pointing there; every mutation is refused at the state layer and by
+  the read-only connection, and a replica refuses to start on a
+  missing database). Two deployment shapes:
+  - **Shared volume** — point `--db` at the writer's file; SQLite WAL
+    supports concurrent readers, so replicas observe every commit
+    immediately (zero lag). This is what the e2e suite exercises.
+  - **Replicated snapshot** — ship the file litestream-style and point
+    the replica at the restored copy; **lag = the replication
+    interval**. The trade is explicit: a revoked or rotated token
+    keeps working on a replica for at most that window (revocation is
+    row replacement, so it propagates with the file), while the writer
+    kills it in the same statement as always.
+
+  `/healthz` on both roles reports `mode` (`writer`/`read-replica`)
+  and `last_write` (unix seconds of the last control-plane mutation) —
+  diff a replica's `last_write` against the writer's to read the lag.
+  Note the per-tenant rate limiter is per-process state: each replica
+  enforces `UNDERCROFT_ORCH_RATE_LIMIT` over its own traffic, so the
+  fleet-wide ceiling is the limit × (1 + replicas).
 - **Secrets hygiene**: generate `UNDERCROFT_ORCH_KEY` and the admin token
   with `keygen`; pass them as environment, never in URLs. On shared
   hosts prefer the HTTP admin plane over CLI flags for instance

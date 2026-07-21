@@ -16,6 +16,14 @@
 //! engine vault → record mapping → return the token once), and migration
 //! (export → import → count-verified → mapping flip → source delete).
 //!
+//! **Read-replica mode** (`serve --read-replica`) opens the state database
+//! read-only and serves *only* `/healthz` and the `/t/*` data plane —
+//! token resolution is a pure MAC lookup, so replicas scale read routing
+//! without ever minting, rotating, or migrating anything. `/admin/*` and
+//! `/ui` answer 403 pointing at the writer. `/healthz` on both roles
+//! carries `mode` and the state's `last_write` stamp, so lag between the
+//! writer and a replica is directly observable.
+//!
 //! Auth failures are uniform 401s with no reason detail, mirroring the
 //! engine's assertion handling.
 
@@ -123,11 +131,22 @@ fn err_response(status: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     json_response(status, &serde_json::json!({ "error": msg }))
 }
 
-/// Run the proxy loop forever. `admin_token` gates `/admin/*`.
-pub fn serve(orch: &Orch, addr: &str, admin_token: &str) -> anyhow::Result<()> {
+/// What this process is allowed to serve: the single writer (full admin
+/// plane + console), or a read replica (data plane only, state read-only).
+pub enum Role<'a> {
+    Writer { admin_token: &'a str },
+    ReadReplica,
+}
+
+/// Run the proxy loop forever.
+pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
     let server = Server::http(addr).map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
     let limiter = RateLimiter::from_env();
-    eprintln!("undercroft-orchestrator listening on http://{addr}");
+    let mode = match role {
+        Role::Writer { .. } => "writer",
+        Role::ReadReplica => "read replica",
+    };
+    eprintln!("undercroft-orchestrator ({mode}) listening on http://{addr}");
     for mut request in server.incoming_requests() {
         let method = request.method().clone();
         let url = request.url().to_string();
@@ -139,7 +158,7 @@ pub fn serve(orch: &Orch, addr: &str, admin_token: &str) -> anyhow::Result<()> {
             .take(256 * 1024 * 1024)
             .read_to_end(&mut body);
 
-        let response = route(orch, admin_token, &limiter, &request, &method, &path, &body);
+        let response = route(orch, &role, &limiter, &request, &method, &path, &body);
         let _ = request.respond(response);
     }
     Ok(())
@@ -147,17 +166,47 @@ pub fn serve(orch: &Orch, addr: &str, admin_token: &str) -> anyhow::Result<()> {
 
 fn route(
     orch: &Orch,
-    admin_token: &str,
+    role: &Role<'_>,
     limiter: &RateLimiter,
     request: &tiny_http::Request,
     method: &Method,
     path: &str,
     body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
-    // Unauthenticated liveness, mirroring the engine.
+    // Unauthenticated liveness, mirroring the engine. `mode` + `last_write`
+    // let an operator diff a replica against the writer to read the lag.
     if method == &Method::Get && path == "/healthz" {
-        return json_response(200, &serde_json::json!({ "ok": true }));
+        let mode = match role {
+            Role::Writer { .. } => "writer",
+            Role::ReadReplica => "read-replica",
+        };
+        let last_write = orch.last_write().ok().flatten();
+        return json_response(
+            200,
+            &serde_json::json!({ "ok": true, "mode": mode, "last_write": last_write }),
+        );
     }
+
+    if let Some(sub) = path.strip_prefix("/t/") {
+        return data_plane(orch, limiter, request, method, sub, body);
+    }
+    if path == "/t" || path == "/t/" {
+        return err_response(404, "missing subpath");
+    }
+
+    // Everything below is writer-only surface.
+    let admin_token = match role {
+        Role::Writer { admin_token } => *admin_token,
+        Role::ReadReplica => {
+            if path == "/ui" || path == "/admin" || path.starts_with("/admin/") {
+                return err_response(
+                    403,
+                    "read replica: admin plane and console live on the writer",
+                );
+            }
+            return err_response(404, "not found");
+        }
+    };
 
     // The fleet console — like the engine's /ui, a self-contained static
     // page carrying no secrets: the operator pastes the admin token into
@@ -170,13 +219,6 @@ fn route(
             )
             // no-cache: console updates must arrive on a plain reload.
             .with_header(Header::from_bytes("Cache-Control", "no-cache").expect("static header"));
-    }
-
-    if let Some(sub) = path.strip_prefix("/t/") {
-        return data_plane(orch, limiter, request, method, sub, body);
-    }
-    if path == "/t" || path == "/t/" {
-        return err_response(404, "missing subpath");
     }
 
     if path == "/admin" || path.starts_with("/admin/") {

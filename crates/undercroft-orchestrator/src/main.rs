@@ -40,6 +40,12 @@ enum Command {
     Serve {
         #[arg(long, env = "UNDERCROFT_ORCH_ADDR", default_value = "127.0.0.1:8900")]
         addr: String,
+        /// Serve as a read replica: open the state database read-only and
+        /// expose only the `/t/*` data plane (admin plane and console
+        /// refuse — they live on the single writer). Point `--db` at the
+        /// writer's file on a shared volume, or at a replicated snapshot.
+        #[arg(long, default_value_t = false)]
+        read_replica: bool,
     },
     /// Register (or update) an engine instance
     InstanceAdd {
@@ -104,14 +110,25 @@ fn main() -> Result<()> {
             println!("UNDERCROFT_ORCH_ADMIN_TOKEN={}", hex::encode(admin));
             Ok(())
         }
-        Command::Serve { addr } => {
+        Command::Serve { addr, read_replica } => {
+            if read_replica {
+                // No admin token: the replica has no admin plane to gate.
+                let orch = Orch::open_read_only(&cli.db, &orch_key()?)?;
+                return proxy::serve(&orch, &addr, proxy::Role::ReadReplica);
+            }
             let orch = Orch::open(&cli.db, &orch_key()?)?;
             let admin = std::env::var("UNDERCROFT_ORCH_ADMIN_TOKEN")
                 .context("UNDERCROFT_ORCH_ADMIN_TOKEN is not set")?;
             if admin.len() < 16 {
                 bail!("UNDERCROFT_ORCH_ADMIN_TOKEN must be at least 16 characters");
             }
-            proxy::serve(&orch, &addr, &admin)
+            proxy::serve(
+                &orch,
+                &addr,
+                proxy::Role::Writer {
+                    admin_token: &admin,
+                },
+            )
         }
         Command::InstanceAdd {
             name,

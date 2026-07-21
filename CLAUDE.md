@@ -69,7 +69,9 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   optional multi-tenant control plane (docs/MULTI_TENANCY.md) — instance
   registry + tenant→vault map in its own SQLite (engine creds sealed,
   tokens stored as HMACs), `/t/*` routing proxy, `/admin/*` plane,
-  count-verified migration, fleet console (ui.html at `GET /ui`).
+  count-verified migration, fleet console (ui.html at `GET /ui`),
+  read replicas (`serve --read-replica`: RO state db, data plane only,
+  `/healthz` mode+last_write lag surface).
   Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding)
@@ -105,7 +107,7 @@ Build and test **inside containers**, not on the host (project policy):
 docker compose run --rm test          # cargo unit + integration tests (177)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (157 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (34 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
