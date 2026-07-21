@@ -108,6 +108,7 @@
   .ticker .save{color:var(--phos)} .ticker .chain{color:var(--gold)}
   .ticker .kgev{color:var(--violet)} .ticker .info{color:var(--ink)}
   .pill.open{background:#0c2a1c;color:var(--phos)} .pill.closed{background:#241a0c;color:var(--amber)}
+  .bar{display:inline-block;height:9px;min-width:2px;background:linear-gradient(90deg,var(--phos-dim),var(--phos));border-radius:3px;vertical-align:middle;margin-right:6px;max-width:calc(100% - 42px)}
   .frame{width:100%;height:640px;border:1px solid var(--edge);border-radius:8px;background:#000;margin-top:10px}
   .frame.theatre{position:fixed;inset:0;width:100vw;height:100vh;z-index:9;border:none;border-radius:0;margin:0}
   a.ctl{display:inline-block}
@@ -185,13 +186,15 @@
             <div class="g"><div class="k">WRITES</div><div class="v" id="sWrites">—</div></div>
             <div class="g"><div class="k">ROOMS</div><div class="v" id="sRooms">—</div></div>
             <div class="g"><div class="k">KG TRIPLES</div><div class="v" id="sKgT">—</div></div>
+            <div class="g"><div class="k">KG ENTITIES</div><div class="v" id="sKgE">—</div></div>
+            <div class="g"><div class="k">ACTIVE FACTS</div><div class="v" id="sKgA">—</div></div>
             <div class="g"><div class="k">TUNNELS</div><div class="v" id="sTun">—</div></div>
             <div class="g"><div class="k">STORE</div><div class="v" id="sBytes">—</div></div>
             <div class="g chain"><div class="k">CHAIN HEAD</div><div class="v" id="sChain">—</div></div>
           </div>
           <div class="sect">
-            <div class="h">WINGS</div>
-            <table><thead><tr><th>WING</th><th>DRAWERS</th></tr></thead><tbody id="wingRows"></tbody></table>
+            <div class="h">WINGS — DRAWER DISTRIBUTION</div>
+            <table><thead><tr><th>WING</th><th>DRAWERS</th><th style="width:50%">SHARE</th></tr></thead><tbody id="wingRows"></tbody></table>
           </div>
           <div class="sect">
             <div class="h">INTEGRITY</div>
@@ -263,8 +266,15 @@
             <span class="spacer"></span>
             <span class="kv" id="monLast"></span>
           </div>
+          <div class="gauges" style="margin-top:10px">
+            <div class="g"><div class="k">WINGS</div><div class="v" id="mWings">—</div></div>
+            <div class="g"><div class="k">ROOMS</div><div class="v" id="mRooms">—</div></div>
+            <div class="g"><div class="k">KG ENTITIES</div><div class="v" id="mKgE">—</div></div>
+            <div class="g"><div class="k">TUNNELS</div><div class="v" id="mTun">—</div></div>
+          </div>
           <div class="charts">
             <div class="chart"><div class="k">DRAWERS <span class="cur" id="cDrawers">—</span></div><canvas id="chDrawers" width="320" height="56"></canvas></div>
+            <div class="chart"><div class="k">WRITE RATE <span class="cur" id="cRate">—</span></div><canvas id="chRate" width="320" height="56"></canvas></div>
             <div class="chart"><div class="k">CHAIN HEIGHT <span class="cur" id="cChain">—</span></div><canvas id="chChain" width="320" height="56"></canvas></div>
             <div class="chart"><div class="k">KG TRIPLES <span class="cur" id="cKg">—</span></div><canvas id="chKg" width="320" height="56"></canvas></div>
             <div class="chart"><div class="k">STORE BYTES <span class="cur" id="cBytes">—</span></div><canvas id="chBytes" width="320" height="56"></canvas></div>
@@ -664,14 +674,28 @@ function spark(id, data) {
 function drawCharts() {
   if (!mon.pts.length) return;
   const last = mon.pts[mon.pts.length - 1];
+  // Write rate: drawers-per-minute between consecutive points.
+  const rates = mon.pts.map((p, i) => {
+    if (!i) return 0;
+    const prev = mon.pts[i - 1], dt = Math.max(1, p.ts - prev.ts);
+    return Math.max(0, (p.drawers - prev.drawers) / dt * 60);
+  });
   spark("chDrawers", mon.pts.map(p => p.drawers));
+  spark("chRate", rates);
   spark("chChain", mon.pts.map(p => p.chain));
   spark("chKg", mon.pts.map(p => p.kg));
   spark("chBytes", mon.pts.map(p => p.bytes));
   $("cDrawers").textContent = last.drawers;
+  $("cRate").textContent = rates[rates.length - 1].toFixed(0) + "/min";
   $("cChain").textContent = "#" + last.chain;
   $("cKg").textContent = last.kg;
   $("cBytes").textContent = fmtBytes(last.bytes);
+  // Structure chips (sealed vaults stream no wing list — show the count
+  // from stats instead, which this console is authorized to see).
+  if (last.wings !== undefined) $("mWings").textContent = last.wings;
+  if (last.rooms !== undefined) $("mRooms").textContent = last.rooms;
+  if (last.kge !== undefined) $("mKgE").textContent = last.kge;
+  if (last.tun !== undefined) $("mTun").textContent = last.tun;
   $("monLast").textContent = "updated " + new Date(last.ts * 1000).toLocaleTimeString();
 }
 function tick(msg, cls) {
@@ -702,7 +726,9 @@ async function pollOnce() {
   try {
     const s = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/stats", { vault: v });
     pushPoint({ ts: Math.floor(Date.now() / 1000), drawers: s.drawers, chain: s.writes,
-                kg: (s.kg && s.kg.triples) || 0, bytes: s.db_bytes || 0 });
+                kg: (s.kg && s.kg.triples) || 0, bytes: s.db_bytes || 0,
+                wings: (s.wings || []).length, rooms: s.rooms,
+                kge: (s.kg && s.kg.entities) || 0, tun: s.tunnels });
   } catch (_) {}
 }
 function startPolling() {
@@ -720,7 +746,9 @@ async function startMonitor() {
   try {
     const h = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/stats/history?window=150", { vault: v });
     if (Array.isArray(h)) {
-      for (const s of h) mon.pts.push({ ts: s.ts, drawers: s.drawers, chain: s.chain_height, kg: s.kg_triples, bytes: s.db_bytes });
+      for (const s of h) mon.pts.push({ ts: s.ts, drawers: s.drawers, chain: s.chain_height,
+        kg: s.kg_triples, bytes: s.db_bytes, rooms: s.rooms, kge: s.kg_entities,
+        tun: s.tunnels, wings: (s.wings || []).length || undefined });
       drawCharts();
     }
   } catch (_) {}
@@ -751,7 +779,13 @@ async function startMonitor() {
             if (!line) continue;
             try {
               const s = JSON.parse(line.slice(5));
-              pushPoint({ ts: s.ts, drawers: s.drawers, chain: s.chain_height, kg: s.kg_triples, bytes: s.db_bytes });
+              // The stream multiplexes event types (sample, drawer-saved,
+              // search, …) — only stats samples become chart points.
+              if (typeof s.drawers !== "number" || typeof s.chain_height !== "number") continue;
+              pushPoint({ ts: s.ts, drawers: s.drawers, chain: s.chain_height,
+                kg: s.kg_triples, bytes: s.db_bytes, rooms: s.rooms,
+                kge: s.kg_entities, tun: s.tunnels,
+                wings: (s.wings || []).length || undefined });
             } catch (_) {}
           }
         }
@@ -839,11 +873,18 @@ async function loadOverview() {
     $("sWrites").textContent = s.writes;
     $("sRooms").textContent = s.rooms;
     $("sKgT").textContent = (s.kg && s.kg.triples !== undefined) ? s.kg.triples : "—";
+    $("sKgE").textContent = (s.kg && s.kg.entities !== undefined) ? s.kg.entities : "—";
+    $("sKgA").textContent = (s.kg && s.kg.active !== undefined) ? s.kg.active : "—";
     $("sTun").textContent = s.tunnels;
     $("sBytes").textContent = fmtBytes(s.db_bytes || 0);
     $("sChain").textContent = s.chain_head ? s.chain_head.slice(0, 24) + "…" : "—";
-    const rows = (s.wings || []).map(w => "<tr><td><span class='pill wing'>" + esc(w.wing) + "</span></td><td>" + w.count + "</td></tr>");
-    $("wingRows").innerHTML = rows.join("") || "<tr><td colspan=2 class='kv'>empty</td></tr>";
+    const total = (s.wings || []).reduce((a, w) => a + w.count, 0) || 1;
+    const rows = (s.wings || []).map(w => {
+      const pct = (100 * w.count / total);
+      return "<tr><td><span class='pill wing'>" + esc(w.wing) + "</span></td><td>" + w.count + "</td>" +
+        "<td><div class='bar' style='width:" + pct.toFixed(1) + "%'></div><span class='kv'>" + pct.toFixed(0) + "%</span></td></tr>";
+    });
+    $("wingRows").innerHTML = rows.join("") || "<tr><td colspan=3 class='kv'>empty</td></tr>";
   } catch (e) { toast("stats failed — " + e.message, true); }
 }
 

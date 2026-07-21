@@ -163,9 +163,13 @@ fn route(
     // page carrying no secrets: the operator pastes the admin token into
     // the page, which attaches it to its /admin/* fetches.
     if method == &Method::Get && path == "/ui" {
-        return Response::from_data(include_str!("ui.html").as_bytes().to_vec()).with_header(
-            Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("static header"),
-        );
+        return Response::from_data(include_str!("ui.html").as_bytes().to_vec())
+            .with_header(
+                Header::from_bytes("Content-Type", "text/html; charset=utf-8")
+                    .expect("static header"),
+            )
+            // no-cache: console updates must arrive on a plain reload.
+            .with_header(Header::from_bytes("Cache-Control", "no-cache").expect("static header"));
     }
 
     if let Some(sub) = path.strip_prefix("/t/") {
