@@ -530,6 +530,90 @@ page.
   event-driven repack migration. Effort: likely 2 releases (format +
   migration), as planned.
 
+### 4. FDE page tier (extend v0.42.0's page machinery to the next cache)
+
+- **Trigger**: a sealed vault at multi-million drawers with the MUVERA
+  FDE tier enabled, where the FDE code cache (256 B/drawer — 5× the PQ
+  cache; ~2.5 GB at 10⁷) is the binding RAM/open-time cost. Same wall
+  as item 3, bigger artifact.
+- **Design**: direct analog of the shipped PQ page tier — the FDE index
+  already has the two prerequisites (v2 rows carry a list field since
+  v0.39.0; `FdeCache::Coded` is slab-grouped). One AEAD page per list
+  under a new `fdepage/{list}/{pageno}` label in the existing `/tok`
+  domain family, sealed `count ‖ (seq ‖ code)*` plaintext, sealed
+  total/deleted counters in `fde_meta`, per-row tail folded per
+  `upsert_many` batch, lazy per-probe load into the slabs, two-way
+  event-driven repack, rotation reseal. **Scope note**: per-candidate
+  ColBERT token matrices stay per-row — they are random-access
+  hydrations at rescore, not list scans; paging them would trade one
+  wall for a worse one. The token-PQ code cache is scan-shaped and may
+  qualify — measure before designing.
+- **Steps**: (1) mirror (or extract a shared seam from) the `pqidx`
+  page helpers into `fdeidx`; (2) counters + verify-equation extension;
+  (3) lazy list loads in `fde_candidates`; (4) rotation + at-rest
+  tests; (5) gate on `fde-synth` at 10⁶–10⁷: open time and RAM must
+  beat the flat cache with containment unchanged (it is byte-identical
+  by construction, so the gate is cost-only).
+- **Effort**: ~1 release — the machinery is proven; the work is the
+  seam and the tests.
+
+### 5. Re-embed migration (`undercroft vault reembed`)
+
+- **Trigger**: switching embedders on a live palace — hash → ONNX
+  model, or a model upgrade — which today means a new vault and a full
+  re-ingest. The ORT backend makes this a real upgrade path, not a
+  hypothetical.
+- **Design**: content is stored verbatim, so re-embedding is a pure
+  derived-data operation: batched over drawers (`upsert_many`-sized
+  transactions), embed with the new embedder, rewrite each sealed
+  embedding under its existing AAD, then drop every embedding-derived
+  artifact (PQ codes/pages + codebook + IVF, FDE rows + codebook) and
+  let the event-driven seams rebuild them. The embedder identity lock
+  updates atomically at the end (two-phase, rotation-style staged
+  marker reconciled at open — a crash mid-run must leave the old
+  identity + old embeddings authoritative); the audit chain records a
+  keyed re-embed entry. ColBERT token matrices come from the late
+  encoder, not the embedder — a separate `--colbert` flag re-encodes
+  those only when that model changed. Remote-index copies go stale —
+  print the re-push reminder (rotation precedent).
+- **Steps**: (1) `store::reembed_all(new_embedder)` with a resumable
+  progress row; (2) CLI subcommand with the type-the-name guard +
+  env-selected target embedder; (3) identity-lock flip + chain entry +
+  crash-window tests (both sides); (4) e2e: re-embed to a
+  different-dim embedder, VERIFY OK, search returns verbatim content;
+  (5) gate: LoCoMo R@10 with the real model before/after — re-embed
+  must reproduce the from-scratch-ingest quality exactly.
+- **Effort**: ~1 release; the risky part is the crash windows, and
+  rotation already mapped that territory.
+
+### 6. Backup/restore + disaster-recovery runbook
+
+- **Trigger**: any production deployment — this is an operability gap,
+  not a performance one. All primitives exist (v0.18 artifact-carrying
+  export, v0.30 recipient-encrypted bundles, count-verified import,
+  verify); what's missing is the one-command shape and the documented
+  recovery semantics.
+- **Design**: `undercroft vault backup <name> --to <recipient-hex>
+  --out <file>` = consistent snapshot as a recipient-encrypted bundle;
+  `undercroft vault restore <file> --identity <key>` = import into a
+  fresh vault + **mandatory full verify** + count check (refuse a
+  silently-partial restore — the migration discipline). A daemon/cron
+  flag for scheduled backups. The runbook documents what each failure
+  loses and what survives: file loss (restore = RPO of last backup),
+  key loss (backups are recipient-encrypted — the bundle identity key
+  is the recovery root, store it separately), tamper (restored chain
+  is a fork from the backup point — the manifest anchor and chain
+  head semantics across restore, stated explicitly). Orchestrator
+  state-db backup recipe alongside (file copy; sealed creds + MAC-only
+  tokens mean a copied file without `UNDERCROFT_ORCH_KEY` yields
+  nothing).
+- **Steps**: (1) backup/restore subcommands over the existing
+  export/bundle/import path; (2) verify-on-restore gate; (3)
+  `docs/RUNBOOK` DR section (loss matrices, restore drill); (4) e2e:
+  backup → destroy vault → restore → VERIFY OK + search parity +
+  chain-fork semantics asserted.
+- **Effort**: ~1 release, mostly e2e and documentation.
+
 ---
 
 ## Operability track (planned)
