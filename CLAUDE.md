@@ -28,8 +28,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   MaxSim), PQ/IVF candidate prefilter for both vault levels (pq.rs primitive,
   pqidx.rs index; both levels scan a load-once RAM code cache), MUVERA FDE
   token-aware candidates (fdeidx.rs; core fde.rs construction; sealed
-  `drawer_fde` + `fde_meta`), experimental in-memory HNSW (hnsw.rs, `hnsw`
-  feature), transactional audit chain (`chain_meta` + `chain_append`),
+  `drawer_fde` + `fde_meta`; opt-in inverted tier via
+  `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
+  default-off by its measured containment gate), experimental in-memory
+  HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`),
   verify, knowledge graph (kg.rs), management surface (manage.rs),
   remote-index integration (remote.rs), in-place key rotation
   (rotate.rs: one-transaction re-seal of every artifact + chain re-key
@@ -100,10 +102,10 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (176)
+docker compose run --rm test          # cargo unit + integration tests (177)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (135 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (30 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (157 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (34 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
