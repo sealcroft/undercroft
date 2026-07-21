@@ -269,6 +269,7 @@ impl PalaceStore {
                 ("pq_meta", "ivf", "pq/ivf/pq"),
                 ("fde_meta", "params", "fde/params/tok"),
                 ("fde_meta", "codebook", "fde/codebook/tok"),
+                ("fde_meta", "ivf", "fde/ivf/tok"),
             ] {
                 let stored: Option<Vec<u8>> = self
                     .conn
@@ -392,6 +393,8 @@ impl PalaceStore {
         *self.fde_cache.borrow_mut() = None;
         self.fde_checked.set(false);
         *self.fde_pq.borrow_mut() = None;
+        *self.fde_ivf.borrow_mut() = None;
+        self.fde_ivf_checked.set(false);
         self.fde_pq_checked.set(false);
         *self.qmatrix_cache.borrow_mut() = None;
         #[cfg(feature = "hnsw")]
