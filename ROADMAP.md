@@ -616,6 +616,106 @@ page.
 
 ---
 
+## Competitive track (ordered 2026-07-22 — compete hard and exceed)
+
+The market (mem0, Zep/Graphiti, Letta, Cognee, Supermemory, plus the
+MCP-server long tail) competes on **convenience**: extraction-based
+"smart memory," bolt-on SDKs, hosted APIs, graph reasoning. None of
+them has a security story — no sealed indexes, no tamper evidence, no
+offline default, no cryptographic tenant isolation. The strategy in
+one line: **close the convenience gap, make the trust gap
+unfollowable.** Everything below preserves the invariants (verbatim,
+local-first, sealed at rest, audit-chained); several items weaponize
+them. Phases are the intended build order; each item ships as its own
+release with the usual battery + measured gates.
+
+### Phase C1 — prove it (weeks, mostly bench + writing)
+
+- **C1.1 Head-to-head benchmark publication.** Run mem0 (local/
+  OpenMemory), Zep/Graphiti self-hosted, Letta, and Supermemory's
+  local binary against undercroft on the harnesses `undercroft-bench`
+  already carries (LongMemEval, LoCoMo, ConvoMem, MemBench) —
+  identical corpora, within-run comparisons, raw logs published, every
+  competitor's best local configuration documented. Include the column
+  only we can fill: quality **while fully sealed, zero external
+  calls**. Publish as docs/BENCHMARKS_VS.md + a landing section.
+  *Gate*: numbers reported as measured, favorable or not — the
+  methodology page IS the product.
+- **C1.2 Security comparison page.** One table, us vs the five named
+  competitors: content encryption / derived-index encryption / tamper
+  evidence / verified reads / key rotation / cross-tenant crypto
+  isolation / offline default / audit chain / export encryption.
+  Sourced claims, dated, PR-able by competitors if they object.
+  Docs page + landing block.
+- **C1.3 Threat-model whitepaper.** Formalize what SECURITY.md +
+  seal.rs already implement (adversary classes, what each layer
+  defeats, honest non-goals), framed against the 2026 "agent memory
+  is an attack surface" literature. The artifact security buyers
+  forward to their teams.
+
+### Phase C2 — meet them (parity; each ~1 release)
+
+- **C2.1 Python + TypeScript SDKs.** Thin typed clients over the
+  existing `/v1` surface (vault lifecycle, drawers, search, KG
+  browse, verify, export/import; assertion minting included). Publish
+  to PyPI/npm with the same version cadence as the binary. This is
+  the single biggest adoption gap — every competitor evaluation
+  starts with `pip install`.
+- **C2.2 Framework adapters.** LangChain + LlamaIndex memory/retriever
+  classes and a CrewAI/AutoGen adapter, each a thin wrapper over the
+  SDKs, each with an example repo. Gets us onto the shelf where
+  bake-offs happen.
+- **C2.3 Working-memory blocks (Letta parity).** A reserved wing +
+  MCP tool sugar (`memory_pin`, `memory_edit`, `memory_unpin`) giving
+  agents editable, always-in-context core memory on top of verbatim
+  drawers — pinned blocks are still drawers: sealed, chained,
+  verifiable.
+- **C2.4 Local document ingestion.** `mine` learns PDF/DOCX/HTML →
+  text extraction, fully local (no OCR cloud), chunked through the
+  existing deterministic pipeline. Closes the Cognee/Supermemory
+  "feed it your documents" gap without touching the no-phone-home
+  stance.
+- **C2.5 KG deepening.** `/v1` KG **write** routes (create/supersede/
+  close facts — console gains editing), multi-hop graph queries, and
+  richer local-LLM extraction prompts for `refine`. Removes
+  Zep/Graphiti's cleanest talking point; our temporal model (valid-now,
+  timelines, auto-supersede) is already competitive underneath.
+
+### Phase C3 — exceed them (category-defining; nobody can follow)
+
+- **C3.1 Facts-with-receipts distillation.** Opt-in automatic pass
+  (local LLM, riding the existing `refine`→KG seam): distilled facts,
+  contradiction handling via the existing temporal supersede, and —
+  the part extraction-based competitors structurally cannot offer —
+  every fact carries an HMAC-verified citation to its verbatim source
+  drawer. Their pitch (smart memory) becomes our subset; our pitch
+  (provable memory) stays exclusive. *Gate*: LoCoMo/LongMemEval with
+  the distillation tier on must beat our retrieval-only baseline.
+- **C3.2 Provable forgetting.** Retention policies per wing/room +
+  `forget --prove`: deletion executes through the audit chain
+  (tombstones already exist), emitting a verifiable attestation that
+  named content was destroyed and nothing else changed. GDPR/RTBF
+  with a receipt. Extraction-based systems cannot know what their
+  LLM absorbed where — this feature is unreachable for them.
+- **C3.3 Memory-poisoning defense.** Provenance labels on every
+  drawer (writing agent/source/session, tamper-covered by the record
+  HMAC), a quarantine wing for untrusted ingest with search-time
+  trust filters, and a review/promote flow. First-mover answer to the
+  documented memory-poisoning attack class: memory that can't be
+  silently seeded *or* silently altered.
+- **C3.4 Post-quantum export bundles.** Hybrid KEM (X25519 + ML-KEM)
+  option in `bundle.rs` for recipient-encrypted exports; PQ notes for
+  the at-rest layer (XChaCha20-Poly1305 is already PQ-comfortable).
+  "Quantum-resistant memory vault" on the label before anyone asks
+  the competitors the question.
+
+Sequencing note: C1 needs no code beyond bench runners and can start
+immediately; C2 items are independent of each other; C3.1 depends on
+nothing but benefits from C1.1's baselines; scale items 4–6 above
+(FDE pages, reembed, backup/DR) interleave on their own triggers.
+
+---
+
 ## Operability track (planned)
 
 Observability and a management/visualization surface for the stack. The
