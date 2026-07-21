@@ -45,6 +45,8 @@ pub struct RotationReport {
     pub tunnels: usize,
     pub token_matrices: usize,
     pub pq_rows: usize,
+    /// Sealed PQ pages re-sealed (the opt-in page tier; 0 in per-row mode).
+    pub pq_pages: usize,
     pub fde_rows: usize,
     pub audit_entries: usize,
     /// Sealed meta artifacts re-sealed (codebooks, IVF centroids, FDE params).
@@ -221,6 +223,7 @@ impl PalaceStore {
         // stored in clear and carry no key material — nothing to rewrite.
         let mut tok_upds: Vec<(String, Vec<u8>)> = Vec::new();
         let mut pq_upds: Vec<(i64, Vec<u8>)> = Vec::new();
+        let mut page_upds: Vec<(i64, i64, Vec<u8>)> = Vec::new();
         let mut fde_upds: Vec<(String, Vec<u8>)> = Vec::new();
         let mut meta_upds: Vec<(&'static str, &'static str, Vec<u8>)> = Vec::new();
         if sealed {
@@ -250,6 +253,29 @@ impl PalaceStore {
                 }
             }
             {
+                // Sealed PQ pages (the opt-in page tier): byte-exact reseal
+                // under the exact (list, pageno)-bound domain.
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT list, pageno, blob FROM pq_page")?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (list, pageno, blob) = row?;
+                    let new = self.vault.reseal_at_rest(
+                        &next,
+                        &format!("pqpage/{list}/{pageno}/pq"),
+                        &blob,
+                    )?;
+                    page_upds.push((list, pageno, new));
+                }
+            }
+            {
                 let mut stmt = self.conn.prepare("SELECT id, fde FROM drawer_fde")?;
                 let rows = stmt.query_map([], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
@@ -267,6 +293,8 @@ impl PalaceStore {
                 ("tok_meta", "codebook", "tok/codebook/tok"),
                 ("pq_meta", "codebook", "pq/codebook/pq"),
                 ("pq_meta", "ivf", "pq/ivf/pq"),
+                ("pq_meta", "rowcount", "pq/rowcount/pq"),
+                ("pq_meta", "deleted", "pq/deleted/pq"),
                 ("fde_meta", "params", "fde/params/tok"),
                 ("fde_meta", "codebook", "fde/codebook/tok"),
                 ("fde_meta", "ivf", "fde/ivf/tok"),
@@ -287,6 +315,7 @@ impl PalaceStore {
         }
         report.token_matrices = tok_upds.len();
         report.pq_rows = pq_upds.len();
+        report.pq_pages = page_upds.len();
         report.fde_rows = fde_upds.len();
         report.meta_artifacts = meta_upds.len();
 
@@ -346,6 +375,11 @@ impl PalaceStore {
                 let mut up = tx.prepare("UPDATE drawer_pq SET code = ?2 WHERE seq = ?1")?;
                 for (seq, code) in &pq_upds {
                     up.execute(params![seq, code])?;
+                }
+                let mut up =
+                    tx.prepare("UPDATE pq_page SET blob = ?3 WHERE list = ?1 AND pageno = ?2")?;
+                for (list, pageno, blob) in &page_upds {
+                    up.execute(params![list, pageno, blob])?;
                 }
                 let mut up = tx.prepare("UPDATE drawer_fde SET fde = ?2 WHERE id = ?1")?;
                 for (id, fde) in &fde_upds {
@@ -452,6 +486,30 @@ mod tests {
     fn rotation_reseals_everything_and_survives_reopen() {
         for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
             let (dir, mut store) = seeded(level);
+            // Sealed leg also exercises the opt-in PQ page tier: pages are
+            // key-derived artifacts and must rotate byte-exact like rows.
+            let old_page_blob: Option<Vec<u8>> = if level == SecurityLevel::Sealed {
+                store.set_pq(true);
+                store.set_pq_pages(1);
+                let _ = store
+                    .search(
+                        "heron verbatim",
+                        &crate::SearchOptions {
+                            wing: None,
+                            room: None,
+                            limit: 3,
+                        },
+                    )
+                    .unwrap();
+                Some(
+                    store
+                        .conn
+                        .query_row("SELECT blob FROM pq_page LIMIT 1", [], |r| r.get(0))
+                        .expect("page tier built"),
+                )
+            } else {
+                None
+            };
             let old_salt = {
                 let raw = std::fs::read_to_string(dir.path().join("vaults/r/vault.json")).unwrap();
                 raw
@@ -501,6 +559,19 @@ mod tests {
             match level {
                 SecurityLevel::Sealed => assert_ne!(old_content_blob, new_content_blob),
                 SecurityLevel::HmacOnly => assert_eq!(old_content_blob, new_content_blob),
+            }
+            if let Some(old_blob) = &old_page_blob {
+                assert!(report.pq_pages >= 1, "pages must be in the reseal sweep");
+                let new_blob: Vec<u8> = store
+                    .conn
+                    .query_row("SELECT blob FROM pq_page LIMIT 1", [], |r| r.get(0))
+                    .unwrap();
+                assert_ne!(old_blob, &new_blob, "page blobs re-sealed");
+                assert_eq!(
+                    store.pq_count_get("rowcount").unwrap(),
+                    3,
+                    "sealed commitment readable under the new keys"
+                );
             }
 
             // A cold reopen derives the new keys from the swapped manifest.

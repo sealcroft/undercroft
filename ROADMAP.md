@@ -492,16 +492,18 @@ page.
   deployment section.
 - **Effort**: ~1 release, mostly e2e work.
 
-### 3. Sealed-tier page-level decryption (spike DONE; slab-cache step SHIPPED v0.41.0; format deferred to trigger)
+### 3. Sealed-tier page-level decryption (SHIPPED — v0.41.0 slab cache + v0.42.0 page tier, opt-in)
 
-- **Progress**: the prescribed first step shipped in v0.41.0 — the PQ
-  RAM cache is slab-grouped by IVF list (the format-free fix; kills
-  the O(N·nprobe) membership filter the spike measured at 0.3–1.4 s/q
-  at 10⁷) and the nlist clamp lifted 1024 → 4096 so √N tracks the
-  corpus past 10⁶. Remaining when the RAM trigger fires: the opt-in
-  page format (`pqpage/{list}` AEAD pages, per-batch tail compaction,
-  sealed total-count in `pq_meta`, `(list, pageno)` caps) + the
-  event-driven repack migration.
+- **Outcome**: built to the spike's decisions across two releases.
+  v0.41.0 shipped the format-free fix (slab-grouped cache, nlist clamp
+  4096). v0.42.0 shipped the page format itself, **default off**: one
+  AEAD page per IVF list (`pqpage/{list}/{pageno}`, 4096-row caps),
+  lazy per-probe decryption, row-count commitment + sealed
+  total/deleted counters (no Merkle), per-row tail folded per
+  `upsert_many` batch (the write-amplification bound), event-driven
+  repack migration both directions, rotation coverage. The trigger
+  stance survives as configuration: flip `UNDERCROFT_PQ_PAGE_MIN` when
+  a sealed deployment's RAM/open-time wall bites — no release needed.
 
 - **Trigger** (stands): sealed vaults at multi-million drawers where the
   decrypt-once RAM caches (PQ ~52 B/drawer, FDE 256 B/drawer) stop
