@@ -412,6 +412,13 @@ using tail rows + sealed total-count, with the migration shaped as
 event-driven repack (the same train-and-repack seam every other derived
 artifact already uses).
 
+**Shipped (v0.41.0)**: the A-grouped layout is now the store's PQ cache —
+slab-grouped by IVF list at both vault levels, probe scans touch only
+their lists' contiguous slabs, and the IVF `nlist` clamp lifted
+1024 → 4096 so √N keeps tracking the corpus past 10⁶. At-rest format
+unchanged; the B-pages format and its repack migration remain gated on
+the RAM trigger above.
+
 ## Restore economics — derived data is a portable, verifiable cache
 
 Restoring or importing a shard today rebuilds the derived artifacts, and they

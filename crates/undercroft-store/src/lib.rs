@@ -44,8 +44,6 @@ const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 /// runs per candidate, so this bounds the added latency.
 const DEFAULT_RERANK_TOP_N: usize = 50;
 
-/// One decrypted sealed-PQ cache row: `(seq, list, code)`.
-pub(crate) type PqCacheRow = (i64, i64, Vec<u8>);
 
 /// Append an audit entry **and** advance the committed chain head, inside
 /// the caller's open transaction (a [`rusqlite::Transaction`] derefs to
@@ -268,9 +266,10 @@ pub struct PalaceStore {
     pq: std::cell::RefCell<Option<pq::ProductQuantizer>>,
     /// The cached IVF coarse quantizer (on-disk copy in `pq_meta`, key `ivf`).
     ivf: std::cell::RefCell<Option<pq::CoarseQuantizer>>,
-    /// Sealed vaults only: `(seq, list, code)` rows decrypted once per open
-    /// (~52 B per drawer — bounded), scanned in RAM. See `pqidx`.
-    pq_cache: std::cell::RefCell<Option<Vec<PqCacheRow>>>,
+    /// Both levels: PQ code rows loaded (sealed: decrypted) once per open
+    /// (~52 B per drawer — bounded), slab-grouped by IVF list so a probe
+    /// scans only its lists contiguously. See `pqidx`.
+    pq_cache: std::cell::RefCell<Option<pqidx::PqCache>>,
     /// Token-matrix product quantizer (v2 pack format) — trained from the
     /// vault's own stored matrices once they cross `tok_pq_min`, cached
     /// here, persisted sealed in `tok_meta`. See `latestage`.
