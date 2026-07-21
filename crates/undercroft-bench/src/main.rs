@@ -18,6 +18,8 @@
 //! comparable conditions. The default hash embedder is weaker on semantic
 //! paraphrase but has zero setup.
 
+mod vs;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::Value;
@@ -132,6 +134,33 @@ enum Command {
         /// NOT run BM25 fusion or the reranker (see `search_with_index`).
         #[arg(long, default_value = "local")]
         backend: String,
+    },
+    /// Head-to-head vs external memory systems (competitive track C1.1):
+    /// the LoCoMo protocol + scorer, driven through a system adapter —
+    /// `undercroft` runs the native store; `mem0` / `supermemory` drive a
+    /// locally hosted instance over its REST surface. One system per
+    /// invocation; identical corpus, identical scoring, RAW lines for
+    /// sharding. See docs/BENCHMARKS_VS.md for the fairness contract.
+    Vs {
+        /// Path to locomo10.json
+        dataset: std::path::PathBuf,
+        /// System under test: undercroft | mem0 | supermemory
+        #[arg(long)]
+        system: String,
+        #[arg(short = 'k', long, default_value_t = 10)]
+        k: usize,
+        /// Evaluate at most N conversations (after --skip)
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        /// Cap QA per conversation (0 = all) — extraction systems pay an
+        /// LLM call per ingested chunk; document any subset used
+        #[arg(long, default_value_t = 0)]
+        qa_limit: usize,
+        /// Base URL for HTTP systems (or UNDERCROFT_VS_URL)
+        #[arg(long, default_value = "")]
+        url: String,
     },
     /// ConvoMem protocol: message-level evidence recall
     Convomem {
@@ -938,6 +967,61 @@ type CategoryScores = std::collections::BTreeMap<String, (f32, u32)>;
 struct PhaseTiming {
     ingest_secs: f32,
     search_secs: f32,
+}
+
+/// The native row for the head-to-head harness: the same
+/// store-per-conversation, room-per-session shape as [`locomo_eval`],
+/// expressed through the [`vs::MemorySystem`] trait so every system runs
+/// the identical loop. Sealed level, embedder from `UNDERCROFT_EMBEDDER`
+/// exactly like the standalone LoCoMo row — the default hash embedder is
+/// the "fully sealed, zero external calls" column.
+struct NativeSystem {
+    store: Option<(tempfile::TempDir, PalaceStore)>,
+    chunk_idx: u32,
+}
+
+impl vs::MemorySystem for NativeSystem {
+    fn name(&self) -> &str {
+        "undercroft"
+    }
+
+    fn begin_conversation(&mut self, _convo: usize) -> Result<()> {
+        self.store = Some(fresh_store(SecurityLevel::Sealed)?);
+        self.chunk_idx = 0;
+        Ok(())
+    }
+
+    fn add(&mut self, session: &str, text: &str) -> Result<()> {
+        let (_, store) = self.store.as_mut().context("no conversation open")?;
+        let d = Drawer::new(
+            "locomo",
+            session,
+            text.into(),
+            None,
+            self.chunk_idx,
+            "bench",
+        );
+        self.chunk_idx += 1;
+        store.upsert(&d)?;
+        Ok(())
+    }
+
+    fn search_sessions(&mut self, question: &str, k: usize) -> Result<Vec<String>> {
+        let (_, store) = self.store.as_mut().context("no conversation open")?;
+        let opts = SearchOptions {
+            wing: None,
+            room: None,
+            limit: k * 6,
+        };
+        let hits = store.search(question, &opts)?;
+        let mut rooms: Vec<String> = Vec::new();
+        for h in &hits {
+            if !rooms.contains(&h.drawer.meta.room) {
+                rooms.push(h.drawer.meta.room.clone());
+            }
+        }
+        Ok(rooms)
+    }
 }
 
 fn locomo_eval(
@@ -1987,6 +2071,73 @@ fn main() -> Result<()> {
                 100.0 * recall_sum / n.max(1) as f32
             );
             for (cat, (sum, cnt)) in per_cat {
+                println!(
+                    "  category {cat:<12} {:.1}%  ({cnt})",
+                    100.0 * sum / cnt as f32
+                );
+            }
+            Ok(())
+        }
+        Command::Vs {
+            dataset,
+            system,
+            k,
+            limit,
+            skip,
+            qa_limit,
+            url,
+        } => {
+            let raw = std::fs::read_to_string(&dataset)
+                .with_context(|| format!("reading {}", dataset.display()))?;
+            let samples: Vec<Value> = serde_json::from_str(&raw)?;
+            let total = samples.len();
+            let start = skip.min(total);
+            let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
+            let shard = &samples[start..end];
+            let mut native;
+            let mut mem0;
+            let mut supermemory;
+            let sys: &mut dyn vs::MemorySystem = match system.as_str() {
+                "undercroft" => {
+                    native = NativeSystem {
+                        store: None,
+                        chunk_idx: 0,
+                    };
+                    &mut native
+                }
+                "mem0" => {
+                    mem0 = vs::Mem0::new(&url);
+                    &mut mem0
+                }
+                "supermemory" => {
+                    supermemory = vs::Supermemory::new(&url);
+                    &mut supermemory
+                }
+                other => anyhow::bail!("unknown system {other:?} (undercroft|mem0|supermemory)"),
+            };
+            let score = vs::vs_eval(sys, shard, k, qa_limit)?;
+            // RAW lines: additive across shards, zero rounding drift —
+            // the same discipline as the standalone LoCoMo row.
+            println!(
+                "VS_RAW system={system} convos={start}..{end}/{total} qa_limit={qa_limit} \
+                 recall_sum={:.4} evaluated={}",
+                score.recall_sum, score.evaluated
+            );
+            println!(
+                "VS_TIMING system={system} ingest_secs={:.3} ingest_chunks={} \
+                 search_secs={:.3} search_ms_per_q={:.1}",
+                score.ingest_secs,
+                score.ingest_chunks,
+                score.search_secs,
+                1000.0 * score.search_secs / score.evaluated.max(1) as f32
+            );
+            println!(
+                "VS — {} · {} questions · session granularity: R@{k} {:.1}%",
+                system,
+                score.evaluated,
+                100.0 * score.recall_sum / score.evaluated.max(1) as f32
+            );
+            for (cat, (sum, cnt)) in score.per_cat {
                 println!(
                     "  category {cat:<12} {:.1}%  ({cnt})",
                     100.0 * sum / cnt as f32

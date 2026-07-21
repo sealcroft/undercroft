@@ -1,0 +1,14 @@
+# Shared local-model backend for the head-to-head competitor stacks.
+# See README.md — competitor servers themselves are launched from their
+# own published compose/self-host paths and pinned by digest at run
+# time, so this file stays minimal and stable.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - bench-vs-ollama:/root/.ollama
+
+volumes:
+  bench-vs-ollama:
