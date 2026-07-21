@@ -192,11 +192,6 @@ impl Orch {
         Ok(v.and_then(|s| s.parse().ok()))
     }
 
-    /// Whether this handle was opened read-only (replica mode).
-    pub fn is_read_only(&self) -> bool {
-        self.read_only
-    }
-
     // -- sealing -----------------------------------------------------------
 
     fn seal(&self, aad: &str, plain: &[u8]) -> Vec<u8> {
@@ -622,7 +617,6 @@ mod tests {
         let (t, token) = writer.tenant_create("acme", "alpha").unwrap();
 
         let replica = Orch::open_read_only(&path, KEY).unwrap();
-        assert!(replica.is_read_only());
         assert_eq!(replica.tenant_by_token(&token).unwrap().unwrap().id, t.id);
         assert_eq!(&*replica.instance_creds("alpha").unwrap().bearer, "b");
         assert!(replica.last_write().unwrap().is_some());
