@@ -26,7 +26,8 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   BM25 fusion) + optional cross-encoder rerank + ColBERT late-interaction
   stage (latestage.rs: token store, event-driven token-PQ codebook, LUT
   MaxSim), PQ/IVF candidate prefilter for both vault levels (pq.rs primitive,
-  pqidx.rs index; both levels scan a load-once RAM code cache), MUVERA FDE
+  pqidx.rs index; both levels scan a load-once RAM code cache, slab-grouped
+  by IVF list since v0.41.0), MUVERA FDE
   token-aware candidates (fdeidx.rs; core fde.rs construction; sealed
   `drawer_fde` + `fde_meta`; opt-in inverted tier via
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept

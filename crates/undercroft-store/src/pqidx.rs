@@ -23,7 +23,12 @@
 //! **performance parity within run-to-run noise** (an earlier loaded-host
 //! run had suggested a win), so it is kept as the single scan path for the
 //! simpler reason: one code path, no per-query SQLite iteration, identical
-//! recall.
+//! recall. Since v0.41.0 the cache is **slab-grouped by IVF list**
+//! ([`PqCache`]): a probe scans its lists' contiguous slabs instead of
+//! filtering every row through a membership test — the page-level spike
+//! measured that flat filter at 0.3–1.4 s/q at 10⁷ versus 10–36 ms/q for
+//! the grouped layout, with zero at-rest change
+//! (`.handover/pqpage_spike.log`; docs/RETRIEVAL_SCALING.md).
 //!
 //! Each drawer's embedding is product-quantized to a few dozen bytes
 //! ([`crate::pq`]) and stored in a `drawer_pq` table; the trained codebook
@@ -59,6 +64,96 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::pq::{CoarseQuantizer, ProductQuantizer};
 use crate::{PalaceStore, StoreError};
+
+/// The PQ RAM code cache, slab-grouped by IVF list: `list → (seqs,
+/// contiguous codes)`. A probe scans only its lists' slabs — no per-row
+/// membership test, which is the O(N·nprobe) filter the page-level spike
+/// measured at 0.3–1.4 s/q at 10⁷ (`.handover/pqpage_spike.log`; the
+/// grouped layout recovered 10–36 ms/q with zero at-rest change). Rows
+/// sit in list -1 until IVF partitions train; -1 also rides along in
+/// every probe afterwards. Mirrors `fdeidx::FdeCache::Coded`.
+pub(crate) struct PqCache {
+    code_len: usize,
+    slabs: std::collections::HashMap<i64, (Vec<i64>, Vec<u8>)>,
+}
+
+impl PqCache {
+    fn new(code_len: usize) -> Self {
+        Self {
+            code_len,
+            slabs: std::collections::HashMap::new(),
+        }
+    }
+
+    fn push(&mut self, seq: i64, list: i64, code: &[u8]) {
+        // A wrong-length code would corrupt its slab's stride — skip it;
+        // like a sealed row that fails to open, it only costs a candidate
+        // slot until the matched-count verify rebuilds.
+        if code.len() != self.code_len {
+            return;
+        }
+        let (seqs, codes) = self.slabs.entry(list).or_default();
+        seqs.push(seq);
+        codes.extend_from_slice(code);
+    }
+
+    /// Drop `seq` wherever it lives (a re-embedded drawer may move lists).
+    fn remove_seq(&mut self, seq: i64) {
+        let code_len = self.code_len;
+        self.slabs.retain(|_, (seqs, codes)| {
+            if let Some(pos) = seqs.iter().position(|s| *s == seq) {
+                seqs.remove(pos);
+                codes.drain(pos * code_len..(pos + 1) * code_len);
+            }
+            !seqs.is_empty()
+        });
+    }
+
+    #[cfg(test)]
+    fn rows(&self) -> usize {
+        self.slabs.values().map(|(s, _)| s.len()).sum()
+    }
+
+    /// Rows across the given lists only (the widen-when-<k check).
+    fn rows_in(&self, lists: &[i64]) -> usize {
+        lists
+            .iter()
+            .filter_map(|l| self.slabs.get(l))
+            .map(|(s, _)| s.len())
+            .sum()
+    }
+
+    /// ADC-score every row of the given lists (or all lists when `None`)
+    /// into `out`.
+    fn scan(
+        &self,
+        pq: &ProductQuantizer,
+        tables: &[f32],
+        lists: Option<&[i64]>,
+        out: &mut Vec<(f32, i64)>,
+    ) {
+        let mut scan_slab = |seqs: &Vec<i64>, codes: &Vec<u8>| {
+            for (i, seq) in seqs.iter().enumerate() {
+                let code = &codes[i * self.code_len..(i + 1) * self.code_len];
+                out.push((pq.adc(tables, code), *seq));
+            }
+        };
+        match lists {
+            Some(lists) => {
+                for l in lists {
+                    if let Some((seqs, codes)) = self.slabs.get(l) {
+                        scan_slab(seqs, codes);
+                    }
+                }
+            }
+            None => {
+                for (seqs, codes) in self.slabs.values() {
+                    scan_slab(seqs, codes);
+                }
+            }
+        }
+    }
+}
 
 /// k-means iterations and training-sample cap: PQ codebooks tolerate sampling
 /// well, and training is a one-time cost we keep to seconds.
@@ -266,7 +361,9 @@ impl PalaceStore {
         // `delete_drawer`, and any crash-window survivor merely wastes a
         // candidate slot downstream — the hydration query filters
         // `seq IN (...)` against live drawers — until the next rebuild.
-        // Probes filter the cache in RAM; if the probed lists hold fewer
+        // A probe scans only its lists' slabs (the flat cache's per-row
+        // membership filter was the O(N·nprobe) cost the page-level spike
+        // measured at 0.3–1.4 s/q at 10⁷); if the probed lists hold fewer
         // than `k` rows (skewed partitions, tiny corpus), widen to the full
         // scan rather than starve the fusion stage.
         self.pq_cache_ensure()?;
@@ -274,26 +371,13 @@ impl PalaceStore {
         let Some(cache) = cache_ref.as_ref() else {
             return Ok(None);
         };
-        let mut scored: Option<Vec<(f32, i64)>> = None;
-        if let Some(lists) = &probe {
-            let probed: Vec<(f32, i64)> = cache
-                .iter()
-                .filter(|(_, list, _)| lists.contains(list))
-                .map(|(seq, _, code)| (pq.adc(&tables, code), *seq))
-                .collect();
-            if probed.len() >= k {
-                scored = Some(probed);
+        let mut scored: Vec<(f32, i64)> = Vec::new();
+        match &probe {
+            Some(lists) if cache.rows_in(lists) >= k => {
+                cache.scan(pq, &tables, Some(lists), &mut scored)
             }
+            _ => cache.scan(pq, &tables, None, &mut scored),
         }
-        if scored.is_none() {
-            scored = Some(
-                cache
-                    .iter()
-                    .map(|(seq, _, code)| (pq.adc(&tables, code), *seq))
-                    .collect(),
-            );
-        }
-        let mut scored = scored.unwrap_or_default();
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {
                 a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
@@ -312,31 +396,42 @@ impl PalaceStore {
         if self.pq_cache.borrow().is_some() {
             return Ok(());
         }
-        let cache = if self.pq_sealed() {
+        // Decode into flat rows first, then slab-group: the stride
+        // (code_len) comes from the first decoded row.
+        let rows: Vec<(i64, i64, Vec<u8>)> = if self.pq_sealed() {
             let mut stmt = self.conn.prepare("SELECT seq, code FROM drawer_pq")?;
-            let rows: Vec<(i64, Vec<u8>)> = stmt
+            let sealed: Vec<(i64, Vec<u8>)> = stmt
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<Result<_, _>>()?;
-            let mut cache = Vec::with_capacity(rows.len());
-            for (seq, blob) in rows {
-                let Ok(plain) = self.vault.index_from_rest(&format!("pqrow/{seq}"), &blob) else {
-                    continue;
-                };
-                let Some((list, code)) = Self::pq_row_unpack(&plain) else {
-                    continue;
-                };
-                cache.push((seq, list, code));
-            }
-            cache
+            sealed
+                .into_iter()
+                .filter_map(|(seq, blob)| {
+                    let plain = self
+                        .vault
+                        .index_from_rest(&format!("pqrow/{seq}"), &blob)
+                        .ok()?;
+                    let (list, code) = Self::pq_row_unpack(&plain)?;
+                    Some((seq, list, code))
+                })
+                .collect()
         } else {
-            let mut stmt = self.conn.prepare("SELECT seq, list, code FROM drawer_pq")?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
+            self.pq_rows_plain()?
         };
+        let mut cache = PqCache::new(rows.first().map_or(0, |(_, _, c)| c.len()));
+        for (seq, list, code) in &rows {
+            cache.push(*seq, *list, code);
+        }
         *self.pq_cache.borrow_mut() = Some(cache);
         Ok(())
+    }
+
+    /// The hmac-only cache load: plain `(seq, list, code)` rows as stored.
+    fn pq_rows_plain(&self) -> Result<Vec<(i64, i64, Vec<u8>)>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT seq, list, code FROM drawer_pq")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Read a pq_meta value through the vault's index sealing (identity on
@@ -433,8 +528,13 @@ impl PalaceStore {
                 Some(cq) if n as u64 <= cq.trained_n().saturating_mul(2)
             );
             if !fresh {
+                // √N lists, clamped. The upper clamp sat at 1024 until the
+                // page-level spike showed √N must keep tracking N past 10⁶
+                // (a 10⁷ corpus at 1024 lists puts ~10k rows in every probe
+                // slab); 4096 covers √N up to ~16M drawers and matches the
+                // inverted-FDE tier's clamp.
                 let nlist = (n as f64).sqrt() as usize;
-                let nlist = nlist.clamp(16, 1024);
+                let nlist = nlist.clamp(16, 4096);
                 let stride = n.div_ceil(PQ_TRAIN_SAMPLE).max(1);
                 let sample: Vec<Vec<f32>> = items
                     .iter()
@@ -465,7 +565,7 @@ impl PalaceStore {
             .prepare("INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (?1, ?2, ?3)")?;
         let sealed = self.pq_sealed();
         let ivf_ref = self.ivf.borrow();
-        let mut cache = Vec::with_capacity(items.len());
+        let mut cache = PqCache::new(pq.code_len());
         for (seq, vec) in &items {
             let list: i64 = ivf_ref.as_ref().map_or(-1, |cq| cq.assign(vec) as i64);
             let code = pq.encode(vec);
@@ -482,7 +582,7 @@ impl PalaceStore {
             }
             // Either level's RAM cache is populated from the plaintext
             // already in hand — no re-read, no re-decrypt.
-            cache.push((*seq, list, code));
+            cache.push(*seq, list, &code);
         }
         drop(ivf_ref);
         *self.pq_cache.borrow_mut() = Some(cache);
@@ -545,8 +645,8 @@ impl PalaceStore {
             Ok(seq) => {
                 // Keep the RAM cache coherent with the plaintext in hand.
                 if let Some(cache) = self.pq_cache.borrow_mut().as_mut() {
-                    cache.retain(|(s, _, _)| *s != seq);
-                    cache.push((seq, list, code));
+                    cache.remove_seq(seq);
+                    cache.push(seq, list, &code);
                 }
                 if created {
                     self.pq_live.set(self.pq_live.get() + 1);
@@ -556,5 +656,37 @@ impl PalaceStore {
             // search rather than serve from a silently stale index.
             Err(_) => self.pq_verified.set(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PqCache;
+
+    /// The slab contract: rows group by list with a fixed stride, probe
+    /// scans see exactly their lists' rows, removal keeps strides intact
+    /// (and a re-push may land in a different list — the re-embed case),
+    /// and wrong-length codes are refused rather than corrupting a slab.
+    #[test]
+    fn slab_cache_groups_removes_and_guards_stride() {
+        let mut c = PqCache::new(2);
+        c.push(1, 0, &[1, 1]);
+        c.push(2, 0, &[2, 2]);
+        c.push(3, 1, &[3, 3]);
+        c.push(4, -1, &[4, 4]);
+        c.push(5, 1, &[9, 9, 9]); // wrong stride: refused
+        assert_eq!(c.rows(), 4);
+        assert_eq!(c.rows_in(&[0, -1]), 3);
+        assert_eq!(c.rows_in(&[7]), 0);
+        // Remove from the middle of list 0, then re-home seq 3 to list 0.
+        c.remove_seq(1);
+        c.remove_seq(3);
+        c.push(3, 0, &[5, 5]);
+        assert_eq!(c.rows(), 3);
+        assert_eq!(c.rows_in(&[0]), 2);
+        assert_eq!(c.rows_in(&[1]), 0, "emptied slab is dropped");
+        let (seqs, codes) = &c.slabs[&0];
+        assert_eq!(seqs, &vec![2, 3]);
+        assert_eq!(codes, &vec![2, 2, 5, 5], "stride intact after removal");
     }
 }

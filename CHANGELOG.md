@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.41.0 — Slab-grouped PQ cache
+
+- The PQ RAM code cache (both vault levels) is now **slab-grouped by
+  IVF list** — a probe scans its lists' contiguous slabs instead of
+  filtering every cached row through a per-row membership test. The
+  page-level spike measured that flat filter at 0.3–1.4 s/q at 10⁷
+  drawers versus 10–36 ms/q for the grouped layout
+  (`.handover/pqpage_spike.log`, docs/RETRIEVAL_SCALING.md); the
+  shipped path previously used a linear `contains`, so the win is a
+  floor. **Zero at-rest change** — cache layout only; recall is
+  byte-identical by construction. Mirrors the inverted-FDE tier's
+  slab cache (v0.39.0), as the page-format plan prescribed.
+- IVF `nlist` clamp lifted 1024 → 4096: √N keeps tracking the corpus
+  past 10⁶ drawers (at 10⁷/1024 every probe slab held ~10k rows),
+  matching the FDE tier's clamp. Corpora below ~1M are unaffected;
+  larger ones repartition on their existing double-growth trigger.
+- First step of the page-level at-rest format arc (ROADMAP item 3):
+  the format-free fix ships first, the opt-in page format + repack
+  migration follow.
+
 ## 0.40.0 — Orchestrator read replicas
 
 - `undercroft-orchestrator serve --read-replica`: opens the state
