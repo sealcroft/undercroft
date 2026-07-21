@@ -343,9 +343,10 @@ impl PalaceStore {
                 None => 0,
             };
             for chunk in rows.chunks(PQ_PAGE_CAP) {
-                let blob = self
-                    .vault
-                    .index_at_rest(&format!("pqpage/{list}/{pageno}"), &Self::pq_page_pack(chunk));
+                let blob = self.vault.index_at_rest(
+                    &format!("pqpage/{list}/{pageno}"),
+                    &Self::pq_page_pack(chunk),
+                );
                 self.conn.execute(
                     "INSERT OR REPLACE INTO pq_page (list, pageno, blob) VALUES (?1, ?2, ?3)",
                     params![list, pageno, blob],
@@ -867,8 +868,10 @@ impl PalaceStore {
         // also the migration path of last resort (any drift lands here).
         self.conn.execute("DELETE FROM drawer_pq", [])?;
         self.conn.execute("DELETE FROM pq_page", [])?;
-        self.conn
-            .execute("DELETE FROM pq_meta WHERE key IN ('rowcount', 'deleted')", [])?;
+        self.conn.execute(
+            "DELETE FROM pq_meta WHERE key IN ('rowcount', 'deleted')",
+            [],
+        )?;
         let mut ins = self
             .conn
             .prepare("INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (?1, ?2, ?3)")?;
@@ -1096,7 +1099,9 @@ impl PalaceStore {
             .query_map([], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
         drop(tail_stmt);
-        let mut page_stmt = self.conn.prepare("SELECT list, pageno, blob FROM pq_page")?;
+        let mut page_stmt = self
+            .conn
+            .prepare("SELECT list, pageno, blob FROM pq_page")?;
         let pages: Vec<(i64, i64, Vec<u8>)> = page_stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
@@ -1126,8 +1131,10 @@ impl PalaceStore {
         }
         drop(ins);
         self.conn.execute("DELETE FROM pq_page", [])?;
-        self.conn
-            .execute("DELETE FROM pq_meta WHERE key IN ('rowcount', 'deleted')", [])?;
+        self.conn.execute(
+            "DELETE FROM pq_meta WHERE key IN ('rowcount', 'deleted')",
+            [],
+        )?;
         self.pq_cache.borrow_mut().take();
         Ok(())
     }

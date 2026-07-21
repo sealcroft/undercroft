@@ -3661,13 +3661,8 @@ mod tests {
         );
 
         // A single write rides the tail — searchable immediately.
-        s.upsert(&drawer(
-            "w",
-            "r",
-            "tail rider about quantum tunneling",
-            200,
-        ))
-        .unwrap();
+        s.upsert(&drawer("w", "r", "tail rider about quantum tunneling", 200))
+            .unwrap();
         assert_eq!(tail_count(&s), 1);
         let hits = s
             .search("quantum tunneling", &SearchOptions::default())
