@@ -405,8 +405,17 @@ Also closes the v0.13.0 follow-up items:
 - Vault console MONITOR tab (live charts + ticker; SSE on telemetry
   builds, 3 s polling everywhere) and KNOWLEDGE tab (entity browser,
   valid-now facts, temporal timeline) over new read-only `/v1` KG
-  routes (stats, entities, query, timeline). First release of the
-  advanced-console arc; fleet live-ops (v0.38.0) is the second.
+  routes (stats, entities, query, timeline). Also PALACE (the pixel-art
+  monitor embedded seamlessly with the console session) and GRAFANA
+  (the observability dashboard, embeddable out of the box). First
+  release of the advanced-console arc.
+
+## v0.38.0 — Fleet live-ops (done)
+
+- Fleet console 10 s sweep: auto health pills, per-tenant metadata
+  stats columns, fleet totals bar; new admin route
+  `GET /admin/tenants/{id}/stats` (metadata relay via stored creds).
+  Completes the advanced-console arc.
 
 ## Next (all demand-driven — planned, not scheduled)
 

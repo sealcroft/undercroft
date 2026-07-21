@@ -304,8 +304,11 @@
     const vault=$('vault').value.trim();
     if(!vault){ $('connMsg').textContent='enter a vault id'; return; }
     disconnect();
-    // Drop the demo world so only real vault data is shown.
+    // Drop the demo world — including its ticker rows — so only real vault
+    // data is shown (a stale "demo mode" line outliving a LIVE connection
+    // reads as a fault on quiet vaults).
     wings=[]; byName.clear(); demoInit=false; sealedVault=false; links.length=0; floaters.length=0;
+    tickerBody.innerHTML='';
     connected=true; mode='live'; abort=new AbortController();
     setStatus('proc','CONNECTING'); $('connMsg').textContent='';
     // backfill history first
@@ -318,6 +321,7 @@
         {headers:headers(), signal:abort.signal});
       if(!res.ok){ setStatus('off','HTTP '+res.status); $('connMsg').textContent='stream: HTTP '+res.status; connected=false; mode='demo'; return; }
       setStatus('live','● LIVE · '+vault);
+      log('info', `live stream connected · ${vault}`);
       const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
       while(connected){
         const {value,done}=await reader.read(); if(done) break;

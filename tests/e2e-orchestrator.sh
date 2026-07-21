@@ -98,6 +98,12 @@ body_has "save through the proxy" '"created":true' -- -X POST "${AUTH_ACME[@]}" 
   "$O/t/drawers"
 body_has "search returns verbatim" 'gigawatts' -- -X POST "${AUTH_ACME[@]}" \
   -d '{"query":"flux capacitor power"}' "$O/t/search"
+
+echo "== Admin tenant stats (fleet live-ops) =="
+# Metadata-only stats via the admin plane (stored engine creds, no tenant token).
+body_has "admin tenant stats"      '"drawers":1'  -- "${ADMIN[@]}" "$O/admin/tenants/$ACME_ID/stats"
+code_is  "stats for unknown tenant 404" 404       -- "${ADMIN[@]}" "$O/admin/tenants/ffffffffffffffff/stats"
+body_has "/ui has fleet totals"    'ENGINES UP'   -- "$O/ui"
 body_has "stats route relays"      '"id":"tenant-' -- "${AUTH_ACME[@]}" "$O/t/stats"
 code_is  "bad token is 401"        401 -- -H "Authorization: Bearer 0000000000000000" -X POST \
   -d '{"query":"x"}' "$O/t/search"

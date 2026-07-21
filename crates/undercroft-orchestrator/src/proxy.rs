@@ -163,9 +163,13 @@ fn route(
     // page carrying no secrets: the operator pastes the admin token into
     // the page, which attaches it to its /admin/* fetches.
     if method == &Method::Get && path == "/ui" {
-        return Response::from_data(include_str!("ui.html").as_bytes().to_vec()).with_header(
-            Header::from_bytes("Content-Type", "text/html; charset=utf-8").expect("static header"),
-        );
+        return Response::from_data(include_str!("ui.html").as_bytes().to_vec())
+            .with_header(
+                Header::from_bytes("Content-Type", "text/html; charset=utf-8")
+                    .expect("static header"),
+            )
+            // no-cache: console updates must arrive on a plain reload.
+            .with_header(Header::from_bytes("Cache-Control", "no-cache").expect("static header"));
     }
 
     if let Some(sub) = path.strip_prefix("/t/") {
@@ -310,6 +314,7 @@ fn admin_plane(
             Ok(list) => json_response(200, &serde_json::json!({ "tenants": list })),
             Err(e) => err_response(500, &e.to_string()),
         },
+        ("GET", ["admin", "tenants", id, "stats"]) => tenant_stats(orch, id),
         ("DELETE", ["admin", "tenants", id]) => delete_tenant(orch, id),
         ("POST", ["admin", "tenants", id, "rotate"]) => match orch.tenant_rotate_token(id) {
             // The fresh token appears in this response and nowhere else;
@@ -357,6 +362,37 @@ fn create_tenant(
         200,
         &serde_json::json!({ "tenant": tenant, "token": token }),
     )
+}
+
+/// Metadata-only stats for one tenant's vault, fetched with the stored
+/// engine creds and relayed verbatim — the admin plane sees counts, sizes,
+/// and the chain head; drawer content stays unreachable from here (the
+/// data-plane allowlist is unchanged and requires the tenant's own token).
+fn tenant_stats(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let tenant = match orch.tenant_get(id) {
+        Ok(Some(t)) => t,
+        Ok(None) => return err_response(404, "unknown tenant"),
+        Err(e) => return err_response(500, &e.to_string()),
+    };
+    let creds = match orch.instance_creds(&tenant.instance) {
+        Ok(c) => c,
+        Err(_) => return err_response(502, "instance unavailable"),
+    };
+    match engine::vault_request(
+        &creds,
+        &tenant.vault,
+        "GET",
+        "stats",
+        "application/json",
+        &[],
+    ) {
+        Ok(r) => Response::from_data(r.body)
+            .with_status_code(r.status)
+            .with_header(
+                Header::from_bytes("Content-Type", "application/json").expect("static header"),
+            ),
+        Err(e) => err_response(502, &e),
+    }
 }
 
 fn delete_tenant(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
