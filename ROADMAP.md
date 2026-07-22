@@ -641,7 +641,7 @@ release with the usual battery + measured gates.
   calls**. Publish as docs/BENCHMARKS_VS.md + a landing section.
   *Gate*: numbers reported as measured, favorable or not — the
   methodology page IS the product.
-- **C1.2 Security comparison page.** One table, us vs the five named
+- **C1.2 Security comparison page (SHIPPED — docs/SECURITY_COMPARISON.md).** One table, us vs the five named
   competitors: content encryption / derived-index encryption / tamper
   evidence / verified reads / key rotation / cross-tenant crypto
   isolation / offline default / audit chain / export encryption.
