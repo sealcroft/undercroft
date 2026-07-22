@@ -273,16 +273,15 @@ pub fn sessions_from_results(v: &Value) -> Vec<String> {
 /// `delete_all_memories` tool (single provisioned user). Search results
 /// map to sessions via each memory's stored metadata (fetched by id over
 /// REST and cached — the tool response carries ids, not metadata).
+type SseReader = std::io::BufReader<Box<dyn std::io::Read + Send + Sync + 'static>>;
+/// A live MCP session: (SSE line reader, message-post URL, next JSON-RPC id).
+type McpSession = (SseReader, String, u64);
+
 pub struct Mem0 {
     base: String,
     user: String,
     agent: ureq::Agent,
-    /// Live MCP session: (SSE line reader, message-post URL, next id).
-    mcp: Option<(
-        std::io::BufReader<Box<dyn std::io::Read + Send + Sync + 'static>>,
-        String,
-        u64,
-    )>,
+    mcp: Option<McpSession>,
     /// memory id → session (metadata cache).
     sessions: std::collections::HashMap<String, String>,
 }
@@ -311,7 +310,7 @@ impl Mem0 {
     /// Read SSE frames until one complete event arrives; returns
     /// (event_name, data).
     fn sse_next(
-        reader: &mut std::io::BufReader<Box<dyn std::io::Read + Send + Sync + 'static>>,
+        reader: &mut SseReader,
     ) -> Result<(String, String)> {
         use std::io::BufRead;
         let (mut event, mut data) = (String::new(), String::new());
