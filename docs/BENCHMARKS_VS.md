@@ -82,7 +82,8 @@ Hardware/context for all rows: one Windows 11 host, Docker Desktop
 |---|---|---|---|---|---|---|---|
 | **undercroft** (native) | sealed vault, default offline hash embedder, BM25+cosine fusion | LoCoMo full (10 convos, 1982 QA) | **94.6%** (1875/1982) | 5.5 | **yes** | **none** | zero-setup row; ingest 16.5 s / 1271 chunks; log `.handover/vs_native_locomo.log` |
 | **undercroft** (best local) | sealed, MiniLM ONNX + ColBERT rescore (`colbert-ort`) | LoCoMo full | **96.5%** (1913/1982) | 52.9 | **yes** | none (local models) | measured v0.23.0, log `.handover/colbert_fde_locomo2.log`; question-for-question stable across 4 configs |
-| mem0 (OSS, local) | OpenMemory/mem0 server + Ollama (model TBD at run) | *pending* | *pending* | — | no | local LLM per write | adapter shipped; live run requires the mem0 stack up |
+| **undercroft** (native, subset) | as above (same-subset comparator for the mem0 row) | LoCoMo convos 1–2 (302 QA) | **96.7%** (292/302) | 3.8 | **yes** | **none** | ingest **2.5 s** / 177 chunks; log `.handover/vs_native_locomo_subset.log` |
+| **mem0** (local, measured) | OpenMemory (`mem0/openmemory-mcp`) + qdrant; LM Studio backend: qwen3.6-35B-A3B (MoE, thinking off) extraction + nomic-embed-text-v1.5; REST add, MCP semantic search | LoCoMo convos 1–2 (302 QA) | **67.9%** (205/302) | 93.2 | no (plaintext qdrant) | local LLM + embed per write | ingest **4 h 07 m** / 177 chunks (~84 s/chunk, extraction-bound); 55 memories retained of 177 chunks — the Personal-Information-Organizer rubric discards non-personal content by design (raw traffic shows `{"facts": []}` for e.g. project-launch turns; log `.handover/vs_mem0_locomo.log`). Two documented transport adaptations, content-neutral: `response_format json_object→(none)` for LM Studio 0.4.19, embeddings zero-padded 768→1536 for OpenMemory's fixed qdrant dims (cosine-order preserving) — `deploy/bench-vs/lmstudio-shim.js` |
 | Supermemory (self-host) | local binary/container | *pending* | *pending* | — | no | depends on config | adapter shipped |
 | Zep/Graphiti | — | — | *adapter pending* | — | no | local LLM per write | graph build cost expected to dominate ingest |
 | Letta | — | — | *adapter pending* | — | no | local LLM runtime | archival-memory surface |
@@ -102,6 +103,29 @@ Competitor stacks and pinned configurations live in
 env-overridable (`UNDERCROFT_VS_URL`, `UNDERCROFT_VS_ADD_PATH`,
 `UNDERCROFT_VS_SEARCH_PATH`, `UNDERCROFT_VS_BEARER`) so upstream API
 drift is absorbable without a rebuild.
+
+### Reading the mem0 row
+
+The 67.9% vs 96.7% gap on the identical subset is not an artifact of the
+harness — both systems saw byte-identical chunks and the same scorer,
+and the mem0 pipeline ran their published server with a strong local
+model (raw request/response traffic logged). The gap has two designed
+causes, both worth understanding on their own terms:
+
+1. **Extraction discards by rubric.** mem0's system prompt extracts
+   *personal* facts (preferences, relationships, plans). Conversation
+   content outside that rubric returns `{"facts": []}` and is simply
+   never stored — 177 ingested chunks became 55 memories. LoCoMo's
+   questions frequently target exactly the discarded material. This is
+   the architecture, not a bug: extraction-based memory answers "what
+   should I remember about this user," verbatim memory answers "what
+   was said."
+2. **Write cost is the price of extraction.** ~84 s per chunk on this
+   host (two-plus LLM calls per write) versus 14 ms for the sealed
+   vault — ingest of the same corpus took 4 h 07 m against 2.5 s, a
+   ~6,000× difference that no amount of GPU shrinks to parity, because
+   one design calls a language model per write and the other never
+   does.
 
 ## Honest caveats
 
