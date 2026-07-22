@@ -1,0 +1,9 @@
+    Finished `release` profile [optimized] target(s) in 19.64s
+=== N=200k (full exact containment gate) ===
+FDE synth: n=200000 docs × 32 tokens, dim=128, topics=25000, params reps=8 ksim=4 dproj=16
+FDE_SYNTH n=200000 fde_dim=2048 gen_s=28.9 build_s=34.6 exact_ms_per_q=11068 scan_ms_per_q=270.8 scan_qps=3.7 r10_in_fde10=0.644 r10_in_fde100=1.000 ram_mb=1638
+FDE_SYNTH_PQ n=200000 code_b=256 pq_build_s=34.9 ivf_build_s=122.8 nlist=447 nprobe=111/223 pq_ms_per_q=32.8 ivf_ms_per_q=112.2 ivf2_ms_per_q=157.3 r10_in_pq100=1.000 r10_in_ivf100=0.960 r10_in_ivf2_100=1.000 ram_mb=51
+=== N=500k (full exact containment gate) ===
+FDE synth: n=500000 docs × 32 tokens, dim=128, topics=62500, params reps=8 ksim=4 dproj=16
+FDE_SYNTH n=500000 fde_dim=2048 gen_s=84.3 build_s=89.2 exact_ms_per_q=25547 scan_ms_per_q=665.4 scan_qps=1.5 r10_in_fde10=0.607 r10_in_fde100=1.000 ram_mb=4096
+FDE_SYNTH_PQ n=500000 code_b=256 pq_build_s=77.9 ivf_build_s=461.6 nlist=707 nprobe=176/353 pq_ms_per_q=79.4 ivf_ms_per_q=351.7 ivf2_ms_per_q=423.8 r10_in_pq100=1.000 r10_in_ivf100=0.967 r10_in_ivf2_100=0.993 ram_mb=128

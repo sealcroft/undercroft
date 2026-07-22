@@ -368,7 +368,7 @@ widens per-probe tails but not the bytes-per-probe mean):
 | 10⁷, 3162 (√N) | 1178 / 563 MB | 20.1 s | 228–543 | 7.5–105 | 27.3–403 (8.7–140) | 7.5–131 | 1008 / 629 MB |
 
 (Ranges span probed fractions 1.5% → 25% of the corpus; raw log
-`.handover/pqpage_spike.log`.)
+`benchmarks/logs/pqpage_spike.log`.)
 
 What the numbers decide:
 

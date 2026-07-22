@@ -1,0 +1,22 @@
+ Container undercroft-test-run-238e3451cbd9 Creating 
+ Container undercroft-test-run-238e3451cbd9 Created 
+    Finished `release` profile [optimized] target(s) in 0.12s
+     Running `target/release/undercroft-bench vs /data/locomo10.json --system undercroft -k 10`
+  [undercroft] convo 1/10 done — 197 q, R@10 so far: 96.4%
+  [undercroft] convo 2/10 done — 302 q, R@10 so far: 96.7%
+  [undercroft] convo 3/10 done — 495 q, R@10 so far: 95.8%
+  [undercroft] convo 4/10 done — 755 q, R@10 so far: 95.4%
+  [undercroft] convo 5/10 done — 997 q, R@10 so far: 95.4%
+  [undercroft] convo 6/10 done — 1155 q, R@10 so far: 95.3%
+  [undercroft] convo 7/10 done — 1345 q, R@10 so far: 95.2%
+  [undercroft] convo 8/10 done — 1584 q, R@10 so far: 95.5%
+  [undercroft] convo 9/10 done — 1780 q, R@10 so far: 94.8%
+  [undercroft] convo 10/10 done — 1982 q, R@10 so far: 94.6%
+VS_RAW system=undercroft convos=0..10/10 qa_limit=0 recall_sum=1875.0000 evaluated=1982
+VS_TIMING system=undercroft ingest_secs=16.518 ingest_chunks=1271 search_secs=10.841 search_ms_per_q=5.5
+VS — undercroft · 1982 questions · session granularity: R@10 94.6%
+  category 1            94.7%  (282)
+  category 2            90.3%  (321)
+  category 3            81.5%  (92)
+  category 4            96.3%  (841)
+  category 5            97.1%  (446)

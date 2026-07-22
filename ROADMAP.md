@@ -444,12 +444,12 @@ page.
   scale; the tier is **default OFF** — opt in via
   `UNDERCROFT_FDE_IVF_MIN=<n>` past ~10⁶ only after validating
   containment on the real corpus. Logs
-  `.handover/fde_slab_sweep{,2}.log`.
+  `benchmarks/logs/fde_slab_sweep{,2}.log`.
 - **Trigger** (original): a real palace approaching ~10⁶ drawers where the flat
   PQ-ADC FDE scan (measured 33 ms/q @ 200k, linear in N) exceeds the
   latency budget. Below that scale it measured net-negative — the
   O(N·nprobe) membership filter loses to flat 256-add ADC (v0.24.0
-  finding; bench evidence in `.handover/fde_pq_sweep.log`).
+  finding; bench evidence in `benchmarks/logs/fde_pq_sweep.log`).
 - **Design**: group the RAM code cache by IVF list (contiguous
   per-list slices built once at load — no per-row `lists.contains`
   test at query time), coarse-quantize the query FDE, scan only the
@@ -511,7 +511,7 @@ page.
   constraint.
 - **Spike result** (`undercroft-bench pqpage-synth`, 10⁶–10⁷ synthetic
   drawers; measured section in RETRIEVAL_SCALING.md, raw log
-  `.handover/pqpage_spike.log`): pages (one AEAD blob per IVF list,
+  `benchmarks/logs/pqpage_spike.log`): pages (one AEAD blob per IVF list,
   AAD `pqpage/{list}`) win on at-rest size (2.1×), open cost
   (22 s → 0 at 10⁷) and RAM (630 MB warm vs ~1 GB) once the trigger
   fires — but the *urgent* 10⁶+ problem is the flat cache's O(N·nprobe)

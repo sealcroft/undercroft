@@ -28,7 +28,7 @@
 //! filtering every row through a membership test — the page-level spike
 //! measured that flat filter at 0.3–1.4 s/q at 10⁷ versus 10–36 ms/q for
 //! the grouped layout, with zero at-rest change
-//! (`.handover/pqpage_spike.log`; docs/RETRIEVAL_SCALING.md).
+//! (`benchmarks/logs/pqpage_spike.log`; docs/RETRIEVAL_SCALING.md).
 //!
 //! Each drawer's embedding is product-quantized to a few dozen bytes
 //! ([`crate::pq`]) and stored in a `drawer_pq` table; the trained codebook
@@ -68,7 +68,7 @@ use crate::{PalaceStore, StoreError};
 /// The PQ RAM code cache, slab-grouped by IVF list: `list → (seqs,
 /// contiguous codes)`. A probe scans only its lists' slabs — no per-row
 /// membership test, which is the O(N·nprobe) filter the page-level spike
-/// measured at 0.3–1.4 s/q at 10⁷ (`.handover/pqpage_spike.log`; the
+/// measured at 0.3–1.4 s/q at 10⁷ (`benchmarks/logs/pqpage_spike.log`; the
 /// grouped layout recovered 10–36 ms/q with zero at-rest change). Rows
 /// sit in list -1 until IVF partitions train; -1 also rides along in
 /// every probe afterwards. Mirrors `fdeidx::FdeCache::Coded`.
