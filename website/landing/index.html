@@ -693,6 +693,17 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <div class="bar-row up2"><span class="bar-name">mempalace · raw</span><div class="bar"><i style="--w:60.3%"></i></div><span class="bar-val">60.3</span></div>
         <div class="bench-foot">recall@10 of the evidence session · MiniLM + BM25 and zero-model hash converge at 94.6, both far above upstream; an optional cross-encoder reranker lifts it to 97.68 (1936/1982)</div>
       </figure>
+      <figure class="bench-card">
+        <figcaption class="bench-head">
+          <span class="bench-name">Head-to-head · vs mem0</span>
+          <span class="bench-metric">session recall@10 · identical corpus, within-run</span>
+        </figcaption>
+        <div class="bar-row hero"><span class="bar-name">undercroft · MiniLM, sealed</span><div class="bar"><i style="--w:97.4%"></i></div><span class="bar-val">97.4</span></div>
+        <div class="bar-row hash"><span class="bar-name">undercroft · hash, sealed</span><div class="bar"><i style="--w:96.7%"></i></div><span class="bar-val">96.7</span></div>
+        <div class="bar-row up2"><span class="bar-name">mem0 · local (their stack)</span><div class="bar"><i style="--w:67.9%"></i></div><span class="bar-val">67.9</span></div>
+        <div class="bench-foot">LoCoMo convos 1–2 (302 QA), byte-identical chunks, one scorer · mem0's published local server with qwen3.6 + nomic via LM Studio · ingest of the same corpus: <b>2.5&nbsp;s</b> (sealed, no model) vs <b>4&nbsp;h&nbsp;07&nbsp;m</b> (LLM per write) · full methodology, configs, raw logs:
+          <a href="https://github.com/compufreq/undercroft/blob/main/docs/BENCHMARKS_VS.md">BENCHMARKS_VS.md</a></div>
+      </figure>
     </div>
 
     <div class="bench-how">
