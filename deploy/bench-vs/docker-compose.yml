@@ -23,16 +23,40 @@ services:
       - bench-vs-qdrant:/qdrant/storage
 
   # OpenMemory's mem0 `lmstudio` provider is hardwired to
-  # localhost:1234; this socat bridge owns the network namespace the
-  # server shares, forwarding in-container localhost:1234 to the host's
-  # LM Studio — a pure transport shim, zero changes to mem0's code.
+  # localhost:1234; this bridge owns the network namespace the server
+  # shares, forwarding in-container localhost:1234 to the host's LM
+  # Studio. It additionally translates one API-dialect mismatch
+  # (`response_format: json_object`, which LM Studio rejects) — see
+  # lmstudio-shim.js; content is never touched, mem0's code unchanged.
   lmstudio-bridge:
-    image: alpine/socat
-    command: tcp-listen:1234,fork,reuseaddr tcp-connect:host.docker.internal:1234
+    image: node:22-alpine
+    command: ["node", "/shim/lmstudio-shim.js"]
+    environment:
+      # OpenMemory's hardcoded qdrant dims; nomic emits 768 — see shim.
+      - PAD_EMBED_TO=1536
+      - SHIM_DEBUG=1
+    volumes:
+      - ./lmstudio-shim.js:/shim/lmstudio-shim.js:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8765:8765"
+      - "127.0.0.1:18800:8000"
+
+  # mem0's canonical REST server (true semantic /search + full
+  # /configure), built from their repo: docker build
+  # https://github.com/mem0ai/mem0.git#main:server — image digest
+  # recorded with any published row. Shares the bridge namespace like
+  # OpenMemory, so localhost:1234 = host LM Studio through the shim.
+  mem0-server:
+    image: bench-mem0-server
+    network_mode: "service:lmstudio-bridge"
+    depends_on:
+      - mem0_store
+      - lmstudio-bridge
+    environment:
+      - OPENAI_API_KEY=lm-studio
+      - OPENAI_BASE_URL=http://localhost:1234/v1
 
   openmemory-mcp:
     image: mem0/openmemory-mcp:latest
@@ -42,6 +66,11 @@ services:
       - lmstudio-bridge
     environment:
       - OPENAI_API_KEY=lm-studio
+      # In-container localhost:1234 = the bridge/shim = host LM Studio;
+      # the OpenAI client library reads this env for every openai-provider
+      # call (the config API's base-url field is not persisted by this
+      # build, so the env is the reliable channel).
+      - OPENAI_BASE_URL=http://localhost:1234/v1
       - USER=bench
 
 volumes:

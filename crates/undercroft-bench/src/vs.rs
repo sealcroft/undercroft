@@ -262,29 +262,173 @@ pub fn sessions_from_results(v: &Value) -> Vec<String> {
     out
 }
 
-// -- mem0 (OSS server / OpenMemory) ----------------------------------------
+// -- mem0 (OpenMemory, their flagship local server) -------------------------
 
-/// mem0's REST surface: `POST /v1/memories/` with `messages`, `user_id`,
-/// and `metadata`; `POST /v1/memories/search/` with `query` and
-/// `user_id`. Extraction happens server-side with whatever LLM/embedder
-/// the server was configured with (the bench-vs deployment pins a fully
-/// local backend — documented in the methodology page).
+/// mem0 local = OpenMemory (`mem0/openmemory-mcp`). Writes go through its
+/// REST surface (`POST /api/v1/memories/` — carries `metadata`, triggers
+/// server-side LLM extraction); semantic search is only exposed through
+/// its MCP tools, so the adapter speaks MCP over the SSE transport
+/// (`GET /mcp/{client}/sse/{user}` + JSON-RPC posts) exactly like any
+/// MCP client would. Per-conversation isolation uses the server's own
+/// `delete_all_memories` tool (single provisioned user). Search results
+/// map to sessions via each memory's stored metadata (fetched by id over
+/// REST and cached — the tool response carries ids, not metadata).
 pub struct Mem0 {
-    cfg: HttpConfig,
+    base: String,
     user: String,
+    agent: ureq::Agent,
+    /// Live MCP session: (SSE line reader, message-post URL, next id).
+    mcp: Option<(
+        std::io::BufReader<Box<dyn std::io::Read + Send + Sync + 'static>>,
+        String,
+        u64,
+    )>,
+    /// memory id → session (metadata cache).
+    sessions: std::collections::HashMap<String, String>,
 }
 
 impl Mem0 {
     pub fn new(url_flag: &str) -> Self {
+        let base = if !url_flag.is_empty() {
+            url_flag.trim_end_matches('/').to_string()
+        } else {
+            std::env::var("UNDERCROFT_VS_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8765".into())
+                .trim_end_matches('/')
+                .to_string()
+        };
         Self {
-            cfg: HttpConfig::resolve(
-                url_flag,
-                "http://127.0.0.1:8000",
-                "/v1/memories/",
-                "/v1/memories/search/",
-            ),
-            user: String::new(),
+            base,
+            user: std::env::var("UNDERCROFT_VS_MEM0_USER").unwrap_or_else(|_| "bench".into()),
+            agent: ureq::AgentBuilder::new()
+                .timeout_read(std::time::Duration::from_secs(600))
+                .build(),
+            mcp: None,
+            sessions: std::collections::HashMap::new(),
         }
+    }
+
+    /// Read SSE frames until one complete event arrives; returns
+    /// (event_name, data).
+    fn sse_next(
+        reader: &mut std::io::BufReader<Box<dyn std::io::Read + Send + Sync + 'static>>,
+    ) -> Result<(String, String)> {
+        use std::io::BufRead;
+        let (mut event, mut data) = (String::new(), String::new());
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 {
+                anyhow::bail!("SSE stream closed");
+            }
+            let line = line.trim_end();
+            if line.is_empty() {
+                if !data.is_empty() {
+                    return Ok((event, data));
+                }
+                continue;
+            }
+            if let Some(v) = line.strip_prefix("event:") {
+                event = v.trim().to_string();
+            } else if let Some(v) = line.strip_prefix("data:") {
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                data.push_str(v.trim());
+            }
+        }
+    }
+
+    fn mcp_ensure(&mut self) -> Result<()> {
+        if self.mcp.is_some() {
+            return Ok(());
+        }
+        let resp = self
+            .agent
+            .get(&format!("{}/mcp/benchvs/sse/{}", self.base, self.user))
+            .call()
+            .map_err(|e| anyhow::anyhow!("MCP SSE connect: {e}"))?;
+        let mut reader = std::io::BufReader::new(resp.into_reader());
+        let (event, endpoint) = Self::sse_next(&mut reader)?;
+        anyhow::ensure!(event == "endpoint", "expected endpoint event, got {event}");
+        let post_url = format!("{}{}", self.base, endpoint);
+        self.mcp = Some((reader, post_url, 1));
+        // MCP handshake.
+        self.mcp_send(json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": { "protocolVersion": "2024-11-05", "capabilities": {},
+                        "clientInfo": { "name": "undercroft-bench-vs", "version": "0" } }
+        }))?;
+        self.mcp_wait(0)?;
+        self.mcp_send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))?;
+        Ok(())
+    }
+
+    fn mcp_send(&mut self, msg: Value) -> Result<()> {
+        let (_, url, _) = self.mcp.as_ref().context("MCP session not open")?;
+        let url = url.clone();
+        self.agent
+            .post(&url)
+            .send_json(msg)
+            .map_err(|e| anyhow::anyhow!("MCP post: {e}"))?;
+        Ok(())
+    }
+
+    /// Read SSE messages until the JSON-RPC response with `id` arrives.
+    fn mcp_wait(&mut self, id: u64) -> Result<Value> {
+        let (reader, _, _) = self.mcp.as_mut().context("MCP session not open")?;
+        loop {
+            let (_, data) = Self::sse_next(reader)?;
+            let Ok(v) = serde_json::from_str::<Value>(&data) else {
+                continue;
+            };
+            if v.get("id").and_then(Value::as_u64) == Some(id) {
+                if let Some(err) = v.get("error") {
+                    anyhow::bail!("MCP error: {err}");
+                }
+                return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+            }
+        }
+    }
+
+    fn mcp_tool(&mut self, name: &str, args: Value) -> Result<Value> {
+        self.mcp_ensure()?;
+        let id = {
+            let (_, _, next) = self.mcp.as_mut().context("MCP session not open")?;
+            let id = *next;
+            *next += 1;
+            id
+        };
+        self.mcp_send(json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": { "name": name, "arguments": args }
+        }))?;
+        let result = self.mcp_wait(id)?;
+        // Tool results carry their payload as text content.
+        let text = result
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(|c| c.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        Ok(serde_json::from_str(text).unwrap_or(Value::String(text.to_string())))
+    }
+
+    /// Session id for a memory id, via REST metadata (cached).
+    fn session_of(&mut self, memory_id: &str) -> Option<String> {
+        if let Some(s) = self.sessions.get(memory_id) {
+            return Some(s.clone());
+        }
+        let url = format!("{}/api/v1/memories/{}", self.base, memory_id);
+        let v: Value = self.agent.get(&url).call().ok()?.into_json().ok()?;
+        let s = v
+            .get("metadata_")
+            .or_else(|| v.get("metadata"))
+            .and_then(|m| m.get("session"))
+            .and_then(Value::as_str)?
+            .to_string();
+        self.sessions.insert(memory_id.to_string(), s.clone());
+        Some(s)
     }
 }
 
@@ -293,30 +437,67 @@ impl MemorySystem for Mem0 {
         "mem0"
     }
 
-    fn begin_conversation(&mut self, convo: usize) -> Result<()> {
-        // Isolation by user id — mem0's own multi-tenancy unit.
-        self.user = format!("vs-convo-{convo}");
+    fn begin_conversation(&mut self, _convo: usize) -> Result<()> {
+        // The server's own wipe tool — conversations run sequentially in
+        // one provisioned user, cleaned between (mirrors fresh-store
+        // isolation for a single-tenant surface).
+        self.mcp_tool("delete_all_memories", json!({}))?;
+        self.sessions.clear();
         Ok(())
     }
 
     fn add(&mut self, session: &str, text: &str) -> Result<()> {
         let body = json!({
-            "messages": [{ "role": "user", "content": text }],
             "user_id": self.user,
+            "text": text,
             "metadata": { "session": session },
+            "app": "bench",
+            "infer": true,
         });
-        post_json(&self.cfg, &self.cfg.add_path.clone(), &body)?;
+        let resp = self
+            .agent
+            .post(&format!("{}/api/v1/memories/", self.base))
+            .send_json(body)
+            .map_err(|e| anyhow::anyhow!("mem0 add: {e}"))?
+            .into_json::<Value>()
+            .unwrap_or(Value::Null);
+        if let Some(err) = resp.get("error") {
+            anyhow::bail!("mem0 add: {err}");
+        }
         Ok(())
     }
 
-    fn search_sessions(&mut self, question: &str, k: usize) -> Result<Vec<String>> {
-        let body = json!({
-            "query": question,
-            "user_id": self.user,
-            "limit": k * 6,
-        });
-        let resp = post_json(&self.cfg, &self.cfg.search_path.clone(), &body)?;
-        Ok(sessions_from_results(&resp))
+    fn search_sessions(&mut self, question: &str, _k: usize) -> Result<Vec<String>> {
+        let result = self.mcp_tool("search_memory", json!({ "query": question }))?;
+        let items = result
+            .as_array()
+            .cloned()
+            .or_else(|| {
+                result
+                    .get("results")
+                    .and_then(Value::as_array)
+                    .cloned()
+            })
+            .unwrap_or_default();
+        let mut out: Vec<String> = Vec::new();
+        for item in &items {
+            let sess = item
+                .get("metadata")
+                .and_then(|m| m.get("session"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    item.get("id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| self.session_of(id))
+                });
+            if let Some(s) = sess {
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
