@@ -309,9 +309,7 @@ impl Mem0 {
 
     /// Read SSE frames until one complete event arrives; returns
     /// (event_name, data).
-    fn sse_next(
-        reader: &mut SseReader,
-    ) -> Result<(String, String)> {
+    fn sse_next(reader: &mut SseReader) -> Result<(String, String)> {
         use std::io::BufRead;
         let (mut event, mut data) = (String::new(), String::new());
         loop {
