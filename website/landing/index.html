@@ -762,9 +762,10 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <div class="bar-row hero"><span class="bar-name">undercroft · MiniLM, sealed</span><div class="bar"><i style="--w:97.4%"></i></div><span class="bar-val">97.4</span></div>
         <div class="bar-row hash"><span class="bar-name">undercroft · no model at all, sealed</span><div class="bar"><i style="--w:96.7%"></i></div><span class="bar-val">96.7</span></div>
         <div class="bar-row up2"><span class="bar-name">mem0 · local, their stack</span><div class="bar"><i style="--w:67.9%"></i></div><span class="bar-val">67.9</span></div>
-        <div class="bench-foot">mem0 = their published OpenMemory server + qdrant, extraction by
-          qwen3.6-35B + nomic embeddings via LM Studio — a stronger model stack than either
-          undercroft row uses</div>
+        <div class="bench-foot">mem0 = their published OpenMemory server + qdrant, running with far
+          more model firepower than we gave ourselves: a 35B-parameter LLM (qwen3.6) + neural
+          embeddings (nomic) versus undercroft's 22M-parameter MiniLM — or no model at all. The
+          architecture won, not the hardware budget.</div>
       </figure>
       <figure class="bench-card">
         <figcaption class="bench-head">
