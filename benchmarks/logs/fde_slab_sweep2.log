@@ -1,0 +1,5 @@
+    Finished `release` profile [optimized] target(s) in 18.50s
+=== N=500k contiguous slabs ===
+FDE synth: n=500000 docs × 32 tokens, dim=128, topics=62500, params reps=8 ksim=4 dproj=16
+FDE_SYNTH n=500000 fde_dim=2048 gen_s=71.3 build_s=87.5 exact_ms_per_q=25439 scan_ms_per_q=666.0 scan_qps=1.5 r10_in_fde10=0.607 r10_in_fde100=1.000 ram_mb=4096
+FDE_SYNTH_PQ n=500000 code_b=256 pq_build_s=76.2 ivf_build_s=463.0 nlist=707 nprobe=176/353 pq_ms_per_q=78.7 ivf_ms_per_q=243.1 ivf2_ms_per_q=282.3 r10_in_pq100=1.000 r10_in_ivf100=0.967 r10_in_ivf2_100=0.993 ram_mb=128

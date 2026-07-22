@@ -1,0 +1,562 @@
+ Image undercroft-pqpage Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 576B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 2.72kB 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/rust:1.90-slim-bookworm
+#3 DONE 0.1s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 442B 0.0s done
+#4 DONE 0.1s
+
+#5 [internal] load build context
+#5 DONE 0.0s
+
+#6 [builder 1/6] FROM docker.io/library/rust:1.90-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9
+#6 resolve docker.io/library/rust:1.90-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9 0.1s done
+#6 DONE 0.1s
+
+#5 [internal] load build context
+#5 transferring context: 195.67kB 0.0s done
+#5 DONE 0.1s
+
+#7 [builder 2/6] WORKDIR /src
+#7 CACHED
+
+#8 [builder 3/6] RUN apt-get update     && apt-get install -y --no-install-recommends curl     && rm -rf /var/lib/apt/lists/*
+#8 CACHED
+
+#9 [builder 4/6] COPY Cargo.toml Cargo.lock ./
+#9 DONE 0.1s
+
+#10 [builder 5/6] COPY crates ./crates
+#10 DONE 0.2s
+
+#11 [builder 6/6] RUN if [ -n "" ]; then         cargo build --release -p undercroft-cli --features "";     else         cargo build --release && cargo test --release --no-run;     fi
+#11 1.214     Updating crates.io index
+#11 6.619  Downloading crates ...
+#11 6.755   Downloaded adler2 v2.0.1
+#11 6.780   Downloaded anstyle-query v1.1.5
+#11 6.800   Downloaded curve25519-dalek-derive v0.1.1
+#11 6.814   Downloaded futures-task v0.3.32
+#11 6.820   Downloaded form_urlencoded v1.2.2
+#11 6.828   Downloaded generic-array v0.14.7
+#11 6.855   Downloaded block-buffer v0.10.4
+#11 6.865   Downloaded idna_adapter v1.2.2
+#11 6.882   Downloaded itoa v1.0.18
+#11 6.899   Downloaded percent-encoding v2.3.2
+#11 6.911   Downloaded sha2 v0.11.0
+#11 6.938   Downloaded tinyvec_macros v0.1.1
+#11 6.949   Downloaded stable_deref_trait v1.2.1
+#11 6.953   Downloaded universal-hash v0.5.1
+#11 6.965   Downloaded zeroize_derive v1.5.0
+#11 6.973   Downloaded version_check v0.9.5
+#11 6.980   Downloaded password-hash v0.5.0
+#11 6.988   Downloaded utf8parse v0.2.2
+#11 6.998   Downloaded lock_api v0.4.14
+#11 7.005   Downloaded phf_shared v0.13.1
+#11 7.026   Downloaded untrusted v0.9.0
+#11 7.040   Downloaded zeroize v1.9.0
+#11 7.048   Downloaded zmij v1.0.23
+#11 7.057   Downloaded writeable v0.6.3
+#11 7.067   Downloaded zstd v0.13.3
+#11 7.092   Downloaded yoke v0.8.3
+#11 7.102   Downloaded sha2 v0.10.9
+#11 7.118   Downloaded rand_chacha v0.3.1
+#11 7.127   Downloaded zstd-safe v7.2.4
+#11 7.140   Downloaded unicode-ident v1.0.24
+#11 7.152   Downloaded unicode-bidi v0.3.18
+#11 7.166   Downloaded log v0.4.33
+#11 7.175   Downloaded parking_lot v0.12.5
+#11 7.182   Downloaded rand_core v0.10.1
+#11 7.188   Downloaded rand_core v0.6.4
+#11 7.194   Downloaded bytes v1.12.1
+#11 7.209   Downloaded zerotrie v0.2.4
+#11 7.230   Downloaded x25519-dalek v2.0.1
+#11 7.261   Downloaded icu_normalizer v2.2.0
+#11 7.284   Downloaded tokio-postgres v0.7.18
+#11 7.331   Downloaded ureq v2.12.1
+#11 7.403   Downloaded scopeguard v1.2.0
+#11 7.417   Downloaded typenum v1.20.1
+#11 7.466   Downloaded unicode-normalization v0.1.25
+#11 7.504   Downloaded zerovec v0.11.6
+#11 7.535   Downloaded icu_normalizer_data v2.2.0
+#11 7.549   Downloaded serde_json v1.0.150
+#11 7.595   Downloaded semver v1.0.28
+#11 7.609   Downloaded rustls-pki-types v1.15.0
+#11 7.626   Downloaded mio v1.2.2
+#11 7.649   Downloaded serde_core v1.0.228
+#11 7.661   Downloaded webpki-roots v1.0.8
+#11 7.670   Downloaded vcpkg v0.2.15
+#11 7.789   Downloaded serde v1.0.228
+#11 7.802   Downloaded zerocopy v0.8.54
+#11 7.847   Downloaded syn v2.0.118
+#11 7.869   Downloaded icu_properties_data v2.2.0
+#11 7.896   Downloaded rusqlite v0.32.1
+#11 7.912   Downloaded futures-util v0.3.32
+#11 7.947   Downloaded hkdf v0.12.4
+#11 7.954   Downloaded clap_builder v4.6.0
+#11 7.969   Downloaded time v0.3.53
+#11 8.004   Downloaded rand v0.10.2
+#11 8.018   Downloaded curve25519-dalek v4.1.3
+#11 8.039   Downloaded idna v1.1.0
+#11 8.049   Downloaded rustls-webpki v0.103.13
+#11 8.060   Downloaded hashbrown v0.14.5
+#11 8.075   Downloaded serde_derive v1.0.228
+#11 8.082   Downloaded rustls v0.23.42
+#11 8.111   Downloaded rand v0.8.7
+#11 8.120   Downloaded memchr v2.8.3
+#11 8.136   Downloaded icu_collections v2.2.0
+#11 8.152   Downloaded rustix v1.1.4
+#11 8.225   Downloaded tokio-util v0.7.18
+#11 8.248   Downloaded flate2 v1.1.9
+#11 8.267   Downloaded cc v1.2.67
+#11 8.275   Downloaded proc-macro2 v1.0.106
+#11 8.298   Downloaded miniz_oxide v0.8.9
+#11 8.306   Downloaded base64 v0.22.1
+#11 8.327   Downloaded url v2.5.8
+#11 8.336   Downloaded zstd-sys v2.0.16+zstd.1.5.7
+#11 8.372   Downloaded rustc_version v0.4.1
+#11 8.380   Downloaded icu_locale_core v2.2.0
+#11 8.403   Downloaded hmac v0.13.0
+#11 8.407   Downloaded getrandom v0.4.3
+#11 8.418   Downloaded clap v4.6.1
+#11 8.436   Downloaded chacha20poly1305 v0.10.1
+#11 8.439   Downloaded tokio v1.52.3
+#11 8.528   Downloaded libc v0.2.186
+#11 8.617   Downloaded postgres-types v0.2.14
+#11 8.623   Downloaded postgres v0.19.14
+#11 8.630   Downloaded icu_provider v2.2.0
+#11 8.636   Downloaded icu_properties v2.2.0
+#11 8.641   Downloaded socket2 v0.6.5
+#11 8.650   Downloaded bitflags v2.13.0
+#11 8.662   Downloaded tinyvec v1.12.0
+#11 8.669   Downloaded tiny_http v0.12.0
+#11 8.679   Downloaded time-macros v0.2.31
+#11 8.684   Downloaded ppv-lite86 v0.2.21
+#11 8.688   Downloaded powerfmt v0.2.0
+#11 8.691   Downloaded const-oid v0.10.2
+#11 8.697   Downloaded quote v1.0.46
+#11 8.705   Downloaded postgres-protocol v0.6.12
+#11 8.712   Downloaded poly1305 v0.8.0
+#11 8.719   Downloaded cmov v0.5.4
+#11 8.725   Downloaded unicode-properties v0.1.4
+#11 8.730   Downloaded smallvec v1.15.2
+#11 8.735   Downloaded parking_lot_core v0.9.12
+#11 8.741   Downloaded once_cell v1.21.4
+#11 8.747   Downloaded litemap v0.8.2
+#11 8.754   Downloaded hybrid-array v0.4.13
+#11 8.759   Downloaded zerovec-derive v0.11.3
+#11 8.762   Downloaded thiserror v2.0.18
+#11 8.777   Downloaded slab v0.4.12
+#11 8.783   Downloaded hmac v0.12.1
+#11 8.801   Downloaded hashlink v0.9.1
+#11 8.812   Downloaded getrandom v0.2.17
+#11 8.823   Downloaded futures-channel v0.3.32
+#11 8.834   Downloaded fastrand v2.4.1
+#11 8.840   Downloaded fallible-iterator v0.3.0
+#11 8.846   Downloaded yoke-derive v0.8.2
+#11 8.850   Downloaded whoami v2.1.2
+#11 8.857   Downloaded tinystr v0.8.3
+#11 8.864   Downloaded tempfile v3.27.0
+#11 8.872   Downloaded stringprep v0.1.5
+#11 8.876   Downloaded pkg-config v0.3.33
+#11 8.883   Downloaded ctutils v0.4.2
+#11 8.900   Downloaded crc32fast v1.5.0
+#11 8.913   Downloaded clap_derive v4.6.1
+#11 8.924   Downloaded ring v0.17.14
+#11 9.008   Downloaded thiserror-impl v2.0.18
+#11 9.012   Downloaded synstructure v0.13.2
+#11 9.024   Downloaded shlex v2.0.1
+#11 9.033   Downloaded potential_utf v0.1.5
+#11 9.039   Downloaded pin-project-lite v0.2.17
+#11 9.057   Downloaded anyhow v1.0.103
+#11 9.069   Downloaded md-5 v0.11.0
+#11 9.075   Downloaded chacha20 v0.10.1
+#11 9.082   Downloaded byteorder v1.5.0
+#11 9.087   Downloaded blake2 v0.10.6
+#11 9.107   Downloaded base64ct v1.8.3
+#11 9.124   Downloaded ascii v1.1.0
+#11 9.139   Downloaded jobserver v0.1.35
+#11 9.151   Downloaded futures-core v0.3.32
+#11 9.156   Downloaded zerofrom-derive v0.1.7
+#11 9.159   Downloaded zerofrom v0.1.8
+#11 9.168   Downloaded webpki-roots v0.26.11
+#11 9.175   Downloaded utf8_iter v1.0.4
+#11 9.178   Downloaded find-msvc-tools v0.1.9
+#11 9.184   Downloaded siphasher v1.0.3
+#11 9.189   Downloaded fallible-iterator v0.2.0
+#11 9.192   Downloaded digest v0.11.3
+#11 9.199   Downloaded time-core v0.1.9
+#11 9.206   Downloaded subtle v2.6.1
+#11 9.219   Downloaded strsim v0.11.1
+#11 9.229   Downloaded simd-adler32 v0.3.9
+#11 9.237   Downloaded displaydoc v0.2.6
+#11 9.245   Downloaded digest v0.10.7
+#11 9.253   Downloaded deranged v0.5.8
+#11 9.259   Downloaded cpufeatures v0.2.17
+#11 9.264   Downloaded cipher v0.4.4
+#11 9.269   Downloaded chacha20 v0.9.1
+#11 9.279   Downloaded anstyle-parse v1.0.0
+#11 9.284   Downloaded anstyle v1.0.14
+#11 9.288   Downloaded phf v0.13.1
+#11 9.292   Downloaded async-trait v0.1.89
+#11 9.303   Downloaded opaque-debug v0.3.1
+#11 9.309   Downloaded num-conv v0.2.2
+#11 9.315   Downloaded is_terminal_polyfill v1.70.2
+#11 9.321   Downloaded inout v0.1.4
+#11 9.327   Downloaded httpdate v1.0.3
+#11 9.337   Downloaded hex v0.4.3
+#11 9.342   Downloaded heck v0.5.0
+#11 9.349   Downloaded futures-sink v0.3.32
+#11 9.357   Downloaded fallible-streaming-iterator v0.1.9
+#11 9.361   Downloaded errno v0.3.14
+#11 9.368   Downloaded crypto-common v0.2.2
+#11 9.375   Downloaded argon2 v0.5.3
+#11 9.384   Downloaded anstream v1.0.0
+#11 9.398   Downloaded crypto-common v0.1.7
+#11 9.404   Downloaded cpufeatures v0.3.0
+#11 9.409   Downloaded colorchoice v1.0.5
+#11 9.415   Downloaded clap_lex v1.1.0
+#11 9.420   Downloaded chunked_transfer v1.5.0
+#11 9.425   Downloaded cfg-if v1.0.4
+#11 9.434   Downloaded block-buffer v0.12.1
+#11 9.448   Downloaded aead v0.5.2
+#11 9.464   Downloaded ahash v0.8.12
+#11 9.515   Downloaded linux-raw-sys v0.12.1
+#11 9.877   Downloaded libsqlite3-sys v0.30.1
+#11 10.23    Compiling libc v0.2.186
+#11 10.23    Compiling proc-macro2 v1.0.106
+#11 10.23    Compiling unicode-ident v1.0.24
+#11 10.23    Compiling quote v1.0.46
+#11 10.25    Compiling cfg-if v1.0.4
+#11 10.25    Compiling typenum v1.20.1
+#11 10.26    Compiling version_check v0.9.5
+#11 10.28    Compiling find-msvc-tools v0.1.9
+#11 10.29    Compiling shlex v2.0.1
+#11 10.31    Compiling subtle v2.6.1
+#11 10.31    Compiling stable_deref_trait v1.2.1
+#11 10.36    Compiling smallvec v1.15.2
+#11 10.36    Compiling serde_core v1.0.228
+#11 10.36    Compiling pkg-config v0.3.33
+#11 10.36    Compiling litemap v0.8.2
+#11 10.42    Compiling writeable v0.6.3
+#11 10.42    Compiling zerocopy v0.8.54
+#11 10.42    Compiling memchr v2.8.3
+#11 10.42    Compiling cmov v0.5.4
+#11 10.46    Compiling cpufeatures v0.2.17
+#11 10.53    Compiling utf8_iter v1.0.4
+#11 10.55    Compiling icu_properties_data v2.2.0
+#11 10.59    Compiling once_cell v1.21.4
+#11 10.74    Compiling icu_normalizer_data v2.2.0
+#11 11.05    Compiling rand_core v0.10.1
+#11 11.05    Compiling zmij v1.0.23
+#11 11.05    Compiling const-oid v0.10.2
+#11 11.05    Compiling getrandom v0.4.3
+#11 11.25    Compiling tinyvec_macros v0.1.1
+#11 11.37    Compiling cpufeatures v0.3.0
+#11 11.47    Compiling ctutils v0.4.2
+#11 11.52    Compiling serde_json v1.0.150
+#11 11.58    Compiling serde v1.0.228
+#11 11.85    Compiling log v0.4.33
+#11 11.93    Compiling percent-encoding v2.3.2
+#11 12.00    Compiling base64 v0.22.1
+#11 12.00    Compiling tinyvec v1.12.0
+#11 12.03    Compiling thiserror v2.0.18
+#11 12.11    Compiling untrusted v0.9.0
+#11 12.25    Compiling bytes v1.12.1
+#11 12.31    Compiling crc32fast v1.5.0
+#11 12.66    Compiling itoa v1.0.18
+#11 12.70    Compiling chacha20 v0.10.1
+#11 12.70    Compiling rustls v0.23.42
+#11 12.74    Compiling unicode-properties v0.1.4
+#11 12.75    Compiling unicode-bidi v0.3.18
+#11 12.94    Compiling generic-array v0.14.7
+#11 13.32    Compiling ahash v0.8.12
+#11 13.54    Compiling adler2 v2.0.1
+#11 13.59    Compiling futures-sink v0.3.32
+#11 13.75    Compiling futures-core v0.3.32
+#11 13.78    Compiling simd-adler32 v0.3.9
+#11 13.82    Compiling pin-project-lite v0.2.17
+#11 13.96    Compiling semver v1.0.28
+#11 14.08    Compiling parking_lot_core v0.9.12
+#11 14.51    Compiling form_urlencoded v1.2.2
+#11 14.56    Compiling fallible-iterator v0.2.0
+#11 14.56    Compiling scopeguard v1.2.0
+#11 14.63    Compiling siphasher v1.0.3
+#11 14.70    Compiling vcpkg v0.2.15
+#11 14.81    Compiling unicode-normalization v0.1.25
+#11 14.89    Compiling byteorder v1.5.0
+#11 14.94    Compiling num-conv v0.2.2
+#11 15.03    Compiling miniz_oxide v0.8.9
+#11 15.04    Compiling zstd-safe v7.2.4
+#11 15.56    Compiling rustc_version v0.4.1
+#11 15.95    Compiling lock_api v0.4.14
+#11 16.16    Compiling hybrid-array v0.4.13
+#11 16.27    Compiling phf_shared v0.13.1
+#11 16.59    Compiling time-core v0.1.9
+#11 16.71    Compiling futures-task v0.3.32
+#11 16.71    Compiling utf8parse v0.2.2
+#11 16.71    Compiling opaque-debug v0.3.1
+#11 16.99    Compiling bitflags v2.13.0
+#11 17.21    Compiling futures-channel v0.3.32
+#11 17.33    Compiling anstyle-parse v1.0.0
+#11 17.44    Compiling anstyle-query v1.1.5
+#11 17.69    Compiling futures-util v0.3.32
+#11 18.29    Compiling base64ct v1.8.3
+#11 18.47    Compiling hex v0.4.3
+#11 18.96    Compiling time-macros v0.2.31
+#11 19.07    Compiling stringprep v0.1.5
+#11 19.28    Compiling getrandom v0.2.17
+#11 19.29    Compiling block-buffer v0.12.1
+#11 19.43    Compiling syn v2.0.118
+#11 19.54    Compiling crypto-common v0.2.2
+#11 19.87    Compiling mio v1.2.2
+#11 19.91    Compiling socket2 v0.6.5
+#11 19.92    Compiling flate2 v1.1.9
+#11 19.93    Compiling curve25519-dalek v4.1.3
+#11 20.01    Compiling whoami v2.1.2
+#11 20.21    Compiling phf v0.13.1
+#11 20.31    Compiling is_terminal_polyfill v1.70.2
+#11 20.46    Compiling jobserver v0.1.35
+#11 20.73    Compiling anstyle v1.0.14
+#11 20.73    Compiling powerfmt v0.2.0
+#11 20.85    Compiling rand_core v0.6.4
+#11 20.92    Compiling colorchoice v1.0.5
+#11 20.98    Compiling clap_lex v1.1.0
+#11 21.11    Compiling strsim v0.11.1
+#11 21.63    Compiling rand v0.10.2
+#11 21.77    Compiling parking_lot v0.12.5
+#11 21.89    Compiling password-hash v0.5.0
+#11 22.02    Compiling anstream v1.0.0
+#11 22.04    Compiling fallible-iterator v0.3.0
+#11 22.17    Compiling cc v1.2.67
+#11 22.28    Compiling crypto-common v0.1.7
+#11 22.28    Compiling block-buffer v0.10.4
+#11 22.43    Compiling inout v0.1.4
+#11 23.09    Compiling universal-hash v0.5.1
+#11 23.26    Compiling aead v0.5.2
+#11 23.26    Compiling heck v0.5.0
+#11 23.39    Compiling fallible-streaming-iterator v0.1.9
+#11 23.54    Compiling digest v0.10.7
+#11 23.55    Compiling anyhow v1.0.103
+#11 23.80    Compiling poly1305 v0.8.0
+#11 24.14    Compiling rustix v1.1.4
+#11 24.19    Compiling undercroft-obs v0.34.2 (/src/crates/undercroft-obs)
+#11 24.26    Compiling chunked_transfer v1.5.0
+#11 24.43    Compiling clap_builder v4.6.0
+#11 24.47    Compiling httpdate v1.0.3
+#11 24.59    Compiling ascii v1.1.0
+#11 24.75    Compiling tokio v1.52.3
+#11 24.84    Compiling linux-raw-sys v0.12.1
+#11 25.00    Compiling digest v0.11.3
+#11 25.06    Compiling sha2 v0.10.9
+#11 25.12    Compiling hmac v0.12.1
+#11 26.14    Compiling hmac v0.13.0
+#11 26.17    Compiling sha2 v0.11.0
+#11 26.30    Compiling md-5 v0.11.0
+#11 26.36    Compiling blake2 v0.10.6
+#11 26.68    Compiling hkdf v0.12.4
+#11 26.78    Compiling tiny_http v0.12.0
+#11 26.96    Compiling fastrand v2.4.1
+#11 28.69    Compiling deranged v0.5.8
+#11 29.33    Compiling argon2 v0.5.3
+#11 30.65    Compiling ring v0.17.14
+#11 30.65    Compiling zstd-sys v2.0.16+zstd.1.5.7
+#11 30.65    Compiling libsqlite3-sys v0.30.1
+#11 30.96    Compiling postgres-protocol v0.6.12
+#11 35.74    Compiling postgres-types v0.2.14
+#11 36.38    Compiling time v0.3.53
+#11 46.92    Compiling tempfile v3.27.0
+#11 49.36    Compiling ppv-lite86 v0.2.21
+#11 50.84    Compiling synstructure v0.13.2
+#11 51.28    Compiling hashbrown v0.14.5
+#11 55.35    Compiling rand_chacha v0.3.1
+#11 56.53    Compiling hashlink v0.9.1
+#11 56.59    Compiling zerofrom-derive v0.1.7
+#11 56.59    Compiling yoke-derive v0.8.2
+#11 56.63    Compiling zeroize_derive v1.5.0
+#11 56.66    Compiling zerovec-derive v0.11.3
+#11 56.68    Compiling displaydoc v0.2.6
+#11 56.72    Compiling serde_derive v1.0.228
+#11 56.77    Compiling thiserror-impl v2.0.18
+#11 56.77    Compiling async-trait v0.1.89
+#11 56.78    Compiling curve25519-dalek-derive v0.1.1
+#11 56.78    Compiling clap_derive v4.6.1
+#11 57.51    Compiling rand v0.8.7
+#11 60.24    Compiling zeroize v1.9.0
+#11 60.98    Compiling tokio-util v0.7.18
+#11 61.14    Compiling rustls-pki-types v1.15.0
+#11 61.21    Compiling cipher v0.4.4
+#11 63.02    Compiling chacha20 v0.9.1
+#11 64.22    Compiling chacha20poly1305 v0.10.1
+#11 64.59    Compiling tokio-postgres v0.7.18
+#11 64.67    Compiling zerofrom v0.1.8
+#11 65.20    Compiling webpki-roots v1.0.8
+#11 65.31    Compiling yoke v0.8.3
+#11 65.77    Compiling webpki-roots v0.26.11
+#11 66.37    Compiling zerovec v0.11.6
+#11 66.37    Compiling zerotrie v0.2.4
+#11 66.74    Compiling clap v4.6.1
+#11 67.89    Compiling x25519-dalek v2.0.1
+#11 68.35    Compiling tinystr v0.8.3
+#11 68.36    Compiling potential_utf v0.1.5
+#11 68.62    Compiling icu_collections v2.2.0
+#11 68.91    Compiling icu_locale_core v2.2.0
+#11 68.95    Compiling rustls-webpki v0.103.13
+#11 72.71    Compiling icu_provider v2.2.0
+#11 73.51    Compiling zstd v0.13.3
+#11 74.14    Compiling icu_properties v2.2.0
+#11 74.14    Compiling icu_normalizer v2.2.0
+#11 74.17    Compiling postgres v0.19.14
+#11 74.54    Compiling undercroft-core v0.34.2 (/src/crates/undercroft-core)
+#11 76.63    Compiling undercroft-vault v0.34.2 (/src/crates/undercroft-vault)
+#11 79.30    Compiling idna_adapter v1.2.2
+#11 79.63    Compiling idna v1.1.0
+#11 80.81    Compiling url v2.5.8
+#11 86.94    Compiling ureq v2.12.1
+#11 89.98    Compiling undercroft-index v0.34.2 (/src/crates/undercroft-index)
+#11 89.98    Compiling undercroft-llm v0.34.2 (/src/crates/undercroft-llm)
+#11 132.4    Compiling rusqlite v0.32.1
+#11 133.8    Compiling undercroft-store v0.34.2 (/src/crates/undercroft-store)
+#11 134.0    Compiling undercroft-orchestrator v0.34.2 (/src/crates/undercroft-orchestrator)
+#11 149.3    Compiling undercroft-cli v0.34.2 (/src/crates/undercroft-cli)
+#11 149.3    Compiling undercroft-bench v0.34.2 (/src/crates/undercroft-bench)
+#11 203.1     Finished `release` profile [optimized] target(s) in 3m 22s
+#11 203.8  Downloading crates ...
+#11 204.1   Downloaded assert_cmd v2.2.2
+#11 204.1   Downloaded termtree v0.5.1
+#11 204.1   Downloaded predicates-tree v1.0.13
+#11 204.1   Downloaded wait-timeout v0.2.1
+#11 204.1   Downloaded predicates v3.1.4
+#11 204.1   Downloaded autocfg v1.5.1
+#11 204.1   Downloaded num-traits v0.2.19
+#11 204.1   Downloaded float-cmp v0.10.0
+#11 204.1   Downloaded predicates-core v1.0.10
+#11 204.1   Downloaded aho-corasick v1.1.4
+#11 204.1   Downloaded normalize-line-endings v0.3.0
+#11 204.1   Downloaded difflib v0.4.0
+#11 204.2   Downloaded regex v1.13.0
+#11 204.2   Downloaded bstr v1.12.3
+#11 204.2   Downloaded regex-syntax v0.8.11
+#11 204.2   Downloaded regex-automata v0.4.15
+#11 204.4    Compiling autocfg v1.5.1
+#11 204.4    Compiling aho-corasick v1.1.4
+#11 204.4    Compiling regex-syntax v0.8.11
+#11 204.4    Compiling predicates-core v1.0.10
+#11 204.4    Compiling termtree v0.5.1
+#11 204.4    Compiling difflib v0.4.0
+#11 204.4    Compiling assert_cmd v2.2.2
+#11 204.4    Compiling normalize-line-endings v0.3.0
+#11 204.4    Compiling wait-timeout v0.2.1
+#11 204.4    Compiling undercroft-core v0.34.2 (/src/crates/undercroft-core)
+#11 204.4    Compiling undercroft-obs v0.34.2 (/src/crates/undercroft-obs)
+#11 204.5    Compiling undercroft-vault v0.34.2 (/src/crates/undercroft-vault)
+#11 204.5    Compiling undercroft-index v0.34.2 (/src/crates/undercroft-index)
+#11 204.5    Compiling undercroft-orchestrator v0.34.2 (/src/crates/undercroft-orchestrator)
+#11 204.5    Compiling undercroft-llm v0.34.2 (/src/crates/undercroft-llm)
+#11 204.5    Compiling undercroft-store v0.34.2 (/src/crates/undercroft-store)
+#11 204.5    Compiling undercroft-bench v0.34.2 (/src/crates/undercroft-bench)
+#11 205.3    Compiling predicates-tree v1.0.13
+#11 205.9    Compiling num-traits v0.2.19
+#11 212.1    Compiling float-cmp v0.10.0
+#11 229.8    Compiling regex-automata v0.4.15
+#11 287.0    Compiling regex v1.13.0
+#11 287.0    Compiling bstr v1.12.3
+#11 290.8    Compiling predicates v3.1.4
+#11 298.9    Compiling undercroft-cli v0.34.2 (/src/crates/undercroft-cli)
+#11 328.1     Finished `release` profile [optimized] target(s) in 2m 04s
+#11 328.1   Executable unittests src/main.rs (target/release/deps/undercroft_bench-a87f0eba3c023e4f)
+#11 328.1   Executable unittests src/main.rs (target/release/deps/undercroft-88739e73211ee2c4)
+#11 328.1   Executable tests/cli.rs (target/release/deps/cli-cc2cedddbb627293)
+#11 328.1   Executable unittests src/lib.rs (target/release/deps/undercroft_core-1f0722b30ec64b6c)
+#11 328.1   Executable unittests src/lib.rs (target/release/deps/undercroft_index-1c315c30fe6a62bc)
+#11 328.1   Executable unittests src/lib.rs (target/release/deps/undercroft_llm-3e889d161ac2aa99)
+#11 328.1   Executable unittests src/lib.rs (target/release/deps/undercroft_obs-0e634e2112a25259)
+#11 328.1   Executable unittests src/main.rs (target/release/deps/undercroft_orchestrator-46429f75e9504ea8)
+#11 328.1   Executable unittests src/lib.rs (target/release/deps/undercroft_store-f6718602f503eb9d)
+#11 328.1   Executable unittests src/lib.rs (target/release/deps/undercroft_vault-d67db84fea4e7eec)
+#11 DONE 328.3s
+
+#12 exporting to image
+#12 exporting layers
+#12 exporting layers 23.3s done
+#12 exporting manifest sha256:ec1f0422de3f27b29484780b8c5045159293c929b6bbc17b553f861b9354520d 0.1s done
+#12 exporting config sha256:6f1e39ba2639fdda9e776eb3d2dbf661081e191287437abd425d2dba642196e2 0.1s done
+#12 exporting attestation manifest sha256:a6dc51d7dcb4e316206ede597952277d9b4d5d1a9cbd4697248805946522c4b2 0.1s done
+#12 exporting manifest list sha256:8cb1a779c8de06e577698e0e54b5ac857a6140eeaaa7301acd657688309a34a1
+#12 exporting manifest list sha256:8cb1a779c8de06e577698e0e54b5ac857a6140eeaaa7301acd657688309a34a1 0.1s done
+#12 naming to docker.io/library/undercroft-pqpage:latest 0.0s done
+#12 unpacking to docker.io/library/undercroft-pqpage:latest
+#12 unpacking to docker.io/library/undercroft-pqpage:latest 8.3s done
+#12 DONE 32.1s
+
+#13 resolving provenance for metadata file
+#13 DONE 0.1s
+ Image undercroft-pqpage Built 
+ Container undercroft-pqpage-run-3d43e472659e Creating 
+ Container undercroft-pqpage-run-3d43e472659e Created 
+########## BUILD: undercroft-bench (release) ##########
+    Finished `release` profile [optimized] target(s) in 0.57s
+
+>>> pqpage-synth --n 100000 --queries 30
+PQPAGE spike: n=100000 dim=384 code=48B nlist=316 (~316 rows/list, ~18 KB plaintext/page) k=256 queries=30
+corpus gen: 0.0s
+at-rest: per-row 12 MB (build 0.3s) | per-page 6 MB (build 0.0s) — seal overhead 40 B × 100000 vs 40 B × 316
+A open (decrypt-all 100000 rows): 0.2s | RSS 25 MB (base 23)
+nprobe=79 (25.0% of corpus): A-flat 10.6 ms/q | A-grouped 1.47 ms/q
+nprobe=19 (6.0% of corpus): A-flat 5.0 ms/q | A-grouped 0.28 ms/q
+nprobe=4 (1.3% of corpus): A-flat 1.1 ms/q | A-grouped 0.12 ms/q
+A-grouped regroup: 0.0s, RSS after 31 MB
+nprobe=79 (25.0% of corpus): B-cold 3.8 ms/q (1.4 MB decrypted/q) | B-warm 1.00 ms/q (page cache 100% of lists, RSS 25 MB, pre-B 25)
+nprobe=19 (6.0% of corpus): B-cold 1.2 ms/q (0.3 MB decrypted/q) | B-warm 0.35 ms/q (page cache 84% of lists, RSS 25 MB, pre-B 25)
+nprobe=4 (1.3% of corpus): B-cold 0.2 ms/q (0.1 MB decrypted/q) | B-warm 0.09 ms/q (page cache 33% of lists, RSS 25 MB, pre-B 25)
+PQPAGE spike done.
+
+>>> pqpage-synth --n 1000000 --queries 30
+PQPAGE spike: n=1000000 dim=384 code=48B nlist=1000 (~1000 rows/list, ~56 KB plaintext/page) k=256 queries=30
+corpus gen: 0.0s
+at-rest: per-row 117 MB (build 4.1s) | per-page 57 MB (build 0.4s) — seal overhead 40 B × 1000000 vs 40 B × 1000
+A open (decrypt-all 1000000 rows): 2.4s | RSS 111 MB (base 67)
+nprobe=250 (25.0% of corpus): A-flat 128.7 ms/q | A-grouped 18.50 ms/q
+nprobe=62 (6.2% of corpus): A-flat 76.1 ms/q | A-grouped 2.97 ms/q
+nprobe=15 (1.5% of corpus): A-flat 36.6 ms/q | A-grouped 0.94 ms/q
+A-grouped regroup: 0.4s, RSS after 183 MB
+nprobe=250 (25.0% of corpus): B-cold 46.3 ms/q (14.0 MB decrypted/q) | B-warm 15.21 ms/q (page cache 100% of lists, RSS 76 MB, pre-B 76)
+nprobe=62 (6.2% of corpus): B-cold 11.1 ms/q (3.5 MB decrypted/q) | B-warm 3.11 ms/q (page cache 86% of lists, RSS 76 MB, pre-B 76)
+nprobe=15 (1.5% of corpus): B-cold 2.2 ms/q (0.8 MB decrypted/q) | B-warm 0.79 ms/q (page cache 36% of lists, RSS 76 MB, pre-B 76)
+PQPAGE spike done.
+
+>>> pqpage-synth --n 10000000 --queries 20
+PQPAGE spike: n=10000000 dim=384 code=48B nlist=1024 (~9765 rows/list, ~547 KB plaintext/page) k=256 queries=20
+corpus gen: 0.5s
+at-rest: per-row 1178 MB (build 36.3s) | per-page 561 MB (build 5.3s) — seal overhead 40 B × 10000000 vs 40 B × 1024
+A open (decrypt-all 10000000 rows): 22.3s | RSS 1008 MB (base 130)
+nprobe=256 (25.0% of corpus): A-flat 1415.2 ms/q | A-grouped 247.88 ms/q
+nprobe=64 (6.2% of corpus): A-flat 661.7 ms/q | A-grouped 35.56 ms/q
+nprobe=16 (1.6% of corpus): A-flat 333.2 ms/q | A-grouped 10.01 ms/q
+A-grouped regroup: 5.1s, RSS after 1822 MB
+nprobe=256 (25.0% of corpus): B-cold 331.7 ms/q (140.0 MB decrypted/q) | B-warm 136.15 ms/q (page cache 100% of lists, RSS 630 MB, pre-B 630)
+nprobe=64 (6.2% of corpus): B-cold 82.4 ms/q (35.0 MB decrypted/q) | B-warm 30.77 ms/q (page cache 73% of lists, RSS 630 MB, pre-B 630)
+nprobe=16 (1.6% of corpus): B-cold 18.5 ms/q (8.7 MB decrypted/q) | B-warm 8.48 ms/q (page cache 26% of lists, RSS 630 MB, pre-B 630)
+PQPAGE spike done.
+
+>>> pqpage-synth --n 10000000 --queries 20 --nlist 3162
+PQPAGE spike: n=10000000 dim=384 code=48B nlist=3162 (~3162 rows/list, ~177 KB plaintext/page) k=256 queries=20
+corpus gen: 0.7s
+at-rest: per-row 1178 MB (build 32.8s) | per-page 563 MB (build 5.3s) — seal overhead 40 B × 10000000 vs 40 B × 3162
+A open (decrypt-all 10000000 rows): 20.1s | RSS 1008 MB (base 104)
+nprobe=790 (25.0% of corpus): A-flat 543.2 ms/q | A-grouped 105.12 ms/q
+nprobe=197 (6.2% of corpus): A-flat 351.7 ms/q | A-grouped 15.67 ms/q
+nprobe=49 (1.5% of corpus): A-flat 228.3 ms/q | A-grouped 7.45 ms/q
+A-grouped regroup: 1.9s, RSS after 1715 MB
+nprobe=790 (25.0% of corpus): B-cold 402.9 ms/q (139.9 MB decrypted/q) | B-warm 130.75 ms/q (page cache 100% of lists, RSS 629 MB, pre-B 629)
+nprobe=197 (6.2% of corpus): B-cold 93.2 ms/q (34.9 MB decrypted/q) | B-warm 32.76 ms/q (page cache 73% of lists, RSS 629 MB, pre-B 629)
+nprobe=49 (1.5% of corpus): B-cold 27.3 ms/q (8.7 MB decrypted/q) | B-warm 7.52 ms/q (page cache 27% of lists, RSS 629 MB, pre-B 629)
+PQPAGE spike done.
+########## PQPAGE SPIKE DONE ##########

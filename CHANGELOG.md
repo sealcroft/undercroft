@@ -37,7 +37,7 @@
   filtering every cached row through a per-row membership test. The
   page-level spike measured that flat filter at 0.3–1.4 s/q at 10⁷
   drawers versus 10–36 ms/q for the grouped layout
-  (`.handover/pqpage_spike.log`, docs/RETRIEVAL_SCALING.md); the
+  (`benchmarks/logs/pqpage_spike.log`, docs/RETRIEVAL_SCALING.md); the
   shipped path previously used a linear `contains`, so the win is a
   floor. **Zero at-rest change** — cache layout only; recall is
   byte-identical by construction. Mirrors the inverted-FDE tier's

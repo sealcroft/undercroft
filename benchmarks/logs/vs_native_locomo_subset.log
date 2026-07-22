@@ -1,0 +1,15 @@
+time="2026-07-22T09:32:43+02:00" level=warning msg="Found orphan containers (undercroft-test-run-42c96ab74063) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container undercroft-test-run-9b0a01207f8f Creating 
+ Container undercroft-test-run-9b0a01207f8f Created 
+    Finished `release` profile [optimized] target(s) in 0.67s
+     Running `target/release/undercroft-bench vs /data/locomo10.json --system undercroft -k 10 --limit 2`
+  [undercroft] convo 1/2 done — 197 q, R@10 so far: 96.4%
+VS_RAW system=undercroft convos=0..2/10 qa_limit=0 recall_sum=292.0000 evaluated=302
+VS_TIMING system=undercroft ingest_secs=2.458 ingest_chunks=177 search_secs=1.155 search_ms_per_q=3.8
+VS — undercroft · 302 questions · session granularity: R@10 96.7%
+  category 1            95.3%  (43)
+  category 2            95.2%  (63)
+  category 3            90.9%  (11)
+  category 4            96.5%  (114)
+  category 5            100.0%  (71)
+  [undercroft] convo 2/2 done — 302 q, R@10 so far: 96.7%

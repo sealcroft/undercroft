@@ -90,23 +90,55 @@ write — their architecture, reported as such.
 
 | System | Config | Corpus | R@10 | search ms/q | Sealed at rest | Model runtime | Notes |
 |---|---|---|---|---|---|---|---|
-| **undercroft** (native) | sealed vault, default offline hash embedder, BM25+cosine fusion | LoCoMo full (10 convos, 1982 QA) | **94.6%** (1875/1982) | 5.5 | **yes** | **none** | zero-setup row; ingest 16.5 s / 1271 chunks; log `.handover/vs_native_locomo.log` |
-| **undercroft** (best local) | sealed, MiniLM ONNX + ColBERT rescore (`colbert-ort`) | LoCoMo full | **96.5%** (1913/1982) | 52.9 | **yes** | local neural embedder + ColBERT (no LLM) | measured v0.23.0, log `.handover/colbert_fde_locomo2.log`; question-for-question stable across 4 configs |
-| **undercroft** (native, subset) | as above (same-subset comparator for the mem0 row) | LoCoMo convos 1–2 (302 QA) | **96.7%** (292/302) | 3.8 | **yes** | **none** | ingest **2.5 s** / 177 chunks; log `.handover/vs_native_locomo_subset.log` |
-| **undercroft** (MiniLM, subset) | sealed, MiniLM ONNX embedder (tract) — the neural-vs-neural comparator: their nomic vs our MiniLM, still no LLM | LoCoMo convos 1–2 (302 QA) | **97.4%** (294/302) | 125.7 | **yes** | local neural embedder (no LLM) | ingest **24.4 s** / 177 chunks; log `.handover/vs_native_onnx_subset.log` |
-| **mem0** (local, measured) | OpenMemory (`mem0/openmemory-mcp`) + qdrant; LM Studio backend: qwen3.6-35B-A3B (MoE, thinking off) extraction + nomic-embed-text-v1.5; REST add, MCP semantic search | LoCoMo convos 1–2 (302 QA) | **67.9%** (205/302) | 93.2 | no (plaintext qdrant) | local LLM + embedder per write | ingest **4 h 07 m** / 177 chunks (~84 s/chunk, extraction-bound); 55 memories retained of 177 chunks — the Personal-Information-Organizer rubric discards non-personal content by design (raw traffic shows `{"facts": []}` for e.g. project-launch turns; log `.handover/vs_mem0_locomo.log`). Two documented transport adaptations, content-neutral: `response_format json_object→(none)` for LM Studio 0.4.19, embeddings zero-padded 768→1536 for OpenMemory's fixed qdrant dims (cosine-order preserving) — `deploy/bench-vs/lmstudio-shim.js` |
+| **undercroft** (native) | sealed vault, default offline hash embedder, BM25+cosine fusion | LoCoMo full (10 convos, 1982 QA) | **94.6%** (1875/1982) | 5.5 | **yes** | **none** | zero-setup row; ingest 16.5 s / 1271 chunks; log [`benchmarks/logs/vs_native_locomo.log`](../benchmarks/logs/vs_native_locomo.log) |
+| **undercroft** (best local) | sealed, MiniLM ONNX + ColBERT rescore (`colbert-ort`) | LoCoMo full | **96.5%** (1913/1982) | 52.9 | **yes** | local neural embedder + ColBERT (no LLM) | measured v0.23.0, log [`benchmarks/logs/colbert_fde_locomo2.log`](../benchmarks/logs/colbert_fde_locomo2.log); question-for-question stable across 4 configs |
+| **undercroft** (native, subset) | as above (same-subset comparator for the mem0 row) | LoCoMo convos 1–2 (302 QA) | **96.7%** (292/302) | 3.8 | **yes** | **none** | ingest **2.5 s** / 177 chunks; log [`benchmarks/logs/vs_native_locomo_subset.log`](../benchmarks/logs/vs_native_locomo_subset.log) |
+| **undercroft** (MiniLM, subset) | sealed, MiniLM ONNX embedder (tract) — the neural-vs-neural comparator: their nomic vs our MiniLM, still no LLM | LoCoMo convos 1–2 (302 QA) | **97.4%** (294/302) | 125.7 | **yes** | local neural embedder (no LLM) | ingest **24.4 s** / 177 chunks; log [`benchmarks/logs/vs_native_onnx_subset.log`](../benchmarks/logs/vs_native_onnx_subset.log) |
+| **mem0** (local, measured) | OpenMemory (`mem0/openmemory-mcp`) + qdrant; LM Studio backend: qwen3.6-35B-A3B (MoE, thinking off) extraction + nomic-embed-text-v1.5; REST add, MCP semantic search | LoCoMo convos 1–2 (302 QA) | **67.9%** (205/302) | 93.2 | no (plaintext qdrant) | local LLM + embedder per write | ingest **4 h 07 m** / 177 chunks (~84 s/chunk, extraction-bound); 55 memories retained of 177 chunks — the Personal-Information-Organizer rubric discards non-personal content by design (raw traffic shows `{"facts": []}` for e.g. project-launch turns; log [`benchmarks/logs/vs_mem0_locomo.log`](../benchmarks/logs/vs_mem0_locomo.log)). Two documented transport adaptations, content-neutral: `response_format json_object→(none)` for LM Studio 0.4.19, embeddings zero-padded 768→1536 for OpenMemory's fixed qdrant dims (cosine-order preserving) — `deploy/bench-vs/lmstudio-shim.js` |
 | Supermemory (self-host) | local binary/container | *pending* | *pending* | — | no | per its config | adapter shipped |
 | Zep/Graphiti | — | — | *adapter pending* | — | no | local LLM per write | graph build cost expected to dominate ingest |
 | Letta | — | — | *adapter pending* | — | no | local LLM runtime | archival-memory surface |
 
-Reproduce any row:
+## Run it yourself
+
+Ready-made runners live in [`benchmarks/`](../benchmarks/) for every
+shell — each is a thin wrapper around the exact containerized
+invocation the published rows used (nothing in a wrapper can bias a
+number):
+
+| Shell | Script |
+|---|---|
+| bash | [`benchmarks/run-vs.sh`](../benchmarks/run-vs.sh) |
+| zsh | [`benchmarks/run-vs.zsh`](../benchmarks/run-vs.zsh) |
+| PowerShell | [`benchmarks/run-vs.ps1`](../benchmarks/run-vs.ps1) |
+
+**Requirements**: Docker with compose (no host toolchain needed), and
+the LoCoMo dataset file — user-supplied research data from
+[snap-research/locomo](https://github.com/snap-research/locomo), not
+redistributed here. Competitor rows additionally need that system's
+local stack ([deploy/bench-vs/](../deploy/bench-vs/README.md)) plus a
+local LLM backend (LM Studio or Ollama), and hours of wall-clock —
+extraction-based systems call an LLM on every write.
+
+**Process**:
 
 ```bash
-docker compose run --rm test \
+cp benchmarks/vs.env.example benchmarks/vs.env   # edit: dataset path, system, shard
+./benchmarks/run-vs.sh                            # or run-vs.zsh / run-vs.ps1
+```
+
+The summary prints `VS_RAW`/`VS_TIMING` lines; the full log lands in
+`benchmarks/logs/local/` (gitignored — only reviewed logs are published,
+per [`benchmarks/logs/README.md`](../benchmarks/logs/README.md)). All
+configuration is in the one env file
+([`benchmarks/vs.env.example`](../benchmarks/vs.env.example), documented
+inline); the raw harness invocation remains available for anyone who
+wants to bypass the wrappers:
+
+```bash
+docker compose run --rm -v /path/to/dataset-dir:/data:ro test \
   cargo run --release -p undercroft-bench -- vs \
-  /path/to/locomo10.json --system undercroft -k 10
-# HTTP systems: bring their stack up (deploy/bench-vs/), then
-#   ... vs /path/to/locomo10.json --system mem0 --url http://host:8000
+  /data/locomo10.json --system undercroft -k 10
 ```
 
 Competitor stacks and pinned configurations live in

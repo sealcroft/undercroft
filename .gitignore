@@ -36,3 +36,7 @@ HANDOVER*.md
 # served UI at crates/undercroft-cli/src/monitor.html). Kept locally only.
 /mockups/
 deploy/observability/docker-compose.binary.yml
+
+# local benchmark runs (published logs are curated in benchmarks/logs/)
+benchmarks/vs.env
+benchmarks/logs/local/

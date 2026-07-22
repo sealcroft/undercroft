@@ -1,0 +1,12 @@
+    Finished `release` profile [optimized] target(s) in 0.22s
+     Running `target/release/undercroft-bench vs /data/locomo10.json --system mem0 -k 10 --limit 2`
+  [mem0] convo 1/2 done — 197 q, R@10 so far: 73.1%
+  [mem0] convo 2/2 done — 302 q, R@10 so far: 67.9%
+VS_RAW system=mem0 convos=0..2/10 qa_limit=0 recall_sum=205.0000 evaluated=302
+VS_TIMING system=mem0 ingest_secs=14825.107 ingest_chunks=177 search_secs=28.132 search_ms_per_q=93.2
+VS — mem0 · 302 questions · session granularity: R@10 67.9%
+  category 1            81.4%  (43)
+  category 2            63.5%  (63)
+  category 3            90.9%  (11)
+  category 4            64.0%  (114)
+  category 5            66.2%  (71)
