@@ -472,12 +472,7 @@ impl MemorySystem for Mem0 {
         let items = result
             .as_array()
             .cloned()
-            .or_else(|| {
-                result
-                    .get("results")
-                    .and_then(Value::as_array)
-                    .cloned()
-            })
+            .or_else(|| result.get("results").and_then(Value::as_array).cloned())
             .unwrap_or_default();
         let mut out: Vec<String> = Vec::new();
         for item in &items {
