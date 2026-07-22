@@ -48,9 +48,11 @@ trait and one evaluation loop:
    local re-ranking, no caching, no retries that change results.
 2. Each competitor runs its **best documented local configuration**
    (their published Docker/self-host path). Extraction-based systems
-   need an LLM + embedder; the local stack (Ollama, model pinned) is
-   recorded per row. We do not run competitors against paid cloud APIs —
-   the comparison is local-vs-local, which is undercroft's arena.
+   need an LLM + embedder; the local backend (LM Studio or Ollama,
+   models pinned) is recorded per row. We do not run competitors
+   against paid cloud APIs — the comparison is local-vs-local, which is
+   undercroft's arena, and no row in a published run makes any
+   off-machine call.
 3. Ingest and search wall-clock are recorded (`VS_TIMING`) — the cost
    of LLM-extraction pipelines is part of the result, not hidden.
 4. All rows run on the same machine in the same session (within-run
@@ -78,13 +80,21 @@ are answering different questions about trust.
 Hardware/context for all rows: one Windows 11 host, Docker Desktop
 (same VM for every row), CPU-only. k=10, session granularity.
 
-| System | Config | Corpus | R@10 | search ms/q | Sealed at rest | External calls | Notes |
+Every row in a published run is **fully local** — no system makes any
+off-machine call; that is the ground rule, not a differentiator. The
+"model runtime" column records what each system additionally requires
+*on* the machine: undercroft's default path calls no model at all
+(deterministic embedder; neural embedders optional, never an LLM),
+while extraction-based systems invoke a local LLM + embedder on every
+write — their architecture, reported as such.
+
+| System | Config | Corpus | R@10 | search ms/q | Sealed at rest | Model runtime | Notes |
 |---|---|---|---|---|---|---|---|
 | **undercroft** (native) | sealed vault, default offline hash embedder, BM25+cosine fusion | LoCoMo full (10 convos, 1982 QA) | **94.6%** (1875/1982) | 5.5 | **yes** | **none** | zero-setup row; ingest 16.5 s / 1271 chunks; log `.handover/vs_native_locomo.log` |
-| **undercroft** (best local) | sealed, MiniLM ONNX + ColBERT rescore (`colbert-ort`) | LoCoMo full | **96.5%** (1913/1982) | 52.9 | **yes** | none (local models) | measured v0.23.0, log `.handover/colbert_fde_locomo2.log`; question-for-question stable across 4 configs |
+| **undercroft** (best local) | sealed, MiniLM ONNX + ColBERT rescore (`colbert-ort`) | LoCoMo full | **96.5%** (1913/1982) | 52.9 | **yes** | local neural embedder + ColBERT (no LLM) | measured v0.23.0, log `.handover/colbert_fde_locomo2.log`; question-for-question stable across 4 configs |
 | **undercroft** (native, subset) | as above (same-subset comparator for the mem0 row) | LoCoMo convos 1–2 (302 QA) | **96.7%** (292/302) | 3.8 | **yes** | **none** | ingest **2.5 s** / 177 chunks; log `.handover/vs_native_locomo_subset.log` |
-| **mem0** (local, measured) | OpenMemory (`mem0/openmemory-mcp`) + qdrant; LM Studio backend: qwen3.6-35B-A3B (MoE, thinking off) extraction + nomic-embed-text-v1.5; REST add, MCP semantic search | LoCoMo convos 1–2 (302 QA) | **67.9%** (205/302) | 93.2 | no (plaintext qdrant) | local LLM + embed per write | ingest **4 h 07 m** / 177 chunks (~84 s/chunk, extraction-bound); 55 memories retained of 177 chunks — the Personal-Information-Organizer rubric discards non-personal content by design (raw traffic shows `{"facts": []}` for e.g. project-launch turns; log `.handover/vs_mem0_locomo.log`). Two documented transport adaptations, content-neutral: `response_format json_object→(none)` for LM Studio 0.4.19, embeddings zero-padded 768→1536 for OpenMemory's fixed qdrant dims (cosine-order preserving) — `deploy/bench-vs/lmstudio-shim.js` |
-| Supermemory (self-host) | local binary/container | *pending* | *pending* | — | no | depends on config | adapter shipped |
+| **mem0** (local, measured) | OpenMemory (`mem0/openmemory-mcp`) + qdrant; LM Studio backend: qwen3.6-35B-A3B (MoE, thinking off) extraction + nomic-embed-text-v1.5; REST add, MCP semantic search | LoCoMo convos 1–2 (302 QA) | **67.9%** (205/302) | 93.2 | no (plaintext qdrant) | local LLM + embedder per write | ingest **4 h 07 m** / 177 chunks (~84 s/chunk, extraction-bound); 55 memories retained of 177 chunks — the Personal-Information-Organizer rubric discards non-personal content by design (raw traffic shows `{"facts": []}` for e.g. project-launch turns; log `.handover/vs_mem0_locomo.log`). Two documented transport adaptations, content-neutral: `response_format json_object→(none)` for LM Studio 0.4.19, embeddings zero-padded 768→1536 for OpenMemory's fixed qdrant dims (cosine-order preserving) — `deploy/bench-vs/lmstudio-shim.js` |
+| Supermemory (self-host) | local binary/container | *pending* | *pending* | — | no | per its config | adapter shipped |
 | Zep/Graphiti | — | — | *adapter pending* | — | no | local LLM per write | graph build cost expected to dominate ingest |
 | Letta | — | — | *adapter pending* | — | no | local LLM runtime | archival-memory surface |
 
