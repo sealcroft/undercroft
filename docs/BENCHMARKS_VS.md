@@ -99,14 +99,46 @@ write — their architecture, reported as such.
 | Zep/Graphiti | — | — | *adapter pending* | — | no | local LLM per write | graph build cost expected to dominate ingest |
 | Letta | — | — | *adapter pending* | — | no | local LLM runtime | archival-memory surface |
 
-Reproduce any row:
+## Run it yourself
+
+Ready-made runners live in [`benchmarks/`](../benchmarks/) for every
+shell — each is a thin wrapper around the exact containerized
+invocation the published rows used (nothing in a wrapper can bias a
+number):
+
+| Shell | Script |
+|---|---|
+| bash | [`benchmarks/run-vs.sh`](../benchmarks/run-vs.sh) |
+| zsh | [`benchmarks/run-vs.zsh`](../benchmarks/run-vs.zsh) |
+| PowerShell | [`benchmarks/run-vs.ps1`](../benchmarks/run-vs.ps1) |
+
+**Requirements**: Docker with compose (no host toolchain needed), and
+the LoCoMo dataset file — user-supplied research data from
+[snap-research/locomo](https://github.com/snap-research/locomo), not
+redistributed here. Competitor rows additionally need that system's
+local stack ([deploy/bench-vs/](../deploy/bench-vs/README.md)) plus a
+local LLM backend (LM Studio or Ollama), and hours of wall-clock —
+extraction-based systems call an LLM on every write.
+
+**Process**:
 
 ```bash
-docker compose run --rm test \
+cp benchmarks/vs.env.example benchmarks/vs.env   # edit: dataset path, system, shard
+./benchmarks/run-vs.sh                            # or run-vs.zsh / run-vs.ps1
+```
+
+The summary prints `VS_RAW`/`VS_TIMING` lines; the full log lands in
+`benchmarks/logs/local/` (gitignored — only reviewed logs are published,
+per [`benchmarks/logs/README.md`](../benchmarks/logs/README.md)). All
+configuration is in the one env file
+([`benchmarks/vs.env.example`](../benchmarks/vs.env.example), documented
+inline); the raw harness invocation remains available for anyone who
+wants to bypass the wrappers:
+
+```bash
+docker compose run --rm -v /path/to/dataset-dir:/data:ro test \
   cargo run --release -p undercroft-bench -- vs \
-  /path/to/locomo10.json --system undercroft -k 10
-# HTTP systems: bring their stack up (deploy/bench-vs/), then
-#   ... vs /path/to/locomo10.json --system mem0 --url http://host:8000
+  /data/locomo10.json --system undercroft -k 10
 ```
 
 Competitor stacks and pinned configurations live in
