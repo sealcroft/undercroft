@@ -647,11 +647,15 @@ release with the usual battery + measured gates.
   isolation / offline default / audit chain / export encryption.
   Sourced claims, dated, PR-able by competitors if they object.
   Docs page + landing block.
-- **C1.3 Threat-model whitepaper.** Formalize what SECURITY.md +
-  seal.rs already implement (adversary classes, what each layer
-  defeats, honest non-goals), framed against the 2026 "agent memory
-  is an attack surface" literature. The artifact security buyers
-  forward to their teams.
+- **C1.3 Threat-model whitepaper (SHIPPED — docs/THREAT_MODEL.md).**
+  Formalized what SECURITY.md + seal.rs already implement: eight
+  adversary classes (offline reader/tamperer, cross-tenant, network,
+  untrusted accelerator, exfil channels, memory poisoner, host —
+  the last a stated non-goal), a layer→adversary map, verbatim-as-
+  security-property, the operator custody boundary, and planned-work
+  labeling for C3. Framed against the 2026 memory-attack literature
+  (MINJA, AgentPoison, forged-reasoning/FragFuse). Published in the
+  book as threat-model.html; linked from SECURITY.md.
 
 ### Phase C2 — meet them (parity; each ~1 release)
 
@@ -697,12 +701,66 @@ release with the usual battery + measured gates.
   named content was destroyed and nothing else changed. GDPR/RTBF
   with a receipt. Extraction-based systems cannot know what their
   LLM absorbed where — this feature is unreachable for them.
-- **C3.3 Memory-poisoning defense.** Provenance labels on every
-  drawer (writing agent/source/session, tamper-covered by the record
-  HMAC), a quarantine wing for untrusted ingest with search-time
-  trust filters, and a review/promote flow. First-mover answer to the
-  documented memory-poisoning attack class: memory that can't be
-  silently seeded *or* silently altered.
+- **C3.3 Memory-poisoning defense — write-path admission control.**
+  First-mover answer to the documented memory-poisoning attack class
+  (MINJA, AgentPoison, forged-reasoning): screen memory **at ingest**,
+  not just at retrieval, so poison never becomes retrievable while a
+  human gate is pending. Full design in
+  [THREAT_MODEL.md §8](THREAT_MODEL.md) (the three-zone boundary);
+  the shipping mechanism:
+  - **Provenance on every drawer** — writing agent / source / channel
+    / session, tamper-covered by the record HMAC. This is the
+    foundation the rest builds on and the cheapest first increment.
+  - **Admission check on the write path** — outcomes admit /
+    quarantine / reject. **Detector, two tiers**: (1) *deterministic,
+    default-on, no model* — imperative-instruction patterns, embedded
+    tool-call/code syntax, exfil & encoded-blob markers, provenance
+    and rate anomalies, similarity to committed attack fixtures; pure
+    functions over the candidate bytes + its deterministic embedding,
+    so it is unit-testable as data with zero host impact. (2)
+    *optional local LLM classifier, advisory-only* — can push a write
+    toward quarantine, never auto-admit; hardened data-marked prompt;
+    stated honestly as itself an injection target, never a gate that
+    can be turned against us.
+  - **Quarantine wing** — flagged writes land sealed and `pending` in
+    a reserved wing, **excluded from all retrieval** (the agent never
+    sees a quarantined drawer). Provenance-driven default posture:
+    high-trust channels auto-admit; untrusted channels (tool output,
+    scraped content, other agents) default to quarantine — keeping the
+    human-review queue small and high-signal, surfaced in the admin
+    console.
+  - **Full lifecycle audit** — every transition is a chain-logged,
+    tamper-evident event with its reason *retained across
+    transitions*: `[quarantined: signal + provenance + ts + sealed
+    fingerprint]` → `[allowed by Z: overrode signals N]` **or**
+    `[denied by Z: reason; content deleted + keyed tombstone]`. The
+    quarantine log doubles as a labeled dataset for improving the
+    detector, and a pattern of quarantine events from one channel
+    exposes a campaign even when each write was individually denied.
+  - **Crash-safe allow/deny state machine** — the two-phase,
+    open-time-reconciled pattern proven by key rotation
+    (`rotate.rs`): a crash mid-decision reconciles to exactly
+    pending / promoted / denied, never half. Deny rides C3.2's
+    attested-forgetting path; promotion can require a C3.1 receipt.
+  - **Honest boundaries (must ship in the docs)**: detection is
+    heuristic — a poison from a channel you trust can still pass;
+    every log stores a sealed fingerprint, never a cleartext payload
+    (or the log becomes a re-injection vector); and this secures the
+    memory and memory→agent zones only — the agent→host zone (an
+    over-privileged agent inducing a malicious tool call) is the agent
+    runtime's and OS's sandbox to enforce, the A8 non-goal. undercroft
+    itself is an inert store that never executes retrieved content, so
+    it is never the code-execution vector.
+  - *Steps*: (1) provenance fields + HMAC coverage; (2) deterministic
+    detector + attack fixtures; (3) quarantine wing + retrieval
+    exclusion; (4) lifecycle audit events on the chain; (5) crash-safe
+    allow/deny + admin-console review flow; (6) provenance posture
+    policy; (7) optional LLM-classifier tier behind a flag. *Gate*:
+    attack-fixture corpus quarantined at a target rate with a bounded
+    false-positive rate on clean LoCoMo ingest; crash-window tests for
+    the state machine; e2e scripted-attacker run over `/v1`.
+  - *Effort*: ~2 releases (provenance + deterministic gate first;
+    classifier tier and posture policy second).
 - **C3.4 Post-quantum posture.** The stack is symmetric-first, so most
   of it is **already PQ-safe by construction**: XChaCha20-Poly1305
   sealing (256-bit keys — Grover-limited to ~128-bit effective, the
