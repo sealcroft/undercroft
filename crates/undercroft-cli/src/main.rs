@@ -367,6 +367,12 @@ enum KgAction {
     },
     /// Graph statistics
     Stats,
+    /// Verify distilled facts against their cited verbatim sources
+    Receipts {
+        /// Only list facts whose receipt is not fully verified
+        #[arg(long)]
+        problems_only: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1468,6 +1474,43 @@ fn main() -> Result<()> {
                         st.entities, st.triples, st.active, st.closed
                     );
                 }
+                KgAction::Receipts { problems_only } => {
+                    use undercroft_store::ReceiptVerdict;
+                    let receipts = store.kg_verify_receipts()?;
+                    if receipts.is_empty() {
+                        println!("No facts carry a receipt yet (run `refine` to distill some).");
+                    }
+                    let mut counts = [0usize; 4];
+                    let mut shown = 0usize;
+                    for r in &receipts {
+                        let (label, idx) = match r.verdict {
+                            ReceiptVerdict::Verified => ("verified", 0),
+                            ReceiptVerdict::SourceChanged => ("source-changed", 1),
+                            ReceiptVerdict::Dangling => ("dangling", 2),
+                            ReceiptVerdict::Tampered => ("TAMPERED", 3),
+                        };
+                        counts[idx] += 1;
+                        let ok = matches!(r.verdict, ReceiptVerdict::Verified);
+                        if !(*problems_only && ok) {
+                            println!("  [{label}] {} ← {}", r.triple_id, r.source_drawer_id);
+                            shown += 1;
+                        }
+                    }
+                    if *problems_only && shown == 0 {
+                        println!("All {} receipt(s) verified.", receipts.len());
+                    }
+                    println!(
+                        "receipts: {} verified · {} source-changed · {} dangling · {} tampered",
+                        counts[0], counts[1], counts[2], counts[3]
+                    );
+                    // A tampered receipt is a hard integrity failure.
+                    if counts[3] > 0 {
+                        bail!(
+                            "{} fact receipt(s) failed integrity — vault tampering",
+                            counts[3]
+                        );
+                    }
+                }
             }
         }
         Command::Drawer { action, vault } => {
@@ -1645,14 +1688,18 @@ fn main() -> Result<()> {
                                     t.subject, t.predicate, t.object
                                 );
                             } else {
-                                store.kg_add(
+                                // Distilled facts carry a receipt: an
+                                // HMAC-covered citation to the verbatim drawer
+                                // they were derived from, checkable later via
+                                // `undercroft kg receipts`.
+                                store.kg_add_receipted(
                                     &t.subject.to_lowercase(),
                                     &t.predicate.to_lowercase(),
                                     &t.object,
                                     None,
                                     None,
                                     0.8, // model-extracted: below human-asserted confidence
-                                    Some(&d.id),
+                                    (&d.id, &d.content),
                                 )?;
                             }
                             facts_added += 1;

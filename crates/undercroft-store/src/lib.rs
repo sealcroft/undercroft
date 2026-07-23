@@ -23,7 +23,7 @@ mod pqidx;
 pub mod remote;
 mod rotate;
 
-pub use kg::{KgStats, Triple};
+pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, Triple};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
 pub use rotate::RotationReport;
 

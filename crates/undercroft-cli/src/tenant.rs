@@ -164,6 +164,7 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "kg", "entities"]) => self.kg_entities(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "query"]) => self.kg_query(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "timeline"]) => self.kg_timeline(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "receipts"]) => self.kg_receipts(id, req, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
@@ -665,6 +666,37 @@ impl Tenancy {
             200,
             Body::Json(json!({
                 "triples": serde_json::to_value(triples).unwrap_or_else(|_| json!([]))
+            })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/kg/receipts` — verify every distilled fact
+    /// against its cited verbatim source. Each entry reports a verdict
+    /// (verified | source_changed | dangling | tampered); the summary counts
+    /// let a caller alert on `tampered` without walking the list.
+    fn kg_receipts(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let receipts = store.kg_verify_receipts().map_err(store_err)?;
+        let mut summary = serde_json::Map::new();
+        for verdict in ["verified", "source_changed", "dangling", "tampered"] {
+            let n = receipts
+                .iter()
+                .filter(|r| {
+                    serde_json::to_value(&r.verdict)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .as_deref()
+                        == Some(verdict)
+                })
+                .count();
+            summary.insert(verdict.into(), json!(n));
+        }
+        Ok((
+            200,
+            Body::Json(json!({
+                "receipts": serde_json::to_value(&receipts).unwrap_or_else(|_| json!([])),
+                "summary": summary,
             })),
         ))
     }
