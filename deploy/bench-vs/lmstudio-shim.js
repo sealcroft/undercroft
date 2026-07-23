@@ -99,9 +99,16 @@ http
         }
       );
       up.on("error", (e) => {
-        res.writeHead(502, { "content-type": "application/json" });
+        if (!res.headersSent) {
+          res.writeHead(502, { "content-type": "application/json" });
+        }
         res.end(JSON.stringify({ error: `shim upstream: ${e.message}` }));
       });
+      // A silently hung upstream call must fail fast, not wedge the single
+      // server worker behind it for the client's whole read timeout: abort
+      // after 5 minutes (far above any healthy local-LLM call) so the
+      // caller gets a 502 it can retry.
+      up.setTimeout(300000, () => up.destroy(new Error("upstream timeout (300s)")));
       up.end(body);
     });
   })

@@ -1,0 +1,4 @@
+    Finished `release` profile [optimized] target(s) in 0.60s
+     Running `target/release/undercroft-bench vs /data/locomo10.json --system mem0 -k 10 --skip 2 --limit 8`
+  [mem0] convo 1/8 done — 193 q, R@10 so far: 58.0%
+Error: timed out reading response

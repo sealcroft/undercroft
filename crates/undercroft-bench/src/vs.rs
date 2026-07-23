@@ -387,6 +387,28 @@ impl Mem0 {
         }
     }
 
+    /// Idempotent MCP tool call with bounded reconnect-and-retry. The
+    /// SSE session runs for hours; a hang or drop surfaces as one
+    /// failed call, and both callers (`delete_all_memories`,
+    /// `search_memory`) are safe to re-issue on a fresh session — both
+    /// multi-hour runs so far died on the single un-retried call at the
+    /// conversation boundary.
+    fn mcp_tool_retry(&mut self, name: &str, args: Value) -> Result<Value> {
+        let mut last = String::new();
+        for attempt in 0..4 {
+            if attempt > 0 {
+                eprintln!("  [mem0] {name} retry {attempt} after: {last}");
+                self.mcp = None;
+                std::thread::sleep(std::time::Duration::from_secs(10 * attempt as u64));
+            }
+            match self.mcp_tool(name, args.clone()) {
+                Ok(v) => return Ok(v),
+                Err(e) => last = e.to_string(),
+            }
+        }
+        anyhow::bail!("mem0 {name} (4 attempts): {last}")
+    }
+
     fn mcp_tool(&mut self, name: &str, args: Value) -> Result<Value> {
         self.mcp_ensure()?;
         let id = {
@@ -438,7 +460,7 @@ impl MemorySystem for Mem0 {
         // The server's own wipe tool — conversations run sequentially in
         // one provisioned user, cleaned between (mirrors fresh-store
         // isolation for a single-tenant surface).
-        self.mcp_tool("delete_all_memories", json!({}))?;
+        self.mcp_tool_retry("delete_all_memories", json!({}))?;
         self.sessions.clear();
         Ok(())
     }
@@ -451,21 +473,38 @@ impl MemorySystem for Mem0 {
             "app": "bench",
             "infer": true,
         });
-        let resp = self
-            .agent
-            .post(&format!("{}/api/v1/memories/", self.base))
-            .send_json(body)
-            .map_err(|e| anyhow::anyhow!("mem0 add: {e}"))?
-            .into_json::<Value>()
-            .unwrap_or(Value::Null);
-        if let Some(err) = resp.get("error") {
-            anyhow::bail!("mem0 add: {err}");
+        // A single hung/refused call must not kill a multi-hour run:
+        // retry transport failures with backoff (a duplicate re-extraction
+        // on the server is the worst case — content-neutral, and honest:
+        // the retry count is bounded and identical for every system).
+        let mut last = String::new();
+        for attempt in 0..4 {
+            if attempt > 0 {
+                eprintln!("  [mem0] add retry {attempt} after: {last}");
+                std::thread::sleep(std::time::Duration::from_secs(10 * attempt as u64));
+            }
+            match self
+                .agent
+                .post(&format!("{}/api/v1/memories/", self.base))
+                .send_json(body.clone())
+            {
+                Ok(resp) => {
+                    let v = resp.into_json::<Value>().unwrap_or(Value::Null);
+                    match v.get("error") {
+                        Some(err) => last = err.to_string(),
+                        None => return Ok(()),
+                    }
+                }
+                Err(e) => last = e.to_string(),
+            }
         }
-        Ok(())
+        anyhow::bail!("mem0 add (4 attempts): {last}")
     }
 
     fn search_sessions(&mut self, question: &str, _k: usize) -> Result<Vec<String>> {
-        let result = self.mcp_tool("search_memory", json!({ "query": question }))?;
+        // Same resilience as `add`: a dropped SSE session re-opens with
+        // bounded retries before the question is declared failed.
+        let result = self.mcp_tool_retry("search_memory", json!({ "query": question }))?;
         let items = result
             .as_array()
             .cloned()

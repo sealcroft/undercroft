@@ -1,0 +1,23 @@
+    Finished `release` profile [optimized] target(s) in 0.24s
+     Running `target/release/undercroft-bench vs /data/locomo10.json --system mem0 -k 10 --skip 4 --limit 6`
+  [mem0] convo 1/6 done — 242 q, R@10 so far: 69.0%
+  [mem0] delete_all_memories retry 1 after: timed out reading response
+  [mem0] convo 2/6 done — 400 q, R@10 so far: 68.0%
+  [mem0] delete_all_memories retry 1 after: timed out reading response
+  [mem0] convo 3/6 done — 590 q, R@10 so far: 68.8%
+  [mem0] delete_all_memories retry 1 after: timed out reading response
+  [mem0] convo 4/6 done — 829 q, R@10 so far: 67.7%
+  [mem0] delete_all_memories retry 1 after: timed out reading response
+  [mem0] add retry 1 after: http://host.docker.internal:8765/api/v1/memories/: Network Error: Network Error: Error encountered in the status line: timed out reading response
+  [mem0] add retry 1 after: "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Internal Server Error</pre>\n</body>\n</html>"
+  [mem0] convo 5/6 done — 1025 q, R@10 so far: 68.3%
+  [mem0] delete_all_memories retry 1 after: timed out reading response
+  [mem0] convo 6/6 done — 1227 q, R@10 so far: 68.7%
+VS_RAW system=mem0 convos=4..10/10 qa_limit=0 recall_sum=843.0000 evaluated=1227
+VS_TIMING system=mem0 ingest_secs=76365.836 ingest_chunks=814 search_secs=257.564 search_ms_per_q=209.9
+VS — mem0 · 1227 questions · session granularity: R@10 68.7%
+  category 1            88.3%  (171)
+  category 2            75.4%  (191)
+  category 3            69.4%  (62)
+  category 4            62.8%  (530)
+  category 5            63.0%  (273)
