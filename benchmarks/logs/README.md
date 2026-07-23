@@ -18,7 +18,10 @@ it will be scrubbed with the history noted.
 | `vs_native_locomo.log` | head-to-head native row, LoCoMo full corpus (R@10 94.6%) |
 | `vs_native_locomo_subset.log` | native row on the mem0-comparison subset (96.7%) |
 | `vs_native_onnx_subset.log` | MiniLM ONNX row on the same subset (97.4%) |
-| `vs_mem0_locomo.log` | mem0/OpenMemory measured row, convos 1–2 (67.9%) |
+| `vs_mem0_locomo.log` | mem0/OpenMemory measured row, convos 1–2 shard (67.9%) |
+| `vs_mem0_convo3.log` | mem0 convo-3 shard (112/193, 58.0%; run ended at the convo-4 boundary — see BENCHMARKS_VS notes) |
+| `vs_mem0_convo4.log` | mem0 convo-4 shard (166/260, 63.8%; run ended at the convo-5 boundary) |
+| `vs_mem0_locomo_5_10.log` | mem0 convos 5–10 shard (843/1227, 68.7%) — completes the full-corpus row (1326/1982, 66.9%) |
 | `colbert_fde_locomo2.log` | best-local config, LoCoMo full corpus (96.5%, v0.23.0) |
 | `pqpage_spike.log` | sealed page-tier research spike, 10⁶–10⁷ synthetic |
 | `fde_slab_sweep.log`, `fde_slab_sweep2.log` | inverted-FDE containment/latency sweeps (v0.39.0 gate) |

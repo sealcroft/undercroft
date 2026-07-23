@@ -46,6 +46,10 @@ trait and one evaluation loop:
 
 1. Adapters are honest pass-throughs to each system's public API — no
    local re-ranking, no caching, no retries that change results.
+   (Transport-level retries of *idempotent* calls — a timed-out write
+   re-issued, a dropped session reconnected — are allowed, bounded,
+   identical policy for every system, and visible in the raw logs; a
+   multi-hour run must not die to one network hiccup.)
 2. Each competitor runs its **best documented local configuration**
    (their published Docker/self-host path). Extraction-based systems
    need an LLM + embedder; the local backend (LM Studio or Ollama,
@@ -57,6 +61,10 @@ trait and one evaluation loop:
    of LLM-extraction pipelines is part of the result, not hidden.
 4. All rows run on the same machine in the same session (within-run
    comparison, the project's standing bench discipline), inside Docker.
+   When a row costs days of wall-clock (extraction pipelines), it may
+   be sharded **by conversation** across runs on the identical pinned
+   stack — `VS_RAW` lines carry exact numerators so shards sum without
+   drift, and every shard log is published individually.
 5. Raw logs land in the repo alongside the results.
 
 ## The column only we can fill
@@ -94,7 +102,7 @@ write — their architecture, reported as such.
 | **undercroft** (best local) | sealed, MiniLM ONNX + ColBERT rescore (`colbert-ort`) | LoCoMo full | **96.5%** (1913/1982) | 52.9 | **yes** | local neural embedder + ColBERT (no LLM) | measured v0.23.0, log [`benchmarks/logs/colbert_fde_locomo2.log`](../benchmarks/logs/colbert_fde_locomo2.log); question-for-question stable across 4 configs |
 | **undercroft** (native, subset) | as above (same-subset comparator for the mem0 row) | LoCoMo convos 1–2 (302 QA) | **96.7%** (292/302) | 3.8 | **yes** | **none** | ingest **2.5 s** / 177 chunks; log [`benchmarks/logs/vs_native_locomo_subset.log`](../benchmarks/logs/vs_native_locomo_subset.log) |
 | **undercroft** (MiniLM, subset) | sealed, MiniLM ONNX embedder (tract) — the neural-vs-neural comparator: their nomic vs our MiniLM, still no LLM | LoCoMo convos 1–2 (302 QA) | **97.4%** (294/302) | 125.7 | **yes** | local neural embedder (no LLM) | ingest **24.4 s** / 177 chunks; log [`benchmarks/logs/vs_native_onnx_subset.log`](../benchmarks/logs/vs_native_onnx_subset.log) |
-| **mem0** (local, measured) | OpenMemory (`mem0/openmemory-mcp`) + qdrant; LM Studio backend: qwen3.6-35B-A3B (MoE, thinking off) extraction + nomic-embed-text-v1.5; REST add, MCP semantic search | LoCoMo convos 1–2 (302 QA) | **67.9%** (205/302) | 93.2 | no (plaintext qdrant) | local LLM + embedder per write | ingest **4 h 07 m** / 177 chunks (~84 s/chunk, extraction-bound); 55 memories retained of 177 chunks — the Personal-Information-Organizer rubric discards non-personal content by design (raw traffic shows `{"facts": []}` for e.g. project-launch turns; log [`benchmarks/logs/vs_mem0_locomo.log`](../benchmarks/logs/vs_mem0_locomo.log)). Two documented transport adaptations, content-neutral: `response_format json_object→(none)` for LM Studio 0.4.19, embeddings zero-padded 768→1536 for OpenMemory's fixed qdrant dims (cosine-order preserving) — `deploy/bench-vs/lmstudio-shim.js` |
+| **mem0** (local, measured) | OpenMemory (`mem0/openmemory-mcp`) + qdrant; LM Studio backend: qwen3.6-35B-A3B (MoE, thinking off) extraction + nomic-embed-text-v1.5; REST add, MCP semantic search | **LoCoMo full (10 convos, 1982 QA)** | **66.9%** (1326/1982) | 93–210 (per shard) | no (plaintext qdrant) | local LLM + embedder per write | Full corpus, sharded by conversation across four runs on the identical pinned stack (`VS_RAW` shard-additive by design): convos 1–2 = 205/302 · convo 3 = 112/193 · convo 4 = 166/260 · convos 5–10 = 843/1227; per-conversation R@10 spans **58.0–70.9%**. Ingest measured **92 s/chunk** (extraction-bound: 4 h 07 m/177 chunks + 21 h 13 m/814 chunks; ≈32 h full-corpus equivalent vs 16.5 s native). Extraction discards by rubric — 55 memories retained of 177 chunks on the measured subset (raw traffic shows `{"facts": []}` for non-personal content). Logs: [`vs_mem0_locomo.log`](../benchmarks/logs/vs_mem0_locomo.log), [`vs_mem0_convo3.log`](../benchmarks/logs/vs_mem0_convo3.log), [`vs_mem0_convo4.log`](../benchmarks/logs/vs_mem0_convo4.log), [`vs_mem0_locomo_5_10.log`](../benchmarks/logs/vs_mem0_locomo_5_10.log). Two documented transport adaptations, content-neutral: `response_format json_object→(none)` for LM Studio 0.4.19, embeddings zero-padded 768→1536 for OpenMemory's fixed qdrant dims (cosine-order preserving) — `deploy/bench-vs/lmstudio-shim.js` |
 | Supermemory (self-host) | local binary/container | *pending* | *pending* | — | no | per its config | adapter shipped |
 | Zep/Graphiti | — | — | *adapter pending* | — | no | local LLM per write | graph build cost expected to dominate ingest |
 | Letta | — | — | *adapter pending* | — | no | local LLM runtime | archival-memory surface |
@@ -149,26 +157,51 @@ drift is absorbable without a rebuild.
 
 ### Reading the mem0 row
 
-The 67.9% vs 96.7% gap on the identical subset is not an artifact of the
-harness — both systems saw byte-identical chunks and the same scorer,
-and the mem0 pipeline ran their published server with a strong local
-model (raw request/response traffic logged). The gap has two designed
-causes, both worth understanding on their own terms:
+The 66.9% vs 94.6% full-corpus gap (27.7 points over the same 1,982
+questions) is not an artifact of the harness — both systems saw
+byte-identical chunks and the same scorer, and the mem0 pipeline ran
+their published server with a strong local model (raw request/response
+traffic logged). The result is also stable: all ten conversations land
+between 58.0% and 70.9%, so no subset choice could have changed the
+story. The gap has two designed causes, both worth understanding on
+their own terms:
 
 1. **Extraction discards by rubric.** mem0's system prompt extracts
    *personal* facts (preferences, relationships, plans). Conversation
    content outside that rubric returns `{"facts": []}` and is simply
-   never stored — 177 ingested chunks became 55 memories. LoCoMo's
-   questions frequently target exactly the discarded material. This is
-   the architecture, not a bug: extraction-based memory answers "what
-   should I remember about this user," verbatim memory answers "what
-   was said."
-2. **Write cost is the price of extraction.** ~84 s per chunk on this
-   host (two-plus LLM calls per write) versus 14 ms for the sealed
-   vault — ingest of the same corpus took 4 h 07 m against 2.5 s, a
-   ~6,000× difference that no amount of GPU shrinks to parity, because
-   one design calls a language model per write and the other never
-   does.
+   never stored — 177 ingested chunks became 55 memories on the
+   measured subset. LoCoMo's questions frequently target exactly the
+   discarded material. This is the architecture, not a bug:
+   extraction-based memory answers "what should I remember about this
+   user," verbatim memory answers "what was said."
+2. **Write cost is the price of extraction.** 92 s per chunk measured
+   on this host (two-plus LLM calls per write) versus 13 ms for the
+   sealed vault — full-corpus ingest ≈32 h against 16.5 s, a ~7,000×
+   difference that no amount of GPU shrinks to parity, because one
+   design calls a language model per write and the other never does.
+
+**Server behavior observed during the run** (documented as evidence,
+with the caveat that none of it affects the scored retrieval path):
+
+- OpenMemory's background *categorization* feature is non-functional
+  in the shipped `mem0/openmemory-mcp` image: it calls
+  `chat.completions.with_response_format(...)`, an API that does not
+  exist in any release of the bundled `openai` SDK (verified
+  in-container; upstream `main` has since been corrected to
+  `beta.chat.completions.parse`, but the published image still carries
+  the broken call, erroring continuously — and even the corrected
+  version hardcodes `model="gpt-4o-mini"` regardless of configured
+  backend). Categories do not feed retrieval, so the row stands.
+- `delete_all_memories` (the per-conversation isolation wipe)
+  consistently exceeded a 600 s response timeout at every conversation
+  boundary, succeeding on a reconnect-and-retry — visible verbatim in
+  the shard logs. The adapter's bounded idempotent retries (fairness
+  rule 1) exist because of this.
+- Neither mem0's code (0.1.108) nor its documentation mentions
+  thinking/reasoning models at all. Disabling qwen3.6's thinking mode
+  (required for sane extraction latency, and only possible in the LM
+  Studio UI — their API surface offers no lever) was a
+  favorable-to-mem0 configuration choice we made and document here.
 
 ## Honest caveats
 

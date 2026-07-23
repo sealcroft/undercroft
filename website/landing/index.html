@@ -748,35 +748,36 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <h2>Against the memory-layer market</h2>
     <p class="bench-lede">Competitors, measured — not quoted. Every system ingests <b>byte-identical
        chunks</b> of the same LoCoMo conversations and is scored by <b>one shared scorer</b>, on the
-       same machine, in the same run. Every row is <b>fully local</b> — no cloud APIs anywhere — and
-       each competitor runs its own published server in its best documented local configuration.
-       Numbers are reported as measured, favorable or not; raw logs ship in the repo, and
-       corrections are accepted by PR.</p>
+       same machine, on one pinned stack — the <b>full corpus, all 1,982 questions</b>. Every row is
+       <b>fully local</b> — no cloud APIs anywhere — and each competitor runs its own published
+       server in its best documented local configuration. Numbers are reported as measured,
+       favorable or not; raw logs ship in the repo, and corrections are accepted by PR.</p>
 
     <div class="bench-grid">
       <figure class="bench-card">
         <figcaption class="bench-head">
           <span class="bench-name">Retrieval quality</span>
-          <span class="bench-metric">session recall@10 · LoCoMo convos 1–2 · 302 QA</span>
+          <span class="bench-metric">session recall@10 · LoCoMo full corpus · 1,982 QA</span>
         </figcaption>
-        <div class="bar-row hero"><span class="bar-name">undercroft · MiniLM, sealed</span><div class="bar"><i style="--w:97.4%"></i></div><span class="bar-val">97.4</span></div>
-        <div class="bar-row hash"><span class="bar-name">undercroft · no model at all, sealed</span><div class="bar"><i style="--w:96.7%"></i></div><span class="bar-val">96.7</span></div>
-        <div class="bar-row up2"><span class="bar-name">mem0 · local, their stack</span><div class="bar"><i style="--w:67.9%"></i></div><span class="bar-val">67.9</span></div>
+        <div class="bar-row hero"><span class="bar-name">undercroft · MiniLM + ColBERT, sealed</span><div class="bar"><i style="--w:96.5%"></i></div><span class="bar-val">96.5</span></div>
+        <div class="bar-row hash"><span class="bar-name">undercroft · no model at all, sealed</span><div class="bar"><i style="--w:94.6%"></i></div><span class="bar-val">94.6</span></div>
+        <div class="bar-row up2"><span class="bar-name">mem0 · local, their stack</span><div class="bar"><i style="--w:66.9%"></i></div><span class="bar-val">66.9</span></div>
         <div class="bench-foot">mem0 = their published OpenMemory server + qdrant, running with far
           more model firepower than we gave ourselves: a 35B-parameter LLM (qwen3.6) + neural
           embeddings (nomic) versus undercroft's 22M-parameter MiniLM — or no model at all. The
-          architecture won, not the hardware budget.</div>
+          architecture won, not the hardware budget. All ten conversations, no subsets: mem0's
+          per-conversation recall spans 58.0–70.9%.</div>
       </figure>
       <figure class="bench-card">
         <figcaption class="bench-head">
           <span class="bench-name">The details that decide it</span>
-          <span class="bench-metric">same 177 chunks, measured in the same run</span>
+          <span class="bench-metric">same 1,271 chunks, one pinned stack</span>
         </figcaption>
         <table class="vs-table">
           <tr><th></th><th>undercroft</th><th>mem0 local</th></tr>
-          <tr><td>ingest, whole corpus</td><td><b>2.5&nbsp;s</b></td><td><b>4&nbsp;h&nbsp;07&nbsp;m</b> (LLM per write)</td></tr>
-          <tr><td>search latency</td><td><b>3.8&nbsp;ms</b>/query</td><td>93.2&nbsp;ms/query</td></tr>
-          <tr><td>what survives ingest</td><td>every word, verbatim</td><td>55 distilled facts of 177 chunks</td></tr>
+          <tr><td>ingest, whole corpus</td><td><b>16.5&nbsp;s</b></td><td><b>≈32&nbsp;h</b> (LLM per write, 92&nbsp;s/chunk measured)</td></tr>
+          <tr><td>search latency</td><td><b>5.5&nbsp;ms</b>/query</td><td>93–210&nbsp;ms/query</td></tr>
+          <tr><td>what survives ingest</td><td>every word, verbatim</td><td>55 distilled facts of 177 chunks (measured subset)</td></tr>
           <tr><td>at rest</td><td>sealed · AEAD + audit chain</td><td>plaintext vector store</td></tr>
           <tr><td>model runtime needed</td><td>none</td><td>LLM + embedder, every write</td></tr>
         </table>
