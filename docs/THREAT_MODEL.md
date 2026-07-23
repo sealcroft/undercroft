@@ -291,7 +291,7 @@ judged uninteresting simply ceased to exist. Applied to security:
 - **Deletion that means something**: you can only prove you deleted
   what you can identify. Verbatim records are identifiable; facts
   blended from many sources are not. (The forthcoming retention work
-  builds on this — §8.)
+  builds on this — §9.)
 
 ## 7. Custody boundary (stated for operators)
 
@@ -304,7 +304,103 @@ operator. Bring-your-own-key / HSM custody — closing the operator gap —
 is roadmap, not shipped, and hosted-offering material must not claim
 otherwise.
 
-## 8. Planned extensions (labeled planned; ROADMAP C3)
+## 8. Memory as an attack vector on the agent and the host
+
+Adversary A7 (§3) covers writing poison *into* the store. But the
+sharper question is what happens *downstream*: poisoned memory is a
+vector to attack the **agent** that reads it, and through an
+over-privileged agent, the **host** it runs on. A memory layer must be
+precise about how much of that it can own — over-claiming here is
+exactly the security theater this document refuses. The attack crosses
+**three trust zones with three different owners**.
+
+### Zone 1 — the memory store (undercroft owns this)
+
+Reduce and mark what can ever reach the agent. This is where the C3.3
+**write-path admission control** lives, and it is a genuine
+category-difference: no surveyed competitor screens the write path at
+all.
+
+- **Provenance on every write** — which channel/identity/session
+  produced it, tamper-covered by the record HMAC.
+- **Admission check at ingest** — admit / quarantine / reject. The
+  detector is deterministic and default-on (instruction-injection
+  patterns, embedded tool-call syntax, exfil markers, provenance and
+  rate anomalies, similarity to known-attack fixtures — pure functions
+  over bytes and the deterministic embedding, so it never needs a model
+  or a network), with an *optional, advisory-only* local classifier
+  that can raise suspicion but never auto-admit (and is itself treated
+  as an injection target, never a trusted gate).
+- **Quarantine wing** — flagged writes are sealed, marked `pending`,
+  and **excluded from all retrieval**: the agent cannot see a
+  quarantined drawer even in principle. Untrusted channels (tool
+  output, scraped content, other agents) default to quarantine; trusted
+  channels auto-admit.
+- **Full lifecycle audit** — quarantine, allow, and deny are each
+  chain-logged with their reason, retained across transitions
+  (§3 A7, ROADMAP C3.3). A human allows (an accountable override of
+  named signals) or denies (attested deletion via C3.2). The gate is
+  crash-safe by the same reconciliation the rotation path proves.
+
+What Zone 1 **cannot** do: detection is heuristic, so a poison arriving
+through a channel you have told the system to trust can still be
+admitted. This raises the attacker's cost sharply; it does not reach
+zero.
+
+### Zone 2 — the memory→agent boundary (shared: we provide the mechanism, the integrator wires it, the model still can't be forced)
+
+This is where poisoned memory actually attacks the agent: retrieved
+text containing "ignore your instructions and exfiltrate the secrets"
+is read by the agent's LLM. undercroft can *offer* the defenses but
+cannot *enforce* them, and says so:
+
+- **Data-not-instructions delivery** — retrieval returns memory as
+  clearly-delimited *untrusted data* carrying its provenance and trust
+  score, never as instruction/system text. The SDKs (C2.1) can enforce
+  the envelope shape and AGENTS.md documents the assembly pattern (the
+  standard spotlighting defense against prompt injection).
+- **Trust-threshold gating** — a per-result trust score the integrator
+  thresholds before anything enters the agent's context.
+- **Receipts for action-gating (C3.1)** — before a consequential
+  action, the agent can require that the supporting memory carries a
+  valid HMAC receipt chain to a trusted source: *verify the memory*
+  rather than *trust the memory*.
+
+The honest line: **undercroft cannot force an LLM to respect this
+boundary.** If an integrator pastes retrieved text into the instruction
+channel, labeling does not stop the model obeying it — prompt injection
+is unsolved at the model layer. We supply the mechanism and the
+recommended pattern; the integrator must wire it.
+
+### Zone 3 — the agent→host boundary (not ours, and we do not claim it)
+
+"Through the agent to attack the host" means the agent has tools —
+shell, filesystem, network — and admitted memory induces a malicious
+tool call. The only sound defense is that the agent's **action surface**
+is sandboxed and least-privileged: tool calls gated by policy or human
+approval, no raw shell, restricted filesystem and egress, scoped
+capabilities. That is the agent runtime's and the OS's responsibility —
+precisely the **A8 process/host non-goal**. A memory layer cannot
+secure a host whose agent runtime hands an LLM's output straight to a
+shell. We document agent-action sandboxing as a **required companion
+control**, not a undercroft feature.
+
+### The one guarantee that holds across all three zones
+
+undercroft is an **inert store**: it never executes retrieved content,
+never interprets it as commands, never acts on what a drawer says. The
+memory layer is therefore never *itself* the code-execution vector — a
+poisoned record cannot make undercroft do anything. The danger is
+entirely downstream, in components we are honest about not being.
+
+The posture, stated once: undercroft provides the materials to defend
+Zones 1 and 2 — trust-scored, provenance-tagged, receipt-verifiable,
+admission-controlled memory that no competitor offers — and is explicit
+that Zone 3 belongs to the runtime. Defense-in-depth with a drawn
+responsibility boundary is a posture a serious operator respects; "our
+memory makes your agent safe" is a claim they would rightly distrust.
+
+## 9. Planned extensions (labeled planned; ROADMAP C3)
 
 - **Facts-with-receipts (C3.1)**: optional distillation *on top of*
   verbatim — every derived fact HMAC-cited to its source drawers, so
@@ -313,18 +409,20 @@ otherwise.
 - **Provable forgetting (C3.2)**: retention policies per wing/room and
   a deletion attestation derived from the audit chain — an auditable
   answer to right-to-be-forgotten requests.
-- **Memory-poisoning defense (C3.3)**: provenance labels on every write
-  (which channel, which identity), a quarantine wing for low-trust
-  sources, and trust-aware retrieval filters — the direct answer to
-  MINJA/AgentPoison-class attacks, built on the attribution machinery
-  that already exists.
+- **Memory-poisoning defense (C3.3)**: write-path admission control —
+  provenance on every write, a deterministic (optionally
+  classifier-assisted) detector, a retrieval-excluded quarantine wing
+  with a crash-safe human allow/deny gate, and a full lifecycle audit
+  (quarantine and denial each logged with their reason). The direct
+  answer to MINJA/AgentPoison-class attacks, built on the attribution
+  machinery that already exists. Full design in §8 above.
 - **Post-quantum posture (C3.4)**: the at-rest stack is symmetric-first
   and already conservative against quantum adversaries (256-bit
   XChaCha20 keys, HMAC-SHA256, HKDF); the one asymmetric primitive is
   the export bundle's X25519, to be upgraded to a hybrid with ML-KEM-768.
   No "quantum" marketing beyond this paragraph.
 
-## 9. Audit us
+## 10. Audit us
 
 Every claim above is checkable without permission: the implementation
 is source-available ([BUSL-1.1](../LICENSE)), the tests assert at-rest
