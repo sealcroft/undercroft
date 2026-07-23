@@ -93,6 +93,59 @@ pub(crate) fn triple_canonical(
     out
 }
 
+/// Unkeyed fingerprint of a source drawer's verbatim content, captured
+/// when a fact is distilled. Unkeyed (plain SHA-256) on purpose: it must
+/// survive key rotation unchanged so a receipt stays valid across
+/// rotations, while the *keyed* `receipt_tag` (below) is what makes the
+/// citation unforgeable. A change here means the cited source was edited
+/// out from under the fact — surfaced as `SourceChanged`, never hidden.
+pub(crate) fn content_fp(content: &str) -> Vec<u8> {
+    Sha256::digest(content.as_bytes()).to_vec()
+}
+
+/// Canonical bytes of a **receipt**: the tamper-covered binding of a
+/// distilled fact to the verbatim drawer it was derived from. Keyed with
+/// the vault mac (like every other tag), so an offline attacker cannot
+/// swap the citation or the source fingerprint without failing
+/// `verify_tag`. The triple id is inside the binding, so a receipt cannot
+/// be moved to a different fact.
+pub(crate) fn receipt_canonical(
+    triple_id: &str,
+    source_drawer_id: &str,
+    source_fp: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(triple_id.as_bytes());
+    out.push(0x1f);
+    out.extend_from_slice(source_drawer_id.as_bytes());
+    out.push(0x1f);
+    out.extend_from_slice(source_fp);
+    out
+}
+
+/// Outcome of verifying one fact's receipt against its cited source.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptVerdict {
+    /// Citation intact and the cited drawer still hashes to the recorded fp.
+    Verified,
+    /// Citation intact, cited drawer present, but its content changed since
+    /// the fact was distilled — the fact may no longer reflect its source.
+    SourceChanged,
+    /// Citation intact but the cited drawer no longer exists.
+    Dangling,
+    /// The receipt binding itself failed its HMAC — offline tampering.
+    Tampered,
+}
+
+/// A fact's receipt and its verification outcome.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReceiptStatus {
+    pub triple_id: String,
+    pub source_drawer_id: String,
+    pub verdict: ReceiptVerdict,
+}
+
 impl PalaceStore {
     pub(crate) fn init_kg_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
@@ -114,11 +167,21 @@ impl PalaceStore {
                  confidence  REAL NOT NULL DEFAULT 1.0,
                  source_drawer_id TEXT,
                  tag         BLOB NOT NULL,
-                 extracted_at TEXT NOT NULL
+                 extracted_at TEXT NOT NULL,
+                 source_fp   BLOB,
+                 receipt_tag BLOB
              );
              CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject);
              CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate);",
         )?;
+        // Migrate palaces created before the receipt columns existed. SQLite
+        // has no ADD COLUMN IF NOT EXISTS; a duplicate-column error just
+        // means the migration already ran, so it is swallowed.
+        for col in ["source_fp BLOB", "receipt_tag BLOB"] {
+            let _ = self
+                .conn
+                .execute(&format!("ALTER TABLE kg_triples ADD COLUMN {col}"), []);
+        }
         Ok(())
     }
 
@@ -146,7 +209,9 @@ impl PalaceStore {
     }
 
     /// Add a fact. Entities are created implicitly. Returns the triple id;
-    /// re-adding the same (s, p, o, valid_from) is idempotent.
+    /// re-adding the same (s, p, o, valid_from) is idempotent. The citation
+    /// (`source_drawer_id`) is recorded but *not* tamper-covered — for an
+    /// evidence-grade citation use [`kg_add_receipted`].
     #[allow(clippy::too_many_arguments)]
     pub fn kg_add(
         &mut self,
@@ -157,6 +222,61 @@ impl PalaceStore {
         valid_to: Option<&str>,
         confidence: f64,
         source_drawer_id: Option<&str>,
+    ) -> Result<String, StoreError> {
+        self.kg_add_inner(
+            subject,
+            predicate,
+            object,
+            valid_from,
+            valid_to,
+            confidence,
+            source_drawer_id,
+            None,
+        )
+    }
+
+    /// Add a distilled fact **with a receipt**: an HMAC-covered citation to
+    /// the verbatim `source` drawer it was derived from. `source` is
+    /// `(drawer_id, drawer_content)`; the content is fingerprinted (unkeyed
+    /// SHA-256) so the receipt later proves both *which* drawer the fact
+    /// came from and that the drawer has not changed under it. The fact's
+    /// verbatim source is never altered — this only *adds* a provable link.
+    #[allow(clippy::too_many_arguments)]
+    pub fn kg_add_receipted(
+        &mut self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        valid_from: Option<&str>,
+        valid_to: Option<&str>,
+        confidence: f64,
+        source: (&str, &str),
+    ) -> Result<String, StoreError> {
+        let (drawer_id, drawer_content) = source;
+        let fp = content_fp(drawer_content);
+        self.kg_add_inner(
+            subject,
+            predicate,
+            object,
+            valid_from,
+            valid_to,
+            confidence,
+            Some(drawer_id),
+            Some(fp),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn kg_add_inner(
+        &mut self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        valid_from: Option<&str>,
+        valid_to: Option<&str>,
+        confidence: f64,
+        source_drawer_id: Option<&str>,
+        source_fp: Option<Vec<u8>>,
     ) -> Result<String, StoreError> {
         let _span = undercroft_obs::scope("kg", self.vault.id());
         undercroft_core::validate_name(subject, "subject").map_err(|e| StoreError::CorruptRow {
@@ -185,18 +305,29 @@ impl PalaceStore {
             &vt,
             confidence,
         ));
+        // Receipt: a separate keyed tag over (triple id, citation, source
+        // fingerprint). Kept distinct from the triple tag so it composes
+        // without touching the fact's own canonical, and so legacy facts
+        // (no receipt) are unaffected.
+        let receipt_tag = source_fp
+            .as_ref()
+            .zip(source_drawer_id)
+            .map(|(fp, did)| self.vault.tag(&receipt_canonical(&id, did, fp)));
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
-                                     confidence, source_drawer_id, tag, extracted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                                     confidence, source_drawer_id, tag, extracted_at,
+                                     source_fp, receipt_tag)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                  object = excluded.object,
                  valid_to = excluded.valid_to,
                  confidence = excluded.confidence,
                  source_drawer_id = excluded.source_drawer_id,
-                 tag = excluded.tag",
+                 tag = excluded.tag,
+                 source_fp = excluded.source_fp,
+                 receipt_tag = excluded.receipt_tag",
             params![
                 id,
                 subject,
@@ -207,7 +338,9 @@ impl PalaceStore {
                 confidence,
                 source_drawer_id,
                 tag.as_slice(),
-                now
+                now,
+                source_fp,
+                receipt_tag.as_ref().map(|t| t.as_slice()),
             ],
         )?;
         let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
@@ -216,6 +349,55 @@ impl PalaceStore {
         undercroft_obs::kg_write(undercroft_obs::KgKind::Triple);
         undercroft_obs::event_kg_triple(self.vault.id());
         Ok(id)
+    }
+
+    /// Verify every fact that carries a receipt against its cited verbatim
+    /// source. Returns one [`ReceiptStatus`] per receipted fact:
+    /// `Verified` (citation intact, source unchanged), `SourceChanged`
+    /// (source edited since distillation), `Dangling` (source deleted), or
+    /// `Tampered` (the receipt binding failed its HMAC). Facts without a
+    /// receipt are skipped — they never claimed a provable citation.
+    pub fn kg_verify_receipts(&self) -> Result<Vec<ReceiptStatus>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_drawer_id, source_fp, receipt_tag
+             FROM kg_triples WHERE receipt_tag IS NOT NULL ORDER BY seq",
+        )?;
+        // (triple id, cited drawer id, source fingerprint, receipt tag)
+        type ReceiptRow = (String, Option<String>, Option<Vec<u8>>, Vec<u8>);
+        let rows: Vec<ReceiptRow> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (id, drawer_id, fp, receipt_tag) in rows {
+            // A receipt_tag is only ever written alongside both fields.
+            let (Some(drawer_id), Some(fp)) = (drawer_id, fp) else {
+                out.push(ReceiptStatus {
+                    triple_id: id,
+                    source_drawer_id: String::new(),
+                    verdict: ReceiptVerdict::Tampered,
+                });
+                continue;
+            };
+            let verdict = if self
+                .vault
+                .verify_tag(&receipt_canonical(&id, &drawer_id, &fp), &receipt_tag)
+                .is_err()
+            {
+                ReceiptVerdict::Tampered
+            } else {
+                match self.get(&drawer_id)? {
+                    None => ReceiptVerdict::Dangling,
+                    Some(d) if content_fp(&d.content) == fp => ReceiptVerdict::Verified,
+                    Some(_) => ReceiptVerdict::SourceChanged,
+                }
+            };
+            out.push(ReceiptStatus {
+                triple_id: id,
+                source_drawer_id: drawer_id,
+                verdict,
+            });
+        }
+        Ok(out)
     }
 
     fn decode_triple(&self, row: TripleRow) -> Result<Triple, StoreError> {
@@ -542,6 +724,7 @@ fn valid_at(t: &Triple, as_of_key: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::ReceiptVerdict;
     use crate::{PalaceStore, SearchOptions};
     use undercroft_vault::{SecurityLevel, VaultManager};
     use tempfile::TempDir;
@@ -674,5 +857,91 @@ mod tests {
         assert!(report.ok(), "chain must cover drawer + kg writes");
         // Searching still works alongside KG data.
         assert!(s.search("content", &SearchOptions::default()).is_ok());
+    }
+
+    fn src_drawer(content: &str) -> undercroft_core::Drawer {
+        undercroft_core::Drawer::new("w", "r", content.into(), Some("t.md".into()), 0, "t")
+    }
+
+    #[test]
+    fn receipt_verifies_then_flags_source_change() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let src = src_drawer("Ada migrated auth to PASETO in June.");
+        let src_id = src.id.clone();
+        s.upsert(&src).unwrap();
+        let tid = s
+            .kg_add_receipted(
+                "ada",
+                "migrated_auth_to",
+                "paseto",
+                None,
+                None,
+                0.8,
+                (&src_id, &src.content),
+            )
+            .unwrap();
+
+        let r = s.kg_verify_receipts().unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].triple_id, tid);
+        assert_eq!(r[0].source_drawer_id, src_id);
+        assert_eq!(r[0].verdict, ReceiptVerdict::Verified);
+
+        // Edit the cited source in place (same recipe → same id, new words):
+        // the receipt must surface that the fact's source moved under it.
+        s.upsert(&src_drawer("Ada decided to keep JWT after all."))
+            .unwrap();
+        let r = s.kg_verify_receipts().unwrap();
+        assert_eq!(r[0].verdict, ReceiptVerdict::SourceChanged);
+    }
+
+    #[test]
+    fn receipt_dangling_when_source_absent() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.kg_add_receipted("x", "rel", "y", None, None, 0.8, ("no-such-drawer", "text"))
+            .unwrap();
+        let r = s.kg_verify_receipts().unwrap();
+        assert_eq!(r[0].verdict, ReceiptVerdict::Dangling);
+    }
+
+    #[test]
+    fn plain_facts_carry_no_receipt() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let src = src_drawer("some verbatim source");
+        s.upsert(&src).unwrap();
+        s.kg_add("a", "rel", "b", None, None, 1.0, Some(&src.id))
+            .unwrap();
+        s.kg_add_receipted("c", "rel", "d", None, None, 0.8, (&src.id, &src.content))
+            .unwrap();
+        // Only the receipted fact is verified; the plain citation (stored
+        // but not tamper-covered) is not treated as a receipt.
+        let r = s.kg_verify_receipts().unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].verdict, ReceiptVerdict::Verified);
+    }
+
+    #[test]
+    fn receipt_tamper_is_detected() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        let src = src_drawer("source words for the receipt");
+        let src_id = src.id.clone();
+        s.upsert(&src).unwrap();
+        s.kg_add_receipted("a", "rel", "b", None, None, 0.8, (&src_id, &src.content))
+            .unwrap();
+        drop(s);
+
+        // Offline attacker rewrites the citation binding.
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        db.execute(
+            "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let r = s2.kg_verify_receipts().unwrap();
+        assert_eq!(r[0].verdict, ReceiptVerdict::Tampered);
     }
 }
