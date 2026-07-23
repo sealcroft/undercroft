@@ -647,11 +647,15 @@ release with the usual battery + measured gates.
   isolation / offline default / audit chain / export encryption.
   Sourced claims, dated, PR-able by competitors if they object.
   Docs page + landing block.
-- **C1.3 Threat-model whitepaper.** Formalize what SECURITY.md +
-  seal.rs already implement (adversary classes, what each layer
-  defeats, honest non-goals), framed against the 2026 "agent memory
-  is an attack surface" literature. The artifact security buyers
-  forward to their teams.
+- **C1.3 Threat-model whitepaper (SHIPPED — docs/THREAT_MODEL.md).**
+  Formalized what SECURITY.md + seal.rs already implement: eight
+  adversary classes (offline reader/tamperer, cross-tenant, network,
+  untrusted accelerator, exfil channels, memory poisoner, host —
+  the last a stated non-goal), a layer→adversary map, verbatim-as-
+  security-property, the operator custody boundary, and planned-work
+  labeling for C3. Framed against the 2026 memory-attack literature
+  (MINJA, AgentPoison, forged-reasoning/FragFuse). Published in the
+  book as threat-model.html; linked from SECURITY.md.
 
 ### Phase C2 — meet them (parity; each ~1 release)
 

@@ -6,6 +6,7 @@
 - [Architecture](architecture.md)
 - [Retrieval, scoring & scaling](retrieval.md)
 - [Security model](security.md)
+- [Threat model (whitepaper)](threat-model.md)
 - [Integrations](integrations.md)
 - [Remote team server](remote-server.md)
 - [Observability](observability.md)
