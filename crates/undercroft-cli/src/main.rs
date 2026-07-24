@@ -1983,18 +1983,24 @@ fn mine_convos(
             continue;
         }
         let room = room_for_file(file);
-        for (idx, chunk) in undercroft_core::convo::chunk_exchanges(&messages, 800)
-            .into_iter()
-            .enumerate()
+        for (idx, (chunk, started_at)) in
+            undercroft_core::convo::chunk_exchanges_dated(&messages, 800)
+                .into_iter()
+                .enumerate()
         {
-            batch.push(Drawer::new(
-                wing,
-                &room,
-                normalize_content(&chunk),
-                Some(file.display().to_string()),
-                idx as u32,
-                "convo-miner",
-            ));
+            batch.push(
+                Drawer::new(
+                    wing,
+                    &room,
+                    normalize_content(&chunk),
+                    Some(file.display().to_string()),
+                    idx as u32,
+                    "convo-miner",
+                )
+                // When the exchange opened — read off the transcript, not
+                // inferred, and the anchor for relative dates inside it.
+                .with_content_date(started_at),
+            );
             drawers += 1;
             if batch.len() >= INGEST_BATCH {
                 upsert_batched(store, &batch)?;
@@ -2033,15 +2039,9 @@ fn sweep_path(
         };
         let room = room_for_file(file);
         for msg in undercroft_core::convo::parse_transcript(&text) {
-            let content = format!(
-                "{}: {}",
-                if msg.role == "user" {
-                    "User"
-                } else {
-                    "Assistant"
-                },
-                msg.text
-            );
+            // Attribute by named speaker where the transcript has one, so a
+            // multi-party conversation does not collapse to two roles.
+            let content = format!("{}: {}", undercroft_core::convo::label(&msg), msg.text);
             let normalized = normalize_content(&content);
             // One drawer per message, keyed by (file, line) — re-sweeps
             // are no-ops for already-filed messages. The in-batch set
@@ -2051,14 +2051,20 @@ fn sweep_path(
                 continue;
             }
             seen.insert(normalized.clone());
-            batch.push(Drawer::new(
-                wing,
-                &room,
-                normalized,
-                Some(file.display().to_string()),
-                msg.line,
-                "sweeper",
-            ));
+            batch.push(
+                Drawer::new(
+                    wing,
+                    &room,
+                    normalized,
+                    Some(file.display().to_string()),
+                    msg.line,
+                    "sweeper",
+                )
+                // The turn's own timestamp, when the transcript records one:
+                // it is when the exchange happened, which is what anchors
+                // "yesterday" in the text.
+                .with_content_date(msg.timestamp.clone()),
+            );
             filed += 1;
             if batch.len() >= INGEST_BATCH {
                 upsert_batched(store, &batch)?;
