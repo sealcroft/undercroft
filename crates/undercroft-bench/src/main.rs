@@ -1179,13 +1179,15 @@ fn locomo_eval(
 
 /// One session-recall pass over a conversation's QA against the current
 /// store contents (identical scoring to [`locomo_eval`]): returns
-/// (recall_sum, evaluated). Run once over verbatim-only (baseline) and
-/// again after distilled facts are added (augmented).
+/// (recall_sum, evaluated). `wing` scopes retrieval: `None` searches
+/// everything, `Some("locomo")` verbatim-only, `Some("facts")`
+/// distilled-only — the three passes that separate verbatim from KG.
 fn score_pass(
     store: &mut PalaceStore,
     qa_pairs: &[Value],
     k: usize,
     qa_limit: usize,
+    wing: Option<&str>,
 ) -> Result<(f32, u32)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
@@ -1221,7 +1223,7 @@ fn score_pass(
         let hits = store.search(
             question,
             &SearchOptions {
-                wing: None,
+                wing: wing.map(str::to_string),
                 room: None,
                 limit: k * 6,
             },
@@ -1253,7 +1255,7 @@ fn distill_eval(samples: &[Value], k: usize, qa_limit: usize) -> Result<()> {
     let llm = undercroft_llm::LlmClient::from_env()
         .map_err(|e| anyhow::anyhow!("distill gate needs a local LLM (UNDERCROFT_LLM_URL): {e}"))?;
     let model = llm.model().to_string();
-    let (mut base_sum, mut aug_sum) = (0f32, 0f32);
+    let (mut base_sum, mut dist_sum, mut aug_sum) = (0f32, 0f32, 0f32);
     let (mut evaluated, mut facts_total, mut verified_total) = (0u32, 0u32, 0u32);
     let mut distill_secs = 0f32;
     let total = samples.len();
@@ -1296,8 +1298,8 @@ fn distill_eval(samples: &[Value], k: usize, qa_limit: usize) -> Result<()> {
             .and_then(Value::as_array)
             .context("sample missing qa")?;
 
-        // Baseline: verbatim retrieval only.
-        let (b_rs, b_ev) = score_pass(&mut store, qa_pairs, k, qa_limit)?;
+        // Baseline: verbatim retrieval only (nothing else in the store yet).
+        let (b_rs, b_ev) = score_pass(&mut store, qa_pairs, k, qa_limit, None)?;
 
         // Distill: LLM facts → receipted KG fact + searchable fact-drawer in
         // the source session's room.
@@ -1346,32 +1348,41 @@ fn distill_eval(samples: &[Value], k: usize, qa_limit: usize) -> Result<()> {
             .filter(|r| matches!(r.verdict, undercroft_store::ReceiptVerdict::Verified))
             .count() as u32;
 
-        // Augmented: same scorer, facts now on the retrieval surface.
-        let (a_rs, _a_ev) = score_pass(&mut store, qa_pairs, k, qa_limit)?;
+        // Distilled-only: retrieval restricted to the KG-fact surface —
+        // what distillation achieves *without* the verbatim it was derived
+        // from (the shape competitors ship, where extraction replaces text).
+        let (d_rs, _d_ev) = score_pass(&mut store, qa_pairs, k, qa_limit, Some("facts"))?;
+
+        // Augmented: verbatim + distilled facts together (no wing filter).
+        let (a_rs, _a_ev) = score_pass(&mut store, qa_pairs, k, qa_limit, None)?;
 
         base_sum += b_rs;
+        dist_sum += d_rs;
         aug_sum += a_rs;
         evaluated += b_ev;
+        let ev = evaluated.max(1) as f32;
         eprintln!(
-            "  [{model}] convo {}/{total} — base {:.1}% aug {:.1}% ({:+.1}), {fact_idx} facts",
+            "  [{model}] convo {}/{total} — verbatim {:.1}% distilled {:.1}% \
+             verbatim+distilled {:.1}%, {fact_idx} facts",
             si + 1,
-            100.0 * base_sum / evaluated.max(1) as f32,
-            100.0 * aug_sum / evaluated.max(1) as f32,
-            100.0 * (aug_sum - base_sum) / evaluated.max(1) as f32,
+            100.0 * base_sum / ev,
+            100.0 * dist_sum / ev,
+            100.0 * aug_sum / ev,
         );
     }
     let ev = evaluated.max(1) as f32;
     println!(
-        "DISTILL_RAW model={model} base_sum={base_sum:.4} aug_sum={aug_sum:.4} \
-         evaluated={evaluated} facts={facts_total} verified={verified_total} \
-         distill_secs={distill_secs:.1}"
+        "DISTILL_RAW model={model} verbatim_sum={base_sum:.4} distilled_sum={dist_sum:.4} \
+         augmented_sum={aug_sum:.4} evaluated={evaluated} facts={facts_total} \
+         verified={verified_total} distill_secs={distill_secs:.1}"
     );
     println!(
-        "DISTILL — {model} · baseline R@{k} {:.1}% · augmented R@{k} {:.1}% · \
-         delta {:+.1} pts ({facts_total} facts, {verified_total} receipts verified)",
+        "DISTILL — {model} · verbatim R@{k} {:.1}% · distilled-only R@{k} {:.1}% · \
+         verbatim+distilled R@{k} {:.1}% ({facts_total} facts, {verified_total} receipts \
+         verified)",
         100.0 * base_sum / ev,
+        100.0 * dist_sum / ev,
         100.0 * aug_sum / ev,
-        100.0 * (aug_sum - base_sum) / ev,
     );
     Ok(())
 }
