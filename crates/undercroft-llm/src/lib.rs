@@ -161,6 +161,177 @@ pub fn extract_json_array(text: &str) -> Result<Value, LlmError> {
     serde_json::from_str(&text[start..=end]).map_err(|e| LlmError::BadOutput(e.to_string()))
 }
 
+// --- Lenient extraction --------------------------------------------------
+//
+// Small local models emit imperfect JSON at a non-trivial rate (trailing
+// commas, an array where a string was asked for, a missing field, an
+// unterminated array). Treating any of that as a hard error and dropping
+// the whole note's output is *our* fragility, not the model's — and it
+// silently thins downstream recall. These helpers repair and salvage
+// deterministically (no extra model calls) so a malformed element costs
+// itself, not the whole note.
+
+/// Coerce a JSON value to a plain string: strings pass through,
+/// numbers/bools stringify, an array joins with ", " (models sometimes
+/// answer a scalar field with a list). Null/object → `None` (unusable).
+fn value_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Array(a) => {
+            let parts: Vec<String> = a.iter().filter_map(value_to_string).collect();
+            (!parts.is_empty()).then(|| parts.join(", "))
+        }
+        _ => None,
+    }
+}
+
+/// JSON-repair pass (dependency-free): drop trailing commas before `]`/`}`,
+/// the most common model defect. Quote-aware so commas inside string values
+/// are untouched; UTF-8-safe (only standalone ASCII commas are removed).
+fn strip_trailing_commas(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let (mut in_str, mut esc, mut i) = (false, false, 0usize);
+    while i < b.len() {
+        let c = b[i];
+        if in_str {
+            out.push(c);
+            if esc {
+                esc = false;
+            } else if c == b'\\' {
+                esc = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' {
+            in_str = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == b',' {
+            let mut j = i + 1;
+            while j < b.len() && b[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < b.len() && (b[j] == b']' || b[j] == b'}') {
+                i += 1; // skip the trailing comma
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
+/// Last-resort salvage: scan for balanced top-level `{...}` objects and
+/// parse each independently, so a syntactically broken *array* still yields
+/// its intact objects. Quote-aware brace matching.
+fn salvage_objects(s: &str) -> Vec<Value> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let (mut depth, mut start, mut in_str, mut esc, mut i) = (0usize, 0usize, false, false, 0usize);
+    while i < b.len() {
+        let c = b[i];
+        if in_str {
+            if esc {
+                esc = false;
+            } else if c == b'\\' {
+                esc = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+        } else if c == b'"' {
+            in_str = true;
+        } else if c == b'{' {
+            if depth == 0 {
+                start = i;
+            }
+            depth += 1;
+        } else if c == b'}' && depth > 0 {
+            depth -= 1;
+            if depth == 0 {
+                if let Ok(v) = serde_json::from_str::<Value>(&s[start..=i]) {
+                    out.push(v);
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Best-effort array-of-objects from possibly-chatty/malformed output:
+/// slice the outermost `[...]`, JSON-repair, parse whole; on failure,
+/// salvage individual objects. Never errors — returns what it can.
+pub fn lenient_objects(out: &str) -> Vec<Value> {
+    let sliced = match (out.find('['), out.rfind(']')) {
+        (Some(a), Some(b)) if b > a => &out[a..=b],
+        _ => out,
+    };
+    let repaired = strip_trailing_commas(sliced);
+    if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&repaired) {
+        return items;
+    }
+    salvage_objects(&repaired)
+}
+
+/// Triples parsed leniently from raw model output: fields coerced to
+/// strings, all three required, malformed elements skipped (not fatal).
+pub fn triples_from_output(out: &str) -> Vec<ExtractedTriple> {
+    lenient_objects(out)
+        .iter()
+        .filter_map(|v| {
+            let o = v.as_object()?;
+            Some(ExtractedTriple {
+                subject: value_to_string(o.get("subject")?)?,
+                predicate: value_to_string(o.get("predicate")?)?,
+                object: value_to_string(o.get("object")?)?,
+            })
+        })
+        .collect()
+}
+
+/// Entities parsed leniently (name required; type defaults to unknown).
+pub fn entities_from_output(out: &str) -> Vec<ExtractedEntity> {
+    lenient_objects(out)
+        .iter()
+        .filter_map(|v| {
+            let o = v.as_object()?;
+            Some(ExtractedEntity {
+                name: value_to_string(o.get("name")?)?,
+                entity_type: o
+                    .get("type")
+                    .and_then(value_to_string)
+                    .unwrap_or_else(unknown_type),
+            })
+        })
+        .collect()
+}
+
+/// Memories parsed leniently (content required; type defaults to unknown).
+pub fn memories_from_output(out: &str) -> Vec<ExtractedMemory> {
+    lenient_objects(out)
+        .iter()
+        .filter_map(|v| {
+            let o = v.as_object()?;
+            Some(ExtractedMemory {
+                memory_type: o
+                    .get("type")
+                    .and_then(value_to_string)
+                    .unwrap_or_else(unknown_type),
+                content: value_to_string(o.get("content")?)?,
+            })
+        })
+        .collect()
+}
+
 const ENTITY_SYSTEM: &str = "You extract named entities from notes. Reply with ONLY a JSON array \
 of objects: [{\"name\": \"...\", \"type\": \"person|organization|project|place|unknown\"}]. \
 No prose, no markdown fences.";
@@ -178,21 +349,15 @@ transient detail. No prose, no markdown fences.";
 
 impl LlmClient {
     pub fn extract_entities(&self, text: &str) -> Result<Vec<ExtractedEntity>, LlmError> {
-        let out = self.complete(ENTITY_SYSTEM, text)?;
-        let arr = extract_json_array(&out)?;
-        serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
+        Ok(entities_from_output(&self.complete(ENTITY_SYSTEM, text)?))
     }
 
     pub fn extract_triples(&self, text: &str) -> Result<Vec<ExtractedTriple>, LlmError> {
-        let out = self.complete(TRIPLE_SYSTEM, text)?;
-        let arr = extract_json_array(&out)?;
-        serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
+        Ok(triples_from_output(&self.complete(TRIPLE_SYSTEM, text)?))
     }
 
     pub fn extract_memories(&self, text: &str) -> Result<Vec<ExtractedMemory>, LlmError> {
-        let out = self.complete(MEMORY_SYSTEM, text)?;
-        let arr = extract_json_array(&out)?;
-        serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
+        Ok(memories_from_output(&self.complete(MEMORY_SYSTEM, text)?))
     }
 
     /// Classify text into one of the given labels (used by room
@@ -296,6 +461,56 @@ mod tests {
         assert!(extract_json_array("no array here").is_err());
         let v = extract_json_array("prefix [1, 2] suffix").unwrap();
         assert_eq!(v, json!([1, 2]));
+    }
+
+    #[test]
+    fn lenient_triples_recover_from_real_model_defects() {
+        // clean output — the happy path still works
+        assert_eq!(
+            triples_from_output(r#"[{"subject":"a","predicate":"knows","object":"b"}]"#).len(),
+            1
+        );
+        // array where a string was asked for → coerced by joining
+        let t = triples_from_output(
+            r#"[{"subject":"ana","predicate":"likes","object":["tea","coffee"]}]"#,
+        );
+        assert_eq!(t[0].object, "tea, coffee");
+        // one object missing a field → that element skipped, others kept
+        let t = triples_from_output(
+            r#"[{"subject":"a","predicate":"p","object":"o"},
+                {"subject":"x","predicate":"y"},
+                {"subject":"c","predicate":"q","object":"d"}]"#,
+        );
+        assert_eq!(t.len(), 2, "the incomplete triple is skipped, not fatal");
+        // trailing comma (repair pass)
+        assert_eq!(
+            triples_from_output(r#"[{"subject":"a","predicate":"p","object":"o"},]"#).len(),
+            1
+        );
+        // markdown fences + prose around the array
+        assert_eq!(
+            triples_from_output(
+                "Sure:\n```json\n[{\"subject\":\"a\",\"predicate\":\"p\",\"object\":\"o\"}]\n```"
+            )
+            .len(),
+            1
+        );
+        // syntactically broken *array* (unterminated) → salvage the intact object
+        let t = triples_from_output(
+            r#"[{"subject":"a","predicate":"p","object":"o"}, {"subject":"d","predicate":"#,
+        );
+        assert_eq!(t.len(), 1, "the one complete object is salvaged");
+        // nothing usable → empty, never an error
+        assert!(triples_from_output("I could not find any facts.").is_empty());
+    }
+
+    #[test]
+    fn lenient_entities_and_memories() {
+        let e = entities_from_output(r#"[{"name":"Acme"},{"type":"person","name":"Ana"}]"#);
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0].entity_type, "unknown"); // defaulted
+        let m = memories_from_output(r#"[{"content":"launch moved to March"},]"#);
+        assert_eq!(m.len(), 1);
     }
 
     #[test]
