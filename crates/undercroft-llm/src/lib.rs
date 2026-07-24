@@ -39,15 +39,27 @@ pub struct LlmClient {
     base: String,
     model: String,
     kind: ApiKind,
+    /// Optional bearer credential for the runtime. Empty for every local
+    /// runtime (they take no auth); set only when the operator has pointed
+    /// `UNDERCROFT_LLM_URL` at a gateway that demands one.
+    key: String,
     agent: ureq::Agent,
 }
 
 impl LlmClient {
     pub fn new(base_url: &str, model: &str, kind: ApiKind) -> Self {
+        Self::with_key(base_url, model, kind, "")
+    }
+
+    /// As [`LlmClient::new`], with a bearer credential sent as
+    /// `Authorization: Bearer <key>` on every request. An empty key sends
+    /// no header at all — the local-runtime default.
+    pub fn with_key(base_url: &str, model: &str, kind: ApiKind, key: &str) -> Self {
         Self {
             base: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             kind,
+            key: key.to_string(),
             agent: ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_secs(120))
                 .build(),
@@ -57,6 +69,12 @@ impl LlmClient {
     /// Build from `UNDERCROFT_LLM_URL`, `UNDERCROFT_LLM_MODEL`, and optional
     /// `UNDERCROFT_LLM_API` (`ollama` | `openai`; default guesses `openai`
     /// when the URL path contains `/v1`, else `ollama`).
+    ///
+    /// `UNDERCROFT_LLM_KEY` is optional and unset by default: local runtimes
+    /// take no credential, and leaving it unset keeps the request
+    /// header-for-header what it has always been. Set it only to reach a
+    /// runtime behind an authenticating gateway — which, unlike the local
+    /// default, means drawer text leaves the machine.
     pub fn from_env() -> Result<Self, LlmError> {
         let base = std::env::var("UNDERCROFT_LLM_URL").map_err(|_| LlmError::NotConfigured)?;
         let model = std::env::var("UNDERCROFT_LLM_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
@@ -66,7 +84,8 @@ impl LlmClient {
             _ if base.contains("/v1") => ApiKind::OpenAi,
             _ => ApiKind::Ollama,
         };
-        Ok(Self::new(&base, &model, kind))
+        let key = std::env::var("UNDERCROFT_LLM_KEY").unwrap_or_default();
+        Ok(Self::with_key(&base, &model, kind, &key))
     }
 
     pub fn model(&self) -> &str {
@@ -100,9 +119,11 @@ impl LlmClient {
                 }),
             ),
         };
-        let resp: Value = self
-            .agent
-            .post(&url)
+        let mut req = self.agent.post(&url);
+        if !self.key.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {}", self.key));
+        }
+        let resp: Value = req
             .send_json(body)
             .map_err(|e| LlmError::Http(e.to_string()))?
             .into_json()
