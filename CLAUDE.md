@@ -10,7 +10,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 - `Cargo.toml` — workspace root (11 crates; `undercroft-embed-onnx` and
   `undercroft-embed-ort` excluded from default-members — heavy ML deps,
   built explicitly)
-- `crates/undercroft-core` — domain model, chunking, ids, normalization, hashed
+- `crates/undercroft-core` — domain model, chunking, ids, normalization
+  (`normalize.rs`: `NormalizeMode::{Prose,Code}` + `mode_for_path` — code
+  and fenced blocks keep indentation/trailing space/blank runs; both modes
+  keep the safety floor), temporal extraction (`temporal.rs`: in-text
+  absolute + relative dates, resolved against the drawer's `content_date`,
+  never guessed), hashed
   n-gram embedder (`embed.rs`: `Embedder` trait + `HashEmbedder`), reranker
   trait (`rerank.rs`: `Reranker`), late-interaction trait + MaxSim + int8
   token packing (`late.rs`: `LateInteraction`), conversation parsing, entities
@@ -107,7 +112,7 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (177)
+docker compose run --rm test          # cargo unit + integration tests (223)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (157 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
@@ -123,6 +128,13 @@ docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5
                                       # mermaid via vendored website/assets/mermaid.min.js)
 docker build -t undercroft .           # runtime image
 ```
+
+**Always pass `--build`.** The battery images COPY the source, they do not
+mount it — `docker compose run --rm test` without `--build` silently
+re-runs whatever was baked into the last image, so a "green" run can be
+testing code you already changed. rustfmt cannot fix host files from those
+images either; mount the repo instead:
+`docker run --rm -v "<repo>:/src" -w /src rust:1.90-slim-bookworm sh -c "rustup component add rustfmt; cargo fmt --all"`
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).

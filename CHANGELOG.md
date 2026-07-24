@@ -1,5 +1,68 @@
 # Changelog
 
+## Unreleased — temporal fidelity: keep the data we were dropping
+
+Retrieval was never the weak link on conversational memory; what we stored
+was. A drawer recorded only when it was *filed*, so a year-old conversation
+ingested today carried today's date, and text like "I went yesterday" had no
+reference point at all. Measured on LoCoMo: 272 of 272 documents carry a
+timestamp, 233 (86%) lean on a relative expression, and exactly **one**
+document in 272 spells a date out in its text.
+
+- **`content_date`** — when the content happened, as distinct from
+  `filed_at`. Declared on `DrawerMeta` since the mempalace port and never
+  populated by anything; now carried end-to-end: REST `POST /drawers`, CLI
+  `remember --content-date`, MCP `undercroft_save` / `undercroft_add_drawer`
+  (declared in the tool schemas so agents can discover it), and `import`,
+  which carries it across rather than stamping every imported drawer with
+  the date of the import. Returned on search hits and reported by MCP search
+  as `happened <date>, filed <date>`. It rides inside `meta_json`, so it is
+  HMAC-covered for free, needs no schema migration, and leaves existing rows
+  byte-identical; it does not enter the drawer id, so re-mining a corpus
+  with dates now available stays idempotent. It also feeds
+  `kg_add_receipted`'s `valid_from`, so the graph's validity windows finally
+  describe when a fact *held*.
+- **`core::temporal`** — dates and times written *into* the text. Scans for
+  absolute ("7 May 2023") and relative ("yesterday", "last Tuesday", "three
+  weeks ago") expressions, keeps each span verbatim with its byte offset,
+  and resolves what the anchor allows. Deterministic, offline, no model, no
+  network. With no anchor a mention is recorded **unresolved** — an honest
+  gap beats an invented date. The scan runs inside `Drawer::new`, so no
+  write path can forget it.
+- **Conversation transcripts keep what the session actually was.**
+  `parse_transcript` dropped every non-`user`/`assistant` message and every
+  non-`text` block, discarding tool calls, tool results and reasoning — most
+  of an agent session — plus per-message timestamps, ids and speaker names.
+  Now every recorded turn survives, non-prose blocks render under a
+  `[kind]` marker with payloads verbatim, unknown future block kinds are
+  preserved, and named speakers no longer collapse to User/Assistant.
+  `chunk_exchanges_dated` reports each chunk's opening turn, feeding
+  `content_date` on the convo miner and sweeper.
+- **Code-aware normalization** — `NormalizeMode::{Prose, Code}` plus
+  `mode_for_path`. Normalization trimmed trailing whitespace and collapsed
+  blank runs on every drawer; harmless for prose, a silent edit for a
+  script, where indentation is semantics. Code mode applies only the safety
+  floor (NUL/control stripping, CRLF→LF); Prose additionally leaves fenced
+  blocks untouched. `NORMALIZE_VERSION` → 2.
+- **`POST /v1/vaults/{id}/refine`** — the `/v1` KG surface was read-only and
+  CLI `refine` wrote triples only, not the searchable fact-drawers that put
+  distillation on the retrieval path. Fact-drawers land in their source
+  drawer's wing under `fact_room` (default `facts`), so a caller selects
+  verbatim / distilled / both purely by varying the room filter on
+  `/search`. Each distinct fact is mirrored once, keyed on the triple id the
+  graph itself returns, so a fact restated across chunks cannot occupy
+  several slots of one top-k.
+- **`UNDERCROFT_LLM_KEY`** — optional bearer for the LLM runtime, unset by
+  default. An empty key sends no header, so a default build's requests are
+  byte-identical to before. Set it only to reach a runtime behind an
+  authenticating gateway — which, unlike the local default, means drawer
+  text leaves the machine.
+
+Tests 177 → **223**, including regression coverage pinning what must not
+change: fence-free prose normalizes byte-for-byte as v1 across ten cases,
+harness noise is still filtered, prose is still verbatim, and
+`chunk_exchanges` text is identical to the dated variant.
+
 ## 0.42.0 — Sealed PQ page tier (opt-in)
 
 - Sealed vaults can now keep their PQ codes as **one AEAD page per IVF

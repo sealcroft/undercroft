@@ -338,6 +338,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/kg/entities` | paged entity summaries (`limit`, `offset`) |
 | GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`) |
 | GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`) |
+| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`) |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON (vectors + token artifacts) |
@@ -386,7 +387,11 @@ Server: `UNDERCROFT_MCP_HTTP_TOKEN` (bearer; mandatory non-loopback) ·
 `UNDERCROFT_METRICS=1` (+ bearer) · `UNDERCROFT_SAMPLE_INTERVAL_MS` (2000).
 
 LLM (optional, for `refine`): `UNDERCROFT_LLM_URL` · `UNDERCROFT_LLM_MODEL`
-(`llama3.2`) · `UNDERCROFT_LLM_API` (`ollama`|`openai`).
+(`llama3.2`) · `UNDERCROFT_LLM_API` (`ollama`|`openai`) ·
+`UNDERCROFT_LLM_KEY` (bearer credential; **unset by default** — local
+runtimes take none, and an empty key sends no header at all. Set it only
+to reach a runtime behind an authenticating gateway, which unlike the
+local default means drawer text leaves the machine).
 
 Telemetry builds: `UNDERCROFT_LOG` · `UNDERCROFT_LOG_FORMAT` (`json`) ·
 `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process) ·
