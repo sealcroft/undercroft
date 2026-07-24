@@ -16,6 +16,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use i18n::{fill, tr};
+use undercroft_core::normalize::mode_for_path;
 use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer, MAX_CONTENT_BYTES};
 use undercroft_store::{PalaceStore, SearchOptions};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
@@ -1922,7 +1923,11 @@ fn mine_files(
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
-        let normalized = normalize_content(&text);
+        // Scripts and config normalize in Code mode: indentation is
+        // semantics and a trailing space is a real diff, so mining a source
+        // tree must not quietly reformat it.
+        let normalized =
+            undercroft_core::normalize::normalize_content_mode(&text, mode_for_path(file));
         let room = room_for_file(file);
         for (idx, chunk) in chunk_text(&normalized, ChunkOptions::default())
             .into_iter()
