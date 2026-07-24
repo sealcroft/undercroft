@@ -714,6 +714,11 @@ impl Tenancy {
     /// a caller retrieve verbatim-only, distilled-only, or both by varying
     /// the room filter on `/search`.
     ///
+    /// A fact restated across several source chunks is cited once per source
+    /// in the graph but mirrored to the retrieval surface only once, so one
+    /// fact cannot occupy several slots of a single top-k. `duplicates`
+    /// reports how often that collapse fired.
+    ///
     /// Requires `UNDERCROFT_LLM_URL` — without it the vault is untouched and
     /// this answers 400. The verbatim drawers are never modified.
     fn refine(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
@@ -746,7 +751,14 @@ impl Tenancy {
             .filter(|d| room.is_none_or(|r| d.meta.room == r))
             .collect();
 
-        let (mut facts, mut skipped, mut failed) = (0u32, 0u32, 0u32);
+        // The knowledge graph already collapses a repeated triple onto one
+        // row (`triple_id` is content-derived, ON CONFLICT DO UPDATE). The
+        // searchable mirror has to match that, or a fact restated across
+        // several source chunks would occupy several slots of one top-k and
+        // crowd out distinct evidence. Keyed on the triple id the graph
+        // itself returns, so the two notions of identity cannot drift.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (mut facts, mut duplicates, mut skipped, mut failed) = (0u32, 0u32, 0u32, 0u32);
         for d in &sources {
             let triples = match llm.extract_triples(&d.content) {
                 Ok(t) => t,
@@ -768,7 +780,7 @@ impl Tenancy {
                 // The receipt is an HMAC-covered citation back to the
                 // verbatim drawer this fact came from — checkable later via
                 // `GET /v1/vaults/{id}/kg/receipts`.
-                store
+                let triple_id = store
                     .kg_add_receipted(
                         &subject,
                         &predicate,
@@ -779,6 +791,13 @@ impl Tenancy {
                         (&d.id, &d.content),
                     )
                     .map_err(store_err)?;
+                // Restating a known fact still re-cites it in the graph — the
+                // receipt above is refreshed either way — but it must not add
+                // a second copy to the retrieval surface.
+                if !seen.insert(triple_id) {
+                    duplicates += 1;
+                    continue;
+                }
                 store
                     .upsert(&Drawer::new(
                         &d.meta.wing,
@@ -798,6 +817,7 @@ impl Tenancy {
             Body::Json(json!({
                 "sources": sources.len(),
                 "facts": facts,
+                "duplicates": duplicates,
                 "skipped": skipped,
                 "failed": failed,
                 "fact_room": fact_room,
