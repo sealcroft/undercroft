@@ -66,6 +66,11 @@ impl Drawer {
         // the times written into it. Resolution needs an anchor and so waits
         // for `with_content_date`.
         let time_mentions = crate::temporal::extract_time_mentions(&content, None);
+        // Likewise the entities named in the content. `manage.rs` already
+        // re-derived these on demand for co-occurrence; recording them on the
+        // drawer means the structure travels with an export and does not have
+        // to be recomputed to be read.
+        let entities = crate::entity::extract_entities(&content);
         Drawer {
             id,
             content,
@@ -83,7 +88,7 @@ impl Drawer {
                 content_date: None,
                 time_mentions,
                 hall: None,
-                entities: Vec::new(),
+                entities,
             },
         }
     }
@@ -144,6 +149,51 @@ mod tests {
         a.meta.room = "other".into();
         let after = a.canonical_bytes(b"c");
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn entities_are_recorded_on_every_drawer() {
+        // Sentence-initial words are deliberately excluded as noise by
+        // extract_entities, so the names under test sit mid-sentence.
+        let d = Drawer::new(
+            "w",
+            "r",
+            "we met Alice and Blue Heron in Berlin.".into(),
+            None,
+            0,
+            "test",
+        );
+        for want in ["alice", "blue heron", "berlin"] {
+            assert!(
+                d.meta.entities.contains(&want.to_string()),
+                "missing {want}: {:?}",
+                d.meta.entities
+            );
+        }
+    }
+
+    #[test]
+    fn entities_survive_the_meta_roundtrip() {
+        let d = Drawer::new("w", "r", "Alice went to Berlin.".into(), None, 0, "test");
+        let back: DrawerMeta =
+            serde_json::from_str(&serde_json::to_string(&d.meta).unwrap()).unwrap();
+        assert_eq!(back.entities, d.meta.entities);
+        assert!(!back.entities.is_empty());
+    }
+
+    #[test]
+    fn entityless_content_stays_empty_and_is_omitted_from_json() {
+        let d = Drawer::new(
+            "w",
+            "r",
+            "just some lowercase words".into(),
+            None,
+            0,
+            "test",
+        );
+        assert!(d.meta.entities.is_empty(), "{:?}", d.meta.entities);
+        // skip_serializing_if keeps existing rows byte-identical.
+        assert!(!serde_json::to_string(&d.meta).unwrap().contains("entities"));
     }
 
     #[test]
