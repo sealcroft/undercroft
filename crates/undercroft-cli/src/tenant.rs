@@ -376,9 +376,19 @@ impl Tenancy {
             .and_then(Value::as_f64)
             .map(|v| v as f32);
 
+        // When the content happened, if the caller knows it. Distinct from
+        // filed_at (when we wrote it down) and preserved rather than dropped:
+        // conversational text leans on relative time ("yesterday", "last
+        // Tuesday") that cannot be resolved without it.
+        let content_date = body
+            .get("content_date")
+            .and_then(Value::as_str)
+            .map(String::from);
+
         let store = self.store_for(id)?;
         let idx = store.count().map_err(err500)? as u32;
-        let drawer = Drawer::new(wing, room, normalized, None, idx, "rest");
+        let drawer =
+            Drawer::new(wing, room, normalized, None, idx, "rest").with_content_date(content_date);
 
         let out = if store.is_external() {
             let v =
@@ -443,6 +453,11 @@ impl Tenancy {
                     "content": h.drawer.content,
                     "wing": h.drawer.meta.wing,
                     "room": h.drawer.meta.room,
+                    // When the content happened. A caller assembling an LLM
+                    // context needs this to interpret relative time in the
+                    // text; null when the writer did not know it.
+                    "content_date": h.drawer.meta.content_date,
+                    "filed_at": h.drawer.meta.filed_at,
                     "score": h.score,
                     "semantic": h.semantic,
                     "lexical": h.lexical,
@@ -731,14 +746,14 @@ impl Tenancy {
             .get("fact_room")
             .and_then(Value::as_str)
             .unwrap_or("facts");
-        validate_name(fact_room, "fact_room").map_err(|e| RestError::new(400, &e.to_string()))?;
+        validate_name(fact_room, "fact_room").map_err(|e| RestError::new(400, e.to_string()))?;
         let limit = body
             .get("limit")
             .and_then(Value::as_u64)
             .unwrap_or(1_000_000) as usize;
 
-        let llm = undercroft_llm::LlmClient::from_env()
-            .map_err(|e| RestError::new(400, &e.to_string()))?;
+        let llm =
+            undercroft_llm::LlmClient::from_env().map_err(|e| RestError::new(400, e.to_string()))?;
         let store = self.store_for(id)?;
 
         // Read the verbatim side only: never re-distil fact-drawers, or a
@@ -780,12 +795,15 @@ impl Tenancy {
                 // The receipt is an HMAC-covered citation back to the
                 // verbatim drawer this fact came from — checkable later via
                 // `GET /v1/vaults/{id}/kg/receipts`.
+                // A fact inherits the date of the content it was distilled
+                // from, so the graph's validity windows describe when the
+                // fact held — not when the extraction happened to run.
                 let triple_id = store
                     .kg_add_receipted(
                         &subject,
                         &predicate,
                         &t.object,
-                        None,
+                        d.meta.content_date.as_deref(),
                         None,
                         0.8, // model-extracted: below human-asserted confidence
                         (&d.id, &d.content),
@@ -799,14 +817,17 @@ impl Tenancy {
                     continue;
                 }
                 store
-                    .upsert(&Drawer::new(
-                        &d.meta.wing,
-                        fact_room,
-                        format!("{} {} {}", t.subject, t.predicate, t.object),
-                        None,
-                        facts,
-                        "distill",
-                    ))
+                    .upsert(
+                        &Drawer::new(
+                            &d.meta.wing,
+                            fact_room,
+                            format!("{} {} {}", t.subject, t.predicate, t.object),
+                            None,
+                            facts,
+                            "distill",
+                        )
+                        .with_content_date(d.meta.content_date.clone()),
+                    )
                     .map_err(store_err)?;
                 facts += 1;
             }
