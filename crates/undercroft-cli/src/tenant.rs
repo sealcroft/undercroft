@@ -165,6 +165,7 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "kg", "query"]) => self.kg_query(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "timeline"]) => self.kg_timeline(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "receipts"]) => self.kg_receipts(id, req, now),
+            ("POST", &["v1", "vaults", id, "refine"]) => self.refine(id, req, body, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
@@ -697,6 +698,110 @@ impl Tenancy {
             Body::Json(json!({
                 "receipts": serde_json::to_value(&receipts).unwrap_or_else(|_| json!([])),
                 "summary": summary,
+            })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/refine` — distil the vault's verbatim drawers
+    /// into receipted knowledge-graph facts, and mirror each fact as a
+    /// searchable drawer so distillation reaches the retrieval surface.
+    ///
+    /// Body: `{ wing?, room?, limit?, fact_room? }`. `wing`/`room` scope
+    /// which verbatim drawers are read (`room` defaults to everything except
+    /// `fact_room`, so re-running never distils its own output); `fact_room`
+    /// (default `facts`) is the room the fact-drawers land in, inside their
+    /// *source drawer's* wing. That keeps per-wing isolation intact and lets
+    /// a caller retrieve verbatim-only, distilled-only, or both by varying
+    /// the room filter on `/search`.
+    ///
+    /// Requires `UNDERCROFT_LLM_URL` — without it the vault is untouched and
+    /// this answers 400. The verbatim drawers are never modified.
+    fn refine(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let wing = body.get("wing").and_then(Value::as_str);
+        let room = body.get("room").and_then(Value::as_str);
+        let fact_room = body
+            .get("fact_room")
+            .and_then(Value::as_str)
+            .unwrap_or("facts");
+        validate_name(fact_room, "fact_room").map_err(|e| RestError::new(400, &e.to_string()))?;
+        let limit = body
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(1_000_000) as usize;
+
+        let llm = undercroft_llm::LlmClient::from_env()
+            .map_err(|e| RestError::new(400, &e.to_string()))?;
+        let store = self.store_for(id)?;
+
+        // Read the verbatim side only: never re-distil fact-drawers, or a
+        // second call would compound its own output into the graph.
+        let sources: Vec<Drawer> = store
+            .recent(wing, limit)
+            .map_err(store_err)?
+            .into_iter()
+            .filter(|d| d.meta.room != fact_room)
+            .filter(|d| room.is_none_or(|r| d.meta.room == r))
+            .collect();
+
+        let (mut facts, mut skipped, mut failed) = (0u32, 0u32, 0u32);
+        for d in &sources {
+            let triples = match llm.extract_triples(&d.content) {
+                Ok(t) => t,
+                Err(e) => {
+                    undercroft_obs::diag_error!("refine: triples failed for {}: {e}", d.id);
+                    failed += 1;
+                    continue;
+                }
+            };
+            for t in triples {
+                let subject = t.subject.to_lowercase();
+                let predicate = t.predicate.to_lowercase();
+                if validate_name(&subject, "subject").is_err()
+                    || validate_name(&predicate, "predicate").is_err()
+                {
+                    skipped += 1;
+                    continue;
+                }
+                // The receipt is an HMAC-covered citation back to the
+                // verbatim drawer this fact came from — checkable later via
+                // `GET /v1/vaults/{id}/kg/receipts`.
+                store
+                    .kg_add_receipted(
+                        &subject,
+                        &predicate,
+                        &t.object,
+                        None,
+                        None,
+                        0.8, // model-extracted: below human-asserted confidence
+                        (&d.id, &d.content),
+                    )
+                    .map_err(store_err)?;
+                store
+                    .upsert(&Drawer::new(
+                        &d.meta.wing,
+                        fact_room,
+                        format!("{} {} {}", t.subject, t.predicate, t.object),
+                        None,
+                        facts,
+                        "distill",
+                    ))
+                    .map_err(store_err)?;
+                facts += 1;
+            }
+        }
+
+        Ok((
+            200,
+            Body::Json(json!({
+                "sources": sources.len(),
+                "facts": facts,
+                "skipped": skipped,
+                "failed": failed,
+                "fact_room": fact_room,
+                "model": llm.model(),
             })),
         ))
     }
