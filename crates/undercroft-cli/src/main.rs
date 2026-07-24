@@ -84,6 +84,10 @@ enum Command {
         /// Room = topic within the wing
         #[arg(long, default_value = "inbox")]
         room: String,
+        /// When the content happened (RFC 3339 or YYYY-MM-DD), as opposed to
+        /// now, when it is being filed. Anchors relative dates in the text.
+        #[arg(long)]
+        content_date: Option<String>,
     },
     /// Mine a directory into the palace (text files, or agent transcripts)
     Mine {
@@ -1051,6 +1055,7 @@ fn main() -> Result<()> {
             vault,
             wing,
             room,
+            content_date,
         } => {
             if content.len() > MAX_CONTENT_BYTES {
                 bail!(
@@ -1067,7 +1072,8 @@ fn main() -> Result<()> {
                 bail!("nothing to remember: content is empty after normalization");
             }
             let count_before = store.count()?;
-            let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli");
+            let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli")
+                .with_content_date(content_date.clone());
             store.upsert(&drawer)?;
             println!(
                 "{}",
@@ -1377,6 +1383,11 @@ fn main() -> Result<()> {
                             .unwrap_or(0) as u32,
                         "import",
                     )
+                    // Carried across an import rather than reset to the
+                    // import's own date: a mempalace export records when the
+                    // content happened, and losing it here would strand every
+                    // relative date in the text.
+                    .with_content_date(g("content_date"))
                 } else {
                     bail!(
                         "line {}: unrecognized record (expected undercroft export with 'meta' \
