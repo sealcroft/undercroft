@@ -278,7 +278,15 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let wing = opt_str(args, "wing").map(str::to_string);
             let room = opt_str(args, "room").map(str::to_string);
             let limit = opt_u64(args, "limit").unwrap_or(5) as usize;
-            let hits = store.search(query, &SearchOptions { wing, room, limit })?;
+            let hits = store.search(
+                query,
+                &SearchOptions {
+                    wing,
+                    room,
+                    limit,
+                    room_cap: None,
+                },
+            )?;
             if hits.is_empty() {
                 return Ok("no memories matched".into());
             }

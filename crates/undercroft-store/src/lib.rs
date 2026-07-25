@@ -172,6 +172,47 @@ pub enum StoreError {
 /// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
 type SearchRow = (String, String, Vec<u8>, Vec<u8>, Vec<u8>);
 
+/// Take `limit` hits from `hits` (already best-first) allowing at most `cap`
+/// per room, then refill any slots the cap left empty in score order.
+///
+/// Order within the result stays score-descending, so a caller that ignores
+/// rooms sees nothing surprising. Single pass plus a small counter map: no
+/// re-scoring, no extra decryption, no allocation per candidate.
+fn diversify_by_room(hits: Vec<SearchHit>, limit: usize, cap: usize) -> Vec<SearchHit> {
+    let mut per_room: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut taken = vec![false; hits.len()];
+    let mut chosen = 0usize;
+    for (i, h) in hits.iter().enumerate() {
+        if chosen == limit {
+            break;
+        }
+        let n = per_room.entry(h.drawer.meta.room.as_str()).or_insert(0);
+        if *n < cap {
+            *n += 1;
+            taken[i] = true;
+            chosen += 1;
+        }
+    }
+    // Refill: the cap is a spreading preference, not a quota to enforce at
+    // the cost of returning fewer memories than asked for.
+    if chosen < limit {
+        for (i, slot) in taken.iter_mut().enumerate() {
+            if chosen == limit {
+                break;
+            }
+            if !*slot {
+                *slot = true;
+                chosen += 1;
+            }
+            let _ = i;
+        }
+    }
+    hits.into_iter()
+        .zip(taken)
+        .filter_map(|(h, keep)| keep.then_some(h))
+        .collect()
+}
+
 pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
     out.extend_from_slice(id.as_bytes());
@@ -205,6 +246,16 @@ pub struct SearchOptions {
     pub wing: Option<String>,
     pub room: Option<String>,
     pub limit: usize,
+    /// Soft cap on how many of the returned hits may come from any single
+    /// room. `None` (the default) keeps pure score order.
+    ///
+    /// A room is a real structural unit — one session, ticket or meeting —
+    /// and a question whose answer spans several of them is starved when a
+    /// flat top-k fills up with the most verbose one. The cap is *soft*:
+    /// once every room has had its share, leftover slots are refilled in
+    /// score order, so a genuinely single-room question still gets its
+    /// evidence and recall is never traded away.
+    pub room_cap: Option<usize>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1546,7 +1597,12 @@ impl PalaceStore {
             // matrices, one query-encode forward total (no-op when unset).
             self.late_rescore(query, &mut hits);
         }
-        hits.truncate(limit);
+        match opts.room_cap {
+            Some(cap) if cap > 0 && hits.len() > limit => {
+                hits = diversify_by_room(std::mem::take(&mut hits), limit, cap)
+            }
+            _ => hits.truncate(limit),
+        }
 
         let fusion_label = match self.fusion {
             Fusion::Legacy => "legacy",
@@ -1975,6 +2031,98 @@ mod tests {
         (dir, PalaceStore::open(vault).unwrap())
     }
 
+    /// Build a hit with a known room and score — enough for the pure
+    /// selection helper, which never looks at content or embeddings.
+    fn hit(room: &str, score: f32, idx: u32) -> SearchHit {
+        SearchHit {
+            drawer: drawer("w", room, &format!("c{idx}"), idx),
+            score,
+            semantic: score,
+            lexical: score,
+        }
+    }
+
+    #[test]
+    fn room_cap_spreads_selection_across_rooms() {
+        // One verbose room dominates by score; evidence in other rooms sits
+        // lower. Without a cap the answer never sees rooms b or c.
+        let hits = vec![
+            hit("a", 0.99, 0),
+            hit("a", 0.98, 1),
+            hit("a", 0.97, 2),
+            hit("a", 0.96, 3),
+            hit("b", 0.50, 4),
+            hit("c", 0.40, 5),
+        ];
+        let out = diversify_by_room(hits, 4, 2);
+        let rooms: Vec<&str> = out.iter().map(|h| h.drawer.meta.room.as_str()).collect();
+        assert_eq!(rooms, vec!["a", "a", "b", "c"], "{rooms:?}");
+        // Score order is preserved within the result.
+        assert!(out.windows(2).all(|w| w[0].score >= w[1].score));
+    }
+
+    #[test]
+    fn room_cap_is_soft_and_never_returns_fewer_than_asked() {
+        // Everything is in one room: the cap must not starve the caller.
+        let hits: Vec<SearchHit> = (0..6)
+            .map(|i| hit("solo", 0.9 - i as f32 * 0.01, i))
+            .collect();
+        let out = diversify_by_room(hits, 4, 2);
+        assert_eq!(out.len(), 4, "soft cap must refill to the limit");
+        assert!(out.iter().all(|h| h.drawer.meta.room == "solo"));
+    }
+
+    #[test]
+    fn room_cap_refill_keeps_the_best_leftovers_in_order() {
+        let hits = vec![
+            hit("a", 0.99, 0),
+            hit("a", 0.98, 1),
+            hit("a", 0.97, 2),
+            hit("b", 0.60, 3),
+        ];
+        // cap 1: a gets one, b gets one, then refill takes a's next best.
+        let out = diversify_by_room(hits, 3, 1);
+        let ids: Vec<u32> = out.iter().map(|h| h.drawer.meta.chunk_index).collect();
+        assert_eq!(ids, vec![0, 1, 3], "{ids:?}");
+    }
+
+    #[test]
+    fn search_without_room_cap_is_unchanged() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..6u32 {
+            s.upsert(&drawer(
+                "w",
+                if i < 4 { "loud" } else { "quiet" },
+                "zebra lockfile note",
+                i,
+            ))
+            .unwrap();
+        }
+        let flat = s
+            .search(
+                "zebra lockfile note",
+                &SearchOptions {
+                    limit: 3,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(flat.len(), 3);
+        let capped = s
+            .search(
+                "zebra lockfile note",
+                &SearchOptions {
+                    limit: 3,
+                    room_cap: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(capped.len(), 3, "capped search still fills the limit");
+        // The cap can only change WHICH rooms appear, never how many hits.
+        assert!(capped.iter().any(|h| h.drawer.meta.room == "quiet"));
+    }
+
     fn drawer(wing: &str, room: &str, content: &str, idx: u32) -> Drawer {
         Drawer::new(
             wing,
@@ -2055,6 +2203,7 @@ mod tests {
                         wing: None,
                         room: None,
                         limit: 5,
+                        room_cap: None,
                     },
                 )
                 .unwrap();
@@ -2126,6 +2275,7 @@ mod tests {
                         wing: None,
                         room: None,
                         limit: 2,
+                        room_cap: None,
                     },
                 )
                 .unwrap();
@@ -2742,6 +2892,7 @@ mod tests {
             wing: None,
             room: None,
             limit: 3,
+            room_cap: None,
         };
 
         // Baseline (no reranker) returns all three, fusion-ordered.
@@ -3081,6 +3232,7 @@ mod tests {
                     wing: Some("a".into()),
                     room: None,
                     limit: 10,
+                    room_cap: None,
                 },
             )
             .unwrap();

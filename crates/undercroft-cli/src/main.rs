@@ -1143,6 +1143,7 @@ fn main() -> Result<()> {
                 wing: wing.clone(),
                 room: room.clone(),
                 limit: *limit,
+                room_cap: None,
             };
             let hits = if backend == "local" {
                 store.search(query, &opts)?

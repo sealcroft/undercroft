@@ -433,6 +433,13 @@ impl Tenancy {
             wing: body.get("wing").and_then(Value::as_str).map(String::from),
             room: body.get("room").and_then(Value::as_str).map(String::from),
             limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
+            // Soft per-room cap: spreads the returned hits across rooms so a
+            // question whose answer spans several sessions is not starved by
+            // the most verbose one. Absent ⇒ pure score order, as before.
+            room_cap: body
+                .get("room_cap")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
         };
         let vector = parse_vector(&body, "vector")?;
         let store = self.store_for(id)?;

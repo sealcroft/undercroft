@@ -516,6 +516,7 @@ mod tests {
                             wing: None,
                             room: None,
                             limit: 3,
+                            room_cap: None,
                         },
                     )
                     .unwrap();
@@ -556,6 +557,7 @@ mod tests {
                         wing: None,
                         room: None,
                         limit: 3,
+                        room_cap: None,
                     },
                 )
                 .unwrap();
