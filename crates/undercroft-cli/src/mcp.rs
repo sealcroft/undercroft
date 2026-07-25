@@ -169,7 +169,7 @@ fn tool_definitions() -> Value {
     json!([
         // --- palace core ---
         tool("undercroft_save", "Save one memory verbatim (encrypted + integrity-tagged at rest).",
-            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic") }),
+            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
             json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results") }),
@@ -184,7 +184,7 @@ fn tool_definitions() -> Value {
         tool("undercroft_get_drawer", "Fetch one drawer verbatim by id.",
             json!({ "id": s("drawer id") }), &["id"]),
         tool("undercroft_add_drawer", "File a drawer with explicit wing/room/source.",
-            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "source_file": s("origin") }),
+            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "source_file": s("origin"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
             &["content"]),
         tool("undercroft_update_drawer", "Replace a drawer's content in place (re-sealed, re-tagged).",
             json!({ "id": s("drawer id"), "content": s("new content") }), &["id", "content"]),
@@ -265,7 +265,8 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 anyhow::bail!("content is empty after normalization");
             }
             let idx = store.count()? as u32;
-            let drawer = Drawer::new(wing, room, normalized, None, idx, "mcp");
+            let drawer = Drawer::new(wing, room, normalized, None, idx, "mcp")
+                .with_content_date(opt_str(args, "content_date").map(str::to_string));
             store.upsert(&drawer)?;
             Ok(format!("saved drawer {} in {}/{}", drawer.id, wing, room))
         }
@@ -277,19 +278,34 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let wing = opt_str(args, "wing").map(str::to_string);
             let room = opt_str(args, "room").map(str::to_string);
             let limit = opt_u64(args, "limit").unwrap_or(5) as usize;
-            let hits = store.search(query, &SearchOptions { wing, room, limit })?;
+            let hits = store.search(
+                query,
+                &SearchOptions {
+                    wing,
+                    room,
+                    limit,
+                    room_cap: None,
+                },
+            )?;
             if hits.is_empty() {
                 return Ok("no memories matched".into());
             }
             let mut out = String::new();
             for (i, h) in hits.iter().enumerate() {
+                // Report when the content happened when we know it, not only
+                // when it was filed: an agent reading "I went yesterday" needs
+                // the anchor to interpret it, and filed_at is the wrong one.
+                let when = match &h.drawer.meta.content_date {
+                    Some(d) => format!("happened {d}, filed {}", h.drawer.meta.filed_at),
+                    None => format!("filed {}", h.drawer.meta.filed_at),
+                };
                 out.push_str(&format!(
-                    "{}. [score {:.3}] ({}/{}, filed {})\n{}\n\n",
+                    "{}. [score {:.3}] ({}/{}, {})\n{}\n\n",
                     i + 1,
                     h.score,
                     h.drawer.meta.wing,
                     h.drawer.meta.room,
-                    h.drawer.meta.filed_at,
+                    when,
                     h.drawer.content
                 ));
             }
@@ -351,7 +367,8 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 opt_str(args, "source_file").map(str::to_string),
                 idx,
                 "mcp",
-            );
+            )
+            .with_content_date(opt_str(args, "content_date").map(str::to_string));
             store.upsert(&drawer)?;
             Ok(format!("added drawer {} in {}/{}", drawer.id, wing, room))
         }

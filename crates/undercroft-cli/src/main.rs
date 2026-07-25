@@ -16,6 +16,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use i18n::{fill, tr};
+use undercroft_core::normalize::mode_for_path;
 use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer, MAX_CONTENT_BYTES};
 use undercroft_store::{PalaceStore, SearchOptions};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
@@ -83,6 +84,10 @@ enum Command {
         /// Room = topic within the wing
         #[arg(long, default_value = "inbox")]
         room: String,
+        /// When the content happened (RFC 3339 or YYYY-MM-DD), as opposed to
+        /// now, when it is being filed. Anchors relative dates in the text.
+        #[arg(long)]
+        content_date: Option<String>,
     },
     /// Mine a directory into the palace (text files, or agent transcripts)
     Mine {
@@ -367,6 +372,12 @@ enum KgAction {
     },
     /// Graph statistics
     Stats,
+    /// Verify distilled facts against their cited verbatim sources
+    Receipts {
+        /// Only list facts whose receipt is not fully verified
+        #[arg(long)]
+        problems_only: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1044,6 +1055,7 @@ fn main() -> Result<()> {
             vault,
             wing,
             room,
+            content_date,
         } => {
             if content.len() > MAX_CONTENT_BYTES {
                 bail!(
@@ -1060,7 +1072,8 @@ fn main() -> Result<()> {
                 bail!("nothing to remember: content is empty after normalization");
             }
             let count_before = store.count()?;
-            let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli");
+            let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli")
+                .with_content_date(content_date.clone());
             store.upsert(&drawer)?;
             println!(
                 "{}",
@@ -1130,6 +1143,7 @@ fn main() -> Result<()> {
                 wing: wing.clone(),
                 room: room.clone(),
                 limit: *limit,
+                room_cap: None,
             };
             let hits = if backend == "local" {
                 store.search(query, &opts)?
@@ -1370,6 +1384,11 @@ fn main() -> Result<()> {
                             .unwrap_or(0) as u32,
                         "import",
                     )
+                    // Carried across an import rather than reset to the
+                    // import's own date: a mempalace export records when the
+                    // content happened, and losing it here would strand every
+                    // relative date in the text.
+                    .with_content_date(g("content_date"))
                 } else {
                     bail!(
                         "line {}: unrecognized record (expected undercroft export with 'meta' \
@@ -1467,6 +1486,43 @@ fn main() -> Result<()> {
                         "entities: {}  triples: {}  active: {}  closed: {}",
                         st.entities, st.triples, st.active, st.closed
                     );
+                }
+                KgAction::Receipts { problems_only } => {
+                    use undercroft_store::ReceiptVerdict;
+                    let receipts = store.kg_verify_receipts()?;
+                    if receipts.is_empty() {
+                        println!("No facts carry a receipt yet (run `refine` to distill some).");
+                    }
+                    let mut counts = [0usize; 4];
+                    let mut shown = 0usize;
+                    for r in &receipts {
+                        let (label, idx) = match r.verdict {
+                            ReceiptVerdict::Verified => ("verified", 0),
+                            ReceiptVerdict::SourceChanged => ("source-changed", 1),
+                            ReceiptVerdict::Dangling => ("dangling", 2),
+                            ReceiptVerdict::Tampered => ("TAMPERED", 3),
+                        };
+                        counts[idx] += 1;
+                        let ok = matches!(r.verdict, ReceiptVerdict::Verified);
+                        if !(*problems_only && ok) {
+                            println!("  [{label}] {} ← {}", r.triple_id, r.source_drawer_id);
+                            shown += 1;
+                        }
+                    }
+                    if *problems_only && shown == 0 {
+                        println!("All {} receipt(s) verified.", receipts.len());
+                    }
+                    println!(
+                        "receipts: {} verified · {} source-changed · {} dangling · {} tampered",
+                        counts[0], counts[1], counts[2], counts[3]
+                    );
+                    // A tampered receipt is a hard integrity failure.
+                    if counts[3] > 0 {
+                        bail!(
+                            "{} fact receipt(s) failed integrity — vault tampering",
+                            counts[3]
+                        );
+                    }
                 }
             }
         }
@@ -1645,14 +1701,18 @@ fn main() -> Result<()> {
                                     t.subject, t.predicate, t.object
                                 );
                             } else {
-                                store.kg_add(
+                                // Distilled facts carry a receipt: an
+                                // HMAC-covered citation to the verbatim drawer
+                                // they were derived from, checkable later via
+                                // `undercroft kg receipts`.
+                                store.kg_add_receipted(
                                     &t.subject.to_lowercase(),
                                     &t.predicate.to_lowercase(),
                                     &t.object,
                                     None,
                                     None,
                                     0.8, // model-extracted: below human-asserted confidence
-                                    Some(&d.id),
+                                    (&d.id, &d.content),
                                 )?;
                             }
                             facts_added += 1;
@@ -1875,7 +1935,11 @@ fn mine_files(
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
-        let normalized = normalize_content(&text);
+        // Scripts and config normalize in Code mode: indentation is
+        // semantics and a trailing space is a real diff, so mining a source
+        // tree must not quietly reformat it.
+        let normalized =
+            undercroft_core::normalize::normalize_content_mode(&text, mode_for_path(file));
         let room = room_for_file(file);
         for (idx, chunk) in chunk_text(&normalized, ChunkOptions::default())
             .into_iter()
@@ -1920,18 +1984,24 @@ fn mine_convos(
             continue;
         }
         let room = room_for_file(file);
-        for (idx, chunk) in undercroft_core::convo::chunk_exchanges(&messages, 800)
-            .into_iter()
-            .enumerate()
+        for (idx, (chunk, started_at)) in
+            undercroft_core::convo::chunk_exchanges_dated(&messages, 800)
+                .into_iter()
+                .enumerate()
         {
-            batch.push(Drawer::new(
-                wing,
-                &room,
-                normalize_content(&chunk),
-                Some(file.display().to_string()),
-                idx as u32,
-                "convo-miner",
-            ));
+            batch.push(
+                Drawer::new(
+                    wing,
+                    &room,
+                    normalize_content(&chunk),
+                    Some(file.display().to_string()),
+                    idx as u32,
+                    "convo-miner",
+                )
+                // When the exchange opened — read off the transcript, not
+                // inferred, and the anchor for relative dates inside it.
+                .with_content_date(started_at),
+            );
             drawers += 1;
             if batch.len() >= INGEST_BATCH {
                 upsert_batched(store, &batch)?;
@@ -1970,15 +2040,9 @@ fn sweep_path(
         };
         let room = room_for_file(file);
         for msg in undercroft_core::convo::parse_transcript(&text) {
-            let content = format!(
-                "{}: {}",
-                if msg.role == "user" {
-                    "User"
-                } else {
-                    "Assistant"
-                },
-                msg.text
-            );
+            // Attribute by named speaker where the transcript has one, so a
+            // multi-party conversation does not collapse to two roles.
+            let content = format!("{}: {}", undercroft_core::convo::label(&msg), msg.text);
             let normalized = normalize_content(&content);
             // One drawer per message, keyed by (file, line) — re-sweeps
             // are no-ops for already-filed messages. The in-batch set
@@ -1988,14 +2052,20 @@ fn sweep_path(
                 continue;
             }
             seen.insert(normalized.clone());
-            batch.push(Drawer::new(
-                wing,
-                &room,
-                normalized,
-                Some(file.display().to_string()),
-                msg.line,
-                "sweeper",
-            ));
+            batch.push(
+                Drawer::new(
+                    wing,
+                    &room,
+                    normalized,
+                    Some(file.display().to_string()),
+                    msg.line,
+                    "sweeper",
+                )
+                // The turn's own timestamp, when the transcript records one:
+                // it is when the exchange happened, which is what anchors
+                // "yesterday" in the text.
+                .with_content_date(msg.timestamp.clone()),
+            );
             filed += 1;
             if batch.len() >= INGEST_BATCH {
                 upsert_batched(store, &batch)?;

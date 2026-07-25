@@ -357,3 +357,46 @@ fn diary_and_tunnel_flow() {
 fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {
     rusqlite::Connection::open(path).unwrap()
 }
+
+#[test]
+fn content_date_is_recorded_and_anchors_relative_dates_in_the_text() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+
+    // The content happened on 8 May; it is being filed now. "yesterday" is
+    // only interpretable against the former.
+    cmd(&home)
+        .args([
+            "remember",
+            "I went to the support group yesterday",
+            "--wing",
+            "caroline",
+            "--content-date",
+            "2023-05-08T13:56:00+00:00",
+        ])
+        .assert()
+        .success();
+
+    // Round-trips out of the sealed store, and the drawer records the
+    // resolved date rather than only the raw phrase.
+    let out = cmd(&home)
+        .args(["export"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("2023-05-08T13:56:00+00:00"),
+        "content_date must survive the write path: {text}"
+    );
+    assert!(
+        text.contains("2023-05-07"),
+        "\"yesterday\" must resolve against the anchor: {text}"
+    );
+    assert!(
+        text.contains("I went to the support group yesterday"),
+        "the text itself stays verbatim: {text}"
+    );
+}

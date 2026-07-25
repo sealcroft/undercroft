@@ -27,6 +27,11 @@ pub struct DrawerMeta {
     pub line_end: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_date: Option<String>,
+    /// Dates and times written into the content itself, preserved verbatim
+    /// and resolved against `content_date` where that is possible. Derived
+    /// structure, like `entities` — the text is never altered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub time_mentions: Vec<crate::temporal::TimeMention>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hall: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -56,6 +61,16 @@ impl Drawer {
         let filed_at = OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .expect("RFC3339 formatting of now() cannot fail");
+        // Scanned here rather than at each call site so no write path can
+        // forget: every drawer that enters the palace, by any route, keeps
+        // the times written into it. Resolution needs an anchor and so waits
+        // for `with_content_date`.
+        let time_mentions = crate::temporal::extract_time_mentions(&content, None);
+        // Likewise the entities named in the content. `manage.rs` already
+        // re-derived these on demand for co-occurrence; recording them on the
+        // drawer means the structure travels with an export and does not have
+        // to be recomputed to be read.
+        let entities = crate::entity::extract_entities(&content);
         Drawer {
             id,
             content,
@@ -71,10 +86,33 @@ impl Drawer {
                 line_start: None,
                 line_end: None,
                 content_date: None,
+                time_mentions,
                 hall: None,
-                entities: Vec::new(),
+                entities,
             },
         }
+    }
+
+    /// Record when the *content* happened, as distinct from `filed_at`,
+    /// which records when we wrote it down. Ingesting a year-old
+    /// conversation today makes those two dates a year apart, and text like
+    /// "I went yesterday" is only interpretable against the former.
+    ///
+    /// Does not affect the drawer id — identity stays (wing, room, source,
+    /// chunk_index, normalize_version), so re-mining an existing corpus with
+    /// dates now available stays idempotent instead of duplicating it.
+    /// Supplying the anchor also resolves the relative mentions already
+    /// scanned from the content — "yesterday" only becomes a date here.
+    #[must_use]
+    pub fn with_content_date(mut self, content_date: Option<String>) -> Self {
+        let anchor = content_date
+            .as_deref()
+            .and_then(crate::temporal::parse_anchor);
+        if anchor.is_some() {
+            self.meta.time_mentions = crate::temporal::extract_time_mentions(&self.content, anchor);
+        }
+        self.meta.content_date = content_date;
+        self
     }
 
     /// Canonical bytes covered by the integrity HMAC: id, meta (canonical
@@ -111,6 +149,51 @@ mod tests {
         a.meta.room = "other".into();
         let after = a.canonical_bytes(b"c");
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn entities_are_recorded_on_every_drawer() {
+        // Sentence-initial words are deliberately excluded as noise by
+        // extract_entities, so the names under test sit mid-sentence.
+        let d = Drawer::new(
+            "w",
+            "r",
+            "we met Alice and Blue Heron in Berlin.".into(),
+            None,
+            0,
+            "test",
+        );
+        for want in ["alice", "blue heron", "berlin"] {
+            assert!(
+                d.meta.entities.contains(&want.to_string()),
+                "missing {want}: {:?}",
+                d.meta.entities
+            );
+        }
+    }
+
+    #[test]
+    fn entities_survive_the_meta_roundtrip() {
+        let d = Drawer::new("w", "r", "Alice went to Berlin.".into(), None, 0, "test");
+        let back: DrawerMeta =
+            serde_json::from_str(&serde_json::to_string(&d.meta).unwrap()).unwrap();
+        assert_eq!(back.entities, d.meta.entities);
+        assert!(!back.entities.is_empty());
+    }
+
+    #[test]
+    fn entityless_content_stays_empty_and_is_omitted_from_json() {
+        let d = Drawer::new(
+            "w",
+            "r",
+            "just some lowercase words".into(),
+            None,
+            0,
+            "test",
+        );
+        assert!(d.meta.entities.is_empty(), "{:?}", d.meta.entities);
+        // skip_serializing_if keeps existing rows byte-identical.
+        assert!(!serde_json::to_string(&d.meta).unwrap().contains("entities"));
     }
 
     #[test]

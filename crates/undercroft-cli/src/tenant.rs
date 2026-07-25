@@ -29,6 +29,109 @@ use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 use crate::assertion::{self, AssertionError};
 
+/// Whole days from a drawer's `content_date` to the caller's reference date.
+/// `None` whenever either side is missing or unparseable — an absent number
+/// is honest, a guessed one is not.
+fn elapsed_days(content_date: &Option<String>, as_of: Option<&str>) -> Option<i64> {
+    let (d, a) = (content_date.as_deref()?, as_of?);
+    undercroft_core::temporal::days_between(d, a)
+}
+
+/// Calendar weeks and months crossed between the content's date and the
+/// reference — the units "how long since" is actually asked in. Reported
+/// from the content's point of view, so a past drawer yields positive counts.
+fn elapsed_calendar(
+    content_date: &Option<String>,
+    as_of: Option<&str>,
+) -> (Option<i64>, Option<i64>) {
+    let Some((d, a)) = content_date.as_deref().zip(as_of) else {
+        return (None, None);
+    };
+    (
+        undercroft_core::temporal::calendar_weeks_between(d, a),
+        undercroft_core::temporal::calendar_months_between(d, a),
+    )
+}
+
+/// The same interval phrased for a human or a prompt ("15 weeks before").
+fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<String> {
+    let (d, a) = content_date.as_deref().zip(as_of)?;
+    // Phrased from the reference looking back at the content, which is how
+    // the question is put: "15 weeks before now", not "after".
+    undercroft_core::temporal::describe_interval(a, d)
+}
+
+/// Triples as JSON, each labelled with where it rests.
+///
+/// `grounding` is `stated` (the note's own words support it, at the recorded
+/// spans), `background` (checked, and the note supports none of it), or
+/// `unevaluated` (never checked — every fact distilled before grounding
+/// existed). Three states, because "we did not look" and "we looked and found
+/// nothing" are different claims.
+///
+/// Optionally narrowed by `?grounding=`. **Never narrowed by default**: a
+/// background fact is what connects entities across notes that never mention
+/// each other, so filtering them out silently would break exactly the
+/// multi-hop questions the graph exists to answer.
+fn triples_json(triples: Vec<undercroft_store::Triple>, want: Option<&str>) -> Value {
+    let rows: Vec<Value> = triples
+        .into_iter()
+        .filter_map(|t| {
+            let label = match t.grounding() {
+                undercroft_core::support::Grounding::Stated => "stated",
+                undercroft_core::support::Grounding::Background => "background",
+                undercroft_core::support::Grounding::Unevaluated => "unevaluated",
+            };
+            if want.is_some_and(|w| w != label) {
+                return None;
+            }
+            let mut v = serde_json::to_value(&t).ok()?;
+            if let Some(o) = v.as_object_mut() {
+                o.insert("grounding".into(), json!(label));
+            }
+            Some(v)
+        })
+        .collect();
+    json!(rows)
+}
+
+/// A drawer's time mentions with the same arithmetic applied to each one.
+///
+/// The drawer's `content_date` says when it was *written*; a mention inside it
+/// says when the thing it describes *happened*, and those are different days.
+/// A note written on the 8th saying "I went yesterday" is about the 7th, so
+/// "how long ago did she go" answered from `content_date` is off by exactly
+/// the day the mention resolution exists to recover.
+///
+/// Both are returned, neither is picked for the caller, and neither is left as
+/// arithmetic homework — which is what hiding these behind the raw text was.
+/// A mention naming a period carries the count from each end, since "some time
+/// in May 2023" is genuinely a span of answers, not one.
+fn mentions_with_elapsed(
+    mentions: &[undercroft_core::temporal::TimeMention],
+    as_of: Option<&str>,
+) -> Vec<Value> {
+    use undercroft_core::temporal::{days_between, describe_interval};
+    mentions
+        .iter()
+        .map(|m| {
+            let mut v = serde_json::to_value(m).unwrap_or_else(|_| json!({}));
+            let (Some(obj), Some(a)) = (v.as_object_mut(), as_of) else {
+                return v;
+            };
+            let Some((first, last)) = m.range() else {
+                return v;
+            };
+            obj.insert("elapsed_days".into(), json!(days_between(first, a)));
+            obj.insert("elapsed".into(), json!(describe_interval(a, first)));
+            if m.is_period() {
+                obj.insert("elapsed_days_end".into(), json!(days_between(last, a)));
+            }
+            v
+        })
+        .collect()
+}
+
 /// Produces the embedder a given vault should open with. Lives in `main`
 /// (it knows the `onnx` feature and env config); this module just calls it.
 pub type EmbedderFactory =
@@ -164,6 +267,8 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "kg", "entities"]) => self.kg_entities(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "query"]) => self.kg_query(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "timeline"]) => self.kg_timeline(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "receipts"]) => self.kg_receipts(id, req, now),
+            ("POST", &["v1", "vaults", id, "refine"]) => self.refine(id, req, body, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
@@ -374,9 +479,19 @@ impl Tenancy {
             .and_then(Value::as_f64)
             .map(|v| v as f32);
 
+        // When the content happened, if the caller knows it. Distinct from
+        // filed_at (when we wrote it down) and preserved rather than dropped:
+        // conversational text leans on relative time ("yesterday", "last
+        // Tuesday") that cannot be resolved without it.
+        let content_date = body
+            .get("content_date")
+            .and_then(Value::as_str)
+            .map(String::from);
+
         let store = self.store_for(id)?;
         let idx = store.count().map_err(err500)? as u32;
-        let drawer = Drawer::new(wing, room, normalized, None, idx, "rest");
+        let drawer =
+            Drawer::new(wing, room, normalized, None, idx, "rest").with_content_date(content_date);
 
         let out = if store.is_external() {
             let v =
@@ -421,8 +536,20 @@ impl Tenancy {
             wing: body.get("wing").and_then(Value::as_str).map(String::from),
             room: body.get("room").and_then(Value::as_str).map(String::from),
             limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
+            // Soft per-room cap: spreads the returned hits across rooms so a
+            // question whose answer spans several sessions is not starved by
+            // the most verbose one. Absent ⇒ pure score order, as before.
+            room_cap: body
+                .get("room_cap")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
         };
         let vector = parse_vector(&body, "vector")?;
+        // Reference date for elapsed-time computation. The engine holds the
+        // dates, so it does the calendar arithmetic — month lengths and leap
+        // years are not a caller's problem, and certainly not a language
+        // model's. Absent ⇒ no elapsed fields, nothing invented.
+        let as_of = body.get("as_of").and_then(Value::as_str).map(String::from);
         let store = self.store_for(id)?;
         let hits = if store.is_external() {
             let v =
@@ -441,6 +568,43 @@ impl Tenancy {
                     "content": h.drawer.content,
                     "wing": h.drawer.meta.wing,
                     "room": h.drawer.meta.room,
+                    // When the content happened. A caller assembling an LLM
+                    // context needs this to interpret relative time in the
+                    // text; null when the writer did not know it.
+                    "content_date": h.drawer.meta.content_date,
+                    "filed_at": h.drawer.meta.filed_at,
+                    // Dates written inside the text, already resolved against
+                    // the drawer's own anchor at write time. Returned so a
+                    // reader never has to re-derive what we computed exactly —
+                    // including how long ago each one was, which is a
+                    // different question from how old the drawer is.
+                    "time_mentions": mentions_with_elapsed(
+                        &h.drawer.meta.time_mentions,
+                        as_of.as_deref(),
+                    ),
+                    "entities": h.drawer.meta.entities,
+                    // Exact whole-day offsets from `as_of`, computed here
+                    // rather than left to the reader. `elapsed` is the same
+                    // interval phrased for display; both are omitted when the
+                    // date is unknown or `as_of` was not supplied.
+                    "elapsed_days": elapsed_days(&h.drawer.meta.content_date, as_of.as_deref()),
+                    // Calendar counts, not day division: "how many weeks
+                    // since" asks how many week boundaries were crossed, and
+                    // 104 days spans 15 of them, not 14.
+                    "elapsed_weeks": elapsed_calendar(&h.drawer.meta.content_date, as_of.as_deref()).0,
+                    "elapsed_months": elapsed_calendar(&h.drawer.meta.content_date, as_of.as_deref()).1,
+                    "elapsed": elapsed_phrase(&h.drawer.meta.content_date, as_of.as_deref()),
+                    // Local-day counts assume both timestamps share a frame.
+                    // When their UTC offsets differ they can disagree with
+                    // absolute ordering — occasionally in sign — so say so
+                    // rather than present one reading as the only one.
+                    "same_frame": h
+                        .drawer
+                        .meta
+                        .content_date
+                        .as_deref()
+                        .zip(as_of.as_deref())
+                        .map(|(d, a)| undercroft_core::temporal::same_frame(d, a)),
                     "score": h.score,
                     "semantic": h.semantic,
                     "lexical": h.lexical,
@@ -641,6 +805,8 @@ impl Tenancy {
             .ok_or_else(|| RestError::new(400, "entity query parameter required"))?;
         let direction = query_param(req, "direction").unwrap_or_else(|| "both".into());
         let as_of = query_param(req, "as_of").map(|v| pct_decode(&v));
+        // Opt-in narrowing only; absent means every fact, whatever it rests on.
+        let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
         let triples = store
             .kg_query_entity(&entity, as_of.as_deref(), &direction)
@@ -649,7 +815,7 @@ impl Tenancy {
             200,
             Body::Json(json!({
                 "entity": entity,
-                "triples": serde_json::to_value(triples).unwrap_or_else(|_| json!([]))
+                "triples": triples_json(triples, grounding.as_deref())
             })),
         ))
     }
@@ -659,12 +825,230 @@ impl Tenancy {
     fn kg_timeline(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let entity = query_param(req, "entity").map(|v| pct_decode(&v));
+        let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
         let triples = store.kg_timeline(entity.as_deref()).map_err(store_err)?;
         Ok((
             200,
             Body::Json(json!({
-                "triples": serde_json::to_value(triples).unwrap_or_else(|_| json!([]))
+                "triples": triples_json(triples, grounding.as_deref())
+            })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/kg/receipts` — verify every distilled fact
+    /// against its cited verbatim source. Each entry reports a verdict
+    /// (verified | source_changed | dangling | tampered); the summary counts
+    /// let a caller alert on `tampered` without walking the list.
+    fn kg_receipts(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let receipts = store.kg_verify_receipts().map_err(store_err)?;
+        let mut summary = serde_json::Map::new();
+        for verdict in ["verified", "source_changed", "dangling", "tampered"] {
+            let n = receipts
+                .iter()
+                .filter(|r| {
+                    serde_json::to_value(&r.verdict)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .as_deref()
+                        == Some(verdict)
+                })
+                .count();
+            summary.insert(verdict.into(), json!(n));
+        }
+        Ok((
+            200,
+            Body::Json(json!({
+                "receipts": serde_json::to_value(&receipts).unwrap_or_else(|_| json!([])),
+                "summary": summary,
+            })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/refine` — distil the vault's verbatim drawers
+    /// into receipted knowledge-graph facts, and mirror each fact as a
+    /// searchable drawer so distillation reaches the retrieval surface.
+    ///
+    /// Body: `{ wing?, room?, limit?, fact_room? }`. `wing`/`room` scope
+    /// which verbatim drawers are read (`room` defaults to everything except
+    /// `fact_room`, so re-running never distils its own output); `fact_room`
+    /// (default `facts`) is the room the fact-drawers land in, inside their
+    /// *source drawer's* wing. That keeps per-wing isolation intact and lets
+    /// a caller retrieve verbatim-only, distilled-only, or both by varying
+    /// the room filter on `/search`.
+    ///
+    /// A fact restated across several source chunks is cited once per source
+    /// in the graph but mirrored to the retrieval surface only once, so one
+    /// fact cannot occupy several slots of a single top-k. `duplicates`
+    /// reports how often that collapse fired.
+    ///
+    /// Requires `UNDERCROFT_LLM_URL` — without it the vault is untouched and
+    /// this answers 400. The verbatim drawers are never modified.
+    fn refine(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let wing = body.get("wing").and_then(Value::as_str);
+        let room = body.get("room").and_then(Value::as_str);
+        let fact_room = body
+            .get("fact_room")
+            .and_then(Value::as_str)
+            .unwrap_or("facts");
+        validate_name(fact_room, "fact_room").map_err(|e| RestError::new(400, e.to_string()))?;
+        let limit = body
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(1_000_000) as usize;
+
+        let llm =
+            undercroft_llm::LlmClient::from_env().map_err(|e| RestError::new(400, e.to_string()))?;
+        let store = self.store_for(id)?;
+
+        // Read the verbatim side only: never re-distil fact-drawers, or a
+        // second call would compound its own output into the graph.
+        let sources: Vec<Drawer> = store
+            .recent(wing, limit)
+            .map_err(store_err)?
+            .into_iter()
+            .filter(|d| d.meta.room != fact_room)
+            .filter(|d| room.is_none_or(|r| d.meta.room == r))
+            .collect();
+
+        // The knowledge graph already collapses a repeated triple onto one
+        // row (`triple_id` is content-derived, ON CONFLICT DO UPDATE). The
+        // searchable mirror has to match that, or a fact restated across
+        // several source chunks would occupy several slots of one top-k and
+        // crowd out distinct evidence. Keyed on the triple id the graph
+        // itself returns, so the two notions of identity cannot drift.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (mut facts, mut duplicates, mut skipped, mut failed) = (0u32, 0u32, 0u32, 0u32);
+        let (mut dated_from_text, mut stated) = (0u32, 0u32);
+        for d in &sources {
+            let anchor = d
+                .meta
+                .content_date
+                .as_deref()
+                .and_then(undercroft_core::temporal::parse_anchor);
+            let triples = match llm.extract_triples(&d.content) {
+                Ok(t) => t,
+                Err(e) => {
+                    undercroft_obs::diag_error!("refine: triples failed for {}: {e}", d.id);
+                    failed += 1;
+                    continue;
+                }
+            };
+            for t in triples {
+                let subject = t.subject.to_lowercase();
+                let predicate = t.predicate.to_lowercase();
+                if validate_name(&subject, "subject").is_err()
+                    || validate_name(&predicate, "predicate").is_err()
+                {
+                    skipped += 1;
+                    continue;
+                }
+                // When the fact was established, which is not the same as
+                // when the note was written: "I quit smoking three months
+                // ago" is a fact about February in a note dated May. The
+                // extractor is asked to point at the words that say so and
+                // is not permitted to supply a date — `resolve_claimed_span`
+                // rejects any span the note does not literally contain and
+                // resolves the rest deterministically. Anything unverified
+                // falls back to the note's own date, which is what every
+                // fact used to get.
+                let dated = t.when.as_deref().and_then(|claim| {
+                    undercroft_core::temporal::resolve_claimed_span(&d.content, claim, anchor)
+                });
+                if dated.is_some() {
+                    dated_from_text += 1;
+                }
+                let fact_date = dated
+                    .as_ref()
+                    .and_then(|m| m.resolved.clone())
+                    .or_else(|| d.meta.content_date.clone());
+                // The receipt is an HMAC-covered citation back to the
+                // verbatim drawer this fact came from — checkable later via
+                // `GET /v1/vaults/{id}/kg/receipts`.
+                // `valid_to` stays open even when the span named a period.
+                // A period says when the event *happened*; it does not say
+                // the fact stopped holding, and "in May 2023" must not be
+                // read as "expired on the 31st".
+                // Where the fact rests. The quote is checked against the note
+                // the same way the `when` span is; what the note does not
+                // contain is not evidence. A fact with no quotable support is
+                // NOT thereby wrong — "Leeds is in the United Kingdom" is the
+                // edge that answers which country Ana works in, and the graph
+                // wants it. This only records which of the two it is, so a
+                // caller that needs the user's own words can ask for them.
+                let support = undercroft_core::support::Support::evaluate(
+                    &d.content,
+                    t.quote
+                        .as_deref()
+                        .map(|q| [q])
+                        .unwrap_or_default()
+                        .as_slice(),
+                );
+                if support.is_stated() {
+                    stated += 1;
+                }
+                let triple_id = store
+                    .kg_add_grounded(
+                        &subject,
+                        &predicate,
+                        &t.object,
+                        fact_date.as_deref(),
+                        None,
+                        0.8, // model-extracted: below human-asserted confidence
+                        (&d.id, &d.content),
+                        Some(&support),
+                    )
+                    .map_err(store_err)?;
+                // Restating a known fact still re-cites it in the graph — the
+                // receipt above is refreshed either way — but it must not add
+                // a second copy to the retrieval surface.
+                if !seen.insert(triple_id) {
+                    duplicates += 1;
+                    continue;
+                }
+                store
+                    .upsert(
+                        &Drawer::new(
+                            &d.meta.wing,
+                            fact_room,
+                            format!("{} {} {}", t.subject, t.predicate, t.object),
+                            None,
+                            facts,
+                            "distill",
+                        )
+                        .with_content_date(fact_date),
+                    )
+                    .map_err(store_err)?;
+                facts += 1;
+            }
+        }
+
+        Ok((
+            200,
+            Body::Json(json!({
+                "sources": sources.len(),
+                "facts": facts,
+                "duplicates": duplicates,
+                "skipped": skipped,
+                "failed": failed,
+                // How many facts were dated by words in the note rather than
+                // by the note's own date. Reported because it is the only
+                // visible measure of whether the extractor is pointing at
+                // real spans — a model that answers with dates instead of
+                // quotations drives this to zero without erroring.
+                "dated_from_text": dated_from_text,
+                // Facts the note's own words support, against facts that rest
+                // on the extractor's background knowledge. Both are wanted:
+                // the second is what lets the graph answer across notes.
+                "stated": stated,
+                "background": facts.saturating_sub(stated),
+                "fact_room": fact_room,
+                "model": llm.model(),
             })),
         ))
     }

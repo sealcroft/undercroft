@@ -39,15 +39,27 @@ pub struct LlmClient {
     base: String,
     model: String,
     kind: ApiKind,
+    /// Optional bearer credential for the runtime. Empty for every local
+    /// runtime (they take no auth); set only when the operator has pointed
+    /// `UNDERCROFT_LLM_URL` at a gateway that demands one.
+    key: String,
     agent: ureq::Agent,
 }
 
 impl LlmClient {
     pub fn new(base_url: &str, model: &str, kind: ApiKind) -> Self {
+        Self::with_key(base_url, model, kind, "")
+    }
+
+    /// As [`LlmClient::new`], with a bearer credential sent as
+    /// `Authorization: Bearer <key>` on every request. An empty key sends
+    /// no header at all — the local-runtime default.
+    pub fn with_key(base_url: &str, model: &str, kind: ApiKind, key: &str) -> Self {
         Self {
             base: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             kind,
+            key: key.to_string(),
             agent: ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_secs(120))
                 .build(),
@@ -57,6 +69,12 @@ impl LlmClient {
     /// Build from `UNDERCROFT_LLM_URL`, `UNDERCROFT_LLM_MODEL`, and optional
     /// `UNDERCROFT_LLM_API` (`ollama` | `openai`; default guesses `openai`
     /// when the URL path contains `/v1`, else `ollama`).
+    ///
+    /// `UNDERCROFT_LLM_KEY` is optional and unset by default: local runtimes
+    /// take no credential, and leaving it unset keeps the request
+    /// header-for-header what it has always been. Set it only to reach a
+    /// runtime behind an authenticating gateway — which, unlike the local
+    /// default, means drawer text leaves the machine.
     pub fn from_env() -> Result<Self, LlmError> {
         let base = std::env::var("UNDERCROFT_LLM_URL").map_err(|_| LlmError::NotConfigured)?;
         let model = std::env::var("UNDERCROFT_LLM_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
@@ -66,7 +84,8 @@ impl LlmClient {
             _ if base.contains("/v1") => ApiKind::OpenAi,
             _ => ApiKind::Ollama,
         };
-        Ok(Self::new(&base, &model, kind))
+        let key = std::env::var("UNDERCROFT_LLM_KEY").unwrap_or_default();
+        Ok(Self::with_key(&base, &model, kind, &key))
     }
 
     pub fn model(&self) -> &str {
@@ -100,9 +119,11 @@ impl LlmClient {
                 }),
             ),
         };
-        let resp: Value = self
-            .agent
-            .post(&url)
+        let mut req = self.agent.post(&url);
+        if !self.key.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {}", self.key));
+        }
+        let resp: Value = req
             .send_json(body)
             .map_err(|e| LlmError::Http(e.to_string()))?
             .into_json()
@@ -138,6 +159,28 @@ pub struct ExtractedTriple {
     pub subject: String,
     pub predicate: String,
     pub object: String,
+    /// The words in the note that say *when* this fact was established,
+    /// copied verbatim — "three months ago", "last May". **Not a date.**
+    ///
+    /// The model is asked to point, not to compute: a span can be checked
+    /// against the note it supposedly came from, and a date cannot. Whatever
+    /// arrives here is verified and resolved by
+    /// `undercroft_core::temporal::resolve_claimed_span`, which rejects
+    /// anything the note does not literally contain. A model that answers
+    /// with a date instead of a quotation therefore contributes nothing,
+    /// which is the intended failure.
+    #[serde(default)]
+    pub when: Option<String>,
+    /// The words in the note that support this fact, copied verbatim — again
+    /// **not** a claim, a quotation.
+    ///
+    /// Checked by `undercroft_core::support::Support::evaluate`, which keeps
+    /// the spans the note really contains. A fact with no quotable support
+    /// is not thereby wrong: "Leeds is in the United Kingdom" is true and
+    /// useful and simply is not in the note. The check records which of the
+    /// two a fact is, and never asks the model to grade itself.
+    #[serde(default)]
+    pub quote: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -161,14 +204,202 @@ pub fn extract_json_array(text: &str) -> Result<Value, LlmError> {
     serde_json::from_str(&text[start..=end]).map_err(|e| LlmError::BadOutput(e.to_string()))
 }
 
+// --- Lenient extraction --------------------------------------------------
+//
+// Small local models emit imperfect JSON at a non-trivial rate (trailing
+// commas, an array where a string was asked for, a missing field, an
+// unterminated array). Treating any of that as a hard error and dropping
+// the whole note's output is *our* fragility, not the model's — and it
+// silently thins downstream recall. These helpers repair and salvage
+// deterministically (no extra model calls) so a malformed element costs
+// itself, not the whole note.
+
+/// Coerce a JSON value to a plain string: strings pass through,
+/// numbers/bools stringify, an array joins with ", " (models sometimes
+/// answer a scalar field with a list). Null/object → `None` (unusable).
+fn value_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Array(a) => {
+            let parts: Vec<String> = a.iter().filter_map(value_to_string).collect();
+            (!parts.is_empty()).then(|| parts.join(", "))
+        }
+        _ => None,
+    }
+}
+
+/// JSON-repair pass (dependency-free): drop trailing commas before `]`/`}`,
+/// the most common model defect. Quote-aware so commas inside string values
+/// are untouched; UTF-8-safe (only standalone ASCII commas are removed).
+fn strip_trailing_commas(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let (mut in_str, mut esc, mut i) = (false, false, 0usize);
+    while i < b.len() {
+        let c = b[i];
+        if in_str {
+            out.push(c);
+            if esc {
+                esc = false;
+            } else if c == b'\\' {
+                esc = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' {
+            in_str = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == b',' {
+            let mut j = i + 1;
+            while j < b.len() && b[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < b.len() && (b[j] == b']' || b[j] == b'}') {
+                i += 1; // skip the trailing comma
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
+/// Last-resort salvage: scan for balanced top-level `{...}` objects and
+/// parse each independently, so a syntactically broken *array* still yields
+/// its intact objects. Quote-aware brace matching.
+fn salvage_objects(s: &str) -> Vec<Value> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let (mut depth, mut start, mut in_str, mut esc, mut i) = (0usize, 0usize, false, false, 0usize);
+    while i < b.len() {
+        let c = b[i];
+        if in_str {
+            if esc {
+                esc = false;
+            } else if c == b'\\' {
+                esc = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+        } else if c == b'"' {
+            in_str = true;
+        } else if c == b'{' {
+            if depth == 0 {
+                start = i;
+            }
+            depth += 1;
+        } else if c == b'}' && depth > 0 {
+            depth -= 1;
+            if depth == 0 {
+                if let Ok(v) = serde_json::from_str::<Value>(&s[start..=i]) {
+                    out.push(v);
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Best-effort array-of-objects from possibly-chatty/malformed output:
+/// slice the outermost `[...]`, JSON-repair, parse whole; on failure,
+/// salvage individual objects. Never errors — returns what it can.
+pub fn lenient_objects(out: &str) -> Vec<Value> {
+    let sliced = match (out.find('['), out.rfind(']')) {
+        (Some(a), Some(b)) if b > a => &out[a..=b],
+        _ => out,
+    };
+    let repaired = strip_trailing_commas(sliced);
+    if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&repaired) {
+        return items;
+    }
+    salvage_objects(&repaired)
+}
+
+/// Triples parsed leniently from raw model output: fields coerced to
+/// strings, all three required, malformed elements skipped (not fatal).
+pub fn triples_from_output(out: &str) -> Vec<ExtractedTriple> {
+    lenient_objects(out)
+        .iter()
+        .filter_map(|v| {
+            let o = v.as_object()?;
+            Some(ExtractedTriple {
+                subject: value_to_string(o.get("subject")?)?,
+                predicate: value_to_string(o.get("predicate")?)?,
+                object: value_to_string(o.get("object")?)?,
+                // Optional and never fatal: a model that omits it, or emits
+                // null or an empty string, simply dates its fact from the
+                // note as before.
+                when: o
+                    .get("when")
+                    .and_then(value_to_string)
+                    .filter(|s| !s.trim().is_empty()),
+                quote: o
+                    .get("quote")
+                    .and_then(value_to_string)
+                    .filter(|s| !s.trim().is_empty()),
+            })
+        })
+        .collect()
+}
+
+/// Entities parsed leniently (name required; type defaults to unknown).
+pub fn entities_from_output(out: &str) -> Vec<ExtractedEntity> {
+    lenient_objects(out)
+        .iter()
+        .filter_map(|v| {
+            let o = v.as_object()?;
+            Some(ExtractedEntity {
+                name: value_to_string(o.get("name")?)?,
+                entity_type: o
+                    .get("type")
+                    .and_then(value_to_string)
+                    .unwrap_or_else(unknown_type),
+            })
+        })
+        .collect()
+}
+
+/// Memories parsed leniently (content required; type defaults to unknown).
+pub fn memories_from_output(out: &str) -> Vec<ExtractedMemory> {
+    lenient_objects(out)
+        .iter()
+        .filter_map(|v| {
+            let o = v.as_object()?;
+            Some(ExtractedMemory {
+                memory_type: o
+                    .get("type")
+                    .and_then(value_to_string)
+                    .unwrap_or_else(unknown_type),
+                content: value_to_string(o.get("content")?)?,
+            })
+        })
+        .collect()
+}
+
 const ENTITY_SYSTEM: &str = "You extract named entities from notes. Reply with ONLY a JSON array \
 of objects: [{\"name\": \"...\", \"type\": \"person|organization|project|place|unknown\"}]. \
 No prose, no markdown fences.";
 
 const TRIPLE_SYSTEM: &str = "You extract factual relationships from notes as knowledge-graph \
 triples. Reply with ONLY a JSON array of objects: [{\"subject\": \"...\", \"predicate\": \
-\"snake_case_relation\", \"object\": \"...\"}]. Only durable facts (roles, locations, \
-ownership, preferences, decisions) — no ephemera. No prose, no markdown fences.";
+\"snake_case_relation\", \"object\": \"...\", \"when\": \"...\", \"quote\": \"...\"}]. Only \
+durable facts (roles, locations, ownership, preferences, decisions) — no ephemera. \
+Background knowledge that connects the note to what you already know is welcome. \
+For \"when\", COPY THE EXACT WORDS from the note that say when the fact was established — \
+\"three months ago\", \"last May\", \"on 2023-05-07\". For \"quote\", COPY THE EXACT WORDS \
+from the note that state this fact. Copy both character for character from the note. Do NOT \
+rewrite them, do NOT work out a date, and use null when the note does not say it — a fact you \
+knew rather than read is still wanted, it just has no quote. No prose, no markdown fences.";
 
 const MEMORY_SYSTEM: &str = "You extract the durable memories worth keeping from a note: \
 decisions made, stated preferences, plans, and stable facts. Reply with ONLY a JSON array of \
@@ -178,21 +409,15 @@ transient detail. No prose, no markdown fences.";
 
 impl LlmClient {
     pub fn extract_entities(&self, text: &str) -> Result<Vec<ExtractedEntity>, LlmError> {
-        let out = self.complete(ENTITY_SYSTEM, text)?;
-        let arr = extract_json_array(&out)?;
-        serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
+        Ok(entities_from_output(&self.complete(ENTITY_SYSTEM, text)?))
     }
 
     pub fn extract_triples(&self, text: &str) -> Result<Vec<ExtractedTriple>, LlmError> {
-        let out = self.complete(TRIPLE_SYSTEM, text)?;
-        let arr = extract_json_array(&out)?;
-        serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
+        Ok(triples_from_output(&self.complete(TRIPLE_SYSTEM, text)?))
     }
 
     pub fn extract_memories(&self, text: &str) -> Result<Vec<ExtractedMemory>, LlmError> {
-        let out = self.complete(MEMORY_SYSTEM, text)?;
-        let arr = extract_json_array(&out)?;
-        serde_json::from_value(arr).map_err(|e| LlmError::BadOutput(e.to_string()))
+        Ok(memories_from_output(&self.complete(MEMORY_SYSTEM, text)?))
     }
 
     /// Classify text into one of the given labels (used by room
@@ -296,6 +521,79 @@ mod tests {
         assert!(extract_json_array("no array here").is_err());
         let v = extract_json_array("prefix [1, 2] suffix").unwrap();
         assert_eq!(v, json!([1, 2]));
+    }
+
+    #[test]
+    fn lenient_triples_recover_from_real_model_defects() {
+        // clean output — the happy path still works
+        assert_eq!(
+            triples_from_output(r#"[{"subject":"a","predicate":"knows","object":"b"}]"#).len(),
+            1
+        );
+        // array where a string was asked for → coerced by joining
+        let t = triples_from_output(
+            r#"[{"subject":"ana","predicate":"likes","object":["tea","coffee"]}]"#,
+        );
+        assert_eq!(t[0].object, "tea, coffee");
+        // one object missing a field → that element skipped, others kept
+        let t = triples_from_output(
+            r#"[{"subject":"a","predicate":"p","object":"o"},
+                {"subject":"x","predicate":"y"},
+                {"subject":"c","predicate":"q","object":"d"}]"#,
+        );
+        assert_eq!(t.len(), 2, "the incomplete triple is skipped, not fatal");
+        // trailing comma (repair pass)
+        assert_eq!(
+            triples_from_output(r#"[{"subject":"a","predicate":"p","object":"o"},]"#).len(),
+            1
+        );
+        // markdown fences + prose around the array
+        assert_eq!(
+            triples_from_output(
+                "Sure:\n```json\n[{\"subject\":\"a\",\"predicate\":\"p\",\"object\":\"o\"}]\n```"
+            )
+            .len(),
+            1
+        );
+        // syntactically broken *array* (unterminated) → salvage the intact object
+        let t = triples_from_output(
+            r#"[{"subject":"a","predicate":"p","object":"o"}, {"subject":"d","predicate":"#,
+        );
+        assert_eq!(t.len(), 1, "the one complete object is salvaged");
+        // nothing usable → empty, never an error
+        assert!(triples_from_output("I could not find any facts.").is_empty());
+    }
+
+    /// `when` is optional in every direction: a model that omits it, nulls
+    /// it, or empties it dates its fact from the note, exactly as before.
+    /// Whatever it *does* send is a quotation to be checked downstream, not
+    /// a date to be believed — see `temporal::resolve_claimed_span`.
+    #[test]
+    fn triples_carry_an_optional_when_span() {
+        let t = triples_from_output(
+            r#"[{"subject":"ana","predicate":"quit","object":"smoking","when":"three months ago"}]"#,
+        );
+        assert_eq!(t[0].when.as_deref(), Some("three months ago"));
+
+        for out in [
+            r#"[{"subject":"a","predicate":"p","object":"o"}]"#,
+            r#"[{"subject":"a","predicate":"p","object":"o","when":null}]"#,
+            r#"[{"subject":"a","predicate":"p","object":"o","when":""}]"#,
+            r#"[{"subject":"a","predicate":"p","object":"o","when":"   "}]"#,
+        ] {
+            let t = triples_from_output(out);
+            assert_eq!(t.len(), 1, "{out}");
+            assert!(t[0].when.is_none(), "{out}");
+        }
+    }
+
+    #[test]
+    fn lenient_entities_and_memories() {
+        let e = entities_from_output(r#"[{"name":"Acme"},{"type":"person","name":"Ana"}]"#);
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0].entity_type, "unknown"); // defaulted
+        let m = memories_from_output(r#"[{"content":"launch moved to March"},]"#);
+        assert_eq!(m.len(), 1);
     }
 
     #[test]

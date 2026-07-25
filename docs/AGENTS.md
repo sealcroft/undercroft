@@ -336,8 +336,19 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |
 | GET | `/v1/vaults/{id}/kg/entities` | paged entity summaries (`limit`, `offset`) |
-| GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`) |
-| GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`) |
+| GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`, `grounding`) |
+| GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`, `grounding`) |
+
+Every fact returned by `kg/query` and `kg/timeline` carries `grounding`:
+`stated` (the source note's own words support it — `support.spans` gives the
+byte ranges in the cited drawer), `background` (checked, and the note supports
+none of it — world knowledge the extractor brought, which is what lets the
+graph answer across notes), or `unevaluated` (never checked; every fact
+distilled before grounding existed). `?grounding=` narrows to one of those and
+is **opt-in only** — the default returns all three, because filtering out
+background facts breaks exactly the multi-hop questions the graph is for.
+| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text` |
+| POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON (vectors + token artifacts) |
@@ -386,7 +397,11 @@ Server: `UNDERCROFT_MCP_HTTP_TOKEN` (bearer; mandatory non-loopback) ·
 `UNDERCROFT_METRICS=1` (+ bearer) · `UNDERCROFT_SAMPLE_INTERVAL_MS` (2000).
 
 LLM (optional, for `refine`): `UNDERCROFT_LLM_URL` · `UNDERCROFT_LLM_MODEL`
-(`llama3.2`) · `UNDERCROFT_LLM_API` (`ollama`|`openai`).
+(`llama3.2`) · `UNDERCROFT_LLM_API` (`ollama`|`openai`) ·
+`UNDERCROFT_LLM_KEY` (bearer credential; **unset by default** — local
+runtimes take none, and an empty key sends no header at all. Set it only
+to reach a runtime behind an authenticating gateway, which unlike the
+local default means drawer text leaves the machine).
 
 Telemetry builds: `UNDERCROFT_LOG` · `UNDERCROFT_LOG_FORMAT` (`json`) ·
 `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process) ·

@@ -15,6 +15,8 @@ pub mod ids;
 pub mod late;
 pub mod normalize;
 pub mod rerank;
+pub mod support;
+pub mod temporal;
 
 pub use chunk::{chunk_text, ChunkOptions};
 pub use drawer::{Drawer, DrawerMeta};

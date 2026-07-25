@@ -1,5 +1,208 @@
 # Changelog
 
+## Unreleased — temporal fidelity: keep the data we were dropping
+
+Retrieval was never the weak link on conversational memory; what we stored
+was. A drawer recorded only when it was *filed*, so a year-old conversation
+ingested today carried today's date, and text like "I went yesterday" had no
+reference point at all. Measured on LoCoMo: 272 of 272 documents carry a
+timestamp, 233 (86%) lean on a relative expression, and exactly **one**
+document in 272 spells a date out in its text.
+
+- **`content_date`** — when the content happened, as distinct from
+  `filed_at`. Declared on `DrawerMeta` since the mempalace port and never
+  populated by anything; now carried end-to-end: REST `POST /drawers`, CLI
+  `remember --content-date`, MCP `undercroft_save` / `undercroft_add_drawer`
+  (declared in the tool schemas so agents can discover it), and `import`,
+  which carries it across rather than stamping every imported drawer with
+  the date of the import. Returned on search hits and reported by MCP search
+  as `happened <date>, filed <date>`. It rides inside `meta_json`, so it is
+  HMAC-covered for free, needs no schema migration, and leaves existing rows
+  byte-identical; it does not enter the drawer id, so re-mining a corpus
+  with dates now available stays idempotent. It also feeds
+  `kg_add_receipted`'s `valid_from`, so the graph's validity windows finally
+  describe when a fact *held*.
+- **`core::temporal`** — dates and times written *into* the text. Scans for
+  absolute ("7 May 2023") and relative ("yesterday", "last Tuesday", "three
+  weeks ago") expressions, keeps each span verbatim with its byte offset,
+  and resolves what the anchor allows. Deterministic, offline, no model, no
+  network. With no anchor a mention is recorded **unresolved** — an honest
+  gap beats an invented date. The scan runs inside `Drawer::new`, so no
+  write path can forget it.
+- **Conversation transcripts keep what the session actually was.**
+  `parse_transcript` dropped every non-`user`/`assistant` message and every
+  non-`text` block, discarding tool calls, tool results and reasoning — most
+  of an agent session — plus per-message timestamps, ids and speaker names.
+  Now every recorded turn survives, non-prose blocks render under a
+  `[kind]` marker with payloads verbatim, unknown future block kinds are
+  preserved, and named speakers no longer collapse to User/Assistant.
+  `chunk_exchanges_dated` reports each chunk's opening turn, feeding
+  `content_date` on the convo miner and sweeper.
+- **Code-aware normalization** — `NormalizeMode::{Prose, Code}` plus
+  `mode_for_path`. Normalization trimmed trailing whitespace and collapsed
+  blank runs on every drawer; harmless for prose, a silent edit for a
+  script, where indentation is semantics. Code mode applies only the safety
+  floor (NUL/control stripping, CRLF→LF); Prose additionally leaves fenced
+  blocks untouched. `NORMALIZE_VERSION` → 2.
+- **`POST /v1/vaults/{id}/refine`** — the `/v1` KG surface was read-only and
+  CLI `refine` wrote triples only, not the searchable fact-drawers that put
+  distillation on the retrieval path. Fact-drawers land in their source
+  drawer's wing under `fact_room` (default `facts`), so a caller selects
+  verbatim / distilled / both purely by varying the room filter on
+  `/search`. Each distinct fact is mirrored once, keyed on the triple id the
+  graph itself returns, so a fact restated across chunks cannot occupy
+  several slots of one top-k.
+- **`UNDERCROFT_LLM_KEY`** — optional bearer for the LLM runtime, unset by
+  default. An empty key sends no header, so a default build's requests are
+  byte-identical to before. Set it only to reach a runtime behind an
+  authenticating gateway — which, unlike the local default, means drawer
+  text leaves the machine.
+
+- **`DrawerMeta.entities` populated** — declared since the mempalace port
+  and never assigned (every "entities" reference in the codebase was to
+  *knowledge-graph* entities, a different thing). Now extracted in
+  `Drawer::new` by the existing deterministic offline extractor, so the
+  structure travels with an export instead of being recomputed to be read.
+  Empty stays empty and is omitted from serialized meta, keeping existing
+  rows byte-identical.
+
+Tests 177 → **249**, including regression coverage pinning what must not
+change: fence-free prose normalizes byte-for-byte as v1 across ten cases,
+harness noise is still filtered, prose is still verbatim, and
+`chunk_exchanges` text is identical to the dated variant.
+
+- **Retrieval selection** — `SearchOptions.room_cap`, a soft per-room cap that
+  spreads the top-k across rooms and then refills by score, so a
+  single-room question still receives the full limit. Default off, and
+  measured 5.6 points *worse* on a corpus where evidence is concentrated:
+  forcing diversity displaces the chunks that hold the answer. Kept because
+  the knob is sound and the measurement is the guidance.
+- **The engine computes elapsed time instead of delegating it.** Diagnosing
+  the remaining benchmark losses showed most had all their gold evidence in
+  context already — asked how long between a flu recovery and a jog, the
+  generator quoted both correct dates and answered "11.7 weeks" against a
+  truth of 104 days. Calendar arithmetic is deterministic work over data we
+  hold, so `core::temporal` now does it: `days_between` (exact, correct
+  across month lengths and leap years), `calendar_weeks_between` and
+  `calendar_months_between` (boundaries crossed — "how many weeks since" is
+  a calendar question, and `days / 7` silently answers a different one),
+  `hours_between` on absolute instants, and `describe_interval` for display.
+  `POST /v1/search` takes `as_of` and returns `elapsed_days`,
+  `elapsed_weeks`, `elapsed_months`, the phrase, and `same_frame`.
+- **Timestamps carry the actor's frame, never the host's.** A local date comes
+  from the UTC offset the timestamp itself declares, so the same vault
+  answers identically on every machine and no IANA database — which ships
+  several releases a year — can retroactively change an answer the audit
+  chain already attests to. Across differing offsets, local-day counting and
+  absolute-instant counting can disagree in *sign* (an evening in Los
+  Angeles and the next morning in Tokyo is +1 local day but −7.5 hours), so
+  both are reported rather than one silently chosen.
+- **`WeekStart::{Monday, Sunday}`** — ISO says Monday, but the US, Canada,
+  Japan and Israel count from Sunday, and first-day-of-week moves every
+  boundary. Monday remains the default; `calendar_weeks_between_with` lets a
+  locale-aware caller say otherwise.
+- **Search hits also return `time_mentions` and `entities`** — computed at
+  write time, sealed on every drawer, and until now unreachable through the
+  only surface that reads them.
+- **A mention resolves to a period, not to its first day.** "May 2023" was
+  recorded as 2023-05-01, which makes it indistinguishable from "1 May 2023"
+  — precision the writer never offered, and the same class of invention this
+  module exists to prevent. `TimeMention` now carries `resolved_end` (and a
+  `range()` accessor) whenever the text named something wider than a day, so
+  a month stays a month. The phrases that name calendar periods were also
+  being read as offsets from the anchor: "last month" resolved to the same
+  day-of-month one month back, "last year" to the same day one year back, and
+  "last week" to seven days ago. They now resolve to the previous month, year
+  and week. `"N units ago"` is displacement arithmetic and still names a day,
+  which is a genuinely different shape.
+- **"this Friday" and "next Friday" were the same date.** Both walked forward
+  from the anchor, so every "this" was read as a "next". "This <weekday>" now
+  means the one inside the anchor's current week — which makes it depend on
+  where the week begins, so `WeekStart` is threaded through extraction as
+  `extract_time_mentions_with`, alongside `describe_interval_with`.
+- **Hostile input no longer panics the write path.** Drawer content is
+  arbitrary user text and extraction runs on every write, so "999999999 days
+  ago" reached an unchecked date shift and panicked. Every shift is now
+  checked and resolves to nothing when it leaves the calendar. Relatedly,
+  `shift_months` returned the *unshifted* date when the target was
+  unrepresentable — reporting the anchor as though it were the answer, a
+  wrong date wearing a right one's costume. It returns `None`.
+- **`describe_interval` counted years as `days / 365`.** A span containing a
+  leap day is longer than 365 days per year, so the division rounded up into
+  a year that had not finished: 2023-01-01 to 2024-12-31 is 730 days and one
+  year, and it read "2 years". Years are now counted on the calendar like
+  every other band.
+- **Month names are also ordinary English words.** A bare lowercase "may",
+  "march" or "august" was recorded as a temporal mention on every drawer that
+  used the verb. A bare month carries no resolvable date anyway, so it is now
+  kept only where the writer's capitalization actually chose — never where
+  capitalization is forced, at the start of a line or sentence. Anything with
+  a day or a year attached is a date whatever its case.
+- **A fact records where it rests: the note's words, or the extractor's
+  background knowledge.** Distilling "Ana works as a radiologist at St. Mary's
+  in Leeds" yields both `ana works_as radiologist`, which the note states, and
+  `leeds city_of United Kingdom`, which it does not — and the second is the
+  edge that answers which country Ana works in. Both belong in the graph;
+  until now they were indistinguishable. `core::support` adds the same
+  contract `when` uses: the extractor **quotes**, and the engine **checks** the
+  quote against the note, so the label comes from a substring test rather than
+  from a model grading itself. Three states, not two — `stated`, `background`,
+  and `unevaluated` for every fact distilled before this existed, because "we
+  did not look" and "we looked and found nothing" are different claims and
+  defaulting the first to the second would assert something about facts nobody
+  checked. Spans are stored as offsets into the source drawer, never as copied
+  text, sealed under `kg/{id}/support` like the object beside them. `kg/query`
+  and `kg/timeline` expose `grounding` and take an **opt-in** `?grounding=`
+  filter — never a default, since excluding background facts breaks the
+  multi-hop questions the graph exists to answer. Existing facts keep verifying
+  untouched: support joins the triple's canonical bytes only when present, so
+  a fact without it hashes exactly as it always did.
+- **A distilled fact is dated by the note's words, not by the note.** `refine`
+  stamped every extracted fact with the drawer's `content_date`, so "I quit
+  smoking three months ago" produced a fact whose validity began the day the
+  note was written — the same bug class as reading elapsed time from
+  `content_date` when the drawer already held a more precise resolution.
+  `ExtractedTriple` gains an optional `when`, and the contract on it is that
+  **the model may point at words, it may not supply a date**: it returns the
+  span verbatim, `temporal::resolve_claimed_span` refuses anything the note
+  does not literally contain, and the deterministic scanner resolves what
+  survives against the note's anchor. An invented span, a rewritten one, or a
+  date in place of a quotation all yield nothing and fall back to
+  `content_date`, which is exactly the old behaviour — so the approximate
+  component can only help, never corrupt. `valid_to` stays open even for a
+  period: "in May 2023" says when the event happened, not that the fact
+  expired on the 31st. The response reports `dated_from_text`, the only
+  visible signal that the extractor is quoting rather than computing.
+- **Each `time_mention` carries its own elapsed counts.** A drawer's
+  `content_date` is when it was *written*; a mention inside it is when the
+  thing it describes *happened*. A note written on the 8th saying "I went
+  yesterday" is about the 7th, so "how long ago" answered from `content_date`
+  is off by exactly the day the mention resolution exists to recover. Both
+  are returned, neither is chosen for the caller, and neither is left as
+  arithmetic homework.
+
+**Measured (AMB harness, gemini-3.1-flash-lite answer+judge, verbatim
+surface, k=10 — internal numbers, not protocol-comparable with AMB's
+published vendor-reported rows):**
+
+- **LoCoMo locomo10, before → after the anchor work: 72.6% → 85.6%**
+  (1540 judged QA; same corpus, judge and retrieval — one variable).
+  Temporal **35.2% → 85.4% (+50.2)**, open-domain 89.5 → 93.8, multi-hop
+  64.6 → 66.7, single-hop 67.4 → 67.7. The failing shape had been: retrieval
+  fetched the right session, the context held zero dates ("I went
+  *yesterday*"), and the model invented one.
+- **LongMemEval s: 74.8%** (500 q, 23,867 docs — ~90× LoCoMo; ingest 28 min,
+  retrieve 40 ms avg). Temporal-reasoning 72.9% on a corpus never tuned
+  against — the anchor work generalises. Single-session-user 98.6%,
+  knowledge-update 83.3%, **multi-session 51.1%** (retrieval breadth, the
+  next frontier).
+- **BEAM 100k: 56.2%** (400 rubric-scored q). Contradiction-resolution
+  40/40, preference-following 92.5%, **abstention 60%** (we fabricate on
+  40% of deliberately unanswerable questions), knowledge-update 42.5%,
+  **event-ordering 17.5%** — absolute anchoring is fixed, *relative
+  ordering* is not: dates are stored but retrieval returns
+  relevance-ordered context with no sequence signal.
+
 ## 0.42.0 — Sealed PQ page tier (opt-in)
 
 - Sealed vaults can now keep their PQ codes as **one AEAD page per IVF

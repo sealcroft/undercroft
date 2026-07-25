@@ -162,6 +162,24 @@ enum Command {
         #[arg(long, default_value = "")]
         url: String,
     },
+    /// C3.1 distillation ship-gate: does adding LLM-distilled
+    /// facts-with-receipts to the retrieval surface beat the verbatim
+    /// retrieval-only baseline on LoCoMo session-recall? One model per run
+    /// (UNDERCROFT_LLM_URL/MODEL/API); measures baseline vs augmented R@k on
+    /// the identical corpus and scorer, and counts receipts verified.
+    Distill {
+        /// Path to locomo10.json
+        dataset: std::path::PathBuf,
+        #[arg(short = 'k', long, default_value_t = 10)]
+        k: usize,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        /// Cap QA per conversation (0 = all)
+        #[arg(long, default_value_t = 0)]
+        qa_limit: usize,
+    },
     /// ConvoMem protocol: message-level evidence recall
     Convomem {
         /// Path to a ConvoMem category JSON (array of items)
@@ -573,6 +591,7 @@ fn run_longmemeval(
                 wing: None,
                 room: None,
                 limit: k * 8,
+                room_cap: None,
             },
         )?;
         let mut ranked_sessions: Vec<String> = Vec::new();
@@ -703,6 +722,7 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
                 wing: None,
                 room: None,
                 limit: 5,
+                room_cap: None,
             },
         )?;
         if hits.first().map(|h| &h.drawer.id) == Some(id) {
@@ -1012,6 +1032,7 @@ impl vs::MemorySystem for NativeSystem {
             wing: None,
             room: None,
             limit: k * 6,
+            room_cap: None,
         };
         let hits = store.search(question, &opts)?;
         let mut rooms: Vec<String> = Vec::new();
@@ -1121,6 +1142,7 @@ fn locomo_eval(
                 wing: None,
                 room: None,
                 limit: k * 6,
+                room_cap: None,
             };
             let search_started = Instant::now();
             let hits = match index.as_mut() {
@@ -1157,6 +1179,217 @@ fn locomo_eval(
         );
     }
     Ok((recall_sum, evaluated, per_cat, timing))
+}
+
+/// One session-recall pass over a conversation's QA against the current
+/// store contents (identical scoring to [`locomo_eval`]): returns
+/// (recall_sum, evaluated). `wing` scopes retrieval: `None` searches
+/// everything, `Some("locomo")` verbatim-only, `Some("facts")`
+/// distilled-only — the three passes that separate verbatim from KG.
+fn score_pass(
+    store: &mut PalaceStore,
+    qa_pairs: &[Value],
+    k: usize,
+    qa_limit: usize,
+    wing: Option<&str>,
+) -> Result<(f32, u32)> {
+    let mut recall_sum = 0f32;
+    let mut evaluated = 0u32;
+    let mut asked = 0usize;
+    for qa in qa_pairs {
+        if qa_limit > 0 && asked >= qa_limit {
+            break;
+        }
+        let question = qa
+            .get("question")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let evidence: Vec<String> = qa
+            .get("evidence")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| e.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if question.is_empty() || evidence.is_empty() {
+            continue;
+        }
+        let correct: std::collections::BTreeSet<String> = evidence
+            .iter()
+            .filter_map(|e| {
+                let s = e.trim_start_matches('D');
+                let sess = s.split(':').next()?;
+                Some(format!("session_{sess}"))
+            })
+            .collect();
+        let hits = store.search(
+            question,
+            &SearchOptions {
+                wing: wing.map(str::to_string),
+                room: None,
+                limit: k * 6,
+                room_cap: None,
+            },
+        )?;
+        let mut rooms: Vec<String> = Vec::new();
+        for h in &hits {
+            if !rooms.contains(&h.drawer.meta.room) {
+                rooms.push(h.drawer.meta.room.clone());
+            }
+        }
+        let topk: Vec<&String> = rooms.iter().take(k).collect();
+        if correct.iter().any(|c| topk.contains(&c)) {
+            recall_sum += 1.0;
+        }
+        evaluated += 1;
+        asked += 1;
+    }
+    Ok((recall_sum, evaluated))
+}
+
+/// C3.1 ship-gate. Per conversation: ingest verbatim (one room per
+/// session) → score baseline → distill each drawer's durable facts through
+/// the configured LLM, storing each as a *receipted* KG fact **and** as a
+/// searchable fact-drawer filed into its source session's room → score
+/// augmented over the same retrieval. The gate: augmented must beat
+/// baseline for the distillation tier to ship as a recall feature; either
+/// way the receipts are verified end-to-end.
+fn distill_eval(samples: &[Value], k: usize, qa_limit: usize) -> Result<()> {
+    let llm = undercroft_llm::LlmClient::from_env()
+        .map_err(|e| anyhow::anyhow!("distill gate needs a local LLM (UNDERCROFT_LLM_URL): {e}"))?;
+    let model = llm.model().to_string();
+    let (mut base_sum, mut dist_sum, mut aug_sum) = (0f32, 0f32, 0f32);
+    let (mut evaluated, mut facts_total, mut verified_total) = (0u32, 0u32, 0u32);
+    let mut distill_secs = 0f32;
+    let total = samples.len();
+    for (si, sample) in samples.iter().enumerate() {
+        let conv = sample
+            .get("conversation")
+            .context("sample missing conversation")?;
+        let (_tmp, mut store) = fresh_store(SecurityLevel::Sealed)?;
+        let mut n = 1;
+        while let Some(dialogs) = conv.get(format!("session_{n}")).and_then(Value::as_array) {
+            let text: Vec<String> = dialogs
+                .iter()
+                .filter_map(|d| {
+                    Some(format!(
+                        "{} said, \"{}\"",
+                        d.get("speaker").and_then(Value::as_str).unwrap_or("?"),
+                        d.get("text").and_then(Value::as_str)?
+                    ))
+                })
+                .collect();
+            let body = undercroft_core::normalize_content(&text.join("\n"));
+            for (ci, chunk) in
+                undercroft_core::chunk_text(&body, undercroft_core::ChunkOptions::default())
+                    .into_iter()
+                    .enumerate()
+            {
+                store.upsert(&Drawer::new(
+                    "locomo",
+                    &format!("session_{n}"),
+                    chunk,
+                    None,
+                    ci as u32,
+                    "bench",
+                ))?;
+            }
+            n += 1;
+        }
+        let qa_pairs = sample
+            .get("qa")
+            .and_then(Value::as_array)
+            .context("sample missing qa")?;
+
+        // Baseline: verbatim retrieval only (nothing else in the store yet).
+        let (b_rs, b_ev) = score_pass(&mut store, qa_pairs, k, qa_limit, None)?;
+
+        // Distill: LLM facts → receipted KG fact + searchable fact-drawer in
+        // the source session's room.
+        let verbatim = store.recent(Some("locomo"), 1_000_000)?;
+        let mut fact_idx = 0u32;
+        let t0 = Instant::now();
+        for d in &verbatim {
+            match llm.extract_triples(&d.content) {
+                Ok(triples) => {
+                    for tri in triples {
+                        let subj = tri.subject.to_lowercase();
+                        let pred = tri.predicate.to_lowercase();
+                        if undercroft_core::validate_name(&subj, "subject").is_err()
+                            || undercroft_core::validate_name(&pred, "predicate").is_err()
+                        {
+                            continue;
+                        }
+                        store.kg_add_receipted(
+                            &subj,
+                            &pred,
+                            &tri.object,
+                            None,
+                            None,
+                            0.8,
+                            (&d.id, &d.content),
+                        )?;
+                        store.upsert(&Drawer::new(
+                            "facts",
+                            &d.meta.room,
+                            format!("{} {} {}", tri.subject, tri.predicate, tri.object),
+                            None,
+                            fact_idx,
+                            "distill",
+                        ))?;
+                        fact_idx += 1;
+                    }
+                }
+                Err(e) => eprintln!("  distill: triples failed for {}: {e}", d.id),
+            }
+        }
+        distill_secs += t0.elapsed().as_secs_f32();
+        facts_total += fact_idx;
+        verified_total += store
+            .kg_verify_receipts()?
+            .iter()
+            .filter(|r| matches!(r.verdict, undercroft_store::ReceiptVerdict::Verified))
+            .count() as u32;
+
+        // Distilled-only: retrieval restricted to the KG-fact surface —
+        // what distillation achieves *without* the verbatim it was derived
+        // from (the shape competitors ship, where extraction replaces text).
+        let (d_rs, _d_ev) = score_pass(&mut store, qa_pairs, k, qa_limit, Some("facts"))?;
+
+        // Augmented: verbatim + distilled facts together (no wing filter).
+        let (a_rs, _a_ev) = score_pass(&mut store, qa_pairs, k, qa_limit, None)?;
+
+        base_sum += b_rs;
+        dist_sum += d_rs;
+        aug_sum += a_rs;
+        evaluated += b_ev;
+        let ev = evaluated.max(1) as f32;
+        eprintln!(
+            "  [{model}] convo {}/{total} — verbatim {:.1}% distilled {:.1}% \
+             verbatim+distilled {:.1}%, {fact_idx} facts",
+            si + 1,
+            100.0 * base_sum / ev,
+            100.0 * dist_sum / ev,
+            100.0 * aug_sum / ev,
+        );
+    }
+    let ev = evaluated.max(1) as f32;
+    println!(
+        "DISTILL_RAW model={model} verbatim_sum={base_sum:.4} distilled_sum={dist_sum:.4} \
+         augmented_sum={aug_sum:.4} evaluated={evaluated} facts={facts_total} \
+         verified={verified_total} distill_secs={distill_secs:.1}"
+    );
+    println!(
+        "DISTILL — {model} · verbatim R@{k} {:.1}% · distilled-only R@{k} {:.1}% · \
+         verbatim+distilled R@{k} {:.1}% ({facts_total} facts, {verified_total} receipts \
+         verified)",
+        100.0 * base_sum / ev,
+        100.0 * dist_sum / ev,
+        100.0 * aug_sum / ev,
+    );
+    Ok(())
 }
 
 /// ConvoMem: one item = conversations of messages + `message_evidences`
@@ -1216,6 +1449,7 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
                 wing: None,
                 room: None,
                 limit: k,
+                room_cap: None,
             },
         )?;
         let recall = if hits
@@ -1290,6 +1524,7 @@ fn membench_eval(raw: &Value, topic: &str, k: usize, limit: Option<usize>) -> Re
                 wing: None,
                 room: None,
                 limit: k,
+                room_cap: None,
             },
         )?;
         let recall = if hits
@@ -2144,6 +2379,21 @@ fn main() -> Result<()> {
                 );
             }
             Ok(())
+        }
+        Command::Distill {
+            dataset,
+            k,
+            limit,
+            skip,
+            qa_limit,
+        } => {
+            let raw = std::fs::read_to_string(&dataset)
+                .with_context(|| format!("reading {}", dataset.display()))?;
+            let samples: Vec<Value> = serde_json::from_str(&raw)?;
+            let total = samples.len();
+            let start = skip.min(total);
+            let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
+            distill_eval(&samples[start..end], k, qa_limit)
         }
         Command::Convomem { dataset, k, limit } => {
             let raw = std::fs::read_to_string(&dataset)

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" width="900" height="620" role="img" aria-labelledby="t d">
+<title id="t">Undercroft domain model</title>
+<desc id="d">Palace contains vaults; a vault contains wings; a wing contains rooms; a room contains drawers. The knowledge graph and audit chain sit inside the vault alongside the wings.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
+</style>
+<rect width="900" height="620" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">Domain model — what nests inside what</text>
+<text x="28" y="58" class="f b dim">One process holds one palace. Everything inside the vault boundary is sealed at rest.</text>
+
+<rect x="24" y="74" width="852" height="522" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="100" class="f l ink">palace</text>
+<text x="640" y="100" class="f s dim">one per process · master key · data dir</text>
+
+<rect x="42" y="114" width="816" height="464" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2"/>
+<text x="60" y="140" class="f l" fill="var(--d-teal-ink,#0d6b62)">vault — isolation + crypto boundary</text>
+<text x="620" y="140" class="f s" fill="var(--d-teal-ink,#0d6b62)">HKDF-derived key · AAD binds vault id</text>
+<text x="60" y="159" class="f s dim">Cross-vault access fails cryptographically, not just logically. One SQLite database, one audit chain.</text>
+
+<rect x="60" y="174" width="780" height="256" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
+<text x="78" y="199" class="f l ink">wing</text>
+<text x="120" y="199" class="f b dim">person · project · tenant user</text>
+<text x="762" y="199" class="f s dim">search scope</text>
+
+<rect x="78" y="214" width="380" height="198" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="94" y="238" class="f l ink">room</text>
+<text x="136" y="238" class="f b dim">topic · session · ticket</text>
+
+<rect x="94" y="252" width="348" height="76" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
+<text x="108" y="273" class="f l" fill="var(--d-blue-ink,#33527d)">drawer</text>
+<text x="168" y="273" class="f b dim">one verbatim chunk</text>
+<text x="108" y="292" class="f s dim">content (sealed) · embedding (sealed) · HMAC tag</text>
+<text x="108" y="309" class="f s dim">meta: content_date · time_mentions · entities · chunk_index</text>
+
+<rect x="94" y="334" width="348" height="26" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.1"/>
+<text x="108" y="351" class="f s dim">drawer · drawer · drawer …</text>
+
+<text x="94" y="378" class="f s dim">id = hash(wing, room, source, chunk_index, normalize_version)</text>
+<text x="94" y="395" class="f s dim">content is not in the id — so re-mining is idempotent, not duplicating</text>
+
+<rect x="472" y="214" width="352" height="198" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
+<text x="488" y="238" class="f l" fill="var(--d-amber-ink,#8d5a1d)">room "facts"</text>
+<text x="488" y="262" class="f b dim">Distilled fact-drawers — one per distinct</text>
+<text x="488" y="279" class="f b dim">triple, written by POST /refine.</text>
+<text x="488" y="303" class="f b dim">Each carries an HMAC receipt citing the</text>
+<text x="488" y="320" class="f b dim">verbatim drawer it came from.</text>
+<text x="488" y="352" class="f s dim">The room filter alone selects the surface:</text>
+<text x="488" y="369" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">verbatim · distilled · both</text>
+<text x="488" y="395" class="f s dim">Sources exclude this room, so refining never</text>
+<text x="488" y="405" class="f s dim">re-distils its own output.</text>
+
+<rect x="60" y="444" width="384" height="116" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
+<text x="78" y="468" class="f l" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
+<text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
+<text x="78" y="508" class="f b dim">Validity windows: valid_from comes from the</text>
+<text x="78" y="525" class="f b dim">source drawer's content_date.</text>
+<text x="78" y="547" class="f s dim">triple_id is content-derived ⇒ a repeated fact collapses.</text>
+
+<rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
+<text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>
+<text x="476" y="491" class="f b dim">Head lives in chain_meta and advances inside</text>
+<text x="476" y="508" class="f b dim">the same transaction as the data it covers.</text>
+<text x="476" y="530" class="f s dim">Manifest anchor lags on purpose:</text>
+<text x="476" y="547" class="f s dim">behind ⇒ crash, fast-forward · ahead ⇒ tamper alarm</text>
+</svg>
