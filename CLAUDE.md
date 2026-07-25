@@ -112,7 +112,7 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (223)
+docker compose run --rm test          # cargo unit + integration tests (226)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (157 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)

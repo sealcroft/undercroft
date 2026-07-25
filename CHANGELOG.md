@@ -58,10 +58,40 @@ document in 272 spells a date out in its text.
   authenticating gateway — which, unlike the local default, means drawer
   text leaves the machine.
 
-Tests 177 → **223**, including regression coverage pinning what must not
+- **`DrawerMeta.entities` populated** — declared since the mempalace port
+  and never assigned (every "entities" reference in the codebase was to
+  *knowledge-graph* entities, a different thing). Now extracted in
+  `Drawer::new` by the existing deterministic offline extractor, so the
+  structure travels with an export instead of being recomputed to be read.
+  Empty stays empty and is omitted from serialized meta, keeping existing
+  rows byte-identical.
+
+Tests 177 → **226**, including regression coverage pinning what must not
 change: fence-free prose normalizes byte-for-byte as v1 across ten cases,
 harness noise is still filtered, prose is still verbatim, and
 `chunk_exchanges` text is identical to the dated variant.
+
+**Measured (AMB harness, gemini-3.1-flash-lite answer+judge, verbatim
+surface, k=10 — internal numbers, not protocol-comparable with AMB's
+published vendor-reported rows):**
+
+- **LoCoMo locomo10, before → after the anchor work: 72.6% → 85.6%**
+  (1540 judged QA; same corpus, judge and retrieval — one variable).
+  Temporal **35.2% → 85.4% (+50.2)**, open-domain 89.5 → 93.8, multi-hop
+  64.6 → 66.7, single-hop 67.4 → 67.7. The failing shape had been: retrieval
+  fetched the right session, the context held zero dates ("I went
+  *yesterday*"), and the model invented one.
+- **LongMemEval s: 74.8%** (500 q, 23,867 docs — ~90× LoCoMo; ingest 28 min,
+  retrieve 40 ms avg). Temporal-reasoning 72.9% on a corpus never tuned
+  against — the anchor work generalises. Single-session-user 98.6%,
+  knowledge-update 83.3%, **multi-session 51.1%** (retrieval breadth, the
+  next frontier).
+- **BEAM 100k: 56.2%** (400 rubric-scored q). Contradiction-resolution
+  40/40, preference-following 92.5%, **abstention 60%** (we fabricate on
+  40% of deliberately unanswerable questions), knowledge-update 42.5%,
+  **event-ordering 17.5%** — absolute anchoring is fixed, *relative
+  ordering* is not: dates are stored but retrieval returns
+  relevance-ordered context with no sequence signal.
 
 ## 0.42.0 — Sealed PQ page tier (opt-in)
 
