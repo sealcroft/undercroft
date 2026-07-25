@@ -27,6 +27,9 @@ website/book/
 # Browser automation artifacts
 .playwright-mcp/
 
+# Local brainstorming / design-scratch documents (never committed)
+/brainstorming/
+
 # Session handover notes (local only — never committed)
 /HANDOVER.md
 HANDOVER*.md
