@@ -159,6 +159,18 @@ pub struct ExtractedTriple {
     pub subject: String,
     pub predicate: String,
     pub object: String,
+    /// The words in the note that say *when* this fact was established,
+    /// copied verbatim — "three months ago", "last May". **Not a date.**
+    ///
+    /// The model is asked to point, not to compute: a span can be checked
+    /// against the note it supposedly came from, and a date cannot. Whatever
+    /// arrives here is verified and resolved by
+    /// `undercroft_core::temporal::resolve_claimed_span`, which rejects
+    /// anything the note does not literally contain. A model that answers
+    /// with a date instead of a quotation therefore contributes nothing,
+    /// which is the intended failure.
+    #[serde(default)]
+    pub when: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -314,6 +326,13 @@ pub fn triples_from_output(out: &str) -> Vec<ExtractedTriple> {
                 subject: value_to_string(o.get("subject")?)?,
                 predicate: value_to_string(o.get("predicate")?)?,
                 object: value_to_string(o.get("object")?)?,
+                // Optional and never fatal: a model that omits it, or emits
+                // null or an empty string, simply dates its fact from the
+                // note as before.
+                when: o
+                    .get("when")
+                    .and_then(value_to_string)
+                    .filter(|s| !s.trim().is_empty()),
             })
         })
         .collect()
@@ -359,8 +378,12 @@ No prose, no markdown fences.";
 
 const TRIPLE_SYSTEM: &str = "You extract factual relationships from notes as knowledge-graph \
 triples. Reply with ONLY a JSON array of objects: [{\"subject\": \"...\", \"predicate\": \
-\"snake_case_relation\", \"object\": \"...\"}]. Only durable facts (roles, locations, \
-ownership, preferences, decisions) — no ephemera. No prose, no markdown fences.";
+\"snake_case_relation\", \"object\": \"...\", \"when\": \"...\"}]. Only durable facts (roles, \
+locations, ownership, preferences, decisions) — no ephemera. For \"when\", COPY THE EXACT \
+WORDS from the note that say when the fact was established — \"three months ago\", \"last \
+May\", \"on 2023-05-07\". Copy them character for character from the note. Do NOT rewrite \
+them, do NOT work out a date, and use null when the note does not say. No prose, no markdown \
+fences.";
 
 const MEMORY_SYSTEM: &str = "You extract the durable memories worth keeping from a note: \
 decisions made, stated preferences, plans, and stable facts. Reply with ONLY a JSON array of \
@@ -523,6 +546,29 @@ mod tests {
         assert_eq!(t.len(), 1, "the one complete object is salvaged");
         // nothing usable → empty, never an error
         assert!(triples_from_output("I could not find any facts.").is_empty());
+    }
+
+    /// `when` is optional in every direction: a model that omits it, nulls
+    /// it, or empties it dates its fact from the note, exactly as before.
+    /// Whatever it *does* send is a quotation to be checked downstream, not
+    /// a date to be believed — see `temporal::resolve_claimed_span`.
+    #[test]
+    fn triples_carry_an_optional_when_span() {
+        let t = triples_from_output(
+            r#"[{"subject":"ana","predicate":"quit","object":"smoking","when":"three months ago"}]"#,
+        );
+        assert_eq!(t[0].when.as_deref(), Some("three months ago"));
+
+        for out in [
+            r#"[{"subject":"a","predicate":"p","object":"o"}]"#,
+            r#"[{"subject":"a","predicate":"p","object":"o","when":null}]"#,
+            r#"[{"subject":"a","predicate":"p","object":"o","when":""}]"#,
+            r#"[{"subject":"a","predicate":"p","object":"o","when":"   "}]"#,
+        ] {
+            let t = triples_from_output(out);
+            assert_eq!(t.len(), 1, "{out}");
+            assert!(t[0].when.is_none(), "{out}");
+        }
     }
 
     #[test]

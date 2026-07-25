@@ -541,6 +541,49 @@ fn month_name_is_deliberate(text: &str, off: usize) -> bool {
     !(before.is_empty() || before.ends_with(['.', '!', '?', '\n', '\r']))
 }
 
+/// Resolve a span that some *other* component claims dates something in
+/// `text` — an extraction model reading the note, most usefully.
+///
+/// The claim is not trusted. It is checked against the text first: a span
+/// that is not literally there is rejected, so a proposer that invents "in
+/// June 2019" for a note which never said it gets nothing back. What survives
+/// that check is resolved by the same deterministic scanner every drawer goes
+/// through, against the same anchor, and only a claim that *resolves* is
+/// returned.
+///
+/// This is the whole contract that lets an approximate component help without
+/// being trusted: **it may point at words, it may not supply a date.** Only
+/// this module turns words into a `resolved` value, so a claim that cannot be
+/// verified degrades to no answer rather than to a wrong one — which keeps
+/// "never guess" true of the system, not merely of the scanner.
+///
+/// The returned mention's `offset` is relative to `text`, not to the claim.
+pub fn resolve_claimed_span(text: &str, claim: &str, anchor: Option<Date>) -> Option<TimeMention> {
+    resolve_claimed_span_with(text, claim, anchor, WeekStart::default())
+}
+
+/// As [`resolve_claimed_span`], under an explicit week-start convention.
+pub fn resolve_claimed_span_with(
+    text: &str,
+    claim: &str,
+    anchor: Option<Date>,
+    ws: WeekStart,
+) -> Option<TimeMention> {
+    let claim = claim.trim();
+    if claim.is_empty() {
+        return None;
+    }
+    // Verbatim or nothing. The words have to be the writer's.
+    let at = text.find(claim)?;
+    let mut m = extract_time_mentions_with(claim, anchor, ws)
+        .into_iter()
+        .find(|m| m.resolved.is_some())?;
+    m.offset = u32::try_from(at)
+        .unwrap_or(u32::MAX)
+        .saturating_add(m.offset);
+    Some(m)
+}
+
 /// Parse a numeric date whose **year comes last** — "13/05/2023",
 /// "05-13-2023", "13.5.2023".
 ///
@@ -867,6 +910,64 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].kind, TimeKind::Absolute);
         assert!(m[0].resolved.is_none());
+    }
+
+    // ---- a claim is checked, not believed --------------------------------
+
+    /// The contract that lets an approximate proposer help without being
+    /// trusted: it points at words, and this module turns words into dates.
+    #[test]
+    fn a_claimed_span_resolves_only_when_the_text_really_says_it() {
+        let note = "I quit smoking three months ago and feel better";
+        let m = resolve_claimed_span(note, "three months ago", anchor()).unwrap();
+        assert_eq!(m.resolved.as_deref(), Some("2023-02-08"));
+        // Offsets are reported against the note, not the fragment.
+        assert_eq!(m.offset as usize, note.find("three").unwrap());
+    }
+
+    /// A span the note does not contain is refused outright — the failure
+    /// mode this check exists for is a model inventing a plausible date.
+    #[test]
+    fn an_invented_span_is_refused() {
+        let note = "I quit smoking three months ago";
+        for claim in [
+            "in June 2019",   // never appears
+            "two months ago", // plausible, still not what was written
+            "2023-02-08",     // the right answer, but not the note's words
+            "",
+            "   ",
+        ] {
+            assert!(
+                resolve_claimed_span(note, claim, anchor()).is_none(),
+                "accepted {claim:?}"
+            );
+        }
+    }
+
+    /// Present in the note but not a time expression, or not resolvable
+    /// against the anchor — either way the caller gets nothing and falls
+    /// back, rather than getting something wrong.
+    #[test]
+    fn a_real_span_that_is_not_a_date_resolves_to_nothing() {
+        let note = "I quit smoking after the move to Berlin, sometime in March";
+        assert!(resolve_claimed_span(note, "after the move", anchor()).is_none());
+        // "March" is in the note, but no year is, and this never guesses one.
+        assert!(resolve_claimed_span(note, "March", anchor()).is_none());
+    }
+
+    #[test]
+    fn a_claimed_span_may_name_a_period() {
+        let note = "we signed the lease in May 2023 after a long search";
+        let m = resolve_claimed_span(note, "May 2023", None).unwrap();
+        assert_eq!(m.range(), Some(("2023-05-01", "2023-05-31")));
+        assert!(m.is_period());
+    }
+
+    /// Relative claims need the note's anchor, exactly like the scanner.
+    #[test]
+    fn a_relative_claim_without_an_anchor_stays_unresolved() {
+        let note = "I quit smoking three months ago";
+        assert!(resolve_claimed_span(note, "three months ago", None).is_none());
     }
 
     // ---- numeric dates with the year last --------------------------------

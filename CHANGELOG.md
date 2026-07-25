@@ -138,6 +138,22 @@ harness noise is still filtered, prose is still verbatim, and
   kept only where the writer's capitalization actually chose — never where
   capitalization is forced, at the start of a line or sentence. Anything with
   a day or a year attached is a date whatever its case.
+- **A distilled fact is dated by the note's words, not by the note.** `refine`
+  stamped every extracted fact with the drawer's `content_date`, so "I quit
+  smoking three months ago" produced a fact whose validity began the day the
+  note was written — the same bug class as reading elapsed time from
+  `content_date` when the drawer already held a more precise resolution.
+  `ExtractedTriple` gains an optional `when`, and the contract on it is that
+  **the model may point at words, it may not supply a date**: it returns the
+  span verbatim, `temporal::resolve_claimed_span` refuses anything the note
+  does not literally contain, and the deterministic scanner resolves what
+  survives against the note's anchor. An invented span, a rewritten one, or a
+  date in place of a quotation all yield nothing and fall back to
+  `content_date`, which is exactly the old behaviour — so the approximate
+  component can only help, never corrupt. `valid_to` stays open even for a
+  period: "in May 2023" says when the event happened, not that the fact
+  expired on the 31st. The response reports `dated_from_text`, the only
+  visible signal that the extractor is quoting rather than computing.
 - **Each `time_mention` carries its own elapsed counts.** A drawer's
   `content_date` is when it was *written*; a mention inside it is when the
   thing it describes *happened*. A note written on the 8th saying "I went

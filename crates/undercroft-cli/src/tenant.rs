@@ -887,7 +887,13 @@ impl Tenancy {
         // itself returns, so the two notions of identity cannot drift.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let (mut facts, mut duplicates, mut skipped, mut failed) = (0u32, 0u32, 0u32, 0u32);
+        let mut dated_from_text = 0u32;
         for d in &sources {
+            let anchor = d
+                .meta
+                .content_date
+                .as_deref()
+                .and_then(undercroft_core::temporal::parse_anchor);
             let triples = match llm.extract_triples(&d.content) {
                 Ok(t) => t,
                 Err(e) => {
@@ -905,18 +911,38 @@ impl Tenancy {
                     skipped += 1;
                     continue;
                 }
+                // When the fact was established, which is not the same as
+                // when the note was written: "I quit smoking three months
+                // ago" is a fact about February in a note dated May. The
+                // extractor is asked to point at the words that say so and
+                // is not permitted to supply a date — `resolve_claimed_span`
+                // rejects any span the note does not literally contain and
+                // resolves the rest deterministically. Anything unverified
+                // falls back to the note's own date, which is what every
+                // fact used to get.
+                let dated = t.when.as_deref().and_then(|claim| {
+                    undercroft_core::temporal::resolve_claimed_span(&d.content, claim, anchor)
+                });
+                if dated.is_some() {
+                    dated_from_text += 1;
+                }
+                let fact_date = dated
+                    .as_ref()
+                    .and_then(|m| m.resolved.clone())
+                    .or_else(|| d.meta.content_date.clone());
                 // The receipt is an HMAC-covered citation back to the
                 // verbatim drawer this fact came from — checkable later via
                 // `GET /v1/vaults/{id}/kg/receipts`.
-                // A fact inherits the date of the content it was distilled
-                // from, so the graph's validity windows describe when the
-                // fact held — not when the extraction happened to run.
+                // `valid_to` stays open even when the span named a period.
+                // A period says when the event *happened*; it does not say
+                // the fact stopped holding, and "in May 2023" must not be
+                // read as "expired on the 31st".
                 let triple_id = store
                     .kg_add_receipted(
                         &subject,
                         &predicate,
                         &t.object,
-                        d.meta.content_date.as_deref(),
+                        fact_date.as_deref(),
                         None,
                         0.8, // model-extracted: below human-asserted confidence
                         (&d.id, &d.content),
@@ -939,7 +965,7 @@ impl Tenancy {
                             facts,
                             "distill",
                         )
-                        .with_content_date(d.meta.content_date.clone()),
+                        .with_content_date(fact_date),
                     )
                     .map_err(store_err)?;
                 facts += 1;
@@ -954,6 +980,12 @@ impl Tenancy {
                 "duplicates": duplicates,
                 "skipped": skipped,
                 "failed": failed,
+                // How many facts were dated by words in the note rather than
+                // by the note's own date. Reported because it is the only
+                // visible measure of whether the extractor is pointing at
+                // real spans — a model that answers with dates instead of
+                // quotations drives this to zero without erroring.
+                "dated_from_text": dated_from_text,
                 "fact_room": fact_room,
                 "model": llm.model(),
             })),
