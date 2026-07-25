@@ -8,86 +8,96 @@
   .b { font-size: 12px; }
   .s { font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-  .ink { fill: #14202b; }
-  .dim { fill: #55697a; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
 </style>
-<rect width="900" height="600" fill="#fbfcfd"/>
+<rect width="900" height="600" fill="var(--d-bg,#fbfcfd)"/>
 <text x="28" y="36" class="f h ink">Layers and trust boundaries</text>
 <text x="28" y="56" class="f b dim">One palace per process. Tenancy is vaults, not palaces. Nothing leaves the machine unless you configure it to.</text>
 
-<rect x="24" y="74" width="852" height="82" rx="9" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="24" y="74" width="852" height="82" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="42" y="98" class="f l ink">callers</text>
-<rect x="42" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
-<text x="56" y="126" class="f b" fill="#33527d">agent over MCP stdio</text>
+<rect x="42" y="108" width="196" height="38" rx="6" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-blue,#4a6fa5)"/>
+<text x="56" y="126" class="f b" fill="var(--d-blue-ink,#33527d)">agent over MCP stdio</text>
 <text x="56" y="140" class="f s dim">32 tools · local process</text>
-<rect x="248" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
-<text x="262" y="126" class="f b" fill="#33527d">app over HTTP /v1</text>
+<rect x="248" y="108" width="196" height="38" rx="6" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-blue,#4a6fa5)"/>
+<text x="262" y="126" class="f b" fill="var(--d-blue-ink,#33527d)">app over HTTP /v1</text>
 <text x="262" y="140" class="f s dim">bearer token · REST</text>
-<rect x="454" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
-<text x="468" y="126" class="f b" fill="#33527d">CLI</text>
+<rect x="454" y="108" width="196" height="38" rx="6" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-blue,#4a6fa5)"/>
+<text x="468" y="126" class="f b" fill="var(--d-blue-ink,#33527d)">CLI</text>
 <text x="468" y="140" class="f s dim">remember · mine · search</text>
-<rect x="660" y="108" width="198" height="38" rx="6" fill="#f7f9fb" stroke="#c9d4dd"/>
+<rect x="660" y="108" width="198" height="38" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="674" y="126" class="f b dim">admin console /ui</text>
 <text x="674" y="140" class="f s dim">served on every build</text>
 
-<path d="M450 158 L450 178" stroke="#8fa3b4" stroke-width="1.8" marker-end="url(#a)"/>
+<path d="M450 158 L450 178" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.8" marker-end="url(#a)"/>
 <text x="462" y="174" class="f s dim">bearer + optional per-vault assertion (HMAC, time-boxed)</text>
 
-<rect x="24" y="182" width="600" height="176" rx="9" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="2"/>
-<text x="42" y="206" class="f l" fill="#523a86">engine — one Rust process</text>
-<rect x="42" y="216" width="270" height="60" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="58" y="238" class="f b" fill="#523a86">/v1 surface + MCP handler</text>
+<rect x="24" y="182" width="600" height="176" rx="9" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="2"/>
+<text x="42" y="206" class="f l" fill="var(--d-violet-ink,#523a86)">engine — one Rust process</text>
+<rect x="42" y="216" width="270" height="60" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="58" y="238" class="f b" fill="var(--d-violet-ink,#523a86)">/v1 surface + MCP handler</text>
 <text x="58" y="254" class="f s dim">drawers · search · refine · kg · verify</text>
 <text x="58" y="269" class="f s dim">rotate · export · import · taxonomy</text>
-<rect x="322" y="216" width="292" height="60" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="338" y="238" class="f b" fill="#523a86">store</text>
+<rect x="322" y="216" width="292" height="60" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="338" y="238" class="f b" fill="var(--d-violet-ink,#523a86)">store</text>
 <text x="338" y="254" class="f s dim">rank → gate → rerank → select</text>
 <text x="338" y="269" class="f s dim">verifies every row's HMAC before use</text>
-<rect x="42" y="284" width="270" height="58" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="58" y="306" class="f b" fill="#523a86">knowledge graph</text>
+<rect x="42" y="284" width="270" height="58" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="58" y="306" class="f b" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
 <text x="58" y="322" class="f s dim">receipted facts, validity windows</text>
 <text x="58" y="336" class="f s dim">written only by refine or explicit kg calls</text>
-<rect x="322" y="284" width="292" height="58" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="338" y="306" class="f b" fill="#523a86">optional local LLM client</text>
+<rect x="322" y="284" width="292" height="58" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="338" y="306" class="f b" fill="var(--d-violet-ink,#523a86)">optional local LLM client</text>
 <text x="338" y="322" class="f s dim">Ollama or OpenAI-compatible, for refine</text>
 <text x="338" y="336" class="f mono dim">unset UNDERCROFT_LLM_URL ⇒ never called</text>
 
-<rect x="640" y="182" width="236" height="176" rx="9" fill="#ffffff" stroke="#c9d4dd" stroke-width="1.4" stroke-dasharray="6 4"/>
+<rect x="640" y="182" width="236" height="176" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.4" stroke-dasharray="6 4"/>
 <text x="658" y="206" class="f l dim">optional, separate binary</text>
-<rect x="658" y="216" width="200" height="60" rx="6" fill="#f7f9fb" stroke="#8fa3b4"/>
+<rect x="658" y="216" width="200" height="60" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)"/>
 <text x="672" y="238" class="f b ink">orchestrator</text>
 <text x="672" y="254" class="f s dim">tenant → vault routing, /t/*</text>
 <text x="672" y="269" class="f s dim">own SQLite, sealed engine creds</text>
-<rect x="658" y="284" width="200" height="58" rx="6" fill="#fdf3f3" stroke="#b5453a"/>
-<text x="672" y="306" class="f b" fill="#94382f">remote vector backends</text>
+<rect x="658" y="284" width="200" height="58" rx="6" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
+<text x="672" y="306" class="f b" fill="var(--d-red-ink,#94382f)">remote vector backends</text>
 <text x="672" y="322" class="f s dim">untrusted accelerators — sealed</text>
 <text x="672" y="336" class="f s dim">payloads only, re-verified on read</text>
 
-<path d="M320 360 L320 380" stroke="#12897e" stroke-width="1.8" marker-end="url(#a)"/>
-<line x1="24" y1="374" x2="876" y2="374" stroke="#12897e" stroke-width="1.6" stroke-dasharray="8 5"/>
-<text x="336" y="370" class="f s" fill="#0d6b62">everything below this line is ciphertext</text>
+<path d="M320 360 L320 380" stroke="var(--d-teal,#12897e)" stroke-width="1.8" marker-end="url(#a)"/>
+<line x1="24" y1="374" x2="876" y2="374" stroke="var(--d-teal,#12897e)" stroke-width="1.6" stroke-dasharray="8 5"/>
+<text x="336" y="370" class="f s" fill="var(--d-teal-ink,#0d6b62)">everything below this line is ciphertext</text>
 
-<rect x="24" y="386" width="852" height="128" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2"/>
-<text x="42" y="410" class="f l" fill="#0d6b62">at rest — per-vault key, HKDF-derived from the master key</text>
-<rect x="42" y="420" width="266" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
-<text x="58" y="442" class="f b" fill="#0d6b62">sealed artifacts</text>
+<rect x="24" y="386" width="852" height="128" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2"/>
+<text x="42" y="410" class="f l" fill="var(--d-teal-ink,#0d6b62)">at rest — per-vault key, HKDF-derived from the master key</text>
+<rect x="42" y="420" width="266" height="80" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.2"/>
+<text x="58" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">sealed artifacts</text>
 <text x="58" y="459" class="f s dim">content · embeddings · ColBERT token</text>
 <text x="58" y="474" class="f s dim">matrices · PQ codes, codebook, pages</text>
 <text x="58" y="491" class="f s dim">each under a distinct AAD domain</text>
-<rect x="318" y="420" width="266" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
-<text x="334" y="442" class="f b" fill="#0d6b62">integrity</text>
+<rect x="318" y="420" width="266" height="80" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.2"/>
+<text x="334" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">integrity</text>
 <text x="334" y="459" class="f s dim">per-row HMAC tag, verified on every</text>
 <text x="334" y="474" class="f s dim">read; tamper-evident audit chain;</text>
 <text x="334" y="491" class="f s dim">manifest anchor as rollback detector</text>
-<rect x="594" y="420" width="264" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
-<text x="610" y="442" class="f b" fill="#0d6b62">never present for sealed vaults</text>
+<rect x="594" y="420" width="264" height="80" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.2"/>
+<text x="610" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">never present for sealed vaults</text>
 <text x="610" y="459" class="f s dim">no full-text index, no plaintext</text>
 <text x="610" y="474" class="f s dim">derived data in clear on disk.</text>
 <text x="610" y="491" class="f s dim">Search uses decrypt-once RAM caches.</text>
 
-<rect x="24" y="526" width="852" height="56" rx="8" fill="#ffffff" stroke="#c9d4dd"/>
+<rect x="24" y="526" width="852" height="56" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="42" y="549" class="f b ink">Default posture: local-first and offline. No telemetry deps compiled in, no external API, deterministic embedder.</text>
 <text x="42" y="568" class="f s dim">Each outward path is a deliberate opt-in: UNDERCROFT_LLM_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL, UNDERCROFT_LLM_KEY.</text>
 
-<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>

@@ -8,57 +8,67 @@
   .b { font-size: 12px; }
   .s { font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-  .ink { fill: #14202b; }
-  .dim { fill: #55697a; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
 </style>
-<rect width="900" height="560" fill="#fbfcfd"/>
+<rect width="900" height="560" fill="var(--d-bg,#fbfcfd)"/>
 <text x="28" y="36" class="f h ink">Write path — one drawer, and why it is safe</text>
 <text x="28" y="56" class="f b dim">Content is stored verbatim. Only derived structure is added; the text itself is never rewritten.</text>
 
-<rect x="24" y="74" width="262" height="82" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="24" y="74" width="262" height="82" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="42" y="98" class="f l ink">1 · normalize</text>
 <text x="42" y="118" class="f b dim">safety floor always: strip NUL and</text>
 <text x="42" y="134" class="f b dim">control chars, CRLF → LF</text>
-<text x="42" y="150" class="f s" fill="#8d5a1d">Code mode keeps every space</text>
+<text x="42" y="150" class="f s" fill="var(--d-amber-ink,#8d5a1d)">Code mode keeps every space</text>
 
-<path d="M292 115 L318 115" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M292 115 L318 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="322" y="74" width="262" height="82" rx="8" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.4"/>
-<text x="340" y="98" class="f l" fill="#523a86">2 · derive, never alter</text>
+<rect x="322" y="74" width="262" height="82" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
+<text x="340" y="98" class="f l" fill="var(--d-violet-ink,#523a86)">2 · derive, never alter</text>
 <text x="340" y="118" class="f b dim">time_mentions · entities</text>
 <text x="340" y="134" class="f b dim">content_date anchors relative dates</text>
 <text x="340" y="150" class="f s dim">runs in Drawer::new — no path forgets</text>
 
-<path d="M590 115 L616 115" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M590 115 L616 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="620" y="74" width="256" height="82" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="620" y="74" width="256" height="82" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="638" y="98" class="f l ink">3 · embed</text>
 <text x="638" y="118" class="f b dim">deterministic offline hash embedder</text>
 <text x="638" y="134" class="f b dim">by default — no model, no network</text>
 <text x="638" y="150" class="f s dim">computed before the lock is taken</text>
 
-<path d="M450 160 L450 182" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M450 160 L450 182" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="24" y="186" width="852" height="176" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2.2"/>
-<text x="42" y="212" class="f l" fill="#0d6b62">4 · one SQLite transaction — all of it, or none of it</text>
-<text x="700" y="212" class="f s" fill="#0d6b62">BEGIN IMMEDIATE</text>
+<rect x="24" y="186" width="852" height="176" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2.2"/>
+<text x="42" y="212" class="f l" fill="var(--d-teal-ink,#0d6b62)">4 · one SQLite transaction — all of it, or none of it</text>
+<text x="700" y="212" class="f s" fill="var(--d-teal-ink,#0d6b62)">BEGIN IMMEDIATE</text>
 
-<rect x="42" y="226" width="266" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
-<text x="58" y="249" class="f l" fill="#0d6b62">seal</text>
+<rect x="42" y="226" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="58" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">seal</text>
 <text x="58" y="269" class="f b dim">XChaCha20-Poly1305 over content</text>
 <text x="58" y="285" class="f b dim">and embedding.</text>
 <text x="58" y="307" class="f s dim">AAD = the drawer id, plus distinct</text>
 <text x="58" y="323" class="f s dim">domains /emb · /tok · /pq</text>
 
-<rect x="318" y="226" width="264" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
-<text x="334" y="249" class="f l" fill="#0d6b62">tag</text>
+<rect x="318" y="226" width="264" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="334" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">tag</text>
 <text x="334" y="269" class="f b dim">HMAC-SHA256 over</text>
 <text x="334" y="287" class="f mono ink">id ‖ meta_json ‖ sealed content</text>
 <text x="334" y="309" class="f s dim">metadata is covered for free — a new</text>
 <text x="334" y="325" class="f s dim">meta field needs no schema change</text>
 
-<rect x="592" y="226" width="266" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
-<text x="608" y="249" class="f l" fill="#0d6b62">chain</text>
+<rect x="592" y="226" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="608" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">chain</text>
 <text x="608" y="269" class="f b dim">chain_append runs in the SAME</text>
 <text x="608" y="285" class="f b dim">transaction as the row.</text>
 <text x="608" y="307" class="f s dim">so no committed write can exist</text>
@@ -66,22 +76,22 @@
 
 <text x="42" y="354" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer — measured ≈55× fewer fsyncs at 200 drawers.</text>
 
-<path d="M450 366 L450 388" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M450 366 L450 388" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="24" y="392" width="404" height="70" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="24" y="392" width="404" height="70" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="42" y="416" class="f l ink">5 · then, outside the transaction</text>
 <text x="42" y="436" class="f b dim">fsync the manifest anchor through an atomic</text>
 <text x="42" y="452" class="f b dim">rename + directory sync. WAL, synchronous=FULL.</text>
 
-<rect x="440" y="392" width="436" height="70" rx="8" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.6"/>
-<text x="458" y="416" class="f l" fill="#22603c">why the anchor lags on purpose</text>
+<rect x="440" y="392" width="436" height="70" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
+<text x="458" y="416" class="f l" fill="var(--d-green-ink,#22603c)">why the anchor lags on purpose</text>
 <text x="458" y="437" class="f b dim">anchor behind the db at open → power loss, fast-forward</text>
 <text x="458" y="454" class="f b dim">anchor ahead of the db at open → rollback, tamper alarm</text>
 
-<rect x="24" y="474" width="852" height="62" rx="8" fill="#fdf3f3" stroke="#b5453a" stroke-width="1.4"/>
-<text x="42" y="498" class="f l" fill="#94382f">The asymmetry is the detector</text>
+<rect x="24" y="474" width="852" height="62" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="42" y="498" class="f l" fill="var(--d-red-ink,#94382f)">The asymmetry is the detector</text>
 <text x="42" y="518" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
 <text x="42" y="530" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
 
-<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>

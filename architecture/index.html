@@ -6,6 +6,7 @@
 <title>Undercroft — architecture</title>
 <style>
   :root {
+    color-scheme: light dark;
     --ink: #14202b; --dim: #55697a; --faint: #7d8fa0;
     --bg: #fbfcfd; --card: #ffffff; --line: #dbe3ea; --line-strong: #b9c6d1;
     --teal: #12897e; --teal-bg: #f2fbfa; --teal-ink: #0d6b62;
@@ -15,6 +16,52 @@
     --green: #2f7d4f; --green-bg: #f1f8f2; --green-ink: #22603c;
     --red: #b5453a; --red-bg: #fdf3f3; --red-ink: #94382f;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --shadow: rgba(20,32,43,.05);
+  }
+  /* Variables consumed by the inlined diagrams. Their own dark media query is
+     stripped on inline so this stays the single source of truth. */
+  :root {
+    --d-bg: var(--card); --d-card: var(--card); --d-card2: #f7f9fb;
+    --d-line: var(--line); --d-line2: #8fa3b4;
+    --d-ink: var(--ink); --d-dim: var(--dim);
+    --d-teal: var(--teal); --d-teal-bg: var(--teal-bg); --d-teal-bg2: #e8f6f4; --d-teal-ink: var(--teal-ink);
+    --d-blue: var(--blue); --d-blue-bg: var(--blue-bg); --d-blue-ink: var(--blue-ink);
+    --d-amber: var(--amber); --d-amber-bg: var(--amber-bg); --d-amber-ink: var(--amber-ink);
+    --d-violet: var(--violet); --d-violet-bg: var(--violet-bg); --d-violet-bg2: #f0ebf8; --d-violet-ink: var(--violet-ink);
+    --d-green: var(--green); --d-green-bg: var(--green-bg); --d-green-bg2: #e9f5ec; --d-green-ink: var(--green-ink);
+    --d-red: var(--red); --d-red-bg: var(--red-bg); --d-red-ink: var(--red-ink);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --DARK: 1; }
+  }
+  :root[data-theme="dark"] { --DARK: 1; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #e4ebf1; --dim: #9aabba; --faint: #78899a;
+      --bg: #0f1419; --card: #161c23; --line: #2b3540; --line-strong: #3f4d5c;
+      --teal: #2ba99c; --teal-bg: #0e2523; --teal-ink: #6fd8cc;
+      --blue: #6d94c8; --blue-bg: #131d2b; --blue-ink: #9dbde3;
+      --violet: #9277c9; --violet-bg: #1c1730; --violet-ink: #b9a3e3;
+      --amber: #d1953f; --amber-bg: #261c0f; --amber-ink: #e8bc78;
+      --green: #4fa570; --green-bg: #10231a; --green-ink: #86cf9f;
+      --red: #d1685c; --red-bg: #2a1614; --red-ink: #eb9a90;
+      --shadow: rgba(0,0,0,.35);
+      --d-card2: #1b222b; --d-line2: #4a5b6b; --d-on: #0f1419;
+      --d-teal-bg2: #123430; --d-violet-bg2: #241d3d; --d-green-bg2: #153021;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #e4ebf1; --dim: #9aabba; --faint: #78899a;
+    --bg: #0f1419; --card: #161c23; --line: #2b3540; --line-strong: #3f4d5c;
+    --teal: #2ba99c; --teal-bg: #0e2523; --teal-ink: #6fd8cc;
+    --blue: #6d94c8; --blue-bg: #131d2b; --blue-ink: #9dbde3;
+    --violet: #9277c9; --violet-bg: #1c1730; --violet-ink: #b9a3e3;
+    --amber: #d1953f; --amber-bg: #261c0f; --amber-ink: #e8bc78;
+    --green: #4fa570; --green-bg: #10231a; --green-ink: #86cf9f;
+    --red: #d1685c; --red-bg: #2a1614; --red-ink: #eb9a90;
+    --shadow: rgba(0,0,0,.35);
+    --d-card2: #1b222b; --d-line2: #4a5b6b; --d-on: #0f1419;
+    --d-teal-bg2: #123430; --d-violet-bg2: #241d3d; --d-green-bg2: #153021;
   }
   * { box-sizing: border-box; }
   body {
@@ -41,7 +88,8 @@
          color: var(--blue-ink); padding: 1px 5px; border-radius: 4px; }
   figure { margin: 26px 0 30px; }
   figure svg { display: block; width: 100%; height: auto;
-               background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+               background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+               box-shadow: 0 1px 3px var(--shadow); }
   figcaption { color: var(--faint); font-size: 13px; margin-top: 10px; }
   figcaption a { color: var(--blue-ink); }
   table { border-collapse: collapse; width: 100%; margin: 18px 0 24px; font-size: 14.5px; }
@@ -82,15 +130,29 @@
   .pill.exp { background: var(--amber-bg); color: var(--amber-ink); border: 1px solid var(--amber); }
   footer { border-top: 1px solid var(--line); margin-top: 64px; padding-top: 22px;
            color: var(--faint); font-size: 13px; }
+  .themebtn {
+    position: fixed; top: 14px; right: 16px; z-index: 20;
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--card); color: var(--dim);
+    border: 1px solid var(--line-strong); border-radius: 20px;
+    padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer;
+    box-shadow: 0 1px 3px var(--shadow);
+  }
+  .themebtn:hover { color: var(--ink); border-color: var(--dim); }
+  .themebtn .glyph { font-size: 14px; line-height: 1; }
+  @media print { .themebtn { display: none; } }
   @media (max-width: 720px) { nav.toc ol { columns: 1; } h1 { font-size: 25px; } }
 </style>
 </head>
 <body>
+<button class="themebtn" id="themebtn" type="button" aria-live="polite">
+  <span class="glyph" aria-hidden="true">◐</span><span id="themelabel">Theme</span>
+</button>
 <header><div class="wrap">
   <h1>Undercroft architecture</h1>
   <p class="sub">How a memory is stored, protected, and found again — the palace model, the retrieval stack, the write path, and every knob that changes their behaviour.</p>
-  <p class="meta">Engine v0.42.0 · diagrams also available as
-     <a href="diagrams/">SVG</a> and <a href="pdf/">PDF</a></p>
+  <p class="meta">Engine v0.42.0 · light and dark themes, following your system by default ·
+     diagrams also available as <a href="diagrams/">SVG</a> and <a href="pdf/">PDF</a></p>
 </div></header>
 
 <div class="wrap">
@@ -131,65 +193,65 @@
   .b { font-size: 12px; }
   .s { font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-  .ink { fill: #14202b; }
-  .dim { fill: #55697a; }
-  .white { fill: #ffffff; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
 </style>
-<rect width="900" height="620" fill="#fbfcfd"/>
+<rect width="900" height="620" fill="var(--d-bg,#fbfcfd)"/>
 
 <text x="28" y="38" class="f h ink">Domain model — what nests inside what</text>
 <text x="28" y="58" class="f b dim">One process holds one palace. Everything inside the vault boundary is sealed at rest.</text>
 
-<rect x="24" y="74" width="852" height="522" rx="10" fill="#ffffff" stroke="#c9d4dd" stroke-width="1.5"/>
+<rect x="24" y="74" width="852" height="522" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="100" class="f l ink">palace</text>
 <text x="640" y="100" class="f s dim">one per process · master key · data dir</text>
 
-<rect x="42" y="114" width="816" height="464" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2"/>
-<text x="60" y="140" class="f l" fill="#0d6b62">vault — isolation + crypto boundary</text>
-<text x="620" y="140" class="f s" fill="#0d6b62">HKDF-derived key · AAD binds vault id</text>
+<rect x="42" y="114" width="816" height="464" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2"/>
+<text x="60" y="140" class="f l" fill="var(--d-teal-ink,#0d6b62)">vault — isolation + crypto boundary</text>
+<text x="620" y="140" class="f s" fill="var(--d-teal-ink,#0d6b62)">HKDF-derived key · AAD binds vault id</text>
 <text x="60" y="159" class="f s dim">Cross-vault access fails cryptographically, not just logically. One SQLite database, one audit chain.</text>
 
-<rect x="60" y="174" width="780" height="256" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="60" y="174" width="780" height="256" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="78" y="199" class="f l ink">wing</text>
 <text x="120" y="199" class="f b dim">person · project · tenant user</text>
 <text x="762" y="199" class="f s dim">search scope</text>
 
-<rect x="78" y="214" width="380" height="198" rx="7" fill="#f7f9fb" stroke="#8fa3b4" stroke-width="1.2"/>
+<rect x="78" y="214" width="380" height="198" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
 <text x="94" y="238" class="f l ink">room</text>
 <text x="136" y="238" class="f b dim">topic · session · ticket</text>
 
-<rect x="94" y="252" width="348" height="76" rx="6" fill="#ffffff" stroke="#4a6fa5" stroke-width="1.6"/>
-<text x="108" y="273" class="f l" fill="#33527d">drawer</text>
+<rect x="94" y="252" width="348" height="76" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
+<text x="108" y="273" class="f l" fill="var(--d-blue-ink,#33527d)">drawer</text>
 <text x="168" y="273" class="f b dim">one verbatim chunk</text>
 <text x="108" y="292" class="f s dim">content (sealed) · embedding (sealed) · HMAC tag</text>
 <text x="108" y="309" class="f s dim">meta: content_date · time_mentions · entities · chunk_index</text>
 
-<rect x="94" y="334" width="348" height="26" rx="6" fill="#ffffff" stroke="#c9d4dd" stroke-width="1.1"/>
+<rect x="94" y="334" width="348" height="26" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.1"/>
 <text x="108" y="351" class="f s dim">drawer · drawer · drawer …</text>
 
 <text x="94" y="378" class="f s dim">id = hash(wing, room, source, chunk_index, normalize_version)</text>
 <text x="94" y="395" class="f s dim">content is not in the id — so re-mining is idempotent, not duplicating</text>
 
-<rect x="472" y="214" width="352" height="198" rx="7" fill="#fdf6ee" stroke="#b5762a" stroke-width="1.4"/>
-<text x="488" y="238" class="f l" fill="#8d5a1d">room "facts"</text>
+<rect x="472" y="214" width="352" height="198" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
+<text x="488" y="238" class="f l" fill="var(--d-amber-ink,#8d5a1d)">room "facts"</text>
 <text x="488" y="262" class="f b dim">Distilled fact-drawers — one per distinct</text>
 <text x="488" y="279" class="f b dim">triple, written by POST /refine.</text>
 <text x="488" y="303" class="f b dim">Each carries an HMAC receipt citing the</text>
 <text x="488" y="320" class="f b dim">verbatim drawer it came from.</text>
 <text x="488" y="352" class="f s dim">The room filter alone selects the surface:</text>
-<text x="488" y="369" class="f mono" fill="#8d5a1d">verbatim · distilled · both</text>
+<text x="488" y="369" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">verbatim · distilled · both</text>
 <text x="488" y="395" class="f s dim">Sources exclude this room, so refining never</text>
 <text x="488" y="405" class="f s dim">re-distils its own output.</text>
 
-<rect x="60" y="444" width="384" height="116" rx="7" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.4"/>
-<text x="78" y="468" class="f l" fill="#523a86">knowledge graph</text>
+<rect x="60" y="444" width="384" height="116" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
+<text x="78" y="468" class="f l" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
 <text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
 <text x="78" y="508" class="f b dim">Validity windows: valid_from comes from the</text>
 <text x="78" y="525" class="f b dim">source drawer's content_date.</text>
 <text x="78" y="547" class="f s dim">triple_id is content-derived ⇒ a repeated fact collapses.</text>
 
-<rect x="458" y="444" width="382" height="116" rx="7" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.4"/>
-<text x="476" y="468" class="f l" fill="#22603c">audit chain</text>
+<rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
+<text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>
 <text x="476" y="491" class="f b dim">Head lives in chain_meta and advances inside</text>
 <text x="476" y="508" class="f b dim">the same transaction as the data it covers.</text>
 <text x="476" y="530" class="f s dim">Manifest anchor lags on purpose:</text>
@@ -232,88 +294,88 @@
   .b { font-size: 12px; }
   .s { font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-  .ink { fill: #14202b; }
-  .dim { fill: #55697a; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
 </style>
-<rect width="900" height="600" fill="#fbfcfd"/>
+<rect width="900" height="600" fill="var(--d-bg,#fbfcfd)"/>
 <text x="28" y="36" class="f h ink">Layers and trust boundaries</text>
 <text x="28" y="56" class="f b dim">One palace per process. Tenancy is vaults, not palaces. Nothing leaves the machine unless you configure it to.</text>
 
-<rect x="24" y="74" width="852" height="82" rx="9" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="24" y="74" width="852" height="82" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="42" y="98" class="f l ink">callers</text>
-<rect x="42" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
-<text x="56" y="126" class="f b" fill="#33527d">agent over MCP stdio</text>
+<rect x="42" y="108" width="196" height="38" rx="6" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-blue,#4a6fa5)"/>
+<text x="56" y="126" class="f b" fill="var(--d-blue-ink,#33527d)">agent over MCP stdio</text>
 <text x="56" y="140" class="f s dim">32 tools · local process</text>
-<rect x="248" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
-<text x="262" y="126" class="f b" fill="#33527d">app over HTTP /v1</text>
+<rect x="248" y="108" width="196" height="38" rx="6" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-blue,#4a6fa5)"/>
+<text x="262" y="126" class="f b" fill="var(--d-blue-ink,#33527d)">app over HTTP /v1</text>
 <text x="262" y="140" class="f s dim">bearer token · REST</text>
-<rect x="454" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
-<text x="468" y="126" class="f b" fill="#33527d">CLI</text>
+<rect x="454" y="108" width="196" height="38" rx="6" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-blue,#4a6fa5)"/>
+<text x="468" y="126" class="f b" fill="var(--d-blue-ink,#33527d)">CLI</text>
 <text x="468" y="140" class="f s dim">remember · mine · search</text>
-<rect x="660" y="108" width="198" height="38" rx="6" fill="#f7f9fb" stroke="#c9d4dd"/>
+<rect x="660" y="108" width="198" height="38" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="674" y="126" class="f b dim">admin console /ui</text>
 <text x="674" y="140" class="f s dim">served on every build</text>
 
-<path d="M450 158 L450 178" stroke="#8fa3b4" stroke-width="1.8" marker-end="url(#a_layers)"/>
+<path d="M450 158 L450 178" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.8" marker-end="url(#a_layers)"/>
 <text x="462" y="174" class="f s dim">bearer + optional per-vault assertion (HMAC, time-boxed)</text>
 
-<rect x="24" y="182" width="600" height="176" rx="9" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="2"/>
-<text x="42" y="206" class="f l" fill="#523a86">engine — one Rust process</text>
-<rect x="42" y="216" width="270" height="60" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="58" y="238" class="f b" fill="#523a86">/v1 surface + MCP handler</text>
+<rect x="24" y="182" width="600" height="176" rx="9" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="2"/>
+<text x="42" y="206" class="f l" fill="var(--d-violet-ink,#523a86)">engine — one Rust process</text>
+<rect x="42" y="216" width="270" height="60" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="58" y="238" class="f b" fill="var(--d-violet-ink,#523a86)">/v1 surface + MCP handler</text>
 <text x="58" y="254" class="f s dim">drawers · search · refine · kg · verify</text>
 <text x="58" y="269" class="f s dim">rotate · export · import · taxonomy</text>
-<rect x="322" y="216" width="292" height="60" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="338" y="238" class="f b" fill="#523a86">store</text>
+<rect x="322" y="216" width="292" height="60" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="338" y="238" class="f b" fill="var(--d-violet-ink,#523a86)">store</text>
 <text x="338" y="254" class="f s dim">rank → gate → rerank → select</text>
 <text x="338" y="269" class="f s dim">verifies every row's HMAC before use</text>
-<rect x="42" y="284" width="270" height="58" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="58" y="306" class="f b" fill="#523a86">knowledge graph</text>
+<rect x="42" y="284" width="270" height="58" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="58" y="306" class="f b" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
 <text x="58" y="322" class="f s dim">receipted facts, validity windows</text>
 <text x="58" y="336" class="f s dim">written only by refine or explicit kg calls</text>
-<rect x="322" y="284" width="292" height="58" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
-<text x="338" y="306" class="f b" fill="#523a86">optional local LLM client</text>
+<rect x="322" y="284" width="292" height="58" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.2"/>
+<text x="338" y="306" class="f b" fill="var(--d-violet-ink,#523a86)">optional local LLM client</text>
 <text x="338" y="322" class="f s dim">Ollama or OpenAI-compatible, for refine</text>
 <text x="338" y="336" class="f mono dim">unset UNDERCROFT_LLM_URL ⇒ never called</text>
 
-<rect x="640" y="182" width="236" height="176" rx="9" fill="#ffffff" stroke="#c9d4dd" stroke-width="1.4" stroke-dasharray="6 4"/>
+<rect x="640" y="182" width="236" height="176" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.4" stroke-dasharray="6 4"/>
 <text x="658" y="206" class="f l dim">optional, separate binary</text>
-<rect x="658" y="216" width="200" height="60" rx="6" fill="#f7f9fb" stroke="#8fa3b4"/>
+<rect x="658" y="216" width="200" height="60" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)"/>
 <text x="672" y="238" class="f b ink">orchestrator</text>
 <text x="672" y="254" class="f s dim">tenant → vault routing, /t/*</text>
 <text x="672" y="269" class="f s dim">own SQLite, sealed engine creds</text>
-<rect x="658" y="284" width="200" height="58" rx="6" fill="#fdf3f3" stroke="#b5453a"/>
-<text x="672" y="306" class="f b" fill="#94382f">remote vector backends</text>
+<rect x="658" y="284" width="200" height="58" rx="6" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
+<text x="672" y="306" class="f b" fill="var(--d-red-ink,#94382f)">remote vector backends</text>
 <text x="672" y="322" class="f s dim">untrusted accelerators — sealed</text>
 <text x="672" y="336" class="f s dim">payloads only, re-verified on read</text>
 
-<path d="M320 360 L320 380" stroke="#12897e" stroke-width="1.8" marker-end="url(#a_layers)"/>
-<line x1="24" y1="374" x2="876" y2="374" stroke="#12897e" stroke-width="1.6" stroke-dasharray="8 5"/>
-<text x="336" y="370" class="f s" fill="#0d6b62">everything below this line is ciphertext</text>
+<path d="M320 360 L320 380" stroke="var(--d-teal,#12897e)" stroke-width="1.8" marker-end="url(#a_layers)"/>
+<line x1="24" y1="374" x2="876" y2="374" stroke="var(--d-teal,#12897e)" stroke-width="1.6" stroke-dasharray="8 5"/>
+<text x="336" y="370" class="f s" fill="var(--d-teal-ink,#0d6b62)">everything below this line is ciphertext</text>
 
-<rect x="24" y="386" width="852" height="128" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2"/>
-<text x="42" y="410" class="f l" fill="#0d6b62">at rest — per-vault key, HKDF-derived from the master key</text>
-<rect x="42" y="420" width="266" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
-<text x="58" y="442" class="f b" fill="#0d6b62">sealed artifacts</text>
+<rect x="24" y="386" width="852" height="128" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2"/>
+<text x="42" y="410" class="f l" fill="var(--d-teal-ink,#0d6b62)">at rest — per-vault key, HKDF-derived from the master key</text>
+<rect x="42" y="420" width="266" height="80" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.2"/>
+<text x="58" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">sealed artifacts</text>
 <text x="58" y="459" class="f s dim">content · embeddings · ColBERT token</text>
 <text x="58" y="474" class="f s dim">matrices · PQ codes, codebook, pages</text>
 <text x="58" y="491" class="f s dim">each under a distinct AAD domain</text>
-<rect x="318" y="420" width="266" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
-<text x="334" y="442" class="f b" fill="#0d6b62">integrity</text>
+<rect x="318" y="420" width="266" height="80" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.2"/>
+<text x="334" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">integrity</text>
 <text x="334" y="459" class="f s dim">per-row HMAC tag, verified on every</text>
 <text x="334" y="474" class="f s dim">read; tamper-evident audit chain;</text>
 <text x="334" y="491" class="f s dim">manifest anchor as rollback detector</text>
-<rect x="594" y="420" width="264" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
-<text x="610" y="442" class="f b" fill="#0d6b62">never present for sealed vaults</text>
+<rect x="594" y="420" width="264" height="80" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.2"/>
+<text x="610" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">never present for sealed vaults</text>
 <text x="610" y="459" class="f s dim">no full-text index, no plaintext</text>
 <text x="610" y="474" class="f s dim">derived data in clear on disk.</text>
 <text x="610" y="491" class="f s dim">Search uses decrypt-once RAM caches.</text>
 
-<rect x="24" y="526" width="852" height="56" rx="8" fill="#ffffff" stroke="#c9d4dd"/>
+<rect x="24" y="526" width="852" height="56" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="42" y="549" class="f b ink">Default posture: local-first and offline. No telemetry deps compiled in, no external API, deterministic embedder.</text>
 <text x="42" y="568" class="f s dim">Each outward path is a deliberate opt-in: UNDERCROFT_LLM_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL, UNDERCROFT_LLM_KEY.</text>
 
-<defs><marker id="a_layers" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+<defs><marker id="a_layers" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
 
 <figcaption>Deployment layers, with the ciphertext boundary marked. <a href="diagrams/layers.svg">SVG</a> · <a href="pdf/layers.pdf">PDF</a></figcaption>
@@ -336,57 +398,57 @@
   .b { font-size: 12px; }
   .s { font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-  .ink { fill: #14202b; }
-  .dim { fill: #55697a; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
 </style>
-<rect width="900" height="560" fill="#fbfcfd"/>
+<rect width="900" height="560" fill="var(--d-bg,#fbfcfd)"/>
 <text x="28" y="36" class="f h ink">Write path — one drawer, and why it is safe</text>
 <text x="28" y="56" class="f b dim">Content is stored verbatim. Only derived structure is added; the text itself is never rewritten.</text>
 
-<rect x="24" y="74" width="262" height="82" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="24" y="74" width="262" height="82" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="42" y="98" class="f l ink">1 · normalize</text>
 <text x="42" y="118" class="f b dim">safety floor always: strip NUL and</text>
 <text x="42" y="134" class="f b dim">control chars, CRLF → LF</text>
-<text x="42" y="150" class="f s" fill="#8d5a1d">Code mode keeps every space</text>
+<text x="42" y="150" class="f s" fill="var(--d-amber-ink,#8d5a1d)">Code mode keeps every space</text>
 
-<path d="M292 115 L318 115" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M292 115 L318 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
 
-<rect x="322" y="74" width="262" height="82" rx="8" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.4"/>
-<text x="340" y="98" class="f l" fill="#523a86">2 · derive, never alter</text>
+<rect x="322" y="74" width="262" height="82" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
+<text x="340" y="98" class="f l" fill="var(--d-violet-ink,#523a86)">2 · derive, never alter</text>
 <text x="340" y="118" class="f b dim">time_mentions · entities</text>
 <text x="340" y="134" class="f b dim">content_date anchors relative dates</text>
 <text x="340" y="150" class="f s dim">runs in Drawer::new — no path forgets</text>
 
-<path d="M590 115 L616 115" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M590 115 L616 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
 
-<rect x="620" y="74" width="256" height="82" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="620" y="74" width="256" height="82" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="638" y="98" class="f l ink">3 · embed</text>
 <text x="638" y="118" class="f b dim">deterministic offline hash embedder</text>
 <text x="638" y="134" class="f b dim">by default — no model, no network</text>
 <text x="638" y="150" class="f s dim">computed before the lock is taken</text>
 
-<path d="M450 160 L450 182" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M450 160 L450 182" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
 
-<rect x="24" y="186" width="852" height="176" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2.2"/>
-<text x="42" y="212" class="f l" fill="#0d6b62">4 · one SQLite transaction — all of it, or none of it</text>
-<text x="700" y="212" class="f s" fill="#0d6b62">BEGIN IMMEDIATE</text>
+<rect x="24" y="186" width="852" height="176" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2.2"/>
+<text x="42" y="212" class="f l" fill="var(--d-teal-ink,#0d6b62)">4 · one SQLite transaction — all of it, or none of it</text>
+<text x="700" y="212" class="f s" fill="var(--d-teal-ink,#0d6b62)">BEGIN IMMEDIATE</text>
 
-<rect x="42" y="226" width="266" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
-<text x="58" y="249" class="f l" fill="#0d6b62">seal</text>
+<rect x="42" y="226" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="58" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">seal</text>
 <text x="58" y="269" class="f b dim">XChaCha20-Poly1305 over content</text>
 <text x="58" y="285" class="f b dim">and embedding.</text>
 <text x="58" y="307" class="f s dim">AAD = the drawer id, plus distinct</text>
 <text x="58" y="323" class="f s dim">domains /emb · /tok · /pq</text>
 
-<rect x="318" y="226" width="264" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
-<text x="334" y="249" class="f l" fill="#0d6b62">tag</text>
+<rect x="318" y="226" width="264" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="334" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">tag</text>
 <text x="334" y="269" class="f b dim">HMAC-SHA256 over</text>
 <text x="334" y="287" class="f mono ink">id ‖ meta_json ‖ sealed content</text>
 <text x="334" y="309" class="f s dim">metadata is covered for free — a new</text>
 <text x="334" y="325" class="f s dim">meta field needs no schema change</text>
 
-<rect x="592" y="226" width="266" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
-<text x="608" y="249" class="f l" fill="#0d6b62">chain</text>
+<rect x="592" y="226" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="608" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">chain</text>
 <text x="608" y="269" class="f b dim">chain_append runs in the SAME</text>
 <text x="608" y="285" class="f b dim">transaction as the row.</text>
 <text x="608" y="307" class="f s dim">so no committed write can exist</text>
@@ -394,24 +456,24 @@
 
 <text x="42" y="354" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer — measured ≈55× fewer fsyncs at 200 drawers.</text>
 
-<path d="M450 366 L450 388" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M450 366 L450 388" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
 
-<rect x="24" y="392" width="404" height="70" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<rect x="24" y="392" width="404" height="70" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="42" y="416" class="f l ink">5 · then, outside the transaction</text>
 <text x="42" y="436" class="f b dim">fsync the manifest anchor through an atomic</text>
 <text x="42" y="452" class="f b dim">rename + directory sync. WAL, synchronous=FULL.</text>
 
-<rect x="440" y="392" width="436" height="70" rx="8" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.6"/>
-<text x="458" y="416" class="f l" fill="#22603c">why the anchor lags on purpose</text>
+<rect x="440" y="392" width="436" height="70" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
+<text x="458" y="416" class="f l" fill="var(--d-green-ink,#22603c)">why the anchor lags on purpose</text>
 <text x="458" y="437" class="f b dim">anchor behind the db at open → power loss, fast-forward</text>
 <text x="458" y="454" class="f b dim">anchor ahead of the db at open → rollback, tamper alarm</text>
 
-<rect x="24" y="474" width="852" height="62" rx="8" fill="#fdf3f3" stroke="#b5453a" stroke-width="1.4"/>
-<text x="42" y="498" class="f l" fill="#94382f">The asymmetry is the detector</text>
+<rect x="24" y="474" width="852" height="62" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="42" y="498" class="f l" fill="var(--d-red-ink,#94382f)">The asymmetry is the detector</text>
 <text x="42" y="518" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
 <text x="42" y="530" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
 
-<defs><marker id="a_writepath" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+<defs><marker id="a_writepath" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
 
 <figcaption>One drawer being written. <a href="diagrams/write-path.svg">SVG</a> · <a href="pdf/write-path.pdf">PDF</a></figcaption>
@@ -465,92 +527,92 @@
   .b { font-size: 12px; }
   .s { font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-  .ink { fill: #14202b; }
-  .dim { fill: #55697a; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
 </style>
-<rect width="900" height="740" fill="#fbfcfd"/>
+<rect width="900" height="740" fill="var(--d-bg,#fbfcfd)"/>
 <text x="28" y="36" class="f h ink">Retrieval stack — one query, top to bottom</text>
 <text x="28" y="56" class="f b dim">Dashed border = optional tier, off by default. Measured numbers are from this session.</text>
 
-<rect x="24" y="72" width="640" height="58" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
-<circle cx="48" cy="101" r="13" fill="#4a6fa5"/><text x="48" y="106" class="f l" fill="#ffffff" text-anchor="middle">1</text>
+<rect x="24" y="72" width="640" height="58" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
+<circle cx="48" cy="101" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="106" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">1</text>
 <text x="72" y="96" class="f l ink">scope</text>
 <text x="72" y="116" class="f b dim">wing + optional room narrow the row set before anything is scored</text>
-<rect x="676" y="72" width="200" height="58" rx="8" fill="#eef3f8" stroke="#c9d4dd"/>
+<rect x="676" y="72" width="200" height="58" rx="8" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="690" y="96" class="f s dim">decides how much work</text>
 <text x="690" y="113" class="f s dim">everything below must do</text>
-<path d="M344 130 L344 148" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 130 L344 148" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
 
-<rect x="24" y="150" width="640" height="66" rx="8" fill="#f2fbfa" stroke="#12897e" stroke-width="1.8" stroke-dasharray="6 4"/>
-<circle cx="48" cy="183" r="13" fill="#12897e"/><text x="48" y="188" class="f l" fill="#ffffff" text-anchor="middle">2</text>
-<text x="72" y="176" class="f l" fill="#0d6b62">candidate prefilter — approximate</text>
+<rect x="24" y="150" width="640" height="66" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8" stroke-dasharray="6 4"/>
+<circle cx="48" cy="183" r="13" fill="var(--d-teal,#12897e)"/><text x="48" y="188" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">2</text>
+<text x="72" y="176" class="f l" fill="var(--d-teal-ink,#0d6b62)">candidate prefilter — approximate</text>
 <text x="72" y="195" class="f b dim">PQ/IVF probes only nearby lists · FDE token-aware · HNSW graph</text>
-<text x="72" y="211" class="f mono" fill="#0d6b62">UNDERCROFT_RETRIEVAL = pq | fde | hnsw</text>
-<rect x="676" y="150" width="200" height="66" rx="8" fill="#e8f6f4" stroke="#12897e"/>
-<text x="690" y="174" class="f s" fill="#0d6b62">measured at 20k drawers:</text>
-<text x="690" y="191" class="f s" fill="#0d6b62">flat 499 ms → pq 12 ms</text>
+<text x="72" y="211" class="f mono" fill="var(--d-teal-ink,#0d6b62)">UNDERCROFT_RETRIEVAL = pq | fde | hnsw</text>
+<rect x="676" y="150" width="200" height="66" rx="8" fill="var(--d-teal-bg2,#e8f6f4)" stroke="var(--d-teal,#12897e)"/>
+<text x="690" y="174" class="f s" fill="var(--d-teal-ink,#0d6b62)">measured at 20k drawers:</text>
+<text x="690" y="191" class="f s" fill="var(--d-teal-ink,#0d6b62)">flat 499 ms → pq 12 ms</text>
 <text x="690" y="208" class="f s dim">first query builds the index</text>
-<path d="M344 216 L344 234" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 216 L344 234" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
 
-<rect x="24" y="236" width="640" height="66" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
-<circle cx="48" cy="269" r="13" fill="#4a6fa5"/><text x="48" y="274" class="f l" fill="#ffffff" text-anchor="middle">3</text>
+<rect x="24" y="236" width="640" height="66" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
+<circle cx="48" cy="269" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="274" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">3</text>
 <text x="72" y="262" class="f l ink">verify, decrypt, score</text>
 <text x="72" y="281" class="f b dim">every row's HMAC is checked before its content is used, then BM25 lexical</text>
 <text x="72" y="297" class="f b dim">is fused with cosine semantic similarity</text>
-<rect x="676" y="236" width="200" height="66" rx="8" fill="#eef3f8" stroke="#c9d4dd"/>
-<text x="690" y="260" class="f mono" fill="#33527d">UNDERCROFT_FUSION</text>
+<rect x="676" y="236" width="200" height="66" rx="8" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-line,#c9d4dd)"/>
+<text x="690" y="260" class="f mono" fill="var(--d-blue-ink,#33527d)">UNDERCROFT_FUSION</text>
 <text x="690" y="277" class="f s dim">bm25 (default) · rrf · legacy</text>
 <text x="690" y="294" class="f s dim">integrity is not optional</text>
-<path d="M344 302 L344 320" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 302 L344 320" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
 
-<rect x="24" y="322" width="640" height="66" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
-<circle cx="48" cy="355" r="13" fill="#4a6fa5"/><text x="48" y="360" class="f l" fill="#ffffff" text-anchor="middle">4</text>
+<rect x="24" y="322" width="640" height="66" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
+<circle cx="48" cy="355" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="360" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">4</text>
 <text x="72" y="348" class="f l ink">relevance gate</text>
 <text x="72" y="367" class="f mono ink">lexical &gt; 0 || semantic &gt; 0.56</text>
 <text x="72" y="383" class="f b dim">an unrelated row still scores ~0.35 from the cosine midpoint — require real evidence</text>
-<rect x="676" y="322" width="200" height="66" rx="8" fill="#fdf3f3" stroke="#b5453a"/>
-<text x="690" y="346" class="f s" fill="#94382f">passes on ANY shared term,</text>
-<text x="690" y="363" class="f s" fill="#94382f">so it rarely empties a result</text>
+<rect x="676" y="322" width="200" height="66" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
+<text x="690" y="346" class="f s" fill="var(--d-red-ink,#94382f)">passes on ANY shared term,</text>
+<text x="690" y="363" class="f s" fill="var(--d-red-ink,#94382f)">so it rarely empties a result</text>
 <text x="690" y="380" class="f s dim">— why a "thin" flag failed</text>
-<path d="M344 388 L344 406" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 388 L344 406" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
 
-<rect x="24" y="408" width="640" height="66" rx="8" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.8" stroke-dasharray="6 4"/>
-<circle cx="48" cy="441" r="13" fill="#6b4fa8"/><text x="48" y="446" class="f l" fill="#ffffff" text-anchor="middle">5</text>
-<text x="72" y="434" class="f l" fill="#523a86">second stage — optional</text>
+<rect x="24" y="408" width="640" height="66" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.8" stroke-dasharray="6 4"/>
+<circle cx="48" cy="441" r="13" fill="var(--d-violet,#6b4fa8)"/><text x="48" y="446" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">5</text>
+<text x="72" y="434" class="f l" fill="var(--d-violet-ink,#523a86)">second stage — optional</text>
 <text x="72" y="453" class="f b dim">cross-encoder rescores the top-N on the real (query, content) pair, or ColBERT</text>
 <text x="72" y="469" class="f b dim">MaxSim over ingest-time token matrices</text>
-<rect x="676" y="408" width="200" height="66" rx="8" fill="#f0ebf8" stroke="#6b4fa8"/>
-<text x="690" y="432" class="f mono" fill="#523a86">UNDERCROFT_RERANKER</text>
+<rect x="676" y="408" width="200" height="66" rx="8" fill="var(--d-violet-bg2,#f0ebf8)" stroke="var(--d-violet,#6b4fa8)"/>
+<text x="690" y="432" class="f mono" fill="var(--d-violet-ink,#523a86)">UNDERCROFT_RERANKER</text>
 <text x="690" y="449" class="f s dim">onnx · ort · colbert</text>
 <text x="690" y="466" class="f s dim">RERANK_TOP_N default 50</text>
-<path d="M344 474 L344 492" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 474 L344 492" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
 
-<rect x="24" y="494" width="640" height="66" rx="8" fill="#ffffff" stroke="#b5762a" stroke-width="1.8"/>
-<circle cx="48" cy="527" r="13" fill="#b5762a"/><text x="48" y="532" class="f l" fill="#ffffff" text-anchor="middle">6</text>
-<text x="72" y="520" class="f l" fill="#8d5a1d">select top-k</text>
+<rect x="24" y="494" width="640" height="66" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-amber,#b5762a)" stroke-width="1.8"/>
+<circle cx="48" cy="527" r="13" fill="var(--d-amber,#b5762a)"/><text x="48" y="532" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">6</text>
+<text x="72" y="520" class="f l" fill="var(--d-amber-ink,#8d5a1d)">select top-k</text>
 <text x="72" y="539" class="f b dim">truncate to limit · optional room_cap spreads across rooms, then refills by score</text>
 <text x="72" y="555" class="f b dim">so a single-room question is never starved</text>
-<rect x="676" y="494" width="200" height="66" rx="8" fill="#fdf6ee" stroke="#b5762a"/>
-<text x="690" y="518" class="f s" fill="#8d5a1d">the budget that decides</text>
-<text x="690" y="535" class="f s" fill="#8d5a1d">what the model ever sees</text>
+<rect x="676" y="494" width="200" height="66" rx="8" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)"/>
+<text x="690" y="518" class="f s" fill="var(--d-amber-ink,#8d5a1d)">the budget that decides</text>
+<text x="690" y="535" class="f s" fill="var(--d-amber-ink,#8d5a1d)">what the model ever sees</text>
 <text x="690" y="552" class="f s dim">room_cap=2 measured −5.6 pp</text>
-<path d="M344 560 L344 578" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 560 L344 578" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
 
-<rect x="24" y="580" width="640" height="72" rx="8" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.8"/>
-<circle cx="48" cy="616" r="13" fill="#2f7d4f"/><text x="48" y="621" class="f l" fill="#ffffff" text-anchor="middle">7</text>
-<text x="72" y="606" class="f l" fill="#22603c">assemble context — caller side</text>
+<rect x="24" y="580" width="640" height="72" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.8"/>
+<circle cx="48" cy="616" r="13" fill="var(--d-green,#2f7d4f)"/><text x="48" y="621" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">7</text>
+<text x="72" y="606" class="f l" fill="var(--d-green-ink,#22603c)">assemble context — caller side</text>
 <text x="72" y="625" class="f b dim">prefix each hit with its content_date, optionally order chronologically, then</text>
 <text x="72" y="641" class="f b dim">hand the text to the answering model</text>
-<rect x="676" y="580" width="200" height="72" rx="8" fill="#e9f5ec" stroke="#2f7d4f"/>
-<text x="690" y="604" class="f s" fill="#22603c">where the +50.2 pp</text>
-<text x="690" y="621" class="f s" fill="#22603c">temporal win lives</text>
+<rect x="676" y="580" width="200" height="72" rx="8" fill="var(--d-green-bg2,#e9f5ec)" stroke="var(--d-green,#2f7d4f)"/>
+<text x="690" y="604" class="f s" fill="var(--d-green-ink,#22603c)">where the +50.2 pp</text>
+<text x="690" y="621" class="f s" fill="var(--d-green-ink,#22603c)">temporal win lives</text>
 <text x="690" y="641" class="f s dim">ordering alone: no effect</text>
 
-<rect x="24" y="668" width="852" height="52" rx="8" fill="#ffffff" stroke="#c9d4dd"/>
+<rect x="24" y="668" width="852" height="52" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="42" y="691" class="f b ink">Recall is decided at stages 2–5. Precision at stage 6. Interpretability at stage 7.</text>
 <text x="42" y="710" class="f s dim">Measured: the multi-session evidence we were missing sat between rank 10 and 50 — a stage-6 budget limit, not stage 2–5 blindness.</text>
 
-<defs><marker id="a_retrievalstack" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+<defs><marker id="a_retrievalstack" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
 
 <figcaption>One query descending the stack, with measured latencies. <a href="diagrams/retrieval-stack.svg">SVG</a> · <a href="pdf/retrieval-stack.pdf">PDF</a></figcaption>
@@ -731,10 +793,57 @@
 </div>
 
 <footer>
-  <p>Undercroft engine v0.42.0 · BUSL-1.1. Diagrams in <a href="diagrams/">diagrams/</a> (SVG) and <a href="pdf/">pdf/</a>.
+  <p>Undercroft engine v0.42.0 · BUSL-1.1. Diagrams in <a href="diagrams/">diagrams/</a> (SVG) and <a href="pdf/">pdf/</a>;
+  rebuild the PDFs with <code>build.sh</code>.
   Measured figures come from internal benchmark runs and are not protocol-comparable with third-party published results.</p>
 </footer>
 
 </div>
+<script>
+(function () {
+  var root = document.documentElement,
+      btn = document.getElementById('themebtn'),
+      label = document.getElementById('themelabel'),
+      media = window.matchMedia('(prefers-color-scheme: dark)'),
+      KEY = 'undercroft-arch-theme';
+
+  function stored() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
+  function save(v) { try { v ? localStorage.setItem(KEY, v) : localStorage.removeItem(KEY); } catch (e) {} }
+
+  // Three states: follow the system, or pin light, or pin dark.
+  function render() {
+    var pin = root.getAttribute('data-theme');
+    var effective = pin || (media.matches ? 'dark' : 'light');
+    label.textContent = pin ? (pin === 'dark' ? 'Dark' : 'Light') : 'Auto';
+    btn.setAttribute('aria-label',
+      'Colour theme: ' + (pin ? pin + ', pinned' : 'automatic, currently ' + effective) +
+      '. Activate to change.');
+  }
+
+  var initial = stored();
+  if (initial === 'light' || initial === 'dark') root.setAttribute('data-theme', initial);
+  render();
+
+  btn.addEventListener('click', function () {
+    var pin = root.getAttribute('data-theme');
+    // auto -> opposite of what you are seeing -> the other -> back to auto
+    if (!pin) {
+      pin = media.matches ? 'light' : 'dark';
+      root.setAttribute('data-theme', pin);
+      save(pin);
+    } else if (pin === (media.matches ? 'light' : 'dark')) {
+      pin = media.matches ? 'dark' : 'light';
+      root.setAttribute('data-theme', pin);
+      save(pin);
+    } else {
+      root.removeAttribute('data-theme');
+      save(null);
+    }
+    render();
+  });
+
+  media.addEventListener('change', render);
+})();
+</script>
 </body>
 </html>
