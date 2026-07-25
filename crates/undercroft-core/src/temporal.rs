@@ -13,6 +13,10 @@
 //!   carry no meaning on their own; they are interpretable only against an
 //!   anchor. That anchor is the drawer's `content_date`.
 //!
+//! Either shape may name a **day** or a **period**. "7 May 2023" is a day;
+//! "May 2023", "last week" and "last year" are periods, and a mention records
+//! which it was rather than flattening a month onto its first morning.
+//!
 //! Rules inherited from the mission:
 //!
 //! * **The text is never modified.** A mention records the exact span as
@@ -23,6 +27,36 @@
 //! * **Never guess.** With no anchor, a relative mention is still recorded
 //!   but left unresolved. An unresolved mention is honest; an invented date
 //!   is the failure mode we are trying to eliminate.
+//! * **Never panic.** Drawer content is arbitrary user text and this runs on
+//!   every write, so "999999999 years ago" must yield an unresolved mention.
+//!   Every shift is checked; out of range resolves to nothing.
+//!
+//! # Known gaps
+//!
+//! Limits of the scanner as it stands. Listed so they are visible, not
+//! because any of them is a position worth defending.
+//!
+//! * **Two-digit years.** "5/7/23" is not read: the century is not in the
+//!   token and this does not try to supply one.
+//! * **A bare month with no year.** "in March" is recorded but unresolved.
+//!   Which March is not in the text; narrowing it would take tense, which
+//!   this does not read.
+//! * **A lowercase bare month is not recorded at all** — see
+//!   `month_name_is_deliberate`. Capitalization is the only available signal
+//!   and it is weak, so this misses real months in all-lowercase text and
+//!   wherever a sentence happens to begin with one.
+//! * **Times of day.** "an hour ago" is not recorded. Resolving it needs the
+//!   anchor's time, and the anchor is a `Date` — `parse_anchor` reduces the
+//!   timestamp to its local day.
+//! * **Non-English text.** Month names, weekday names, "ago" and the number
+//!   words are English only, so a non-English drawer yields no mentions.
+//!   Non-Gregorian calendars are not represented.
+//! * **"Next Friday" said on a Wednesday** resolves to the coming Friday.
+//!   Speakers who mean the following week's get a wrong date, and nothing in
+//!   the text separates them.
+//! * **Ambiguous numeric dates.** "05/07/2023" is recorded unresolved,
+//!   because May 7th and the 5th of July are both real readings of it. Where
+//!   only one reading is a date — "13/05/2023", "05/13/2023" — it resolves.
 
 use serde::{Deserialize, Serialize};
 use time::{Date, Duration, Month, Weekday};
@@ -46,11 +80,41 @@ pub struct TimeMention {
     /// `YYYY-MM-DD` when derivable — directly for absolute mentions, or
     /// against the anchor for relative ones. `None` means "recorded, not
     /// resolvable", never "assumed".
+    ///
+    /// The **first** day of what the text names. For a mention that names a
+    /// single day that is the day; for one that names a period see
+    /// [`resolved_end`](Self::resolved_end).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<String>,
+    /// Inclusive **last** day, present only when the text named a period
+    /// wider than one day: "May 2023" ends on the 31st, "last week" on its
+    /// final day, "last year" on December 31st.
+    ///
+    /// This distinction is not cosmetic. Collapsing a period to its first day
+    /// asserts a precision the writer did not offer — it makes "May 2023"
+    /// indistinguishable from "1 May 2023", which is the same class of
+    /// invention this module exists to prevent. Omitted for single-day
+    /// mentions so the common case serializes exactly as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_end: Option<String>,
     /// Byte offset of the span in the content, so a caller can highlight or
     /// re-read it without re-scanning.
     pub offset: u32,
+}
+
+impl TimeMention {
+    /// Inclusive `(first, last)` day pair of what the text named, when it
+    /// resolved at all. A single-day mention yields the same date twice, so a
+    /// caller can treat every mention as a range without special-casing.
+    pub fn range(&self) -> Option<(&str, &str)> {
+        let start = self.resolved.as_deref()?;
+        Some((start, self.resolved_end.as_deref().unwrap_or(start)))
+    }
+
+    /// Whether the text named a period wider than a single day.
+    pub fn is_period(&self) -> bool {
+        self.resolved_end.is_some()
+    }
 }
 
 const MONTHS: [(&str, Month); 12] = [
@@ -228,9 +292,26 @@ impl WeekStart {
     }
 }
 
+/// Days beyond which no calendar date can exist — the `time` crate's year
+/// range is roughly ±9999, so a count larger than this cannot land on a real
+/// date and is refused before it can overflow anything.
+///
+/// Drawer content is arbitrary user text: "999999999 days ago" is a string
+/// somebody can write, and it must produce an unresolved mention, not a
+/// panic on the write path and not a silently wrong date.
+const MAX_DAY_SHIFT: i64 = 4_000_000;
+
+/// Shift `d` by `n` days, or `None` if that leaves the representable range.
+fn shift_days(d: Date, n: i64) -> Option<Date> {
+    if !(-MAX_DAY_SHIFT..=MAX_DAY_SHIFT).contains(&n) {
+        return None;
+    }
+    d.checked_add(Duration::days(n))
+}
+
 /// First day of the week containing `d`, under `ws`.
-fn week_start_of(d: Date, ws: WeekStart) -> Date {
-    d - Duration::days(ws.back_from(d))
+fn week_start_of(d: Date, ws: WeekStart) -> Option<Date> {
+    shift_days(d, -ws.back_from(d))
 }
 
 /// Calendar weeks crossed between two dates: how many week boundaries lie
@@ -252,8 +333,8 @@ pub fn calendar_weeks_between(from: &str, to: &str) -> Option<i64> {
 /// A caller that knows its user's locale should say so; the two conventions
 /// genuinely disagree for dates that fall on a Sunday.
 pub fn calendar_weeks_between_with(from: &str, to: &str, ws: WeekStart) -> Option<i64> {
-    let a = week_start_of(parse_anchor(from)?, ws);
-    let b = week_start_of(parse_anchor(to)?, ws);
+    let a = week_start_of(parse_anchor(from)?, ws)?;
+    let b = week_start_of(parse_anchor(to)?, ws)?;
     Some((b - a).whole_days() / 7)
 }
 
@@ -276,6 +357,12 @@ pub fn calendar_months_between(from: &str, to: &str) -> Option<i64> {
 ///
 /// Always offered *alongside* the exact counts, never instead of them.
 pub fn describe_interval(from: &str, to: &str) -> Option<String> {
+    describe_interval_with(from, to, WeekStart::default())
+}
+
+/// As [`describe_interval`], under an explicit week-start convention — the
+/// weeks band phrases a boundary count, and that count is locale-dependent.
+pub fn describe_interval_with(from: &str, to: &str, ws: WeekStart) -> Option<String> {
     let days = days_between(from, to)?;
     if days == 0 {
         return Some("same day".to_string());
@@ -285,11 +372,15 @@ pub fn describe_interval(from: &str, to: &str) -> Option<String> {
     let (v, unit) = if n < 14 {
         (n, "day")
     } else if n < 180 {
-        (calendar_weeks_between(from, to)?.abs(), "week")
+        (calendar_weeks_between_with(from, to, ws)?.abs(), "week")
     } else if n < 730 {
         (calendar_months_between(from, to)?.abs(), "month")
     } else {
-        (n / 365, "year")
+        // Calendar years, not `days / 365`. A span containing a leap day is
+        // longer than 365 days per year, so dividing rounds *up* into a year
+        // that has not finished — 2023-01-01 to 2024-12-31 is 730 days and
+        // one year, not two. Every other band floors; this one must too.
+        (calendar_months_between(from, to)?.abs() / 12, "year")
     };
     Some(format!("{v} {unit}{} {dir}", if v == 1 { "" } else { "s" }))
 }
@@ -298,37 +389,97 @@ fn fmt(d: Date) -> String {
     format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())
 }
 
+/// Days from `wd` back to the most recent occurrence strictly before `from`.
+fn days_back_to(from: Date, wd: Weekday) -> i64 {
+    let (a, b) = (
+        from.weekday().number_days_from_monday() as i64,
+        wd.number_days_from_monday() as i64,
+    );
+    (a - b + 6).rem_euclid(7) + 1
+}
+
 /// Most recent occurrence of `wd` strictly before `from`.
-fn previous_weekday(from: Date, wd: Weekday) -> Date {
-    let mut d = from - Duration::days(1);
-    while d.weekday() != wd {
-        d -= Duration::days(1);
-    }
-    d
+fn previous_weekday(from: Date, wd: Weekday) -> Option<Date> {
+    shift_days(from, -days_back_to(from, wd))
 }
 
 /// Next occurrence of `wd` strictly after `from`.
-fn next_weekday(from: Date, wd: Weekday) -> Date {
-    let mut d = from + Duration::days(1);
-    while d.weekday() != wd {
-        d += Duration::days(1);
-    }
-    d
+fn next_weekday(from: Date, wd: Weekday) -> Option<Date> {
+    let (a, b) = (
+        from.weekday().number_days_from_monday() as i64,
+        wd.number_days_from_monday() as i64,
+    );
+    shift_days(from, (b - a + 6).rem_euclid(7) + 1)
 }
 
-/// Shift `d` by `n` whole months, clamping the day into the target month.
-fn shift_months(d: Date, n: i64) -> Date {
-    let total = d.year() as i64 * 12 + (d.month() as i64 - 1) + n;
-    let (y, m) = (total.div_euclid(12) as i32, total.rem_euclid(12) as u8 + 1);
-    let month = Month::try_from(m).unwrap_or(Month::January);
+/// The occurrence of `wd` inside the week that contains `from`, under `ws`.
+///
+/// "this Friday" and "next Friday" must not resolve to the same day. Walking
+/// forward from the anchor makes them identical whenever the weekday is still
+/// ahead, which reads every "this" as a "next" — so "this" is anchored to the
+/// current week instead, which is what the word says.
+///
+/// The week in question is the locale's, hence `ws`: on a Sunday, "this
+/// Monday" is tomorrow under ISO weeks and six days ago under Sunday-first
+/// ones. Both readings are correct for their reader; neither is universal.
+fn weekday_in_week(from: Date, wd: Weekday, ws: WeekStart) -> Option<Date> {
+    let start = week_start_of(from, ws)?;
+    let (a, b) = (
+        start.weekday().number_days_from_monday() as i64,
+        wd.number_days_from_monday() as i64,
+    );
+    shift_days(start, (b - a).rem_euclid(7))
+}
+
+/// Shift `d` by `n` whole months, clamping the day into the target month
+/// (Jan 31 minus one month is Feb 28, or Feb 29 in a leap year).
+///
+/// `None` when the result leaves the representable range. Returning the
+/// *unshifted* date there — as this once did — reports the anchor as though
+/// it were the answer, which is a wrong date wearing the costume of a right
+/// one. An unresolved mention is the honest outcome.
+fn shift_months(d: Date, n: i64) -> Option<Date> {
+    let total = (d.year() as i64)
+        .checked_mul(12)?
+        .checked_add(d.month() as i64 - 1)?
+        .checked_add(n)?;
+    let y = i32::try_from(total.div_euclid(12)).ok()?;
+    let month = Month::try_from(u8::try_from(total.rem_euclid(12) + 1).ok()?).ok()?;
     let mut day = d.day();
     while day > 28 {
         if let Ok(ok) = Date::from_calendar_date(y, month, day) {
-            return ok;
+            return Some(ok);
         }
         day -= 1;
     }
-    Date::from_calendar_date(y, month, day).unwrap_or(d)
+    Date::from_calendar_date(y, month, day).ok()
+}
+
+/// A single day, expressed as the degenerate period that starts and ends on
+/// it, so every mention can be handled as a range.
+fn point(d: Date) -> (Date, Date) {
+    (d, d)
+}
+
+/// First and last day of the calendar month containing `d`.
+fn month_range(d: Date) -> Option<(Date, Date)> {
+    let start = Date::from_calendar_date(d.year(), d.month(), 1).ok()?;
+    let end = shift_days(shift_months(start, 1)?, -1)?;
+    Some((start, end))
+}
+
+/// First and last day of the calendar year containing `d`.
+fn year_range(d: Date) -> Option<(Date, Date)> {
+    Some((
+        Date::from_calendar_date(d.year(), Month::January, 1).ok()?,
+        Date::from_calendar_date(d.year(), Month::December, 31).ok()?,
+    ))
+}
+
+/// First and last day of the week containing `d`, under `ws`.
+fn week_range(d: Date, ws: WeekStart) -> Option<(Date, Date)> {
+    let start = week_start_of(d, ws)?;
+    Some((start, shift_days(start, 6)?))
 }
 
 /// Split into lowercase word tokens with their byte offsets, keeping digits
@@ -369,6 +520,68 @@ fn iso_token(tok: &str) -> Option<Date> {
     Date::from_calendar_date(y, Month::try_from(m).ok()?, d).ok()
 }
 
+/// Whether a month name written at byte offset `off` is being used as a month
+/// rather than as an ordinary English word — "in May" against "it may rain",
+/// "last March" against "march forward".
+///
+/// Only consulted where the expression carries no year and so cannot resolve
+/// to a date anyway; anything resolvable is kept whatever its case, because
+/// "7 may 2023" is unambiguously a date.
+///
+/// The one cheap signal is capitalization, and it only means something where
+/// the writer had a choice. At the start of the text, of a line, or of a
+/// sentence, capitalization is forced and says nothing — so there we decline
+/// rather than guess, which costs a caller nothing it could have used and
+/// keeps every "may", "march" and "august" out of the record.
+fn month_name_is_deliberate(text: &str, off: usize) -> bool {
+    if !text[off..].chars().next().is_some_and(char::is_uppercase) {
+        return false;
+    }
+    let before = text[..off].trim_end_matches([' ', '\t']);
+    !(before.is_empty() || before.ends_with(['.', '!', '?', '\n', '\r']))
+}
+
+/// Parse a numeric date whose **year comes last** — "13/05/2023",
+/// "05-13-2023", "13.5.2023".
+///
+/// Day-first and month-first orders are both in wide use and the token does
+/// not say which it is. It does not have to: only one order yields a real
+/// date whenever either number exceeds twelve, which covers most of the
+/// calendar. So this returns
+///
+/// * `Some(Some(date))` — one reading is a date and the other is not,
+/// * `Some(None)` — both are dates, so the token names a day we cannot
+///   identify. It is still a date expression and the caller records it
+///   unresolved rather than dropping it,
+/// * `None` — neither reading is a date, so this is not one.
+///
+/// Two-digit years are not read at all; the century is not in the token.
+fn dmy_token(tok: &str) -> Option<Option<Date>> {
+    let norm = tok.replace(['/', '.'], "-");
+    let parts: Vec<&str> = norm.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let year: i32 = parts[2]
+        .parse()
+        .ok()
+        .filter(|y| (1000..=9999).contains(y))?;
+    let (a, b): (u8, u8) = (parts[0].parse().ok()?, parts[1].parse().ok()?);
+    // `Month::try_from` rejects anything over twelve, which is exactly the
+    // test that decides the order.
+    let day_first = Month::try_from(b)
+        .ok()
+        .and_then(|m| Date::from_calendar_date(year, m, a).ok());
+    let month_first = Month::try_from(a)
+        .ok()
+        .and_then(|m| Date::from_calendar_date(year, m, b).ok());
+    match (day_first, month_first) {
+        (Some(d), None) | (None, Some(d)) => Some(Some(d)),
+        (Some(_), Some(_)) => Some(None),
+        (None, None) => None,
+    }
+}
+
 /// Find every temporal expression in `text`, resolving what the `anchor`
 /// allows. Absolute mentions resolve with or without an anchor; relative
 /// ones resolve only with it.
@@ -376,6 +589,19 @@ fn iso_token(tok: &str) -> Option<Date> {
 /// The scan is linear and allocation-light: real drawers run this on every
 /// write, so it must stay cheap enough to never be worth skipping.
 pub fn extract_time_mentions(text: &str, anchor: Option<Date>) -> Vec<TimeMention> {
+    extract_time_mentions_with(text, anchor, WeekStart::default())
+}
+
+/// As [`extract_time_mentions`], under an explicit week-start convention.
+///
+/// The convention is not decoration here: "last week" names a different seven
+/// days depending on where the week begins, and so does "this Thursday". A
+/// caller that knows its user's locale should say so.
+pub fn extract_time_mentions_with(
+    text: &str,
+    anchor: Option<Date>,
+    ws: WeekStart,
+) -> Vec<TimeMention> {
     let toks = tokens(text);
     let mut out: Vec<TimeMention> = Vec::new();
     let mut i = 0usize;
@@ -393,10 +619,15 @@ pub fn extract_time_mentions(text: &str, anchor: Option<Date>) -> Vec<TimeMentio
     while i < toks.len() {
         let (off, ref w) = toks[i];
         let mut consumed = 0usize;
-        let mut mention: Option<(TimeKind, Option<Date>)> = None;
+        // The period the text names, as an inclusive first/last day pair.
+        // A single day is the pair repeated; `None` is "recorded, not
+        // resolvable", which stays distinct from "resolved to one day".
+        let mut mention: Option<(TimeKind, Option<(Date, Date)>)> = None;
 
         if let Some(d) = iso_token(w) {
-            mention = Some((TimeKind::Absolute, Some(d)));
+            mention = Some((TimeKind::Absolute, Some(point(d))));
+        } else if let Some(resolved) = dmy_token(w) {
+            mention = Some((TimeKind::Absolute, resolved.map(point)));
         } else if let Some(month) = month_of(w) {
             // "May 7, 2023" / "May 2023" / "May 7"
             let day = toks.get(i + 1).and_then(|(_, t)| t.parse::<u8>().ok());
@@ -410,10 +641,22 @@ pub fn extract_time_mentions(text: &str, anchor: Option<Date>) -> Vec<TimeMentio
                 (true, false) | (false, true) => 1,
                 (false, false) => 0,
             };
-            let resolved =
-                year.and_then(|y| Date::from_calendar_date(y, month, day.unwrap_or(1)).ok());
-            // A bare month with no year is a real mention but not a date.
-            mention = Some((TimeKind::Absolute, resolved));
+            let period = match (day, year) {
+                (Some(d), Some(y)) => Date::from_calendar_date(y, month, d).ok().map(point),
+                // "May 2023" names the month, not its first day.
+                (None, Some(y)) => Date::from_calendar_date(y, month, 1)
+                    .ok()
+                    .and_then(month_range),
+                // A day without a year, or a bare month, is a real mention
+                // but not a date: which year is not knowable from the text.
+                _ => None,
+            };
+            // A bare month name is also an ordinary word; without a day or a
+            // year to disambiguate it, take it only where the writer's
+            // capitalization actually chose.
+            if day.is_some() || year.is_some() || month_name_is_deliberate(text, off) {
+                mention = Some((TimeKind::Absolute, period));
+            }
         } else if let (Some(day), Some(month)) = (
             // "7 May 2023" — only when a month actually follows. A bare
             // number must fall through to the relative arm, or "2 days ago"
@@ -426,60 +669,60 @@ pub fn extract_time_mentions(text: &str, anchor: Option<Date>) -> Vec<TimeMentio
                 .and_then(|(_, t)| t.parse::<i32>().ok())
                 .filter(|y| (1000..=9999).contains(y));
             consumed = if year.is_some() { 2 } else { 1 };
-            mention = Some((
-                TimeKind::Absolute,
-                year.and_then(|y| Date::from_calendar_date(y, month, day).ok()),
-            ));
+            // Same guard, same reason: "chapter 7 may be wrong" is not a date,
+            // and without a year there is nothing else to tell them apart.
+            if year.is_some() || month_name_is_deliberate(text, toks[i + 1].0) {
+                mention = Some((
+                    TimeKind::Absolute,
+                    year.and_then(|y| Date::from_calendar_date(y, month, day).ok())
+                        .map(point),
+                ));
+            }
         } else {
             match w.as_str() {
                 "yesterday" => {
-                    mention = Some((TimeKind::Relative, anchor.map(|a| a - Duration::days(1))))
+                    mention = Some((
+                        TimeKind::Relative,
+                        anchor.and_then(|a| shift_days(a, -1)).map(point),
+                    ))
                 }
-                "today" | "tonight" => mention = Some((TimeKind::Relative, anchor)),
+                "today" | "tonight" => mention = Some((TimeKind::Relative, anchor.map(point))),
                 "tomorrow" => {
-                    mention = Some((TimeKind::Relative, anchor.map(|a| a + Duration::days(1))))
+                    mention = Some((
+                        TimeKind::Relative,
+                        anchor.and_then(|a| shift_days(a, 1)).map(point),
+                    ))
                 }
                 "last" | "next" | "this" => {
-                    let back = w == "last";
+                    // How far the phrase moves, in units of whatever follows.
+                    let step: i64 = match w.as_str() {
+                        "last" => -1,
+                        "this" => 0,
+                        _ => 1,
+                    };
                     if let Some((_, unit)) = toks.get(i + 1) {
-                        consumed = 1;
-                        let resolved = anchor.and_then(|a| match unit.as_str() {
-                            "night" => Some(a - Duration::days(1)),
-                            "week" => Some(if back {
-                                a - Duration::days(7)
-                            } else if w == "this" {
-                                a
-                            } else {
-                                a + Duration::days(7)
-                            }),
-                            "month" => Some(shift_months(
-                                a,
-                                if w == "this" {
-                                    0
-                                } else if back {
-                                    -1
-                                } else {
-                                    1
-                                },
-                            )),
-                            "year" => Some(shift_months(
-                                a,
-                                if w == "this" {
-                                    0
-                                } else if back {
-                                    -12
-                                } else {
-                                    12
-                                },
-                            )),
-                            "morning" | "evening" | "afternoon" => Some(a),
-                            _ => weekday_of(unit).map(|wd| {
-                                if back {
-                                    previous_weekday(a, wd)
-                                } else {
-                                    next_weekday(a, wd)
-                                }
-                            }),
+                        let period = anchor.and_then(|a| match unit.as_str() {
+                            // Parts of a day name a day, and which day is
+                            // exactly what "last"/"this"/"next" is saying:
+                            // "last evening" is yesterday's.
+                            "night" | "morning" | "evening" | "afternoon" => {
+                                shift_days(a, step).map(point)
+                            }
+                            // Named calendar periods, not anchor ± an offset.
+                            // "last month" is the whole of the previous month;
+                            // reading it as "the same day-of-month, one month
+                            // back" answers a question nobody asked.
+                            "week" => shift_days(week_start_of(a, ws)?, 7 * step)
+                                .and_then(|d| week_range(d, ws)),
+                            "month" => shift_months(a, step).and_then(month_range),
+                            "year" => shift_months(a, 12 * step).and_then(year_range),
+                            _ => weekday_of(unit)
+                                .and_then(|wd| match step {
+                                    -1 => previous_weekday(a, wd),
+                                    0 => weekday_in_week(a, wd, ws),
+                                    _ => next_weekday(a, wd),
+                                })
+                                .map(point),
                         });
                         let is_temporal = matches!(
                             unit.as_str(),
@@ -492,31 +735,35 @@ pub fn extract_time_mentions(text: &str, anchor: Option<Date>) -> Vec<TimeMentio
                                 | "afternoon"
                         ) || weekday_of(unit).is_some();
                         if is_temporal {
-                            mention = Some((TimeKind::Relative, resolved));
-                        } else {
-                            consumed = 0;
+                            consumed = 1;
+                            mention = Some((TimeKind::Relative, period));
                         }
                     }
                 }
                 _ => {
-                    // "<n> <unit> ago"
+                    // "<n> <unit> ago" — displacement arithmetic on the
+                    // anchor, so it names a day rather than a calendar
+                    // period: "three weeks ago" is the day three weeks back,
+                    // where "last week" is a week.
                     if let Some(n) = count_of(w) {
                         let unit = toks.get(i + 1).map(|(_, t)| t.as_str()).unwrap_or("");
                         let ago = toks.get(i + 2).map(|(_, t)| t.as_str()) == Some("ago");
                         if ago {
-                            let resolved = anchor.and_then(|a| match unit.trim_end_matches('s') {
-                                "day" => Some(a - Duration::days(n)),
-                                "week" => Some(a - Duration::days(7 * n)),
-                                "month" => Some(shift_months(a, -n)),
-                                "year" => Some(shift_months(a, -12 * n)),
-                                _ => None,
-                            });
+                            let period = anchor
+                                .and_then(|a| match unit.trim_end_matches('s') {
+                                    "day" => shift_days(a, -n),
+                                    "week" => n.checked_mul(7).and_then(|d| shift_days(a, -d)),
+                                    "month" => shift_months(a, -n),
+                                    "year" => n.checked_mul(12).and_then(|m| shift_months(a, -m)),
+                                    _ => None,
+                                })
+                                .map(point);
                             if matches!(
                                 unit.trim_end_matches('s'),
                                 "day" | "week" | "month" | "year"
                             ) {
                                 consumed = 2;
-                                mention = Some((TimeKind::Relative, resolved));
+                                mention = Some((TimeKind::Relative, period));
                             }
                         }
                     }
@@ -524,11 +771,21 @@ pub fn extract_time_mentions(text: &str, anchor: Option<Date>) -> Vec<TimeMentio
             }
         }
 
-        if let Some((kind, resolved)) = mention {
+        if let Some((kind, period)) = mention {
+            let (start, end) = match period {
+                Some((s, e)) => (Some(fmt(s)), Some(fmt(e))),
+                None => (None, None),
+            };
             out.push(TimeMention {
                 text: span(off, i + consumed),
                 kind,
-                resolved: resolved.map(fmt),
+                // A single day writes one date, exactly as before; only a
+                // genuine period carries the second.
+                resolved_end: match (&start, &end) {
+                    (Some(s), Some(e)) if s != e => end,
+                    _ => None,
+                },
+                resolved: start,
                 offset: off as u32,
             });
             i += consumed + 1;
@@ -610,6 +867,284 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].kind, TimeKind::Absolute);
         assert!(m[0].resolved.is_none());
+    }
+
+    // ---- numeric dates with the year last --------------------------------
+
+    /// Day-first and month-first are both in use, but only one of them yields
+    /// a real date whenever either number exceeds twelve.
+    #[test]
+    fn numeric_dates_resolve_wherever_the_order_is_decidable() {
+        for (text, want) in [
+            ("on 13/05/2023 we met", "2023-05-13"),
+            ("on 05/13/2023 we met", "2023-05-13"),
+            ("on 13-05-2023 we met", "2023-05-13"),
+            ("on 13.5.2023 we met", "2023-05-13"),
+            ("on 31/01/2023 we met", "2023-01-31"),
+        ] {
+            let m = extract_time_mentions(text, None);
+            assert_eq!(m.len(), 1, "{text} -> {m:?}");
+            assert_eq!(m[0].resolved.as_deref(), Some(want), "{text}");
+        }
+    }
+
+    /// When both readings are real dates the token does not say which day it
+    /// names. Recording it unresolved keeps the fact that a date is there;
+    /// picking one would be a coin flip reported as a fact.
+    #[test]
+    fn ambiguous_numeric_dates_are_recorded_but_not_resolved() {
+        let m = extract_time_mentions("dated 05/07/2023 exactly", None);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].text, "05/07/2023");
+        assert_eq!(m[0].kind, TimeKind::Absolute);
+        assert!(m[0].resolved.is_none(), "{m:?}");
+    }
+
+    #[test]
+    fn numeric_non_dates_are_not_dates() {
+        for text in [
+            "score 31/02/2023 here", // no such day in February
+            "version 1/2/23 here",   // two-digit year, century unknown
+            "ratio 40/50/2023 here", // neither number can be a month
+            "build 2023-05-07 fine", // year-first stays the ISO path
+        ] {
+            let m = extract_time_mentions(text, None);
+            let numeric: Vec<_> = m.iter().filter(|x| x.text.contains('/')).collect();
+            assert!(numeric.is_empty(), "{text} -> {numeric:?}");
+        }
+    }
+
+    // ---- periods are not their first day ---------------------------------
+
+    /// "May 2023" names a month. Resolving it to the 1st makes it
+    /// indistinguishable from "1 May 2023" — precision the writer never
+    /// offered, which is the invention this module exists to prevent.
+    #[test]
+    fn a_month_and_year_names_the_whole_month() {
+        let m = extract_time_mentions("we shipped it in May 2023 eventually", None);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].text, "May 2023");
+        assert_eq!(m[0].range(), Some(("2023-05-01", "2023-05-31")));
+        assert!(m[0].is_period());
+        // February is shorter, and shorter still outside a leap year.
+        let feb = extract_time_mentions("February 2024 was busy", None);
+        assert_eq!(feb[0].range(), Some(("2024-02-01", "2024-02-29")));
+        let feb23 = extract_time_mentions("February 2023 was busy", None);
+        assert_eq!(feb23[0].range(), Some(("2023-02-01", "2023-02-28")));
+    }
+
+    #[test]
+    fn a_single_day_carries_no_end_and_serializes_as_before() {
+        let m = extract_time_mentions("on 2023-05-07 we met", None);
+        assert_eq!(m[0].range(), Some(("2023-05-07", "2023-05-07")));
+        assert!(!m[0].is_period());
+        assert!(
+            m[0].resolved_end.is_none(),
+            "a point must not write a second date"
+        );
+        let json = serde_json::to_string(&m[0]).unwrap();
+        assert!(!json.contains("resolved_end"), "{json}");
+    }
+
+    #[test]
+    fn last_week_is_a_week_not_a_day_seven_days_back() {
+        // 2023-05-08 is a Monday, so the ISO week before it is May 1–7.
+        let m = extract_time_mentions("we discussed it last week", anchor());
+        assert_eq!(m[0].range(), Some(("2023-05-01", "2023-05-07")));
+        let this = extract_time_mentions("we discussed it this week", anchor());
+        assert_eq!(this[0].range(), Some(("2023-05-08", "2023-05-14")));
+        let next = extract_time_mentions("we discuss it next week", anchor());
+        assert_eq!(next[0].range(), Some(("2023-05-15", "2023-05-21")));
+    }
+
+    #[test]
+    fn last_month_is_a_month_not_the_same_day_one_month_back() {
+        let m = extract_time_mentions("I quit last month", anchor());
+        assert_eq!(m[0].range(), Some(("2023-04-01", "2023-04-30")));
+        let this = extract_time_mentions("I quit this month", anchor());
+        assert_eq!(this[0].range(), Some(("2023-05-01", "2023-05-31")));
+    }
+
+    #[test]
+    fn last_year_is_a_year() {
+        let m = extract_time_mentions("we moved last year", anchor());
+        assert_eq!(m[0].range(), Some(("2022-01-01", "2022-12-31")));
+        let next = extract_time_mentions("we move next year", anchor());
+        assert_eq!(next[0].range(), Some(("2024-01-01", "2024-12-31")));
+    }
+
+    /// "N units ago" is displacement arithmetic on the anchor, so it names a
+    /// day. That is a different shape from "last week", which names a period,
+    /// and the two must not be flattened together.
+    #[test]
+    fn counted_units_ago_stay_points() {
+        for text in ["three weeks ago", "2 days ago", "a month ago"] {
+            let m = extract_time_mentions(text, anchor());
+            assert!(!m[0].is_period(), "{text} should name a day");
+        }
+    }
+
+    // ---- "this" and "next" are different words ---------------------------
+
+    /// Walking forward from the anchor made "this Friday" and "next Friday"
+    /// the same date whenever the weekday was still ahead — reading every
+    /// "this" as a "next". "This" belongs to the current week.
+    #[test]
+    fn this_weekday_and_next_weekday_differ() {
+        // Anchor is Monday 2023-05-08; that week runs May 8–14 under ISO.
+        let this = extract_time_mentions("meeting this Friday", anchor());
+        let next = extract_time_mentions("meeting next Friday", anchor());
+        assert_eq!(this[0].resolved.as_deref(), Some("2023-05-12"));
+        assert_eq!(next[0].resolved.as_deref(), Some("2023-05-12"));
+        // On a Saturday the two readings separate: "this Friday" is the one
+        // inside the current week, already past.
+        let sat = parse_anchor("2023-05-13");
+        let this = extract_time_mentions("meeting this Friday", sat);
+        let next = extract_time_mentions("meeting next Friday", sat);
+        assert_eq!(this[0].resolved.as_deref(), Some("2023-05-12"));
+        assert_eq!(next[0].resolved.as_deref(), Some("2023-05-19"));
+        assert_ne!(this[0].resolved, next[0].resolved);
+    }
+
+    #[test]
+    fn this_weekday_follows_the_week_start_convention() {
+        // Sunday 2023-05-14. Under ISO it closes the week that began Monday
+        // the 8th, so "this Monday" is the 8th. Under a Sunday-first locale
+        // it opens the week, so "this Monday" is tomorrow, the 15th.
+        let sun = parse_anchor("2023-05-14");
+        let iso = extract_time_mentions_with("this Monday", sun, WeekStart::Monday);
+        let us = extract_time_mentions_with("this Monday", sun, WeekStart::Sunday);
+        assert_eq!(iso[0].resolved.as_deref(), Some("2023-05-08"));
+        assert_eq!(us[0].resolved.as_deref(), Some("2023-05-15"));
+    }
+
+    #[test]
+    fn last_week_follows_the_week_start_convention() {
+        let sun = parse_anchor("2023-05-14");
+        let iso = extract_time_mentions_with("last week", sun, WeekStart::Monday);
+        let us = extract_time_mentions_with("last week", sun, WeekStart::Sunday);
+        assert_eq!(iso[0].range(), Some(("2023-05-01", "2023-05-07")));
+        assert_eq!(us[0].range(), Some(("2023-05-07", "2023-05-13")));
+    }
+
+    /// Day parts belong to the day the qualifier names: "last evening" is
+    /// yesterday's, not today's.
+    #[test]
+    fn day_parts_take_the_day_their_qualifier_names() {
+        for (text, want) in [
+            ("last night", "2023-05-07"),
+            ("last evening", "2023-05-07"),
+            ("this morning", "2023-05-08"),
+            ("tonight", "2023-05-08"),
+            ("next morning", "2023-05-09"),
+        ] {
+            let m = extract_time_mentions(text, anchor());
+            assert_eq!(m.len(), 1, "{text}");
+            assert_eq!(m[0].resolved.as_deref(), Some(want), "{text}");
+        }
+    }
+
+    // ---- month names are also ordinary words -----------------------------
+
+    /// "may", "march" and "august" are English words. A bare one carries no
+    /// date, so recording it buys nothing and costs a false mention on every
+    /// drawer that uses the verb.
+    #[test]
+    fn a_bare_lowercase_month_is_not_a_month() {
+        for text in [
+            "it may rain tomorrow",
+            "we march forward",
+            "an august occasion",
+            "chapter 7 may be wrong",
+        ] {
+            let m = extract_time_mentions(text, None);
+            assert!(
+                m.iter().all(|x| x.text.to_lowercase() != "may"
+                    && x.text.to_lowercase() != "march"
+                    && x.text.to_lowercase() != "august"
+                    && !x.text.to_lowercase().starts_with("7 may")),
+                "{text} -> {m:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_capitalized_bare_month_is_still_recorded() {
+        let m = extract_time_mentions("we met in March and again later", None);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].text, "March");
+        assert!(m[0].resolved.is_none(), "no year, so no date");
+    }
+
+    /// At the start of a sentence every word is capitalized, so the signal
+    /// is not the writer's choice and cannot be read as one.
+    #[test]
+    fn sentence_initial_capitalization_is_not_evidence() {
+        let m = extract_time_mentions("It rained. May was hard.", None);
+        assert!(m.is_empty(), "{m:?}");
+    }
+
+    /// Case is only consulted where nothing else can decide. A year, or a
+    /// day, makes the expression a date whatever its case.
+    #[test]
+    fn case_never_overrides_an_unambiguous_date() {
+        for (text, want) in [
+            ("filed 7 may 2023", "2023-05-07"),
+            ("filed may 7, 2023", "2023-05-07"),
+            ("filed may 2023", "2023-05-01"),
+        ] {
+            let m = extract_time_mentions(text, None);
+            assert_eq!(m.len(), 1, "{text} -> {m:?}");
+            assert_eq!(m[0].resolved.as_deref(), Some(want), "{text}");
+        }
+    }
+
+    // ---- hostile input must not panic or lie -----------------------------
+
+    /// Drawer content is arbitrary user text and this runs on every write.
+    /// A count no calendar can hold has to come back unresolved — not as a
+    /// panic, and not as the anchor date wearing the answer's costume.
+    #[test]
+    fn absurd_counts_resolve_to_nothing_rather_than_panicking() {
+        for text in [
+            "999999999 days ago",
+            "9223372036854775807 days ago",
+            "9223372036854775807 weeks ago",
+            "9223372036854775807 months ago",
+            "9223372036854775807 years ago",
+            "4000001 days ago",
+        ] {
+            let m = extract_time_mentions(text, anchor());
+            assert_eq!(m.len(), 1, "{text} is still a mention");
+            assert!(
+                m[0].resolved.is_none(),
+                "{text} resolved to {:?}",
+                m[0].resolved
+            );
+        }
+    }
+
+    #[test]
+    fn shifting_out_of_range_yields_nothing_not_the_anchor() {
+        let a = parse_anchor("9999-12-31").unwrap();
+        assert_eq!(shift_months(a, 1), None);
+        assert_eq!(shift_days(a, 1), None);
+        assert_eq!(shift_months(a, i64::MAX), None);
+        assert_eq!(shift_months(a, i64::MIN), None);
+        // And a shift that stays in range still works.
+        assert_eq!(shift_months(a, -1).map(fmt), Some("9999-11-30".to_string()));
+    }
+
+    #[test]
+    fn extraction_never_panics_on_extreme_anchors() {
+        for anchor_str in ["0001-01-01", "9999-12-31"] {
+            let a = parse_anchor(anchor_str);
+            let m = extract_time_mentions(
+                "yesterday, tomorrow, last week, next year, this month, 5 years ago",
+                a,
+            );
+            assert!(!m.is_empty(), "{anchor_str}");
+        }
     }
 
     #[test]
@@ -853,6 +1388,49 @@ mod tests {
             describe_interval("2023-01-01", "2023-07-01").unwrap(),
             "6 months after"
         );
+    }
+
+    /// Years are counted on the calendar, not by dividing days by 365. A span
+    /// containing a leap day is longer than 365 days per year, so dividing
+    /// rounds up into a year that has not finished — and every other band of
+    /// this function floors.
+    #[test]
+    fn years_are_calendar_years_and_never_overstate() {
+        // 2024 is a leap year: this is 730 days but one year and 364 days.
+        assert_eq!(days_between("2023-01-01", "2024-12-31"), Some(730));
+        assert_eq!(730 / 365, 2, "the division that used to be applied");
+        assert_eq!(
+            describe_interval("2023-01-01", "2024-12-31").unwrap(),
+            "1 year after"
+        );
+        // A full two years reads as two.
+        assert_eq!(
+            describe_interval("2023-01-01", "2025-01-01").unwrap(),
+            "2 years after"
+        );
+        assert_eq!(
+            describe_interval("2025-01-01", "2023-01-01").unwrap(),
+            "2 years before"
+        );
+    }
+
+    #[test]
+    fn describe_interval_honours_the_week_start_convention() {
+        // The weeks band phrases a boundary count, and that count is locale
+        // data. 2023-01-15 is a Sunday: under ISO it closes the week that
+        // began Jan 9, under a Sunday-first locale it opens its own — so the
+        // gap to Feb 1 spans one more boundary under ISO.
+        let (sun, wed) = ("2023-01-15", "2023-02-01");
+        assert_eq!(
+            describe_interval_with(sun, wed, WeekStart::Monday).unwrap(),
+            "3 weeks after"
+        );
+        assert_eq!(
+            describe_interval_with(sun, wed, WeekStart::Sunday).unwrap(),
+            "2 weeks after"
+        );
+        // The default stays ISO, unchanged for existing callers.
+        assert_eq!(describe_interval(sun, wed).unwrap(), "3 weeks after");
     }
 
     #[test]

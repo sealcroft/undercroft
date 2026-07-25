@@ -104,6 +104,47 @@ harness noise is still filtered, prose is still verbatim, and
 - **Search hits also return `time_mentions` and `entities`** — computed at
   write time, sealed on every drawer, and until now unreachable through the
   only surface that reads them.
+- **A mention resolves to a period, not to its first day.** "May 2023" was
+  recorded as 2023-05-01, which makes it indistinguishable from "1 May 2023"
+  — precision the writer never offered, and the same class of invention this
+  module exists to prevent. `TimeMention` now carries `resolved_end` (and a
+  `range()` accessor) whenever the text named something wider than a day, so
+  a month stays a month. The phrases that name calendar periods were also
+  being read as offsets from the anchor: "last month" resolved to the same
+  day-of-month one month back, "last year" to the same day one year back, and
+  "last week" to seven days ago. They now resolve to the previous month, year
+  and week. `"N units ago"` is displacement arithmetic and still names a day,
+  which is a genuinely different shape.
+- **"this Friday" and "next Friday" were the same date.** Both walked forward
+  from the anchor, so every "this" was read as a "next". "This <weekday>" now
+  means the one inside the anchor's current week — which makes it depend on
+  where the week begins, so `WeekStart` is threaded through extraction as
+  `extract_time_mentions_with`, alongside `describe_interval_with`.
+- **Hostile input no longer panics the write path.** Drawer content is
+  arbitrary user text and extraction runs on every write, so "999999999 days
+  ago" reached an unchecked date shift and panicked. Every shift is now
+  checked and resolves to nothing when it leaves the calendar. Relatedly,
+  `shift_months` returned the *unshifted* date when the target was
+  unrepresentable — reporting the anchor as though it were the answer, a
+  wrong date wearing a right one's costume. It returns `None`.
+- **`describe_interval` counted years as `days / 365`.** A span containing a
+  leap day is longer than 365 days per year, so the division rounded up into
+  a year that had not finished: 2023-01-01 to 2024-12-31 is 730 days and one
+  year, and it read "2 years". Years are now counted on the calendar like
+  every other band.
+- **Month names are also ordinary English words.** A bare lowercase "may",
+  "march" or "august" was recorded as a temporal mention on every drawer that
+  used the verb. A bare month carries no resolvable date anyway, so it is now
+  kept only where the writer's capitalization actually chose — never where
+  capitalization is forced, at the start of a line or sentence. Anything with
+  a day or a year attached is a date whatever its case.
+- **Each `time_mention` carries its own elapsed counts.** A drawer's
+  `content_date` is when it was *written*; a mention inside it is when the
+  thing it describes *happened*. A note written on the 8th saying "I went
+  yesterday" is about the 7th, so "how long ago" answered from `content_date`
+  is off by exactly the day the mention resolution exists to recover. Both
+  are returned, neither is chosen for the caller, and neither is left as
+  arithmetic homework.
 
 **Measured (AMB harness, gemini-3.1-flash-lite answer+judge, verbatim
 surface, k=10 — internal numbers, not protocol-comparable with AMB's

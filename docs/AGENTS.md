@@ -339,7 +339,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`) |
 | GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`) |
 | POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`) |
-| POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions` (resolved), `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame` |
+| POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON (vectors + token artifacts) |

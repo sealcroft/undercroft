@@ -61,6 +61,43 @@ fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<
     undercroft_core::temporal::describe_interval(a, d)
 }
 
+/// A drawer's time mentions with the same arithmetic applied to each one.
+///
+/// The drawer's `content_date` says when it was *written*; a mention inside it
+/// says when the thing it describes *happened*, and those are different days.
+/// A note written on the 8th saying "I went yesterday" is about the 7th, so
+/// "how long ago did she go" answered from `content_date` is off by exactly
+/// the day the mention resolution exists to recover.
+///
+/// Both are returned, neither is picked for the caller, and neither is left as
+/// arithmetic homework — which is what hiding these behind the raw text was.
+/// A mention naming a period carries the count from each end, since "some time
+/// in May 2023" is genuinely a span of answers, not one.
+fn mentions_with_elapsed(
+    mentions: &[undercroft_core::temporal::TimeMention],
+    as_of: Option<&str>,
+) -> Vec<Value> {
+    use undercroft_core::temporal::{days_between, describe_interval};
+    mentions
+        .iter()
+        .map(|m| {
+            let mut v = serde_json::to_value(m).unwrap_or_else(|_| json!({}));
+            let (Some(obj), Some(a)) = (v.as_object_mut(), as_of) else {
+                return v;
+            };
+            let Some((first, last)) = m.range() else {
+                return v;
+            };
+            obj.insert("elapsed_days".into(), json!(days_between(first, a)));
+            obj.insert("elapsed".into(), json!(describe_interval(a, first)));
+            if m.is_period() {
+                obj.insert("elapsed_days_end".into(), json!(days_between(last, a)));
+            }
+            v
+        })
+        .collect()
+}
+
 /// Produces the embedder a given vault should open with. Lives in `main`
 /// (it knows the `onnx` feature and env config); this module just calls it.
 pub type EmbedderFactory =
@@ -504,9 +541,13 @@ impl Tenancy {
                     "filed_at": h.drawer.meta.filed_at,
                     // Dates written inside the text, already resolved against
                     // the drawer's own anchor at write time. Returned so a
-                    // reader never has to re-derive what we computed exactly.
-                    "time_mentions": serde_json::to_value(&h.drawer.meta.time_mentions)
-                        .unwrap_or_else(|_| json!([])),
+                    // reader never has to re-derive what we computed exactly —
+                    // including how long ago each one was, which is a
+                    // different question from how old the drawer is.
+                    "time_mentions": mentions_with_elapsed(
+                        &h.drawer.meta.time_mentions,
+                        as_of.as_deref(),
+                    ),
                     "entities": h.drawer.meta.entities,
                     // Exact whole-day offsets from `as_of`, computed here
                     // rather than left to the reader. `elapsed` is the same

@@ -15,11 +15,19 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   and fenced blocks keep indentation/trailing space/blank runs; both modes
   keep the safety floor), temporal extraction (`temporal.rs`: in-text
   absolute + relative dates, resolved against the drawer's `content_date`,
-  never guessed; exact calendar arithmetic — `days_between`,
+  never guessed; a mention resolves to a **period** (`resolved` +
+  `resolved_end`, `range()`) so "May 2023" and "last week" stay the month and
+  the week instead of collapsing onto a first day; exact calendar
+  arithmetic — `days_between`,
   `calendar_weeks_between` (boundaries crossed, not days/7),
   `calendar_months_between`, `hours_between` on absolute instants,
-  `WeekStart::{Monday,Sunday}` since first-day-of-week is locale data;
-  local dates come from the offset the timestamp itself carries, never from
+  `describe_interval` (years counted on the calendar, never days/365),
+  `WeekStart::{Monday,Sunday}` since first-day-of-week is locale data and it
+  moves "last week"/"this Thursday" as well as the counts (`*_with`
+  variants throughout, incl. `extract_time_mentions_with`);
+  every shift is checked — hostile counts resolve to nothing, never a panic
+  and never the unshifted anchor; local dates come from the offset the
+  timestamp itself carries, never from
   the host clock, so a vault answers identically on every machine), hashed
   n-gram embedder (`embed.rs`: `Embedder` trait + `HashEmbedder`), reranker
   trait (`rerank.rs`: `Reranker`), late-interaction trait + MaxSim + int8
