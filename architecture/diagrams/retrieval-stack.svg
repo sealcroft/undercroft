@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 740" width="900" height="740" role="img" aria-labelledby="t d">
+<title id="t">Undercroft retrieval stack</title>
+<desc id="d">Seven stages from scoping a query to assembling context, marking which tiers are optional and which stages decide recall, precision and interpretability.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 14px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: #14202b; }
+  .dim { fill: #55697a; }
+</style>
+<rect width="900" height="740" fill="#fbfcfd"/>
+<text x="28" y="36" class="f h ink">Retrieval stack — one query, top to bottom</text>
+<text x="28" y="56" class="f b dim">Dashed border = optional tier, off by default. Measured numbers are from this session.</text>
+
+<rect x="24" y="72" width="640" height="58" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<circle cx="48" cy="101" r="13" fill="#4a6fa5"/><text x="48" y="106" class="f l" fill="#ffffff" text-anchor="middle">1</text>
+<text x="72" y="96" class="f l ink">scope</text>
+<text x="72" y="116" class="f b dim">wing + optional room narrow the row set before anything is scored</text>
+<rect x="676" y="72" width="200" height="58" rx="8" fill="#eef3f8" stroke="#c9d4dd"/>
+<text x="690" y="96" class="f s dim">decides how much work</text>
+<text x="690" y="113" class="f s dim">everything below must do</text>
+<path d="M344 130 L344 148" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="24" y="150" width="640" height="66" rx="8" fill="#f2fbfa" stroke="#12897e" stroke-width="1.8" stroke-dasharray="6 4"/>
+<circle cx="48" cy="183" r="13" fill="#12897e"/><text x="48" y="188" class="f l" fill="#ffffff" text-anchor="middle">2</text>
+<text x="72" y="176" class="f l" fill="#0d6b62">candidate prefilter — approximate</text>
+<text x="72" y="195" class="f b dim">PQ/IVF probes only nearby lists · FDE token-aware · HNSW graph</text>
+<text x="72" y="211" class="f mono" fill="#0d6b62">UNDERCROFT_RETRIEVAL = pq | fde | hnsw</text>
+<rect x="676" y="150" width="200" height="66" rx="8" fill="#e8f6f4" stroke="#12897e"/>
+<text x="690" y="174" class="f s" fill="#0d6b62">measured at 20k drawers:</text>
+<text x="690" y="191" class="f s" fill="#0d6b62">flat 499 ms → pq 12 ms</text>
+<text x="690" y="208" class="f s dim">first query builds the index</text>
+<path d="M344 216 L344 234" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="24" y="236" width="640" height="66" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<circle cx="48" cy="269" r="13" fill="#4a6fa5"/><text x="48" y="274" class="f l" fill="#ffffff" text-anchor="middle">3</text>
+<text x="72" y="262" class="f l ink">verify, decrypt, score</text>
+<text x="72" y="281" class="f b dim">every row's HMAC is checked before its content is used, then BM25 lexical</text>
+<text x="72" y="297" class="f b dim">is fused with cosine semantic similarity</text>
+<rect x="676" y="236" width="200" height="66" rx="8" fill="#eef3f8" stroke="#c9d4dd"/>
+<text x="690" y="260" class="f mono" fill="#33527d">UNDERCROFT_FUSION</text>
+<text x="690" y="277" class="f s dim">bm25 (default) · rrf · legacy</text>
+<text x="690" y="294" class="f s dim">integrity is not optional</text>
+<path d="M344 302 L344 320" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="24" y="322" width="640" height="66" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<circle cx="48" cy="355" r="13" fill="#4a6fa5"/><text x="48" y="360" class="f l" fill="#ffffff" text-anchor="middle">4</text>
+<text x="72" y="348" class="f l ink">relevance gate</text>
+<text x="72" y="367" class="f mono ink">lexical &gt; 0 || semantic &gt; 0.56</text>
+<text x="72" y="383" class="f b dim">an unrelated row still scores ~0.35 from the cosine midpoint — require real evidence</text>
+<rect x="676" y="322" width="200" height="66" rx="8" fill="#fdf3f3" stroke="#b5453a"/>
+<text x="690" y="346" class="f s" fill="#94382f">passes on ANY shared term,</text>
+<text x="690" y="363" class="f s" fill="#94382f">so it rarely empties a result</text>
+<text x="690" y="380" class="f s dim">— why a "thin" flag failed</text>
+<path d="M344 388 L344 406" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="24" y="408" width="640" height="66" rx="8" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.8" stroke-dasharray="6 4"/>
+<circle cx="48" cy="441" r="13" fill="#6b4fa8"/><text x="48" y="446" class="f l" fill="#ffffff" text-anchor="middle">5</text>
+<text x="72" y="434" class="f l" fill="#523a86">second stage — optional</text>
+<text x="72" y="453" class="f b dim">cross-encoder rescores the top-N on the real (query, content) pair, or ColBERT</text>
+<text x="72" y="469" class="f b dim">MaxSim over ingest-time token matrices</text>
+<rect x="676" y="408" width="200" height="66" rx="8" fill="#f0ebf8" stroke="#6b4fa8"/>
+<text x="690" y="432" class="f mono" fill="#523a86">UNDERCROFT_RERANKER</text>
+<text x="690" y="449" class="f s dim">onnx · ort · colbert</text>
+<text x="690" y="466" class="f s dim">RERANK_TOP_N default 50</text>
+<path d="M344 474 L344 492" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="24" y="494" width="640" height="66" rx="8" fill="#ffffff" stroke="#b5762a" stroke-width="1.8"/>
+<circle cx="48" cy="527" r="13" fill="#b5762a"/><text x="48" y="532" class="f l" fill="#ffffff" text-anchor="middle">6</text>
+<text x="72" y="520" class="f l" fill="#8d5a1d">select top-k</text>
+<text x="72" y="539" class="f b dim">truncate to limit · optional room_cap spreads across rooms, then refills by score</text>
+<text x="72" y="555" class="f b dim">so a single-room question is never starved</text>
+<rect x="676" y="494" width="200" height="66" rx="8" fill="#fdf6ee" stroke="#b5762a"/>
+<text x="690" y="518" class="f s" fill="#8d5a1d">the budget that decides</text>
+<text x="690" y="535" class="f s" fill="#8d5a1d">what the model ever sees</text>
+<text x="690" y="552" class="f s dim">room_cap=2 measured −5.6 pp</text>
+<path d="M344 560 L344 578" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="24" y="580" width="640" height="72" rx="8" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.8"/>
+<circle cx="48" cy="616" r="13" fill="#2f7d4f"/><text x="48" y="621" class="f l" fill="#ffffff" text-anchor="middle">7</text>
+<text x="72" y="606" class="f l" fill="#22603c">assemble context — caller side</text>
+<text x="72" y="625" class="f b dim">prefix each hit with its content_date, optionally order chronologically, then</text>
+<text x="72" y="641" class="f b dim">hand the text to the answering model</text>
+<rect x="676" y="580" width="200" height="72" rx="8" fill="#e9f5ec" stroke="#2f7d4f"/>
+<text x="690" y="604" class="f s" fill="#22603c">where the +50.2 pp</text>
+<text x="690" y="621" class="f s" fill="#22603c">temporal win lives</text>
+<text x="690" y="641" class="f s dim">ordering alone: no effect</text>
+
+<rect x="24" y="668" width="852" height="52" rx="8" fill="#ffffff" stroke="#c9d4dd"/>
+<text x="42" y="691" class="f b ink">Recall is decided at stages 2–5. Precision at stage 6. Interpretability at stage 7.</text>
+<text x="42" y="710" class="f s dim">Measured: the multi-session evidence we were missing sat between rank 10 and 50 — a stage-6 budget limit, not stage 2–5 blindness.</text>
+
+<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+</svg>

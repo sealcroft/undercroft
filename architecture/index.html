@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Undercroft — architecture</title>
+<style>
+  :root {
+    --ink: #14202b; --dim: #55697a; --faint: #7d8fa0;
+    --bg: #fbfcfd; --card: #ffffff; --line: #dbe3ea; --line-strong: #b9c6d1;
+    --teal: #12897e; --teal-bg: #f2fbfa; --teal-ink: #0d6b62;
+    --blue: #4a6fa5; --blue-bg: #eef3f8; --blue-ink: #33527d;
+    --violet: #6b4fa8; --violet-bg: #f6f3fb; --violet-ink: #523a86;
+    --amber: #b5762a; --amber-bg: #fdf6ee; --amber-ink: #8d5a1d;
+    --green: #2f7d4f; --green-bg: #f1f8f2; --green-ink: #22603c;
+    --red: #b5453a; --red-bg: #fdf3f3; --red-ink: #94382f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.65;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px 96px; }
+  header { border-bottom: 1px solid var(--line); background: var(--card); margin-bottom: 40px; }
+  header .wrap { padding: 40px 24px 32px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 10px; font-weight: 600; }
+  .sub { color: var(--dim); font-size: 17px; margin: 0; max-width: 72ch; }
+  .meta { color: var(--faint); font-size: 13px; margin-top: 16px; }
+  h2 {
+    font-size: 23px; font-weight: 600; margin: 56px 0 6px;
+    padding-top: 20px; border-top: 1px solid var(--line);
+  }
+  h2:first-of-type { border-top: none; padding-top: 0; }
+  h3 { font-size: 17px; font-weight: 600; margin: 32px 0 8px; }
+  h4 { font-size: 15px; font-weight: 600; margin: 22px 0 6px; }
+  p { margin: 0 0 14px; max-width: 78ch; }
+  .lede { font-size: 17px; color: var(--dim); margin-bottom: 22px; max-width: 76ch; }
+  code { font-family: var(--mono); font-size: 13.5px; background: var(--blue-bg);
+         color: var(--blue-ink); padding: 1px 5px; border-radius: 4px; }
+  figure { margin: 26px 0 30px; }
+  figure svg { display: block; width: 100%; height: auto;
+               background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  figcaption { color: var(--faint); font-size: 13px; margin-top: 10px; }
+  figcaption a { color: var(--blue-ink); }
+  table { border-collapse: collapse; width: 100%; margin: 18px 0 24px; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 13px; letter-spacing: .02em; }
+  td code { font-size: 13px; }
+  tbody tr:hover { background: var(--card); }
+  .note { border-left: 3px solid var(--line-strong); background: var(--card);
+          padding: 14px 18px; margin: 20px 0; border-radius: 0 8px 8px 0; }
+  .note.teal { border-color: var(--teal); background: var(--teal-bg); }
+  .note.amber { border-color: var(--amber); background: var(--amber-bg); }
+  .note.red { border-color: var(--red); background: var(--red-bg); }
+  .note.green { border-color: var(--green); background: var(--green-bg); }
+  .note.violet { border-color: var(--violet); background: var(--violet-bg); }
+  .note p:last-child { margin-bottom: 0; }
+  .note .tag { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+               text-transform: uppercase; margin-bottom: 6px; }
+  .note.teal .tag { color: var(--teal-ink); }
+  .note.amber .tag { color: var(--amber-ink); }
+  .note.red .tag { color: var(--red-ink); }
+  .note.green .tag { color: var(--green-ink); }
+  .note.violet .tag { color: var(--violet-ink); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 20px 0 26px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .card h4 { margin: 0 0 6px; }
+  .card p { font-size: 14px; color: var(--dim); margin: 0; }
+  .kpi { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 18px 22px; margin-bottom: 8px; }
+  nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  nav.toc li { margin: 3px 0; }
+  nav.toc a { color: var(--blue-ink); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px;
+          border-radius: 20px; vertical-align: 2px; margin-left: 6px; }
+  .pill.on { background: var(--green-bg); color: var(--green-ink); border: 1px solid var(--green); }
+  .pill.off { background: var(--blue-bg); color: var(--blue-ink); border: 1px solid var(--blue); }
+  .pill.exp { background: var(--amber-bg); color: var(--amber-ink); border: 1px solid var(--amber); }
+  footer { border-top: 1px solid var(--line); margin-top: 64px; padding-top: 22px;
+           color: var(--faint); font-size: 13px; }
+  @media (max-width: 720px) { nav.toc ol { columns: 1; } h1 { font-size: 25px; } }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>Undercroft architecture</h1>
+  <p class="sub">How a memory is stored, protected, and found again — the palace model, the retrieval stack, the write path, and every knob that changes their behaviour.</p>
+  <p class="meta">Engine v0.42.0 · diagrams also available as
+     <a href="diagrams/">SVG</a> and <a href="pdf/">PDF</a></p>
+</div></header>
+
+<div class="wrap">
+
+<nav class="toc"><ol>
+  <li><a href="#idea">The one idea</a></li>
+  <li><a href="#domain">Palace, wing, room, drawer</a></li>
+  <li><a href="#layers">Layers and trust boundaries</a></li>
+  <li><a href="#write">The write path</a></li>
+  <li><a href="#retrieval">The retrieval stack</a></li>
+  <li><a href="#recall">Recall vs precision, measured</a></li>
+  <li><a href="#security">Security model</a></li>
+  <li><a href="#config">Configuration reference</a></li>
+  <li><a href="#defaults">Why the defaults are what they are</a></li>
+</ol></nav>
+
+<h2 id="idea">The one idea</h2>
+<p class="lede">Most memory systems summarise what you tell them. Undercroft stores the words and adds structure alongside them.</p>
+<p>That single decision explains almost every design choice below. If content is kept verbatim, then retrieval has to be good enough to find the right passage rather than relying on a pre-digested summary — hence a hybrid lexical + semantic stack with optional reranking. If nothing is thrown away, then metadata that arrives with the content has to be preserved too, not just the text. And if the store holds the user's actual words, it had better be encrypted, integrity-tagged, and tamper-evident.</p>
+
+<div class="cards">
+  <div class="card"><h4>Verbatim</h4><p>The write path never summarises, paraphrases, or lossily compresses. Only derived structure is added; the text is returned exactly as given.</p></div>
+  <div class="card"><h4>Local-first</h4><p>Default builds have no telemetry dependencies, contact no external API, and use a deterministic offline embedder. Every outward path is an explicit opt-in.</p></div>
+  <div class="card"><h4>Provable</h4><p>Every row carries a keyed HMAC verified on read; every write advances a tamper-evident audit chain inside the same transaction.</p></div>
+</div>
+
+<h2 id="domain">Palace, wing, room, drawer</h2>
+<p class="lede">Four nested levels, each with exactly one job.</p>
+
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" width="900" height="620" role="img" aria-labelledby="t_domainmodel d_domainmodel">
+<title id="t_domainmodel">Undercroft domain model</title>
+<desc id="d_domainmodel">Palace contains vaults; a vault contains wings; a wing contains rooms; a room contains drawers. The knowledge graph and audit chain sit inside the vault alongside the wings.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: #14202b; }
+  .dim { fill: #55697a; }
+  .white { fill: #ffffff; }
+</style>
+<rect width="900" height="620" fill="#fbfcfd"/>
+
+<text x="28" y="38" class="f h ink">Domain model — what nests inside what</text>
+<text x="28" y="58" class="f b dim">One process holds one palace. Everything inside the vault boundary is sealed at rest.</text>
+
+<rect x="24" y="74" width="852" height="522" rx="10" fill="#ffffff" stroke="#c9d4dd" stroke-width="1.5"/>
+<text x="42" y="100" class="f l ink">palace</text>
+<text x="640" y="100" class="f s dim">one per process · master key · data dir</text>
+
+<rect x="42" y="114" width="816" height="464" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2"/>
+<text x="60" y="140" class="f l" fill="#0d6b62">vault — isolation + crypto boundary</text>
+<text x="620" y="140" class="f s" fill="#0d6b62">HKDF-derived key · AAD binds vault id</text>
+<text x="60" y="159" class="f s dim">Cross-vault access fails cryptographically, not just logically. One SQLite database, one audit chain.</text>
+
+<rect x="60" y="174" width="780" height="256" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<text x="78" y="199" class="f l ink">wing</text>
+<text x="120" y="199" class="f b dim">person · project · tenant user</text>
+<text x="762" y="199" class="f s dim">search scope</text>
+
+<rect x="78" y="214" width="380" height="198" rx="7" fill="#f7f9fb" stroke="#8fa3b4" stroke-width="1.2"/>
+<text x="94" y="238" class="f l ink">room</text>
+<text x="136" y="238" class="f b dim">topic · session · ticket</text>
+
+<rect x="94" y="252" width="348" height="76" rx="6" fill="#ffffff" stroke="#4a6fa5" stroke-width="1.6"/>
+<text x="108" y="273" class="f l" fill="#33527d">drawer</text>
+<text x="168" y="273" class="f b dim">one verbatim chunk</text>
+<text x="108" y="292" class="f s dim">content (sealed) · embedding (sealed) · HMAC tag</text>
+<text x="108" y="309" class="f s dim">meta: content_date · time_mentions · entities · chunk_index</text>
+
+<rect x="94" y="334" width="348" height="26" rx="6" fill="#ffffff" stroke="#c9d4dd" stroke-width="1.1"/>
+<text x="108" y="351" class="f s dim">drawer · drawer · drawer …</text>
+
+<text x="94" y="378" class="f s dim">id = hash(wing, room, source, chunk_index, normalize_version)</text>
+<text x="94" y="395" class="f s dim">content is not in the id — so re-mining is idempotent, not duplicating</text>
+
+<rect x="472" y="214" width="352" height="198" rx="7" fill="#fdf6ee" stroke="#b5762a" stroke-width="1.4"/>
+<text x="488" y="238" class="f l" fill="#8d5a1d">room "facts"</text>
+<text x="488" y="262" class="f b dim">Distilled fact-drawers — one per distinct</text>
+<text x="488" y="279" class="f b dim">triple, written by POST /refine.</text>
+<text x="488" y="303" class="f b dim">Each carries an HMAC receipt citing the</text>
+<text x="488" y="320" class="f b dim">verbatim drawer it came from.</text>
+<text x="488" y="352" class="f s dim">The room filter alone selects the surface:</text>
+<text x="488" y="369" class="f mono" fill="#8d5a1d">verbatim · distilled · both</text>
+<text x="488" y="395" class="f s dim">Sources exclude this room, so refining never</text>
+<text x="488" y="405" class="f s dim">re-distils its own output.</text>
+
+<rect x="60" y="444" width="384" height="116" rx="7" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.4"/>
+<text x="78" y="468" class="f l" fill="#523a86">knowledge graph</text>
+<text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
+<text x="78" y="508" class="f b dim">Validity windows: valid_from comes from the</text>
+<text x="78" y="525" class="f b dim">source drawer's content_date.</text>
+<text x="78" y="547" class="f s dim">triple_id is content-derived ⇒ a repeated fact collapses.</text>
+
+<rect x="458" y="444" width="382" height="116" rx="7" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="476" y="468" class="f l" fill="#22603c">audit chain</text>
+<text x="476" y="491" class="f b dim">Head lives in chain_meta and advances inside</text>
+<text x="476" y="508" class="f b dim">the same transaction as the data it covers.</text>
+<text x="476" y="530" class="f s dim">Manifest anchor lags on purpose:</text>
+<text x="476" y="547" class="f s dim">behind ⇒ crash, fast-forward · ahead ⇒ tamper alarm</text>
+</svg>
+
+<figcaption>The domain model. <a href="diagrams/domain-model.svg">SVG</a> · <a href="pdf/domain-model.pdf">PDF</a></figcaption>
+</figure>
+
+<h3>Drawer — the unit of memory</h3>
+<p>One verbatim chunk of content plus its metadata. Its identity is deliberately <em>structural</em>, not content-based:</p>
+<p><code>drawer_id = hash(wing, room, source, chunk_index, normalize_version)</code></p>
+<p>Content is not in that hash. This is what makes re-mining a source idempotent: process the same file twice and the same chunk lands in the same slot, updating in place instead of creating a duplicate. It also means changing any of those five inputs changes the drawer's identity — which is why giving <code>room</code> new meaning only applies to newly created vaults.</p>
+
+<h3>Room — topic, session, or ticket</h3>
+<p>A room groups drawers within a wing and doubles as a search filter. Because it is both a label and a predicate, it can carry real structure — one room per conversation session, per support ticket, per meeting — at no extra cost. The distilled knowledge surface uses this: fact-drawers live in their own room (<code>facts</code> by default), so a caller chooses between verbatim recall, distilled facts, or both purely by varying the room filter.</p>
+
+<h3>Wing — the isolation unit within a vault</h3>
+<p>A person, a project, or a tenant's user. Search is normally wing-scoped, so a wing bounds how much work every retrieval stage has to do.</p>
+
+<h3>Vault — the cryptographic boundary</h3>
+<p>Each vault has its own key, derived from the palace master key via HKDF, and every sealed artifact binds the vault identity into its AEAD associated data. Cross-vault access therefore fails <em>cryptographically</em>, not merely because a check rejected it. One vault is one SQLite database with one audit chain.</p>
+
+<div class="note teal">
+  <span class="tag">Design note</span>
+  <p>Metadata rides inside a single serialized <code>meta_json</code> column that the row's HMAC already covers. Adding an optional metadata field therefore needs no schema migration and leaves existing rows byte-identical — their tags still verify. That property is why <code>content_date</code>, <code>time_mentions</code>, and <code>entities</code> could be introduced without touching storage or keys.</p>
+</div>
+
+<h2 id="layers">Layers and trust boundaries</h2>
+<p class="lede">One process holds one palace. Tenancy is expressed as vaults, not as separate palaces.</p>
+
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600" role="img" aria-labelledby="t_layers d_layers">
+<title id="t_layers">Undercroft deployment layers and trust boundaries</title>
+<desc id="d_layers">Callers reach the engine over MCP or HTTP; the engine holds the store and knowledge graph; below the ciphertext line everything is sealed. An optional orchestrator routes tenants and remote vector backends are untrusted accelerators.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: #14202b; }
+  .dim { fill: #55697a; }
+</style>
+<rect width="900" height="600" fill="#fbfcfd"/>
+<text x="28" y="36" class="f h ink">Layers and trust boundaries</text>
+<text x="28" y="56" class="f b dim">One palace per process. Tenancy is vaults, not palaces. Nothing leaves the machine unless you configure it to.</text>
+
+<rect x="24" y="74" width="852" height="82" rx="9" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<text x="42" y="98" class="f l ink">callers</text>
+<rect x="42" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
+<text x="56" y="126" class="f b" fill="#33527d">agent over MCP stdio</text>
+<text x="56" y="140" class="f s dim">32 tools · local process</text>
+<rect x="248" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
+<text x="262" y="126" class="f b" fill="#33527d">app over HTTP /v1</text>
+<text x="262" y="140" class="f s dim">bearer token · REST</text>
+<rect x="454" y="108" width="196" height="38" rx="6" fill="#eef3f8" stroke="#4a6fa5"/>
+<text x="468" y="126" class="f b" fill="#33527d">CLI</text>
+<text x="468" y="140" class="f s dim">remember · mine · search</text>
+<rect x="660" y="108" width="198" height="38" rx="6" fill="#f7f9fb" stroke="#c9d4dd"/>
+<text x="674" y="126" class="f b dim">admin console /ui</text>
+<text x="674" y="140" class="f s dim">served on every build</text>
+
+<path d="M450 158 L450 178" stroke="#8fa3b4" stroke-width="1.8" marker-end="url(#a_layers)"/>
+<text x="462" y="174" class="f s dim">bearer + optional per-vault assertion (HMAC, time-boxed)</text>
+
+<rect x="24" y="182" width="600" height="176" rx="9" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="2"/>
+<text x="42" y="206" class="f l" fill="#523a86">engine — one Rust process</text>
+<rect x="42" y="216" width="270" height="60" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
+<text x="58" y="238" class="f b" fill="#523a86">/v1 surface + MCP handler</text>
+<text x="58" y="254" class="f s dim">drawers · search · refine · kg · verify</text>
+<text x="58" y="269" class="f s dim">rotate · export · import · taxonomy</text>
+<rect x="322" y="216" width="292" height="60" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
+<text x="338" y="238" class="f b" fill="#523a86">store</text>
+<text x="338" y="254" class="f s dim">rank → gate → rerank → select</text>
+<text x="338" y="269" class="f s dim">verifies every row's HMAC before use</text>
+<rect x="42" y="284" width="270" height="58" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
+<text x="58" y="306" class="f b" fill="#523a86">knowledge graph</text>
+<text x="58" y="322" class="f s dim">receipted facts, validity windows</text>
+<text x="58" y="336" class="f s dim">written only by refine or explicit kg calls</text>
+<rect x="322" y="284" width="292" height="58" rx="6" fill="#ffffff" stroke="#6b4fa8" stroke-width="1.2"/>
+<text x="338" y="306" class="f b" fill="#523a86">optional local LLM client</text>
+<text x="338" y="322" class="f s dim">Ollama or OpenAI-compatible, for refine</text>
+<text x="338" y="336" class="f mono dim">unset UNDERCROFT_LLM_URL ⇒ never called</text>
+
+<rect x="640" y="182" width="236" height="176" rx="9" fill="#ffffff" stroke="#c9d4dd" stroke-width="1.4" stroke-dasharray="6 4"/>
+<text x="658" y="206" class="f l dim">optional, separate binary</text>
+<rect x="658" y="216" width="200" height="60" rx="6" fill="#f7f9fb" stroke="#8fa3b4"/>
+<text x="672" y="238" class="f b ink">orchestrator</text>
+<text x="672" y="254" class="f s dim">tenant → vault routing, /t/*</text>
+<text x="672" y="269" class="f s dim">own SQLite, sealed engine creds</text>
+<rect x="658" y="284" width="200" height="58" rx="6" fill="#fdf3f3" stroke="#b5453a"/>
+<text x="672" y="306" class="f b" fill="#94382f">remote vector backends</text>
+<text x="672" y="322" class="f s dim">untrusted accelerators — sealed</text>
+<text x="672" y="336" class="f s dim">payloads only, re-verified on read</text>
+
+<path d="M320 360 L320 380" stroke="#12897e" stroke-width="1.8" marker-end="url(#a_layers)"/>
+<line x1="24" y1="374" x2="876" y2="374" stroke="#12897e" stroke-width="1.6" stroke-dasharray="8 5"/>
+<text x="336" y="370" class="f s" fill="#0d6b62">everything below this line is ciphertext</text>
+
+<rect x="24" y="386" width="852" height="128" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2"/>
+<text x="42" y="410" class="f l" fill="#0d6b62">at rest — per-vault key, HKDF-derived from the master key</text>
+<rect x="42" y="420" width="266" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
+<text x="58" y="442" class="f b" fill="#0d6b62">sealed artifacts</text>
+<text x="58" y="459" class="f s dim">content · embeddings · ColBERT token</text>
+<text x="58" y="474" class="f s dim">matrices · PQ codes, codebook, pages</text>
+<text x="58" y="491" class="f s dim">each under a distinct AAD domain</text>
+<rect x="318" y="420" width="266" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
+<text x="334" y="442" class="f b" fill="#0d6b62">integrity</text>
+<text x="334" y="459" class="f s dim">per-row HMAC tag, verified on every</text>
+<text x="334" y="474" class="f s dim">read; tamper-evident audit chain;</text>
+<text x="334" y="491" class="f s dim">manifest anchor as rollback detector</text>
+<rect x="594" y="420" width="264" height="80" rx="6" fill="#ffffff" stroke="#12897e" stroke-width="1.2"/>
+<text x="610" y="442" class="f b" fill="#0d6b62">never present for sealed vaults</text>
+<text x="610" y="459" class="f s dim">no full-text index, no plaintext</text>
+<text x="610" y="474" class="f s dim">derived data in clear on disk.</text>
+<text x="610" y="491" class="f s dim">Search uses decrypt-once RAM caches.</text>
+
+<rect x="24" y="526" width="852" height="56" rx="8" fill="#ffffff" stroke="#c9d4dd"/>
+<text x="42" y="549" class="f b ink">Default posture: local-first and offline. No telemetry deps compiled in, no external API, deterministic embedder.</text>
+<text x="42" y="568" class="f s dim">Each outward path is a deliberate opt-in: UNDERCROFT_LLM_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL, UNDERCROFT_LLM_KEY.</text>
+
+<defs><marker id="a_layers" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+</svg>
+
+<figcaption>Deployment layers, with the ciphertext boundary marked. <a href="diagrams/layers.svg">SVG</a> · <a href="pdf/layers.pdf">PDF</a></figcaption>
+</figure>
+
+<p>Callers reach the engine three ways — MCP over stdio for local agents, HTTP <code>/v1</code> for applications, and the CLI — and all three land on the same store. An admin console is served at <code>/ui</code> on every build.</p>
+<p>Two components sit deliberately outside the engine. The <strong>orchestrator</strong> is a separate binary and a pure <code>/v1</code> client: it maps tenants to vaults and proxies requests, and the engine never links it. <strong>Remote vector backends</strong> (Qdrant, Chroma, pgvector, Milvus, Weaviate) are treated as untrusted accelerators — they receive sealed payloads only, and anything they return is re-verified locally before use.</p>
+
+<h2 id="write">The write path</h2>
+<p class="lede">Normalise, derive, embed, then commit everything atomically.</p>
+
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" width="900" height="560" role="img" aria-labelledby="t_writepath d_writepath">
+<title id="t_writepath">Undercroft write path</title>
+<desc id="d_writepath">A drawer is normalized, has structure derived from it, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: #14202b; }
+  .dim { fill: #55697a; }
+</style>
+<rect width="900" height="560" fill="#fbfcfd"/>
+<text x="28" y="36" class="f h ink">Write path — one drawer, and why it is safe</text>
+<text x="28" y="56" class="f b dim">Content is stored verbatim. Only derived structure is added; the text itself is never rewritten.</text>
+
+<rect x="24" y="74" width="262" height="82" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<text x="42" y="98" class="f l ink">1 · normalize</text>
+<text x="42" y="118" class="f b dim">safety floor always: strip NUL and</text>
+<text x="42" y="134" class="f b dim">control chars, CRLF → LF</text>
+<text x="42" y="150" class="f s" fill="#8d5a1d">Code mode keeps every space</text>
+
+<path d="M292 115 L318 115" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+
+<rect x="322" y="74" width="262" height="82" rx="8" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.4"/>
+<text x="340" y="98" class="f l" fill="#523a86">2 · derive, never alter</text>
+<text x="340" y="118" class="f b dim">time_mentions · entities</text>
+<text x="340" y="134" class="f b dim">content_date anchors relative dates</text>
+<text x="340" y="150" class="f s dim">runs in Drawer::new — no path forgets</text>
+
+<path d="M590 115 L616 115" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+
+<rect x="620" y="74" width="256" height="82" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<text x="638" y="98" class="f l ink">3 · embed</text>
+<text x="638" y="118" class="f b dim">deterministic offline hash embedder</text>
+<text x="638" y="134" class="f b dim">by default — no model, no network</text>
+<text x="638" y="150" class="f s dim">computed before the lock is taken</text>
+
+<path d="M450 160 L450 182" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+
+<rect x="24" y="186" width="852" height="176" rx="9" fill="#f2fbfa" stroke="#12897e" stroke-width="2.2"/>
+<text x="42" y="212" class="f l" fill="#0d6b62">4 · one SQLite transaction — all of it, or none of it</text>
+<text x="700" y="212" class="f s" fill="#0d6b62">BEGIN IMMEDIATE</text>
+
+<rect x="42" y="226" width="266" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
+<text x="58" y="249" class="f l" fill="#0d6b62">seal</text>
+<text x="58" y="269" class="f b dim">XChaCha20-Poly1305 over content</text>
+<text x="58" y="285" class="f b dim">and embedding.</text>
+<text x="58" y="307" class="f s dim">AAD = the drawer id, plus distinct</text>
+<text x="58" y="323" class="f s dim">domains /emb · /tok · /pq</text>
+
+<rect x="318" y="226" width="264" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
+<text x="334" y="249" class="f l" fill="#0d6b62">tag</text>
+<text x="334" y="269" class="f b dim">HMAC-SHA256 over</text>
+<text x="334" y="287" class="f mono ink">id ‖ meta_json ‖ sealed content</text>
+<text x="334" y="309" class="f s dim">metadata is covered for free — a new</text>
+<text x="334" y="325" class="f s dim">meta field needs no schema change</text>
+
+<rect x="592" y="226" width="266" height="112" rx="7" fill="#ffffff" stroke="#12897e" stroke-width="1.3"/>
+<text x="608" y="249" class="f l" fill="#0d6b62">chain</text>
+<text x="608" y="269" class="f b dim">chain_append runs in the SAME</text>
+<text x="608" y="285" class="f b dim">transaction as the row.</text>
+<text x="608" y="307" class="f s dim">so no committed write can exist</text>
+<text x="608" y="323" class="f s dim">without its audit entry</text>
+
+<text x="42" y="354" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer — measured ≈55× fewer fsyncs at 200 drawers.</text>
+
+<path d="M450 366 L450 388" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+
+<rect x="24" y="392" width="404" height="70" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<text x="42" y="416" class="f l ink">5 · then, outside the transaction</text>
+<text x="42" y="436" class="f b dim">fsync the manifest anchor through an atomic</text>
+<text x="42" y="452" class="f b dim">rename + directory sync. WAL, synchronous=FULL.</text>
+
+<rect x="440" y="392" width="436" height="70" rx="8" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.6"/>
+<text x="458" y="416" class="f l" fill="#22603c">why the anchor lags on purpose</text>
+<text x="458" y="437" class="f b dim">anchor behind the db at open → power loss, fast-forward</text>
+<text x="458" y="454" class="f b dim">anchor ahead of the db at open → rollback, tamper alarm</text>
+
+<rect x="24" y="474" width="852" height="62" rx="8" fill="#fdf3f3" stroke="#b5453a" stroke-width="1.4"/>
+<text x="42" y="498" class="f l" fill="#94382f">The asymmetry is the detector</text>
+<text x="42" y="518" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
+<text x="42" y="530" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
+
+<defs><marker id="a_writepath" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+</svg>
+
+<figcaption>One drawer being written. <a href="diagrams/write-path.svg">SVG</a> · <a href="pdf/write-path.pdf">PDF</a></figcaption>
+</figure>
+
+<h3>Normalisation has two modes</h3>
+<p>A safety floor applies always: NUL and lone control characters are stripped (they corrupt terminals and log pipelines) and CRLF becomes LF so hashes are stable across platforms. Tabs and newlines always survive.</p>
+<table>
+  <thead><tr><th>Mode</th><th>Additional behaviour</th><th>Chosen for</th></tr></thead>
+  <tbody>
+    <tr><td><code>Prose</code> <span class="pill on">default</span></td><td>Trims trailing whitespace per line, collapses 3+ blank lines to 2 — but never inside a fenced <code>```</code> or <code>~~~</code> block</td><td>Markdown, notes, chat messages</td></tr>
+    <tr><td><code>Code</code></td><td>Safety floor only. Every byte of indentation, every trailing space, every blank run is preserved</td><td>Selected by file extension: <code>.py</code>, <code>.rs</code>, <code>.ts</code>, <code>.sh</code>, <code>.yaml</code>, <code>Makefile</code>, ~75 more</td></tr>
+  </tbody>
+</table>
+<p>The reason for the split is simple: in a Python file leading whitespace <em>is</em> the semantics, and a trailing-space diff is a real change. Tidying it away is a silent edit to user data. <code>normalize_version</code> is stamped into each drawer's metadata and into its id, so a change in normalisation output is detectable rather than invisible.</p>
+
+<h3>Derived structure — added, never substituted</h3>
+<table>
+  <thead><tr><th>Field</th><th>What it holds</th><th>How it is produced</th></tr></thead>
+  <tbody>
+    <tr><td><code>content_date</code></td><td>When the content <em>happened</em>, as opposed to <code>filed_at</code> — when it was written down</td><td>Supplied by the caller. Ingesting a year-old conversation today makes those two dates a year apart</td></tr>
+    <tr><td><code>time_mentions</code></td><td>Dates and times written inside the text, each span kept verbatim with its byte offset, plus a resolution when derivable</td><td>Deterministic offline scanner. Absolute forms resolve alone; relative ones ("yesterday", "last Tuesday", "three weeks ago") resolve against <code>content_date</code></td></tr>
+    <tr><td><code>entities</code></td><td>Names appearing in the content, lowercased and deduplicated</td><td>Deterministic offline extractor; sentence-initial words excluded as noise</td></tr>
+  </tbody>
+</table>
+
+<div class="note amber">
+  <span class="tag">Never guess</span>
+  <p>With no anchor, a relative time mention is recorded <em>unresolved</em> rather than assigned a plausible date. An honest gap is useful; an invented date is the failure mode this design exists to remove. The extraction runs inside the drawer constructor rather than at each call site, so no write path — REST, MCP, CLI, mining, import, sweeper — can silently skip it.</p>
+</div>
+
+<h3>One transaction</h3>
+<p>Sealing the content and embedding, computing the row tag, and appending to the audit chain all happen inside a single SQLite transaction. There is no committed write that lacks its audit entry. Bulk ingest takes one transaction and one manifest anchor per <em>batch</em> rather than per drawer, measured at roughly 55× fewer fsyncs on a 200-drawer import.</p>
+
+<div class="note green">
+  <span class="tag">The asymmetry is the detector</span>
+  <p>The manifest anchor is fsynced after the transaction commits, so it deliberately <em>lags</em> the database. At open: anchor behind the database means power was lost mid-write, and it fast-forwards. Anchor <em>ahead</em> of the database means someone restored an older copy of the file — a tamper alarm. Keeping them merely "in sync" would make those two cases indistinguishable; the directional invariant is what makes rollback detectable.</p>
+</div>
+
+<h2 id="retrieval">The retrieval stack</h2>
+<p class="lede">Seven stages. Two are optional tiers that are off until you enable them.</p>
+
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 740" width="900" height="740" role="img" aria-labelledby="t_retrievalstack d_retrievalstack">
+<title id="t_retrievalstack">Undercroft retrieval stack</title>
+<desc id="d_retrievalstack">Seven stages from scoping a query to assembling context, marking which tiers are optional and which stages decide recall, precision and interpretability.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 14px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: #14202b; }
+  .dim { fill: #55697a; }
+</style>
+<rect width="900" height="740" fill="#fbfcfd"/>
+<text x="28" y="36" class="f h ink">Retrieval stack — one query, top to bottom</text>
+<text x="28" y="56" class="f b dim">Dashed border = optional tier, off by default. Measured numbers are from this session.</text>
+
+<rect x="24" y="72" width="640" height="58" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<circle cx="48" cy="101" r="13" fill="#4a6fa5"/><text x="48" y="106" class="f l" fill="#ffffff" text-anchor="middle">1</text>
+<text x="72" y="96" class="f l ink">scope</text>
+<text x="72" y="116" class="f b dim">wing + optional room narrow the row set before anything is scored</text>
+<rect x="676" y="72" width="200" height="58" rx="8" fill="#eef3f8" stroke="#c9d4dd"/>
+<text x="690" y="96" class="f s dim">decides how much work</text>
+<text x="690" y="113" class="f s dim">everything below must do</text>
+<path d="M344 130 L344 148" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+
+<rect x="24" y="150" width="640" height="66" rx="8" fill="#f2fbfa" stroke="#12897e" stroke-width="1.8" stroke-dasharray="6 4"/>
+<circle cx="48" cy="183" r="13" fill="#12897e"/><text x="48" y="188" class="f l" fill="#ffffff" text-anchor="middle">2</text>
+<text x="72" y="176" class="f l" fill="#0d6b62">candidate prefilter — approximate</text>
+<text x="72" y="195" class="f b dim">PQ/IVF probes only nearby lists · FDE token-aware · HNSW graph</text>
+<text x="72" y="211" class="f mono" fill="#0d6b62">UNDERCROFT_RETRIEVAL = pq | fde | hnsw</text>
+<rect x="676" y="150" width="200" height="66" rx="8" fill="#e8f6f4" stroke="#12897e"/>
+<text x="690" y="174" class="f s" fill="#0d6b62">measured at 20k drawers:</text>
+<text x="690" y="191" class="f s" fill="#0d6b62">flat 499 ms → pq 12 ms</text>
+<text x="690" y="208" class="f s dim">first query builds the index</text>
+<path d="M344 216 L344 234" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+
+<rect x="24" y="236" width="640" height="66" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<circle cx="48" cy="269" r="13" fill="#4a6fa5"/><text x="48" y="274" class="f l" fill="#ffffff" text-anchor="middle">3</text>
+<text x="72" y="262" class="f l ink">verify, decrypt, score</text>
+<text x="72" y="281" class="f b dim">every row's HMAC is checked before its content is used, then BM25 lexical</text>
+<text x="72" y="297" class="f b dim">is fused with cosine semantic similarity</text>
+<rect x="676" y="236" width="200" height="66" rx="8" fill="#eef3f8" stroke="#c9d4dd"/>
+<text x="690" y="260" class="f mono" fill="#33527d">UNDERCROFT_FUSION</text>
+<text x="690" y="277" class="f s dim">bm25 (default) · rrf · legacy</text>
+<text x="690" y="294" class="f s dim">integrity is not optional</text>
+<path d="M344 302 L344 320" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+
+<rect x="24" y="322" width="640" height="66" rx="8" fill="#ffffff" stroke="#8fa3b4" stroke-width="1.4"/>
+<circle cx="48" cy="355" r="13" fill="#4a6fa5"/><text x="48" y="360" class="f l" fill="#ffffff" text-anchor="middle">4</text>
+<text x="72" y="348" class="f l ink">relevance gate</text>
+<text x="72" y="367" class="f mono ink">lexical &gt; 0 || semantic &gt; 0.56</text>
+<text x="72" y="383" class="f b dim">an unrelated row still scores ~0.35 from the cosine midpoint — require real evidence</text>
+<rect x="676" y="322" width="200" height="66" rx="8" fill="#fdf3f3" stroke="#b5453a"/>
+<text x="690" y="346" class="f s" fill="#94382f">passes on ANY shared term,</text>
+<text x="690" y="363" class="f s" fill="#94382f">so it rarely empties a result</text>
+<text x="690" y="380" class="f s dim">— why a "thin" flag failed</text>
+<path d="M344 388 L344 406" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+
+<rect x="24" y="408" width="640" height="66" rx="8" fill="#f6f3fb" stroke="#6b4fa8" stroke-width="1.8" stroke-dasharray="6 4"/>
+<circle cx="48" cy="441" r="13" fill="#6b4fa8"/><text x="48" y="446" class="f l" fill="#ffffff" text-anchor="middle">5</text>
+<text x="72" y="434" class="f l" fill="#523a86">second stage — optional</text>
+<text x="72" y="453" class="f b dim">cross-encoder rescores the top-N on the real (query, content) pair, or ColBERT</text>
+<text x="72" y="469" class="f b dim">MaxSim over ingest-time token matrices</text>
+<rect x="676" y="408" width="200" height="66" rx="8" fill="#f0ebf8" stroke="#6b4fa8"/>
+<text x="690" y="432" class="f mono" fill="#523a86">UNDERCROFT_RERANKER</text>
+<text x="690" y="449" class="f s dim">onnx · ort · colbert</text>
+<text x="690" y="466" class="f s dim">RERANK_TOP_N default 50</text>
+<path d="M344 474 L344 492" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+
+<rect x="24" y="494" width="640" height="66" rx="8" fill="#ffffff" stroke="#b5762a" stroke-width="1.8"/>
+<circle cx="48" cy="527" r="13" fill="#b5762a"/><text x="48" y="532" class="f l" fill="#ffffff" text-anchor="middle">6</text>
+<text x="72" y="520" class="f l" fill="#8d5a1d">select top-k</text>
+<text x="72" y="539" class="f b dim">truncate to limit · optional room_cap spreads across rooms, then refills by score</text>
+<text x="72" y="555" class="f b dim">so a single-room question is never starved</text>
+<rect x="676" y="494" width="200" height="66" rx="8" fill="#fdf6ee" stroke="#b5762a"/>
+<text x="690" y="518" class="f s" fill="#8d5a1d">the budget that decides</text>
+<text x="690" y="535" class="f s" fill="#8d5a1d">what the model ever sees</text>
+<text x="690" y="552" class="f s dim">room_cap=2 measured −5.6 pp</text>
+<path d="M344 560 L344 578" stroke="#8fa3b4" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+
+<rect x="24" y="580" width="640" height="72" rx="8" fill="#f1f8f2" stroke="#2f7d4f" stroke-width="1.8"/>
+<circle cx="48" cy="616" r="13" fill="#2f7d4f"/><text x="48" y="621" class="f l" fill="#ffffff" text-anchor="middle">7</text>
+<text x="72" y="606" class="f l" fill="#22603c">assemble context — caller side</text>
+<text x="72" y="625" class="f b dim">prefix each hit with its content_date, optionally order chronologically, then</text>
+<text x="72" y="641" class="f b dim">hand the text to the answering model</text>
+<rect x="676" y="580" width="200" height="72" rx="8" fill="#e9f5ec" stroke="#2f7d4f"/>
+<text x="690" y="604" class="f s" fill="#22603c">where the +50.2 pp</text>
+<text x="690" y="621" class="f s" fill="#22603c">temporal win lives</text>
+<text x="690" y="641" class="f s dim">ordering alone: no effect</text>
+
+<rect x="24" y="668" width="852" height="52" rx="8" fill="#ffffff" stroke="#c9d4dd"/>
+<text x="42" y="691" class="f b ink">Recall is decided at stages 2–5. Precision at stage 6. Interpretability at stage 7.</text>
+<text x="42" y="710" class="f s dim">Measured: the multi-session evidence we were missing sat between rank 10 and 50 — a stage-6 budget limit, not stage 2–5 blindness.</text>
+
+<defs><marker id="a_retrievalstack" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8fa3b4"/></marker></defs>
+</svg>
+
+<figcaption>One query descending the stack, with measured latencies. <a href="diagrams/retrieval-stack.svg">SVG</a> · <a href="pdf/retrieval-stack.pdf">PDF</a></figcaption>
+</figure>
+
+<h3>Stage 2 — candidate prefilter <span class="pill off">opt-in</span></h3>
+<p>By default, search scans the wing. Past a certain size that becomes the dominant cost, and three approximate tiers exist to avoid it: <strong>PQ/IVF</strong> clusters vectors into lists and probes only the nearest ones (roughly O(√N)), <strong>MUVERA FDE</strong> gives token-aware candidates, and an experimental in-memory <strong>HNSW</strong> graph gives O(log N).</p>
+<div class="note violet">
+  <span class="tag">Measured</span>
+  <p>On a deliberately adversarial 20,000-drawer corpus (every query lexically matching every drawer), flat scan ran at <strong>499 ms</strong> p50 while <code>UNDERCROFT_RETRIEVAL=pq</code> ran at <strong>12 ms</strong> p50 — a 41× difference. Two caveats before enabling it anywhere that matters: these tiers are <em>approximate</em>, so recall must be checked against a flat baseline first; and the first query after ingest pays a one-time index build (66 s in that test), which wants warming at startup rather than ambushing a user.</p>
+</div>
+
+<h3>Stage 3 — verify, decrypt, score</h3>
+<p>Every candidate row's HMAC is verified before its content is used; integrity is not an optional tier. Scoring then fuses a lexical BM25 signal with cosine semantic similarity. <code>UNDERCROFT_FUSION</code> selects <code>bm25</code> (the default), <code>rrf</code> for reciprocal-rank fusion, or <code>legacy</code>.</p>
+
+<h3>Stage 4 — the relevance gate</h3>
+<p>An unrelated record still scores around 0.35 from the neutral cosine midpoint alone, so the gate demands actual evidence: <code>lexical &gt; 0 || semantic &gt; 0.56</code>. Failing rows are removed, not merely down-ranked.</p>
+<div class="note red">
+  <span class="tag">Known limitation</span>
+  <p>Because <code>lexical &gt; 0</code> passes on <em>any</em> shared term, this gate rarely empties a result set in practice. A caller cannot use "the gate rejected everything" as a signal that the corpus lacks an answer — measured on an adversarial benchmark, unanswerable questions received exactly as much context as answerable ones. Deciding that retrieved text fails to answer a question requires reading it against the question, which is the answering model's job, not retrieval's. What the layer does provide is per-hit <code>score</code>, <code>semantic</code>, and <code>lexical</code> values so a caller can set its own policy.</p>
+</div>
+
+<h3>Stage 5 — second stage <span class="pill off">opt-in</span></h3>
+<p>A cross-encoder rescores the top-N candidates on the full (query, content) pair — the interaction a bi-encoder cannot capture — then results are re-sorted. Alternatively ColBERT late interaction computes MaxSim over token matrices built at ingest. Bounded to <code>UNDERCROFT_RERANK_TOP_N</code> forward passes, default 50.</p>
+
+<h3>Stage 6 — select top-k</h3>
+<p>Results are truncated to the requested limit. An optional <code>room_cap</code> takes at most <em>N</em> hits per room and then refills any remaining slots in score order — a soft cap, so a genuinely single-room question still receives the full limit and recall is never traded for spread.</p>
+<div class="note amber">
+  <span class="tag">Measured — enable with care</span>
+  <p>On a corpus where evidence is <em>concentrated</em> (one session holds the answer), <code>room_cap=2</code> measured <strong>5.6 points worse</strong> overall. Forcing room diversity pulls in unrelated sessions and displaces the chunks that actually contained the answer. Spreading trades precision for breadth; when precision is what the question needs, that trade loses. Default off for this reason.</p>
+</div>
+
+<h3>Stage 7 — assemble context <span class="pill exp">caller side</span></h3>
+<p>The final step belongs to whoever builds the prompt: label each hit with its <code>content_date</code>, optionally order them chronologically, then hand the text to the model.</p>
+
+<h2 id="recall">Recall vs precision, measured</h2>
+<p class="lede">Different stages control different failure modes — worth knowing before tuning any of them.</p>
+<table>
+  <thead><tr><th>Property</th><th>Decided at</th><th>What goes wrong when it is weak</th></tr></thead>
+  <tbody>
+    <tr><td>Recall — is the evidence findable?</td><td>stages 2–5</td><td>The answer is not in the candidate set at any k. Fix: better ranking or a wider pool</td></tr>
+    <tr><td>Precision — is the evidence shown?</td><td>stage 6</td><td>The answer ranks below the budget. Fix: raise k, or select differently</td></tr>
+    <tr><td>Interpretability — can it be read?</td><td>stage 7</td><td>Evidence is present but unusable — "I went yesterday" with no anchor</td></tr>
+  </tbody>
+</table>
+<div class="note teal">
+  <span class="tag">Worked example</span>
+  <p>Questions needing evidence from several sessions were failing. Measuring gold-document presence separated the causes cleanly: where <em>all</em> the required documents reached the context, answers were correct 97% of the time; where one was missing, they failed. Probing recall at increasing k showed the missing documents ranked between position 10 and 50 — findable, but below the budget. That made it a stage-6 problem, ruled out reranking (stage 5) as the fix, and explained why forcing room diversity had made things worse: the issue was depth of recall for weakly-matching evidence, never spread.</p>
+  <p>The same measurement also showed roughly 40% of those failures had every required document present and still answered wrongly — an aggregation limit of the answering model that no retrieval change can lift. Knowing which portion is which prevents spending effort on the part that is not retrieval's to solve.</p>
+</div>
+
+<h2 id="security">Security model</h2>
+<table>
+  <thead><tr><th>Property</th><th>Mechanism</th></tr></thead>
+  <tbody>
+    <tr><td>Confidentiality at rest</td><td>XChaCha20-Poly1305 over content, embeddings, ColBERT token matrices, and PQ index artifacts — each under a distinct AAD domain (<code>content</code>, <code>/emb</code>, <code>/tok</code>, <code>/pq</code>)</td></tr>
+    <tr><td>Per-vault isolation</td><td>Keys derived per vault via HKDF from the master key; vault identity bound into AAD, so cross-vault reads fail cryptographically</td></tr>
+    <tr><td>Row integrity</td><td>HMAC-SHA256 over <code>id ‖ meta_json ‖ sealed content</code>, verified on every read</td></tr>
+    <tr><td>History integrity</td><td>Tamper-evident audit chain; head in <code>chain_meta</code>, advanced in the same transaction as the data</td></tr>
+    <tr><td>Rollback detection</td><td>Manifest anchor that must never run ahead of the database</td></tr>
+    <tr><td>Durability</td><td>WAL + <code>synchronous=FULL</code>; anchor fsynced through an atomic rename plus directory sync; key material fsynced at creation</td></tr>
+    <tr><td>Key rotation</td><td>In-place re-seal of every artifact plus chain re-key over preserved audit bytes, in one transaction, crash-reconciled at open</td></tr>
+    <tr><td>Sharing</td><td>Recipient-encrypted export bundles: X25519 ephemeral-static → HKDF → XChaCha20-Poly1305</td></tr>
+    <tr><td>Path safety</td><td>Vault, wing, and room names pass <code>validate_name</code>, a path-traversal guard</td></tr>
+    <tr><td>Secrets in memory</td><td>Key material lives in a zeroize-on-drop wrapper and is never <code>Debug</code>-printed</td></tr>
+  </tbody>
+</table>
+<p>For sealed vaults there is an additional standing rule: no plaintext or plaintext-derived data is ever written to disk in clear. No full-text index exists for them, and search operates over decrypt-once RAM caches.</p>
+
+<h2 id="config">Configuration reference</h2>
+<p class="lede">Everything is environment-driven, and every default is the conservative choice.</p>
+
+<h3>Core</h3>
+<table>
+  <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>UNDERCROFT_HOME</code></td><td><code>~/.undercroft</code></td><td>Palace data directory</td></tr>
+    <tr><td><code>UNDERCROFT_PASSPHRASE</code></td><td>unset</td><td>Passphrase-wrapped master key</td></tr>
+    <tr><td><code>UNDERCROFT_LANG</code></td><td>system</td><td>CLI output language</td></tr>
+  </tbody>
+</table>
+
+<h3>Retrieval</h3>
+<table>
+  <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>UNDERCROFT_RETRIEVAL</code></td><td>unset — flat scan</td><td><code>pq</code> · <code>fde</code> · <code>hnsw</code> (feature-gated). Approximate; verify recall before relying on it</td></tr>
+    <tr><td><code>UNDERCROFT_FUSION</code></td><td><code>bm25</code></td><td><code>bm25</code> · <code>rrf</code> · <code>legacy</code></td></tr>
+    <tr><td><code>UNDERCROFT_FTS_PREFILTER_MIN</code></td><td>2048</td><td>Row count above which the lexical prefilter engages (hmac-only vaults)</td></tr>
+    <tr><td><code>UNDERCROFT_IVF_MIN</code> · <code>UNDERCROFT_IVF_NPROBE</code></td><td>size-gated</td><td>When the IVF tier activates, and how many lists each query probes</td></tr>
+    <tr><td><code>UNDERCROFT_PQ_PAGE_MIN</code></td><td>off</td><td>Sealed PQ page tier: one AEAD page per IVF list, decrypted lazily per probe</td></tr>
+    <tr><td><code>UNDERCROFT_TOK_PQ_MIN</code> · <code>UNDERCROFT_FDE_PQ_MIN</code> · <code>UNDERCROFT_FDE_IVF_MIN</code></td><td>off</td><td>Compression and inverted tiers for token matrices and FDE rows</td></tr>
+    <tr><td><code>UNDERCROFT_FDE_REPS</code> · <code>_KSIM</code> · <code>_DPROJ</code> · <code>_NPROBE</code> · <code>_SEED</code></td><td>tuned</td><td>FDE construction and probe parameters</td></tr>
+  </tbody>
+</table>
+
+<h3>Models</h3>
+<table>
+  <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds)</td></tr>
+    <tr><td><code>UNDERCROFT_ONNX_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>User-supplied embedding model files</td></tr>
+    <tr><td><code>UNDERCROFT_RERANKER</code></td><td>unset — no second stage</td><td><code>onnx</code> · <code>ort</code> · <code>colbert</code> · <code>colbert-ort</code></td></tr>
+    <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores</td></tr>
+    <tr><td><code>UNDERCROFT_RERANK_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Reranker model files</td></tr>
+    <tr><td><code>UNDERCROFT_COLBERT_MODEL</code> · <code>_QUERY_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Late-interaction encoder exports</td></tr>
+    <tr><td><code>UNDERCROFT_ORT_POOL</code></td><td>1</td><td>ONNX Runtime session-pool size</td></tr>
+    <tr><td><code>UNDERCROFT_FORCE_EMBEDDER</code></td><td>unset</td><td>Override the identity recorded in a vault — changes what its vectors mean; use only when re-embedding</td></tr>
+  </tbody>
+</table>
+
+<h3>Optional LLM (for <code>refine</code> only)</h3>
+<table>
+  <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>UNDERCROFT_LLM_URL</code></td><td>unset</td><td><strong>Nothing is contacted unless this is set.</strong> Points at Ollama or an OpenAI-compatible runtime</td></tr>
+    <tr><td><code>UNDERCROFT_LLM_MODEL</code></td><td><code>llama3.2</code></td><td>Model name passed to that runtime</td></tr>
+    <tr><td><code>UNDERCROFT_LLM_API</code></td><td>guessed from URL</td><td><code>ollama</code> · <code>openai</code></td></tr>
+    <tr><td><code>UNDERCROFT_LLM_KEY</code></td><td>unset</td><td>Bearer credential. An empty key sends no header at all, so default requests are unchanged. Setting it means drawer text leaves the machine</td></tr>
+  </tbody>
+</table>
+
+<h3>Server and multi-tenancy</h3>
+<table>
+  <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>UNDERCROFT_MCP_HTTP_TOKEN</code></td><td>required off-loopback</td><td>Palace-wide bearer token</td></tr>
+    <tr><td><code>UNDERCROFT_ASSERTION_SECRET</code></td><td>unset</td><td>When set, every vault-addressing request must carry a valid time-boxed <code>X-Vault-Assertion</code></td></tr>
+    <tr><td><code>UNDERCROFT_ORCH_ADDR</code> · <code>_DB</code> · <code>_KEY</code> · <code>_ADMIN_TOKEN</code> · <code>_RATE_LIMIT</code></td><td>—</td><td>Orchestrator listen address, state database, sealing key, admin plane token, per-process rate limit</td></tr>
+  </tbody>
+</table>
+
+<h3>Remote vector backends <span class="pill exp">untrusted accelerators</span></h3>
+<table>
+  <thead><tr><th>Variable</th><th>Backend</th></tr></thead>
+  <tbody>
+    <tr><td><code>UNDERCROFT_QDRANT_URL</code></td><td>Qdrant</td></tr>
+    <tr><td><code>UNDERCROFT_CHROMA_URL</code></td><td>Chroma</td></tr>
+    <tr><td><code>UNDERCROFT_PGVECTOR_DSN</code></td><td>pgvector</td></tr>
+    <tr><td><code>UNDERCROFT_MILVUS_URL</code></td><td>Milvus</td></tr>
+    <tr><td><code>UNDERCROFT_WEAVIATE_URL</code></td><td>Weaviate</td></tr>
+  </tbody>
+</table>
+<p>These receive sealed content only, and everything they return is re-verified locally. They accelerate candidate generation; they are never trusted as a source of truth.</p>
+
+<h3>Observability <span class="pill off">compiled out by default</span></h3>
+<table>
+  <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>UNDERCROFT_METRICS</code></td><td>Serve a Prometheus <code>/metrics</code> endpoint (behind the bearer)</td></tr>
+    <tr><td><code>UNDERCROFT_LOG</code> · <code>UNDERCROFT_LOG_FORMAT</code></td><td>Log filter; <code>json</code> for structured output</td></tr>
+    <tr><td><code>UNDERCROFT_OTLP_ENDPOINT</code></td><td>OTLP trace destination. <strong>Unset means nothing leaves the process.</strong></td></tr>
+    <tr><td><code>UNDERCROFT_OTLP_HEADERS</code></td><td>Comma-separated <code>key=value</code> export headers, e.g. for an authenticated collector</td></tr>
+    <tr><td><code>UNDERCROFT_SERVICE_NAME</code> · <code>UNDERCROFT_SAMPLE_INTERVAL_MS</code></td><td>Service label; gauge sampling interval (2000 ms)</td></tr>
+  </tbody>
+</table>
+<p>Telemetry requires a <code>--features telemetry</code> build. Default builds carry zero telemetry dependencies and emit nothing. Even when enabled, signals are metadata and counts only — never drawer content, never key material.</p>
+
+<h3>Per-request options (not environment)</h3>
+<table>
+  <thead><tr><th>Option</th><th>Where</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>wing</code> · <code>room</code> · <code>limit</code></td><td><code>POST /v1/vaults/{id}/search</code></td><td>Scope and budget</td></tr>
+    <tr><td><code>room_cap</code></td><td>same</td><td>Soft per-room cap on selection. Absent = pure score order</td></tr>
+    <tr><td><code>content_date</code></td><td><code>POST …/drawers</code>, CLI <code>remember</code>, MCP <code>save</code> / <code>add_drawer</code></td><td>When the content happened</td></tr>
+    <tr><td><code>dedup_threshold</code></td><td><code>POST …/drawers</code></td><td>Similarity above which a near-duplicate refreshes the existing drawer instead of inserting</td></tr>
+    <tr><td><code>fact_room</code> · <code>wing</code> · <code>room</code> · <code>limit</code></td><td><code>POST …/refine</code></td><td>Which drawers to distil and where fact-drawers land</td></tr>
+  </tbody>
+</table>
+
+<h2 id="defaults">Why the defaults are what they are</h2>
+<p class="lede">Almost every optional tier is off. That is a position, not an oversight.</p>
+<div class="cards">
+  <div class="card"><h4>Approximate tiers are opt-in</h4><p>PQ, FDE, and HNSW trade exactness for speed. A memory product that silently loses recall to save milliseconds has broken its main promise, so each stays off until measured on the workload in question.</p></div>
+  <div class="card"><h4>Models are user-supplied</h4><p>No weights ship with the binary and none are downloaded. The default embedder is a deterministic hashed n-gram — offline, reproducible, and adequate on its own.</p></div>
+  <div class="card"><h4>Outward paths are explicit</h4><p>No LLM URL, no OTLP endpoint, no remote index, no API key by default. Each is one variable, and setting it is a visible decision about data leaving the machine.</p></div>
+  <div class="card"><h4>Integrity is not a tier</h4><p>Verification, sealing, and the audit chain have no off switch. They are the parts you cannot bolt on afterwards.</p></div>
+</div>
+
+<footer>
+  <p>Undercroft engine v0.42.0 · BUSL-1.1. Diagrams in <a href="diagrams/">diagrams/</a> (SVG) and <a href="pdf/">pdf/</a>.
+  Measured figures come from internal benchmark runs and are not protocol-comparable with third-party published results.</p>
+</footer>
+
+</div>
+</body>
+</html>
