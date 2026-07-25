@@ -29,6 +29,24 @@ use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 use crate::assertion::{self, AssertionError};
 
+/// Whole days from a drawer's `content_date` to the caller's reference date.
+/// `None` whenever either side is missing or unparseable — an absent number
+/// is honest, a guessed one is not.
+fn elapsed_days(content_date: &Option<String>, as_of: Option<&str>) -> Option<i64> {
+    let (d, a) = (content_date.as_deref()?, as_of?);
+    undercroft_core::temporal::days_between(d, a)
+}
+
+/// The same interval phrased for a human or a prompt ("15 weeks before").
+fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<String> {
+    elapsed_days(content_date, as_of).map(|d| {
+        // days_between counts forward to `as_of`, so a positive result means
+        // the content precedes the reference: express it from the content's
+        // point of view.
+        undercroft_core::temporal::describe_elapsed(-d)
+    })
+}
+
 /// Produces the embedder a given vault should open with. Lives in `main`
 /// (it knows the `onnx` feature and env config); this module just calls it.
 pub type EmbedderFactory =
@@ -442,6 +460,11 @@ impl Tenancy {
                 .map(|v| v as usize),
         };
         let vector = parse_vector(&body, "vector")?;
+        // Reference date for elapsed-time computation. The engine holds the
+        // dates, so it does the calendar arithmetic — month lengths and leap
+        // years are not a caller's problem, and certainly not a language
+        // model's. Absent ⇒ no elapsed fields, nothing invented.
+        let as_of = body.get("as_of").and_then(Value::as_str).map(String::from);
         let store = self.store_for(id)?;
         let hits = if store.is_external() {
             let v =
@@ -465,6 +488,18 @@ impl Tenancy {
                     // text; null when the writer did not know it.
                     "content_date": h.drawer.meta.content_date,
                     "filed_at": h.drawer.meta.filed_at,
+                    // Dates written inside the text, already resolved against
+                    // the drawer's own anchor at write time. Returned so a
+                    // reader never has to re-derive what we computed exactly.
+                    "time_mentions": serde_json::to_value(&h.drawer.meta.time_mentions)
+                        .unwrap_or_else(|_| json!([])),
+                    "entities": h.drawer.meta.entities,
+                    // Exact whole-day offsets from `as_of`, computed here
+                    // rather than left to the reader. `elapsed` is the same
+                    // interval phrased for display; both are omitted when the
+                    // date is unknown or `as_of` was not supplied.
+                    "elapsed_days": elapsed_days(&h.drawer.meta.content_date, as_of.as_deref()),
+                    "elapsed": elapsed_phrase(&h.drawer.meta.content_date, as_of.as_deref()),
                     "score": h.score,
                     "semantic": h.semantic,
                     "lexical": h.lexical,
