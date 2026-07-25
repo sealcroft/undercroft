@@ -37,14 +37,28 @@ fn elapsed_days(content_date: &Option<String>, as_of: Option<&str>) -> Option<i6
     undercroft_core::temporal::days_between(d, a)
 }
 
+/// Calendar weeks and months crossed between the content's date and the
+/// reference — the units "how long since" is actually asked in. Reported
+/// from the content's point of view, so a past drawer yields positive counts.
+fn elapsed_calendar(
+    content_date: &Option<String>,
+    as_of: Option<&str>,
+) -> (Option<i64>, Option<i64>) {
+    let Some((d, a)) = content_date.as_deref().zip(as_of) else {
+        return (None, None);
+    };
+    (
+        undercroft_core::temporal::calendar_weeks_between(d, a),
+        undercroft_core::temporal::calendar_months_between(d, a),
+    )
+}
+
 /// The same interval phrased for a human or a prompt ("15 weeks before").
 fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<String> {
-    elapsed_days(content_date, as_of).map(|d| {
-        // days_between counts forward to `as_of`, so a positive result means
-        // the content precedes the reference: express it from the content's
-        // point of view.
-        undercroft_core::temporal::describe_elapsed(-d)
-    })
+    let (d, a) = content_date.as_deref().zip(as_of)?;
+    // Phrased from the reference looking back at the content, which is how
+    // the question is put: "15 weeks before now", not "after".
+    undercroft_core::temporal::describe_interval(a, d)
 }
 
 /// Produces the embedder a given vault should open with. Lives in `main`
@@ -499,6 +513,11 @@ impl Tenancy {
                     // interval phrased for display; both are omitted when the
                     // date is unknown or `as_of` was not supplied.
                     "elapsed_days": elapsed_days(&h.drawer.meta.content_date, as_of.as_deref()),
+                    // Calendar counts, not day division: "how many weeks
+                    // since" asks how many week boundaries were crossed, and
+                    // 104 days spans 15 of them, not 14.
+                    "elapsed_weeks": elapsed_calendar(&h.drawer.meta.content_date, as_of.as_deref()).0,
+                    "elapsed_months": elapsed_calendar(&h.drawer.meta.content_date, as_of.as_deref()).1,
                     "elapsed": elapsed_phrase(&h.drawer.meta.content_date, as_of.as_deref()),
                     "score": h.score,
                     "semantic": h.semantic,

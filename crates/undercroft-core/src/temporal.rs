@@ -143,33 +143,67 @@ pub fn days_between(from: &str, to: &str) -> Option<i64> {
     Some((b - a).whole_days())
 }
 
-/// Human-readable elapsed time between two dates, e.g. `3 days before`,
-/// `14 weeks after`, `same day`.
+/// Monday that begins the ISO-8601 week containing `d`.
 ///
-/// Units are chosen to keep resolution rather than to sound round: days
-/// below a fortnight, then weeks all the way to about half a year, then
-/// months, then years. Calling 104 days "3 months" would throw away
-/// precision a memory is expected to have; "14 weeks" does not.
+/// Monday because ISO 8601 says so. A locale that starts its weeks on Sunday
+/// would shift every boundary, which is why the convention is stated here
+/// instead of left implicit in an arithmetic expression.
+fn week_start(d: Date) -> Date {
+    d - Duration::days(d.weekday().number_days_from_monday() as i64)
+}
+
+/// Calendar weeks crossed between two dates: how many week boundaries lie
+/// between them, not how many 7-day spans fit inside.
 ///
-/// Counts are floored — 104 days is 14 whole weeks, not 15 — so the phrase
-/// never overstates. It is always returned *alongside* the exact day count,
-/// never instead of it: the integer is the contract, this is for display.
-pub fn describe_elapsed(days: i64) -> String {
-    let n = days.abs();
-    if n == 0 {
-        return "same day".to_string();
+/// Those are different questions, and "how many weeks since X" is the
+/// calendar one. Thursday 2023-01-19 to Wednesday 2023-05-03 is 104 days —
+/// fourteen 7-day spans, but **fifteen** week boundaries crossed (the week
+/// of Jan 16 through the week of May 1). Dividing days by 7 silently answers
+/// the question nobody asked.
+///
+/// Derived from week starts rather than ISO week numbers, because those reset
+/// each year and subtracting them breaks across a year boundary.
+pub fn calendar_weeks_between(from: &str, to: &str) -> Option<i64> {
+    let a = week_start(parse_anchor(from)?);
+    let b = week_start(parse_anchor(to)?);
+    Some((b - a).whole_days() / 7)
+}
+
+/// Calendar months crossed: January to May is 4, whatever the day of the
+/// month and however many days those months held. Not `days / 30`, which is
+/// a duration approximation and drifts.
+pub fn calendar_months_between(from: &str, to: &str) -> Option<i64> {
+    let a = parse_anchor(from)?;
+    let b = parse_anchor(to)?;
+    let key = |d: Date| d.year() as i64 * 12 + (d.month() as u8 as i64);
+    Some(key(b) - key(a))
+}
+
+/// The interval between two dates phrased for a human or a prompt, in
+/// calendar units so it agrees with how the question would be asked.
+///
+/// Days below a fortnight, because "13 days" tells you more than "1 week".
+/// Then calendar weeks out to about half a year, then calendar months, then
+/// years. Direction is explicit; identical dates read "same day".
+///
+/// Always offered *alongside* the exact counts, never instead of them.
+pub fn describe_interval(from: &str, to: &str) -> Option<String> {
+    let days = days_between(from, to)?;
+    if days == 0 {
+        return Some("same day".to_string());
     }
     let dir = if days < 0 { "before" } else { "after" };
+    let n = days.abs();
     let (v, unit) = if n < 14 {
         (n, "day")
     } else if n < 180 {
-        (n / 7, "week")
+        (calendar_weeks_between(from, to)?.abs(), "week")
     } else if n < 730 {
-        (n / 30, "month")
+        (calendar_months_between(from, to)?.abs(), "month")
     } else {
         (n / 365, "year")
     };
-    format!("{v} {unit}{} {dir}", if v == 1 { "" } else { "s" })
+    Some(format!("{v} {unit}{} {dir}", if v == 1 { "" } else { "s" }))
 }
 
 fn fmt(d: Date) -> String {
@@ -544,38 +578,94 @@ mod tests {
         assert_eq!(days_between("2023-05-08", ""), None);
     }
 
-    /// The real failure this exists to remove: asked for the gap between a
-    /// flu recovery and a jog, a generator answered "11.7 weeks" — wrong
-    /// arithmetic, confidently stated. The engine computes the interval
-    /// exactly instead of asking a model to.
+    /// The failure this exists to remove, and the correction that followed.
+    /// Asked for the gap between a flu recovery and a jog, a generator
+    /// answered "11.7 weeks". The truth is 104 days — and the answer to
+    /// "how many weeks" is **15**, the number of week boundaries crossed.
+    /// `days / 7` gives 14, which answers a different question.
     #[test]
-    fn the_interval_a_model_got_wrong() {
-        let d = days_between("2023-01-19", "2023-05-03").unwrap();
-        assert_eq!(d, 104, "exact day count is the contract");
-        assert_eq!(describe_elapsed(d), "14 weeks after");
-        // Floored, never rounded up: 14 whole weeks with the 15th in
-        // progress. A phrase that overstates would be its own bug.
-        assert_eq!(d / 7, 14);
+    fn weeks_means_calendar_weeks_not_seven_day_spans() {
+        let (a, b) = ("2023-01-19", "2023-05-03");
+        assert_eq!(days_between(a, b), Some(104));
+        assert_eq!(104 / 7, 14, "the duration reading");
+        assert_eq!(
+            calendar_weeks_between(a, b),
+            Some(15),
+            "the calendar reading"
+        );
+        assert_eq!(calendar_months_between(a, b), Some(4));
+        assert_eq!(describe_interval(a, b).unwrap(), "15 weeks after");
+    }
+
+    #[test]
+    fn calendar_weeks_count_boundaries_not_elapsed_time() {
+        // Sunday to the following Monday: one day, but a boundary is crossed.
+        assert_eq!(days_between("2023-01-15", "2023-01-16"), Some(1));
+        assert_eq!(calendar_weeks_between("2023-01-15", "2023-01-16"), Some(1));
+        // Monday to Sunday of the same week: six days, no boundary.
+        assert_eq!(days_between("2023-01-16", "2023-01-22"), Some(6));
+        assert_eq!(calendar_weeks_between("2023-01-16", "2023-01-22"), Some(0));
+    }
+
+    #[test]
+    fn calendar_weeks_survive_the_year_boundary() {
+        // ISO week numbers reset in January, so subtracting them would be
+        // wrong here. Week starts are not.
+        assert_eq!(calendar_weeks_between("2022-12-26", "2023-01-02"), Some(1));
+        assert_eq!(calendar_weeks_between("2022-12-20", "2023-01-10"), Some(3));
+    }
+
+    #[test]
+    fn calendar_months_ignore_month_length() {
+        assert_eq!(calendar_months_between("2023-01-31", "2023-02-01"), Some(1));
+        assert_eq!(calendar_months_between("2023-01-01", "2023-01-31"), Some(0));
+        assert_eq!(calendar_months_between("2023-11-15", "2024-02-01"), Some(3));
+    }
+
+    #[test]
+    fn intervals_are_directional() {
+        assert_eq!(
+            describe_interval("2023-05-03", "2023-01-19").unwrap(),
+            "15 weeks before"
+        );
+        assert_eq!(
+            describe_interval("2023-05-03", "2023-05-03").unwrap(),
+            "same day"
+        );
+        assert_eq!(
+            calendar_weeks_between("2023-05-03", "2023-01-19"),
+            Some(-15)
+        );
+    }
+
+    #[test]
+    fn short_intervals_count_days() {
+        assert_eq!(
+            describe_interval("2023-05-01", "2023-05-02").unwrap(),
+            "1 day after"
+        );
+        assert_eq!(
+            describe_interval("2023-05-01", "2023-05-13").unwrap(),
+            "12 days after"
+        );
     }
 
     #[test]
     fn weeks_keep_resolution_past_two_months() {
-        // Calling these "months" would discard precision a memory should have.
-        assert_eq!(describe_elapsed(70), "10 weeks after");
-        assert_eq!(describe_elapsed(104), "14 weeks after");
-        assert_eq!(describe_elapsed(179), "25 weeks after");
-        // Beyond half a year, months read better than 30-odd weeks.
-        assert_eq!(describe_elapsed(180), "6 months after");
+        // Calling this "2 months" would discard precision a memory should keep.
+        assert_eq!(
+            describe_interval("2023-01-01", "2023-03-12").unwrap(),
+            "10 weeks after"
+        );
+        // Past half a year, months read better than thirty-odd weeks.
+        assert_eq!(
+            describe_interval("2023-01-01", "2023-07-01").unwrap(),
+            "6 months after"
+        );
     }
 
     #[test]
-    fn describe_elapsed_reads_naturally_and_keeps_direction() {
-        assert_eq!(describe_elapsed(0), "same day");
-        assert_eq!(describe_elapsed(1), "1 day after");
-        assert_eq!(describe_elapsed(-1), "1 day before");
-        assert_eq!(describe_elapsed(13), "13 days after");
-        assert_eq!(describe_elapsed(21), "3 weeks after");
-        assert_eq!(describe_elapsed(-90), "12 weeks before");
-        assert_eq!(describe_elapsed(800), "2 years after");
+    fn describe_interval_refuses_garbage() {
+        assert!(describe_interval("nope", "2023-05-03").is_none());
     }
 }
