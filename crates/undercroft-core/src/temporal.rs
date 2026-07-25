@@ -203,13 +203,34 @@ pub fn hours_between(from: &str, to: &str) -> Option<i64> {
     Some((b - a).whole_hours())
 }
 
-/// Monday that begins the ISO-8601 week containing `d`.
+/// Which day a week begins on. Not a formatting preference: it moves every
+/// week boundary, so it changes the answer to "how many weeks since".
 ///
-/// Monday because ISO 8601 says so. A locale that starts its weeks on Sunday
-/// would shift every boundary, which is why the convention is stated here
-/// instead of left implicit in an arithmetic expression.
-fn week_start(d: Date) -> Date {
-    d - Duration::days(d.weekday().number_days_from_monday() as i64)
+/// ISO 8601 says Monday, and that is the default. The United States, Canada,
+/// Japan and Israel count from Sunday, and a reader there is not wrong — so
+/// the convention is a parameter rather than a hardcoded assumption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WeekStart {
+    #[default]
+    Monday,
+    Sunday,
+}
+
+impl WeekStart {
+    /// Days to subtract from `d` to reach the start of its week.
+    fn back_from(self, d: Date) -> i64 {
+        let from_monday = d.weekday().number_days_from_monday() as i64;
+        match self {
+            WeekStart::Monday => from_monday,
+            // Sunday is the day before Monday, so shift the cycle by one.
+            WeekStart::Sunday => (from_monday + 1) % 7,
+        }
+    }
+}
+
+/// First day of the week containing `d`, under `ws`.
+fn week_start_of(d: Date, ws: WeekStart) -> Date {
+    d - Duration::days(ws.back_from(d))
 }
 
 /// Calendar weeks crossed between two dates: how many week boundaries lie
@@ -224,8 +245,15 @@ fn week_start(d: Date) -> Date {
 /// Derived from week starts rather than ISO week numbers, because those reset
 /// each year and subtracting them breaks across a year boundary.
 pub fn calendar_weeks_between(from: &str, to: &str) -> Option<i64> {
-    let a = week_start(parse_anchor(from)?);
-    let b = week_start(parse_anchor(to)?);
+    calendar_weeks_between_with(from, to, WeekStart::default())
+}
+
+/// As [`calendar_weeks_between`], under an explicit week-start convention.
+/// A caller that knows its user's locale should say so; the two conventions
+/// genuinely disagree for dates that fall on a Sunday.
+pub fn calendar_weeks_between_with(from: &str, to: &str, ws: WeekStart) -> Option<i64> {
+    let a = week_start_of(parse_anchor(from)?, ws);
+    let b = week_start_of(parse_anchor(to)?, ws);
     Some((b - a).whole_days() / 7)
 }
 
@@ -723,6 +751,41 @@ mod tests {
         );
         assert_eq!(calendar_months_between(a, b), Some(4));
         assert_eq!(describe_interval(a, b).unwrap(), "15 weeks after");
+    }
+
+    #[test]
+    fn week_start_convention_changes_the_count_and_both_are_right() {
+        // 2023-01-15 is a Sunday. Under ISO it closes the week beginning
+        // Jan 9; under a Sunday-first locale it OPENS the next one — so the
+        // gap to the following Wednesday spans a different number of weeks.
+        let (sun, wed) = ("2023-01-15", "2023-01-18");
+        assert_eq!(
+            calendar_weeks_between_with(sun, wed, WeekStart::Monday),
+            Some(1),
+            "ISO: Sunday ends the previous week, so a boundary is crossed"
+        );
+        assert_eq!(
+            calendar_weeks_between_with(sun, wed, WeekStart::Sunday),
+            Some(0),
+            "Sunday-first: both dates sit inside one week"
+        );
+        // The default stays ISO, unchanged for existing callers.
+        assert_eq!(calendar_weeks_between(sun, wed), Some(1));
+        assert_eq!(WeekStart::default(), WeekStart::Monday);
+    }
+
+    #[test]
+    fn sunday_first_weeks_still_count_boundaries_correctly() {
+        // Saturday to Sunday crosses a boundary when weeks start on Sunday,
+        // and does not when they start on Monday.
+        assert_eq!(
+            calendar_weeks_between_with("2023-01-14", "2023-01-15", WeekStart::Sunday),
+            Some(1)
+        );
+        assert_eq!(
+            calendar_weeks_between_with("2023-01-14", "2023-01-15", WeekStart::Monday),
+            Some(0)
+        );
     }
 
     #[test]
