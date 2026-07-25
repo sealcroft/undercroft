@@ -138,6 +138,25 @@ harness noise is still filtered, prose is still verbatim, and
   kept only where the writer's capitalization actually chose — never where
   capitalization is forced, at the start of a line or sentence. Anything with
   a day or a year attached is a date whatever its case.
+- **A fact records where it rests: the note's words, or the extractor's
+  background knowledge.** Distilling "Ana works as a radiologist at St. Mary's
+  in Leeds" yields both `ana works_as radiologist`, which the note states, and
+  `leeds city_of United Kingdom`, which it does not — and the second is the
+  edge that answers which country Ana works in. Both belong in the graph;
+  until now they were indistinguishable. `core::support` adds the same
+  contract `when` uses: the extractor **quotes**, and the engine **checks** the
+  quote against the note, so the label comes from a substring test rather than
+  from a model grading itself. Three states, not two — `stated`, `background`,
+  and `unevaluated` for every fact distilled before this existed, because "we
+  did not look" and "we looked and found nothing" are different claims and
+  defaulting the first to the second would assert something about facts nobody
+  checked. Spans are stored as offsets into the source drawer, never as copied
+  text, sealed under `kg/{id}/support` like the object beside them. `kg/query`
+  and `kg/timeline` expose `grounding` and take an **opt-in** `?grounding=`
+  filter — never a default, since excluding background facts breaks the
+  multi-hop questions the graph exists to answer. Existing facts keep verifying
+  untouched: support joins the triple's canonical bytes only when present, so
+  a fact without it hashes exactly as it always did.
 - **A distilled fact is dated by the note's words, not by the note.** `refine`
   stamped every extracted fact with the drawer's `content_date`, so "I quit
   smoking three months ago" produced a fact whose validity began the day the

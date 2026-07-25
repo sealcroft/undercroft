@@ -30,6 +30,18 @@ pub struct Triple {
     pub confidence: f64,
     pub source_drawer_id: Option<String>,
     pub extracted_at: String,
+    /// Where the fact rests, when that was ever evaluated. `None` is
+    /// `Grounding::Unevaluated` and is not the same as an empty evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support: Option<undercroft_core::support::Support>,
+}
+
+impl Triple {
+    /// Whether this fact rests on the note's own words, on the extractor's
+    /// background knowledge, or was never checked.
+    pub fn grounding(&self) -> undercroft_core::support::Grounding {
+        undercroft_core::support::Support::grounding(self.support.as_ref())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -67,6 +79,10 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
+// Every field of a triple that the tamper tag covers, so the argument list is
+// the fact itself rather than an assortment. Splitting it would only move the
+// coupling somewhere less obvious.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn triple_canonical(
     id: &str,
     subject: &str,
@@ -75,6 +91,7 @@ pub(crate) fn triple_canonical(
     valid_from: &Option<String>,
     valid_to: &Option<String>,
     confidence: f64,
+    support_at_rest: Option<&[u8]>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
     for part in [
@@ -90,6 +107,15 @@ pub(crate) fn triple_canonical(
     out.extend_from_slice(&confidence.to_le_bytes());
     out.push(0x1f);
     out.extend_from_slice(object_at_rest);
+    // Appended only when a grounding evaluation exists. Every fact written
+    // before grounding did has none, so its canonical bytes are unchanged to
+    // the byte and its tag still verifies — no re-tagging, no rewrite of a
+    // tamper-evident table, no chain churn. The separator goes inside the
+    // branch for the same reason.
+    if let Some(sup) = support_at_rest {
+        out.push(0x1f);
+        out.extend_from_slice(sup);
+    }
     out
 }
 
@@ -169,7 +195,11 @@ impl PalaceStore {
                  tag         BLOB NOT NULL,
                  extracted_at TEXT NOT NULL,
                  source_fp   BLOB,
-                 receipt_tag BLOB
+                 receipt_tag BLOB,
+                 -- Sealed grounding evaluation. NULL means the check never
+                 -- ran, which is NOT the same as running it and finding no
+                 -- support; see core::support::Grounding.
+                 support     BLOB
              );
              CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject);
              CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate);",
@@ -177,7 +207,7 @@ impl PalaceStore {
         // Migrate palaces created before the receipt columns existed. SQLite
         // has no ADD COLUMN IF NOT EXISTS; a duplicate-column error just
         // means the migration already ran, so it is swallowed.
-        for col in ["source_fp BLOB", "receipt_tag BLOB"] {
+        for col in ["source_fp BLOB", "receipt_tag BLOB", "support BLOB"] {
             let _ = self
                 .conn
                 .execute(&format!("ALTER TABLE kg_triples ADD COLUMN {col}"), []);
@@ -232,6 +262,7 @@ impl PalaceStore {
             confidence,
             source_drawer_id,
             None,
+            None,
         )
     }
 
@@ -252,6 +283,31 @@ impl PalaceStore {
         confidence: f64,
         source: (&str, &str),
     ) -> Result<String, StoreError> {
+        self.kg_add_grounded(
+            subject, predicate, object, valid_from, valid_to, confidence, source, None,
+        )
+    }
+
+    /// As [`kg_add_receipted`], recording **where the fact rests**: `support`
+    /// is the outcome of checking the extractor's quotations against the
+    /// source drawer.
+    ///
+    /// `None` records that no such check was run — distinct from
+    /// `Some(Support::default())`, which records that it ran and the note
+    /// supported nothing. A fact resting on background knowledge is not a
+    /// lesser fact; it is the edge that answers what a single note cannot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn kg_add_grounded(
+        &mut self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        valid_from: Option<&str>,
+        valid_to: Option<&str>,
+        confidence: f64,
+        source: (&str, &str),
+        support: Option<&undercroft_core::support::Support>,
+    ) -> Result<String, StoreError> {
         let (drawer_id, drawer_content) = source;
         let fp = content_fp(drawer_content);
         self.kg_add_inner(
@@ -263,6 +319,7 @@ impl PalaceStore {
             confidence,
             Some(drawer_id),
             Some(fp),
+            support,
         )
     }
 
@@ -277,6 +334,7 @@ impl PalaceStore {
         confidence: f64,
         source_drawer_id: Option<&str>,
         source_fp: Option<Vec<u8>>,
+        support: Option<&undercroft_core::support::Support>,
     ) -> Result<String, StoreError> {
         let _span = undercroft_obs::scope("kg", self.vault.id());
         undercroft_core::validate_name(subject, "subject").map_err(|e| StoreError::CorruptRow {
@@ -296,6 +354,15 @@ impl PalaceStore {
             .content_at_rest(&format!("kg/{id}"), object.as_bytes());
         let vf = valid_from.map(str::to_string);
         let vt = valid_to.map(str::to_string);
+        // Sealed like the object, under its own AAD domain: spans are
+        // metadata about verbatim content and a sealed vault keeps no
+        // plaintext-derived artifact in the clear.
+        let support_rest = support
+            .map(|s| serde_json::to_vec(s).unwrap_or_default())
+            .map(|bytes| {
+                self.vault
+                    .content_at_rest(&format!("kg/{id}/support"), &bytes)
+            });
         let tag = self.vault.tag(&triple_canonical(
             &id,
             subject,
@@ -304,6 +371,7 @@ impl PalaceStore {
             &vf,
             &vt,
             confidence,
+            support_rest.as_deref(),
         ));
         // Receipt: a separate keyed tag over (triple id, citation, source
         // fingerprint). Kept distinct from the triple tag so it composes
@@ -318,8 +386,8 @@ impl PalaceStore {
         tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
                                      confidence, source_drawer_id, tag, extracted_at,
-                                     source_fp, receipt_tag)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                                     source_fp, receipt_tag, support)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                  object = excluded.object,
                  valid_to = excluded.valid_to,
@@ -327,7 +395,8 @@ impl PalaceStore {
                  source_drawer_id = excluded.source_drawer_id,
                  tag = excluded.tag,
                  source_fp = excluded.source_fp,
-                 receipt_tag = excluded.receipt_tag",
+                 receipt_tag = excluded.receipt_tag,
+                 support = excluded.support",
             params![
                 id,
                 subject,
@@ -341,6 +410,7 @@ impl PalaceStore {
                 now,
                 source_fp,
                 receipt_tag.as_ref().map(|t| t.as_slice()),
+                support_rest.as_deref(),
             ],
         )?;
         let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
@@ -402,18 +472,7 @@ impl PalaceStore {
 
     fn decode_triple(&self, row: TripleRow) -> Result<Triple, StoreError> {
         self.vault
-            .verify_tag(
-                &triple_canonical(
-                    &row.id,
-                    &row.subject,
-                    &row.predicate,
-                    &row.object,
-                    &row.valid_from,
-                    &row.valid_to,
-                    row.confidence,
-                ),
-                &row.tag,
-            )
+            .verify_tag(&row.canonical(), &row.tag)
             .map_err(|_| {
                 undercroft_obs::hmac_verify_failed("kg");
                 undercroft_obs::event_hmac_fail(self.vault.id(), "kg");
@@ -426,6 +485,21 @@ impl PalaceStore {
                 id: row.id.clone(),
                 reason: e.to_string(),
             })?;
+        // Absent support stays absent: `Unevaluated` is a real state and must
+        // not be quietly rendered as "checked, found nothing".
+        let support = row
+            .support
+            .as_deref()
+            .map(|sealed| {
+                self.vault
+                    .content_from_rest(&format!("kg/{}/support", row.id), sealed)
+                    .map_err(|e| StoreError::CorruptRow {
+                        id: row.id.clone(),
+                        reason: e.to_string(),
+                    })
+                    .map(|bytes| serde_json::from_slice(&bytes).unwrap_or_default())
+            })
+            .transpose()?;
         Ok(Triple {
             object: String::from_utf8(object).map_err(|e| StoreError::CorruptRow {
                 id: row.id.clone(),
@@ -439,15 +513,13 @@ impl PalaceStore {
             confidence: row.confidence,
             source_drawer_id: row.source_drawer_id,
             extracted_at: row.extracted_at,
+            support,
         })
     }
 
     fn all_triples(&self) -> Result<Vec<Triple>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, subject, predicate, object, valid_from, valid_to, confidence,
-                    source_drawer_id, tag, extracted_at
-             FROM kg_triples ORDER BY seq",
-        )?;
+        let sql = format!("SELECT {TRIPLE_COLUMNS} FROM kg_triples ORDER BY seq");
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows: Vec<TripleRow> = stmt
             .query_map([], TripleRow::from_row)?
             .collect::<Result<_, _>>()?;
@@ -517,6 +589,16 @@ impl PalaceStore {
                 .vault
                 .content_at_rest(&format!("kg/{}", t.id), t.object.as_bytes());
             let vt = Some(ended.clone());
+            // Closing a validity window does not re-evaluate grounding, so
+            // the sealed support is re-sealed byte-for-byte from what the
+            // fact already carried. Recomputing the tag without it would
+            // report tampering on every grounded fact that was superseded.
+            let support_rest = t.support.as_ref().map(|s| {
+                self.vault.content_at_rest(
+                    &format!("kg/{}/support", t.id),
+                    &serde_json::to_vec(s).unwrap_or_default(),
+                )
+            });
             let tag = self.vault.tag(&triple_canonical(
                 &t.id,
                 &t.subject,
@@ -525,11 +607,13 @@ impl PalaceStore {
                 &t.valid_from,
                 &vt,
                 t.confidence,
+                support_rest.as_deref(),
             ));
             let tx = self.conn.transaction()?;
             tx.execute(
-                "UPDATE kg_triples SET object = ?1, valid_to = ?2, tag = ?3 WHERE id = ?4",
-                params![object_rest, ended, tag.as_slice(), t.id],
+                "UPDATE kg_triples SET object = ?1, valid_to = ?2, tag = ?3, support = ?4
+                 WHERE id = ?5",
+                params![object_rest, ended, tag.as_slice(), support_rest, t.id],
             )?;
             let (head, writes) = chain_append(
                 &tx,
@@ -640,25 +724,13 @@ impl PalaceStore {
     /// Verify every KG row's HMAC; returns ids that fail.
     pub(crate) fn kg_verify(&self) -> Result<Vec<String>, StoreError> {
         let mut bad = Vec::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT id, subject, predicate, object, valid_from, valid_to, confidence,
-                    source_drawer_id, tag, extracted_at
-             FROM kg_triples ORDER BY seq",
-        )?;
+        let sql = format!("SELECT {TRIPLE_COLUMNS} FROM kg_triples ORDER BY seq");
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows: Vec<TripleRow> = stmt
             .query_map([], TripleRow::from_row)?
             .collect::<Result<_, _>>()?;
         for row in rows {
-            let canonical = triple_canonical(
-                &row.id,
-                &row.subject,
-                &row.predicate,
-                &row.object,
-                &row.valid_from,
-                &row.valid_to,
-                row.confidence,
-            );
-            if self.vault.verify_tag(&canonical, &row.tag).is_err() {
+            if self.vault.verify_tag(&row.canonical(), &row.tag).is_err() {
                 bad.push(format!("kg/{}", row.id));
             }
         }
@@ -685,7 +757,18 @@ struct TripleRow {
     source_drawer_id: Option<String>,
     tag: Vec<u8>,
     extracted_at: String,
+    /// Sealed grounding evaluation, or `None` when the check never ran.
+    /// Every path that recomputes the tag must carry this through unchanged
+    /// — it is inside the canonical bytes, so dropping it invalidates a
+    /// grounded fact's tag and reports tampering where there was none.
+    support: Option<Vec<u8>>,
 }
+
+/// Columns every triple read needs, in the order `TripleRow::from_row`
+/// expects. Kept in one place so a new column cannot reach one query and
+/// miss another — the failure mode there is a false tamper alarm.
+const TRIPLE_COLUMNS: &str = "id, subject, predicate, object, valid_from, valid_to, confidence, \
+                              source_drawer_id, tag, extracted_at, support";
 
 impl TripleRow {
     fn from_row(r: &rusqlite::Row<'_>) -> Result<Self, rusqlite::Error> {
@@ -700,7 +783,22 @@ impl TripleRow {
             source_drawer_id: r.get(7)?,
             tag: r.get(8)?,
             extracted_at: r.get(9)?,
+            support: r.get(10)?,
         })
+    }
+
+    /// Canonical bytes for this row, support included when present.
+    fn canonical(&self) -> Vec<u8> {
+        triple_canonical(
+            &self.id,
+            &self.subject,
+            &self.predicate,
+            &self.object,
+            &self.valid_from,
+            &self.valid_to,
+            self.confidence,
+            self.support.as_deref(),
+        )
     }
 }
 
@@ -734,6 +832,134 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("kg-test", level).unwrap();
         (dir, PalaceStore::open(vault).unwrap())
+    }
+
+    // ---- grounding: where a fact rests ----------------------------------
+
+    const NOTE: &str = "Ana works as a radiologist at St. Mary's hospital in Leeds.";
+
+    fn grounded(s: &mut PalaceStore, predicate: &str, object: &str, quote: Option<&str>) -> String {
+        let support = undercroft_core::support::Support::evaluate(
+            NOTE,
+            quote.map(|q| [q]).unwrap_or_default().as_slice(),
+        );
+        s.kg_add_grounded(
+            "ana",
+            predicate,
+            object,
+            None,
+            None,
+            0.8,
+            ("drawer-1", NOTE),
+            Some(&support),
+        )
+        .unwrap()
+    }
+
+    /// The three states have to survive a round trip through sealing and the
+    /// tamper tag, because that is where the distinction actually lives.
+    #[test]
+    fn grounding_survives_a_round_trip() {
+        use undercroft_core::support::Grounding;
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        grounded(
+            &mut s,
+            "works_as",
+            "radiologist",
+            Some("works as a radiologist"),
+        );
+        grounded(
+            &mut s,
+            "located_in",
+            "United Kingdom",
+            Some("United Kingdom"),
+        );
+        // No grounding evaluation at all — the pre-grounding write path.
+        s.kg_add("ana", "knows", "bob", None, None, 1.0, None)
+            .unwrap();
+
+        let facts = s.kg_query_entity("ana", None, "outgoing").unwrap();
+        let by = |p: &str| facts.iter().find(|t| t.predicate == p).unwrap().grounding();
+
+        assert_eq!(by("works_as"), Grounding::Stated, "the note says it");
+        assert_eq!(
+            by("located_in"),
+            Grounding::Background,
+            "checked, and the note does not contain 'United Kingdom'"
+        );
+        assert_eq!(
+            by("knows"),
+            Grounding::Unevaluated,
+            "never checked — must not read as Background"
+        );
+    }
+
+    #[test]
+    fn a_stated_fact_records_where_in_the_note_it_came_from() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        grounded(
+            &mut s,
+            "works_as",
+            "radiologist",
+            Some("works as a radiologist"),
+        );
+        let facts = s.kg_query_entity("ana", None, "outgoing").unwrap();
+        let spans = &facts[0].support.as_ref().unwrap().spans;
+        assert_eq!(spans.len(), 1);
+        let (o, l) = (spans[0].offset as usize, spans[0].len as usize);
+        assert_eq!(&NOTE[o..o + l], "works as a radiologist");
+    }
+
+    /// Support is inside the triple's canonical bytes, so every path that
+    /// recomputes a tag has to carry it. `verify` is where a miss shows up —
+    /// as a tamper alarm on a fact nobody touched.
+    #[test]
+    fn grounded_facts_pass_verification() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        grounded(
+            &mut s,
+            "works_as",
+            "radiologist",
+            Some("works as a radiologist"),
+        );
+        grounded(&mut s, "located_in", "United Kingdom", None);
+        s.kg_add("ana", "knows", "bob", None, None, 1.0, None)
+            .unwrap();
+        assert!(
+            s.kg_verify().unwrap().is_empty(),
+            "no fact was tampered with"
+        );
+    }
+
+    /// Closing a validity window re-tags the row. It must re-seal the
+    /// grounding it already had rather than dropping it.
+    #[test]
+    fn superseding_a_grounded_fact_keeps_its_grounding_and_its_tag() {
+        use undercroft_core::support::Grounding;
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        grounded(
+            &mut s,
+            "works_as",
+            "radiologist",
+            Some("works as a radiologist"),
+        );
+        s.kg_supersede("ana", "works_as", "consultant", Some("2024-06-01"))
+            .unwrap();
+        assert!(
+            s.kg_verify().unwrap().is_empty(),
+            "superseding must not look like tampering"
+        );
+        let closed = s
+            .kg_timeline(Some("ana"))
+            .unwrap()
+            .into_iter()
+            .find(|t| t.object == "radiologist")
+            .unwrap();
+        assert_eq!(
+            closed.grounding(),
+            Grounding::Stated,
+            "the closed fact still rests on the words it always did"
+        );
     }
 
     #[test]

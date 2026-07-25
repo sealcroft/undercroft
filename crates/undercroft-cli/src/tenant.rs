@@ -61,6 +61,40 @@ fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<
     undercroft_core::temporal::describe_interval(a, d)
 }
 
+/// Triples as JSON, each labelled with where it rests.
+///
+/// `grounding` is `stated` (the note's own words support it, at the recorded
+/// spans), `background` (checked, and the note supports none of it), or
+/// `unevaluated` (never checked — every fact distilled before grounding
+/// existed). Three states, because "we did not look" and "we looked and found
+/// nothing" are different claims.
+///
+/// Optionally narrowed by `?grounding=`. **Never narrowed by default**: a
+/// background fact is what connects entities across notes that never mention
+/// each other, so filtering them out silently would break exactly the
+/// multi-hop questions the graph exists to answer.
+fn triples_json(triples: Vec<undercroft_store::Triple>, want: Option<&str>) -> Value {
+    let rows: Vec<Value> = triples
+        .into_iter()
+        .filter_map(|t| {
+            let label = match t.grounding() {
+                undercroft_core::support::Grounding::Stated => "stated",
+                undercroft_core::support::Grounding::Background => "background",
+                undercroft_core::support::Grounding::Unevaluated => "unevaluated",
+            };
+            if want.is_some_and(|w| w != label) {
+                return None;
+            }
+            let mut v = serde_json::to_value(&t).ok()?;
+            if let Some(o) = v.as_object_mut() {
+                o.insert("grounding".into(), json!(label));
+            }
+            Some(v)
+        })
+        .collect();
+    json!(rows)
+}
+
 /// A drawer's time mentions with the same arithmetic applied to each one.
 ///
 /// The drawer's `content_date` says when it was *written*; a mention inside it
@@ -771,6 +805,8 @@ impl Tenancy {
             .ok_or_else(|| RestError::new(400, "entity query parameter required"))?;
         let direction = query_param(req, "direction").unwrap_or_else(|| "both".into());
         let as_of = query_param(req, "as_of").map(|v| pct_decode(&v));
+        // Opt-in narrowing only; absent means every fact, whatever it rests on.
+        let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
         let triples = store
             .kg_query_entity(&entity, as_of.as_deref(), &direction)
@@ -779,7 +815,7 @@ impl Tenancy {
             200,
             Body::Json(json!({
                 "entity": entity,
-                "triples": serde_json::to_value(triples).unwrap_or_else(|_| json!([]))
+                "triples": triples_json(triples, grounding.as_deref())
             })),
         ))
     }
@@ -789,12 +825,13 @@ impl Tenancy {
     fn kg_timeline(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let entity = query_param(req, "entity").map(|v| pct_decode(&v));
+        let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
         let triples = store.kg_timeline(entity.as_deref()).map_err(store_err)?;
         Ok((
             200,
             Body::Json(json!({
-                "triples": serde_json::to_value(triples).unwrap_or_else(|_| json!([]))
+                "triples": triples_json(triples, grounding.as_deref())
             })),
         ))
     }
@@ -887,7 +924,7 @@ impl Tenancy {
         // itself returns, so the two notions of identity cannot drift.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let (mut facts, mut duplicates, mut skipped, mut failed) = (0u32, 0u32, 0u32, 0u32);
-        let mut dated_from_text = 0u32;
+        let (mut dated_from_text, mut stated) = (0u32, 0u32);
         for d in &sources {
             let anchor = d
                 .meta
@@ -937,8 +974,26 @@ impl Tenancy {
                 // A period says when the event *happened*; it does not say
                 // the fact stopped holding, and "in May 2023" must not be
                 // read as "expired on the 31st".
+                // Where the fact rests. The quote is checked against the note
+                // the same way the `when` span is; what the note does not
+                // contain is not evidence. A fact with no quotable support is
+                // NOT thereby wrong — "Leeds is in the United Kingdom" is the
+                // edge that answers which country Ana works in, and the graph
+                // wants it. This only records which of the two it is, so a
+                // caller that needs the user's own words can ask for them.
+                let support = undercroft_core::support::Support::evaluate(
+                    &d.content,
+                    t.quote
+                        .as_deref()
+                        .map(|q| [q])
+                        .unwrap_or_default()
+                        .as_slice(),
+                );
+                if support.is_stated() {
+                    stated += 1;
+                }
                 let triple_id = store
-                    .kg_add_receipted(
+                    .kg_add_grounded(
                         &subject,
                         &predicate,
                         &t.object,
@@ -946,6 +1001,7 @@ impl Tenancy {
                         None,
                         0.8, // model-extracted: below human-asserted confidence
                         (&d.id, &d.content),
+                        Some(&support),
                     )
                     .map_err(store_err)?;
                 // Restating a known fact still re-cites it in the graph — the
@@ -986,6 +1042,11 @@ impl Tenancy {
                 // real spans — a model that answers with dates instead of
                 // quotations drives this to zero without erroring.
                 "dated_from_text": dated_from_text,
+                // Facts the note's own words support, against facts that rest
+                // on the extractor's background knowledge. Both are wanted:
+                // the second is what lets the graph answer across notes.
+                "stated": stated,
+                "background": facts.saturating_sub(stated),
                 "fact_room": fact_room,
                 "model": llm.model(),
             })),

@@ -171,6 +171,16 @@ pub struct ExtractedTriple {
     /// which is the intended failure.
     #[serde(default)]
     pub when: Option<String>,
+    /// The words in the note that support this fact, copied verbatim — again
+    /// **not** a claim, a quotation.
+    ///
+    /// Checked by `undercroft_core::support::Support::evaluate`, which keeps
+    /// the spans the note really contains. A fact with no quotable support
+    /// is not thereby wrong: "Leeds is in the United Kingdom" is true and
+    /// useful and simply is not in the note. The check records which of the
+    /// two a fact is, and never asks the model to grade itself.
+    #[serde(default)]
+    pub quote: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -333,6 +343,10 @@ pub fn triples_from_output(out: &str) -> Vec<ExtractedTriple> {
                     .get("when")
                     .and_then(value_to_string)
                     .filter(|s| !s.trim().is_empty()),
+                quote: o
+                    .get("quote")
+                    .and_then(value_to_string)
+                    .filter(|s| !s.trim().is_empty()),
             })
         })
         .collect()
@@ -378,12 +392,14 @@ No prose, no markdown fences.";
 
 const TRIPLE_SYSTEM: &str = "You extract factual relationships from notes as knowledge-graph \
 triples. Reply with ONLY a JSON array of objects: [{\"subject\": \"...\", \"predicate\": \
-\"snake_case_relation\", \"object\": \"...\", \"when\": \"...\"}]. Only durable facts (roles, \
-locations, ownership, preferences, decisions) — no ephemera. For \"when\", COPY THE EXACT \
-WORDS from the note that say when the fact was established — \"three months ago\", \"last \
-May\", \"on 2023-05-07\". Copy them character for character from the note. Do NOT rewrite \
-them, do NOT work out a date, and use null when the note does not say. No prose, no markdown \
-fences.";
+\"snake_case_relation\", \"object\": \"...\", \"when\": \"...\", \"quote\": \"...\"}]. Only \
+durable facts (roles, locations, ownership, preferences, decisions) — no ephemera. \
+Background knowledge that connects the note to what you already know is welcome. \
+For \"when\", COPY THE EXACT WORDS from the note that say when the fact was established — \
+\"three months ago\", \"last May\", \"on 2023-05-07\". For \"quote\", COPY THE EXACT WORDS \
+from the note that state this fact. Copy both character for character from the note. Do NOT \
+rewrite them, do NOT work out a date, and use null when the note does not say it — a fact you \
+knew rather than read is still wanted, it just has no quote. No prose, no markdown fences.";
 
 const MEMORY_SYSTEM: &str = "You extract the durable memories worth keeping from a note: \
 decisions made, stated preferences, plans, and stable facts. Reply with ONLY a JSON array of \

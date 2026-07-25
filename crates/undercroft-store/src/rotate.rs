@@ -162,11 +162,17 @@ impl PalaceStore {
         // source fingerprint is unkeyed SHA-256 and stays byte-identical, so
         // the citation binding survives rotation verbatim.
         #[allow(clippy::type_complexity)]
-        let mut triple_upds: Vec<(String, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = Vec::new();
+        let mut triple_upds: Vec<(
+            String,
+            Vec<u8>,
+            Vec<u8>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+        )> = Vec::new();
         {
             let mut stmt = self.conn.prepare(
                 "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, \
-                        source_drawer_id, source_fp, receipt_tag \
+                        source_drawer_id, source_fp, receipt_tag, support \
                  FROM kg_triples",
             )?;
             let rows = stmt.query_map([], |r| {
@@ -181,13 +187,24 @@ impl PalaceStore {
                     r.get::<_, Option<String>>(7)?,
                     r.get::<_, Option<Vec<u8>>>(8)?,
                     r.get::<_, Option<Vec<u8>>>(9)?,
+                    r.get::<_, Option<Vec<u8>>>(10)?,
                 ))
             })?;
             for row in rows {
-                let (id, s, p, object, vf, vt, conf, src_id, src_fp, receipt_tag) = row?;
+                let (id, s, p, object, vf, vt, conf, src_id, src_fp, receipt_tag, support) = row?;
                 let new_object = self
                     .vault
                     .reseal_at_rest(&next, &format!("kg/{id}"), &object)?;
+                // The grounding blob is sealed under its own AAD domain, so
+                // rotation must re-seal it like any other artifact — and the
+                // new bytes are what the new tag has to cover, since support
+                // is inside the triple's canonical.
+                let new_support = support
+                    .map(|sealed| {
+                        self.vault
+                            .reseal_at_rest(&next, &format!("kg/{id}/support"), &sealed)
+                    })
+                    .transpose()?;
                 let tag = next
                     .tag(&crate::kg::triple_canonical(
                         &id,
@@ -197,6 +214,7 @@ impl PalaceStore {
                         &vf,
                         &vt,
                         conf,
+                        new_support.as_deref(),
                     ))
                     .to_vec();
                 // Re-key the receipt binding when present (unchanged
@@ -208,7 +226,7 @@ impl PalaceStore {
                     ),
                     _ => None,
                 };
-                triple_upds.push((id, new_object, tag, new_receipt));
+                triple_upds.push((id, new_object, tag, new_receipt, new_support));
             }
         }
         report.kg_triples = triple_upds.len();
@@ -377,10 +395,11 @@ impl PalaceStore {
                     up.execute(params![id, tag])?;
                 }
                 let mut up = tx.prepare(
-                    "UPDATE kg_triples SET object = ?2, tag = ?3, receipt_tag = ?4 WHERE id = ?1",
+                    "UPDATE kg_triples SET object = ?2, tag = ?3, receipt_tag = ?4, support = ?5
+                     WHERE id = ?1",
                 )?;
-                for (id, object, tag, receipt_tag) in &triple_upds {
-                    up.execute(params![id, object, tag, receipt_tag])?;
+                for (id, object, tag, receipt_tag, support) in &triple_upds {
+                    up.execute(params![id, object, tag, receipt_tag, support])?;
                 }
                 let mut up = tx.prepare("UPDATE tunnels SET tag = ?2 WHERE id = ?1")?;
                 for (id, tag) in &tunnel_upds {
@@ -653,6 +672,89 @@ mod tests {
             .check_duplicate("rotation must not lose a word")
             .unwrap()
             .is_some());
+    }
+
+    /// The grounding blob is sealed under its own AAD domain *and* sits
+    /// inside the triple's canonical bytes, so rotation has to re-seal it and
+    /// then tag the new bytes. Missing either half turns every grounded fact
+    /// into a tamper alarm the moment the key changes.
+    #[test]
+    fn grounding_survives_rotation() {
+        use undercroft_core::support::{Grounding, Support};
+        for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+            let dir = TempDir::new().unwrap();
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let vault = mgr.create("r", level).unwrap();
+            let mut store = PalaceStore::open(vault).unwrap();
+            let note = "Ada migrated auth to PASETO in June.";
+            let src = drawer(note, 0);
+            let src_id = src.id.clone();
+            store.upsert(&src).unwrap();
+
+            let stated = Support::evaluate(note, &["migrated auth to PASETO"]);
+            store
+                .kg_add_grounded(
+                    "ada",
+                    "migrated_auth_to",
+                    "paseto",
+                    None,
+                    None,
+                    0.8,
+                    (&src_id, note),
+                    Some(&stated),
+                )
+                .unwrap();
+            // Checked, unsupported — must stay distinguishable from both the
+            // stated fact and from a fact nobody ever checked.
+            store
+                .kg_add_grounded(
+                    "ada",
+                    "works_with",
+                    "rust",
+                    None,
+                    None,
+                    0.8,
+                    (&src_id, note),
+                    Some(&Support::default()),
+                )
+                .unwrap();
+            store
+                .kg_add("ada", "knows", "bob", None, None, 1.0, None)
+                .unwrap();
+
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let candidate = mgr.rotation_candidate("r").unwrap();
+            store.rotate_keys(candidate).unwrap();
+            drop(store);
+
+            let store = reopen(&dir);
+            assert!(
+                store.kg_verify().unwrap().is_empty(),
+                "{level:?}: rotation must not read as tampering"
+            );
+            let facts = store.kg_query_entity("ada", None, "outgoing").unwrap();
+            let by = |p: &str| {
+                facts
+                    .iter()
+                    .find(|t| t.predicate == p)
+                    .unwrap_or_else(|| panic!("{p} missing"))
+                    .grounding()
+            };
+            assert_eq!(by("migrated_auth_to"), Grounding::Stated, "{level:?}");
+            assert_eq!(by("works_with"), Grounding::Background, "{level:?}");
+            assert_eq!(by("knows"), Grounding::Unevaluated, "{level:?}");
+            // And the span still points at the right words after re-sealing.
+            let spans = &facts
+                .iter()
+                .find(|t| t.predicate == "migrated_auth_to")
+                .unwrap()
+                .support
+                .as_ref()
+                .unwrap()
+                .spans;
+            let (o, l) = (spans[0].offset as usize, spans[0].len as usize);
+            assert_eq!(&note[o..o + l], "migrated auth to PASETO", "{level:?}");
+        }
     }
 
     #[test]
