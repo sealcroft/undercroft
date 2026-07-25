@@ -15,7 +15,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   and fenced blocks keep indentation/trailing space/blank runs; both modes
   keep the safety floor), temporal extraction (`temporal.rs`: in-text
   absolute + relative dates, resolved against the drawer's `content_date`,
-  never guessed), hashed
+  never guessed; exact calendar arithmetic — `days_between`,
+  `calendar_weeks_between` (boundaries crossed, not days/7),
+  `calendar_months_between`, `hours_between` on absolute instants,
+  `WeekStart::{Monday,Sunday}` since first-day-of-week is locale data;
+  local dates come from the offset the timestamp itself carries, never from
+  the host clock, so a vault answers identically on every machine), hashed
   n-gram embedder (`embed.rs`: `Embedder` trait + `HashEmbedder`), reranker
   trait (`rerank.rs`: `Reranker`), late-interaction trait + MaxSim + int8
   token packing (`late.rs`: `LateInteraction`), conversation parsing, entities
@@ -85,6 +90,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
+- `architecture/` — illustrated architecture reference: four theme-aware
+  SVG diagrams (`diagrams/`), the same as PDF (`pdf/`, rebuilt by
+  `build.sh` — librsvg has no CSS-variable support, so the build
+  flattens each `var()` to its light fallback first), and `index.html`
+  which inlines them and documents every layer plus all 60
+  `UNDERCROFT_*` variables
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
   under `src/`
 - `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,
@@ -112,7 +123,7 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (226)
+docker compose run --rm test          # cargo unit + integration tests (249)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (157 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)

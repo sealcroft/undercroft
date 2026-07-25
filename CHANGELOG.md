@@ -66,10 +66,44 @@ document in 272 spells a date out in its text.
   Empty stays empty and is omitted from serialized meta, keeping existing
   rows byte-identical.
 
-Tests 177 → **226**, including regression coverage pinning what must not
+Tests 177 → **249**, including regression coverage pinning what must not
 change: fence-free prose normalizes byte-for-byte as v1 across ten cases,
 harness noise is still filtered, prose is still verbatim, and
 `chunk_exchanges` text is identical to the dated variant.
+
+- **Retrieval selection** — `SearchOptions.room_cap`, a soft per-room cap that
+  spreads the top-k across rooms and then refills by score, so a
+  single-room question still receives the full limit. Default off, and
+  measured 5.6 points *worse* on a corpus where evidence is concentrated:
+  forcing diversity displaces the chunks that hold the answer. Kept because
+  the knob is sound and the measurement is the guidance.
+- **The engine computes elapsed time instead of delegating it.** Diagnosing
+  the remaining benchmark losses showed most had all their gold evidence in
+  context already — asked how long between a flu recovery and a jog, the
+  generator quoted both correct dates and answered "11.7 weeks" against a
+  truth of 104 days. Calendar arithmetic is deterministic work over data we
+  hold, so `core::temporal` now does it: `days_between` (exact, correct
+  across month lengths and leap years), `calendar_weeks_between` and
+  `calendar_months_between` (boundaries crossed — "how many weeks since" is
+  a calendar question, and `days / 7` silently answers a different one),
+  `hours_between` on absolute instants, and `describe_interval` for display.
+  `POST /v1/search` takes `as_of` and returns `elapsed_days`,
+  `elapsed_weeks`, `elapsed_months`, the phrase, and `same_frame`.
+- **Timestamps carry the actor's frame, never the host's.** A local date comes
+  from the UTC offset the timestamp itself declares, so the same vault
+  answers identically on every machine and no IANA database — which ships
+  several releases a year — can retroactively change an answer the audit
+  chain already attests to. Across differing offsets, local-day counting and
+  absolute-instant counting can disagree in *sign* (an evening in Los
+  Angeles and the next morning in Tokyo is +1 local day but −7.5 hours), so
+  both are reported rather than one silently chosen.
+- **`WeekStart::{Monday, Sunday}`** — ISO says Monday, but the US, Canada,
+  Japan and Israel count from Sunday, and first-day-of-week moves every
+  boundary. Monday remains the default; `calendar_weeks_between_with` lets a
+  locale-aware caller say otherwise.
+- **Search hits also return `time_mentions` and `entities`** — computed at
+  write time, sealed on every drawer, and until now unreachable through the
+  only surface that reads them.
 
 **Measured (AMB harness, gemini-3.1-flash-lite answer+judge, verbatim
 surface, k=10 — internal numbers, not protocol-comparable with AMB's
