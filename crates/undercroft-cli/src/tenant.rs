@@ -519,6 +519,17 @@ impl Tenancy {
                     "elapsed_weeks": elapsed_calendar(&h.drawer.meta.content_date, as_of.as_deref()).0,
                     "elapsed_months": elapsed_calendar(&h.drawer.meta.content_date, as_of.as_deref()).1,
                     "elapsed": elapsed_phrase(&h.drawer.meta.content_date, as_of.as_deref()),
+                    // Local-day counts assume both timestamps share a frame.
+                    // When their UTC offsets differ they can disagree with
+                    // absolute ordering — occasionally in sign — so say so
+                    // rather than present one reading as the only one.
+                    "same_frame": h
+                        .drawer
+                        .meta
+                        .content_date
+                        .as_deref()
+                        .zip(as_of.as_deref())
+                        .map(|(d, a)| undercroft_core::temporal::same_frame(d, a)),
                     "score": h.score,
                     "semantic": h.semantic,
                     "lexical": h.lexical,

@@ -119,9 +119,21 @@ fn count_of(word: &str) -> Option<i64> {
     })
 }
 
-/// Parse the leading `YYYY-MM-DD` of an RFC3339 timestamp or bare date.
-/// Anything else is not an anchor — callers get `None` and leave relative
-/// mentions unresolved rather than inventing one.
+/// The **local calendar date** an RFC 3339 timestamp names, in the offset the
+/// timestamp itself carries — or a bare `YYYY-MM-DD` as given. Anything else
+/// is not an anchor: callers get `None` and leave relative mentions
+/// unresolved rather than inventing one.
+///
+/// Taking the leading 10 characters is not a shortcut, it is the definition.
+/// `2023-05-08T23:30:00-07:00` names May 8th *for the person who wrote it*,
+/// and "yesterday" in their sentence means their May 7th regardless of what
+/// UTC or the reading machine thinks. The actor's frame travels with the
+/// data; the host's timezone is never consulted, so the same vault answers
+/// identically on every machine.
+///
+/// Storing the offset rather than a zone name is deliberate: historical
+/// records need no IANA database, and a later change to DST rules cannot
+/// retroactively alter what was recorded.
 pub fn parse_anchor(s: &str) -> Option<Date> {
     let d = s.get(..10)?;
     let mut it = d.split('-');
@@ -141,6 +153,54 @@ pub fn days_between(from: &str, to: &str) -> Option<i64> {
     let a = parse_anchor(from)?;
     let b = parse_anchor(to)?;
     Some((b - a).whole_days())
+}
+
+/// The UTC offset an RFC 3339 timestamp declares, in whole minutes. `None`
+/// for a bare date, which names a day without committing to a frame.
+///
+/// Exposed so a caller can tell whether two timestamps are even comparable
+/// in the same frame before trusting a day count between them.
+pub fn offset_minutes(s: &str) -> Option<i32> {
+    let t = s.get(10..)?;
+    // The offset sits at the END of the time part: "T23:30:00Z" or
+    // "T23:30:00-07:00". Zulu is UTC by definition.
+    if t.ends_with('Z') || t.ends_with('z') {
+        return Some(0);
+    }
+    // ...THH:MM:SS±HH:MM — find the sign that introduces the offset.
+    let idx = t.rfind(['+', '-'])?;
+    let sign = if t.as_bytes()[idx] == b'-' { -1 } else { 1 };
+    let rest = &t[idx + 1..];
+    let (h, m) = rest.split_once(':')?;
+    Some(sign * (h.parse::<i32>().ok()? * 60 + m.parse::<i32>().ok()?))
+}
+
+/// Whether two timestamps are expressed in the same UTC offset.
+///
+/// When they are not, a local-date difference and an absolute-instant
+/// difference can disagree — occasionally even in sign — so a caller
+/// comparing across frames should know it is doing so rather than be handed
+/// one answer as if it were the only one.
+pub fn same_frame(a: &str, b: &str) -> bool {
+    match (offset_minutes(a), offset_minutes(b)) {
+        (Some(x), Some(y)) => x == y,
+        // A bare date makes no claim, so it cannot conflict.
+        _ => true,
+    }
+}
+
+/// Absolute hours between two RFC 3339 instants, honouring both offsets.
+///
+/// The counterpart to [`days_between`], which works in local calendar days.
+/// Use this when physical ordering matters — did A really happen before B —
+/// and that when human day-counting matters. They are different questions:
+/// an evening in Los Angeles and the next morning in Tokyo is +1 local day
+/// but −7.5 absolute hours.
+pub fn hours_between(from: &str, to: &str) -> Option<i64> {
+    use time::format_description::well_known::Rfc3339;
+    let a = time::OffsetDateTime::parse(from, &Rfc3339).ok()?;
+    let b = time::OffsetDateTime::parse(to, &Rfc3339).ok()?;
+    Some((b - a).whole_hours())
 }
 
 /// Monday that begins the ISO-8601 week containing `d`.
@@ -583,6 +643,74 @@ mod tests {
     /// answered "11.7 weeks". The truth is 104 days — and the answer to
     /// "how many weeks" is **15**, the number of week boundaries crossed.
     /// `days / 7` gives 14, which answers a different question.
+    // ---- frames: whose clock is this? ------------------------------------
+
+    #[test]
+    fn the_local_date_is_the_actors_date_not_utcs() {
+        // 23:30 in Los Angeles is already the next day in UTC. The sentence
+        // "I went yesterday" written then means the writer's yesterday.
+        let ts = "2023-05-08T23:30:00-07:00";
+        assert_eq!(fmt(parse_anchor(ts).unwrap()), "2023-05-08");
+        let m = extract_time_mentions("I went yesterday", parse_anchor(ts));
+        assert_eq!(m[0].resolved.as_deref(), Some("2023-05-07"));
+    }
+
+    #[test]
+    fn offsets_are_read_not_discarded() {
+        assert_eq!(offset_minutes("2023-05-08T23:30:00-07:00"), Some(-420));
+        assert_eq!(offset_minutes("2023-05-08T23:30:00+09:00"), Some(540));
+        assert_eq!(offset_minutes("2023-05-08T23:30:00Z"), Some(0));
+        assert_eq!(
+            offset_minutes("2023-05-08"),
+            None,
+            "a bare date claims no frame"
+        );
+    }
+
+    #[test]
+    fn same_frame_detects_incomparable_timestamps() {
+        assert!(same_frame(
+            "2023-05-08T10:00:00+09:00",
+            "2023-05-09T10:00:00+09:00"
+        ));
+        assert!(!same_frame(
+            "2023-05-08T23:30:00-07:00",
+            "2023-05-09T08:00:00+09:00"
+        ));
+        // A bare date makes no claim, so it never conflicts.
+        assert!(same_frame("2023-05-08", "2023-05-09T08:00:00+09:00"));
+    }
+
+    /// The case that motivates keeping both notions: across frames, local-day
+    /// counting and absolute-instant counting can disagree in SIGN. Neither
+    /// is wrong; they answer different questions, so the engine reports both
+    /// rather than silently picking one.
+    #[test]
+    fn local_days_and_absolute_hours_can_disagree_in_sign() {
+        let a = "2023-05-08T23:30:00-07:00"; // evening in Los Angeles
+        let b = "2023-05-09T08:00:00+09:00"; // next morning in Tokyo
+        assert_eq!(days_between(a, b), Some(1), "one local day later");
+        assert_eq!(
+            hours_between(a, b),
+            Some(-7),
+            "but earlier in absolute time"
+        );
+        assert!(!same_frame(a, b), "and the caller can tell why");
+    }
+
+    #[test]
+    fn hours_between_honours_both_offsets() {
+        assert_eq!(
+            hours_between("2023-05-08T23:30:00+09:00", "2023-05-08T23:30:00-07:00"),
+            Some(16)
+        );
+        assert_eq!(
+            hours_between("2023-05-08", "2023-05-09"),
+            None,
+            "needs instants"
+        );
+    }
+
     #[test]
     fn weeks_means_calendar_weeks_not_seven_day_spans() {
         let (a, b) = ("2023-01-19", "2023-05-03");
