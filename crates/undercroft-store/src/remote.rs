@@ -17,7 +17,7 @@ use base64::Engine;
 use undercroft_index::{IndexRecord, VectorIndex};
 use rusqlite::{params, OptionalExtension};
 
-use crate::{PalaceStore, SearchHit, SearchOptions, StoreError, SEMANTIC_ADMISSION_GATE};
+use crate::{PalaceStore, SearchHit, SearchOptions, StoreError};
 
 /// Raw index-push row: (id, wing, room, content, embedding).
 type PushRow = (String, String, String, Vec<u8>, Vec<u8>);
@@ -157,8 +157,13 @@ impl PalaceStore {
         }
         // The exact channel, for the same reason as the local gate: an
         // approximate match should reorder a result set, never populate one.
+        // The cosine leg comes from the embedder's own calibration, exactly as
+        // it does locally — a mirror is an accelerator, not a different vector
+        // space, and gating it differently would make the same query admit
+        // differently depending on which path answered it.
+        let gate = self.semantic_gate;
         hits.retain(|h| {
-            h.lexical_exact > 0.0 || h.lexical_morph > 0.0 || h.semantic > SEMANTIC_ADMISSION_GATE
+            h.lexical_exact > 0.0 || h.lexical_morph > 0.0 || gate.is_some_and(|g| h.semantic > g)
         });
         hits.sort_by(|a, b| {
             b.score

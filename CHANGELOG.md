@@ -1,5 +1,71 @@
 # Changelog
 
+## Unreleased — the relevance gate belongs to the vector space, not to a constant
+
+- **A model embedder used to retire the relevance gate by being installed.**
+  `SEMANTIC_ADMISSION_GATE` was one `const`, 0.56, calibrated against
+  `HashEmbedder` — feature hashing over surface forms puts unrelated text at
+  cosine ~0, so 0.56 sat comfortably above its floor. A trained encoder does
+  not. E5- and BGE-family models put *unrelated* pairs near 0.75 in the same
+  `semantic` space, which is **above** the gate: the disjunct in `hits.retain`
+  became vacuously true for every hit, the whole candidate set was kept, and a
+  query with no good match returned whatever ranked highest instead of nothing.
+  Silently, for every query in every language, by configuration rather than by
+  code.
+  - Now `Embedder::semantic_admission_gate()`, resolved **once per open** into
+    a store field. Reading it inside `hits.retain` would have put forward
+    passes in the hot path — the mistake `language_of_drawer` made last
+    session with string comparisons.
+  - **The default implementation measures the embedder in hand.** Fourteen
+    pairs of texts that share no subject, gate = worst observed + 0.06. Reading
+    what a model actually does to unrelated text is evidence; deriving a gate
+    from the string `bge-m3` would be inference, and this project does not
+    infer.
+  - **Half the probe pairs are same-language on purpose.** Two unrelated
+    sentences in one language share function words, register and syntax, and
+    score well above an unrelated pair that also crosses a script boundary. A
+    cross-lingual-only probe set measures the wrong floor, under-estimates it,
+    and leaves the gate partly retired — the exact failure being closed.
+  - The 0.06 margin is the one part that is convention rather than
+    measurement: it is the shipped hash gate's own headroom (0.56 against a
+    ~0.50 floor) carried across rather than re-invented.
+- **The default vault does not move.** `HashEmbedder` declares 0.56 rather than
+  re-deriving it — calibration would shift it by a hundredth and the battery
+  pins several pairs at "a hair over the gate". `the_default_vault_gate_is_
+  still_the_shipped_number` writes 0.56 out longhand, so editing the constant
+  alone cannot make the test agree with it again.
+- **An external vault now refuses semantic-only admission instead of borrowing
+  a number.** Its `embed` is unreachable by construction and
+  `search_with_vector` scores caller-supplied vectors, so every `semantic` on
+  that path is a real cosine from a model this process has never seen — and it
+  was being gated at `HashEmbedder`'s floor, well below where a gateway-hosted
+  encoder puts unrelated text. Refusing errs in the safe direction: it can
+  narrow admission, never widen it. The remedy is a declaration, not a guess.
+- **A failing embedder no longer calibrates.** Both model backends report an
+  inference failure as a zero vector; calibrating through one would measure the
+  failure and report a hash-shaped gate near 0.56, which a later *successful*
+  inference would sail straight over. Any probe embedding to zero returns
+  "no semantic-only admission" instead.
+- `UNDERCROFT_SEMANTIC_GATE` overrides whatever the embedder says — a number in
+  `0.0..=1.0` declares the gate, `off` refuses semantic-only admission. For an
+  operator who has measured their own corpus, which beats fourteen probe pairs.
+  A value that parses as neither falls back to the embedder rather than failing
+  the open: the fallback is the safe direction, and bricking a server on a
+  typo'd env var is worse than ignoring it.
+- **Measured, and exercised in both directions.** Pinned back to the old const,
+  `a_high_floor_embedder_does_not_admit_unrelated_drawers` admits two unrelated
+  drawers at `semantic` **0.7693** and **0.7609** against a 0.56 gate. Those
+  two numbers are the bug.
+- **Stated as a gap, because it is one.** No model weights exist in the test
+  environment, so what is pinned is the *mechanism* — via a stand-in embedder
+  whose vectors carry a shared constant component and therefore a high floor —
+  and not the floor of any real encoder. The 0.75 figure for E5/BGE is a
+  citation to `.handover/EMBEDDER_RESEARCH.md`, not a measurement made here.
+  Max-of-fourteen is also a crude estimator: it is conservative in the
+  direction that matters, but fourteen pairs cannot describe a distribution,
+  and a model whose true floor is higher than anything probed will still admit
+  too much.
+
 ## Unreleased — morphology gets the other half of its evidence
 
 - **A corpus that declares nothing now reaches 100% too — the drawer says what

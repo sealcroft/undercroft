@@ -22,6 +22,137 @@ pub trait Embedder {
     fn model_name(&self) -> &str;
     fn dimension(&self) -> usize;
     fn embed(&self, text: &str) -> Vec<f32>;
+
+    /// The `semantic` score above which this vector space may admit a drawer
+    /// on cosine evidence alone, or `None` for a space whose floor is not
+    /// knowable here — in which case admission rests on the lexical channels
+    /// and nothing else.
+    ///
+    /// **This is a property of the vector space, not of the search code**,
+    /// which is the whole reason it lives on the trait. The gate was a single
+    /// `const` calibrated to [`HashEmbedder`], whose unrelated-pair floor is
+    /// almost exactly zero; feature hashing over surface forms puts texts that
+    /// share no token at cosine ~0. A model embedder does not. E5- and
+    /// BGE-family encoders put *unrelated* pairs near 0.75 in this same
+    /// `semantic` space, so a gate of 0.56 is below their floor, the disjunct
+    /// is vacuously true for every hit, and the store's relevance gate is
+    /// retired for every query in every language — silently, by configuration
+    /// rather than by code.
+    ///
+    /// The default implementation **measures** the embedder in hand
+    /// ([`calibrate_admission_gate`]) rather than guessing from its name.
+    /// Reading what a model actually does to known-unrelated text is evidence;
+    /// deriving a gate from the string `bge-m3` would be inference, and this
+    /// project does not infer. An implementation that knows its own floor
+    /// should override and say so.
+    fn semantic_admission_gate(&self) -> Option<f32> {
+        calibrate_admission_gate(self)
+    }
+}
+
+/// Pairs of texts that share no subject, used to find where a vector space
+/// puts things that have nothing to do with each other.
+///
+/// Ours, written for this purpose: ordinary sentences about ordinary things,
+/// quoted from nothing.
+///
+/// **Half are same-language on purpose.** A cross-lingual probe set alone
+/// measures the wrong floor: two unrelated sentences in *one* language share
+/// function words, register and syntax, and a model scores them well above an
+/// unrelated pair that also happens to cross a script boundary. Calibrating on
+/// cross-lingual pairs only would therefore under-estimate the floor and leave
+/// the gate partly retired — the exact failure this is here to close. The
+/// cross-lingual half is kept because a multilingual model's floor is also a
+/// cross-lingual property, and the four English-anchored pairs are the ones
+/// `the_semantic_gate_is_calibrated_to_the_default_embedder` already pins.
+const UNRELATED_PROBES: [(&str, &str); 14] = [
+    // Cross-lingual.
+    ("the quarterly revenue report", "私は昨日公園へ行きました"),
+    ("kubernetes cluster autoscaling", "ذهبت إلى المستشفى أمس"),
+    (
+        "my cat sleeps on the windowsill",
+        "πήγα στην Αθήνα το καλοκαίρι",
+    ),
+    (
+        "database migration rollback",
+        "그는 어제 서울에서 회의에 참석했습니다",
+    ),
+    ("она читает книгу по вечерам", "the bridge was repainted"),
+    ("der Zug fährt um sieben Uhr ab", "海の水はとても冷たかった"),
+    ("मैंने कल एक नई किताब खरीदी", "the servers rebooted overnight"),
+    // Same-language, and these are the ones that set the floor.
+    (
+        "the compiler emitted three warnings",
+        "she planted tulips along the fence",
+    ),
+    (
+        "اشترى سيارة جديدة الأسبوع الماضي",
+        "الطبخ يحتاج إلى صبر طويل",
+    ),
+    (
+        "поезд опоздал на двадцать минут",
+        "она изучает историю искусства",
+    ),
+    (
+        "der Drucker ist schon wieder kaputt",
+        "im Sommer schwimmen wir im See",
+    ),
+    (
+        "το ψωμί τελείωσε νωρίς το πρωί",
+        "ο υπολογιστής χρειάζεται επισκευή",
+    ),
+    ("会議は三時に始まります", "この靴は少し小さいです"),
+    ("他昨天修好了自行车", "这份报告需要重新排版"),
+];
+
+/// Headroom between the measured floor and the gate, in `semantic` space.
+///
+/// 0.06, which is not a new number: the hand-derived [`HASH_ADMISSION_GATE`]
+/// is 0.56 against a floor of ~0.50, so this is that gate's own headroom
+/// carried across rather than re-invented. It is the one part of the
+/// calibration that is a convention rather than a measurement, and it is
+/// stated here so it can be argued with.
+const ADMISSION_MARGIN: f32 = 0.06;
+
+/// Cosine 0 in `semantic` space — two vectors with nothing in common.
+const NEUTRAL: f32 = 0.5;
+
+/// Measure where an embedder puts known-unrelated text, and return a gate a
+/// margin above the worst case.
+///
+/// `None` means "do not admit on semantic evidence alone". That is returned
+/// when any probe embeds to the zero vector, because a zero vector is exactly
+/// how both model backends report an *inference failure*
+/// (`embed_inner(..).unwrap_or_else(|_| vec![0.0; dim])`). Calibrating through
+/// one would measure the failure rather than the model and hand back a
+/// hash-shaped gate near 0.56 — which a later *successful* inference would
+/// sail straight over, reintroducing the retired-gate bug through the back
+/// door. It is also what makes an [`ExternalEmbedder`] fall out correctly, its
+/// `embed` being all-zeros by construction, though that one overrides
+/// explicitly rather than relying on the accident.
+///
+/// **The estimator is max-of-14 and that is crude.** It is conservative in the
+/// direction that matters — the gate clears every unrelated pair observed —
+/// but 14 pairs cannot describe a distribution, and a model whose floor is
+/// genuinely higher than anything here will still admit too much. An operator
+/// who has measured their own corpus should declare the result rather than
+/// trust this (`UNDERCROFT_SEMANTIC_GATE`).
+pub fn calibrate_admission_gate<E: Embedder + ?Sized>(e: &E) -> Option<f32> {
+    let mut floor = NEUTRAL;
+    for (a, b) in UNRELATED_PROBES {
+        let (va, vb) = (e.embed(a), e.embed(b));
+        if va.iter().all(|x| *x == 0.0) || vb.iter().all(|x| *x == 0.0) {
+            return None;
+        }
+        let semantic = (cosine(&va, &vb) + 1.0) / 2.0;
+        if semantic > floor {
+            floor = semantic;
+        }
+    }
+    // Clamped at 1.0, where nothing can ever clear it: a model that puts
+    // unrelated text as close as related text has no usable semantic-only
+    // admission, and saying so is honest.
+    Some((floor + ADMISSION_MARGIN).clamp(NEUTRAL, 1.0))
 }
 
 #[derive(Debug, Default, Clone)]
@@ -121,6 +252,25 @@ pub const HASH_EMBEDDER_V1: &str = "undercroft-hash-v1";
 pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
 pub const HASH_EMBEDDER: &str = "undercroft-hash-v3";
 
+/// The `semantic` score above which [`HashEmbedder`] admits on cosine alone.
+///
+/// Declared rather than calibrated, and deliberately so: this is the
+/// hand-derived number the store shipped, measured against this embedder, and
+/// re-deriving it at open would move it by a hundredth and shift which pairs
+/// admit across a battery that pins several of them at "a hair over the gate".
+/// `semantic` is `(cosine + 1) / 2`, so 0.56 is a raw cosine of 0.12 — chosen
+/// because feature hashing over surface forms puts unrelated text at almost
+/// exactly zero. `the_semantic_gate_is_calibrated_to_the_default_embedder` is
+/// the acceptance test.
+///
+/// It is also length-sensitive in a way nothing else records: measured, a typo
+/// pair and a false friend both admit on a bare pair (0.85, 0.78) and stop
+/// admitting past ~40 words, while a true morphological pair (`книга`/`книге`)
+/// stops admitting at 20. Admission on this leg tracks drawer length as much
+/// as relatedness, which is why lexical evidence is what the gate should
+/// mostly rest on.
+pub const HASH_ADMISSION_GATE: f32 = 0.56;
+
 impl Embedder for HashEmbedder {
     fn model_name(&self) -> &str {
         HASH_EMBEDDER
@@ -128,6 +278,10 @@ impl Embedder for HashEmbedder {
 
     fn dimension(&self) -> usize {
         EMBED_DIM
+    }
+
+    fn semantic_admission_gate(&self) -> Option<f32> {
+        Some(HASH_ADMISSION_GATE)
     }
 
     fn embed(&self, text: &str) -> Vec<f32> {
@@ -189,6 +343,24 @@ impl Embedder for ExternalEmbedder {
         // degradation (cosine 0) rather than a panic if some path slips
         // through the store's guards.
         vec![0.0; self.dim.max(1)]
+    }
+
+    /// Unknown, and unknowable from here.
+    ///
+    /// There is no local model to measure: `embed` above is never reached, and
+    /// `search_with_vector` scores a caller-supplied query vector against
+    /// caller-supplied drawer vectors, so every `semantic` on this path is a
+    /// real cosine from a real model this process has never seen. Before this
+    /// was a per-embedder property such a vault was gated at 0.56, i.e. at
+    /// [`HashEmbedder`]'s floor — which for the gateway-hosted encoders these
+    /// vaults actually use is well *below* their unrelated floor, so a query
+    /// with no good match returned whatever ranked highest instead of nothing.
+    ///
+    /// Refusing is the only honest answer and it errs in the safe direction:
+    /// it can narrow admission, never widen it. The remedy is a declaration —
+    /// `UNDERCROFT_SEMANTIC_GATE=<measured value>` — not a guess made here.
+    fn semantic_admission_gate(&self) -> Option<f32> {
+        None
     }
 }
 

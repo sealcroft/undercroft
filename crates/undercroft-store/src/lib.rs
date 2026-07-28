@@ -40,25 +40,32 @@ use undercroft_vault::{SecurityLevel, Vault, VaultError};
 /// recall exact; above it the FTS5 candidate cut dominates search cost.
 const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 
-/// The cosine above which a drawer is admitted on semantic evidence alone.
+/// Resolve the `semantic` admission gate for a store at open.
 ///
-/// **Calibrated to `HashEmbedder`, and must be re-derived for any other
-/// embedder.** `semantic` is `(cosine + 1) / 2`, so this is a raw cosine of
-/// 0.12 — chosen because feature hashing over surface forms puts unrelated
-/// text at almost exactly zero. A model embedder does not: its unrelated-pair
-/// floor is typically well above 0.12, and swapping one in without re-deriving
-/// this number makes the disjunct vacuously true and retires the relevance
-/// gate for every query in every language, by configuration rather than by
-/// code. `the_semantic_gate_is_calibrated_to_the_default_embedder` is the
-/// acceptance test for that.
+/// The gate used to be one `const` here, 0.56, calibrated to `HashEmbedder`
+/// and applied to every embedder. It is now a property of the vector space
+/// ([`Embedder::semantic_admission_gate`]), resolved **once per open** and
+/// held in a field — a calibrating implementation costs forward passes, and
+/// evaluating it inside `hits.retain` would put those in the hot path, the
+/// same mistake `language_of_drawer` made with string comparisons.
 ///
-/// It is also length-sensitive in a way nothing else records: measured, a
-/// typo pair and a false friend both admit on a bare pair (0.85, 0.78) and
-/// stop admitting past ~40 words, while a true morphological pair
-/// (`книга`/`книге`) stops admitting at 20. Admission on this leg tracks
-/// drawer length as much as relatedness, which is why lexical evidence is
-/// what the gate should mostly rest on.
-const SEMANTIC_ADMISSION_GATE: f32 = 0.56;
+/// `UNDERCROFT_SEMANTIC_GATE` overrides whatever the embedder says: a number in
+/// `0.0..=1.0` declares the gate, and `off` refuses semantic-only admission
+/// outright. That is for an operator who has measured their own corpus, which
+/// beats a 14-pair probe set. A value that parses as neither falls back to the
+/// embedder rather than failing the open — the fallback is the safe direction
+/// (calibration, or a refusal), and bricking a server on a typo'd env var is
+/// worse than ignoring it.
+fn resolve_semantic_gate<E: Embedder + ?Sized>(embedder: &E) -> Option<f32> {
+    match std::env::var("UNDERCROFT_SEMANTIC_GATE") {
+        Ok(v) if v.eq_ignore_ascii_case("off") => None,
+        Ok(v) => match v.parse::<f32>() {
+            Ok(g) if (0.0..=1.0).contains(&g) => Some(g),
+            _ => embedder.semantic_admission_gate(),
+        },
+        Err(_) => embedder.semantic_admission_gate(),
+    }
+}
 
 /// Bumped whenever `search_key` changes what the FTS index holds, so an
 /// existing vault rebuilds instead of serving a stale token set. `v1` is the
@@ -398,6 +405,11 @@ pub struct PalaceStore {
     /// — this is the in-memory role embedded ChromaDB's index played
     /// upstream, without writing plaintext-derived data to disk.
     emb_cache: std::cell::RefCell<Option<std::collections::HashMap<String, Vec<f32>>>>,
+    /// The `semantic` score above which a drawer may be admitted on cosine
+    /// alone; `None` refuses semantic-only admission entirely. Resolved once
+    /// at open by [`resolve_semantic_gate`] — see there for why it is not
+    /// read per hit.
+    semantic_gate: Option<f32>,
     /// Whether the FTS5 BM25 prefilter index exists. Only ever true for
     /// hmac-only vaults — sealed vaults must not persist anything
     /// plaintext-derived, an FTS index included.
@@ -802,6 +814,9 @@ impl PalaceStore {
             .model_name()
             .starts_with("external:")
             .then(|| embedder.dimension());
+        // Once, here, and never again for the life of the store: a calibrating
+        // embedder pays forward passes for this.
+        let semantic_gate = resolve_semantic_gate(embedder.as_ref());
         let mut store = Self {
             conn,
             vault,
@@ -809,6 +824,7 @@ impl PalaceStore {
             reranker: None,
             late: None,
             emb_cache: std::cell::RefCell::new(None),
+            semantic_gate,
             fts: false,
             fts_min,
             fusion: Fusion::from_env(),
@@ -1991,8 +2007,14 @@ impl PalaceStore {
         // than populate one. Gating on the blended channel would mean every
         // fold widens admission, which is how `قطار` came to match
         // `المستشفى` on a shared alef.
+        //
+        // The cosine leg is read from the field, not a const: what counts as
+        // "clearly positive" is a property of the embedder's vector space, and
+        // `None` there means this space has no usable floor and the lexical
+        // channels carry admission alone.
+        let gate = self.semantic_gate;
         hits.retain(|h| {
-            h.lexical_exact > 0.0 || h.lexical_morph > 0.0 || h.semantic > SEMANTIC_ADMISSION_GATE
+            h.lexical_exact > 0.0 || h.lexical_morph > 0.0 || gate.is_some_and(|g| h.semantic > g)
         });
         hits.sort_by(|a, b| {
             b.score
@@ -2438,7 +2460,7 @@ fn contains_a_long_word(q: &str, tok: &str) -> bool {
 /// channel split had to land first.
 ///
 /// The qualifier is not pedantry. The gate is a disjunction, and its other arm
-/// is `semantic > SEMANTIC_ADMISSION_GATE`, which is undiscounted and
+/// is `semantic >` the embedder's own gate, which is undiscounted and
 /// uncapped: measured, `internal` / `international` clears it at every drawer
 /// length tested and `conversation` / `conversion` at three lengths of four.
 /// So these pairs *can* be admitted — by the cosine leg, not by this rule.
@@ -6945,7 +6967,7 @@ mod tests {
     #[test]
     fn the_semantic_gate_is_calibrated_to_the_default_embedder() {
         let e = HashEmbedder;
-        let ceiling = 2.0 * SEMANTIC_ADMISSION_GATE - 1.0;
+        let ceiling = 2.0 * undercroft_core::embed::HASH_ADMISSION_GATE - 1.0;
         let unrelated = [
             ("the quarterly revenue report", "私は昨日公園へ行きました"),
             ("kubernetes cluster autoscaling", "ذهبت إلى المستشفى أمس"),
@@ -6965,6 +6987,209 @@ mod tests {
                 "unrelated pair scored {c}, at or above the gate's {ceiling}"
             );
         }
+    }
+
+    /// A stand-in for a trained encoder: a vector space with a HIGH
+    /// unrelated floor, which is the shape every model embedder has and the
+    /// hash embedder does not.
+    ///
+    /// Construction: one constant component that every text carries, plus
+    /// that text's own hash vector, in equal measure. Two texts then score
+    /// `(1 + cos_hash) / 2`, so a lexically unrelated pair lands at raw
+    /// cosine ~0.5 — `semantic` 0.75, which is where `EMBEDDER_RESEARCH.md`
+    /// puts the E5 and BGE families. Related texts ride above it.
+    ///
+    /// **This is a stand-in, not a measurement.** No model weights exist in
+    /// this test environment, so the 0.75 figure is a citation rather than
+    /// something verified here. What these tests pin is the *mechanism* —
+    /// that a high floor moves the gate, and that admission does not silently
+    /// open — not the floor of any particular encoder.
+    struct HighFloorEmbedder;
+
+    impl Embedder for HighFloorEmbedder {
+        fn model_name(&self) -> &str {
+            "test-high-floor"
+        }
+        fn dimension(&self) -> usize {
+            undercroft_core::embed::EMBED_DIM
+        }
+        fn embed(&self, text: &str) -> Vec<f32> {
+            let d = undercroft_core::embed::EMBED_DIM;
+            let c = 1.0 / (d as f32).sqrt();
+            let t = HashEmbedder.embed(text);
+            let mut v: Vec<f32> = (0..d).map(|i| c + t[i]).collect();
+            let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for x in &mut v {
+                    *x /= norm;
+                }
+            }
+            v
+        }
+    }
+
+    /// Every text embeds to the zero vector — precisely how both model
+    /// backends report an inference failure.
+    struct BrokenEmbedder;
+
+    impl Embedder for BrokenEmbedder {
+        fn model_name(&self) -> &str {
+            "test-broken"
+        }
+        fn dimension(&self) -> usize {
+            undercroft_core::embed::EMBED_DIM
+        }
+        fn embed(&self, _text: &str) -> Vec<f32> {
+            vec![0.0; undercroft_core::embed::EMBED_DIM]
+        }
+    }
+
+    fn semantic_between<E: Embedder>(e: &E, a: &str, b: &str) -> f32 {
+        (undercroft_core::embed::cosine(&e.embed(a), &e.embed(b)) + 1.0) / 2.0
+    }
+
+    /// The gate must clear the floor of the space it was calibrated against,
+    /// and must not still be the hash embedder's number.
+    #[test]
+    fn a_high_floor_space_gets_a_higher_gate() {
+        let e = HighFloorEmbedder;
+        let floor = semantic_between(
+            &e,
+            "kubernetes cluster autoscaling",
+            "she planted tulips along the fence",
+        );
+        assert!(
+            floor > 0.70,
+            "the stand-in does not actually have a high floor: {floor}"
+        );
+        let gate = e.semantic_admission_gate().expect("a gate was calibrated");
+        assert!(
+            gate > floor,
+            "gate {gate} sits at or below this space's unrelated floor {floor}"
+        );
+        assert!(
+            gate > undercroft_core::embed::HASH_ADMISSION_GATE,
+            "gate {gate} is still the hash embedder's 0.56"
+        );
+        // The other direction, and the one a too-clever calibration fails:
+        // raising the gate must not disable the leg outright. A pair this
+        // space genuinely rates close still has to be able to clear it.
+        let close = semantic_between(
+            &e,
+            "the printer jammed again this morning",
+            "the printer jammed again this afternoon",
+        );
+        assert!(
+            close > gate,
+            "gate {gate} is so high nothing can clear it (close pair: {close})"
+        );
+    }
+
+    /// End to end, through the real [`PalaceStore::search`], and the failure
+    /// this whole mechanism exists to close.
+    ///
+    /// The gate was one const, 0.56, calibrated to the hash embedder's ~0
+    /// floor and applied to every embedder alike. Point a trained encoder at
+    /// it and every hit clears the cosine disjunct on its own, `hits.retain`
+    /// keeps the entire candidate set, and the relevance gate is retired for
+    /// every query in every language — silently, by configuration rather than
+    /// by code. Here a query sharing no word with the corpus must return
+    /// **nothing** rather than whatever ranked highest.
+    ///
+    /// Exercised, not merely written: pinned back to the old const this test
+    /// fails, admitting both drawers at `semantic` **0.7693** and **0.7609**
+    /// against a 0.56 gate. Those two numbers are the whole bug, measured.
+    #[test]
+    fn a_high_floor_embedder_does_not_admit_unrelated_drawers() {
+        let filler = " and the rest of the note carries on about nothing in particular for a while";
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let mut s = PalaceStore::open_with_embedder(vault, Box::new(HighFloorEmbedder)).unwrap();
+        for (i, body) in [
+            "the printer jammed again this morning and the queue backed up",
+            "she planted tulips along the fence by the garden shed",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let content = format!("{body}{filler}{filler}");
+            s.upsert(&drawer("w", "r", &content, i as u32)).unwrap();
+        }
+        // Shares no token, no stem and no family with either drawer.
+        let hits = s.search("kubernetes", &SearchOptions::default()).unwrap();
+        assert!(
+            hits.is_empty(),
+            "admitted {} drawer(s) on the cosine leg alone: {:?}",
+            hits.len(),
+            hits.iter().map(|h| h.semantic).collect::<Vec<_>>()
+        );
+        // And the gate really is the reason: the same corpus still answers a
+        // query it does contain, so this is a relevance gate and not a
+        // broken search.
+        let hits = s.search("tulips", &SearchOptions::default()).unwrap();
+        assert!(!hits.is_empty(), "the corpus stopped answering entirely");
+        assert!(hits[0].lexical_exact > 0.0);
+    }
+
+    /// An external vault's vectors come from a model this process has never
+    /// seen, so its floor is not knowable here and semantic-only admission is
+    /// refused until an operator declares one.
+    #[test]
+    fn an_external_vault_refuses_semantic_only_admission() {
+        assert_eq!(
+            undercroft_core::embed::ExternalEmbedder::new("gateway", 8).semantic_admission_gate(),
+            None
+        );
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let s = PalaceStore::open_with_embedder(
+            vault,
+            Box::new(undercroft_core::embed::ExternalEmbedder::new("gateway", 8)),
+        )
+        .unwrap();
+        assert_eq!(s.semantic_gate, None);
+    }
+
+    /// A zero vector is an inference failure, not a measurement. Calibrating
+    /// through one would report a hash-shaped gate near 0.56 that a later
+    /// *successful* inference would sail straight over — the retired-gate bug
+    /// returning through the door marked "degraded gracefully".
+    #[test]
+    fn calibration_refuses_an_embedder_that_is_failing() {
+        assert_eq!(BrokenEmbedder.semantic_admission_gate(), None);
+    }
+
+    /// The refactor must not move the default vault by a hundredth. 0.56 is
+    /// written out rather than referenced, so editing the constant alone
+    /// cannot make this test agree with it again.
+    #[test]
+    fn the_default_vault_gate_is_still_the_shipped_number() {
+        let (_d, s) = store(SecurityLevel::Sealed);
+        assert_eq!(s.semantic_gate, Some(0.56));
+    }
+
+    /// `UNDERCROFT_SEMANTIC_GATE` is for an operator who has measured their
+    /// own corpus, which beats a 14-pair probe set. Garbage falls back to the
+    /// embedder rather than failing the open: the fallback is the safe
+    /// direction, and bricking a server on a typo is worse than ignoring it.
+    #[test]
+    fn an_operator_can_declare_or_disable_the_gate() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("UNDERCROFT_SEMANTIC_GATE", "0.8");
+        assert_eq!(resolve_semantic_gate(&HashEmbedder), Some(0.8));
+        std::env::set_var("UNDERCROFT_SEMANTIC_GATE", "off");
+        assert_eq!(resolve_semantic_gate(&HashEmbedder), None);
+        for junk in ["banana", "1.5", "-0.2", ""] {
+            std::env::set_var("UNDERCROFT_SEMANTIC_GATE", junk);
+            assert_eq!(
+                resolve_semantic_gate(&HashEmbedder),
+                Some(undercroft_core::embed::HASH_ADMISSION_GATE),
+                "{junk:?} did not fall back to the embedder"
+            );
+        }
+        std::env::remove_var("UNDERCROFT_SEMANTIC_GATE");
     }
 
     /// A family match must never *admit* a drawer — only reorder one already
@@ -7224,7 +7449,7 @@ mod tests {
     ///
     /// Measured end to end through the real [`PalaceStore::search`] at
     /// **realistic drawer length**. At one sentence the cosine alone clears
-    /// `SEMANTIC_ADMISSION_GATE` and masks whatever the lexical channels do —
+    /// `HASH_ADMISSION_GATE` and masks whatever the lexical channels do —
     /// measured, 62.5% of Greek's supposedly-unreachable rows were admitted by
     /// the embedder at short frame length, so a short-drawer control proves
     /// nothing about a lexical rule.
@@ -8116,7 +8341,7 @@ mod tests {
     ///
     /// Pinned at REALISTIC drawer length on purpose. On a one-sentence drawer
     /// every one of these was admitted by the semantic gate at 0.56-0.58, i.e.
-    /// a hair over `SEMANTIC_ADMISSION_GATE`, so a short-drawer test reports
+    /// a hair over `HASH_ADMISSION_GATE`, so a short-drawer test reports
     /// "found" while the lexical channels are empty and passes with the fix
     /// reverted.
     #[test]
@@ -8428,7 +8653,7 @@ mod tests {
         let hits = s.search("kubernetes", &SearchOptions::default()).unwrap();
         for h in &hits {
             assert!(
-                h.lexical_exact > 0.0 || h.semantic > SEMANTIC_ADMISSION_GATE,
+                h.lexical_exact > 0.0 || h.semantic > undercroft_core::embed::HASH_ADMISSION_GATE,
                 "admitted on approximate evidence alone: exact={} sem={}",
                 h.lexical_exact,
                 h.semantic

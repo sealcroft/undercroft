@@ -197,7 +197,21 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   discounts both morph and approximate evidence at half weight, capped at one
   per query slot. On `Fusion::Legacy` and the remote path `lexical_morph` is 0
   because `lexical_score`'s exact leg is unrestricted substring containment and
-  already counts that relation as exact — a shipped asymmetry, now narrowed. A fold makes two words
+  already counts that relation as exact — a shipped asymmetry, now narrowed.
+  The gate's third leg is the cosine, and it belongs to the **vector space**,
+  not to the search code: `Embedder::semantic_admission_gate` is MEASURED from
+  the embedder in hand (14 known-unrelated probe pairs, worst + a 0.06 margin;
+  half same-language on purpose, because a cross-lingual-only set under-
+  estimates the floor), resolved ONCE at open into a field — reading it per hit
+  would put forward passes in the hot path. `HashEmbedder` declares the shipped
+  0.56 rather than re-deriving it, so the default vault does not move;
+  `ExternalEmbedder` refuses semantic-only admission outright, its vectors
+  coming from a model this process has never seen; a probe that embeds to zero
+  is an inference FAILURE, not a floor, and also refuses. One const for every
+  embedder was how installing an E5/BGE model — unrelated pairs near 0.75,
+  i.e. ABOVE the gate — retired the relevance gate silently, by configuration
+  rather than by code. `UNDERCROFT_SEMANTIC_GATE` declares it (`off` = lexical
+  channels only). A fold makes two words
   one token and `fuzzy_eq`/`same_word_family` forgive difference, so on one
   channel each of those would be a *membership* decision; `same_word_family`
   is the reachable half of morphology — nearly-a-prefix, ≥7 shared chars,
@@ -285,7 +299,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`, rebuilt by
   `build.sh` — librsvg has no CSS-variable support, so the build
   flattens each `var()` to its light fallback first), and `index.html`
-  which inlines them and documents every layer plus all 60
+  which inlines them and documents every layer plus all 61
   `UNDERCROFT_*` variables
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
   under `src/`

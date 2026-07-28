@@ -555,6 +555,11 @@ Models: `UNDERCROFT_EMBEDDER` (`hash`|`onnx`|`ort`) ·
 
 Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw`) · `UNDERCROFT_FUSION`
 (`bm25` default |`rrf`|`legacy`) · `UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
+`UNDERCROFT_SEMANTIC_GATE` (the embedder's own calibration; a number in
+`0.0..=1.0` declares the `semantic` score above which a drawer is admitted
+on cosine evidence alone, `off` refuses semantic-only admission entirely.
+Set it only if you have measured your own corpus — the default is measured
+from the embedder in hand, and an external vault refuses until you declare) ·
 `UNDERCROFT_IVF_MIN` (8192) · `UNDERCROFT_IVF_NPROBE` ·
 `UNDERCROFT_PQ_PAGE_MIN` (off by default — sealed page tier: one AEAD
 page per IVF list, lazy per-probe decrypt) ·
