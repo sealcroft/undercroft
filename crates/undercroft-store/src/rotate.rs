@@ -452,7 +452,7 @@ impl PalaceStore {
 
     /// Drop every RAM cache holding plaintext derived under the previous
     /// keys; they rebuild lazily from the re-sealed rows.
-    fn drop_derived_caches(&self) {
+    pub(crate) fn drop_derived_caches(&self) {
         *self.emb_cache.borrow_mut() = None;
         *self.pq.borrow_mut() = None;
         *self.ivf.borrow_mut() = None;

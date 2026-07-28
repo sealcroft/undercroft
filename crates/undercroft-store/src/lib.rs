@@ -39,6 +39,77 @@ use undercroft_vault::{SecurityLevel, Vault, VaultError};
 /// Below this a full decrypt-free scan is cheap and keeps semantic-only
 /// recall exact; above it the FTS5 candidate cut dominates search cost.
 const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
+
+/// The cosine above which a drawer is admitted on semantic evidence alone.
+///
+/// **Calibrated to `HashEmbedder`, and must be re-derived for any other
+/// embedder.** `semantic` is `(cosine + 1) / 2`, so this is a raw cosine of
+/// 0.12 — chosen because feature hashing over surface forms puts unrelated
+/// text at almost exactly zero. A model embedder does not: its unrelated-pair
+/// floor is typically well above 0.12, and swapping one in without re-deriving
+/// this number makes the disjunct vacuously true and retires the relevance
+/// gate for every query in every language, by configuration rather than by
+/// code. `the_semantic_gate_is_calibrated_to_the_default_embedder` is the
+/// acceptance test for that.
+///
+/// It is also length-sensitive in a way nothing else records: measured, a
+/// typo pair and a false friend both admit on a bare pair (0.85, 0.78) and
+/// stop admitting past ~40 words, while a true morphological pair
+/// (`книга`/`книге`) stops admitting at 20. Admission on this leg tracks
+/// drawer length as much as relatedness, which is why lexical evidence is
+/// what the gate should mostly rest on.
+const SEMANTIC_ADMISSION_GATE: f32 = 0.56;
+
+/// Bumped whenever `search_key` changes what the FTS index holds, so an
+/// existing vault rebuilds instead of serving a stale token set. `v1` is the
+/// first folded index; a vault written before it has no marker at all and the
+/// external-content triggers are dropped on the way past.
+const FTS_KEY_VERSION: &str = "v1";
+
+/// Embedder identity changes this build performs on its own.
+///
+/// Only the built-in hash embedder appears here. It is deterministic, local
+/// and cheap, so re-embedding a vault is a walk rather than a model run — and
+/// because it ships inside the binary, a user who merely upgraded did not
+/// choose a new embedding space and should not have to repair one by hand.
+///
+/// A swap to or from a model-backed embedder is never automatic: that is
+/// potentially hours of inference and a deliberate decision, so it keeps the
+/// explicit `UNDERCROFT_FORCE_EMBEDDER` + `repair` path.
+const KNOWN_EMBEDDER_UPGRADES: &[(&str, &str)] = &[
+    (
+        undercroft_core::embed::HASH_EMBEDDER_V1,
+        undercroft_core::embed::HASH_EMBEDDER,
+    ),
+    // v2 never shipped in a tag, but it existed on the branch long enough for
+    // a vault to be built from it. Without this row such a vault matches on
+    // name, returns early, and keeps vectors from a different token space with
+    // no warning and no override that helps.
+    (
+        undercroft_core::embed::HASH_EMBEDDER_V2,
+        undercroft_core::embed::HASH_EMBEDDER,
+    ),
+];
+
+// KNOWN GAP, deliberately accepted — no v4.
+//
+// Moving Hebrew out of the delimiting script class changed its token space:
+// `segment` now emits character bigrams for Hebrew where it emitted one word,
+// and the fold strips the points. Every other script's tokens are byte-
+// identical, so the blast radius is Hebrew alone — much narrower than v1→v2
+// (fold + segmentation) or v2→v3 (Brahmic conjuncts), both of which moved
+// tokens for whole script families and therefore bumped.
+//
+// The consequence is real and is not fixed here: a vault that already holds
+// Hebrew content keeps `undercroft-hash-v3` vectors built from the old token
+// space, so its Hebrew *cosine* leg stays stale until someone runs
+// `UNDERCROFT_FORCE_EMBEDDER=1` + `repair`. The lexical channels — which are
+// what this change was for, and what carries Hebrew from 0% to 87.5% — are
+// recomputed at read and are correct immediately.
+//
+// This is a judgement that a whole-fleet re-embed is not worth one script's
+// cosine leg, not a claim that nothing changed. If Hebrew corpora become a
+// real workload, the fix is a v4 row above and it costs 45.9 µs/drawer.
 /// Default number of fusion-ranked candidates a reranker re-scores per search
 /// (override with `UNDERCROFT_RERANK_TOP_N`). One cross-encoder forward pass
 /// runs per candidate, so this bounds the added latency.
@@ -159,6 +230,12 @@ pub enum StoreError {
     },
     #[error("remote index error: {0}")]
     Index(#[from] undercroft_index::IndexError),
+    #[error(
+        "the remote index was built with embedder {pushed:?} but this vault now uses \
+         {current:?}; vectors from two embedding spaces cannot be compared, so its candidates \
+         would be meaningless. Run `undercroft index push` to rebuild it."
+    )]
+    IndexStale { pushed: String, current: String },
     #[error("this vault uses external embeddings; writes must supply a vector")]
     ExternalVault,
     #[error("this vault computes its own embeddings; a vector may not be supplied")]
@@ -228,7 +305,36 @@ pub struct SearchHit {
     pub drawer: Drawer,
     pub score: f32,
     pub semantic: f32,
+    /// Lexical evidence for ranking: exact term matches plus approximate ones
+    /// (folds, one-edit tolerance, morphological families) at reduced weight.
     pub lexical: f32,
+    /// Lexical evidence that the drawer literally contains a query term.
+    ///
+    /// This is what decides admission. Approximate evidence is a guess, and a
+    /// guess should move a drawer within a result set rather than put it
+    /// there: `lexical` alone would let one forgiven edit return a drawer as
+    /// if it had said the word.
+    pub lexical_exact: f32,
+    /// Lexical evidence that the drawer holds a *morphological relative* of a
+    /// query term rather than the term itself — today, and only, a whole word
+    /// contained inside a longer one (`Dampfschiff` in
+    /// `Donaudampfschifffahrt`).
+    ///
+    /// This admits, like `lexical_exact`, and unlike the approximate channel.
+    /// The reason it is a separate field rather than folded into either is
+    /// auditability: a caller can tell "your word is in here" from "something
+    /// built on your word is in here", so a report of a surprising hit — or a
+    /// surprising miss — is reproducible instead of a matter of opinion.
+    ///
+    /// It exists because the alternative was worse in both directions. Left in
+    /// the approximate channel, containment could not admit, and measured, a
+    /// compound drawer past ~80 words has neither exact lexical evidence nor a
+    /// passing cosine, so it was dropped rather than mis-ranked. Promoted into
+    /// `lexical_exact`, it would have become indistinguishable from the drawer
+    /// having said the word — and `lexical_score`'s substring leg already makes
+    /// that claim on `Fusion::Legacy` and every remote search, which is the
+    /// inconsistency this resolves.
+    pub lexical_morph: f32,
 }
 
 /// Result of [`PalaceStore::save_with_dedup`]: the drawer id that now holds
@@ -397,12 +503,29 @@ impl PalaceStore {
         vault: Vault,
         embedder: Box<dyn Embedder + Send>,
     ) -> Result<Self, StoreError> {
-        let store = Self::open_inner(vault, embedder)?;
-        store.enforce_embedder_identity()?;
+        let mut store = Self::open_inner(vault, embedder)?;
+        store.enforce_embedder_identity(true)?;
         Ok(store)
     }
 
-    fn enforce_embedder_identity(&self) -> Result<(), StoreError> {
+    /// Open for a role that must not write.
+    ///
+    /// A read-only replica still has to serve reads across an embedder
+    /// upgrade, so a mismatch here neither migrates nor refuses: it warns and
+    /// leaves the old vectors in place. The semantic leg is then comparing
+    /// vectors from two different spaces and is not trustworthy, which the
+    /// warning says — the lexical leg is unaffected, and `search` already
+    /// admits a hit on lexical evidence alone.
+    pub fn open_read_only(
+        vault: Vault,
+        embedder: Box<dyn Embedder + Send>,
+    ) -> Result<Self, StoreError> {
+        let mut store = Self::open_inner(vault, embedder)?;
+        store.enforce_embedder_identity(false)?;
+        Ok(store)
+    }
+
+    fn enforce_embedder_identity(&mut self, may_migrate: bool) -> Result<(), StoreError> {
         let stored_name: Option<String> = self
             .conn
             .query_row(
@@ -424,22 +547,163 @@ impl PalaceStore {
         match (stored_name, stored_dim) {
             (Some(name), Some(dim)) => {
                 let dim: usize = dim.parse().unwrap_or(0);
-                if name != current_name || (dim != 0 && dim != current_dim) {
-                    if std::env::var("UNDERCROFT_FORCE_EMBEDDER").ok().as_deref() == Some("1") {
-                        self.record_embedder_identity()?;
+                if name == current_name && (dim == 0 || dim == current_dim) {
+                    return Ok(());
+                }
+                // The documented override comes first, so it dominates every
+                // identity path. Putting it after the migration branch would
+                // make it dead code for the one transition that actually does
+                // fallible work, leaving an operator whose migration cannot
+                // complete with no way in.
+                if std::env::var("UNDERCROFT_FORCE_EMBEDDER").ok().as_deref() == Some("1") {
+                    // A read-only role must not write, and recording the
+                    // identity is a write. An operator setting the override to
+                    // get a replica past `EmbedderMismatch` would otherwise
+                    // get a replica that claims the new identity, keeps the
+                    // old vectors, and serves a semantic leg spanning two
+                    // embedding spaces — with nothing on disk saying so.
+                    if !may_migrate {
+                        undercroft_obs::diag_warn!(
+                            "UNDERCROFT_FORCE_EMBEDDER=1 on a read-only open: serving {name} \
+                             vectors with the {current_name} embedder, and recording nothing. \
+                             The semantic ranking spans two embedding spaces and is not \
+                             meaningful; the lexical leg is unaffected"
+                        );
                         return Ok(());
                     }
-                    return Err(StoreError::EmbedderMismatch {
-                        stored: name,
-                        stored_dim: dim,
-                        current: current_name,
-                        current_dim,
-                    });
+                    self.record_embedder_identity()?;
+                    return Ok(());
                 }
-                Ok(())
+                // A known, dimension-preserving upgrade of the built-in
+                // embedder is a migration we know how to run, not a mismatch
+                // to refuse. `dim == 0` means the stored dimension is
+                // unparseable, which is not evidence that it matches — treat
+                // it as a mismatch rather than migrating on an assumption.
+                let known = KNOWN_EMBEDDER_UPGRADES
+                    .iter()
+                    .any(|(from, to)| *from == name && *to == current_name);
+                if known && dim == current_dim {
+                    if !may_migrate {
+                        undercroft_obs::diag_warn!(
+                            "vault holds {name} embeddings but this build uses {current_name}; \
+                             opened read-only so they are left as they are — the semantic \
+                             ranking is not meaningful until a writable open migrates them"
+                        );
+                        return Ok(());
+                    }
+                    return self.migrate_embedding_space();
+                }
+                Err(StoreError::EmbedderMismatch {
+                    stored: name,
+                    stored_dim: dim,
+                    current: current_name,
+                    current_dim,
+                })
             }
             _ => self.record_embedder_identity(),
         }
+    }
+
+    /// Re-embed every drawer after a known upgrade of the built-in embedder.
+    ///
+    /// **Safe to interrupt.** Embeddings are derived data and are not covered
+    /// by the record HMAC, so nothing here touches a drawer tag or the audit
+    /// chain — which is exactly why a re-embed is not a rotation. Re-embedding
+    /// is idempotent (same content, same embedder, same vector), and the new
+    /// identity is written only after the last row lands, so a crash mid-walk
+    /// leaves the old identity in place and the next open repeats the whole
+    /// walk to the same result.
+    ///
+    /// Every drawer is read through `get`, so the pass verifies each record's
+    /// HMAC on the way past. A tampered vault fails the migration rather than
+    /// quietly re-embedding corrupt content.
+    fn migrate_embedding_space(&mut self) -> Result<(), StoreError> {
+        let ids: Vec<String> = self
+            .conn
+            .prepare("SELECT id FROM drawers ORDER BY seq")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        // This runs inside `open`, so on a large vault it must say what it is
+        // doing rather than look like a hang. Counts and identities only —
+        // never content.
+        if !ids.is_empty() {
+            undercroft_obs::diag_info!(
+                "migrating {} drawers to embedder {} (one-time, resumable)",
+                ids.len(),
+                undercroft_core::embed::HASH_EMBEDDER
+            );
+        }
+        // Batched rather than one transaction: a vault with 100k drawers
+        // should not hold a single write lock for the length of the walk, and
+        // idempotency plus the deferred identity write make batching safe.
+        let mut damaged = 0u64;
+        for chunk in ids.chunks(512) {
+            let mut rows: Vec<(String, Vec<u8>)> = Vec::with_capacity(chunk.len());
+            for id in chunk {
+                // A drawer that cannot be read is skipped, not fatal. `get`
+                // verifies the record HMAC, so a corrupt or tampered row
+                // errors here — and aborting would turn a vault that was
+                // damaged-but-mostly-readable into one that opens for nothing
+                // at all, including `verify`, which is the only tool that can
+                // name the damage. Its old vector stays; a row that fails
+                // every read does not have a recall problem.
+                match self.get(id) {
+                    Ok(Some(d)) => {
+                        let emb = self.embedder_embed(&d.content);
+                        rows.push((id.clone(), self.vault.embedding_at_rest(id, &emb)));
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        damaged += 1;
+                        undercroft_obs::diag_warn!(
+                            "drawer {id} could not be read during re-embed and was left \
+                             untouched; run `verify`"
+                        );
+                    }
+                }
+            }
+            let tx = self.conn.transaction()?;
+            {
+                let mut up = tx.prepare("UPDATE drawers SET embedding = ?1 WHERE id = ?2")?;
+                for (id, blob) in &rows {
+                    up.execute(params![blob, id])?;
+                }
+            }
+            tx.commit()?;
+        }
+        if damaged > 0 {
+            undercroft_obs::diag_warn!(
+                "{damaged} drawer(s) could not be re-embedded; the vault is open and the rest \
+                 migrated — run `verify` to see which"
+            );
+        }
+        self.invalidate_embedding_space()?;
+        // Recorded even when rows were skipped. Withholding it would make
+        // every future open repeat the whole walk for damage that only
+        // `repair` can clear — and on the multi-tenant server that is once
+        // per request.
+        self.record_embedder_identity()
+    }
+
+    /// Discard everything derived from the *previous* embedding vectors.
+    ///
+    /// The PQ/IVF index quantizes the vector space: its codes, pages and
+    /// codebook all describe embeddings that no longer exist, and a stale
+    /// codebook does not fail loudly — it silently returns the wrong
+    /// candidates. Dropping the tables lets the existing self-heal rebuild
+    /// them.
+    ///
+    /// ColBERT token matrices (`drawer_tok`) and the FDE index are built from
+    /// the late-interaction model rather than this one, so they are correct
+    /// across an embedder change and are deliberately left in place.
+    pub(crate) fn invalidate_embedding_space(&self) -> Result<(), StoreError> {
+        self.conn.execute_batch(
+            "DROP TABLE IF EXISTS drawer_pq;
+             DROP TABLE IF EXISTS pq_page;
+             DROP TABLE IF EXISTS pq_meta;",
+        )?;
+        self.drop_derived_caches();
+        Ok(())
     }
 
     fn record_embedder_identity(&self) -> Result<(), StoreError> {
@@ -699,43 +963,138 @@ impl PalaceStore {
         if !matches!(self.vault.level(), SecurityLevel::HmacOnly) {
             return Ok(false);
         }
+        // A *standalone* fts5 table over folded text, not external-content
+        // over raw `drawers.content`.
+        //
+        // The external-content form indexed raw bytes under unicode61, which
+        // folds Latin diacritics and ς→σ and nothing else. Our query terms are
+        // now `search_key`-folded, so the two disagree on ß, ё, Turkish İ and
+        // every Arabic mark — and the prefilter is only safe when it finds
+        // *nothing*: a non-empty wrong answer becomes `seq IN (...)` and cuts
+        // the right drawer out of the scan and out of the cosine path with it.
+        // Query `izmir` against a drawer saying `İzmir` was exactly that.
+        //
+        // Folding the index instead makes unicode61's token set a superset of
+        // ours over the same text, so it can over-return (the scan filters
+        // that) but never under-return, which was the fatal direction.
+        //
+        // Note the query-side predicate everyone reaches for is dead code:
+        // `needs_full_scan` sees the output of `tokenize`, so every term it
+        // gets is already folded and `search_key(t) != t` is identically false.
         if self
             .conn
-            .execute_batch(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS drawers_fts USING fts5(
-                     content, content='drawers', content_rowid='seq'
-                 );
-                 CREATE TRIGGER IF NOT EXISTS drawers_fts_ai AFTER INSERT ON drawers BEGIN
-                     INSERT INTO drawers_fts(rowid, content) VALUES (new.seq, new.content);
-                 END;
-                 CREATE TRIGGER IF NOT EXISTS drawers_fts_ad AFTER DELETE ON drawers BEGIN
-                     INSERT INTO drawers_fts(drawers_fts, rowid, content)
-                     VALUES ('delete', old.seq, old.content);
-                 END;
-                 CREATE TRIGGER IF NOT EXISTS drawers_fts_au AFTER UPDATE OF content ON drawers BEGIN
-                     INSERT INTO drawers_fts(drawers_fts, rowid, content)
-                     VALUES ('delete', old.seq, old.content);
-                     INSERT INTO drawers_fts(rowid, content) VALUES (new.seq, new.content);
-                 END;",
-            )
+            .execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS drawers_fts USING fts5(text);")
             .is_err()
         {
             return Ok(false);
         }
-        // Backfill drawers written before the index existed (a vault
-        // predating this feature, or a dropped index): an external-content
-        // rebuild re-reads every row from `drawers`.
+        // Storing folded text in clear leaks nothing new: this table only ever
+        // exists for HmacOnly vaults, whose content is already readable.
+        // Sealed vaults never reach here.
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'fts_key_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
         let n_drawers: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
         let n_fts: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM drawers_fts", [], |r| r.get(0))?;
-        if n_fts != n_drawers {
-            self.conn
-                .execute("INSERT INTO drawers_fts(drawers_fts) VALUES('rebuild')", [])?;
+        // Rebuild when the fold changed (a vault indexed by an older build,
+        // including the external-content shape) or when the counts disagree.
+        if stored.as_deref() != Some(FTS_KEY_VERSION) || n_fts != n_drawers {
+            self.rebuild_fts()?;
         }
         Ok(true)
+    }
+
+    /// Drop and repopulate `drawers_fts` from folded content, in one
+    /// transaction. Also removes the external-content triggers an older build
+    /// installed, which would otherwise keep writing raw text into it.
+    fn rebuild_fts(&self) -> Result<(), StoreError> {
+        let rows: Vec<(i64, Vec<u8>, String)> = self
+            .conn
+            .prepare("SELECT seq, content, id FROM drawers ORDER BY seq")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        self.conn.execute_batch(
+            "DROP TRIGGER IF EXISTS drawers_fts_ai;
+             DROP TRIGGER IF EXISTS drawers_fts_ad;
+             DROP TRIGGER IF EXISTS drawers_fts_au;
+             DROP TABLE IF EXISTS drawers_fts;
+             CREATE VIRTUAL TABLE drawers_fts USING fts5(text);",
+        )?;
+        {
+            let mut ins = self
+                .conn
+                .prepare("INSERT INTO drawers_fts(rowid, text) VALUES (?1, ?2)")?;
+            for (seq, blob, id) in &rows {
+                // An unreadable row is skipped, not fatal: the prefilter is an
+                // accelerator, and `verify` is what reports damage.
+                let Ok(plain) = self.vault.content_from_rest(id, blob) else {
+                    continue;
+                };
+                let Ok(text) = std::str::from_utf8(&plain) else {
+                    continue;
+                };
+                ins.execute(params![seq, &*undercroft_core::normalize::search_key(text)])?;
+            }
+        }
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('fts_key_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![FTS_KEY_VERSION],
+        )?;
+        Ok(())
+    }
+
+    /// Keep `drawers_fts` in step with a written row.
+    ///
+    /// Called from the write path rather than a trigger, because the fold is
+    /// Rust and SQL cannot express it. Advisory: a failure here costs the
+    /// prefilter an entry (the scan still finds the drawer), never the write.
+    pub(crate) fn fts_index(&self, id: &str, content: &str) {
+        if !self.fts {
+            return;
+        }
+        let seq: Option<i64> = self
+            .conn
+            .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        let Some(seq) = seq else { return };
+        let _ = self
+            .conn
+            .execute("DELETE FROM drawers_fts WHERE rowid = ?1", params![seq]);
+        let _ = self.conn.execute(
+            "INSERT INTO drawers_fts(rowid, text) VALUES (?1, ?2)",
+            params![seq, &*undercroft_core::normalize::search_key(content)],
+        );
+    }
+
+    /// The `seq` a drawer occupies, for removing its index entry inside the
+    /// same transaction that removes the row — dropping it beforehand would
+    /// leave the index short of the table if that transaction rolled back,
+    /// and under-returning is the one direction the prefilter must never do.
+    pub(crate) fn fts_seq_of(&self, id: &str) -> Option<i64> {
+        if !self.fts {
+            return None;
+        }
+        self.conn
+            .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten()
     }
 
     /// Tune when the BM25 prefilter engages on hmac-only vaults: it runs
@@ -839,6 +1198,32 @@ impl PalaceStore {
         let n: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+        Ok(n as u64)
+    }
+
+    /// An index no drawer in this vault has ever been given.
+    ///
+    /// For callers that need a unique *slot* rather than a chunk's position
+    /// within a source: a note saved through an API has no source to be the
+    /// fourth chunk of, but its id still has to be unique, and `chunk_index`
+    /// is the only field left to carry that.
+    ///
+    /// [`count`](Self::count) cannot serve, and the difference is a data-loss
+    /// bug rather than a nicety. `COUNT(*)` goes *down* when a drawer is
+    /// deleted, so the next save is handed an index that is still in use, the
+    /// derived id collides, and `ON CONFLICT(id) DO UPDATE` overwrites the
+    /// unrelated drawer holding it — a record destroyed by writing a
+    /// different one. SQLite's `AUTOINCREMENT` sequence never reuses a rowid,
+    /// so it only ever moves forward.
+    ///
+    /// Identical to `count()` for any vault that has never deleted, so
+    /// existing ids are unaffected.
+    pub fn next_append_index(&self) -> Result<u64, StoreError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'drawers'), 0)",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(n as u64)
     }
 
@@ -961,8 +1346,14 @@ impl PalaceStore {
         drawer: &Drawer,
         embedding: &[f32],
     ) -> Result<(bool, String, u64), StoreError> {
+        // meta_json is stored unsealed, so it must not carry words copied out
+        // of the content — the date expressions and names that derivation
+        // lifts verbatim. `meta_at_rest` empties exactly those and keeps the
+        // resolutions, which are offsets and ISO dates rather than content.
+        // The tag below covers what is actually written, so verify stays
+        // consistent with storage.
         let meta_json =
-            serde_json::to_string(&drawer.meta).map_err(|e| StoreError::CorruptRow {
+            serde_json::to_string(&drawer.meta_at_rest()).map_err(|e| StoreError::CorruptRow {
                 id: drawer.id.clone(),
                 reason: e.to_string(),
             })?;
@@ -1023,6 +1414,8 @@ impl PalaceStore {
         // Store the late-interaction token matrix (advisory; a drawer
         // without one keeps its fusion rank at rescore time).
         self.late_encode_row(&drawer.id, &drawer.content);
+        // And the folded FTS entry (hmac-only vaults; a no-op otherwise).
+        self.fts_index(&drawer.id, &drawer.content);
         if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
             cache.insert(drawer.id.clone(), embedding);
         }
@@ -1175,11 +1568,18 @@ impl PalaceStore {
         if let Some((match_id, _)) = best {
             // Refresh the matched drawer in place: keep its id, take the
             // incoming content/metadata and a fresh recency.
-            let refreshed = Drawer {
+            let mut refreshed = Drawer {
                 id: match_id.clone(),
                 content: drawer.content.clone(),
                 meta: drawer.meta.clone(),
             };
+            // Taking the incoming metadata wholesale used to discard the
+            // matched drawer's dates with it: the same text recorded on an
+            // earlier day simply stopped having happened. The text collapses,
+            // the chronology does not.
+            if let Some(existing) = self.get(&match_id)? {
+                refreshed.absorb_occurrences_of(&existing);
+            }
             self.write_drawer(&refreshed, embedding)?;
             undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Deduped);
             undercroft_obs::event_drawer_saved(
@@ -1410,12 +1810,7 @@ impl PalaceStore {
         let _span = undercroft_obs::scope("search", self.vault.id());
         let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
-        let qterms: Vec<String> = query
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|t| t.len() > 1)
-            .map(str::to_string)
-            .collect();
+        let qterms: Vec<String> = tokenize(query);
 
         let candidates = if self.fde_enabled {
             // MUVERA FDE candidates: token-aware single-vector ranking over
@@ -1441,7 +1836,12 @@ impl PalaceStore {
             }
         } else {
             match self.fts_min {
-                Some(min) if self.fts && !qterms.is_empty() && self.count()? >= min as u64 => {
+                Some(min)
+                    if self.fts
+                        && !qterms.is_empty()
+                        && !needs_full_scan(&qterms)
+                        && self.count()? >= min as u64 =>
+                {
                     self.fts_candidates(&qterms, std::cmp::max(256, limit * 32))
                 }
                 _ => None,
@@ -1506,16 +1906,30 @@ impl PalaceStore {
             };
             let semantic = ((cosine(&qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
             let recency = recency_boost(&drawer.meta.filed_at, now);
-            let tokens = if self.fusion == Fusion::Legacy {
-                Vec::new()
+            let (tokens, ngram, units) = if self.fusion == Fusion::Legacy {
+                (Vec::new(), Vec::new(), 0.0)
             } else {
-                tokenize(&drawer.content)
+                let s = segment(&drawer.content);
+                let units = s.len as f32;
+                // Same minimum-length rule the query side applies, so term
+                // matching stays symmetric rather than relying on a one-byte
+                // token happening never to match anything. The n-gram flags
+                // are filtered in step with the tokens they describe.
+                let (tokens, ngram): (Vec<String>, Vec<bool>) = s
+                    .tokens
+                    .into_iter()
+                    .zip(s.ngram)
+                    .filter(|(t, _)| t.len() > 1)
+                    .unzip();
+                (tokens, ngram, units)
             };
             cands.push(Candidate {
                 drawer,
                 semantic,
                 recency,
                 tokens,
+                ngram,
+                units,
             });
         }
 
@@ -1524,13 +1938,19 @@ impl PalaceStore {
             Fusion::Legacy => cands
                 .into_iter()
                 .map(|c| {
-                    let lexical = lexical_score(&qterms, query, &c.drawer.content);
+                    let (lexical, lexical_exact) = lexical_score(&qterms, query, &c.drawer.content);
                     let score = 0.55 * c.semantic + 0.35 * lexical + 0.10 * c.recency;
                     SearchHit {
                         drawer: c.drawer,
                         score,
                         semantic: c.semantic,
                         lexical,
+                        lexical_exact,
+                        // `lexical_score`'s exact leg is unrestricted substring
+                        // containment, so on this path the relation the morph
+                        // channel carries elsewhere is already counted as exact.
+                        // Left at zero rather than double-counted.
+                        lexical_morph: 0.0,
                     }
                 })
                 .collect::<Vec<_>>(),
@@ -1539,13 +1959,15 @@ impl PalaceStore {
                 cands
                     .into_iter()
                     .zip(bm25)
-                    .map(|(c, lexical)| {
+                    .map(|(c, (lexical, lexical_exact, lexical_morph))| {
                         let score = 0.55 * c.semantic + 0.35 * lexical + 0.10 * c.recency;
                         SearchHit {
                             drawer: c.drawer,
                             score,
                             semantic: c.semantic,
                             lexical,
+                            lexical_exact,
+                            lexical_morph,
                         }
                     })
                     .collect::<Vec<_>>()
@@ -1555,8 +1977,18 @@ impl PalaceStore {
 
         // Relevance gate: an unrelated record still scores ~0.35 from the
         // neutral cosine midpoint + recency alone. Require actual evidence —
-        // a lexical match or a clearly positive semantic signal.
-        hits.retain(|h| h.lexical > 0.0 || h.semantic > 0.56);
+        // the drawer literally contains a query term, or the cosine is
+        // clearly positive.
+        //
+        // Deliberately the *exact* channel. Approximate evidence — a fold
+        // that made two spellings one token, a forgiven edit, a shared word
+        // family — is a guess, and a guess should reorder a result set rather
+        // than populate one. Gating on the blended channel would mean every
+        // fold widens admission, which is how `قطار` came to match
+        // `المستشفى` on a shared alef.
+        hits.retain(|h| {
+            h.lexical_exact > 0.0 || h.lexical_morph > 0.0 || h.semantic > SEMANTIC_ADMISSION_GATE
+        });
         hits.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -1671,15 +2103,10 @@ impl PalaceStore {
         query: &str,
         qvec: &[f32],
     ) -> SearchHit {
-        let qterms: Vec<String> = query
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|t| t.len() > 1)
-            .map(str::to_string)
-            .collect();
+        let qterms: Vec<String> = tokenize(query);
         let emb = self.embedder.embed(&drawer.content);
         let semantic = ((cosine(qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
-        let lexical = lexical_score(&qterms, query, &drawer.content);
+        let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
         let recency = recency_boost(&drawer.meta.filed_at, OffsetDateTime::now_utc());
         let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
         SearchHit {
@@ -1687,6 +2114,8 @@ impl PalaceStore {
             score,
             semantic,
             lexical,
+            lexical_exact,
+            lexical_morph: 0.0,
         }
     }
 
@@ -1796,17 +2225,475 @@ struct Candidate {
     semantic: f32,
     recency: f32,
     tokens: Vec<String>,
+    /// Parallel to `tokens` — see `script::Segmented::ngram`.
+    ngram: Vec<bool>,
+    /// Content units — see `script::Segmented::len`. Not `tokens.len()`,
+    /// which counts the n-gram expansion.
+    units: f32,
 }
 
-/// Lowercase alphanumeric tokens of length > 1 — the same tokenization the
-/// query goes through, so BM25 term matching is symmetric with the query.
+/// Lowercase comparison tokens — the same tokenization the query goes
+/// through, so BM25 term matching is symmetric with the query.
+///
+/// Canonicalized first: what byte comparison misses is the *same* word written
+/// with a different but canonically equivalent encoding, which would put the
+/// query and the drawer in different buckets for no reason a reader could
+/// see. Both sides run through here, so the fold stays symmetric.
+///
+/// Boundaries then come from `script::segment`. `is_alphanumeric` is
+/// Unicode-aware, but being aware of a character is not the same as knowing
+/// where its words end: in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao and
+/// Myanmar it finds no boundary the writer intended, and a whole clause
+/// became one token. See that module for what each script actually does.
 fn tokenize(content: &str) -> Vec<String> {
-    content
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
+    // The historical minimum-length rule, kept exactly: it is a *byte* test,
+    // so it only ever drops single ASCII letters — every non-Latin character
+    // is 2+ bytes and always survived it. Changing it to characters would
+    // silently delete every one-letter Cyrillic, Greek and Arabic token from
+    // every existing vault, so it stays as it is.
+    segment(content)
+        .tokens
+        .into_iter()
         .filter(|t| t.len() > 1)
-        .map(str::to_string)
         .collect()
+}
+
+/// `tokenize`, keeping the content-unit count that BM25 needs for length
+/// normalization. Segmented runs emit unigrams and bigrams, so `tokens.len()`
+/// is no longer a measure of how much a drawer says.
+fn segment(content: &str) -> undercroft_core::script::Segmented {
+    // `search_key`, not `match_key`: this is the retrieval key, and it also
+    // lowercases. Both `tokenize` (the query side) and the per-candidate
+    // document side flow through here, so symmetry is structural rather than
+    // something two call sites have to remember.
+    undercroft_core::script::segment(&undercroft_core::normalize::search_key(content))
+}
+
+/// Whether a query term matches a document token, tolerating one edit.
+///
+/// The tolerance is a port of mempalace's spellcheck extra and it is gated by
+/// length, because a single edit is a large fraction of a short word. That
+/// gate is in **bytes**, so it opens at three characters of Cyrillic and at
+/// *two* of anything CJK — where a one-character substitution is not a typo
+/// but a different word: 北京/東京 are two cities, 中国/美国 two countries,
+/// 한국/중국 likewise, and each pair is one substitution apart.
+///
+/// So for terms written entirely in a script that attaches without a
+/// delimiter, allow insertion and deletion — a particle or clitic arriving —
+/// and never substitution. Elsewhere the historical byte gate stands.
+///
+/// Note this is deliberately *not* "make the gate character-based". Korean
+/// query terms are two to four syllables and would all fall under a five-
+/// character threshold, losing the tolerance that is the only reason Korean
+/// retrieved anything before segmentation existed.
+fn fuzzy_eq(q: &str, tok: &str) -> bool {
+    if q.chars()
+        .all(|c| undercroft_core::script::script_of(c).attaches_without_delimiter())
+    {
+        let (qn, tn) = (q.chars().count(), tok.chars().count());
+        // Both sides must be at least two characters. A one-character query
+        // term is one insertion away from *every* bigram containing it, so
+        // `北` would claim 北, 东北 and 北虎 in one drawer and score a
+        // Siberian-tiger note as three occurrences of the query. Korean
+        // particles (한국어/한국어는) and 北京/北京市 are unaffected.
+        return qn.min(tn) >= 2 && qn.abs_diff(tn) == 1 && within_one_edit(q, tok);
+    }
+    // Never forgive an edit inside a number. `١٠٠٠٠٠` used to be all-Arabic
+    // and took the strict branch above; folded to ASCII `100000` it reaches
+    // here, clears the byte gate, and matches `200000`, `100001` and
+    // `190000`. A digit substitution is not a typo worth forgiving in a
+    // retrieval index, and this closes the same latent hole for numbers that
+    // were always Latin-typed.
+    if !q.chars().any(|c| !c.is_numeric()) {
+        return false;
+    }
+    if q.len() >= 5 && within_one_edit(q, tok) {
+        return true;
+    }
+    same_word_family(q, tok) || contains_a_long_word(q, tok)
+}
+
+/// One word is a whole substring of the other, at any offset.
+///
+/// This is the half of compounding a prefix rule structurally cannot see:
+/// `Dampfschiff` is a *suffix* of `Donaudampfschifffahrt` and `Ausbildung` sits
+/// interior to `Bundesausbildungsförderungsgesetz`, so `same_word_family`
+/// reaches neither — the shared prefix is zero.
+///
+/// It is also a consistency fix. `lexical_score` has always scored this
+/// relation, through `lower.contains(t)`, so `Fusion::Legacy` and every
+/// remote-index search already had it; only the default BM25 path, which
+/// compares tokens rather than substrings, did not. Measured, that mattered
+/// more than it looks: the cosine leg carries `Dampfschiff` /
+/// `Donaudampfschifffahrt` at 0.8182 on a bare pair but only 0.5058 once the
+/// drawer reaches ~80 words, so at real chunk length `lexical_exact` was 0,
+/// `semantic` was below the gate, and the drawer was dropped rather than
+/// mis-ranked.
+///
+/// **Eight characters on the shorter side**, chosen by measurement over this
+/// repo's own prose (73 files, 6,710 distinct alphabetic words): 644 linked
+/// pairs, 0.017% of eligible pairs, 214 of them beyond `same_word_family`'s
+/// reach, per-word degree p90 = 1 and max = 8. At seven the `-ability` family
+/// alone links fourteen words to `ability`, and `article`/`particle`,
+/// `mission`/`admission` and `allowed`/`swallowed` arrive — 401 extra pairs.
+///
+/// Deliberately short of `run` / `running`, whose shorter side is 3: short
+/// stems are a different gap and this is not a workaround for it.
+///
+/// The residue it does create is real morphology far more often than noise —
+/// `unresolved`/`resolved`, `incompatible`/`compatible`,
+/// `autoincrement`/`increment` — with `counting`/`accounting` and
+/// `knowledge`/`acknowledged` as the sharpest genuine false pairs. All of it
+/// lands in the approximate channel, so none of it can admit a drawer.
+/// Critically, it creates none of gap (a)'s false friends: containment is
+/// false for `город`/`горох`, `книга`/`книге` and `positive`/`position`.
+/// One word contains the other, in a script that attaches without a delimiter
+/// and is not logographic.
+///
+/// This is `contains_a_long_word`'s counterpart for Arabic, Kana, Hangul,
+/// Khmer, Thai, Lao and Myanmar. It is what carries `كتاب` to `الكتاب` and
+/// `مكتبة` to `بالمكتبة` once bigram-to-bigram equality stops being exact
+/// evidence: the whole-subrun tokens still contain one another, which is a
+/// contiguous chain over the stem rather than one shared fragment.
+///
+/// Three characters on the shorter side, not eight. The delimiting rule can
+/// afford eight because a Latin word carries its own boundaries; an Arabic
+/// stem is commonly three letters and there is no shorter honest floor. The
+/// cost is measured and real: at three characters this relation runs at 0.519
+/// morphological precision, against 0.820 at four and 0.911 at five. It routes
+/// to `tf_morph`, so it is labelled and discounted — but it does admit, and
+/// that number is the reason the channel exists.
+fn shares_a_stem(q: &str, tok: &str) -> bool {
+    let non_delimiting_word = |s: &str| {
+        s.chars().all(|c| {
+            let sc = undercroft_core::script::script_of(c);
+            sc.attaches_without_delimiter() && !sc.is_logographic()
+        })
+    };
+    if !non_delimiting_word(q) || !non_delimiting_word(tok) {
+        return false;
+    }
+    const MIN_CHARS: usize = 3;
+    let (qn, tn) = (q.chars().count(), tok.chars().count());
+    if qn.min(tn) < MIN_CHARS {
+        return false;
+    }
+    if qn <= tn {
+        tok.contains(q)
+    } else {
+        q.contains(tok)
+    }
+}
+
+fn contains_a_long_word(q: &str, tok: &str) -> bool {
+    // Delimiting scripts only — a bigram token from Han, Arabic or Thai must
+    // never reach a substring rule.
+    if !q
+        .chars()
+        .all(|c| !undercroft_core::script::script_of(c).attaches_without_delimiter())
+    {
+        return false;
+    }
+    const MIN_CHARS: usize = 8;
+    let (qn, tn) = (q.chars().count(), tok.chars().count());
+    if qn.min(tn) < MIN_CHARS {
+        return false;
+    }
+    if qn <= tn {
+        tok.contains(q)
+    } else {
+        q.contains(tok)
+    }
+}
+
+/// One word is nearly a prefix of the other — the reachable half of
+/// morphology, without needing to know anyone's language.
+///
+/// This connects suffix and agglutinative inflection: `documentation` to
+/// `document`/`documented`/`documents`/`documenting`, `encryption` to
+/// `encrypt`, Georgian `ბიბლიოთეკა` to `ბიბლიოთეკაში`, German
+/// `Konfiguration` to `Konfigurationen`.
+///
+/// The two thresholds are both load-bearing and both were chosen by what they
+/// reject. A prefix of **7** is what excludes the systematic English
+/// `-tive`/`-tion` class, which sits at exactly 6 and is length-symmetric so a
+/// length-difference bound would not catch it: `positive`/`position`,
+/// `relative`/`relation`, `creative`/`creation`, `transfer`/`transform`,
+/// `personal`/`personnel`. It also rejects the Slavic and Greek false friends
+/// a 6 would admit — `сообщение` (message) / `сообщество` (community),
+/// `κατάσταση` (situation) / `κατάστημα` (shop). Bounding the divergent tail
+/// on the **shorter** side rejects `представление` (idea) /
+/// `представитель` (representative), which shares 8.
+///
+/// Three false pairs survive and are the accepted cost: `conversation` /
+/// `conversion`, `processor` / `procession`, `internal` / `international`.
+/// They feed the **approximate** channel only, so none of them can admit a
+/// drawer **on the lexical channel** — they can only move one inside a result
+/// set that already cleared the exact gate. That containment is why the
+/// channel split had to land first.
+///
+/// The qualifier is not pedantry. The gate is a disjunction, and its other arm
+/// is `semantic > SEMANTIC_ADMISSION_GATE`, which is undiscounted and
+/// uncapped: measured, `internal` / `international` clears it at every drawer
+/// length tested and `conversation` / `conversion` at three lengths of four.
+/// So these pairs *can* be admitted — by the cosine leg, not by this rule.
+/// Reading this containment as absolute overstates what the split buys.
+///
+/// One asymmetry worth knowing before reading the next paragraph as absolute:
+/// `lexical_score`'s exact leg is unrestricted substring containment with **no
+/// length gate**, so on `Fusion::Legacy` and on every remote-index search a
+/// query `run` against a drawer saying `i was running daily` already yields
+/// `lexical_exact = 1.0` and is admitted. It is the default BM25 path, which
+/// compares whole tokens, that does not. So the short-stem gap is *directional*
+/// (it bites when the query is the shorter form) and holds on one of three
+/// fusion modes — the same shipped inconsistency `contains_a_long_word` was
+/// added to reduce.
+///
+/// What this does not reach, and no prefix rule can: Russian nominal case
+/// (`книга`/`книге` share 4, and so do `город`/`горох`), Greek `πόλη`/`πόλεων`
+/// (3), English short stems (`running`/`run` — `run` is 3 characters), and
+/// German compounds, where `Dampfschiff` is a *suffix* of
+/// `Donaudampfschifffahrt` (the embedder's character trigrams already carry
+/// that one on the cosine leg). Stem-rewriting morphology — Arabic broken
+/// plurals, Korean conjugation — shares no contiguous surface at all.
+/// The per-script morphological rules — the "right tool per language" made
+/// explicit, with every value carrying the promiscuity that chose it.
+///
+/// Promiscuity = how many of a real 50k vocabulary one query links to
+/// (hermitdave/FrequencyWords 2018, top-500 queries against the full list).
+/// It is the instrument that produced the 74.3% figure, and it needs no
+/// relatedness labels: a relation that reaches a large slice of the lexicon is
+/// unsafe whether or not any single pair is defensible.
+struct MorphRule {
+    /// Minimum characters on the shorter side for whole-word containment.
+    floor: usize,
+    /// Consonantal-skeleton equality, and the weak letters it removes.
+    /// Equality, never subsequence: measured, skeleton-subsequence on Arabic
+    /// reaches mean 64.81 words — **worse than the 49.44 of the containment
+    /// rule already shipped** — while equality reaches 6.67.
+    skeleton: Option<fn(char) -> bool>,
+    /// Whether a >=7 shared prefix admits (Greek only — see `greek_word_family`).
+    prefix_family: bool,
+}
+
+/// Arabic weak letters: alef, waw, yeh.
+fn ar_weak(c: char) -> bool {
+    matches!(c as u32, 0x0627 | 0x0648 | 0x064A)
+}
+/// Hebrew matres lectionis: alef, waw, yod. `ה` is deliberately absent — it is
+/// the definite article and a frequent radical, so stripping it would merge a
+/// clitic into the stem it attaches to.
+fn he_weak(c: char) -> bool {
+    matches!(c as u32, 0x05D0 | 0x05D5 | 0x05D9)
+}
+
+/// Minimum consonants left after the weak letters go. Measured on Arabic, the
+/// class size by skeleton length is 75.3 / 38.2 / 14.3 / 6.4 for lengths
+/// 1/2/3/4 — so a floor of 3 keeps the strong triliteral roots and refuses the
+/// collapse. It is a floor on the SKELETON, not on the word: that distinction
+/// is what lets `كتاب`/`كتب` through while refusing `بيت`→`بت`.
+const SKELETON_FLOOR: usize = 3;
+
+fn skeleton_with(w: &str, weak: fn(char) -> bool) -> String {
+    w.chars().filter(|c| !weak(*c)).collect()
+}
+
+/// Which rule applies to this word, by the script of its characters.
+///
+/// Returns `None` for mixed-script words and for Han, where a character is
+/// already a morpheme and no stem relation applies.
+fn morph_rule_for(w: &str) -> Option<MorphRule> {
+    let mut chars = w.chars();
+    let first = chars.next()?;
+    let sc = undercroft_core::script::script_of(first);
+    if !w
+        .chars()
+        .all(|c| undercroft_core::script::script_of(c) == sc)
+    {
+        return None;
+    }
+    use undercroft_core::script::Script;
+    Some(match sc {
+        // Semitic root-and-pattern. Arabic and Hebrew are the same family and
+        // take the same tool; only the weak-letter set differs.
+        Script::Arabic => MorphRule {
+            floor: 3,
+            skeleton: Some(ar_weak),
+            prefix_family: false,
+        },
+        Script::Hebrew => MorphRule {
+            floor: 3,
+            skeleton: Some(he_weak),
+            prefix_family: false,
+        },
+        // Han: a character is a morpheme, so unigrams already carry it.
+        Script::Han => return None,
+        // The other non-delimiting scripts keep the >=3 whole-word rule.
+        s if s.attaches_without_delimiter() => MorphRule {
+            floor: 3,
+            skeleton: None,
+            prefix_family: false,
+        },
+        // Delimiting scripts keep the floor of 8.
+        //
+        // I lowered this to 5 and it was wrong. The justification was a
+        // promiscuity measurement — how many words of a real 50k vocabulary a
+        // query links to — which read 3.03 for English at 5 and looked safe.
+        // That instrument counts links; it cannot see whether a link is
+        // CORRECT, and there were no negative controls. Measured against the
+        // real engine afterwards, floor 5 admitted `other`/`mother`,
+        // `count`/`accounting`, `press`/`depression`, `stand`/`understand`,
+        // `cover`/`discovery` and `article`/`particle` — every one a false
+        // admission that did not exist before.
+        //
+        // The 8 is not arbitrary and was not chosen by counting: see
+        // `contains_a_long_word`, which names the 401 extra pairs that taking
+        // 7 instead would have admitted. A precision-justified constant must
+        // not be replaced by a recall-justified one.
+        //
+        // What this costs, and it is real: Turkish is purely additive with
+        // stems of 2-5 characters, so containment is true on every pair and
+        // the floor refuses all of it. Turkish, Hindi, Spanish and English
+        // regress to their prior numbers. Reaching them needs a per-LANGUAGE
+        // floor, which needs a language input, because Turkish and English
+        // share a script and disagree about the right value.
+        //
+        // (retained for the record) The measurement at floor 5 read: Greek
+        // 3.41, English 3.03, Russian 3.20, Turkish 9.35, German 12.44; at 3,
+        // 45.68 / 33.33 / 27.49 / 65.55 / 68.47, German peaking at 1,996
+        // links for one query because German compounds.
+        _ => MorphRule {
+            floor: 8,
+            skeleton: None,
+            prefix_family: true,
+        },
+    })
+}
+
+/// Does a morphological relation hold — the admitting half of the morph
+/// channel, dispatched per script.
+fn morph_relation(q: &str, tok: &str) -> bool {
+    let Some(rule) = morph_rule_for(q) else {
+        return false;
+    };
+    // Both sides must be the same script, or a rule chosen for one language
+    // decides a pair from another.
+    if morph_rule_for(tok).is_none()
+        || undercroft_core::script::script_of(tok.chars().next().unwrap_or(' '))
+            != undercroft_core::script::script_of(q.chars().next().unwrap_or(' '))
+    {
+        return false;
+    }
+    // Never relate one number to another. `fuzzy_eq` has refused this since
+    // the Arabic digit fold landed — "a digit substitution is not a typo worth
+    // forgiving in a retrieval index" — but that guard sits in the channel
+    // that RANKS. This one is evaluated first and lands in the channel that
+    // ADMITS, so without its own guard it was strictly worse: measured,
+    // `45678` admitted a drawer saying `456789`, `100000` admitted `1000000`,
+    // and `2023` admitted `20231`. Every invoice number, order id and account
+    // number in a vault was one containment away from a wrong drawer.
+    if !q.chars().any(|c| !c.is_numeric()) || !tok.chars().any(|c| !c.is_numeric()) {
+        return false;
+    }
+    // The shipped >=3 whole-word rule, unchanged. It self-guards on script, so
+    // it is a no-op for the delimiting branch.
+    if shares_a_stem(q, tok) {
+        return true;
+    }
+    let (qn, tn) = (q.chars().count(), tok.chars().count());
+    if qn.min(tn) >= rule.floor
+        && (if qn <= tn {
+            tok.contains(q)
+        } else {
+            q.contains(tok)
+        })
+    {
+        return true;
+    }
+    if let Some(weak) = rule.skeleton {
+        let a = skeleton_with(q, weak);
+        if a.chars().count() >= SKELETON_FLOOR && a == skeleton_with(tok, weak) {
+            return true;
+        }
+    }
+    // Greek only, and `greek_word_family` is what enforces that: measured,
+    // this rule links a mean of 0.16 English words and 0.58 Russian ones, so
+    // it is not the promiscuity that keeps it off Latin — it is that Latin's
+    // false pairs (`conversation`/`conversion`) are the named, documented cost
+    // of the rule, and Greek's beneficiaries are nine real paradigm forms.
+    rule.prefix_family && greek_word_family(q, tok)
+}
+
+/// `same_word_family`, but admitting — and only for Greek.
+///
+/// Greek inflection **substitutes** its endings rather than appending them, so
+/// containment reaches almost none of it. Measured over 49 real paradigm pairs
+/// at realistic drawer length: endings that merely append admitted 12 of 15,
+/// endings that replace admitted **1 of 20**. Of the 33 pairs dropped,
+/// `same_word_family` already fires on 9 — every form of `άνθρωπος`, three of
+/// `εργαζόμενος`, `πληροφορίες`, `πληροφοριών`, `εφημερίδες` — but it was
+/// routed to the approximate channel, which ranks and never admits, so those
+/// drawers were **dropped rather than mis-ranked**.
+///
+/// Scoped to the Greek script deliberately, because that is exactly what
+/// separates the benefit from the cost. The three Latin pairs this rule's own
+/// documentation names as the accepted price — `conversation`/`conversion`,
+/// `processor`/`procession`, `internal`/`international` — all measure a
+/// 7-prefix and all would admit. They are Latin; the nine beneficiaries are
+/// Greek. Conditioning on script takes the one and not the other.
+///
+/// Measured Greek cost: `παράδειγμα`/`παράδεισος` (example/paradise), which
+/// shares 7 and diverges by 3. Note what does *not* fire — `πολύ`/`πόλη`, the
+/// frequency argument that killed Snowball Greek, shares only 3 characters. A
+/// stemmer builds an equivalence class that one false friend poisons; a
+/// pairwise predicate answers about two strings and creates no class, which is
+/// why this survives an argument a stemmer did not.
+fn greek_word_family(q: &str, tok: &str) -> bool {
+    let greek = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| matches!(c as u32, 0x0370..=0x03FF | 0x1F00..=0x1FFF))
+    };
+    greek(q) && greek(tok) && same_word_family(q, tok)
+}
+
+fn same_word_family(q: &str, tok: &str) -> bool {
+    // Delimiting scripts only. A bigram token from Han, Arabic or Thai must
+    // never reach a character-prefix rule.
+    if !q
+        .chars()
+        .all(|c| !undercroft_core::script::script_of(c).attaches_without_delimiter())
+    {
+        return false;
+    }
+    let (qn, tn) = (q.chars().count(), tok.chars().count());
+    let shared = q
+        .chars()
+        .zip(tok.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    shared >= 7 && qn.min(tn) - shared <= 3
+}
+
+/// True when a query cannot be served by the FTS5 prefilter.
+///
+/// `drawers_fts` is a standalone fts5 table over `search_key(content)` — see
+/// `init_fts_schema`, which explains why it is no longer external-content over
+/// raw bytes. Folding the index fixed the *fold* disagreement; it does not fix
+/// the *segmentation* one, and that is what this predicate is still for: our
+/// tokens for Han, Kana, Hangul, Arabic, Khmer, Thai, Lao and Myanmar are
+/// character bigrams, and unicode61 does not bigram anything.
+///
+/// The prefilter is only safe when it finds nothing: `fts_candidates` returns
+/// `None` on an empty result and search falls back to a full scan. A
+/// *non-empty* wrong answer becomes `seq IN (...)` and cuts the right drawer
+/// out of the scan entirely — and out of the cosine path with it. Bypassing
+/// keeps the full scan, which is correct and merely slower.
+fn needs_full_scan(qterms: &[String]) -> bool {
+    qterms.iter().any(|t| {
+        t.chars()
+            .any(|c| undercroft_core::script::script_of(c).attaches_without_delimiter())
+    })
 }
 
 /// Raw Okapi BM25 per candidate over the candidate set as the corpus, plus
@@ -1814,22 +2701,89 @@ fn tokenize(content: &str) -> Vec<String> {
 /// saturation constant when squashing raw scores into [0,1]. Term matching
 /// carries the same one-typo tolerance (5+ char terms) as lexical search,
 /// so a misspelled query still contributes.
-fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> (Vec<f32>, f32) {
+/// BM25 over a candidate set, kept in two channels.
+///
+/// `raw` is for ranking and blends both kinds of evidence. `exact` counts
+/// only tokens that literally equal a query term, and it is what decides
+/// *admission* — see the relevance gate in `search`. The distinction matters
+/// because approximate evidence is a guess: a fold makes two spellings one
+/// token, and `fuzzy_eq` forgives an edit. Under a single channel each of
+/// those is a membership decision, so a drawer whose only relationship to the
+/// query is a typo away gets returned as if it had said the word.
+struct Bm25 {
+    raw: Vec<f32>,
+    exact: Vec<f32>,
+    morph: Vec<f32>,
+    k_sat: f32,
+}
+
+/// Approximate evidence counts, but never as much as saying the word.
+const APPROX_WEIGHT: f32 = 0.5;
+
+fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> Bm25 {
     let n = cands.len();
     if n == 0 || qterms.is_empty() {
-        return (vec![0.0; n], 0.0);
+        return Bm25 {
+            raw: vec![0.0; n],
+            exact: vec![0.0; n],
+            morph: vec![0.0; n],
+            k_sat: 0.0,
+        };
     }
     // tf[doc][term] = occurrences of qterms[term] in the doc's tokens.
     let mut tf = vec![vec![0u32; qterms.len()]; n];
+    let mut tf_approx = vec![vec![0u32; qterms.len()]; n];
+    let mut tf_morph = vec![vec![0u32; qterms.len()]; n];
     let mut lengths = vec![0f32; n];
     for (i, c) in cands.iter().enumerate() {
-        lengths[i] = c.tokens.len() as f32;
-        for tok in &c.tokens {
-            for (j, q) in qterms.iter().enumerate() {
-                if tok == q || (q.len() >= 5 && within_one_edit(q, tok)) {
+        // Content units, not emitted tokens: a segmented run expands into
+        // unigrams plus bigrams, and charging that to document length would
+        // penalise precisely the drawers segmentation exists to reach.
+        lengths[i] = c.units;
+        for (ti, tok) in c.tokens.iter().enumerate() {
+            // An n-gram is a fragment, not a word. Letting one fill the exact
+            // slot by literal equality is what let a single shared
+            // two-character substring admit a drawer: measured, 74.3% of a
+            // real Arabic corpus on one query, against 6.9% for Greek through
+            // the same code. Han is not flagged, because there a character is
+            // a morpheme.
+            let is_ngram = c.ngram.get(ti).copied().unwrap_or(false);
+            // A token fills at most one query-term slot, and an *exact* match
+            // outranks a fuzzy one wherever the two compete. Taking the first
+            // match of either kind let an earlier fuzzy term steal a token
+            // that exactly equals a later one: for query `دفتر دفاتر`, a
+            // document saying `دفاتر` scored as evidence for `دفتر` while
+            // `دفاتر` — literally present — kept df = 0 and therefore maximal
+            // IDF for a term that occurs. The document was scored as if it
+            // contained a different word.
+            if !is_ngram {
+                if let Some(j) = qterms.iter().position(|q| q == tok) {
                     tf[i][j] += 1;
-                    break; // a token fills at most one query-term slot
+                    continue;
                 }
+            }
+            // Checked before the general fuzzy scan so containment lands in
+            // its own channel rather than being absorbed as approximate.
+            if let Some(j) = qterms.iter().position(|q| morph_relation(q, tok)) {
+                tf_morph[i][j] = 1;
+                continue;
+            }
+            // A bigram meeting the same bigram is the weakest evidence there
+            // is — real, but the same grade that makes كريم (a name) surface
+            // كرم (generosity) at rank 1. It ranks; it does not admit.
+            if is_ngram {
+                if let Some(j) = qterms.iter().position(|q| q == tok) {
+                    tf_approx[i][j] = 1;
+                    continue;
+                }
+            }
+            if let Some(j) = qterms.iter().position(|q| fuzzy_eq(q, tok)) {
+                // Capped at one per slot. Uncapped, a drawer saying
+                // `document documents documented documenting` reaches tf = 4
+                // on a query for `documentation` while a drawer that says
+                // `documentation` once reaches tf = 1 — the approximate
+                // channel would outscore the exact one.
+                tf_approx[i][j] = 1;
             }
         }
     }
@@ -1838,7 +2792,11 @@ fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> (Vec<f32>, f32) {
     let mut present_idf_sum = 0f32;
     let mut present_cnt = 0f32;
     for (j, idf_j) in idf.iter_mut().enumerate() {
-        let df = tf.iter().filter(|row| row[j] > 0).count() as f32;
+        // Rarity counts a term as present on either channel — IDF describes
+        // the corpus, not the confidence of one match.
+        let df = (0..n)
+            .filter(|&i| tf[i][j] > 0 || tf_morph[i][j] > 0 || tf_approx[i][j] > 0)
+            .count() as f32;
         // Okapi probabilistic IDF, +1 inside the log to stay non-negative.
         *idf_j = (1.0 + (n as f32 - df + 0.5) / (df + 0.5)).ln();
         if df > 0.0 {
@@ -1852,30 +2810,51 @@ fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> (Vec<f32>, f32) {
         0.0
     };
     let mut raw = vec![0f32; n];
-    for (i, raw_i) in raw.iter_mut().enumerate() {
+    let mut exact = vec![0f32; n];
+    let mut morph = vec![0f32; n];
+    for i in 0..n {
         let len_norm = 1.0 - BM25_B + BM25_B * lengths[i] / avgdl;
-        let mut s = 0f32;
+        let saturate = |f: f32, idf: f32| idf * (f * (BM25_K1 + 1.0)) / (f + BM25_K1 * len_norm);
+        let (mut s, mut e, mut m) = (0f32, 0f32, 0f32);
         for (j, idf_j) in idf.iter().enumerate() {
-            let f = tf[i][j] as f32;
+            let f_exact = tf[i][j] as f32;
+            let f_morph = tf_morph[i][j] as f32;
+            // Morphological evidence is discounted exactly like approximate
+            // evidence for RANKING; the difference is only that it admits.
+            let f = f_exact + APPROX_WEIGHT * (f_morph + tf_approx[i][j] as f32);
             if f > 0.0 {
-                s += idf_j * (f * (BM25_K1 + 1.0)) / (f + BM25_K1 * len_norm);
+                s += saturate(f, *idf_j);
+            }
+            if f_exact > 0.0 {
+                e += saturate(f_exact, *idf_j);
+            }
+            if f_morph > 0.0 {
+                m += saturate(f_morph, *idf_j);
             }
         }
-        *raw_i = s;
+        raw[i] = s;
+        exact[i] = e;
+        morph[i] = m;
     }
-    (raw, k_sat)
+    Bm25 {
+        raw,
+        exact,
+        morph,
+        k_sat,
+    }
 }
 
 /// BM25 squashed into [0,1] for the linear blend: `raw / (raw + k_sat)`,
 /// so one strong term match sits near 0.5 and additional evidence climbs
 /// toward 1 without ever forcing a top candidate to exactly 1.0.
-fn bm25_scores(qterms: &[String], cands: &[Candidate]) -> Vec<f32> {
-    let (raw, k_sat) = bm25_raw(qterms, cands);
-    if k_sat <= 0.0 {
-        return vec![0.0; cands.len()];
+fn bm25_scores(qterms: &[String], cands: &[Candidate]) -> Vec<(f32, f32, f32)> {
+    let b = bm25_raw(qterms, cands);
+    if b.k_sat <= 0.0 {
+        return vec![(0.0, 0.0, 0.0); cands.len()];
     }
-    raw.iter()
-        .map(|&r| if r > 0.0 { r / (r + k_sat) } else { 0.0 })
+    let squash = |r: f32| if r > 0.0 { r / (r + b.k_sat) } else { 0.0 };
+    (0..cands.len())
+        .map(|i| (squash(b.raw[i]), squash(b.exact[i]), squash(b.morph[i])))
         .collect()
 }
 
@@ -1919,7 +2898,8 @@ fn ranks_desc_positive(vals: &[f32]) -> Vec<Option<usize>> {
 /// only rank positions. `lexical` is reported as the squashed BM25 so the
 /// caller's relevance gate treats it exactly like the BM25 blend.
 fn rrf_fuse(qterms: &[String], cands: Vec<Candidate>) -> Vec<SearchHit> {
-    let (raw, k_sat) = bm25_raw(qterms, &cands);
+    let b = bm25_raw(qterms, &cands);
+    let (raw, k_sat) = (b.raw, b.k_sat);
     let sem: Vec<f32> = cands.iter().map(|c| c.semantic).collect();
     let rec: Vec<f32> = cands.iter().map(|c| c.recency).collect();
     let sem_rank = ranks_desc(&sem);
@@ -1934,16 +2914,20 @@ fn rrf_fuse(qterms: &[String], cands: Vec<Candidate>) -> Vec<SearchHit> {
                 score += 1.0 / (RRF_K + r as f32);
             }
             score += 0.10 * (1.0 / (RRF_K + rec_rank[i] as f32));
-            let lexical = if k_sat > 0.0 && raw[i] > 0.0 {
-                raw[i] / (raw[i] + k_sat)
-            } else {
-                0.0
+            let squash = |r: f32| {
+                if k_sat > 0.0 && r > 0.0 {
+                    r / (r + k_sat)
+                } else {
+                    0.0
+                }
             };
             SearchHit {
                 drawer: c.drawer,
                 score,
                 semantic: c.semantic,
-                lexical,
+                lexical: squash(raw[i]),
+                lexical_exact: squash(b.exact[i]),
+                lexical_morph: squash(b.morph[i]),
             }
         })
         .collect()
@@ -1953,28 +2937,41 @@ fn rrf_fuse(qterms: &[String], cands: Vec<Candidate>) -> Vec<SearchHit> {
 /// Terms of 5+ chars also match with one typo (edit distance 1) — the
 /// port of mempalace's spellcheck extra, done at query time instead of
 /// with a dictionary.
-fn lexical_score(qterms: &[String], raw_query: &str, content: &str) -> f32 {
+///
+/// Returns `(lexical, lexical_exact)` on the same split as `bm25_raw`: the
+/// substring leg is exact evidence, the one-edit leg is not.
+fn lexical_score(qterms: &[String], raw_query: &str, content: &str) -> (f32, f32) {
     if qterms.is_empty() {
-        return 0.0;
+        return (0.0, 0.0);
     }
-    let lower = content.to_lowercase();
+    // Same canonical fold the query terms went through, or a drawer written
+    // with a different but equivalent encoding cannot match its own words.
+    // Both legs of this function must fold, or the substring leg desynchronises
+    // from the term leg: a folded query term cannot be found in an unfolded
+    // haystack, and under the relevance gate that *drops* the drawer.
+    let lower = undercroft_core::normalize::search_key(content);
     let words: Vec<&str> = lower
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .collect();
-    let matched = qterms
-        .iter()
-        .filter(|t| {
-            lower.contains(t.as_str())
-                || (t.len() >= 5 && words.iter().any(|w| within_one_edit(t, w)))
-        })
-        .count() as f32;
-    let mut score = matched / qterms.len() as f32;
-    let phrase = raw_query.trim().to_lowercase();
-    if phrase.len() > 3 && lower.contains(&phrase) {
-        score = (score + 0.5).min(1.0);
+    let (mut exact, mut approx) = (0f32, 0f32);
+    for t in qterms {
+        if lower.contains(t.as_str()) {
+            exact += 1.0;
+        } else if words.iter().any(|w| fuzzy_eq(t, w)) {
+            approx += 1.0;
+        }
     }
-    score
+    let n = qterms.len() as f32;
+    let mut score = (exact + APPROX_WEIGHT * approx) / n;
+    let mut score_exact = exact / n;
+    let phrase = undercroft_core::normalize::search_key(raw_query.trim());
+    if phrase.len() > 3 && lower.contains(&*phrase) {
+        // A literal phrase hit is exact evidence on both channels.
+        score = (score + 0.5).min(1.0);
+        score_exact = (score_exact + 0.5).min(1.0);
+    }
+    (score, score_exact)
 }
 
 /// True when `a` and `b` are within Levenshtein distance 1 (single
@@ -2039,6 +3036,8 @@ mod tests {
             score,
             semantic: score,
             lexical: score,
+            lexical_exact: score,
+            lexical_morph: 0.0,
         }
     }
 
@@ -2121,6 +3120,39 @@ mod tests {
         assert_eq!(capped.len(), 3, "capped search still fills the limit");
         // The cap can only change WHICH rooms appear, never how many hits.
         assert!(capped.iter().any(|h| h.drawer.meta.room == "quiet"));
+    }
+
+    /// Exactly what `POST /v1/vaults/{id}/drawers` does: index the new
+    /// drawer by the store's current row count.
+    fn rest_save(s: &mut PalaceStore, wing: &str, room: &str, text: &str) -> String {
+        let idx = s.next_append_index().unwrap() as u32;
+        let d = Drawer::new(wing, room, text.into(), None, idx, "rest");
+        s.upsert(&d).unwrap();
+        d.id
+    }
+
+    /// `count()` is `SELECT COUNT(*)`, so it goes DOWN when a drawer is
+    /// deleted — and it is the drawer id's uniquifier on the REST write path.
+    /// After a delete, the next save reuses an index that is still in use,
+    /// and `ON CONFLICT(id) DO UPDATE` overwrites the drawer holding it.
+    /// An unrelated record is destroyed by writing a new one.
+    #[test]
+    fn a_rest_save_after_a_delete_must_not_overwrite_an_unrelated_drawer() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let a = rest_save(&mut s, "w", "r", "first note");
+        let b = rest_save(&mut s, "w", "r", "second note");
+        assert_ne!(a, b);
+
+        assert!(s.delete_drawer(&a).unwrap());
+        let c = rest_save(&mut s, "w", "r", "third note");
+
+        assert_ne!(c, b, "a new save must not land on an existing drawer's id");
+        assert_eq!(
+            s.get(&b).unwrap().map(|d| d.content),
+            Some("second note".to_string()),
+            "the unrelated drawer must survive"
+        );
+        assert_eq!(s.count().unwrap(), 2, "two drawers remain");
     }
 
     fn drawer(wing: &str, room: &str, content: &str, idx: u32) -> Drawer {
@@ -3182,6 +4214,86 @@ mod tests {
         );
     }
 
+    /// The existing at-rest test uses a secret containing no date expression
+    /// and no name, so it cannot see this: *derived* structure is stored in
+    /// `meta_json`, which is not sealed, and two of those fields hold spans
+    /// copied verbatim out of the content. A sealed vault that encrypts the
+    /// sentence and writes fragments of it in the clear beside the ciphertext
+    /// has not sealed the sentence.
+    #[test]
+    fn sealed_vault_leaks_no_derived_fragment_of_its_content() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        // "Zerlinda" is a name the entity extractor takes; "three weeks ago"
+        // is a span the temporal scanner records verbatim.
+        let secret = "the passphrase came from Zerlinda three weeks ago";
+        s.upsert(&drawer("w", "r", secret, 0).with_content_date(Some("2023-05-08".into())))
+            .unwrap();
+        drop(s);
+        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        let leaked: Vec<&str> = ["Zerlinda", "zerlinda", "three weeks ago", "passphrase"]
+            .into_iter()
+            .filter(|n| db.windows(n.len()).any(|w| w == n.as_bytes()))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "sealed vault wrote content fragments in the clear: {leaked:?}"
+        );
+    }
+
+    /// What a stolen sealed-vault file reveals — asserted, so a change in
+    /// either direction trips it.
+    ///
+    /// Content is sealed and must stay sealed; that half is the guarantee.
+    /// The other half is an honest inventory of what metadata is still
+    /// readable, because `meta_json` is stored unsealed and pretending
+    /// otherwise would be worse than the exposure. An attacker holding the
+    /// file learns the wing and room names — which in practice are topics,
+    /// people, cases — the source path, when the content happened, and the
+    /// dates resolved out of it. They do not learn a word of the content.
+    ///
+    /// This list is not an endorsement. It is the thing to shrink, and this
+    /// test is what will notice when it does.
+    #[test]
+    fn a_sealed_vault_exposes_metadata_but_never_content() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        let mut d = Drawer::new(
+            "wingsecretmerger",
+            "roomdivorcecase",
+            "Zerlinda signed the acquisition three weeks ago in Geneva.".into(),
+            Some("/home/alice/projects/acquisition-secret/notes.md".into()),
+            7,
+            "addedbyprobe",
+        )
+        .with_content_date(Some("2023-05-08".into()));
+        d.meta.hall = Some("hallsecretlabel".into());
+        s.upsert(&d).unwrap();
+        drop(s);
+        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        let has = |n: &str| db.windows(n.len()).any(|w| w == n.as_bytes());
+
+        // The guarantee: not one word of the content, nor anything derived
+        // from it that copies its words.
+        for secret in ["Zerlinda", "zerlinda", "Geneva", "three weeks ago"] {
+            assert!(!has(secret), "content leaked into a sealed vault: {secret}");
+        }
+
+        // The inventory: readable today, and each one is a thing to fix.
+        for (what, needle) in [
+            ("wing name", "wingsecretmerger"),
+            ("room name", "roomdivorcecase"),
+            ("source path", "/home/alice/projects/acquisition-secret"),
+            ("added_by", "addedbyprobe"),
+            ("hall label", "hallsecretlabel"),
+            ("content_date", "2023-05-08"),
+            ("a date resolved out of the content", "2023-04-17"),
+        ] {
+            assert!(
+                has(needle),
+                "{what} is no longer readable — good, but update this inventory"
+            );
+        }
+    }
+
     #[test]
     fn hmac_only_content_is_plaintext_but_tagged() {
         let (dir, mut s) = store(SecurityLevel::HmacOnly);
@@ -4007,13 +5119,11 @@ mod tests {
         s.upsert(&drawer("w", "r", "memory written before the index", 0))
             .unwrap();
         drop(s);
-        // Simulate a vault predating the feature (or a dropped index).
+        // Simulate a vault predating the feature (or a dropped index). The
+        // external-content triggers an older build installed are gone now, so
+        // dropping the table is the whole simulation.
         let conn = Connection::open(dir.path().join("vaults/test/palace.db")).unwrap();
-        conn.execute_batch(
-            "DROP TRIGGER drawers_fts_ai; DROP TRIGGER drawers_fts_ad;
-             DROP TRIGGER drawers_fts_au; DROP TABLE drawers_fts;",
-        )
-        .unwrap();
+        conn.execute_batch("DROP TABLE drawers_fts;").unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
@@ -4102,6 +5212,1417 @@ mod tests {
             .unwrap();
         assert!(!hits.is_empty());
         assert!(hits[0].drawer.content.contains("kubernetes"));
+    }
+
+    /// The headline. Before segmentation these queries returned an **empty
+    /// vector**, not a bad ranking: the clause was one token so BM25 scored
+    /// zero, the hash embedder shared no feature so cosine was 0.0 and
+    /// `semantic` exactly 0.500, and the relevance gate
+    /// (`lexical > 0.0 || semantic > 0.56`) then dropped the only drawer that
+    /// contained the answer. An empty result reads as an empty vault.
+    ///
+    /// So the assertion that matters is "did anything come back at all".
+    #[test]
+    fn a_query_finds_the_drawer_that_contains_it() {
+        let cases = [
+            ("北京", "我昨天去了北京参加会议"),
+            ("東京", "昨日は東京で会議に参加しました"),
+            ("한국어", "한국어는 어렵다"),
+            ("ភ្នំពេញ", "ខ្ញុំបានទៅភ្នំពេញកាលពីម្សិលមិញ"),
+            ("ประชุม", "ประชุมทีมงานที่กรุงเทพ"),
+            // Arabic: the word is present, wearing its definite article.
+            ("كتاب", "قرأت الكتاب أمس"),
+        ];
+        for (query, content) in cases {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer("w", "r", content, 0)).unwrap();
+            s.upsert(&drawer("w", "r", "an unrelated note about the weather", 1))
+                .unwrap();
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            assert!(!hits.is_empty(), "query {query:?} returned nothing");
+            assert_eq!(hits[0].drawer.content, content, "query {query:?}");
+            assert!(hits[0].lexical > 0.0, "query {query:?} matched no term");
+        }
+    }
+
+    /// Segmentation must not turn every short CJK term into a wildcard. The
+    /// byte-gated tolerance opened at two characters, where one substitution
+    /// is a different city, not a typo.
+    #[test]
+    fn a_substitution_in_cjk_is_a_different_word_not_a_typo() {
+        assert!(!fuzzy_eq("北京", "東京"));
+        assert!(!fuzzy_eq("中国", "美国"));
+        assert!(!fuzzy_eq("한국", "중국"));
+        // Insertion and deletion still pass — that is a particle arriving.
+        assert!(fuzzy_eq("한국어", "한국어는"));
+        assert!(fuzzy_eq("北京", "北京市"));
+        // And the Latin tolerance is untouched.
+        assert!(fuzzy_eq("kubernetes", "kubernets"));
+        assert!(!fuzzy_eq("cat", "bat"), "below the byte gate, as before");
+    }
+
+    #[test]
+    fn the_right_city_outranks_the_one_sharing_a_character() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "我昨天去了北京参加会议", 0))
+            .unwrap();
+        s.upsert(&drawer("w", "r", "東京タワーに行きました", 1))
+            .unwrap();
+        let hits = s.search("北京", &SearchOptions::default()).unwrap();
+        assert!(!hits.is_empty());
+        assert!(
+            hits[0].drawer.content.contains("北京"),
+            "got {:?}",
+            hits[0].drawer.content
+        );
+    }
+
+    /// `drawers_fts` indexes raw content under unicode61, which cannot agree
+    /// with segmented query terms. The prefilter only fails safe when it
+    /// matches *nothing*; a non-empty wrong answer cuts the right drawer out
+    /// of the scan and out of the cosine path with it.
+    #[test]
+    fn the_fts_prefilter_is_bypassed_for_segmented_scripts() {
+        assert!(needs_full_scan(&["北京".to_string()]));
+        assert!(needs_full_scan(&["كتاب".to_string()]));
+        assert!(!needs_full_scan(&["beijing".to_string()]));
+        assert!(!needs_full_scan(&["москва".to_string()]));
+
+        // And end to end, with the prefilter forced on.
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        assert!(s.fts, "hmac-only vaults index for FTS");
+        s.set_fts_prefilter_min(Some(1));
+        s.upsert(&drawer("w", "r", "我昨天去了北京参加会议", 0))
+            .unwrap();
+        for i in 1..5 {
+            s.upsert(&drawer("w", "r", &format!("filler note {i}"), i))
+                .unwrap();
+        }
+        let hits = s.search("北京", &SearchOptions::default()).unwrap();
+        assert!(!hits.is_empty(), "prefilter cut the only matching drawer");
+        assert!(hits[0].drawer.content.contains("北京"));
+    }
+
+    /// The regression guard. Latin-script retrieval must be untouched — the
+    /// segmenter only claims scripts that do not delimit their own words.
+    #[test]
+    fn latin_retrieval_is_unchanged() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the kubernetes cluster upgrade finished",
+            0,
+        ))
+        .unwrap();
+        s.upsert(&drawer("w", "r", "unrelated note about the weather", 1))
+            .unwrap();
+        for mode in [Fusion::Bm25, Fusion::Rrf, Fusion::Legacy] {
+            s.set_fusion(mode);
+            let hits = s
+                .search("kubernetes upgrade", &SearchOptions::default())
+                .unwrap();
+            assert!(!hits.is_empty(), "mode {mode:?}");
+            assert!(
+                hits[0].drawer.content.contains("kubernetes"),
+                "mode {mode:?}"
+            );
+        }
+    }
+
+    /// A long segmented clause must not be buried by BM25 length
+    /// normalization just because it expanded into n-grams.
+    #[test]
+    fn ngram_expansion_does_not_inflate_document_length() {
+        let long = "我昨天去了北京参加会议然后回到上海继续工作并且写了一份很长的报告";
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", long, 0)).unwrap();
+        s.upsert(&drawer("w", "r", "今天天气很好", 1)).unwrap();
+        let hits = s.search("北京", &SearchOptions::default()).unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].drawer.content, long);
+    }
+
+    // ------------------------------------------------------------------
+    // Embedder identity migration
+    // ------------------------------------------------------------------
+
+    /// Environment variables are process-global and `cargo test` runs threads
+    /// in parallel, so two tests toggling `UNDERCROFT_FORCE_EMBEDDER` race and
+    /// one of them reads the other's value. Every such test takes this first.
+    /// (`unwrap_or_else(into_inner)` because a panic inside one holder must not
+    /// poison the rest into failing for the wrong reason.)
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Put a vault back into the state a v1 build left it in: the old
+    /// identity recorded, and embeddings that are not what v2 would produce.
+    /// Junk vectors are the point — if the migration does not actually run,
+    /// the drawer stays unfindable and the test says so.
+    fn make_it_look_like_v1(s: &PalaceStore) {
+        s.conn
+            .execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'embedder_name'",
+                params![undercroft_core::embed::HASH_EMBEDDER_V1],
+            )
+            .unwrap();
+        let junk = vec![0.0f32; undercroft_core::embed::EMBED_DIM];
+        let ids: Vec<String> = s
+            .conn
+            .prepare("SELECT id FROM drawers")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for id in ids {
+            let blob = s.vault.embedding_at_rest(&id, &junk);
+            s.conn
+                .execute(
+                    "UPDATE drawers SET embedding = ?1 WHERE id = ?2",
+                    params![blob, id],
+                )
+                .unwrap();
+        }
+    }
+
+    fn reopen_vault(dir: &TempDir) -> Result<PalaceStore, StoreError> {
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        PalaceStore::open(mgr.unlock("test").unwrap())
+    }
+
+    /// Every known predecessor migrates, not just the oldest. v2 shipped in no
+    /// tag but existed on the branch, and a vault built from it holds vectors
+    /// from a different token space.
+    #[test]
+    fn every_known_predecessor_identity_migrates() {
+        for from in [
+            undercroft_core::embed::HASH_EMBEDDER_V1,
+            undercroft_core::embed::HASH_EMBEDDER_V2,
+        ] {
+            let dir = TempDir::new().unwrap();
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+            {
+                let mut s = PalaceStore::open(vault).unwrap();
+                s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
+                    .unwrap();
+                make_it_look_like_v1(&s);
+                s.conn
+                    .execute(
+                        "UPDATE meta SET value = ?1 WHERE key = 'embedder_name'",
+                        params![from],
+                    )
+                    .unwrap();
+            }
+            let s = reopen_vault(&dir).unwrap_or_else(|_| panic!("{from} must migrate"));
+            let stored: String = s
+                .conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key='embedder_name'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, undercroft_core::embed::HASH_EMBEDDER, "from {from}");
+            let hits = s
+                .search("heron verbatim", &SearchOptions::default())
+                .unwrap();
+            assert!(!hits.is_empty(), "from {from}");
+        }
+    }
+
+    /// Upgrading the binary must not hand the user a broken vault, and must
+    /// not require them to know an env var exists.
+    #[test]
+    fn a_v1_vault_migrates_itself_on_open() {
+        for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+            let dir = TempDir::new().unwrap();
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let vault = mgr.create("test", level).unwrap();
+            {
+                let mut s = PalaceStore::open(vault).unwrap();
+                s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
+                    .unwrap();
+                s.upsert(&drawer("w", "r", "unrelated note about rain", 1))
+                    .unwrap();
+                make_it_look_like_v1(&s);
+            }
+
+            let s = reopen_vault(&dir).expect("a known upgrade must not refuse to open");
+
+            let stored: String = s
+                .conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key='embedder_name'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, undercroft_core::embed::HASH_EMBEDDER, "{level:?}");
+
+            // The vectors were actually rewritten, not just the label.
+            let hits = s
+                .search("heron verbatim", &SearchOptions::default())
+                .unwrap();
+            assert!(!hits.is_empty(), "{level:?}");
+            assert!(hits[0].drawer.content.contains("heron"), "{level:?}");
+            assert!(hits[0].semantic > 0.5, "{level:?} — still the junk vector");
+        }
+    }
+
+    /// The migration writes the new identity last, so an interrupted walk
+    /// leaves the vault claiming v1 and the next open simply does it again.
+    /// Re-embedding is idempotent, so repeating it is free of consequence.
+    #[test]
+    fn an_interrupted_migration_is_retried_and_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
+                .unwrap();
+            make_it_look_like_v1(&s);
+        }
+        let read_vector = |s: &PalaceStore| -> Vec<f32> {
+            let (id, blob): (String, Vec<u8>) = s
+                .conn
+                .query_row("SELECT id, embedding FROM drawers", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            s.vault.embedding_from_rest(&id, &blob).unwrap()
+        };
+        let first = {
+            let s = reopen_vault(&dir).unwrap();
+            read_vector(&s)
+        };
+        // Pretend the identity write never landed, and run it again.
+        {
+            let s = reopen_vault(&dir).unwrap();
+            s.conn
+                .execute(
+                    "UPDATE meta SET value = ?1 WHERE key = 'embedder_name'",
+                    params![undercroft_core::embed::HASH_EMBEDDER_V1],
+                )
+                .unwrap();
+        }
+        let s = reopen_vault(&dir).unwrap();
+        // Sealed embeddings carry a random nonce, so the ciphertext differs
+        // between runs while the vector underneath must not.
+        assert_eq!(first, read_vector(&s), "re-running the walk moved a vector");
+        let hits = s
+            .search("heron verbatim", &SearchOptions::default())
+            .unwrap();
+        assert!(!hits.is_empty());
+    }
+
+    /// One damaged drawer must not cost the user the other fifty thousand —
+    /// especially since `verify`, the only tool that can name the damage,
+    /// needs an open store to run.
+    #[test]
+    fn one_unreadable_drawer_does_not_make_the_vault_unopenable() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let victim: String;
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
+                .unwrap();
+            s.upsert(&drawer("w", "r", "a second intact drawer about rain", 1))
+                .unwrap();
+            victim = s
+                .conn
+                .query_row("SELECT id FROM drawers ORDER BY seq LIMIT 1", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            // Corrupt the tag so `get` fails its HMAC check on this row only.
+            s.conn
+                .execute(
+                    "UPDATE drawers SET tag = ?1 WHERE id = ?2",
+                    params![vec![0u8; 32], victim],
+                )
+                .unwrap();
+            make_it_look_like_v1(&s);
+        }
+        let s = reopen_vault(&dir).expect("one bad drawer must not lock the vault");
+
+        // The walk continued past the damaged row: the intact drawer now
+        // holds the vector v2 produces for its content.
+        let (intact_id, blob, content): (String, Vec<u8>, Vec<u8>) = s
+            .conn
+            .query_row(
+                "SELECT id, embedding, content FROM drawers WHERE id != ?1",
+                params![victim],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let stored = s.vault.embedding_from_rest(&intact_id, &blob).unwrap();
+        let plain = s.vault.content_from_rest(&intact_id, &content).unwrap();
+        let expected = HashEmbedder.embed(std::str::from_utf8(&plain).unwrap());
+        assert_eq!(stored.len(), expected.len());
+        assert!(
+            undercroft_core::embed::cosine(&stored, &expected) > 0.99,
+            "the intact drawer was not re-embedded"
+        );
+
+        // And `verify` — the only tool that can name the damage — is now
+        // reachable, which it would not be if open had failed.
+        let report = s.verify().unwrap();
+        assert!(
+            report.bad_records.contains(&victim),
+            "verify should still name the damaged drawer"
+        );
+        // Note: `search` remains intolerant of a corrupt row (the candidate
+        // loader propagates the HMAC failure). That predates this change and
+        // is not addressed here — what the tolerant walk buys is that `open`,
+        // and therefore `verify` and `repair`, still work.
+    }
+
+    /// The override must not turn a read-only open into a write either.
+    #[test]
+    fn force_embedder_writes_nothing_on_a_read_only_open() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
+                .unwrap();
+            // An identity this build does not know how to migrate.
+            s.conn
+                .execute(
+                    "UPDATE meta SET value = 'some-onnx-model' WHERE key = 'embedder_name'",
+                    [],
+                )
+                .unwrap();
+        }
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("UNDERCROFT_FORCE_EMBEDDER", "1");
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let opened =
+            PalaceStore::open_read_only(mgr.unlock("test").unwrap(), Box::new(HashEmbedder));
+        std::env::remove_var("UNDERCROFT_FORCE_EMBEDDER");
+        let s = opened.expect("the override should still let a read-only open through");
+        let stored: String = s
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key='embedder_name'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored, "some-onnx-model",
+            "a read-only open recorded a new identity"
+        );
+    }
+
+    /// A read-only role serves reads across the upgrade; it does not rewrite
+    /// the vault it was told not to write to.
+    #[test]
+    fn a_read_only_open_does_not_migrate() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
+                .unwrap();
+            make_it_look_like_v1(&s);
+        }
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s = PalaceStore::open_read_only(mgr.unlock("test").unwrap(), Box::new(HashEmbedder))
+            .expect("a read-only open must still succeed");
+        let stored: String = s
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key='embedder_name'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored,
+            undercroft_core::embed::HASH_EMBEDDER_V1,
+            "a read-only open rewrote the vault"
+        );
+        // The lexical leg still works, which is the point of degrading
+        // rather than refusing.
+        let hits = s
+            .search("heron verbatim", &SearchOptions::default())
+            .unwrap();
+        assert!(!hits.is_empty());
+    }
+
+    /// The documented override has to dominate every identity path, including
+    /// the one that now does fallible work.
+    #[test]
+    fn force_embedder_still_overrides_a_known_upgrade() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
+                .unwrap();
+            make_it_look_like_v1(&s);
+        }
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("UNDERCROFT_FORCE_EMBEDDER", "1");
+        let s = reopen_vault(&dir).unwrap();
+        // Identity recorded, but no walk ran — the junk vector is still there.
+        let hits = s
+            .search("heron verbatim", &SearchOptions::default())
+            .unwrap();
+        let migrated = hits.first().map(|h| h.semantic > 0.5).unwrap_or(false);
+        std::env::remove_var("UNDERCROFT_FORCE_EMBEDDER");
+        assert!(!migrated, "the override should have skipped the migration");
+    }
+
+    /// The reachable half of morphology, and the boundary of it.
+    #[test]
+    fn a_word_family_is_matched_but_a_false_friend_is_not() {
+        for (a, b) in [
+            ("documentation", "document"),
+            ("documentation", "documented"),
+            ("documentation", "documents"),
+            ("encryption", "encrypt"),
+            ("konfiguration", "konfigurationen"),
+            ("ბიბლიოთეკა", "ბიბლიოთეკაში"),
+        ] {
+            assert!(same_word_family(a, b), "{a} / {b} should be a family");
+        }
+        // Rejected: the systematic English -tive/-tion class sits at a shared
+        // prefix of exactly 6, and is length-symmetric.
+        for (a, b) in [
+            ("positive", "position"),
+            ("relative", "relation"),
+            ("creative", "creation"),
+            ("transfer", "transform"),
+            ("personal", "personnel"),
+            ("сообщение", "сообщество"),
+            ("κατάσταση", "κατάστημα"),
+            ("представление", "представитель"),
+        ] {
+            assert!(!same_word_family(a, b), "{a} / {b} must not be a family");
+        }
+        // Out of reach, and honestly so: these share too little.
+        for (a, b) in [("книга", "книге"), ("running", "run"), ("πόλη", "πόλεων")]
+        {
+            assert!(!same_word_family(a, b), "{a} / {b}");
+        }
+        // A bigram token from a segmented script must never reach this rule.
+        assert!(!same_word_family("北京", "北京市"));
+    }
+
+    /// Compounding's other half: a suffix or interior relation, which no
+    /// prefix rule can see.
+    #[test]
+    fn a_contained_word_is_found_at_any_offset() {
+        for (a, b) in [
+            ("dampfschiff", "donaudampfschifffahrt"),
+            ("ausbildung", "bundesausbildungsfoerderungsgesetz"),
+            ("konfiguration", "systemkonfiguration"),
+        ] {
+            assert!(contains_a_long_word(a, b), "{a} in {b}");
+            assert!(contains_a_long_word(b, a), "and symmetrically");
+        }
+        // Below the eight-character floor: short stems are a different gap and
+        // this must not pretend to solve them.
+        assert!(!contains_a_long_word("run", "running"));
+        assert!(!contains_a_long_word("ability", "vulnerability"), "7 chars");
+        // The decisive safety property: none of gap (a)'s false friends.
+        for (a, b) in [
+            ("город", "горох"),
+            ("книга", "книге"),
+            ("positive", "position"),
+        ] {
+            assert!(!contains_a_long_word(a, b), "{a} / {b}");
+        }
+        // A bigram token from a segmented script must never reach this rule.
+        assert!(!contains_a_long_word("北京", "北京市"));
+    }
+
+    /// The accepted cost, pinned so it is a recorded decision rather than a
+    /// surprise in a bug report. All of it is approximate-channel only.
+    #[test]
+    fn containment_admits_these_false_pairs_and_we_accept_it() {
+        assert!(contains_a_long_word("counting", "accounting"));
+        assert!(contains_a_long_word("knowledge", "acknowledged"));
+        // Derivational prefixes: morphologically related, semantically
+        // opposite. Correct as evidence, wrong as a synonym — which is exactly
+        // what a capped, half-weighted approximate channel is for.
+        assert!(contains_a_long_word("compatible", "incompatible"));
+        assert!(contains_a_long_word("resolved", "unresolved"));
+    }
+
+    /// Containment is now *admitting* evidence, in its own channel.
+    ///
+    /// It stays out of `lexical_exact`, because the drawer did not say the
+    /// word — it said something built on it — and a caller asking "why did
+    /// this come back" is entitled to that distinction. But it clears the
+    /// gate, which it could not do while it sat in the approximate channel.
+    #[test]
+    fn containment_admits_in_its_own_channel() {
+        let cand = |content: &'static str| {
+            let s = segment(content);
+            let units = s.len as f32;
+            let (tokens, ngram): (Vec<String>, Vec<bool>) = s
+                .tokens
+                .into_iter()
+                .zip(s.ngram)
+                .filter(|(t, _)| t.len() > 1)
+                .unzip();
+            Candidate {
+                drawer: drawer("w", "r", content, 0),
+                semantic: 0.0,
+                recency: 0.0,
+                units,
+                tokens,
+                ngram,
+            }
+        };
+        let qterms = tokenize("dampfschifffahrt");
+        let cands = vec![
+            cand("die donaudampfschifffahrtsgesellschaft tagt heute"),
+            cand("ein bericht ueber ganz andere dinge"),
+        ];
+        let b = bm25_raw(&qterms, &cands);
+        assert_eq!(b.exact[0], 0.0, "the drawer did not say the word");
+        assert!(b.morph[0] > 0.0, "but it holds a word built on it");
+        assert!(b.raw[0] > 0.0, "and it ranks");
+        assert_eq!(b.morph[1], 0.0, "the unrelated drawer gets nothing");
+        // Discounted for ranking exactly like approximate evidence: an exact
+        // match on the same term must still outrank it.
+        let exact_cands = vec![cand("dampfschifffahrt ist das thema")];
+        let e = bm25_raw(&qterms, &exact_cands);
+        assert!(e.exact[0] > 0.0);
+    }
+
+    /// The failure D1 was decided to close. Measured, the cosine leg carries
+    /// `Dampfschiff`/`Donaudampfschifffahrt` at 0.82 on a bare pair and 0.51
+    /// past ~80 words, so before the morph channel a compound drawer at real
+    /// chunk length had neither exact lexical evidence nor a passing cosine
+    /// and was dropped rather than mis-ranked.
+    #[test]
+    fn a_compound_is_found_at_chunk_length() {
+        let filler = " das ist ein sehr langer text mit vielen weiteren woertern darin";
+        let content = format!(
+            "die Donaudampfschifffahrtsgesellschaft{}{}{}{}",
+            filler, filler, filler, filler
+        );
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", &content, 0)).unwrap();
+        s.upsert(&drawer("w", "r", "an unrelated note about the weather", 1))
+            .unwrap();
+        let hits = s
+            .search("dampfschifffahrt", &SearchOptions::default())
+            .unwrap();
+        assert!(!hits.is_empty(), "the compound drawer was dropped");
+        let h = &hits[0];
+        assert!(h.drawer.content.starts_with("die Donau"));
+        assert_eq!(h.lexical_exact, 0.0, "it never claimed to be exact");
+        assert!(
+            h.lexical_morph > 0.0,
+            "it was admitted on the morph channel"
+        );
+    }
+
+    /// The gate is a raw cosine of 0.12, and it only means anything because
+    /// feature hashing puts unrelated text at ~0. This is the acceptance test
+    /// for any future embedder: a model whose unrelated-pair floor exceeds it
+    /// makes the semantic disjunct vacuously true and retires the relevance
+    /// gate for every query in every language, by configuration alone.
+    #[test]
+    fn the_semantic_gate_is_calibrated_to_the_default_embedder() {
+        let e = HashEmbedder;
+        let ceiling = 2.0 * SEMANTIC_ADMISSION_GATE - 1.0;
+        let unrelated = [
+            ("the quarterly revenue report", "私は昨日公園へ行きました"),
+            ("kubernetes cluster autoscaling", "ذهبت إلى المستشفى أمس"),
+            (
+                "my cat sleeps on the windowsill",
+                "πήγα στην Αθήνα το καλοκαίρι",
+            ),
+            (
+                "database migration rollback",
+                "그는 어제 서울에서 회의에 참석했습니다",
+            ),
+        ];
+        for (a, b) in unrelated {
+            let c = undercroft_core::embed::cosine(&e.embed(a), &e.embed(b));
+            assert!(
+                c < ceiling,
+                "unrelated pair scored {c}, at or above the gate's {ceiling}"
+            );
+        }
+    }
+
+    /// A family match must never *admit* a drawer — only reorder one already
+    /// admitted. This is the containment the channel split exists to provide.
+    #[test]
+    fn a_family_match_is_approximate_evidence_only() {
+        let cand = |content: &'static str| {
+            let s = segment(content);
+            let units = s.len as f32;
+            let (tokens, ngram): (Vec<String>, Vec<bool>) = s
+                .tokens
+                .into_iter()
+                .zip(s.ngram)
+                .filter(|(t, _)| t.len() > 1)
+                .unzip();
+            Candidate {
+                drawer: drawer("w", "r", content, 0),
+                semantic: 0.0,
+                recency: 0.0,
+                units,
+                tokens,
+                ngram,
+            }
+        };
+        let qterms = tokenize("documentation");
+        let cands = vec![
+            cand("the document was filed"),
+            cand("read the documentation"),
+        ];
+        let b = bm25_raw(&qterms, &cands);
+        assert_eq!(b.exact[0], 0.0, "a family match is not exact evidence");
+        assert!(b.raw[0] > 0.0, "but it does contribute to ranking");
+        assert!(b.exact[1] > 0.0, "the literal term is exact evidence");
+        assert!(b.raw[1] > b.raw[0], "exact must outrank family");
+    }
+
+    /// End to end, through the real gate: a query typed the plain way must
+    /// find a drawer written the marked way, in each script the fold covers.
+    #[test]
+    fn a_folded_query_finds_the_unfolded_drawer() {
+        let cases = [
+            ("izmir", "the meeting in İzmir was short"),
+            ("strasse", "sie wohnt in der Hauptstraße"),
+            ("lodz", "a postcard from Łódź"),
+            ("2023", "التقرير عن سنة ٢٠٢٣"),
+            ("الكتاب", "قَرَأتُ الكِتَابَ أمس"),
+            ("kitab", "قرأت الكتاب أمس"),  // control: must NOT match
+            ("athina", "Πήγα στην Αθήνα"), // control: must NOT match
+        ];
+        for (query, content) in cases {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer("w", "r", content, 0)).unwrap();
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            let found = hits.iter().any(|h| h.drawer.content == content);
+            // The two controls are transliterations, not folds — the fold is a
+            // comparison key, never a romanizer, and nothing here should
+            // suggest otherwise.
+            let expect = !matches!(query, "kitab" | "athina");
+            assert_eq!(found, expect, "query {query:?} against {content:?}");
+        }
+    }
+
+    /// Greek within its own script, which the fold does cover.
+    #[test]
+    fn an_unaccented_greek_query_finds_its_drawer() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "Πήγα στην Αθήνα το καλοκαίρι", 0))
+            .unwrap();
+        let hits = s.search("ΑΘΗΝΑ", &SearchOptions::default()).unwrap();
+        assert!(!hits.is_empty(), "all-caps Greek found nothing");
+    }
+
+    /// The prefilter used to hold raw content under unicode61, which folds
+    /// Latin diacritics and nothing else. It returned a non-empty *wrong* set
+    /// for `izmir` and cut the right drawer out of the scan. The index is
+    /// folded now, so its token set is a superset of ours over the same text:
+    /// it can over-return, which the scan filters, but never under-return.
+    #[test]
+    fn the_folded_fts_index_finds_folded_queries() {
+        // Unchanged: a pure-Latin query still uses the prefilter.
+        assert!(!needs_full_scan(&["strasse".to_string()]));
+
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
+        let mut s = PalaceStore::open(vault).unwrap();
+        assert!(s.fts);
+        s.set_fts_prefilter_min(Some(1));
+        s.upsert(&drawer("w", "r", "das Büro in der Hauptstraße", 0))
+            .unwrap();
+        s.upsert(&drawer("w", "r", "the meeting in İzmir was short", 1))
+            .unwrap();
+        for i in 2..8 {
+            s.upsert(&drawer("w", "r", &format!("filler note {i}"), i))
+                .unwrap();
+        }
+        for (query, want) in [("strasse", "Hauptstraße"), ("izmir", "İzmir")] {
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            assert!(
+                hits.iter().any(|h| h.drawer.content.contains(want)),
+                "prefilter cut the drawer for {query:?}"
+            );
+        }
+    }
+
+    /// The defect this closes: a shared two-character substring was literal
+    /// equality, so it filled the EXACT slot and admitted. Measured on a real
+    /// 50k-word Arabic corpus, one content word admitted **74.3%** of a
+    /// 120-drawer vault — against 6.9% for Greek through the same code, a
+    /// 10.8x difference produced by one line in `script.rs`.
+    #[test]
+    fn an_arabic_bigram_alone_does_not_admit() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        // None of these is about a book. Each shares at most a bigram with the
+        // query, which is exactly the evidence that used to admit.
+        let unrelated = [
+            "ذهبت إلى المستشفى أمس",
+            "الطقس جميل اليوم في المدينة",
+            "اشتريت قطارا صغيرا لابني",
+            "كريم رجل كريم مع أصدقائه",
+            "مصرف كبير في وسط البلد",
+        ];
+        for (i, c) in unrelated.iter().enumerate() {
+            s.upsert(&drawer("w", "r", c, i as u32)).unwrap();
+        }
+        s.upsert(&drawer("w", "r", "قرأت الكتاب أمس في البيت", 99))
+            .unwrap();
+
+        let hits = s.search("الكتاب", &SearchOptions::default()).unwrap();
+        assert!(!hits.is_empty(), "the drawer that says it must come back");
+        assert!(hits[0].drawer.content.contains("الكتاب"));
+        // The whole point: the rest of the vault is no longer admitted on a
+        // shared fragment. Before this change every one of these cleared the
+        // gate in the exact channel.
+        assert!(
+            hits.len() <= 2,
+            "admitted {} of 6 drawers on one query: {:?}",
+            hits.len(),
+            hits.iter().map(|h| &h.drawer.content).collect::<Vec<_>>()
+        );
+    }
+
+    /// ...and the clitic cases it must not cost. These are carried by
+    /// whole-word containment, not by bigram equality.
+    #[test]
+    fn arabic_clitics_survive_the_tightening() {
+        for (query, content) in [
+            ("كتاب", "قرأت الكتاب أمس"),
+            ("مكتبة", "ذهبت إلى بالمكتبة صباحا"),
+            ("معلم", "حضر المعلمون الاجتماع"),
+        ] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer("w", "r", content, 0)).unwrap();
+            s.upsert(&drawer("w", "r", "الطقس جميل اليوم", 1)).unwrap();
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            assert!(
+                hits.iter().any(|h| h.drawer.content == content),
+                "{query} lost {content}"
+            );
+        }
+        // The relation is morphological, not exact — it says so.
+        assert!(shares_a_stem("كتاب", "الكتاب"));
+        assert!(!shares_a_stem("كتاب", "كت"), "a bigram is below the floor");
+        // A name and a common noun sharing one bigram is not a stem relation.
+        assert!(!shares_a_stem("كريم", "كرم"));
+        // Delimiting scripts are untouched by this rule.
+        assert!(!shares_a_stem("running", "run"));
+    }
+
+    /// Hebrew scored **0 of 8** — the only language in the audit to admit
+    /// nothing at all, at either drawer length — because it writes with spaces
+    /// and was therefore classed as delimiting, which handed it the
+    /// eight-character floor and excluded it from `shares_a_stem`. Its clitics
+    /// attach at the front with no delimiter, exactly like Arabic's.
+    #[test]
+    fn hebrew_clitics_reach_their_stem() {
+        for (query, content) in [
+            ("ספר", "קראתי את הספר אתמול בערב"),
+            ("ספר", "כתבתי בספר הזה הרבה"),
+            ("ספר", "קניתי ספרים חדשים בחנות"),
+            ("ילד", "הילדים שיחקו בגינה"),
+        ] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer("w", "r", content, 0)).unwrap();
+            s.upsert(&drawer("w", "r", "מזג האוויר היה נעים", 1))
+                .unwrap();
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            assert!(
+                hits.iter().any(|h| h.drawer.content == content),
+                "{query} lost {content}"
+            );
+        }
+        assert!(shares_a_stem("ספר", "הספר"), "the front clitic must carry");
+        // ...and the floor still rejects a fragment, exactly as for Arabic.
+        assert!(!shares_a_stem("ספר", "סו"));
+    }
+
+    /// Vocalised Hebrew must answer an unvocalised query — the same promise
+    /// the Arabic harakat strip already makes.
+    #[test]
+    fn hebrew_points_do_not_split_a_word() {
+        use undercroft_core::normalize::search_key;
+        assert_eq!(search_key("סֵפֶר"), search_key("ספר"));
+        assert_eq!(search_key("שָׁלוֹם"), search_key("שלום"));
+        // The maqaf is a hyphen and must keep splitting: stripping it would
+        // glue two words into one token.
+        assert_ne!(search_key("בית־ספר"), search_key("ביתספר"));
+    }
+
+    /// Greek endings substitute rather than append, so containment reaches
+    /// almost none of them. This is the pair class that was dropped — not
+    /// mis-ranked — before `greek_word_family` admitted.
+    #[test]
+    fn greek_inflection_admits_and_latin_is_untouched() {
+        for (query, content) in [
+            ("άνθρωπος", "Το δικαίωμα του ανθρώπου είναι θεμελιώδες"),
+            ("άνθρωπος", "Οι άνθρωποι περίμεναν στην ουρά"),
+            ("πληροφορία", "Ζήτησα πληροφορίες για το δρομολόγιο"),
+        ] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer("w", "r", content, 0)).unwrap();
+            s.upsert(&drawer("w", "r", "Ο καιρός ήταν ζεστός χθες", 1))
+                .unwrap();
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            assert!(
+                hits.iter().any(|h| h.drawer.content == content),
+                "{query} lost {content}"
+            );
+        }
+        assert!(greek_word_family("ανθρωπος", "ανθρωπου"));
+        // The frequency argument that killed Snowball Greek does not reach a
+        // pairwise rule: πολύ/πόλη share three characters, not seven.
+        assert!(!greek_word_family("πολυ", "πολη"));
+        assert!(!greek_word_family("κατασταση", "καταστημα"));
+        // The measured cost, pinned so it stays a known quantity.
+        assert!(
+            greek_word_family("παραδειγμα", "παραδεισος"),
+            "example/paradise is this rule's accepted false pair"
+        );
+        // Latin keeps the rule OFF the admitting channel — this is the whole
+        // reason the predicate is script-scoped.
+        assert!(same_word_family("conversation", "conversion"));
+        assert!(!greek_word_family("conversation", "conversion"));
+        assert!(!greek_word_family("internal", "international"));
+    }
+
+    // ---- TEMPORARY promiscuity measurement, delete after reading ----------
+    //
+    // How much of a REAL vocabulary does one query link to under each
+    // relation? That is the instrument that produced the 74.3% Arabic figure,
+    // so these numbers land on a comparable scale. It needs no relatedness
+    // labels: a relation that links a query to a large fraction of the
+    // lexicon is unsafe whether or not any individual pair is defensible.
+    //
+    // Corpus: hermitdave/FrequencyWords 2018 (OpenSubtitles-derived), MIT,
+    // 50,000 words with counts, top-N by frequency used as queries.
+
+    fn load_words(path: &str, script_ok: fn(char) -> bool) -> Vec<String> {
+        let raw = std::fs::read_to_string(path).expect("word list");
+        raw.lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .map(|w| undercroft_core::normalize::search_key(w).to_string())
+            .filter(|w| w.chars().count() >= 2 && w.chars().all(script_ok))
+            .collect()
+    }
+
+    fn arabic_char(c: char) -> bool {
+        matches!(c as u32, 0x0620..=0x064A | 0x0671..=0x06D3)
+    }
+    fn greek_char(c: char) -> bool {
+        matches!(c as u32, 0x0370..=0x03FF | 0x1F00..=0x1FFF)
+    }
+
+    fn skeleton_of(s: &str) -> String {
+        s.chars()
+            .filter(|c| !matches!(*c as u32, 0x0627 | 0x0648 | 0x064A))
+            .collect()
+    }
+
+    /// Report the distribution of "how many vocabulary words does this query
+    /// link to", over the top `qn` queries against the whole vocabulary.
+    fn report(label: &str, queries: &[String], vocab: &[String], rel: impl Fn(&str, &str) -> bool) {
+        let mut counts: Vec<usize> = queries
+            .iter()
+            .map(|q| {
+                vocab
+                    .iter()
+                    .filter(|w| w.as_str() != q && rel(q, w))
+                    .count()
+            })
+            .collect();
+        counts.sort_unstable();
+        let n = counts.len().max(1);
+        let total: usize = counts.iter().sum();
+        let mean = total as f64 / n as f64;
+        let median = counts[n / 2];
+        let p95 = counts[(n * 95 / 100).min(n - 1)];
+        let max = *counts.last().unwrap_or(&0);
+        let zero = counts.iter().filter(|c| **c == 0).count();
+        println!(
+            "  {label:<34} mean {mean:>8.2}  median {median:>5}  p95 {p95:>6}  max {max:>6}  \
+             links-nothing {:>4.1}%  of-vocab {:>6.3}%",
+            100.0 * zero as f64 / n as f64,
+            100.0 * mean / vocab.len() as f64
+        );
+    }
+
+    fn latin_char(c: char) -> bool {
+        c.is_alphabetic() && (c as u32) < 0x0250
+    }
+    fn cyrillic_char(c: char) -> bool {
+        matches!(c as u32, 0x0400..=0x04FF)
+    }
+    fn hebrew_char(c: char) -> bool {
+        matches!(c as u32, 0x05D0..=0x05EA)
+    }
+
+    /// Hebrew matres lectionis. `ה` is deliberately NOT stripped: it is the
+    /// definite article and a frequent real consonant, so removing it would
+    /// merge the clitic with the stem it attaches to.
+    fn he_skeleton(s: &str) -> String {
+        s.chars()
+            .filter(|c| !matches!(*c as u32, 0x05D0 | 0x05D5 | 0x05D9))
+            .collect()
+    }
+
+    fn floors(label: &str, qs: &[String], v: &[String], fl: &[usize]) {
+        for &f in fl {
+            report(&format!("{label} floor {f}"), qs, v, move |q, w| {
+                let (qn, tn) = (q.chars().count(), w.chars().count());
+                qn.min(tn) >= f
+                    && if qn <= tn {
+                        w.contains(q)
+                    } else {
+                        q.contains(w)
+                    }
+            });
+        }
+    }
+
+    #[test]
+    #[ignore = "measurement, needs testdata/*_50k.txt"]
+    fn measure_relation_promiscuity() {
+        const QN: usize = 500;
+        let load = |f: &str, ok: fn(char) -> bool| {
+            let v = load_words(&format!("testdata/{f}_50k.txt"), ok);
+            let q: Vec<String> = v.iter().take(QN).cloned().collect();
+            (v, q)
+        };
+        let (ar, arq) = load("ar", arabic_char);
+        let (el, elq) = load("el", greek_char);
+        let (he, heq) = load("he", hebrew_char);
+        let (en, enq) = load("en", latin_char);
+        let (de, deq) = load("de", latin_char);
+        let (tr, trq) = load("tr", latin_char);
+        let (ru, ruq) = load("ru", cyrillic_char);
+
+        println!(
+            "
+=== ARABIC (vocab {}) ===",
+            ar.len()
+        );
+        report("SHIPPED shares_a_stem >=3", &arq, &ar, |q, w| {
+            shares_a_stem(q, w)
+        });
+        report("skeleton equality >=3", &arq, &ar, |q, w| {
+            let (a, b) = (skeleton_of(q), skeleton_of(w));
+            a.chars().count() >= 3 && a == b
+        });
+        report("skeleton SUBSEQ >=3", &arq, &ar, |q, w| {
+            let (a, b) = (skeleton_of(q), skeleton_of(w));
+            if a.chars().count() < 3 {
+                return false;
+            }
+            let mut it = b.chars();
+            a.chars().all(|c| it.any(|x| x == c))
+        });
+
+        println!(
+            "
+=== HEBREW (vocab {}) ===",
+            he.len()
+        );
+        report("SHIPPED shares_a_stem >=3", &heq, &he, |q, w| {
+            shares_a_stem(q, w)
+        });
+        report("he-skeleton equality >=3", &heq, &he, |q, w| {
+            let (a, b) = (he_skeleton(q), he_skeleton(w));
+            a.chars().count() >= 3 && a == b
+        });
+
+        println!(
+            "
+=== GREEK (vocab {}) ===",
+            el.len()
+        );
+        report("SHIPPED greek_word_family", &elq, &el, |q, w| {
+            greek_word_family(q, w)
+        });
+        floors("contains", &elq, &el, &[3, 4, 5, 6, 8]);
+
+        println!(
+            "
+=== ENGLISH (vocab {}) ===",
+            en.len()
+        );
+        floors("contains", &enq, &en, &[3, 4, 5, 6, 8]);
+        report("same_word_family >=7", &enq, &en, |q, w| {
+            same_word_family(q, w)
+        });
+
+        println!(
+            "
+=== GERMAN (vocab {}) ===",
+            de.len()
+        );
+        floors("contains", &deq, &de, &[3, 4, 5, 6, 8]);
+
+        println!(
+            "
+=== TURKISH (vocab {}) ===",
+            tr.len()
+        );
+        floors("contains", &trq, &tr, &[3, 4, 5, 6, 8]);
+
+        println!(
+            "
+=== RUSSIAN (vocab {}) ===",
+            ru.len()
+        );
+        floors("contains", &ruq, &ru, &[3, 4, 5, 6, 8]);
+        report("same_word_family >=7", &ruq, &ru, |q, w| {
+            same_word_family(q, w)
+        });
+    }
+
+    /// Regression: a two-character word in a non-delimiting script.
+    ///
+    /// At exactly two characters the bigram IS the word, and flagging it as an
+    /// n-gram denied it the exact slot while the whole-subrun push was guarded
+    /// on `> 2` — so nothing unflagged was emitted at all. Hebrew fell into
+    /// this when it left the delimiting class.
+    ///
+    /// Pinned at REALISTIC drawer length on purpose. On a one-sentence drawer
+    /// every one of these was admitted by the semantic gate at 0.56-0.58, i.e.
+    /// a hair over `SEMANTIC_ADMISSION_GATE`, so a short-drawer test reports
+    /// "found" while the lexical channels are empty and passes with the fix
+    /// reverted.
+    #[test]
+    fn a_two_character_word_is_a_word_not_a_fragment() {
+        const PAD: &str = " מזג האוויר אתמול היה חם ושמשי מאוד קניתי ירקות טריים \
+             בשוק המרכזי הרכבת איחרה בשעתיים בגלל תקלה אכלנו במסעדה קרובה עם \
+             חברים טובים הים היה שקט והשמש שקעה מוקדם";
+        for (query, content) in [
+            ("גן", "יש גן גדול ליד הבית שלנו"),
+            ("בן", "הוא בן טוב מאוד למשפחה שלו"),
+            ("יד", "הוא הרים את יד ימין באוויר"),
+            ("עץ", "יש עץ גבוה מאוד בחצר האחורית"),
+        ] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            let target = format!("{content}{PAD}");
+            s.upsert(&drawer("w", "r", &target, 0)).unwrap();
+            for (i, f) in ["מזג האוויר נעים", "הרכבת איחרה", "אכלנו במסעדה"]
+                .iter()
+                .enumerate()
+            {
+                s.upsert(&drawer("w", "r", &format!("{f}{PAD}"), i as u32 + 1))
+                    .unwrap();
+            }
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            let hit = hits
+                .iter()
+                .find(|h| h.drawer.content.starts_with(content))
+                .unwrap_or_else(|| panic!("{query} lost its drawer at realistic length"));
+            assert!(
+                hit.lexical_exact > 0.0,
+                "{query}: admitted on {:?}, not the exact channel — the cosine \
+                 gate is carrying it and the fix is not working",
+                hit.semantic
+            );
+        }
+        // A two-character run INSIDE a longer word stays a fragment.
+        let seg = undercroft_core::script::segment(&undercroft_core::normalize::search_key("הגן"));
+        let whole = seg.tokens.iter().position(|t| t == "הגן").unwrap();
+        assert!(!seg.ngram[whole], "the whole word is not an n-gram");
+        for (i, t) in seg.tokens.iter().enumerate() {
+            if t.chars().count() == 2 {
+                assert!(
+                    seg.ngram[i],
+                    "{t} is a fragment of הגן and must stay flagged"
+                );
+            }
+        }
+    }
+
+    /// Regression: the morph channel must never relate one number to another.
+    /// `fuzzy_eq` has always refused this, but it ranks; this one admits.
+    #[test]
+    fn a_number_is_never_a_morphological_relative() {
+        for (query, content) in [
+            ("45678", "invoice 456789 was paid last week"),
+            ("100000", "the total came to 1000000 exactly"),
+            ("2023", "in 20231 the record was filed"),
+        ] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer("w", "r", content, 0)).unwrap();
+            s.upsert(&drawer("w", "r", "the weather was warm today", 1))
+                .unwrap();
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            // The morph channel must be empty. The drawer may still surface on
+            // the semantic gate, which this fix does not touch — asserting on
+            // absence would test the cosine, not the guard.
+            if let Some(h) = hits.iter().find(|h| h.drawer.content == content) {
+                assert_eq!(
+                    h.lexical_morph, 0.0,
+                    "{query} claimed a morphological relation to {content:?} —                      a digit edit is not morphology"
+                );
+                assert_eq!(h.lexical_exact, 0.0, "{query} claimed exact evidence");
+            }
+        }
+        assert!(!morph_relation("45678", "456789"));
+        assert!(
+            morph_relation("document", "documentation"),
+            "words still relate"
+        );
+    }
+
+    /// Regression: the delimiting floor is 8, and these are the pairs that
+    /// justify it. Lowering it to 5 promoted every one of them from ranking
+    /// into admission — a precision loss bought with a recall-only measurement.
+    #[test]
+    fn the_delimiting_floor_still_refuses_its_named_false_pairs() {
+        for (query, content) in [
+            ("other", "my mother called me yesterday"),
+            ("count", "the accounting team reviewed it"),
+            ("press", "he suffers from depression sometimes"),
+            ("stand", "I cannot understand this at all"),
+            ("cover", "the discovery changed everything"),
+            ("article", "every particle was measured"),
+        ] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            s.upsert(&drawer("w", "r", content, 0)).unwrap();
+            s.upsert(&drawer("w", "r", "the train arrived late", 1))
+                .unwrap();
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            if let Some(h) = hits.iter().find(|h| h.drawer.content == content) {
+                assert_eq!(
+                    h.lexical_morph, 0.0,
+                    "{query} claimed a morphological relation to {content:?}"
+                );
+            }
+        }
+        // The relation the floor exists to keep: eight characters, genuine.
+        assert!(morph_relation("document", "documentation"));
+        assert!(!morph_relation("other", "mother"));
+    }
+
+    /// A single ideograph is one insertion from every bigram containing it.
+    #[test]
+    fn a_one_character_query_is_not_a_wildcard() {
+        // And a number is never a typo: after the digit fold `١٠٠٠٠٠` is
+        // ASCII and would otherwise clear the byte gate and match `200000`.
+        assert!(!fuzzy_eq("100000", "200000"));
+        assert!(!fuzzy_eq("100000", "100001"));
+        assert!(
+            fuzzy_eq("kubernetes", "kubernets"),
+            "words still forgive one"
+        );
+    }
+
+    #[test]
+    fn a_one_character_cjk_query_is_not_a_wildcard() {
+        assert!(!fuzzy_eq("北", "东北"));
+        assert!(!fuzzy_eq("北", "北虎"));
+        // Two-character terms keep the particle/suffix tolerance.
+        assert!(fuzzy_eq("한국어", "한국어는"));
+        assert!(fuzzy_eq("北京", "北京市"));
+    }
+
+    /// A real model swap is a decision, not something to do behind the
+    /// user's back — hours of inference and a different vector space.
+    #[test]
+    fn an_unknown_embedder_swap_still_refuses() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            s.upsert(&drawer("w", "r", "a note", 0)).unwrap();
+            s.conn
+                .execute(
+                    "UPDATE meta SET value = 'some-onnx-model' WHERE key = 'embedder_name'",
+                    [],
+                )
+                .unwrap();
+        }
+        match reopen_vault(&dir) {
+            Err(StoreError::EmbedderMismatch { .. }) => {}
+            Err(e) => panic!("wrong error: {e:?}"),
+            Ok(_) => panic!("a model swap must never happen behind the user's back"),
+        }
+    }
+
+    /// PQ codes quantize the old vector space. A stale codebook does not
+    /// fail loudly — it returns the wrong candidates.
+    #[test]
+    fn migration_discards_the_quantized_index() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            s.upsert(&drawer("w", "r", "the heron files drawers", 0))
+                .unwrap();
+            s.pq_schema().unwrap();
+            s.conn
+                .execute(
+                    "INSERT INTO pq_meta (key, value) VALUES ('codebook', x'00')",
+                    [],
+                )
+                .unwrap();
+            make_it_look_like_v1(&s);
+        }
+        let s = reopen_vault(&dir).unwrap();
+        let stale: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'pq_meta'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0, "the old codebook outlived the vectors it encoded");
+    }
+
+    /// The migration runs inside `open`, so its cost is a user-visible pause.
+    /// Not part of the normal suite — run explicitly:
+    /// `cargo test --release -p undercroft-store -- --ignored migration_at_scale --nocapture`
+    #[test]
+    #[ignore]
+    fn migration_at_scale() {
+        const N: usize = 20_000;
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            let batch: Vec<Drawer> = (0..N)
+                .map(|i| {
+                    drawer(
+                        "w",
+                        "r",
+                        &format!(
+                            "drawer {i}: the heron files verbatim drawers into wings and rooms, \
+                             and this sentence exists to give the embedder realistic work to do"
+                        ),
+                        i as u32,
+                    )
+                })
+                .collect();
+            s.upsert_many(&batch).unwrap();
+            make_it_look_like_v1(&s);
+        }
+        let t0 = std::time::Instant::now();
+        let s = reopen_vault(&dir).unwrap();
+        let elapsed = t0.elapsed();
+        eprintln!(
+            "migrated {N} drawers in {:?} ({:.1} µs/drawer)",
+            elapsed,
+            elapsed.as_secs_f64() * 1e6 / N as f64
+        );
+        let hits = s
+            .search("heron verbatim", &SearchOptions::default())
+            .unwrap();
+        assert!(!hits.is_empty());
+    }
+
+    /// A document containing the query term verbatim must be scored as
+    /// containing it, not as containing a term it merely resembles.
+    #[test]
+    fn an_exact_match_outranks_a_fuzzy_one_for_the_same_token() {
+        // The discriminating case is a drawer holding BOTH surface forms.
+        // Old behaviour: the exact token `kubernets` is claimed by query term
+        // 0, and `kubernetes` is *also* claimed by term 0 (one edit away),
+        // giving tf = [2, 0] — one term, saturated by k1. New behaviour: each
+        // token fills its own exact slot, tf = [1, 1] — two terms, neither
+        // saturated, which scores strictly higher. Anything that ranks on a
+        // cosine tie instead would pass with the fix reverted.
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "kubernets kubernetes both forms here", 0))
+            .unwrap();
+        s.upsert(&drawer("w", "r", "kubernets kubernets twice the typo", 1))
+            .unwrap();
+        s.set_fusion(Fusion::Bm25);
+        let hits = s
+            .search("kubernets kubernetes", &SearchOptions::default())
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(
+            hits[0].drawer.content.contains("both forms"),
+            "got {:?}",
+            hits[0].drawer.content
+        );
+        // And directly, on the channels: a drawer holding both surface forms
+        // fills two exact slots, and the blended channel can only ever be at
+        // least the exact one.
+        let cand = |content: &'static str| {
+            let s = segment(content);
+            let units = s.len as f32;
+            let (tokens, ngram): (Vec<String>, Vec<bool>) = s
+                .tokens
+                .into_iter()
+                .zip(s.ngram)
+                .filter(|(t, _)| t.len() > 1)
+                .unzip();
+            Candidate {
+                drawer: drawer("w", "r", content, 0),
+                semantic: 0.0,
+                recency: 0.0,
+                units,
+                tokens,
+                ngram,
+            }
+        };
+        let qterms = tokenize("kubernets kubernetes");
+        let cands = vec![
+            cand("kubernets kubernetes both forms here"),
+            cand("kubernets kubernets twice the typo"),
+        ];
+        let b = bm25_raw(&qterms, &cands);
+        assert!(b.exact[0] > 0.0, "both forms are literally present");
+        assert!(b.raw[0] >= b.exact[0], "blended is never below exact");
+        assert!(
+            b.raw[0] > b.raw[1],
+            "two exact terms must outscore one term seen twice: {:?} vs {:?}",
+            b.raw[0],
+            b.raw[1]
+        );
+    }
+
+    /// The whole point of the split: approximate evidence alone must not
+    /// admit a drawer, only reorder ones already admitted.
+    #[test]
+    fn approximate_evidence_alone_does_not_admit_a_drawer() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        // `kubernets` is one edit from `kubernetes`, so the drawer is
+        // approximate evidence and nothing more.
+        s.upsert(&drawer("w", "r", "the kubernets cluster note", 0))
+            .unwrap();
+        s.set_fusion(Fusion::Bm25);
+        let hits = s.search("kubernetes", &SearchOptions::default()).unwrap();
+        for h in &hits {
+            assert!(
+                h.lexical_exact > 0.0 || h.semantic > SEMANTIC_ADMISSION_GATE,
+                "admitted on approximate evidence alone: exact={} sem={}",
+                h.lexical_exact,
+                h.semantic
+            );
+        }
+        // And when it *is* admitted (the hash embedder shares trigrams here),
+        // the approximate channel still shows up in ranking.
+        if let Some(h) = hits.first() {
+            assert!(h.lexical >= h.lexical_exact);
+        }
     }
 
     #[test]

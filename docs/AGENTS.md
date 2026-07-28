@@ -28,10 +28,28 @@ HKDF-derived keys). When you build on it:
    is opt-in at build time and metadata-only.
 3. **Sealed vaults keep nothing plaintext-derived on disk.** Do not write
    sidecar files, caches, or logs containing drawer content next to a
-   sealed vault.
-4. **Drawer ids are deterministic** over (wing, room, source, chunk_index).
-   Re-ingesting the same source is idempotent — rely on that instead of
-   inventing your own dedup on top.
+   sealed vault. **Know precisely what this does and does not cover.**
+   Content, embeddings, PQ codes, ColBERT matrices and grounding spans are
+   sealed. Drawer *metadata* is not: an attacker holding the database file
+   reads the wing and room names — which in practice are topics, people or
+   case identifiers — the `source_file` path, `added_by`, the hall label,
+   `content_date`, and the dates resolved out of the content. They read no
+   word of the content itself. If a wing name, a room name or a file path
+   would be sensitive in your deployment, **do not put the secret in the
+   name** — treat those as public labels until this is closed. The exposure
+   is pinned by a test so it cannot widen unnoticed.
+4. **Drawer ids are deterministic** over (wing, room, source, chunk_index),
+   but what that buys you depends on the path. Ingest *from a source* —
+   `mine`, `sweep`, `import` — is idempotent: the source path and the chunk's
+   position within it are the id, so processing the same file twice updates
+   in place. Rely on that instead of inventing your own dedup on top.
+   **A save through an API is not.** `POST /v1/drawers`, `undercroft_save`
+   and `undercroft_add_drawer` have no source to be a chunk of, so
+   `chunk_index` carries a unique append index instead and every call
+   creates a new drawer — posting identical text twice gives you two.
+   That is deliberate: the same words on a different day are a different
+   event. To collapse repeats, pass `dedup_threshold` on save or run
+   `undercroft_dedup`; both keep every date the text appeared on.
 5. **Integrity is enforced, not assumed.** Every read verifies an HMAC;
    every write advances a tamper-evident audit chain in the same
    transaction. If `verify` fails, treat it as an incident (see the
@@ -172,7 +190,10 @@ Two options worth knowing:
   save and search — your product's embedding model, undercroft's sealing
   and integrity. Dimension is enforced exactly.
 - **Dedup-refresh**: pass `"dedup_threshold":0.9` on save to refresh a
-  near-duplicate in place (audited update) instead of piling up copies.
+  near-duplicate in place (audited update) instead of piling up copies. The
+  refreshed drawer takes the incoming text and date, and keeps the one it
+  displaced in `occurrences`, so collapsing a repeat never erases the day it
+  first appeared. Search hits carry the full chronology.
 
 Export lines carry vectors and ColBERT token artifacts, so
 export→import is a **lossless migration primitive** — restore is a copy,
@@ -227,9 +248,77 @@ per vault on first write, and a model swap is refused unless you set
 
 | Value | What | When |
 |---|---|---|
-| `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo R@10 92.7% with hybrid search |
+| `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo R@10 92.7% with hybrid search. **Single-language only** — see below |
 | `onnx` | user-supplied MiniLM-class ONNX via tract (pure Rust); needs `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`, build `--features onnx` | best recall, pure-Rust constraint |
 | `ort` | same models via ONNX Runtime (C++ dep, build `--features ort`); ~2.5× faster/forward, int8 support, ~4–5× faster ingest | throughput matters; same env vars, switching is one env change |
+
+**Cross-lingual retrieval needs a multilingual embedder — the default
+cannot do it, and will not tell you so.** `hash` is feature hashing over
+surface forms: word unigrams, word bigrams and character trigrams, each
+SHA-256'd into a bucket. Two texts score close only when they share literal
+tokens or trigrams. An English query and an Arabic note share none, so the
+score is noise — measured, a translation pair scored *lower* than an
+unrelated sentence. The same limit applies within one language: `car` and
+`automobile` do not match either. The trigrams buy morphology
+(`run`/`running`), not meaning.
+
+So a vault holding several languages, or queried in a language other than
+the one it was written in, needs `onnx`/`ort` with a **multilingual** model
+(LaBSE, multilingual-e5, nomic-embed-text-v2-moe) — or an external vault,
+where you supply vectors yourself and the engine never embeds. Either way
+the vectors are sealed at rest exactly like the default ones, so this costs
+nothing in confidentiality.
+
+Note the two axes are independent. **Retrieval** across languages is the
+embedder's job. **Reading dates inside the text** is the scanner's, selected
+per request with `language` (`en`, `ar`), and it works regardless of which
+embedder found the drawer.
+
+### Reading conventions are declared, not detected
+
+Four read-time fields decide how a drawer's dates are read. All are per request,
+all default to prior behaviour, and because mentions are re-read live an
+already-ingested corpus answers correctly the moment you declare its conventions
+— no re-ingest, no re-embed.
+
+| field | values | default | what it decides |
+|---|---|---|---|
+| `language` | `en`, `ar` | `en` | which scanner reads the words. Arabic is a grammar, not a word list: the past marker precedes the count (`قبل ثلاثة أيام`), the dual is one word (`يومين`), period modifiers follow their noun |
+| `week_start` | `monday`, `sunday`, `saturday` | `monday` (`saturday` for `ar`) | which day begins a week — moves "last week" and every week count |
+| `date_order` | `day_first`, `month_first` | see below | which field a bare numeric date puts first |
+| `calendar` | `gregorian`, `buddhist`, `minguo`, `hijri`, `jalali` | `gregorian` | which calendar counted the year |
+
+**`date_order`** — `07/05/2023` is 7 May or 5 July and the token does not say.
+Four signals are consulted, strongest first:
+
+1. what you declared on the request;
+2. what the text demonstrates about itself — `13/05` can only be day-first, so
+   an unambiguous date anywhere in the same drawer states the writer's
+   convention by example. This is evidence, not inference, and it overrides the
+   default without any configuration;
+3. what the language implies — CLDR gives `ar` as `d/M/y` in every Arabic
+   territory, so Arabic declares day-first. English splits US/Commonwealth and
+   implies nothing, which is why it does not;
+4. failing all three, **day-first** — the majority convention worldwide.
+
+The cost of that last step is explicit: a US corpus that never declares
+`month_first` reads `07/05` as 7 May. Declare it once and the whole corpus reads
+correctly, retroactively.
+
+**`calendar`** — nothing is inferred here, ever. Script is not evidence (Thai
+script writes Gregorian dates constantly) and neither is the numeral system
+(`๒๐๒๖` is an ordinary Gregorian 2026 typed in Thai digits). An undeclared
+corpus reads years as written, so a Thai date reads 543 years high until you say
+`buddhist` — visible and correctable, where a silently dropped date is neither.
+Buddhist and Minguo are renumbered Gregorian years and convert by arithmetic;
+Hijri (**Umm al-Qura**, the Saudi civil calendar) and Jalali are different
+calendars — lunar drift, an equinox-anchored new year, different month lengths —
+so they convert as whole dates.
+
+Not yet read: **era markers written in the text** (`พ.ศ.`, `ค.ศ.`, `هـ`, `م`,
+令和, 民國). Those would outrank a declared calendar, being the writer's statement
+about one date rather than yours about a corpus, and they are blocked on a
+tokenizer change — attached forms like `1447هـ` arrive as a single mixed token.
 
 **Second stage** (`UNDERCROFT_RERANKER`): `onnx`/`ort` = cross-encoder
 re-scoring of the top `UNDERCROFT_RERANK_TOP_N` (default 50) — measured
@@ -292,7 +381,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | Tool | W | Does |
 |---|---|---|
 | `undercroft_save` | W | save one memory verbatim |
-| `undercroft_search` | | hybrid semantic+lexical search |
+| `undercroft_search` | | hybrid semantic+lexical search. Pass `language: "ar"` to read the stored text as Arabic (Saturday-first weeks by default). Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, and the further days the same text was recorded on |
 | `undercroft_wake_up` | | recent essential memories for session start |
 | `undercroft_verify` | | verify HMACs + audit chain |
 | `undercroft_status` | | palace statistics |
@@ -312,7 +401,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_kg_query` / `_kg_timeline` / `_kg_stats` | | query facts (incl. `--as-of`) |
 | `undercroft_diary_write` | W | per-agent diary entry |
 | `undercroft_diary_read` / `_list_agents` | | read diaries |
-| `undercroft_dedup` | W | report/remove exact duplicates |
+| `undercroft_dedup` | W | report/remove exact duplicates. Collapses the *text* only — the days each copy was recorded on are folded onto the survivor's `occurrences` before its row goes, and the report's `dates_kept` counts them. The same words on two different days are two things that happened |
 
 ## 9. Reference — HTTP surface
 
@@ -329,7 +418,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes |
 | POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `vector`, `dedup_threshold`) |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
-| GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim |
+| GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`) |
 | POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
@@ -348,7 +437,7 @@ distilled before grounding existed). `?grounding=` narrows to one of those and
 is **opt-in only** — the default returns all three, because filtering out
 background facts breaks exactly the multi-hop questions the graph is for.
 | POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text` |
-| POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened |
+| POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON (vectors + token artifacts) |

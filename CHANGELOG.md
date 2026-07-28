@@ -1,6 +1,395 @@
 # Changelog
 
-## Unreleased — temporal fidelity: keep the data we were dropping
+## Unreleased — the comparison layer, and dates that are declared rather than guessed
+
+- **A date's calendar and field order are DECLARED, never inferred.** `Locale`
+  gains `calendar` and `date_order` beside `language` and `week_start`, all
+  read-time, so an already-ingested corpus answers correctly the moment a caller
+  declares its conventions — no migration, no re-embed, no FTS rebuild.
+  Calendars: Gregorian, Buddhist (`-543`), Minguo (`+1911`), Hijri
+  (**Umm al-Qura**, the Saudi civil calendar) and Jalali. The last two are not
+  renumbered Gregorian years — lunar drift is ~11 days a year and Jalali turns
+  at the vernal equinox with different month lengths — so conversion is
+  whole-date and delegated to `calendrical_calculations` (Apache-2.0, three
+  transitive deps, pure algorithm with no data files, Unicode Consortium /
+  ICU4X). Tabular Hijri was the easy implementation and is wrong by a day or two
+  against what documents actually carry.
+  - **Two guesses removed.** `iso_token` subtracted 543 from any year written in
+    Thai numerals, so `๒๐๒๖-๐๕-๐๗` — an ordinary Gregorian 2026 — resolved to
+    **1483**, in a function whose docstring said "exact rather than heuristic".
+    A numeral system is not a calendar. The next attempt guarded on range and
+    made `2566-05-13` vanish instead, losing the dates in a novel, an astronomy
+    note or a century-scale plan. `GREGORIAN_MAX = 2199` is retired: it existed
+    only to stop Buddhist 2566 reading as Gregorian 2566, and once a calendar
+    could be declared it began causing the harm it was built to prevent.
+  - **Field order takes four signals, strongest first:** declared on `Locale`;
+    demonstrated by the text (`13/05` can only be day-first, so an unambiguous
+    date states the writer's convention by example — evidence, not inference);
+    implied by the language (CLDR gives `ar` as `d/M/y` in every Arabic
+    territory, while English splits US/Commonwealth and implies nothing); and
+    failing all three, day-first, the majority convention worldwide. This
+    reverses a considered position — the module recorded `05/07/2023` unresolved
+    because "picking one would be a coin flip reported as a fact" — on the
+    grounds that a memory returning no date is unusable. Cost, pinned by test: a
+    US corpus that never declares `MonthFirst` reads `07/05` as 7 May.
+- **Ordinary Arabic prose stopped inventing dates.** `AR_AGO` contained `من`,
+  among the commonest words in the language, and the branch required no
+  confirming evidence — so `الخامس من الشهر` ("the fifth OF THE MONTH") resolved
+  to a month before the anchor and `أكثر من ثلاثة أيام` ("more THAN three days")
+  to three days ago. `ar_ago_is_temporal` now needs clause-initial position, a
+  count reaching a unit, and no range marker closing it: an allowlist, because a
+  blocklist of quantifiers fabricates on the first one nobody enumerated while an
+  allowlist fails by going quiet. Stated cost: a mid-sentence
+  `كان الاجتماع من ثلاثة أيام` is no longer read. Also `قبل الشهر الماضي` is
+  "before LAST month" — `قبل` yields the noun to a following period modifier
+  instead of resolving one unit back and stranding `الماضي`.
+- **Numeric dates read in any digit system** — Arabic-Indic, Persian,
+  Devanagari, Bengali, Thai, fullwidth. `٢٠٢٣-٠٥-٠٧` was unread *even under*
+  `Language::Arabic`, because the parsers used `str::parse`, which is ASCII-only:
+  the numeric channel was closed to exactly the languages whose word-forms the
+  module also cannot read. And a month NAME joined by hyphens now reads —
+  `2023-May-07`, `٠٧-أيار-٢٠٢٣` — where both languages previously yielded
+  **nothing**, because `-` is a token character so the whole date arrived as one
+  token the digit readers declined and the month-name arms never saw.
+- **Six readers now agree about the same date.** `iso_token`, `dmy_token`,
+  `named_date_token`, both English month-name arms and the Arabic one gated years
+  at two different bounds, so `iso_token("2566-05-13")` refused while
+  `May 13, 2566` one screen away resolved. Pinned as an invariant rather than a
+  constant, since the constant has since been right, wrong and removed while the
+  invariant never changed.
+- **Hebrew was the only language in a 15-language audit to admit nothing at
+  all** — 0 of 8 pairs, at every drawer length, on every channel. It writes with
+  spaces, so `Script::Other` treated it as delimiting, which handed it an
+  8-character floor for 3-character stems *and* excluded it from `shares_a_stem`.
+  Its clitics attach with no delimiter, exactly as Arabic's do. Now
+  `Script::Hebrew`, non-delimiting, with the points (niqqud) folded for the same
+  reason the Arabic harakat already are — `maqaf`, `paseq` and `sof pasuq` are
+  deliberately excluded, being delimiters.
+- **One morphological rule table, dispatched per script.** The engine had a
+  single relation — substring containment — with one global constant, and across
+  15 languages and 189 real paradigm pairs it dropped **51.5%** of morphological
+  relations at realistic drawer length. Three different shapes, one constant:
+  Arabic's root is a *subsequence* (`كتب` inside `كتاب`), Greek's ending
+  *substitutes* so the stem is a shared *prefix*, and Turkish is purely additive
+  yet scored 16.7% because its stems are shorter than the floor. Arabic and
+  Hebrew are one family and take one tool — a consonantal skeleton, equality at a
+  ≥3-radical floor, measured **7× tighter** than the containment rule already
+  shipped. Greek gets a script-scoped shared-prefix rule; Latin does not, because
+  its documented cost (`conversation`/`conversion`) is Latin and the nine
+  beneficiaries are Greek.
+  - **A recall-only measurement is not a precision justification.** The
+    delimiting floor was lowered 8→5 on a promiscuity figure (3.03 mean links for
+    English) that counts *how many* words a rule reaches and cannot see whether
+    any of them is correct. Measured against the engine afterwards it admitted
+    `other`/`mother`, `count`/`accounting`, `press`/`depression`,
+    `stand`/`understand`. Reverted; Turkish, Hindi, Spanish and English return to
+    their prior numbers, and reaching them needs a per-LANGUAGE floor, since
+    Turkish and English share a script and disagree about the right value.
+- **A shared fragment is not evidence — Arabic was admitting the whole vault.**
+  Measured against the shipped code on a real 50k-word Arabic frequency corpus
+  with control drawers: **one Arabic content word admitted 74.3% of a
+  120-drawer vault.** The same code, same drawer length, on Greek: 6.9%. A
+  10.8x difference produced by one line in `script.rs`. Arabic is
+  non-delimiting, so `segment` emits character bigrams for the *query* as well
+  as the document, bigram met bigram by literal equality, and literal equality
+  fills the exact slot — so a shared two-character substring in an unvocalised
+  abjad was read as "the drawer said your word". It is the failure
+  `is_logographic` documents for unigrams, one n-gram order lower, in a script
+  the module claims to serve. The grades were indistinguishable, which is the
+  proof: `كتاب`/`كتب` (book/books) shares one bigram and ranked 13, while
+  `كريم`/`كرم` (a name / generosity) ranked **1** and `مصر`/`مصرف`
+  (Egypt / bank) ranked **2**. `Segmented` now flags n-grams from
+  non-delimiting, non-logographic scripts and they are refused the exact slot;
+  Han is deliberately unflagged, because there a character is a morpheme.
+  Clitics are carried instead by whole-word containment (`shares_a_stem`, ≥3
+  chars, into `lexical_morph`), so `كتاب`→`الكتاب`, `مكتبة`→`بالمكتبة` and
+  `معلم`→`المعلمون` still work — on a contiguous chain over the stem rather
+  than one fragment. The 3-character floor runs at 0.519 morphological
+  precision (0.820 at four, 0.911 at five); it is labelled and discounted, and
+  it admits, which is why that number is stated. Verified **monotone** over
+  665,750 query/drawer pairs — it admits nothing the previous code did not, so
+  it cannot introduce a new false merge. No dependency, and no identity bump:
+  `segment`'s tokens are byte-identical and only the flags are new.
+- **Recorded, not fixed: stripping Greek accents over-merges in the exact
+  channel.** `πότε` (when) folds onto `ποτέ` (never), and `καλά` onto `κάλα` —
+  one token, so they meet by literal equality and are admitted at rank 1. Not a
+  bug to revert: the accent strip is what lets an all-caps or carelessly-typed
+  Greek query find anything, and it is what makes our fold comparable to
+  Lucene's accent-stripped Greek analysis. It is a cost of the fold, it is
+  pinned by test, and it is written at `search_key` because five rounds of
+  review looked past it.
+- **A key for finding a word, distinct from a key for being it.** `match_key`
+  answers "is this the same text?" — it is what `fingerprint()` compares, so
+  folding there would make 中國 and 中国 the same *drawer* for dedup, and it
+  deliberately pins `ﬁ != fi`, `① != 1` and surviving tatweel. Retrieval asks
+  a different question, and the answer was no in ways that were not bad
+  rankings but empty result sets: `قَرَأتُ الكِتَابَ` shared no whole-word
+  token with `الكتاب`, `İzmir` tokenized to `["zmi"]`, `Straße` never met
+  `strasse`, `٢٠٢٣` never met `2023`, a PDF's `ﬁnal conﬁguration` never met
+  `final configuration`, `ΑΘΗΝΑ` never met `Αθήνα`. `search_key` is that
+  second key, and every tokenizer now uses it — `match_key` is left to dedup.
+  Order carries the design: lowercase precedes the mark strip because `İ` is
+  not a mark and lowercasing *manufactures* the U+0307 the strip removes,
+  which fixes Turkish with no Turkic tailoring and so keeps ı/i minimal pairs.
+  Not blanket NFKC: an alphanumeric-to-alphanumeric guard rejects `ﷺ` (18
+  chars, category So — it would inject a phrase into every religious drawer's
+  term frequency) and `﷼` (Sc, a delimiter that would become letters);
+  CJK radicals invert that guard, being themselves So. Cyrillic gets almost
+  nothing on purpose — only a *loose* stress mark and `ё→е`, since a blanket
+  decompose-and-strip would turn `й` into `и`. ZWSP, ZWNJ and ZWJ are pinned
+  as **not** stripped: ZWSP is Khmer's word delimiter, ZWNJ splitting
+  `کتاب‌ها` yields an exact hit on the stem, and ZWJ is contrastive in
+  Malayalam. Every fold's conflation is pinned by test rather than left to a
+  bug report: على/علي, كتابة/كتابه, Masse/Maße, πότε/ποτέ, все/всё. They are
+  taken because the unmarked spelling is the default register in each of those
+  orthographies — the corpus already made the merge.
+- **Evidence that admits a drawer, kept apart from evidence that ranks it.**
+  The relevance gate was `lexical > 0.0`, and `lexical` mixed a literal term
+  match with a forgiven edit — and now with a fold that makes two spellings
+  one token. On one channel each of those is a *membership* decision, which is
+  how a shared alef made `قطار` match `المستشفى`. `SearchHit` now carries
+  `lexical_exact`; both gates test it, ranking keeps the blend, and
+  approximate evidence contributes at half weight capped at one occurrence per
+  query slot — uncapped, `document documents documented documenting` reaches
+  tf = 4 against a query for `documentation` while the drawer that says
+  `documentation` reaches tf = 1. The cost is deliberate: a drawer whose only
+  relationship to the query is morphological must now also clear
+  `semantic > 0.56`.
+- **Morphology, the half of it that is reachable without a language tag.**
+  `same_word_family` matches when one word is nearly a prefix of the other —
+  ≥7 shared characters, divergent tail ≤3 on the shorter side. That connects
+  `documentation`/`document`, `encryption`/`encrypt`,
+  `Konfiguration`/`Konfigurationen`, `ბიბლიოთეკა`/`ბიბლიოთეკაში`. The
+  thresholds were chosen by what they *reject*: a prefix of 6 would admit the
+  systematic `-tive`/`-tion` class (`positive`/`position`,
+  `creative`/`creation`) which is length-symmetric, plus
+  `сообщение`/`сообщество` and `κατάσταση`/`κατάστημα`. It feeds the
+  approximate channel only, so the three false pairs that survive
+  (`conversation`/`conversion`, `processor`/`procession`,
+  `internal`/`international`) can reorder a result set but never populate one.
+  **Named as gaps, not refusals:** Russian nominal case and Greek inflection
+  (`книга`/`книге` share 4 characters, and so do `город`/`горох` — the
+  information separating them *is* Russian morphology), English short stems
+  (`running`/`run`), German compounds on the BM25 leg (a suffix relation; the
+  embedder's trigrams already carry it on the cosine leg), and stem-rewriting
+  morphology — Arabic broken plurals and Korean conjugation share **zero**
+  n-grams at n=3, 4 or 5, verified by direct computation. Only a multilingual
+  model reaches those.
+- **The FTS prefilter cut the drawer it was meant to find, again.**
+  `drawers_fts` was external-content over raw bytes under unicode61, which
+  folds Latin diacritics and `ς→σ` and nothing else — so it disagreed with
+  folded query terms on ß, ё, Turkish İ and every Arabic mark. Query `izmir`
+  against a drawer saying `İzmir` returned a non-empty *wrong* set, which
+  became `seq IN (...)` and removed the right drawer from the scan and the
+  cosine path with it. The obvious query-side guard is dead code: every term
+  `needs_full_scan` sees has already been folded by `tokenize`. So the index
+  is folded instead — a standalone fts5 table over `search_key(content)`,
+  rebuilt on a `fts_key_version` mismatch, which makes unicode61's token set a
+  superset of ours over the same text: it can over-return, which the scan
+  filters, but never under-return.
+- **A number is never a typo.** After the digit fold `١٠٠٠٠٠` is ASCII
+  `100000`, which cleared the byte gate and fuzzy-matched `200000`, `100001`
+  and `190000`. All-numeric terms no longer forgive an edit, which also closes
+  the same latent hole for numbers that were always Latin-typed.
+- **The embedder was reading a different alphabet than the tokenizer.**
+  `HashEmbedder::tokens()` had its own copy of the split and applied neither
+  `match_key` nor segmentation, so the cosine leg disagreed with the lexical
+  one about what a word is. Composed `أحمد` and its decomposed twin shared one
+  feature of three; `ёلка`, `οδός` and `más` shared **none**. On a sealed
+  vault that is not a second opinion — cosine is the only retrieval signal
+  there is. It now uses exactly the store's rules, which changes the vectors
+  and therefore the embedder's identity: **`undercroft-hash-v1` →
+  `undercroft-hash-v2`**.
+- **Upgrading the binary migrates the vault instead of refusing to open it.**
+  A recorded identity that no longer matches was an error telling the user to
+  set `UNDERCROFT_FORCE_EMBEDDER=1` and run `repair` — reasonable for a model
+  swap the user chose, wrong for a built-in embedder that changed underneath
+  them. Known, dimension-preserving upgrades of the default embedder now
+  re-embed on open. Embeddings are derived data and carry no HMAC, so the walk
+  never touches a drawer tag or the audit chain — this is why a re-embed is
+  not a rotation. It is batched (a 100k-drawer vault must not hold one write
+  lock for the whole pass), idempotent, and records the new identity **last**,
+  so an interrupted migration simply runs again. Every drawer is read through
+  `get`, so each record's HMAC is verified on the way past. Swaps to or from a
+  *model* embedder are still refused — that is hours of inference and a
+  decision the user should make.
+  Three things the migration is careful about, each found by reviewing it
+  rather than by running it:
+  **One damaged drawer does not cost you the rest.** Verifying every record on
+  the way past means a corrupt or tampered row makes the walk fail, and a walk
+  inside `open` failing means the vault does not open *at all* — including for
+  `verify`, the one tool that can name the damage, and `repair`, the one that
+  can clear it. Unreadable rows are now skipped with a warning naming the id,
+  the rest migrate, and the vault opens. (`search` is still intolerant of a
+  corrupt row; that predates this and is not addressed here.)
+  **`UNDERCROFT_FORCE_EMBEDDER=1` comes first.** Checked after the migration
+  branch it was dead code for the only transition that does fallible work,
+  which removed the documented escape from exactly the situation needing one.
+  **A read-only role does not migrate.** `serve --read-only` guards its write
+  *routes*, but every route opens the store, so the migration would have
+  performed a bulk rewrite the operator explicitly forbade. `open_read_only`
+  warns and leaves the vectors alone; the lexical leg still serves.
+- **A remote index went on answering with vectors from a space that no longer
+  existed.** `index_collection()` is derived from the vault id alone, so
+  nothing recorded which embedder a mirror was built with. After an upgrade the
+  query was embedded locally under v2 and matched against v1 vectors on the
+  remote: candidates come back effectively at random, local re-scoring then
+  drops them, and the user gets an empty result from a vault that holds the
+  answer — with no error. `index push` now records the embedder, and
+  `search_with_index` refuses a mismatched mirror and names the fix. This one
+  is not specific to v1→v2; it was wrong for any embedder change.
+- **A one-character CJK query was a wildcard.** `北` is one insertion from
+  *every* bigram containing it, so a single occurrence in a drawer about
+  Siberian tigers (东北虎) was counted three times — 北, 东北, 北虎 — and
+  competed with genuine 北京 hits. The insertion/deletion tolerance now
+  requires two characters on both sides, which keeps 한국어/한국어는 and
+  北京/北京市 and drops only the wildcard.
+- **A stale PQ codebook outlived the vectors it encoded.** `repair` re-embedded
+  without invalidating the quantized index, whose codes and codebook describe
+  the old vector space. That failure is silent: the index does not error, it
+  returns the wrong candidates. Both `repair` and the new migration now drop
+  `drawer_pq` / `pq_page` / `pq_meta` and let the existing self-heal rebuild.
+  ColBERT token matrices and the FDE index are built from the late-interaction
+  model rather than this one and are correctly left alone.
+- **A document containing the query term verbatim was scored as containing a
+  different word.** In `bm25_raw` a token filled the first query slot it
+  matched, and exact and one-edit matches had equal standing. For a query like
+  `دفتر دفاتر`, a document saying `دفاتر` was counted as evidence for `دفتر`
+  while `دفاتر` — literally present — kept `df = 0` and therefore maximal IDF
+  for a term that occurs. Exact matches now claim their token first.
+- **A query for a word the drawer contains returned nothing.** Not a bad
+  ranking — an empty array that reads as an empty vault. Tokenizing splits on
+  `!char::is_alphanumeric()`, which finds a boundary only in scripts that
+  mark one. `我昨天去了北京参加会议` was **one token**, so a query for `北京`
+  matched no term; the hash embedder shared no feature either, giving cosine
+  exactly 0.0 and `semantic` exactly 0.500; and the relevance gate
+  (`lexical > 0.0 || semantic > 0.56`) then dropped the only drawer holding
+  the answer. Measured, on the real tokenizer: `北京` 0/1, `東京` 0/1,
+  `ភ្នំពេញ` 0/2, `한국어` vs `한국어는` 0/1, and `كتاب` 0/1 against a drawer
+  reading `قرأت الكتاب أمس`.
+  Khmer, Thai and Myanmar failed *differently* and worse. Their marks are
+  combining but not `Other_Alphabetic` (Khmer COENG U+17D2, Thai tone marks,
+  Myanmar ASAT), so they **do** split — into fragments positioned by whatever
+  word follows. The same Thai word matched when it ended the document and
+  missed when it began it. Han and Kana at least produced one stable token
+  both sides agreed on.
+  Boundaries now come from `script::segment`: character bigrams over maximal
+  same-**script** subruns, plus unigrams only where a character is a word.
+  That last qualifier is load-bearing in both directions — without Han
+  unigrams `好` stops being findable, and with unigrams everywhere `قطار`
+  matches `المستشفى` on a shared alef, which does not merely add noise but
+  retires the relevance gate for every query in the script. Latin and digit
+  subruns stay whole, so `Kubernetes` inside Chinese is still matchable
+  instead of being shredded into `wi, in, nd`. Delimiting scripts — Latin,
+  Cyrillic, Greek, Georgian, and Tibetan, which delimits on the tsheg — are
+  untouched and pinned byte-identical by test.
+- **Two characters is not a typo, it is a different city.** The one-edit
+  tolerance is gated on `q.len() >= 5`, and that is a *byte* count, so it
+  opened at three characters of Cyrillic and at **two** of anything CJK —
+  where one substitution turns 北京 into 東京, 中国 into 美国, 한국 into 중국.
+  Segmenting into bigrams would have made every CJK term a wildcard. Terms
+  written entirely in a non-delimiting script now allow insertion and
+  deletion only, which is a particle or clitic arriving, never substitution.
+  Deliberately *not* done by making the gate character-based: Korean query
+  terms are two to four syllables and would all have fallen below it.
+- **The FTS5 prefilter cut the drawer it was supposed to find.** It is only
+  fail-safe when it matches nothing — `fts_candidates` returns `None` and the
+  scan runs. A non-empty *wrong* answer becomes `seq IN (...)`, removing the
+  right drawer from the scan and from the cosine path with it. `drawers_fts`
+  is external-content with no `tokenize=` option, so it indexes raw text
+  under unicode61 and cannot agree with segmented query terms. Queries
+  carrying a segmented script now bypass it and take the full scan.
+- **BM25 no longer charges a drawer for being segmented.** Length
+  normalization divided by token count, which the n-gram expansion roughly
+  tripled for exactly the documents segmentation exists to serve. Candidates
+  now carry content units — a run counts once per character, not once per
+  emitted n-gram.
+
+- **Arabic, and a scanner per language rather than a word list.** Extraction
+  was English-only and failed *silently* — an Arabic corpus produced no
+  mentions at all and the vault looked like it had worked. Researched before
+  implementing, and the sources changed the design: the past marker
+  **precedes** the count (قبل/منذ ثلاثة أيام), the **dual** is one inflected
+  word with no numeral to read (يومين، أسبوعين، شهرين، سنتين، عامين), and a
+  period modifier **follows** its noun (الأسبوع الماضي) while هذا precedes
+  it. Both current Gregorian month-name systems are matched — the
+  Levantine/Aramaic set (كانون الثاني، شباط…) and the Latin-derived set
+  (يناير، فبراير…) — since neither is a dialect of the other and a corpus can
+  mix them. Numerals are read in both genders. `WeekStart` gains **Saturday**
+  (Egypt, Saudi Arabia, the UAE — CLDR is the authority), and it is the
+  Arabic default because getting the language right and leaving the week
+  European is subtly rather than obviously wrong. Arabic-Indic (U+0660–0669)
+  and Extended Arabic-Indic (U+06F0–06F9) digits are now digits; `str::parse`
+  takes ASCII only, so "٣ أيام" was invisible. The locale is a **read-time**
+  parameter (`language` on `/v1/search` and `undercroft_search`), which is the
+  payoff of reading live: a corpus ingested under one locale answers
+  correctly under another with no re-ingest. One bug was found by the tests
+  rather than by reading — اليوم is both "the day" and "today", and the unit
+  reading claimed the token then dropped it, so "today" went missing.
+- **The same word in two encodings is one word.** Nothing canonicalised
+  before comparing, so أ written as U+0623 or as alef plus a combining hamza
+  — the class covering أحمد، إبراهيم، مؤمن، رئيس — was two different pieces
+  of content: different fingerprint so dedup never paired them, different
+  tokens so a query in one encoding could not find a drawer in the other.
+  `normalize::match_key` composes to NFC and derives the **comparison keys**
+  only: stored bytes are untouched, because the promise is verbatim and
+  because `NORMALIZE_VERSION` is inside the drawer id, so folding on the
+  write path would move every future id. NFC and not NFKC — compatibility
+  folding rewrites ﬁ to fi, which changes content rather than encoding.
+- **A sealed vault no longer writes fragments of its content in the clear.**
+  `meta_json` is stored unsealed — fine for wing, room, dates and counts, the
+  same trade-off plaintext wing/room names already make. It is not fine for
+  two fields that derivation lifts *verbatim* out of the content:
+  `time_mentions[].text` held every date expression as written, and
+  `entities` held every name. A vault that encrypts the sentence and writes
+  its dates and names beside the ciphertext has not sealed the sentence, and
+  the invariant says exactly that. Found by widening the at-rest test, which
+  had used a secret containing neither a date nor a name and so could not see
+  it; proved against the bytes on disk, which reported `["zerlinda",
+  "three weeks ago"]`. `Drawer::meta_at_rest()` empties both before the row is
+  written, and the tag covers what is actually stored. Nothing is lost: both
+  are derived structure the reader recomputes from content it has already
+  decrypted, mentions were already being read live, and `entities` is now
+  derived at read too. What survives storage is the *resolutions* — offsets
+  and ISO dates, which are not content — so a stored reading stays comparable
+  with a live one. Applied at both security levels, so there is one storage
+  contract rather than two. **Existing vaults keep the fragments already
+  written**; purging them needs a rewrite pass, which the queued re-seal
+  migration is the natural home for.
+- **Deduplication collapses the text and keeps every date.** The content
+  fingerprint covers content only, so `dedup --apply` grouped byte-identical
+  drawers vault-wide and deleted all but the first — and the same words
+  written on two different days are two things that happened, so a date was
+  destroyed with each deleted row, unrecoverably. `save_with_dedup` had the
+  same blindness from the other side: it took the incoming metadata wholesale,
+  so the survivor adopted the newer date and the earlier appearance silently
+  stopped existing. Found while explaining why 5 of 500 measured contexts
+  carried the same passage twice — the answer was that the corpus records it
+  on two different days, which is exactly the case that was being erased.
+  `DrawerMeta` gains `occurrences`: the further days this same content was
+  recorded, folded onto the survivor before the duplicate row goes.
+  `Drawer::all_occurrences()` returns the full chronology including the
+  drawer's own, earliest first; appearances are deduplicated by
+  `content_date`, so re-ingesting a corpus five times is one appearance filed
+  five ways rather than five appearances. The sweep reports `dates_kept`, and
+  a dry run reports the same number it would preserve. Empty serializes to
+  nothing, so every existing row keeps its bytes and keeps verifying.
+- **The reading of a drawer's times is live; the seal is the record.**
+  `time_mentions` was computed once in `Drawer::new` and sealed, which froze
+  it at whatever the writing binary understood — a drawer written before
+  "last month" was read as a month still carried it as a single day, and the
+  only way to benefit from the fix was to rewrite every drawer. But a mention
+  is derived from two things the drawer stores permanently and immutably, its
+  own text and its `content_date`, so nothing about it needs to be frozen.
+  Read surfaces now answer from `Drawer::live_time_mentions()` — deliberately
+  the same call `with_content_date` makes, so the two readings cannot drift
+  apart — and every future improvement to the scanner reaches every existing
+  vault with no migration and no re-ingest. The sealed copy stays as the
+  record of what was understood at the time, and `mentions_restated: true`
+  appears wherever the two disagree, rather than one silently winning.
+  `GET /drawers/{id}` keeps `drawer` byte-faithful to storage and adds
+  `live_time_mentions` beside it, so a fetch and an export never disagree
+  about the record itself.
 
 Retrieval was never the weak link on conversational memory; what we stored
 was. A drawer recorded only when it was *filed*, so a year-old conversation

@@ -224,13 +224,13 @@
 <text x="108" y="273" class="f l" fill="var(--d-blue-ink,#33527d)">drawer</text>
 <text x="168" y="273" class="f b dim">one verbatim chunk</text>
 <text x="108" y="292" class="f s dim">content (sealed) · embedding (sealed) · HMAC tag</text>
-<text x="108" y="309" class="f s dim">meta: content_date · time_mentions · entities · chunk_index</text>
+<text x="108" y="309" class="f s dim">meta: content_date · occurrences · time_mentions · entities</text>
 
 <rect x="94" y="334" width="348" height="26" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.1"/>
 <text x="108" y="351" class="f s dim">drawer · drawer · drawer …</text>
 
 <text x="94" y="378" class="f s dim">id = hash(wing, room, source, chunk_index, normalize_version)</text>
-<text x="94" y="395" class="f s dim">content is not in the id — so re-mining is idempotent, not duplicating</text>
+<text x="94" y="395" class="f s dim">content is not in the id — re-mine updates, API save appends</text>
 
 <rect x="472" y="214" width="352" height="198" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
 <text x="488" y="238" class="f l" fill="var(--d-amber-ink,#8d5a1d)">room "facts"</text>
@@ -246,9 +246,9 @@
 <rect x="60" y="444" width="384" height="116" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
 <text x="78" y="468" class="f l" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
 <text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
-<text x="78" y="508" class="f b dim">Validity windows: valid_from comes from the</text>
-<text x="78" y="525" class="f b dim">source drawer's content_date.</text>
-<text x="78" y="547" class="f s dim">triple_id is content-derived ⇒ a repeated fact collapses.</text>
+<text x="78" y="508" class="f b dim">valid_from: the words in the note that date the fact,</text>
+<text x="78" y="525" class="f b dim">else the drawer's own content_date.</text>
+<text x="78" y="547" class="f s dim">triple_id content-derived ⇒ repeats collapse · stated/background</text>
 
 <rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>
@@ -265,9 +265,17 @@
 <p>One verbatim chunk of content plus its metadata. Its identity is deliberately <em>structural</em>, not content-based:</p>
 <p><code>drawer_id = hash(wing, room, source, chunk_index, normalize_version)</code></p>
 <p>Content is not in that hash. This is what makes re-mining a source idempotent: process the same file twice and the same chunk lands in the same slot, updating in place instead of creating a duplicate. It also means changing any of those five inputs changes the drawer's identity — which is why giving <code>room</code> new meaning only applies to newly created vaults.</p>
+<p><strong>A save that arrives through an API has no source</strong> to be the fourth chunk of, so <code>chunk_index</code> carries a unique append index instead of a position, and identity becomes unique-per-call rather than idempotent: posting the same text twice creates two drawers. That is the intended reading — the same words written on a different day are a different event, not a mistake to be silently swallowed. Collapsing repeats is deduplication's job, and it keeps every date the text appeared on rather than discarding all but one.</p>
+<p>The append index has to be monotonic. It once came from <code>COUNT(*)</code>, which <em>decreases</em> when a drawer is deleted — so the next save was handed an index still in use, derived an id that already existed, and overwrote the unrelated drawer holding it. It now comes from SQLite's <code>AUTOINCREMENT</code> sequence, which never reuses a rowid.</p>
 
 <h3>Room — topic, session, or ticket</h3>
 <p>A room groups drawers within a wing and doubles as a search filter. Because it is both a label and a predicate, it can carry real structure — one room per conversation session, per support ticket, per meeting — at no extra cost. The distilled knowledge surface uses this: fact-drawers live in their own room (<code>facts</code> by default), so a caller chooses between verbatim recall, distilled facts, or both purely by varying the room filter.</p>
+
+<div class="note">
+  <span class="tag">A model may point, not assert</span>
+  <p>Distillation runs through an approximate component, so nothing it says is taken on trust. It is asked for <em>quotations</em> — the words that date a fact, and the words that support it — and the engine checks each span against the note it supposedly came from. A span the note does not literally contain is not evidence and contributes nothing, so a model that answers with a computed date instead of a quotation simply adds nothing. Only the deterministic layer ever turns words into a date.</p>
+  <p>That check is what makes a fact's <strong>grounding</strong> knowable: <code>stated</code> when the note's own words support it, <code>background</code> when they do not, and <code>unevaluated</code> for facts distilled before the check existed — three states, because "we did not look" and "we looked and found nothing" are different claims. Background is a provenance kind, <em>not</em> a quality grade: "Leeds is in the United Kingdom" is absent from the note and is exactly the edge that answers which country someone works in. Filtering is opt-in and the default returns all three, because excluding background facts would break the multi-hop questions a graph exists to answer.</p>
+</div>
 
 <h3>Wing — the isolation unit within a vault</h3>
 <p>A person, a project, or a tenant's user. Search is normally wing-scoped, so a wing bounds how much work every retrieval stage has to do.</p>
@@ -497,8 +505,16 @@
     <tr><td><code>content_date</code></td><td>When the content <em>happened</em>, as opposed to <code>filed_at</code> — when it was written down</td><td>Supplied by the caller. Ingesting a year-old conversation today makes those two dates a year apart</td></tr>
     <tr><td><code>time_mentions</code></td><td>Dates and times written inside the text, each span kept verbatim with its byte offset, plus a resolution when derivable</td><td>Deterministic offline scanner. Absolute forms resolve alone; relative ones ("yesterday", "last Tuesday", "three weeks ago") resolve against <code>content_date</code></td></tr>
     <tr><td><code>entities</code></td><td>Names appearing in the content, lowercased and deduplicated</td><td>Deterministic offline extractor; sentence-initial words excluded as noise</td></tr>
+    <tr><td><code>occurrences</code></td><td>Further days this same content was recorded, beyond the drawer's own</td><td>Written only by deduplication. Collapsing identical text is right — it is the same text — but the days it appeared on are data, so they move to the survivor before the duplicate row goes</td></tr>
   </tbody>
 </table>
+
+<div class="note">
+  <span class="tag">Derived at write, read live</span>
+  <p><code>time_mentions</code> is recorded onto the drawer when it is written, and <em>re-read</em> when it is served. The resolution depends on nothing but the drawer's own text and its <code>content_date</code>, both immutable — so storing it only freezes it at whatever the writing binary understood. A drawer written before "last month" was read as a month still carries it as a single day; re-reading upgrades it without rewriting a byte, which is what makes a scanner improvement reach existing vaults with no migration. The stored copy remains the record of what was understood at the time, and the two are reported as disagreeing rather than one silently winning.</p>
+  <p>It is also what makes <strong>language</strong> a read-time choice. The scanner is selected per request, so a corpus ingested while the engine read English is answered correctly the moment a reader asks in Arabic — no re-ingest, no rewrite. And a language is a <em>scanner</em>, not a word list: Arabic puts the past marker before the count (<span dir="rtl">قبل ثلاثة أيام</span>), has a dual that is one inflected word rather than a numeral beside a plural (<span dir="rtl">يومين</span>), puts period modifiers after the noun (<span dir="rtl">الأسبوع الماضي</span>), reads two current Gregorian month-name systems, and begins its week on Saturday. Each of those is grammar, and none of them survives being translated into an English pattern.</p>
+  <p>Note what this does <em>not</em> do. Reading dates inside the text is the scanner's job; <strong>retrieving across languages is the embedder's</strong>, and the default embedder cannot — it hashes surface forms, so an English query and an Arabic note share no token and no character trigram. The two are chosen independently, and a multilingual vault needs both.</p>
+</div>
 
 <div class="note amber">
   <span class="tag">Never guess</span>
@@ -682,6 +698,13 @@
 </table>
 <p>For sealed vaults there is an additional standing rule: no plaintext or plaintext-derived data is ever written to disk in clear. No full-text index exists for them, and search operates over decrypt-once RAM caches.</p>
 
+<div class="note amber">
+  <span class="tag">What that rule does and does not cover</span>
+  <p>It covers the content and everything derived from it that copies its words. It does <em>not</em> yet cover drawer <strong>metadata</strong>, which is stored unsealed. Measured against the bytes of a sealed database file, an attacker holding it reads the wing name, the room name, the <code>source_file</code> path, <code>added_by</code>, the hall label, <code>content_date</code>, and the dates resolved out of the content. They read no word of the content itself. In practice wing and room names <em>are</em> the topics, people and case identifiers, and a source path carries a username and a project name — so until this is closed, a deployment should treat those as public labels and keep the secret out of the name.</p>
+  <p>Two fields used to be worse. <code>time_mentions[].text</code> held every date expression as written and <code>entities</code> held every name, both lifted verbatim out of the content and both sitting in unsealed metadata. They are now emptied before the row is written; what survives is the resolutions — byte offsets and ISO dates, which are not content. The exposure that remains is pinned by a test that fails if content ever leaks <em>and</em> fails if a listed field stops being readable, so the inventory cannot quietly go out of date.</p>
+  <p>Closing the rest does not require giving up queryability, and the engine already contains both halves of the answer. Fields that must be filtered in SQL — wing, room — can become a <strong>keyed blind index</strong>: store a truncated HMAC of the value and filter on that, exactly as duplicate detection already does with its keyed fingerprint. Everything else moves into a sealed blob decrypted once into a RAM cache at query time, exactly as embeddings, PQ codes and ColBERT matrices already are. Sealing and searchability are not in tension here; the pattern for having both is already in use four times over.</p>
+</div>
+
 <h2 id="config">Configuration reference</h2>
 <p class="lede">Everything is environment-driven, and every default is the conservative choice.</p>
 
@@ -713,7 +736,7 @@
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds)</td></tr>
+    <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds). <strong>Required for cross-lingual retrieval</strong> — see below</td></tr>
     <tr><td><code>UNDERCROFT_ONNX_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>User-supplied embedding model files</td></tr>
     <tr><td><code>UNDERCROFT_RERANKER</code></td><td>unset — no second stage</td><td><code>onnx</code> · <code>ort</code> · <code>colbert</code> · <code>colbert-ort</code></td></tr>
     <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores</td></tr>

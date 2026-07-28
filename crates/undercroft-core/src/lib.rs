@@ -15,6 +15,7 @@ pub mod ids;
 pub mod late;
 pub mod normalize;
 pub mod rerank;
+pub mod script;
 pub mod support;
 pub mod temporal;
 

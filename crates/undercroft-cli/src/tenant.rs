@@ -61,6 +61,52 @@ fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<
     undercroft_core::temporal::describe_interval(a, d)
 }
 
+/// The locale a request asks its temporal text to be read in.
+///
+/// `language` selects a scanner — Arabic puts the past marker before the count
+/// and has a dual, so it is grammar rather than vocabulary — and `week_start`
+/// selects the week convention, which moves "last week" and every week count.
+/// Arabic defaults to Saturday weeks, the convention across most of the region,
+/// because getting the language right and leaving the week European produces
+/// answers that are subtly rather than obviously wrong.
+fn locale_from(body: &Value) -> undercroft_core::temporal::Locale {
+    use undercroft_core::temporal::{Calendar, DateOrder, Locale, WeekStart};
+    let mut locale = match body.get("language").and_then(Value::as_str) {
+        Some("ar") | Some("arabic") => Locale::ARABIC,
+        _ => Locale::ENGLISH,
+    };
+    if let Some(ws) = body.get("week_start").and_then(Value::as_str) {
+        locale = locale.with_week_start(match ws {
+            "sunday" | "sun" => WeekStart::Sunday,
+            "saturday" | "sat" => WeekStart::Saturday,
+            _ => WeekStart::Monday,
+        });
+    }
+    // Which field a bare numeric date puts first. Declared, because it cannot be
+    // derived: US English is month-first and Commonwealth English day-first, and
+    // both are `Language::English`. Unrecognised values leave it undeclared,
+    // which falls through to what the text demonstrates and then to day-first —
+    // never to an error, since a reading convention is not worth a 400.
+    if let Some(order) = body.get("date_order").and_then(Value::as_str) {
+        locale = locale.with_date_order(match order {
+            "month_first" | "mdy" | "us" => DateOrder::MonthFirst,
+            "day_first" | "dmy" => DateOrder::DayFirst,
+            _ => DateOrder::Undeclared,
+        });
+    }
+    // Which calendar counted the year. Never inferred — see `Calendar`.
+    if let Some(cal) = body.get("calendar").and_then(Value::as_str) {
+        locale = locale.with_calendar(match cal {
+            "buddhist" | "be" | "thai" => Calendar::Buddhist,
+            "minguo" | "roc" | "taiwan" => Calendar::Minguo,
+            "hijri" | "islamic" | "umalqura" => Calendar::Hijri,
+            "jalali" | "persian" | "solar_hijri" => Calendar::Jalali,
+            _ => Calendar::Gregorian,
+        });
+    }
+    locale
+}
+
 /// Triples as JSON, each labelled with where it rests.
 ///
 /// `grounding` is `stated` (the note's own words support it, at the recorded
@@ -489,7 +535,7 @@ impl Tenancy {
             .map(String::from);
 
         let store = self.store_for(id)?;
-        let idx = store.count().map_err(err500)? as u32;
+        let idx = store.next_append_index().map_err(err500)? as u32;
         let drawer =
             Drawer::new(wing, room, normalized, None, idx, "rest").with_content_date(content_date);
 
@@ -550,6 +596,10 @@ impl Tenancy {
         // years are not a caller's problem, and certainly not a language
         // model's. Absent ⇒ no elapsed fields, nothing invented.
         let as_of = body.get("as_of").and_then(Value::as_str).map(String::from);
+        // Which language the drawers' own text should be read in. Read-time,
+        // because the reading is live — a corpus ingested under one locale is
+        // answered correctly under another without being rewritten.
+        let locale = locale_from(&body);
         let store = self.store_for(id)?;
         let hits = if store.is_external() {
             let v =
@@ -573,16 +623,35 @@ impl Tenancy {
                     // text; null when the writer did not know it.
                     "content_date": h.drawer.meta.content_date,
                     "filed_at": h.drawer.meta.filed_at,
+                    // Every day this same text is known to have been recorded,
+                    // earliest first. More than one entry means dedup collapsed
+                    // identical wording written on different days — the text is
+                    // one record, the chronology is all of them.
+                    "occurrences": serde_json::to_value(h.drawer.all_occurrences())
+                        .unwrap_or_else(|_| json!([])),
                     // Dates written inside the text, already resolved against
                     // the drawer's own anchor at write time. Returned so a
                     // reader never has to re-derive what we computed exactly —
                     // including how long ago each one was, which is a
                     // different question from how old the drawer is.
+                    // Read live, not from the seal. The resolution is derived
+                    // from the drawer's own text and `content_date`, both
+                    // immutable, so re-reading costs a linear scan and makes
+                    // every improvement to the scanner retroactive across
+                    // every existing vault — no migration, no re-ingest.
                     "time_mentions": mentions_with_elapsed(
-                        &h.drawer.meta.time_mentions,
+                        &h.drawer.live_time_mentions_in(locale),
                         as_of.as_deref(),
                     ),
-                    "entities": h.drawer.meta.entities,
+                    // Present only when this build disagrees with the sealed
+                    // reading: the drawer was written by an older
+                    // understanding of the language. Not an error, and not
+                    // something to resolve silently.
+                    "mentions_restated": h.drawer.time_mentions_differ()
+                        .then_some(true),
+                    // Derived at read: names are words out of the content, and unsealed
+                    // metadata must not carry them. See Drawer::meta_at_rest.
+                    "entities": h.drawer.live_entities(),
                     // Exact whole-day offsets from `as_of`, computed here
                     // rather than left to the reader. `elapsed` is the same
                     // interval phrased for display; both are omitted when the
@@ -608,6 +677,8 @@ impl Tenancy {
                     "score": h.score,
                     "semantic": h.semantic,
                     "lexical": h.lexical,
+                    "lexical_exact": h.lexical_exact,
+                    "lexical_morph": h.lexical_morph,
                 })
             })
             .collect();
@@ -659,7 +730,21 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         match store.get(drawer_id).map_err(store_err)? {
-            Some(d) => Ok((200, Body::Json(json!({ "drawer": d })))),
+            Some(d) => {
+                // Same rule as search: the sealed reading is the record, the
+                // live one is the answer. `drawer` stays byte-faithful to
+                // what is stored so an export and a fetch cannot disagree
+                // about the record itself.
+                let live = d.live_time_mentions();
+                let restated = live != d.meta.time_mentions;
+                let mut body = json!({ "drawer": d });
+                if restated {
+                    body["live_time_mentions"] =
+                        serde_json::to_value(&live).unwrap_or_else(|_| json!([]));
+                    body["mentions_restated"] = json!(true);
+                }
+                Ok((200, Body::Json(body)))
+            }
             None => Err(RestError::new(404, "no such drawer")),
         }
     }
@@ -1157,8 +1242,15 @@ impl Tenancy {
                 .map_err(|e| RestError::new(500, e.to_string()))?;
             let embedder =
                 (self.factory)(&vault).map_err(|e| RestError::new(500, e.to_string()))?;
-            let mut store = PalaceStore::open_with_embedder(vault, embedder)
-                .map_err(|e| RestError::new(500, e.to_string()))?;
+            // A read-only server must not rewrite the vault it is serving —
+            // an embedder migration is a bulk write, and the operator asked
+            // this process not to make any.
+            let opened = if self.read_only {
+                PalaceStore::open_read_only(vault, embedder)
+            } else {
+                PalaceStore::open_with_embedder(vault, embedder)
+            };
+            let mut store = opened.map_err(|e| RestError::new(500, e.to_string()))?;
             if let Some(make_reranker) = &self.reranker {
                 store.set_reranker(Some(make_reranker()));
             }
@@ -1332,4 +1424,75 @@ fn respond(req: Request, code: u16, body: &str, content_type: &str) {
             .with_status_code(code)
             .with_header(header),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use undercroft_core::temporal::{Calendar, DateOrder, Language, WeekStart};
+
+    /// `locale_from` is the whole of the read-time convention surface, and this
+    /// file had no test module at all — so a renamed field or a typo in a value
+    /// would have shipped silently while `docs/AGENTS.md` promised it worked.
+    #[test]
+    fn the_request_declares_its_reading_conventions() {
+        let l = locale_from(&serde_json::json!({}));
+        assert_eq!(l.language, Language::English);
+        assert_eq!(l.week_start, WeekStart::Monday);
+        assert_eq!(
+            l.date_order,
+            DateOrder::Undeclared,
+            "English implies no order"
+        );
+        assert_eq!(l.calendar, Calendar::Gregorian);
+
+        // Arabic brings Saturday weeks and day-first with it: CLDR gives `ar` as
+        // d/M/y in every Arabic territory, so both follow from the language.
+        let l = locale_from(&serde_json::json!({"language": "ar"}));
+        assert_eq!(l.language, Language::Arabic);
+        assert_eq!(l.week_start, WeekStart::Saturday);
+        assert_eq!(l.date_order, DateOrder::DayFirst);
+
+        // Each convention is independently declarable, with the aliases a caller
+        // would actually reach for.
+        for (v, want) in [
+            ("month_first", DateOrder::MonthFirst),
+            ("mdy", DateOrder::MonthFirst),
+            ("us", DateOrder::MonthFirst),
+            ("day_first", DateOrder::DayFirst),
+            ("dmy", DateOrder::DayFirst),
+        ] {
+            let l = locale_from(&serde_json::json!({"date_order": v}));
+            assert_eq!(l.date_order, want, "date_order {v:?}");
+        }
+        for (v, want) in [
+            ("buddhist", Calendar::Buddhist),
+            ("thai", Calendar::Buddhist),
+            ("be", Calendar::Buddhist),
+            ("minguo", Calendar::Minguo),
+            ("roc", Calendar::Minguo),
+            ("hijri", Calendar::Hijri),
+            ("umalqura", Calendar::Hijri),
+            ("jalali", Calendar::Jalali),
+            ("persian", Calendar::Jalali),
+        ] {
+            let l = locale_from(&serde_json::json!({"calendar": v}));
+            assert_eq!(l.calendar, want, "calendar {v:?}");
+        }
+
+        // An unrecognised value falls back rather than failing: a reading
+        // convention is not worth a 400.
+        let l = locale_from(&serde_json::json!({"calendar": "mayan", "date_order": "sideways"}));
+        assert_eq!(l.calendar, Calendar::Gregorian);
+        assert_eq!(l.date_order, DateOrder::Undeclared);
+
+        // And they compose.
+        let l = locale_from(
+            &serde_json::json!({"language": "ar", "calendar": "hijri", "week_start": "sunday"}),
+        );
+        assert_eq!(l.language, Language::Arabic);
+        assert_eq!(l.calendar, Calendar::Hijri);
+        assert_eq!(l.week_start, WeekStart::Sunday);
+        assert_eq!(l.date_order, DateOrder::DayFirst, "still from the language");
+    }
 }

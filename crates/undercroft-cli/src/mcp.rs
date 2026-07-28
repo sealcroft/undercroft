@@ -172,7 +172,7 @@ fn tool_definitions() -> Value {
             json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
-            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results") }),
+            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar") }),
             &["query"]),
         tool("undercroft_wake_up", "Load session context: recent essential memories.",
             json!({ "wing": s("scope to wing") }), &[]),
@@ -264,7 +264,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             if normalized.is_empty() {
                 anyhow::bail!("content is empty after normalization");
             }
-            let idx = store.count()? as u32;
+            let idx = store.next_append_index()? as u32;
             let drawer = Drawer::new(wing, room, normalized, None, idx, "mcp")
                 .with_content_date(opt_str(args, "content_date").map(str::to_string));
             store.upsert(&drawer)?;
@@ -290,6 +290,46 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             if hits.is_empty() {
                 return Ok("no memories matched".into());
             }
+            // Reference date for elapsed time. The engine holds the dates, so
+            // it does the calendar arithmetic — month lengths and leap years
+            // are not a caller's problem, and least of all a language model's.
+            let as_of = opt_str(args, "as_of").map(str::to_string);
+            // Which language the drawers' own text is read in. Read-time,
+            // because the reading is live: a corpus ingested while the engine
+            // read English is answered correctly in Arabic without a rewrite.
+            let locale = match opt_str(args, "language") {
+                Some("ar") | Some("arabic") => undercroft_core::temporal::Locale::ARABIC,
+                _ => undercroft_core::temporal::Locale::ENGLISH,
+            };
+            // Reading conventions, declared rather than detected. A numeric
+            // date's field order cannot be derived from the language (US
+            // month-first, Commonwealth day-first, both English) and a calendar
+            // cannot be derived from the text at all — script is not evidence
+            // and a numeral system is not a calendar.
+            let locale = match opt_str(args, "date_order") {
+                Some("month_first") | Some("mdy") | Some("us") => {
+                    locale.with_date_order(undercroft_core::temporal::DateOrder::MonthFirst)
+                }
+                Some("day_first") | Some("dmy") => {
+                    locale.with_date_order(undercroft_core::temporal::DateOrder::DayFirst)
+                }
+                _ => locale,
+            };
+            let locale = match opt_str(args, "calendar") {
+                Some("buddhist") | Some("be") | Some("thai") => {
+                    locale.with_calendar(undercroft_core::temporal::Calendar::Buddhist)
+                }
+                Some("minguo") | Some("roc") | Some("taiwan") => {
+                    locale.with_calendar(undercroft_core::temporal::Calendar::Minguo)
+                }
+                Some("hijri") | Some("islamic") | Some("umalqura") => {
+                    locale.with_calendar(undercroft_core::temporal::Calendar::Hijri)
+                }
+                Some("jalali") | Some("persian") | Some("solar_hijri") => {
+                    locale.with_calendar(undercroft_core::temporal::Calendar::Jalali)
+                }
+                _ => locale,
+            };
             let mut out = String::new();
             for (i, h) in hits.iter().enumerate() {
                 // Report when the content happened when we know it, not only
@@ -299,13 +339,59 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     Some(d) => format!("happened {d}, filed {}", h.drawer.meta.filed_at),
                     None => format!("filed {}", h.drawer.meta.filed_at),
                 };
+                // "15 weeks before" rather than two dates and a subtraction.
+                let ago = match (h.drawer.meta.content_date.as_deref(), as_of.as_deref()) {
+                    (Some(d), Some(a)) => undercroft_core::temporal::describe_interval(a, d)
+                        .map(|s| format!(", {s}"))
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                };
+                // Every day this text is known to have been recorded. One
+                // entry is the ordinary case and says nothing extra.
+                let seen = {
+                    let all = h.drawer.all_occurrences();
+                    if all.len() > 1 {
+                        let days: Vec<&str> = all
+                            .iter()
+                            .filter_map(|o| o.content_date.as_deref())
+                            .collect();
+                        format!("\nalso recorded on: {}", days.join(", "))
+                    } else {
+                        String::new()
+                    }
+                };
+                // Times written inside the text, resolved against this
+                // drawer's own anchor and read live rather than from the seal.
+                let mentions = {
+                    let m = h.drawer.live_time_mentions_in(locale);
+                    let resolved: Vec<String> = m
+                        .iter()
+                        .filter_map(|x| {
+                            x.range().map(|(a, b)| {
+                                if a == b {
+                                    format!("{:?} = {a}", x.text)
+                                } else {
+                                    format!("{:?} = {a}..{b}", x.text)
+                                }
+                            })
+                        })
+                        .collect();
+                    if resolved.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\ndates in the text: {}", resolved.join(" · "))
+                    }
+                };
                 out.push_str(&format!(
-                    "{}. [score {:.3}] ({}/{}, {})\n{}\n\n",
+                    "{}. [score {:.3}] ({}/{}, {}{}){}{}\n{}\n\n",
                     i + 1,
                     h.score,
                     h.drawer.meta.wing,
                     h.drawer.meta.room,
                     when,
+                    ago,
+                    seen,
+                    mentions,
                     h.drawer.content
                 ));
             }
@@ -359,7 +445,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             if normalized.is_empty() {
                 anyhow::bail!("content is empty after normalization");
             }
-            let idx = store.count()? as u32;
+            let idx = store.next_append_index()? as u32;
             let drawer = Drawer::new(
                 wing,
                 room,

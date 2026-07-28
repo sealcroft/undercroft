@@ -49,13 +49,13 @@
 <text x="108" y="273" class="f l" fill="var(--d-blue-ink,#33527d)">drawer</text>
 <text x="168" y="273" class="f b dim">one verbatim chunk</text>
 <text x="108" y="292" class="f s dim">content (sealed) · embedding (sealed) · HMAC tag</text>
-<text x="108" y="309" class="f s dim">meta: content_date · time_mentions · entities · chunk_index</text>
+<text x="108" y="309" class="f s dim">meta: content_date · occurrences · time_mentions · entities</text>
 
 <rect x="94" y="334" width="348" height="26" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.1"/>
 <text x="108" y="351" class="f s dim">drawer · drawer · drawer …</text>
 
 <text x="94" y="378" class="f s dim">id = hash(wing, room, source, chunk_index, normalize_version)</text>
-<text x="94" y="395" class="f s dim">content is not in the id — so re-mining is idempotent, not duplicating</text>
+<text x="94" y="395" class="f s dim">content is not in the id — re-mine updates, API save appends</text>
 
 <rect x="472" y="214" width="352" height="198" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
 <text x="488" y="238" class="f l" fill="var(--d-amber-ink,#8d5a1d)">room "facts"</text>
@@ -71,9 +71,9 @@
 <rect x="60" y="444" width="384" height="116" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
 <text x="78" y="468" class="f l" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
 <text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
-<text x="78" y="508" class="f b dim">Validity windows: valid_from comes from the</text>
-<text x="78" y="525" class="f b dim">source drawer's content_date.</text>
-<text x="78" y="547" class="f s dim">triple_id is content-derived ⇒ a repeated fact collapses.</text>
+<text x="78" y="508" class="f b dim">valid_from: the words in the note that date the fact,</text>
+<text x="78" y="525" class="f b dim">else the drawer's own content_date.</text>
+<text x="78" y="547" class="f s dim">triple_id content-derived ⇒ repeats collapse · stated/background</text>
 
 <rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>

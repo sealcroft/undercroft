@@ -52,6 +52,15 @@ rand = "0.8"
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 hex = "0.4"
+unicode-normalization = "0.1"
+# Calendar conversion for the calendars that are NOT a renumbered Gregorian
+# year: Hijri is lunar, Jalali turns at the equinox. Apache-2.0, maintained by
+# the Unicode Consortium under ICU4X, three dependencies, and PURE ALGORITHM —
+# no data files to ship or download, which is what makes it acceptable in an
+# offline local-first binary. Hand-rolling these was the alternative and the
+# tabular Hijri variant is the one that is easy to write and wrong for real
+# documents; this carries Umm al-Qura, the Saudi civil calendar.
+calendrical_calculations = "0.2"
 subtle = "2.6"
 tempfile = "3"
 instant-distance = "0.6"

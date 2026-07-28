@@ -98,12 +98,23 @@ impl Support {
 
 /// Byte range of `quote` within `text`, if it is literally there.
 ///
-/// No minimum length is imposed. A one-word quote is legitimate evidence and
-/// a threshold would be an invented constant; `len` is carried precisely so a
-/// reader can see how much was actually quoted and judge for itself. The
-/// weakness this leaves is real: an extractor that quotes a single common
-/// word gets `Stated` for a fact the note does not support. The span makes
-/// that visible rather than hiding it behind a flag.
+/// **No minimum length is imposed, and this is the weak point of the whole
+/// mechanism.** An extractor that quotes a single common word — "a", "the" —
+/// earns `Stated` for a fact the note does not support.
+///
+/// Every guard considered for it needed something invented: a length floor is
+/// an arbitrary constant, and "the quote must share a word with the fact"
+/// needs a stopword list to stop "the" satisfying it, which is arbitrary data.
+/// Both also produce false negatives — "vegetarian" is a legitimate one-word
+/// quote for a dietary-preference fact, and a fact whose subject and object
+/// the extractor paraphrased would lose its real quote to an overlap test.
+///
+/// So the span is carried instead, and `len` says exactly how much was
+/// quoted. A consumer that cares can require more; the engine does not
+/// pretend to a threshold it cannot justify. Worth revisiting if a real
+/// extractor is ever observed doing this — as of the measured runs, the
+/// failure seen in practice is the opposite one, models quoting too little
+/// rather than too trivially.
 pub fn locate(text: &str, quote: &str) -> Option<Span> {
     let quote = quote.trim();
     if quote.is_empty() {
