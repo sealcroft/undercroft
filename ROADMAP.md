@@ -425,6 +425,30 @@ Also closes the v0.13.0 follow-up items:
   observable. Shared-volume (zero lag) and replicated-snapshot
   deployment shapes documented; single-writer stance unchanged.
 
+## Unreleased — the comparison layer, and dates that are declared (done)
+
+- **Dates are declared, never guessed.** `Locale` carries `language`,
+  `week_start`, `date_order` and `calendar`, all read-time, so an ingested
+  corpus answers correctly the moment its conventions are declared — no
+  migration, no re-embed. Ten calendars; Hijri (Umm al-Qura) and Jalali convert
+  whole dates via `calendrical_calculations`.
+- **An era the writer typed outranks the calendar the caller declared.**
+  `พ.ศ.`, `ค.ศ.`, `هـ`, `民國`, `令和` and the rest, read before, after or glued
+  to a year. Japanese eras are bounded, because an era's first and last years
+  are partial. A bare year is a mention only where a marker names it.
+- **Morphology: 191 audited pairs, 19 languages, 100% on the lexical channel —
+  declared or not.** Five pairwise rules, none building an equivalence class:
+  suffix, substitutive inflection, agglutinative stacking, Arabic root identity,
+  and a table of irregulars. Language resolved by declaration, else by script
+  where a script settles it, else by the drawer's own function words.
+- **48 negative controls, which did not exist before.** The audit driving this
+  work contained none: every pair in it was a true relation, so a rule admitting
+  everything scored 100%. Each rule's price is now a pinned test row.
+- **Rejections recorded with their measurements**, because they are the
+  expensive part: Snowball (spec-correct and still wrong here — it builds a
+  class one false friend poisons), Arabic subsequence in three families, and a
+  blind union of the Latin tables.
+
 ## Next (all demand-driven — planned, not scheduled)
 
 Nothing below should be built until its trigger fires; each entry

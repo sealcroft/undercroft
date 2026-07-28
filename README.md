@@ -115,6 +115,35 @@ undercroft search "query" --backend qdrant
 undercroft index status qdrant
 ```
 
+## Languages
+
+A query finds a word's other forms — `running` from `run`, `Kinder` from `Kind`,
+`libri` from `libro`, `бумаги` from `бумага`, `مكتوب` from `كتب`. Measured end
+to end at realistic drawer length over **191 paradigm pairs in 19 languages:
+100% on the lexical channel**, with nothing left to the embedder to rescue.
+
+Which language applies is resolved three ways, strongest first: what you
+declared on the request; else what the script settles (Greek, Georgian and
+Hangul are one language apiece); else **what the drawer says it is** — a text
+carrying `der`, `die`, `und` is German. Only closed-class function words vote,
+and only decisively. **You do not have to declare anything**, though declaring
+is stronger and worth doing when you know.
+
+Five pairwise rules do it — suffix, substitutive inflection, agglutinative
+stacking, Arabic root identity, and a table of irregular forms. None builds an
+equivalence class, which is why a stemmer is deliberately *not* used: one false
+friend poisons a whole class, and measured, Snowball Greek merges `πολύ` (much)
+with `πόλη` (city).
+
+Morphology admits, so every rule has a price and **each one is a pinned test
+row** — declaring German merges `flow`/`flower`, Italian merges `pesca`/`pesce`.
+48 negative controls guard them; see
+[docs/agents.html](https://compufreq.github.io/undercroft/agents.html).
+
+Note this is **within-language**. Cross-lingual retrieval needs a multilingual
+model via `onnx`/`ort` — the default hashed embedder matches on shared surface
+forms, so an EN/AR translation pair scores *below* an unrelated sentence.
+
 ## Embedders
 
 The `Embedder` trait is pluggable and identity-tracked: the model name and

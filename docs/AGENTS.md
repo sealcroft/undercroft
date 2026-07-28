@@ -283,7 +283,7 @@ already-ingested corpus answers correctly the moment you declare its conventions
 
 | field | values | default | what it decides |
 |---|---|---|---|
-| `language` | `en`, `ar`, `de` | `en` | **two consumers, one declaration.** Which scanner reads the *dates* (`en`, `ar` — Arabic is a grammar, not a word list: the past marker precedes the count, `قبل ثلاثة أيام`, the dual is one word, `يومين`), and whose inflection *retrieval* uses (`en`, `de`). Each falls back rather than guessing, so `de` reads dates as English and `ar` inflects as undeclared |
+| `language` | dates: `en`, `ar` · morphology: `en`, `de`, `nl`, `it`, `es`, `fr`, `pt`, `tr`, `ru`, `el`, `hi`, `ka`, `ko` | inferred per drawer | **two consumers, one declaration.** Which scanner reads the *dates*, and whose inflection *retrieval* uses. Each falls back rather than guessing. **Morphology no longer needs it** — see below |
 | `week_start` | `monday`, `sunday`, `saturday` | `monday` (`saturday` for `ar`) | which day begins a week — moves "last week" and every week count |
 | `date_order` | `day_first`, `month_first` | see below | which field a bare numeric date puts first |
 | `calendar` | `gregorian`, `buddhist`, `minguo`, `hijri`, `jalali`, `reiwa`, `heisei`, `showa`, `taisho`, `meiji` | `gregorian` | which calendar counted the year, **unless a drawer names its own era** |
@@ -305,15 +305,49 @@ The cost of that last step is explicit: a US corpus that never declares
 `month_first` reads `07/05` as 7 May. Declare it once and the whole corpus reads
 correctly, retroactively.
 
-**`language` also decides which word-endings retrieval will follow.** German
-plurals need `-er` (`Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher`) and
-English cannot have it — measured, enabling `-er` for English admitted
-`flow`/`flower`, `tow`/`tower`, `corn`/`corner`, `butt`/`butter` and
-`cow`/`cower`. German and English share a script, so nothing in the bytes says
-which endings are legal and the engine will not guess: declare `de` and German
-morphology reaches 100% of the audited pairs, leave it undeclared and it reaches
-75%. Note the price of declaring, which is real and deliberate: under `de`,
-`flow`/`flower` **will** meet, because you said this corpus is German.
+### Morphology: 19 languages, and you do not have to declare any of them
+
+Retrieval reaches a word's other forms — `running` from `run`, `Kinder` from
+`Kind`, `libri` from `libro`, `бумаги` from `бумага`, `مكتوب` from `كتب`.
+Measured end to end at realistic drawer length over 191 paradigm pairs in 19
+languages: **100% on the lexical channel, declared or not**, with nothing left
+to the embedder.
+
+Which language applies is resolved three ways, strongest first:
+
+1. **What you declared** on the request. A statement about your corpus, and it
+   wins.
+2. **What the script settles.** Greek, Georgian and Hangul are used by one
+   language apiece, so a Greek `-ος` ending can only ever match a Greek word.
+   (Cyrillic and Devanagari get the majority language's table — Russian and
+   Hindi — whose endings the family largely shares. Approximate, and labelled.)
+3. **What the drawer says it is.** A text carrying `der`, `die`, `und`, `nicht`
+   is German. Only closed-class function words vote, and only decisively — three
+   hits and twice the runner-up — because `is` votes for English and Dutch
+   alike. Where they disagree the drawer says nothing.
+
+This is reading, not guessing. Nothing is derived from the *shape* of a word;
+the writer's own commonest words are read, exactly as an era marker is.
+
+**Declare `language` anyway when you know it.** It is stronger than either
+fallback, and for a short or code-heavy drawer the function words may not carry.
+
+**What it costs, per language, pinned by test.** Morphology admits, so every
+rule has a price and none of them is hidden:
+
+| declaring | also merges |
+|---|---|
+| `de` | `flow`/`flower` — German needs `-er`, English cannot have it |
+| `nl` | `kop`/`kopen`, `man`/`manen` — Dutch `-en` |
+| `it` | `pesca`/`pesce` — `a→e` carries the feminine plural |
+| `tr` | `kar`/`kara` |
+| `en` | `champion`/`champ` is *lost*, not merged — `-ion` needs a six-character stem to keep `question`/`quest` apart |
+| (always) | Arabic `سيارة`/`أسرة` — the consonantal skeleton rule, which predates this |
+
+Cross-lingual retrieval is a different axis and remains **impossible** with the
+default embedder: `HashEmbedder` is feature hashing over surface forms, so an
+EN/AR translation pair scores *below* an unrelated sentence. Every figure above
+is within-language. Use an `onnx`/`ort` multilingual model for that.
 
 **`calendar`** — nothing is inferred here, ever. Script is not evidence (Thai
 script writes Gregorian dates constantly) and neither is the numeral system
