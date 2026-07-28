@@ -193,7 +193,22 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   channel each of those would be a *membership* decision; `same_word_family`
   is the reachable half of morphology — nearly-a-prefix, ≥7 shared chars,
   tail ≤3, which excludes the `-tive`/`-tion` class at exactly 6 and cannot
-  reach Russian case or Arabic broken plurals at all. `drawers_fts` is a
+  reach Russian case or Arabic broken plurals at all. `suffix_family` +
+  `IRREGULAR` (~110 forms) admit on `lexical_morph`: SHAPE not length, which is
+  what makes a 3-char stem safe here when floor-3 containment measured 33.3
+  (en) / 68.5 (de) mean links and this measures 1.08 / 0.98, capped at 5. Both
+  are PAIRWISE — a stemmer builds an equivalence class one false friend
+  poisons (`πολύ`/`πόλη` is why Snowball Greek was rejected). `-er` is
+  German-only via `MorphLang` on `SearchOptions` (`suffixes_for`), fed by the
+  request's existing `language` — ONE declaration, two consumers: the date
+  scanner (en/ar) and morphology (en/de). For English `-er` admits
+  `flow`/`flower`, `corn`/`corner`, `butt`/`butter`; declared German it takes
+  `Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher` and German goes 50%→**100%**,
+  all on the lexical channel. Declared, never detected — the two share a script,
+  so nothing in the bytes says which endings are legal, and the price is pinned:
+  under German, `flow`/`flower` DOES meet. Note promiscuity
+  moved only +0.21 for `-er`, i.e. **the population metric could not see it and
+  the negative controls could**. `drawers_fts` is a
   **standalone** fts5 table over `search_key(content)`, rebuilt on a
   `fts_key_version` mismatch: external-content over raw bytes disagreed with
   folded query terms, and the prefilter is only safe when it finds *nothing*)
@@ -391,7 +406,17 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   links to) counts reach and is blind to correctness; used to justify lowering
   the delimiting floor 8→5 it admitted `other`/`mother` and
   `count`/`accounting`. Any rule feeding a channel that ADMITS needs negative
-  controls, not just a link count.
+  controls, not just a link count. **The controls now exist**:
+  `false_friends_stay_apart` (store lib.rs) runs 20 known false friends across
+  en/de/ar/el end-to-end through `search` at realistic drawer length, asserting
+  only the LEXICAL channels (a sem-only hit is the embedder's opinion, not a
+  rule's) and failing in BOTH directions — `Verdict::Apart` must not gain a
+  channel, `Verdict::Cost` is a pinned known price whose disappearance is good
+  news that must be recorded rather than absorbed. Padding is asserted disjoint
+  from every control word: the first run of this instrument reported the
+  decisive Greek pair as already-related because the filler literally contained
+  the query, so it measured the padding — flatteringly, and in the one place
+  it mattered most.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path

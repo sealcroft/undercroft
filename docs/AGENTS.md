@@ -283,7 +283,7 @@ already-ingested corpus answers correctly the moment you declare its conventions
 
 | field | values | default | what it decides |
 |---|---|---|---|
-| `language` | `en`, `ar` | `en` | which scanner reads the words. Arabic is a grammar, not a word list: the past marker precedes the count (`قبل ثلاثة أيام`), the dual is one word (`يومين`), period modifiers follow their noun |
+| `language` | `en`, `ar`, `de` | `en` | **two consumers, one declaration.** Which scanner reads the *dates* (`en`, `ar` — Arabic is a grammar, not a word list: the past marker precedes the count, `قبل ثلاثة أيام`, the dual is one word, `يومين`), and whose inflection *retrieval* uses (`en`, `de`). Each falls back rather than guessing, so `de` reads dates as English and `ar` inflects as undeclared |
 | `week_start` | `monday`, `sunday`, `saturday` | `monday` (`saturday` for `ar`) | which day begins a week — moves "last week" and every week count |
 | `date_order` | `day_first`, `month_first` | see below | which field a bare numeric date puts first |
 | `calendar` | `gregorian`, `buddhist`, `minguo`, `hijri`, `jalali`, `reiwa`, `heisei`, `showa`, `taisho`, `meiji` | `gregorian` | which calendar counted the year, **unless a drawer names its own era** |
@@ -304,6 +304,16 @@ Four signals are consulted, strongest first:
 The cost of that last step is explicit: a US corpus that never declares
 `month_first` reads `07/05` as 7 May. Declare it once and the whole corpus reads
 correctly, retroactively.
+
+**`language` also decides which word-endings retrieval will follow.** German
+plurals need `-er` (`Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher`) and
+English cannot have it — measured, enabling `-er` for English admitted
+`flow`/`flower`, `tow`/`tower`, `corn`/`corner`, `butt`/`butter` and
+`cow`/`cower`. German and English share a script, so nothing in the bytes says
+which endings are legal and the engine will not guess: declare `de` and German
+morphology reaches 100% of the audited pairs, leave it undeclared and it reaches
+75%. Note the price of declaring, which is real and deliberate: under `de`,
+`flow`/`flower` **will** meet, because you said this corpus is German.
 
 **`calendar`** — nothing is inferred here, ever. Script is not evidence (Thai
 script writes Gregorian dates constantly) and neither is the numeral system

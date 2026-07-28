@@ -1,5 +1,188 @@
 # Changelog
 
+## Unreleased — morphology gets the other half of its evidence
+
+- **Eighteen of nineteen languages reach 100% of their audited paradigm on the
+  LEXICAL channel.** Aggregate 191 pairs: **55.0% → 96.9%**, and the count of
+  pairs carried by the embedder alone falls from 20 to **zero**. Only Arabic is
+  short, at 85.7%, and its six are measured-unreachable rather than untried.
+  - **Greek 83.7% → 100%**, Russian 66.7% → 100%, French 85.7% → 100%,
+    English 80.0% → 100%.
+  - `derivations_for` — endings whose stem must be LONGER, because the ending is
+    short enough to be an accident on a short word. Two languages, three
+    endings, gated at five characters: English `-ion` separates
+    `encrypt`/`encryption` (7) from `mill`/`million` (4); French `-e` separates
+    `grand`/`grande` (5) from `port`/`porte` (4). This IS a length threshold —
+    the instrument that produced the floor-8→5 mistake — so it is deliberately
+    confined and every pair it decides is pinned as a control on one side or
+    the other.
+  - **The Greek final sigma cost 40 points across two commits.** Written into
+    the table it matches nothing, because `inflection_family` canonicalises its
+    inputs to the ordinary sigma. It was fixed once, then reintroduced by the
+    next batch of entries and had to be fixed again — a table whose entries are
+    invisible to the rule that reads them looks exactly like a table that is
+    merely incomplete.
+  - 38 negative controls, all green, now including the price of *declaring*
+    Dutch (`kop`/`kopen`, `man`/`manen`) beside the proof that an undeclared
+    corpus is untouched.
+
+- **Sixteen of nineteen languages now reach 100% of their audited paradigm.**
+  Aggregate lexical recall over 191 pairs: **55.0% → 89.5%**. Three mechanisms
+  finished the job, each language-scoped through `MorphLang`:
+  - `agglutinative_family` — prefix-anchored, because `strip_suffix` cannot see
+    a four-morpheme stack. Turkish `kitaplarımızdan` is `kitap`+`lar`+`ımız`+
+    `dan` and no fixed ending matches it; what identifies it is that the
+    remainder *begins* with a real plural morpheme. **Turkish 16.7% → 100%**,
+    Korean 40% → 100%. Single-vowel suffixes are excluded deliberately: Turkish
+    dative `-a`/`-e` would merge `kar`/`kara`, which is a control.
+  - Inflection tables for Dutch, Hindi and Georgian — all three to **100%**.
+  - ~60 more `IRREGULAR` entries: the suppletive cores of Italian, French,
+    Portuguese, Dutch, Russian, Greek, Persian and Korean.
+  - **Greek 38.8% → 83.7%, and 24 of those points were one character.** The
+    table was written with the FINAL sigma while `inflection_family`
+    canonicalises inputs to the ordinary one, so every `-ος` noun in the
+    language — the largest declension there is — matched nothing while the
+    entries sat there looking correct. Greek also gained the aorist augment and
+    the labial/velar/`-ζω` stem mutations.
+  - **Persian 83.3% → 100%** by naming the token that exists: the ZWNJ in the
+    present stem is not alphanumeric, so the segmenter splits it and the
+    drawer's token is the bare stem, never the citation form.
+  - Still short, and measured: Arabic 85.7% (six templatic pairs, priced and
+    rejected in `ARABIC_SKELETON_DECISION.md`), French 85.7%, English 80.0%
+    (`encrypt`/`encryption`, seven characters against a floor of eight),
+    Russian 66.7%, Greek 83.7%.
+
+- **Substitutive morphology, which is what almost everything left was.** Three
+  languages measured **0.0%** on the lexical channel — Italian, Russian, Dutch —
+  and the reason is structural: every rule the engine owned was ADDITIVE.
+  `libri` is not `libro` plus anything; it is `libro` with its ending replaced.
+  Italian, Russian, Greek and every Romance verb paradigm work this way.
+  - **A generic shared-prefix rule cannot do this job, at any threshold.**
+    `libro`/`libri` shares four characters and differs by one on each side — and
+    so does `porto`/`porta`. Identical shape, so any threshold admitting the
+    plural admits the false pair. What separates them is not length but
+    *identity*: `o`→`i` is an Italian plural and `o`→`a` is not.
+  - So `inflections_for` is a table of the mappings each language actually has,
+    scoped by `MorphLang` — data one can read and check, rather than a number
+    one can only tune. Six languages added: Italian, Spanish, French,
+    Portuguese, Russian, Greek.
+
+  | language | lexical before | after |
+  |---|---|---|
+  | Spanish | 57.1% | **100.0%** |
+  | Italian | **0.0%** | 83.3% |
+  | Portuguese | 33.3% | 83.3% |
+  | French | 28.6% | 71.4% |
+  | Greek | 38.8% | 53.1% |
+  | Russian | **0.0%** | 50.0% |
+
+  Aggregate lexical over 191 pairs in 19 languages: **55.0% → 69.1%**, with the
+  pairs carried by the embedder alone falling from 20 to 12.
+  - **Zero new false merges.** `caso`/`casa`, `porto`/`porta`, `город`/`горох`,
+    `сообщение`/`сообщество` all stay apart, and are now pinned in the shipped
+    controls (32, up from 27) with the language declared — a rule scoped to a
+    language is not exercised at all by an undeclared control.
+  - **One named price:** Italian `pesca`/`pesce` merges, because `a`→`e` carries
+    the entire feminine plural. Recorded as `Verdict::Cost`, exactly as
+    παράδειγμα/παράδεισος is for Greek.
+
+- **Spanish reaches 100%, and the untested Latin languages are now measured.**
+  27 Spanish irregular verb forms join `IRREGULAR` (`ser`/`fue`, `ir`/`va`,
+  `tener`/`tiene` …), taking Spanish from 85.7% to **100%** of its audited
+  pairs. Stated honestly: that is 100% *admitted* and **4/7 lexical** — the
+  three `hablar` forms are substitutive and remain semantic-only.
+  - **French, Italian, Portuguese and Dutch had never been measured at all.**
+    First numbers, lexical channel only: Portuguese 33.3%, French 28.6%,
+    Dutch 20.0%, **Italian 0.0%**.
+  - **Italian is the new Hebrew.** Not one pair reaches a lexical channel,
+    because Italian inflection **substitutes** rather than appends: `libri` is
+    not `libro` plus anything. Every additive rule the engine owns is
+    structurally blind to it. Fixing it needs a Romance prefix-family rule with
+    a threshold far below Greek's 7 — and that threshold is exactly what needs
+    controls, since `caso`/`casa` and `porto`/`porta` are one character apart too.
+  - **`-en` is now German-only, because Dutch caught it.** In the common set it
+    admitted `kop`/`kopen` (cup / to buy) and `man`/`manen` (man / manes) while
+    buying English nothing — every English `-en` form is irregular and named in
+    the table. Both are pinned in the shipped controls under
+    `dutch (undeclared)`, an undeclared corpus being exactly what gets the
+    common set. An ending has to earn its place in every language that might be
+    undeclared, not only the one it was added for.
+  - Aggregate over the 167-pair audit: **64.1% → 70.1%**, seven languages at
+    100% (English, German, Spanish, Hebrew, Japanese, Chinese, Thai).
+
+- **German reaches 100%, because the caller can now say it is German.**
+  `MorphLang` joins `SearchOptions`, driven by the request's existing
+  `language` field — one declaration, two consumers: the date scanner (`en`,
+  `ar`) and morphology (`en`, `de`). Declared German enables `-er`, and
+  `Kind`/`Kinder`, `Haus`/`Häuser` and `Buch`/`Bücher` all reach the **lexical**
+  channel; `Bücher` had been semantic-only. Measured end to end: German
+  **50% → 100%** of its audited pairs, all eight on `lexical_morph`.
+  - Read-time and declared, never detected, exactly like `calendar` and
+    `date_order`. German and English share a script, so nothing in the bytes
+    says which endings are legal. Undeclared behaves exactly as before.
+  - **The price of declaring is pinned by test**: under `MorphLang::German`,
+    `flow`/`flower` *does* meet. That is correct — the caller said this corpus
+    is German — and it is precisely why the choice is per request.
+
+- **English reaches its own inflected forms.** Two pairwise rules, neither a
+  stemmer and neither a floor. `suffix_family` asks whether one word is the
+  other plus one ending from a **closed six-item set**, with final-consonant
+  undoubling so `running` reaches `run`. `IRREGULAR` is a table of ~110 forms no
+  rule over letters can relate — English suppletion and strong verbs, irregular
+  plurals, German strong verbs — because `go`/`went` is not a spelling variant
+  of a stem and 58% of all remaining audit drops are exactly this class.
+  - **Shape, not length, is what makes a 3-character stem safe.** Containment at
+    floor 3 asks "does `run` appear anywhere in this word" and answers yes for
+    `brunt`, `prune`, `runway`: measured, mean **33.3** English words per query
+    and **68.5** German, peaking at 1,996. `suffix_family` asks "is this exactly
+    `run` plus one of six endings" and measures **1.08** and **0.98**, bounded at
+    5 links. Unlike a stemmer it builds no equivalence class, so no single bad
+    ending can poison one.
+  - **`-er` is excluded, and it cost German its plurals.** `Kind`/`Kinder` and
+    `Haus`/`Häuser` need it. Enabling it admitted `flow`/`flower`, `tow`/`tower`,
+    `corn`/`corner`, `butt`/`butter` and `cow`/`cower` — five false pairs for
+    two real ones, because English also builds agent nouns with `-er`. One
+    suffix set cannot serve two languages that share a script and disagree; that
+    needs a **language input**, the same wall the containment floor hit. The
+    umlaut would have discriminated (`Häuser` carries one, `flower` cannot) but
+    `search_key` folds it away first, and `Kind`/`Kinder` has none anyway.
+  - **Promiscuity did not catch `-er`; the controls did.** Adding it moved the
+    population figure by **+0.21 links per query** — indistinguishable from
+    safe. The negative controls failed it five times over. A population metric
+    is no more a precision test than a recall metric is.
+  - **A wrong belief, corrected by asserting the channel.** `encrypt`/`encryption`
+    reads as *admitted* in the audit and reaches **no lexical channel at all**:
+    `encrypt` is seven characters, one below `contains_a_long_word`'s floor of
+    eight, so it has only ever been a semantic hit. Every per-language audit
+    percentage mixes lexical and embedder admissions and none of them is a
+    lexical-recall figure.
+
+- **Negative controls, at last.** The 167-pair morphology audit that drove the
+  comparison layer contains **no false friends** — every row in it is a true
+  relation, so a rule admitting every string pair would score 100% on it. That
+  is precisely how the containment floor went 8 → 5 on a "safe" reading and
+  admitted `other`/`mother`. `false_friends_stay_apart` closes the gap: 20 known
+  false friends across English, German, Arabic and Greek, measured end to end
+  through the real `search` at realistic drawer length, asserting only the
+  **lexical** channels — a semantic-only hit is the embedder's opinion, not a
+  rule's, and pinning it would make this a test of `HashEmbedder`.
+  - It **fails in both directions**. A pair that gains a lexical channel is a
+    new over-admission; a pair that loses one is good news the test refuses to
+    absorb silently.
+  - Verified load-bearing: de-scoping `greek_word_family` to all scripts makes
+    `university`/`universe`, `conversation`/`conversion`,
+    `internal`/`international` and `processor`/`procession` admit on
+    `lexical_morph` at 0.309, and the test names each one.
+  - **Three Arabic false friends already admit** and are pinned as such:
+    `سيارة`/`أسرة`, `كريم`/`كرم`, `قطار`/`قطر` all share a consonantal skeleton
+    once the weak letters ا و ي are stripped. The audit named them and never ran
+    them; this is the first measurement of the shipped rule's price.
+  - Padding is asserted disjoint from every control word. The first run of this
+    instrument reported `πολύ`/`πόλη` — the pair `lib.rs` records as having
+    killed Snowball Greek — as *already related*, because the filler literally
+    contained `πολύ` and the query matched its own padding. A contaminated
+    control fails flatteringly, which is the dangerous direction.
+
 ## Unreleased — the comparison layer, and dates that are declared rather than guessed
 
 - **An era the writer typed outranks the calendar the caller declared.** `พ.ศ.`,

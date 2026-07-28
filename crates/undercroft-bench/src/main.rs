@@ -588,6 +588,7 @@ fn run_longmemeval(
         let hits = store.search(
             question,
             &SearchOptions {
+                morph_lang: Default::default(),
                 wing: None,
                 room: None,
                 limit: k * 8,
@@ -719,6 +720,7 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
         let hits = store.search(
             &query,
             &SearchOptions {
+                morph_lang: Default::default(),
                 wing: None,
                 room: None,
                 limit: 5,
@@ -1029,6 +1031,7 @@ impl vs::MemorySystem for NativeSystem {
     fn search_sessions(&mut self, question: &str, k: usize) -> Result<Vec<String>> {
         let (_, store) = self.store.as_mut().context("no conversation open")?;
         let opts = SearchOptions {
+            morph_lang: Default::default(),
             wing: None,
             room: None,
             limit: k * 6,
@@ -1139,6 +1142,7 @@ fn locomo_eval(
                 })
                 .collect();
             let opts = SearchOptions {
+                morph_lang: Default::default(),
                 wing: None,
                 room: None,
                 limit: k * 6,
@@ -1227,6 +1231,7 @@ fn score_pass(
         let hits = store.search(
             question,
             &SearchOptions {
+                morph_lang: Default::default(),
                 wing: wing.map(str::to_string),
                 room: None,
                 limit: k * 6,
@@ -1446,6 +1451,7 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
         let hits = store.search(
             question,
             &SearchOptions {
+                morph_lang: Default::default(),
                 wing: None,
                 room: None,
                 limit: k,
@@ -1521,6 +1527,7 @@ fn membench_eval(raw: &Value, topic: &str, k: usize, limit: Option<usize>) -> Re
         let hits = store.search(
             question,
             &SearchOptions {
+                morph_lang: Default::default(),
                 wing: None,
                 room: None,
                 limit: k,

@@ -43,3 +43,7 @@ deploy/observability/docker-compose.binary.yml
 # local benchmark runs (published logs are curated in benchmarks/logs/)
 benchmarks/vs.env
 benchmarks/logs/local/
+
+# Promiscuity corpora, fetched not committed (hermitdave/FrequencyWords, MIT):
+#   curl -sSL https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ar/ar_50k.txt -o crates/undercroft-store/testdata/ar_50k.txt
+crates/undercroft-store/testdata/

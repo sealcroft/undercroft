@@ -532,6 +532,7 @@ mod tests {
                     .search(
                         "heron verbatim",
                         &crate::SearchOptions {
+                            morph_lang: Default::default(),
                             wing: None,
                             room: None,
                             limit: 3,
@@ -573,6 +574,7 @@ mod tests {
                 .search(
                     "heron verbatim",
                     &crate::SearchOptions {
+                        morph_lang: Default::default(),
                         wing: None,
                         room: None,
                         limit: 3,

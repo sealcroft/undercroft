@@ -281,6 +281,23 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let hits = store.search(
                 query,
                 &SearchOptions {
+                    // The same `language` the date scanner reads.
+                    morph_lang: match opt_str(args, "language") {
+                        Some("de") | Some("german") => undercroft_store::MorphLang::German,
+                        Some("en") | Some("english") => undercroft_store::MorphLang::English,
+                        Some("it") | Some("italian") => undercroft_store::MorphLang::Italian,
+                        Some("es") | Some("spanish") => undercroft_store::MorphLang::Spanish,
+                        Some("fr") | Some("french") => undercroft_store::MorphLang::French,
+                        Some("pt") | Some("portuguese") => undercroft_store::MorphLang::Portuguese,
+                        Some("ru") | Some("russian") => undercroft_store::MorphLang::Russian,
+                        Some("el") | Some("greek") => undercroft_store::MorphLang::Greek,
+                        Some("nl") | Some("dutch") => undercroft_store::MorphLang::Dutch,
+                        Some("tr") | Some("turkish") => undercroft_store::MorphLang::Turkish,
+                        Some("hi") | Some("hindi") => undercroft_store::MorphLang::Hindi,
+                        Some("ka") | Some("georgian") => undercroft_store::MorphLang::Georgian,
+                        Some("ko") | Some("korean") => undercroft_store::MorphLang::Korean,
+                        _ => undercroft_store::MorphLang::Undeclared,
+                    },
                     wing,
                     room,
                     limit,

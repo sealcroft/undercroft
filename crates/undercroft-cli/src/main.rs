@@ -1140,6 +1140,7 @@ fn main() -> Result<()> {
         } => {
             let store = open_store(&cli, vault)?;
             let opts = SearchOptions {
+                morph_lang: Default::default(),
                 wing: wing.clone(),
                 room: room.clone(),
                 limit: *limit,

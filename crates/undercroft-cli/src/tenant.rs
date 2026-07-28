@@ -114,6 +114,31 @@ fn locale_from(body: &Value) -> undercroft_core::temporal::Locale {
     locale
 }
 
+/// Whose inflection applies to the query, from the request's `language`.
+///
+/// Read-time and declared, exactly like `calendar` and `date_order`: German and
+/// English share a script, so nothing in the bytes says which endings are legal.
+/// An unrecognised or absent value means `Undeclared`, which is the behaviour
+/// that shipped before this existed.
+fn morph_lang_from(body: &Value) -> undercroft_store::MorphLang {
+    match body.get("language").and_then(Value::as_str) {
+        Some("de") | Some("german") => undercroft_store::MorphLang::German,
+        Some("en") | Some("english") => undercroft_store::MorphLang::English,
+        Some("it") | Some("italian") => undercroft_store::MorphLang::Italian,
+        Some("es") | Some("spanish") => undercroft_store::MorphLang::Spanish,
+        Some("fr") | Some("french") => undercroft_store::MorphLang::French,
+        Some("pt") | Some("portuguese") => undercroft_store::MorphLang::Portuguese,
+        Some("ru") | Some("russian") => undercroft_store::MorphLang::Russian,
+        Some("el") | Some("greek") => undercroft_store::MorphLang::Greek,
+        Some("nl") | Some("dutch") => undercroft_store::MorphLang::Dutch,
+        Some("tr") | Some("turkish") => undercroft_store::MorphLang::Turkish,
+        Some("hi") | Some("hindi") => undercroft_store::MorphLang::Hindi,
+        Some("ka") | Some("georgian") => undercroft_store::MorphLang::Georgian,
+        Some("ko") | Some("korean") => undercroft_store::MorphLang::Korean,
+        _ => undercroft_store::MorphLang::Undeclared,
+    }
+}
+
 /// Triples as JSON, each labelled with where it rests.
 ///
 /// `grounding` is `stated` (the note's own words support it, at the recorded
@@ -586,6 +611,11 @@ impl Tenancy {
         let body = parse_json(body)?;
         let query = body_str(&body, "query")?;
         let opts = SearchOptions {
+            // The SAME `language` the date scanner reads. One declaration per
+            // request; each consumer documents what it supports and falls back
+            // rather than guessing. Morphology knows en and de; the temporal
+            // scanner knows en and ar.
+            morph_lang: morph_lang_from(&body),
             wing: body.get("wing").and_then(Value::as_str).map(String::from),
             room: body.get("room").and_then(Value::as_str).map(String::from),
             limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,

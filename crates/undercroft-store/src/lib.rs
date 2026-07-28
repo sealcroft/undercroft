@@ -349,6 +349,8 @@ pub struct SaveOutcome {
 
 #[derive(Debug, Default, Clone)]
 pub struct SearchOptions {
+    /// Whose inflection applies. Declared, never detected — see [`MorphLang`].
+    pub morph_lang: MorphLang,
     pub wing: Option<String>,
     pub room: Option<String>,
     pub limit: usize,
@@ -1810,6 +1812,9 @@ impl PalaceStore {
         let _span = undercroft_obs::scope("search", self.vault.id());
         let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
+        // Declared by the caller, never read off the text: German and English
+        // share a script, so nothing in the bytes says which endings are legal.
+        let lang = opts.morph_lang;
         let qterms: Vec<String> = tokenize(query);
 
         let candidates = if self.fde_enabled {
@@ -1955,7 +1960,7 @@ impl PalaceStore {
                 })
                 .collect::<Vec<_>>(),
             Fusion::Bm25 => {
-                let bm25 = bm25_scores(&qterms, &cands);
+                let bm25 = bm25_scores(&qterms, &cands, lang);
                 cands
                     .into_iter()
                     .zip(bm25)
@@ -1972,7 +1977,7 @@ impl PalaceStore {
                     })
                     .collect::<Vec<_>>()
             }
-            Fusion::Rrf => rrf_fuse(&qterms, cands),
+            Fusion::Rrf => rrf_fuse(&qterms, cands, lang),
         };
 
         // Relevance gate: an unrelated record still scores ~0.35 from the
@@ -2498,6 +2503,753 @@ fn skeleton_with(w: &str, weak: fn(char) -> bool) -> String {
     w.chars().filter(|c| !weak(*c)).collect()
 }
 
+/// Whose inflection applies to a comparison, declared by the caller.
+///
+/// Not detected, and not detectable: German and English share a script, so
+/// nothing in the bytes says which endings are legal. This is the same class of
+/// read-time declaration as [`undercroft_core::temporal::Locale`]'s `calendar`
+/// and `date_order` — the caller knows their corpus and the engine does not
+/// guess.
+///
+/// It exists because one suffix set demonstrably cannot serve two languages.
+/// See [`suffixes_for`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum MorphLang {
+    /// Nothing declared: only the endings that are safe in every delimiting
+    /// script. Exactly what shipped before this existed, so an undeclared
+    /// corpus behaves as it always did.
+    #[default]
+    Undeclared,
+    English,
+    German,
+    Italian,
+    Spanish,
+    French,
+    Portuguese,
+    Russian,
+    Greek,
+    Dutch,
+    Turkish,
+    Hindi,
+    Georgian,
+    Korean,
+}
+
+/// The inflectional endings a word may gain, as a CLOSED set per language.
+///
+/// Deliberately never `-e`: German `Reis` (rice) + `e` is `Reise` (journey),
+/// and that pair is a control.
+///
+/// **`-er` is the reason this function takes a language at all.** German needs
+/// it for `Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher`. English cannot
+/// have it: measured against the controls, enabling it for English admitted
+/// `flow`/`flower`, `tow`/`tower`, `corn`/`corner`, `butt`/`butter` and
+/// `cow`/`cower` — five false pairs for two real ones, because English also
+/// builds agent nouns with `-er` and the shorter word is frequently not the
+/// verb. Note the population instrument could NOT see this: adding `-er` moved
+/// promiscuity by +0.21 links per query, indistinguishable from safe. Only the
+/// negative controls caught it.
+///
+/// The umlaut would have discriminated without any declaration — `Häuser`,
+/// `Bücher`, `Männer` all carry one and `flower` cannot — but `search_key`
+/// folds it away long before this rule sees the word, and `Kind`/`Kinder` has
+/// no umlaut anyway.
+/// Endings that SUBSTITUTE for one another on a shared stem, per language.
+///
+/// This is the mechanism `suffix_family` is structurally blind to, and it is
+/// the single largest block of everything still dropped. An additive rule asks
+/// whether one word is the other **plus** an ending; `libri` is not `libro`
+/// plus anything, it is `libro` with its ending replaced. Italian, Russian,
+/// Greek and every Romance verb paradigm work this way, which is why three
+/// languages measured **0.0%** on the lexical channel.
+///
+/// **A generic shared-prefix rule cannot do this job.** `libro`/`libri` shares
+/// four characters and differs by one on each side — and so does
+/// `porto`/`porta`. They are the same shape, so any threshold that admits the
+/// plural admits the false pair. What separates them is not length but
+/// *identity*: `o`→`i` is an Italian plural and `o`→`a` is not. So the rule is
+/// a table of the mappings a language actually has, which is data one can read
+/// and check, rather than a number one can only tune.
+///
+/// Every entry is a real paradigm ending. Nothing here is a guess about which
+/// strings look similar.
+fn inflections_for(lang: MorphLang) -> &'static [(&'static str, &'static str)] {
+    const NONE: &[(&str, &str)] = &[];
+    // Nouns first, then the verb classes.
+    const IT: &[(&str, &str)] = &[
+        ("o", "i"),
+        ("a", "e"),
+        ("e", "i"),
+        ("co", "chi"),
+        ("go", "ghi"),
+        ("ca", "che"),
+        ("ga", "ghe"),
+        ("are", "o"),
+        ("are", "a"),
+        ("are", "ano"),
+        ("are", "ato"),
+        ("are", "ava"),
+        ("are", "iamo"),
+        ("ere", "o"),
+        ("ere", "e"),
+        ("ere", "ono"),
+        ("ere", "uto"),
+        ("ire", "o"),
+        ("ire", "e"),
+        ("ire", "ono"),
+        ("ire", "ito"),
+    ];
+    const ES: &[(&str, &str)] = &[
+        ("ar", "o"),
+        ("ar", "a"),
+        ("ar", "an"),
+        ("ar", "amos"),
+        ("ar", "aron"),
+        ("ar", "aba"),
+        ("ar", "ado"),
+        ("er", "o"),
+        ("er", "e"),
+        ("er", "en"),
+        ("er", "emos"),
+        ("er", "ieron"),
+        ("er", "ido"),
+        ("ir", "o"),
+        ("ir", "e"),
+        ("ir", "en"),
+        ("ir", "imos"),
+        ("ir", "ieron"),
+        ("ir", "ido"),
+    ];
+    const FR: &[(&str, &str)] = &[
+        ("er", "e"),
+        ("er", "es"),
+        ("er", "ent"),
+        ("er", "ons"),
+        ("er", "ez"),
+        ("er", "ais"),
+        ("er", "ait"),
+        ("er", "ait"),
+        ("al", "aux"),
+        ("eau", "eaux"),
+        ("if", "ive"),
+    ];
+    const PT: &[(&str, &str)] = &[
+        ("ar", "o"),
+        ("ar", "a"),
+        ("ar", "am"),
+        ("ar", "ou"),
+        ("ar", "amos"),
+        ("ar", "ado"),
+        ("er", "o"),
+        ("er", "e"),
+        ("er", "em"),
+        ("er", "eu"),
+        ("er", "ido"),
+        ("ir", "o"),
+        ("ir", "e"),
+        ("ir", "em"),
+        ("ir", "iu"),
+        ("ao", "oes"),
+    ];
+    // Russian: the six cases of the commonest declensions, plus the verb
+    // endings. Nothing here maps a consonant to a consonant, which is what
+    // keeps `город`/`горох` apart.
+    const RU: &[(&str, &str)] = &[
+        ("а", "и"),
+        ("а", "е"),
+        ("а", "у"),
+        ("а", "ой"),
+        ("а", "ы"),
+        ("а", "ам"),
+        ("а", "ах"),
+        ("я", "и"),
+        ("я", "е"),
+        ("я", "ю"),
+        ("ь", "и"),
+        ("ь", "е"),
+        ("ать", "аю"),
+        ("ать", "ает"),
+        ("ать", "ают"),
+        ("ать", "ал"),
+        ("ить", "ю"),
+        ("ить", "ит"),
+        ("ить", "ят"),
+        ("ить", "ил"),
+        // Masculine consonant stems: the cases append rather than substitute.
+        // Nothing here maps a consonant to a consonant, so `город`/`горох`
+        // stays out.
+        ("", "а"),
+        ("", "у"),
+        ("", "ом"),
+        ("", "е"),
+        ("", "ы"),
+        ("", "ов"),
+        ("", "ам"),
+        ("", "ах"),
+        ("", "ами"),
+    ];
+    // Greek, written with the ORDINARY sigma throughout: `inflection_family`
+    // canonicalises the final form to it before matching, so a pattern
+    // written with the final sigma matches nothing at all.
+    const EL: &[(&str, &str)] = &[
+        ("οσ", "ου"),
+        ("οσ", "οι"),
+        ("οσ", "ων"),
+        ("οσ", "ουσ"),
+        ("οσ", "ο"),
+        ("α", "εσ"),
+        ("α", "ων"),
+        ("α", "ασ"),
+        ("η", "ησ"),
+        ("η", "εισ"),
+        ("η", "εων"),
+        ("ησ", "η"),
+        ("ησ", "εσ"),
+        ("ησ", "ων"),
+        ("ω", "ει"),
+        ("ω", "εισ"),
+        ("ω", "ουμε"),
+        ("ω", "ουν"),
+        ("ομαι", "εται"),
+        ("ομαι", "ονται"),
+        // Aorist stem mutation: labials, velars and the -ζω verbs.
+        ("φω", "ψα"),
+        ("πω", "ψα"),
+        ("βω", "ψα"),
+        ("κω", "ξα"),
+        ("γω", "ξα"),
+        ("χω", "ξα"),
+        ("ζω", "σα"),
+        // The declensions the first pass missed, one per audited drop.
+        ("ασ", "εσ"),
+        ("ασ", "α"),
+        ("ασ", "ων"),
+        ("ο", "ου"),
+        ("ο", "α"),
+        ("ι", "ιου"),
+        ("ι", "ια"),
+        ("ι", "ιων"),
+        ("α", "ατοσ"),
+        ("α", "ατα"),
+        ("α", "ατων"),
+        ("αινω", "α"),
+        ("ησ", "ητησ"),
+    ];
+    const NL: &[(&str, &str)] = &[("", "en"), ("s", "zen"), ("f", "ven"), ("", "s")];
+    // Devanagari. The oblique a-matra -> e-matra is the one substitution here;
+    // the plural and oblique-plural endings append.
+    const HI: &[(&str, &str)] = &[
+        ("", "\u{947}\u{902}"),
+        ("", "\u{94b}\u{902}"),
+        ("\u{93e}", "\u{947}"),
+    ];
+    // Georgian: nominative -i against the plural and the case endings.
+    const KA: &[(&str, &str)] = &[
+        ("\u{10d8}", "\u{10d4}\u{10d1}\u{10d8}"),
+        ("\u{10d8}", "\u{10e8}\u{10d8}"),
+        ("\u{10d8}", "\u{10e1}"),
+    ];
+    match lang {
+        MorphLang::Dutch => NL,
+        MorphLang::Hindi => HI,
+        MorphLang::Georgian => KA,
+        MorphLang::Italian => IT,
+        MorphLang::Spanish => ES,
+        MorphLang::French => FR,
+        MorphLang::Portuguese => PT,
+        MorphLang::Russian => RU,
+        MorphLang::Greek => EL,
+        _ => NONE,
+    }
+}
+
+/// Suffixes an agglutinative language STACKS, matched at the front of what is
+/// left after the stem — never as a whole ending.
+///
+/// `strip_suffix` cannot see these. Turkish `kitaplarımızdan` is `kitap` +
+/// `lar` + `ımız` + `dan`, four morphemes deep, and no fixed ending matches it;
+/// what identifies it is that the remainder *begins* with a real plural
+/// morpheme. So this rule anchors on the stem and asks only about the first
+/// suffix in the stack.
+///
+/// **Single-vowel suffixes are excluded on purpose.** Turkish dative is `-a`/
+/// `-e` after a consonant, so admitting it would merge `kar`/`kara` (snow /
+/// black), which is a control. The cost is that dative on a consonant stem is
+/// not reached; the alternative is a rule relating every noun to every noun
+/// ending in one more vowel.
+fn agglutinative_for(lang: MorphLang) -> &'static [&'static str] {
+    const NONE: &[&str] = &[];
+    const TR: &[&str] = &[
+        "ler", "lar", "de", "da", "te", "ta", "den", "dan", "ten", "tan", "in", "ın", "un", "ün",
+        "im", "ım", "um", "üm", "iyor", "ıyor", "uyor", "üyor", "ecek", "acak", "di", "dı", "du",
+        "dü", "ti", "tı", "miş", "mış", "siz", "sız", "lik", "lık", "luk", "lük",
+    ];
+    // Korean particles, which attach to an unchanged noun.
+    const KO: &[&str] = &[
+        "\u{c5d0}\u{c11c}",
+        "\u{c5d0}\u{ac8c}",
+        "\u{c5d0}",
+        "\u{c758}",
+        "\u{c744}",
+        "\u{b97c}",
+        "\u{c740}",
+        "\u{b294}",
+        "\u{b3c4}",
+        "\u{b9cc}",
+        "\u{bd80}\u{d130}",
+        "\u{ae4c}\u{c9c0}",
+    ];
+    match lang {
+        MorphLang::Turkish => TR,
+        MorphLang::Korean => KO,
+        _ => NONE,
+    }
+}
+
+/// Shortest stem an agglutinative language may inflect. Two, because Turkish
+/// `ev` (house) and Korean nouns genuinely are two characters — and two is safe
+/// HERE for the reason three is safe in `suffix_family`: the rule demands the
+/// stem match EXACTLY and the remainder begin with a real morpheme, not that
+/// the stem appear somewhere inside the word.
+const AGGLUTINATIVE_STEM_FLOOR: usize = 2;
+
+/// A stem carrying a stack of suffixes — `ev`/`evlerde`,
+/// `kitap`/`kitaplarımızdan`, `학교`/`학교에서`.
+fn agglutinative_family(q: &str, tok: &str, lang: MorphLang) -> bool {
+    let sufs = agglutinative_for(lang);
+    if sufs.is_empty() {
+        return false;
+    }
+    // Turkish cites a verb by its infinitive; the stack sits on the stem.
+    let bases = [
+        q,
+        q.strip_suffix("mek").unwrap_or(q),
+        q.strip_suffix("mak").unwrap_or(q),
+        q.strip_suffix("\u{b2e4}").unwrap_or(q),
+    ];
+    bases.iter().any(|base| {
+        base.chars().count() >= AGGLUTINATIVE_STEM_FLOOR
+            && tok
+                .strip_prefix(*base)
+                .is_some_and(|rest| sufs.iter().any(|sx| rest.starts_with(sx)))
+    })
+}
+
+/// Endings whose stems must be LONGER, because the ending itself is short and
+/// common enough to be an accident on a short word.
+///
+/// Two entries earn this, and both were measured against controls rather than
+/// argued. English `-ion`: `encrypt`/`encryption` is a real derivation and
+/// `mill`/`million` is not, and the only thing separating them is that
+/// `encrypt` is seven characters and `mill` is four. French `-e`:
+/// `grand`/`grande` is the feminine and `port`/`porte` is a harbour beside a
+/// door — again five characters against four.
+///
+/// This IS a length threshold, which is the instrument that produced the
+/// floor-8→5 mistake, so it is deliberately confined: two languages, three
+/// endings, and every pair it decides is pinned as a control on one side or the
+/// other. It is not a general permission to lower floors.
+fn derivations_for(lang: MorphLang) -> &'static [(&'static str, &'static str)] {
+    const NONE: &[(&str, &str)] = &[];
+    const EN: &[(&str, &str)] = &[("", "ion"), ("", "ation"), ("e", "ion")];
+    const FR: &[(&str, &str)] = &[("", "e"), ("", "es")];
+    match lang {
+        MorphLang::English => EN,
+        MorphLang::French => FR,
+        _ => NONE,
+    }
+}
+
+/// Stem length a [`derivations_for`] ending requires. Five, because that is
+/// what separates `encrypt` (7) from `mill` (4) and `grand` (5) from `port` (4).
+const DERIVATION_STEM_FLOOR: usize = 5;
+
+/// Shortest stem an inflection may sit on. Three: Italian `cas`/`casa`/`case`
+/// is the pair this exists for, and a two-character stem in any of these
+/// languages is a preposition, not a lemma.
+const INFLECTION_STEM_FLOOR: usize = 3;
+
+/// Two words that are one stem carrying two endings the language actually
+/// pairs — `libro`/`libri`, `книга`/`книги`, `hablar`/`hablo`.
+///
+/// Pairwise like everything else here: it answers about two strings and builds
+/// no equivalence class, so a wrong entry costs exactly the pairs it names.
+fn inflection_family(q: &str, tok: &str, lang: MorphLang) -> bool {
+    if q == tok {
+        return false;
+    }
+    // Greek writes sigma in a FINAL form word-finally and an ordinary form
+    // everywhere else. It is one letter, and `search_key` keeps both — so a
+    // table written with the ordinary sigma missed EVERY `-os` noun in the
+    // language, silently, while the entries sat there looking correct. Folded
+    // here to keep the blast radius to this rule; doing it in `search_key` is
+    // the better fix and needs an `fts_key_version` bump.
+    let canon = |w: &str| -> String { w.replace('\u{3c2}', "\u{3c3}") };
+    // The Greek aorist prefixes an augment. Stripping it lets the stems meet —
+    // a real morpheme, not a guess about a leading vowel.
+    let forms = |w: &str| -> Vec<String> {
+        let c = canon(w);
+        let mut v = vec![c.clone()];
+        if lang == MorphLang::Greek {
+            if let Some(rest) = c.strip_prefix('\u{3b5}') {
+                if rest.chars().count() >= INFLECTION_STEM_FLOOR {
+                    v.push(rest.to_string());
+                }
+            }
+        }
+        v
+    };
+    let (qs, ts) = (forms(q), forms(tok));
+    let meets = |table: &[(&str, &str)], floor: usize| -> bool {
+        table.iter().any(|(a, b)| {
+            [(a, b), (b, a)].iter().any(|(x, y)| {
+                qs.iter().any(|qf| {
+                    ts.iter()
+                        .any(|tf| match (qf.strip_suffix(**x), tf.strip_suffix(**y)) {
+                            (Some(sq), Some(st)) => sq == st && sq.chars().count() >= floor,
+                            _ => false,
+                        })
+                })
+            })
+        })
+    };
+    if meets(derivations_for(lang), DERIVATION_STEM_FLOOR) {
+        return true;
+    }
+    inflections_for(lang).iter().any(|(a, b)| {
+        [(a, b), (b, a)].iter().any(|(x, y)| {
+            qs.iter().any(|qf| {
+                ts.iter()
+                    .any(|tf| match (qf.strip_suffix(**x), tf.strip_suffix(**y)) {
+                        (Some(sq), Some(st)) => {
+                            sq == st && sq.chars().count() >= INFLECTION_STEM_FLOOR
+                        }
+                        _ => false,
+                    })
+            })
+        })
+    })
+}
+
+fn suffixes_for(lang: MorphLang) -> &'static [&'static str] {
+    // `-en` is German's, not everyone's. It buys English nothing — every
+    // English `-en` form here (`child`/`children`, `ox`/`oxen`) is irregular
+    // and named in the table — and measured on Dutch it admitted `kop`/`kopen`
+    // (cup / to buy) and `man`/`manen` (man / manes), two false pairs for no
+    // gain at all. An undeclared corpus should carry only endings that earn
+    // their place in every language that might be undeclared.
+    const COMMON: &[&str] = &["s", "es", "ed", "ing"];
+    const GERMAN: &[&str] = &["s", "es", "ed", "ing", "en", "er"];
+    match lang {
+        MorphLang::German => GERMAN,
+        // Every other language's productive endings are SUBSTITUTIVE and live
+        // in `inflections_for`; what they share with English is the plural
+        // `-s`/`-es`, which the common set already carries.
+        _ => COMMON,
+    }
+}
+
+/// Shortest stem this rule will inflect. Three, because `run`/`running` is the
+/// pair it exists for — and three is safe HERE in a way it is not for
+/// containment, which is the whole point of the shape below.
+const SUFFIX_STEM_FLOOR: usize = 3;
+
+/// One word is the other plus an inflectional ending — `run`/`running`,
+/// `kind`/`kinder`, `haus`/`häuser` (the fold has already made that `hauser`).
+///
+/// **This is not the containment floor, and not a stemmer.** The distinction is
+/// what makes a 3-character stem safe here when floor-3 containment was
+/// catastrophic. Containment asks "does `run` appear ANYWHERE in this word" and
+/// answers yes for `brunt`, `prune`, `grunt`, `runway`; measured, it reached a
+/// mean of 33 English words per query. This asks "is this word exactly `run`
+/// plus one ending from a six-item list", which admits `runs`, `running`,
+/// `runner` and nothing else. And unlike a stemmer it builds no equivalence
+/// class — it answers about two strings, so a bad ending cannot poison a class
+/// the way `πολύ`/`πόλη` poisons Snowball Greek's.
+///
+/// Final-consonant doubling is handled because English requires it: `running`
+/// is `run` + `n` + `ing`, and without the undoubling the pair this rule exists
+/// for does not match.
+fn suffix_family(q: &str, tok: &str, lang: MorphLang) -> bool {
+    let (short, long) = if q.chars().count() <= tok.chars().count() {
+        (q, tok)
+    } else {
+        (tok, q)
+    };
+    if short.chars().count() < SUFFIX_STEM_FLOOR || short == long {
+        return false;
+    }
+    // `run` doubled is `runn`; nothing else the stem could legally become.
+    let doubled = short
+        .chars()
+        .next_back()
+        .map(|c| format!("{short}{c}"))
+        .unwrap_or_default();
+    suffixes_for(lang).iter().any(|suf| {
+        long.strip_suffix(suf)
+            .is_some_and(|stem| stem == short || stem == doubled)
+    })
+}
+
+/// Forms that no rule over letters can relate, listed because they are a closed
+/// class and the alternative is silence.
+///
+/// Suppletion (`go`/`went`) and ablaut (`gehen`/`ging`, `sprechen`/`spricht`)
+/// are not spelling variations of a stem — they are different stems that a
+/// language has bolted into one paradigm. Every string relation the audit
+/// counterfactuals tested reaches exactly none of them, in six unrelated
+/// languages, which is why 58% of all remaining drops sit here.
+///
+/// A table is honest about being a table. It is data, reviewable line by line,
+/// and it creates no equivalence class beyond the pair written down. What it is
+/// NOT is complete: this is the frequent core of English irregular verbs and
+/// plurals plus German strong verbs, not a lexicon, and a form absent from it is
+/// simply not reached.
+const IRREGULAR: &[(&str, &str)] = &[
+    // English — irregular plurals.
+    ("child", "children"),
+    ("man", "men"),
+    ("woman", "women"),
+    ("person", "people"),
+    ("foot", "feet"),
+    ("tooth", "teeth"),
+    ("goose", "geese"),
+    ("mouse", "mice"),
+    ("louse", "lice"),
+    ("ox", "oxen"),
+    // English — suppletive and strong verbs, by frequency.
+    ("go", "went"),
+    ("be", "was"),
+    ("be", "were"),
+    ("am", "was"),
+    ("is", "was"),
+    ("are", "were"),
+    ("do", "did"),
+    ("have", "had"),
+    ("say", "said"),
+    ("make", "made"),
+    ("take", "took"),
+    ("come", "came"),
+    ("see", "saw"),
+    ("know", "knew"),
+    ("get", "got"),
+    ("give", "gave"),
+    ("find", "found"),
+    ("think", "thought"),
+    ("tell", "told"),
+    ("become", "became"),
+    ("leave", "left"),
+    ("feel", "felt"),
+    ("put", "put"),
+    ("bring", "brought"),
+    ("begin", "began"),
+    ("keep", "kept"),
+    ("hold", "held"),
+    ("write", "wrote"),
+    ("stand", "stood"),
+    ("hear", "heard"),
+    ("let", "let"),
+    ("mean", "meant"),
+    ("set", "set"),
+    ("meet", "met"),
+    ("run", "ran"),
+    ("pay", "paid"),
+    ("sit", "sat"),
+    ("speak", "spoke"),
+    ("lie", "lay"),
+    ("lead", "led"),
+    ("read", "read"),
+    ("grow", "grew"),
+    ("lose", "lost"),
+    ("fall", "fell"),
+    ("send", "sent"),
+    ("build", "built"),
+    ("understand", "understood"),
+    ("draw", "drew"),
+    ("break", "broke"),
+    ("spend", "spent"),
+    ("buy", "bought"),
+    ("eat", "ate"),
+    ("teach", "taught"),
+    ("catch", "caught"),
+    ("drive", "drove"),
+    ("sell", "sold"),
+    ("choose", "chose"),
+    ("drink", "drank"),
+    ("sing", "sang"),
+    ("swim", "swam"),
+    ("wear", "wore"),
+    ("sleep", "slept"),
+    ("win", "won"),
+    ("forget", "forgot"),
+    ("rise", "rose"),
+    ("throw", "threw"),
+    ("fly", "flew"),
+    ("steal", "stole"),
+    // The other languages' suppletive cores. Each is a different stem bolted
+    // into one paradigm, so no rule over letters reaches any of them.
+    // Italian.
+    ("andare", "vado"),
+    ("andare", "va"),
+    ("essere", "e"),
+    ("essere", "sono"),
+    ("essere", "era"),
+    ("avere", "ha"),
+    ("avere", "ho"),
+    ("fare", "faccio"),
+    // French.
+    ("aller", "vais"),
+    ("aller", "va"),
+    ("etre", "est"),
+    ("etre", "suis"),
+    ("etre", "etait"),
+    ("avoir", "ai"),
+    ("avoir", "avait"),
+    ("faire", "fait"),
+    ("pouvoir", "peut"),
+    ("vouloir", "veut"),
+    // Portuguese.
+    ("ser", "foi"),
+    ("ser", "e"),
+    ("ir", "foi"),
+    ("ir", "vai"),
+    ("ter", "tem"),
+    ("fazer", "fez"),
+    // Dutch.
+    ("gaan", "ging"),
+    ("zijn", "was"),
+    ("zijn", "is"),
+    ("hebben", "heeft"),
+    ("hebben", "had"),
+    ("spreken", "spreekt"),
+    ("stad", "steden"),
+    ("schip", "schepen"),
+    ("kind", "kinderen"),
+    // Russian: suppletion and the consonant mutations no ending table sees.
+    (
+        "\u{447}\u{435}\u{43b}\u{43e}\u{432}\u{435}\u{43a}",
+        "\u{43b}\u{44e}\u{434}\u{438}",
+    ),
+    (
+        "\u{43f}\u{438}\u{441}\u{430}\u{442}\u{44c}",
+        "\u{43f}\u{438}\u{448}\u{435}\u{442}",
+    ),
+    (
+        "\u{440}\u{435}\u{431}\u{451}\u{43d}\u{43e}\u{43a}",
+        "\u{434}\u{435}\u{442}\u{438}",
+    ),
+    ("\u{438}\u{434}\u{442}\u{438}", "\u{448}\u{451}\u{43b}"),
+    // Greek.
+    (
+        "\u{3b2}\u{3bb}\u{3b5}\u{3c0}\u{3c9}",
+        "\u{3b5}\u{3b9}\u{3b4}\u{3b1}",
+    ),
+    (
+        "\u{3c4}\u{3c1}\u{3c9}\u{3c9}",
+        "\u{3b5}\u{3c6}\u{3b1}\u{3b3}\u{3b1}",
+    ),
+    ("\u{3bb}\u{3b5}\u{3c9}", "\u{3b5}\u{3b9}\u{3c0}\u{3b1}"),
+    // Persian.
+    (
+        "\u{631}\u{641}\u{62a}\u{646}",
+        "\u{645}\u{6cc}\u{200c}\u{631}\u{648}\u{645}",
+    ),
+    (
+        "\u{631}\u{641}\u{62a}\u{646}",
+        "\u{645}\u{6cc}\u{631}\u{648}\u{645}",
+    ),
+    // Korean: the contraction shares no character with its citation form.
+    ("\u{d558}\u{b2e4}", "\u{d574}\u{c694}"),
+    ("\u{ba39}\u{b2e4}", "\u{ba39}\u{c5c8}\u{c5b4}\u{c694}"),
+    ("\u{c774}\u{b2e4}", "\u{c608}\u{c694}"),
+    // Persian: the ZWNJ in the present stem is not alphanumeric, so the
+    // segmenter splits it and the drawer's token is the bare stem. A table has
+    // to name the token that exists, not the citation form.
+    ("رفتن", "روم"),
+    // Spanish — the suppletive and stem-changing verbs. Spanish plurals are
+    // additive and the suffix rule already takes them; what it cannot take is
+    // a verb whose stem changes, and `ser`/`fue` shares no letters at all.
+    ("ser", "fue"),
+    ("ser", "es"),
+    ("ser", "era"),
+    ("ir", "fue"),
+    ("ir", "va"),
+    ("ir", "iba"),
+    ("haber", "hay"),
+    ("haber", "hubo"),
+    ("hacer", "hizo"),
+    ("hacer", "hace"),
+    ("tener", "tiene"),
+    ("tener", "tuvo"),
+    ("poder", "puede"),
+    ("poder", "pudo"),
+    ("decir", "dice"),
+    ("decir", "dijo"),
+    ("dar", "dio"),
+    ("estar", "esta"),
+    ("estar", "estuvo"),
+    ("querer", "quiere"),
+    ("venir", "viene"),
+    ("venir", "vino"),
+    ("saber", "sabe"),
+    ("saber", "supo"),
+    ("ver", "vio"),
+    ("poner", "puso"),
+    ("salir", "sale"),
+    // German — strong verbs, present 3sg and preterite against the infinitive.
+    // The fold has already resolved the umlauts, so these are written as the
+    // fold leaves them.
+    ("gehen", "ging"),
+    ("sprechen", "spricht"),
+    ("sprechen", "sprach"),
+    ("sein", "war"),
+    ("sein", "ist"),
+    ("haben", "hatte"),
+    ("werden", "wurde"),
+    ("werden", "wird"),
+    ("kommen", "kam"),
+    ("nehmen", "nahm"),
+    ("nehmen", "nimmt"),
+    ("geben", "gab"),
+    ("geben", "gibt"),
+    ("sehen", "sah"),
+    ("sehen", "sieht"),
+    ("stehen", "stand"),
+    ("finden", "fand"),
+    ("bleiben", "blieb"),
+    ("heissen", "hiess"),
+    ("essen", "ass"),
+    ("essen", "isst"),
+    ("fahren", "fuhr"),
+    ("fahren", "faehrt"),
+    ("laufen", "lief"),
+    ("lesen", "las"),
+    ("lesen", "liest"),
+    ("schreiben", "schrieb"),
+    ("trinken", "trank"),
+    ("helfen", "half"),
+    ("helfen", "hilft"),
+    ("halten", "hielt"),
+    ("tragen", "trug"),
+    ("schlafen", "schlief"),
+    ("treffen", "traf"),
+    ("denken", "dachte"),
+    ("bringen", "brachte"),
+    ("wissen", "wusste"),
+    ("wissen", "weiss"),
+    ("ziehen", "zog"),
+    ("bitten", "bat"),
+    ("sitzen", "sass"),
+    ("liegen", "lag"),
+];
+
+/// Whether the pair is one the [`IRREGULAR`] table names, in either direction.
+fn irregular_pair(q: &str, tok: &str) -> bool {
+    IRREGULAR
+        .iter()
+        .any(|(a, b)| (*a == q && *b == tok) || (*a == tok && *b == q))
+}
+
 /// Which rule applies to this word, by the script of its characters.
 ///
 /// Returns `None` for mixed-script words and for Han, where a character is
@@ -2572,7 +3324,7 @@ fn morph_rule_for(w: &str) -> Option<MorphRule> {
 
 /// Does a morphological relation hold — the admitting half of the morph
 /// channel, dispatched per script.
-fn morph_relation(q: &str, tok: &str) -> bool {
+fn morph_relation(q: &str, tok: &str, lang: MorphLang) -> bool {
     let Some(rule) = morph_rule_for(q) else {
         return false;
     };
@@ -2621,6 +3373,15 @@ fn morph_relation(q: &str, tok: &str) -> bool {
     // it is not the promiscuity that keeps it off Latin — it is that Latin's
     // false pairs (`conversation`/`conversion`) are the named, documented cost
     // of the rule, and Greek's beneficiaries are nine real paradigm forms.
+    // A named irregular form, and a regular ending on a stem the two share.
+    // Both are pairwise and neither creates a class.
+    if irregular_pair(q, tok)
+        || suffix_family(q, tok, lang)
+        || inflection_family(q, tok, lang)
+        || agglutinative_family(q, tok, lang)
+    {
+        return true;
+    }
     rule.prefix_family && greek_word_family(q, tok)
 }
 
@@ -2720,7 +3481,7 @@ struct Bm25 {
 /// Approximate evidence counts, but never as much as saying the word.
 const APPROX_WEIGHT: f32 = 0.5;
 
-fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> Bm25 {
+fn bm25_raw(qterms: &[String], cands: &[Candidate], lang: MorphLang) -> Bm25 {
     let n = cands.len();
     if n == 0 || qterms.is_empty() {
         return Bm25 {
@@ -2764,7 +3525,7 @@ fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> Bm25 {
             }
             // Checked before the general fuzzy scan so containment lands in
             // its own channel rather than being absorbed as approximate.
-            if let Some(j) = qterms.iter().position(|q| morph_relation(q, tok)) {
+            if let Some(j) = qterms.iter().position(|q| morph_relation(q, tok, lang)) {
                 tf_morph[i][j] = 1;
                 continue;
             }
@@ -2847,8 +3608,8 @@ fn bm25_raw(qterms: &[String], cands: &[Candidate]) -> Bm25 {
 /// BM25 squashed into [0,1] for the linear blend: `raw / (raw + k_sat)`,
 /// so one strong term match sits near 0.5 and additional evidence climbs
 /// toward 1 without ever forcing a top candidate to exactly 1.0.
-fn bm25_scores(qterms: &[String], cands: &[Candidate]) -> Vec<(f32, f32, f32)> {
-    let b = bm25_raw(qterms, cands);
+fn bm25_scores(qterms: &[String], cands: &[Candidate], lang: MorphLang) -> Vec<(f32, f32, f32)> {
+    let b = bm25_raw(qterms, cands, lang);
     if b.k_sat <= 0.0 {
         return vec![(0.0, 0.0, 0.0); cands.len()];
     }
@@ -2897,8 +3658,8 @@ fn ranks_desc_positive(vals: &[f32]) -> Vec<Option<usize>> {
 /// blend's recency weight). Scale-free: no semantic/lexical weight to tune,
 /// only rank positions. `lexical` is reported as the squashed BM25 so the
 /// caller's relevance gate treats it exactly like the BM25 blend.
-fn rrf_fuse(qterms: &[String], cands: Vec<Candidate>) -> Vec<SearchHit> {
-    let b = bm25_raw(qterms, &cands);
+fn rrf_fuse(qterms: &[String], cands: Vec<Candidate>, lang: MorphLang) -> Vec<SearchHit> {
+    let b = bm25_raw(qterms, &cands, lang);
     let (raw, k_sat) = (b.raw, b.k_sat);
     let sem: Vec<f32> = cands.iter().map(|c| c.semantic).collect();
     let rec: Vec<f32> = cands.iter().map(|c| c.recency).collect();
@@ -3101,6 +3862,7 @@ mod tests {
             .search(
                 "zebra lockfile note",
                 &SearchOptions {
+                    morph_lang: Default::default(),
                     limit: 3,
                     ..Default::default()
                 },
@@ -3111,6 +3873,7 @@ mod tests {
             .search(
                 "zebra lockfile note",
                 &SearchOptions {
+                    morph_lang: Default::default(),
                     limit: 3,
                     room_cap: Some(1),
                     ..Default::default()
@@ -3232,6 +3995,7 @@ mod tests {
                 .search(
                     "bulk drawer number",
                     &SearchOptions {
+                        morph_lang: Default::default(),
                         wing: None,
                         room: None,
                         limit: 5,
@@ -3304,6 +4068,7 @@ mod tests {
                 .search(
                     "kafka stream backlog",
                     &SearchOptions {
+                        morph_lang: Default::default(),
                         wing: None,
                         room: None,
                         limit: 2,
@@ -3921,6 +4686,7 @@ mod tests {
             ))
             .unwrap();
         let opts = SearchOptions {
+            morph_lang: Default::default(),
             wing: None,
             room: None,
             limit: 3,
@@ -4341,6 +5107,7 @@ mod tests {
             .search(
                 "alpha",
                 &SearchOptions {
+                    morph_lang: Default::default(),
                     wing: Some("a".into()),
                     room: None,
                     limit: 10,
@@ -5790,7 +6557,7 @@ mod tests {
             cand("die donaudampfschifffahrtsgesellschaft tagt heute"),
             cand("ein bericht ueber ganz andere dinge"),
         ];
-        let b = bm25_raw(&qterms, &cands);
+        let b = bm25_raw(&qterms, &cands, MorphLang::Undeclared);
         assert_eq!(b.exact[0], 0.0, "the drawer did not say the word");
         assert!(b.morph[0] > 0.0, "but it holds a word built on it");
         assert!(b.raw[0] > 0.0, "and it ranks");
@@ -5798,7 +6565,7 @@ mod tests {
         // Discounted for ranking exactly like approximate evidence: an exact
         // match on the same term must still outrank it.
         let exact_cands = vec![cand("dampfschifffahrt ist das thema")];
-        let e = bm25_raw(&qterms, &exact_cands);
+        let e = bm25_raw(&qterms, &exact_cands, MorphLang::Undeclared);
         assert!(e.exact[0] > 0.0);
     }
 
@@ -5888,7 +6655,7 @@ mod tests {
             cand("the document was filed"),
             cand("read the documentation"),
         ];
-        let b = bm25_raw(&qterms, &cands);
+        let b = bm25_raw(&qterms, &cands, MorphLang::Undeclared);
         assert_eq!(b.exact[0], 0.0, "a family match is not exact evidence");
         assert!(b.raw[0] > 0.0, "but it does contribute to ranking");
         assert!(b.exact[1] > 0.0, "the literal term is exact evidence");
@@ -6105,6 +6872,500 @@ mod tests {
         assert!(!greek_word_family("internal", "international"));
     }
 
+    /// Words that look related and are not — the half of the evidence the
+    /// morphology work has never had.
+    ///
+    /// `.handover/LANGUAGE_COVERAGE_AUDIT.md` states it at line 105: **none of
+    /// its 167 pairs is a negative control.** Every row is a true morphological
+    /// relation, so a rule that admitted every string pair would score 100% on
+    /// it. That is exactly how the containment floor went 8 → 5 on a "3.03 mean
+    /// links, safe" reading and admitted `other`/`mother`. A recall measurement
+    /// cannot justify a precision decision; this is the missing half, and every
+    /// rule that ADMITS has to come through here first.
+    ///
+    /// Measured end to end through the real [`PalaceStore::search`] at
+    /// **realistic drawer length**. At one sentence the cosine alone clears
+    /// `SEMANTIC_ADMISSION_GATE` and masks whatever the lexical channels do —
+    /// measured, 62.5% of Greek's supposedly-unreachable rows were admitted by
+    /// the embedder at short frame length, so a short-drawer control proves
+    /// nothing about a lexical rule.
+    ///
+    /// Only the LEXICAL channels are asserted. A semantic-only hit is the
+    /// embedder's opinion rather than a rule's, and pinning it would turn this
+    /// into a test of `HashEmbedder`'s hashing.
+    ///
+    /// **It fails in both directions.** [`Verdict::Apart`] pairs must not gain
+    /// a lexical channel. [`Verdict::Cost`] pairs already admit and are pinned
+    /// as the known price — if one stops admitting, that is *good news* and
+    /// this test reports it instead of staying quiet, exactly as
+    /// `a_sealed_vault_exposes_metadata_but_never_content` does for metadata.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Verdict {
+        /// Must not meet on any lexical channel.
+        Apart,
+        /// Already meets. A recorded, deliberate cost — not an accident.
+        Cost,
+    }
+
+    struct Controls {
+        language: &'static str,
+        /// Declared for the query, because a rule scoped to a language is not
+        /// exercised at all by an undeclared control.
+        lang: MorphLang,
+        /// Padding to reach realistic length. Asserted disjoint from every
+        /// control word: the first version of this study reported the decisive
+        /// Greek pair as already-related because the filler literally contained
+        /// the query, so the measurement was of the padding.
+        filler: &'static [&'static str],
+        pairs: &'static [(&'static str, &'static str, Verdict, &'static str)],
+    }
+
+    const CONTROL_SETS: &[Controls] = &[
+        Controls {
+            language: "english",
+            lang: MorphLang::English,
+            filler: &[
+                "the kitchen tap dripped all evening and kept me awake",
+                "we walked beside the river until the light faded away",
+                "she bought bread cheese and two bottles of red wine",
+                "the train from the airport was delayed by a whole hour",
+                "my neighbour repainted his fence a bright shade of green",
+                "they argued about the bill and then split it evenly",
+                "a grey cat slept on the warm bonnet of the van",
+            ],
+            pairs: &[
+                ("other", "mother", Verdict::Apart, "the floor 8→5 casualty"),
+                (
+                    "count",
+                    "accounting",
+                    Verdict::Apart,
+                    "the floor 8→5 casualty",
+                ),
+                ("press", "depression", Verdict::Apart, "audit false friend"),
+                ("university", "universe", Verdict::Apart, "Porter over-stem"),
+                ("organization", "organ", Verdict::Apart, "Porter over-stem"),
+                (
+                    "experiment",
+                    "experience",
+                    Verdict::Apart,
+                    "Porter over-stem",
+                ),
+                ("police", "policy", Verdict::Apart, "Porter over-stem"),
+                (
+                    "conversation",
+                    "conversion",
+                    Verdict::Apart,
+                    "same_word_family cost",
+                ),
+                (
+                    "internal",
+                    "international",
+                    Verdict::Apart,
+                    "same_word_family cost",
+                ),
+                (
+                    "processor",
+                    "procession",
+                    Verdict::Apart,
+                    "same_word_family cost",
+                ),
+                // The `-er` hazard. A suffix rule needs `-er` for German
+                // plurals, and English uses `-er` to make an agent noun from a
+                // verb — except where the shorter word is not that verb. These
+                // decide whether ONE Latin suffix set can serve both languages.
+                ("flow", "flower", Verdict::Apart, "-er hazard"),
+                ("tow", "tower", Verdict::Apart, "-er hazard"),
+                ("corn", "corner", Verdict::Apart, "-er hazard"),
+                ("butt", "butter", Verdict::Apart, "-er hazard"),
+                ("cow", "cower", Verdict::Apart, "-er hazard"),
+            ],
+        },
+        Controls {
+            // Dutch is not a declared language and never will be by accident:
+            // it is here because an UNDECLARED corpus gets `COMMON`, and these
+            // two are what `-en` did to it before `-en` became German-only.
+            language: "dutch (undeclared)",
+            lang: MorphLang::Undeclared,
+            filler: &[
+                "de kraan in de keuken heeft de hele avond gelekt",
+                "we liepen langs de rivier tot aan de brug",
+                "zij kocht kaas en twee flessen rode wijn",
+                "de trein vanaf het vliegveld was een uur te laat",
+                "de buurvrouw verfde haar schutting lichtgroen",
+                "zij aten brood met oude kaas en dronken thee",
+            ],
+            pairs: &[
+                (
+                    "kop",
+                    "kopen",
+                    Verdict::Apart,
+                    "cup / to buy — the -en cost",
+                ),
+                ("man", "manen", Verdict::Apart, "man / manes — the -en cost"),
+            ],
+        },
+        Controls {
+            // The price of DECLARING Dutch. `-en` is Dutch's plural, so
+            // declaring it takes `boek`/`boeken` and pays for it with these
+            // two. The `dutch (undeclared)` set above proves an undeclared
+            // corpus is untouched; this proves the cost is known rather than
+            // discovered later.
+            language: "dutch (declared)",
+            lang: MorphLang::Dutch,
+            filler: &[
+                "de kraan in de keuken heeft de hele avond gelekt",
+                "we liepen langs de rivier tot aan de brug",
+                "zij kocht kaas en twee flessen rode wijn",
+                "de trein vanaf het vliegveld was een uur te laat",
+                "de buurvrouw verfde haar schutting lichtgroen",
+                "zij aten brood met oude kaas en dronken thee",
+            ],
+            pairs: &[
+                (
+                    "kop",
+                    "kopen",
+                    Verdict::Cost,
+                    "cup / to buy — the -en price",
+                ),
+                ("man", "manen", Verdict::Cost, "man / manes — the -en price"),
+            ],
+        },
+        Controls {
+            language: "german",
+            lang: MorphLang::German,
+            filler: &[
+                "der wasserhahn tropfte den ganzen abend und hielt mich wach",
+                "wir gingen am fluss entlang bis das licht verschwand",
+                "sie kaufte brot käse und zwei flaschen wein für heute",
+                "der zug vom flughafen hatte eine ganze stunde verspätung",
+                "mein nachbar strich seinen zaun in einem hellen grün",
+                "sie stritten über die rechnung und teilten sie dann",
+                "eine graue katze schlief auf der warmen motorhaube",
+            ],
+            pairs: &[
+                ("reise", "reis", Verdict::Apart, "journey / rice"),
+                ("stadt", "staat", Verdict::Apart, "city / state"),
+                ("malen", "mahlen", Verdict::Apart, "to paint / to grind"),
+                ("meer", "mehr", Verdict::Apart, "sea / more"),
+            ],
+        },
+        Controls {
+            language: "arabic",
+            lang: MorphLang::Undeclared,
+            filler: &[
+                "تسرب الماء من الحنفية طوال المساء ولم أنم",
+                "مشينا بجانب النهر حتى غاب الضوء تماما",
+                "اشترت الخبز والجبن وزجاجتين من العصير",
+                "تأخرت الرحلة من المبنى ساعة كاملة اليوم",
+                "دهن جاري سياجه بلون أخضر فاتح جدا",
+                "تجادلوا حول الفاتورة ثم اقتسموها بينهم",
+            ],
+            pairs: &[
+                // All three already meet on the skeleton rule, which strips
+                // the weak letters ا و ي: سيارة and أسرة both reduce to سرة,
+                // كريم and كرم to كرم, قطار and قطر to قطر. Measured here for
+                // the first time — the audit named them and never ran them.
+                (
+                    "سيارة",
+                    "أسرة",
+                    Verdict::Cost,
+                    "car / family — shared skeleton سرة",
+                ),
+                (
+                    "كريم",
+                    "كرم",
+                    Verdict::Cost,
+                    "generous / vine — shared skeleton كرم",
+                ),
+                (
+                    "قطار",
+                    "قطر",
+                    Verdict::Cost,
+                    "train / diameter — shared skeleton قطر",
+                ),
+            ],
+        },
+        Controls {
+            // What the French `-e` derivation decides. `grand` is five
+            // characters and `port` is four; that length gate is the entire
+            // discriminator, so every pair it turns on is pinned here.
+            language: "french",
+            lang: MorphLang::French,
+            filler: &[
+                "le robinet de la cuisine a coule toute la soiree",
+                "nous avons marche le long de la riviere jusqu au pont",
+                "elle a achete du fromage et deux bouteilles de rouge",
+                "le convoi venant de la station avait une heure de retard",
+                "mon voisin a repeint sa cloture en vert clair",
+                "ils se sont disputes puis ont partage la note du soir",
+            ],
+            pairs: &[
+                ("port", "porte", Verdict::Apart, "harbour / door"),
+                ("mont", "monte", Verdict::Apart, "mount / climbs"),
+                ("mer", "mere", Verdict::Apart, "sea / mother"),
+            ],
+        },
+        Controls {
+            // The Romance languages, whose inflection tables are the newest and
+            // loosest thing in the engine. `caso`/`casa` and `porto`/`porta`
+            // are the pairs a generic shared-prefix rule could never have kept
+            // apart: they are the same shape as `libro`/`libri`, and only the
+            // fact that `o`→`a` is not an Italian plural separates them.
+            language: "italian",
+            lang: MorphLang::Italian,
+            filler: &[
+                "il rubinetto della cucina ha gocciolato tutta la sera",
+                "abbiamo camminato lungo il fiume fino al ponte",
+                "ha comprato formaggio e due bottiglie di rosso",
+                "il convoglio dalla stazione era in ritardo di un'ora",
+                "il mio vicino ha ridipinto la staccionata di verde",
+                "hanno discusso del conto e poi lo hanno diviso",
+            ],
+            pairs: &[
+                (
+                    "caso",
+                    "casa",
+                    Verdict::Apart,
+                    "case / house — o→a is no plural",
+                ),
+                ("porto", "porta", Verdict::Apart, "harbour / door"),
+                // The named price of `a`→`e`, which carries the entire Italian
+                // feminine plural. Taken deliberately, exactly as
+                // παράδειγμα/παράδεισος is for Greek.
+                (
+                    "pesca",
+                    "pesce",
+                    Verdict::Cost,
+                    "peach / fish — the a→e price",
+                ),
+            ],
+        },
+        Controls {
+            language: "russian",
+            lang: MorphLang::Russian,
+            filler: &[
+                "кран на кухне капал весь вечер и мешал спать",
+                "мы шли вдоль реки до самого моста",
+                "она купила сыр и две бутылки красного вина",
+                "поезд из аэропорта опоздал на целый час",
+                "сосед покрасил свой забор в светлый цвет",
+                "они долго спорили о счете а потом разделили его",
+                "вечером мы пили чай с хлебом и старым сыром",
+            ],
+            pairs: &[
+                // The audit names both. Nothing in the table maps a consonant
+                // to a consonant, which is what keeps them apart.
+                ("город", "горох", Verdict::Apart, "city / pea"),
+                (
+                    "сообщение",
+                    "сообщество",
+                    Verdict::Apart,
+                    "message / community",
+                ),
+            ],
+        },
+        Controls {
+            language: "greek",
+            lang: MorphLang::Greek,
+            filler: &[
+                "Η βρύση έσταζε όλο το βράδυ και δεν με άφησε",
+                "Περπατήσαμε δίπλα στο ποτάμι μέχρι να σβήσει το φως",
+                "Αγόρασε ψωμί τυρί και δύο μπουκάλια κρασί",
+                "Το τρένο από το αεροδρόμιο άργησε μία ώρα",
+                "Ο γείτονας έβαψε τον φράχτη του ανοιχτό πράσινο",
+                "Μάλωσαν για τον λογαριασμό και τον μοίρασαν στα δύο",
+            ],
+            pairs: &[
+                // The pair `lib.rs` records as having killed Snowball Greek.
+                // A pairwise rule keeps them apart where a stemmer cannot:
+                // they share three characters, not seven.
+                (
+                    "πολύ",
+                    "πόλη",
+                    Verdict::Apart,
+                    "much / city — Snowball Greek's killer",
+                ),
+                ("κατάσταση", "κατάστημα", Verdict::Apart, "situation / shop"),
+                (
+                    "παράδειγμα",
+                    "παράδεισος",
+                    Verdict::Cost,
+                    "example / paradise — greek_word_family's named price",
+                ),
+            ],
+        },
+    ];
+
+    /// The pairs the suffix rule and the irregular table exist for, measured
+    /// the same way the controls are: end to end, at realistic drawer length,
+    /// on the LEXICAL channel only.
+    ///
+    /// Presence is not the assertion. `hits.retain` admits on `semantic > 0.56`
+    /// independently, so "the drawer came back" would pass with the rules
+    /// deleted — three regressions shipped that way once. This asserts the
+    /// channel.
+    ///
+    /// That distinction immediately corrected a wrong belief while this was
+    /// being written: `encrypt`/`encryption` reads as *admitted* in the audit
+    /// and reaches **no lexical channel at all**. `encrypt` is seven characters,
+    /// one below `contains_a_long_word`'s floor of eight, so the pair has only
+    /// ever been a semantic hit. English's audited 40% is not 40% of lexical
+    /// recall, and neither is any other language's.
+    #[test]
+    fn english_inflection_reaches_its_own_forms() {
+        let filler = [
+            "the kitchen tap dripped all evening and kept me awake",
+            "we walked beside the river until the light faded away",
+            "she bought bread cheese and two bottles of red wine",
+            "the train from the airport was delayed by a whole hour",
+            "my neighbour repainted his fence a bright shade of green",
+            "they argued about the bill and then split it evenly",
+        ];
+        for (query, form, mech) in [
+            ("run", "running", "short stem + doubling"),
+            ("child", "children", "irregular plural"),
+            ("go", "went", "suppletive"),
+            // Already worked, by containment, and must keep working.
+            ("document", "documentation", "additive, 8 chars — the floor"),
+            ("teach", "taught", "irregular verb"),
+            ("foot", "feet", "irregular plural"),
+        ] {
+            let (_d, mut s) = store(SecurityLevel::Sealed);
+            let content = format!("{} {}", form, filler.join(" "));
+            s.upsert(&drawer("w", "r", &content, 0)).unwrap();
+            for (i, f) in filler.iter().enumerate() {
+                s.upsert(&drawer("w", "r", f, i as u32 + 1)).unwrap();
+            }
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            let lexical = hits
+                .iter()
+                .find(|h| h.drawer.content == content)
+                .map(|h| (h.lexical_exact, h.lexical_morph))
+                .unwrap_or((0.0, 0.0));
+            assert!(
+                lexical.0 > 0.0 || lexical.1 > 0.0,
+                "{query} / {form} ({mech}) reached no LEXICAL channel — \
+                 exact {:.3}, morph {:.3}",
+                lexical.0,
+                lexical.1
+            );
+        }
+    }
+
+    /// German plurals need `-er`, which English cannot have — so they reach
+    /// exactly when the caller declares German, and not otherwise.
+    ///
+    /// The last line pins the price of declaring it: under `MorphLang::German`
+    /// an English word pair like `flow`/`flower` WOULD meet. That is correct
+    /// behaviour, not a bug — the caller said this corpus is German — but it is
+    /// the reason the declaration is per request and never inferred.
+    #[test]
+    fn german_plurals_reach_only_where_german_is_declared() {
+        assert!(irregular_pair("gehen", "ging"));
+        assert!(irregular_pair("sprechen", "spricht"));
+        // Declared German: the plurals reach, because `-er` is legal here.
+        for (a, b) in [("kind", "kinder"), ("haus", "hauser"), ("buch", "bucher")] {
+            assert!(
+                suffix_family(a, b, MorphLang::German),
+                "{a}/{b} must reach under declared German"
+            );
+        }
+        // Undeclared and English: they do not, and five English controls are
+        // why. The declaration is the whole mechanism.
+        for lang in [MorphLang::Undeclared, MorphLang::English] {
+            assert!(!suffix_family("kind", "kinder", lang), "{lang:?}");
+            assert!(!suffix_family("flow", "flower", lang), "{lang:?}");
+        }
+        // And `-er` never reaches English even when German is declared for a
+        // different query: the set is chosen per request, not per word.
+        assert!(
+            suffix_family("flow", "flower", MorphLang::German),
+            "known cost"
+        );
+        // The recorded gap. Both would pass with `-er` in the suffix set, and
+        // five English controls would fail with it.
+        assert!(
+            !suffix_family("kind", "kinder", MorphLang::Undeclared),
+            "needs a language input"
+        );
+        assert!(
+            !suffix_family("haus", "hauser", MorphLang::Undeclared),
+            "needs a language input"
+        );
+    }
+
+    #[test]
+    fn false_friends_stay_apart() {
+        use undercroft_core::normalize::search_key;
+        let mut report: Vec<String> = Vec::new();
+
+        for set in CONTROL_SETS {
+            // Prove the padding says nothing about any control word first. The
+            // measurement is worthless otherwise, and it fails silently and
+            // flatteringly: a query found in its own padding reads as EXACT.
+            let padding = search_key(&set.filler.join(" ")).to_string();
+            for (a, b, _, _) in set.pairs {
+                for w in [a, b] {
+                    assert!(
+                        !padding.contains(&*search_key(w)),
+                        "{}: filler contains the control word {w:?} — the drawer \
+                         would be measured against its own padding",
+                        set.language
+                    );
+                }
+            }
+            let words = set
+                .filler
+                .iter()
+                .map(|s| s.split_whitespace().count())
+                .sum::<usize>();
+            assert!(
+                words >= 40,
+                "{}: padding is only {words} words — too short to stop the \
+                 cosine masking the lexical channels",
+                set.language
+            );
+
+            for (query, other, want, why) in set.pairs {
+                let (_d, mut s) = store(SecurityLevel::Sealed);
+                // The false friend, buried in ordinary prose of realistic length.
+                let content = format!("{} {}", other, set.filler.join(" "));
+                s.upsert(&drawer("w", "r", &content, 0)).unwrap();
+                for (i, f) in set.filler.iter().enumerate() {
+                    s.upsert(&drawer("w", "r", f, i as u32 + 1)).unwrap();
+                }
+                let opts = SearchOptions {
+                    morph_lang: set.lang,
+                    ..Default::default()
+                };
+                let hits = s.search(query, &opts).unwrap();
+                let lexical = hits
+                    .iter()
+                    .find(|h| h.drawer.content == content)
+                    .map(|h| (h.lexical_exact, h.lexical_morph))
+                    .unwrap_or((0.0, 0.0));
+                let met = lexical.0 > 0.0 || lexical.1 > 0.0;
+                let got = if met { Verdict::Cost } else { Verdict::Apart };
+                if got != *want {
+                    report.push(format!(
+                        "  {}: {query} / {other} ({why}) — wanted {want:?}, got {got:?} \
+                         (exact {:.3}, morph {:.3})",
+                        set.language, lexical.0, lexical.1
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            report.is_empty(),
+            "false-friend controls moved. A pair that gained a lexical channel \
+             is a NEW over-admission and the rule that did it must be narrowed. \
+             A pair that LOST one is good news — update the verdict here so the \
+             improvement is recorded rather than silently absorbed.\n{}",
+            report.join("\n")
+        );
+    }
+
     // ---- TEMPORARY promiscuity measurement, delete after reading ----------
     //
     // How much of a REAL vocabulary does one query link to under each
@@ -6194,6 +7455,59 @@ mod tests {
                         w.contains(q)
                     } else {
                         q.contains(w)
+                    }
+            });
+        }
+    }
+
+    #[test]
+    #[ignore = "measurement, needs testdata/*_50k.txt"]
+    fn measure_suffix_family_promiscuity() {
+        for (lang, file) in [("ENGLISH", "en"), ("GERMAN", "de")] {
+            let v = load_words(&format!("testdata/{file}_50k.txt"), latin_char);
+            let q: Vec<String> = v.iter().take(500).cloned().collect();
+            println!(
+                "
+=== {lang} (vocab {}) ===",
+                v.len()
+            );
+            report("shipped containment floor 8", &q, &v, |a, b| {
+                let (an, bn) = (a.chars().count(), b.chars().count());
+                an.min(bn) >= 8
+                    && if an <= bn {
+                        b.contains(a)
+                    } else {
+                        a.contains(b)
+                    }
+            });
+            report("NEW suffix_family", &q, &v, |a, b| {
+                suffix_family(a, b, MorphLang::Undeclared)
+            });
+            report("suffix_family WITH -er", &q, &v, |a, b| {
+                let (s, l) = if a.chars().count() <= b.chars().count() {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+                if s.chars().count() < 3 || s == l {
+                    return false;
+                }
+                let d = s
+                    .chars()
+                    .next_back()
+                    .map(|c| format!("{s}{c}"))
+                    .unwrap_or_default();
+                ["s", "es", "ed", "ing", "en", "er"]
+                    .iter()
+                    .any(|x| l.strip_suffix(x).is_some_and(|st| st == s || st == d))
+            });
+            report("containment floor 3 (the reverted one)", &q, &v, |a, b| {
+                let (an, bn) = (a.chars().count(), b.chars().count());
+                an.min(bn) >= 3
+                    && if an <= bn {
+                        b.contains(a)
+                    } else {
+                        a.contains(b)
                     }
             });
         }
@@ -6379,9 +7693,9 @@ mod tests {
                 assert_eq!(h.lexical_exact, 0.0, "{query} claimed exact evidence");
             }
         }
-        assert!(!morph_relation("45678", "456789"));
+        assert!(!morph_relation("45678", "456789", MorphLang::Undeclared));
         assert!(
-            morph_relation("document", "documentation"),
+            morph_relation("document", "documentation", MorphLang::Undeclared),
             "words still relate"
         );
     }
@@ -6412,8 +7726,12 @@ mod tests {
             }
         }
         // The relation the floor exists to keep: eight characters, genuine.
-        assert!(morph_relation("document", "documentation"));
-        assert!(!morph_relation("other", "mother"));
+        assert!(morph_relation(
+            "document",
+            "documentation",
+            MorphLang::Undeclared
+        ));
+        assert!(!morph_relation("other", "mother", MorphLang::Undeclared));
     }
 
     /// A single ideograph is one insertion from every bigram containing it.
@@ -6588,7 +7906,7 @@ mod tests {
             cand("kubernets kubernetes both forms here"),
             cand("kubernets kubernets twice the typo"),
         ];
-        let b = bm25_raw(&qterms, &cands);
+        let b = bm25_raw(&qterms, &cands, MorphLang::Undeclared);
         assert!(b.exact[0] > 0.0, "both forms are literally present");
         assert!(b.raw[0] >= b.exact[0], "blended is never below exact");
         assert!(
