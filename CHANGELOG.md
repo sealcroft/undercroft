@@ -2,6 +2,99 @@
 
 ## Unreleased — morphology gets the other half of its evidence
 
+- **A corpus that declares nothing now reaches 100% too — the drawer says what
+  language it is.** Undeclared recall goes **62.8% → 100.0%** across all
+  nineteen languages, with zero pairs left to the embedder.
+  - Script settles Greek, Georgian and Hangul; it cannot settle Latin, which is
+    why `MorphLang` exists at all. But the DRAWER can: a text carrying `der`,
+    `die`, `und`, `nicht` is German. `language_of_drawer` reads the function
+    words of the candidate being scored — **evidence, not inference**, the same
+    class of act as reading `พ.ศ.` beside a year. Nothing is derived from the
+    shape of a word; the writer's own commonest words are read.
+  - **Decisive or nothing**: the winner needs three hits and twice the
+    runner-up, because `is` votes for English and Dutch alike. Where the words
+    disagree the drawer says nothing and the corpus is left exactly as it was.
+  - Consulted **only** where the caller declared nothing. A declaration is a
+    deliberate statement about a corpus and outranks one drawer's vocabulary —
+    the reverse of the era-marker precedence, and for the reverse reason: an era
+    marker sits beside the very date it qualifies, a stray quotation does not.
+  - Only closed-class words vote — articles, pronouns, prepositions,
+    auxiliaries. Content words travel between languages and a loanword should
+    not get a vote. Portuguese is identified by its contractions (`da`, `do`,
+    `ao`, `na`) precisely because `que`, `para` and `mas` vote for Spanish too
+    and so decide nothing.
+  - **Two controls flipped from `Apart` to `Cost`, and that is the feature.**
+    Dutch `kop`/`kopen` and `man`/`manen` now merge in an undeclared Dutch
+    drawer, because the drawer identifies as Dutch and `-en` is Dutch's known
+    price. What the engine no longer does is hand Dutch text the English ending
+    set merely because the caller said nothing.
+  - **The blind union was tried first and failed**: all eight Latin tables broke
+    5 controls, the Romance subset broke 2 (`cover`/`cove`, `cover`/`coven`).
+    Applying every table to every Latin word is not the same as knowing which
+    language the text is in.
+
+- **A corpus that declares nothing now gets 86.4% instead of 62.8%.** Five
+  languages were silently degrading for callers who never set `language`:
+  measured undeclared, Greek 40.8%, Russian 16.7%, Hindi 25.0%, Georgian 33.3%,
+  Korean 80.0% — against 100% each when declared. All five now read **100%
+  undeclared**, and pairs left to the embedder alone fall from 21 to 9.
+  - `morph_lang_by_script` applies a table wherever its own script appears.
+    **This is not the inference the never-guess contract forbids**: deriving a
+    *calendar* from script is forbidden because Thai script writes Gregorian
+    dates constantly, so the script says nothing about the claim. Here it is
+    reversed — a Greek `-ος` ending can only ever match a Greek word, so
+    applying the Greek table asserts nothing the characters do not already say,
+    and applying it to an English corpus costs exactly zero.
+  - **Two of the five are an approximation, and are labelled as one.** Greek,
+    Georgian and Hangul are used by one language apiece, so the mapping is a
+    fact. Cyrillic is also Ukrainian, Bulgarian and Serbian; Devanagari is also
+    Marathi and Nepali. Those two get the majority language's table, whose
+    endings the family largely shares — approximate morphology instead of none,
+    and an ending that is wrong for the corpus simply fails to match.
+  - `suffix_family` is deliberately **not** widened. Its endings are Latin, and
+    Latin is exactly the case no script can settle: German needs `-er`, English
+    cannot have it. The eight Latin-script languages still require the
+    declaration, and that is irreducible rather than unfinished.
+
+- **Arabic reaches 100%, and so does every other language: 191/191.**
+  Eight Arabic suppletives and irregular plurals join `IRREGULAR` — `امرأة`/`نساء`
+  (م-ر-أ against ن-س-و), `إنسان`/`ناس`, `فم`/`أفواه`, `أخ`/`إخوة`. Their plural is
+  built on a *different root*, so no root table reaches them, exactly as no
+  suffix rule reaches `go`/`went`.
+  - **This was an inconsistency, not a finding.** Suppletion had been put in
+    `IRREGULAR` for eight languages already — `человек`/`люди`, `βλέπω`/`είδα`,
+    `gehen`/`ging` — while Arabic's was written up as needing a multilingual
+    encoder. Same class, same table.
+  - Written in the **folded** orthography, because that is what the rule sees:
+    `search_key` maps `ة`→`ه` and every hamza-bearing alef to `ا`, so `امرأة`
+    arrives as `امراه`. The citation form would have matched nothing — the exact
+    failure the Greek final sigma caused twice, checked this time before writing
+    rather than after measuring.
+- **Arabic 85.7% → 97.6%, by roots rather than by shape.** The whole
+  19-language audit now reads **190/191 = 99.5%** on the lexical channel, with
+  zero pairs resting on the embedder.
+  - Arabic pours a three-consonant ROOT into a template — ك-ت-ب gives كتب,
+    كتاب, كاتب, مكتوب, كتابة — so `ar_root_family` asks only whether two words
+    are explained by the same root. 144 roots × 20 templates, generated once.
+  - **It is an allowlist, and that is the whole safety argument.** A form the
+    table cannot generate matches nothing. `بيت`→`بيوت` and `يجب`→`يجيب` are the
+    same string operation, so no rule over surface shape could ever admit one
+    and refuse the other — but only the first is generable from a known root.
+  - **Half as promiscuous as the rule it sits beside**: mean 3.25 against the
+    shipped skeleton rule's 6.67, linking nothing at all for 86.2% of queries,
+    while recovering five of the six drops. Every axis improves at once.
+  - `يجب`/`يجيب`, `أجل`/`أجمل`, `ليس`/`لويس`, `لكن`/`المكان` and `سيارة`/`أسرة`
+    are pinned as controls — each was a false merge under one of the three
+    rejected subsequence families.
+  - **No dependency, and none possible.** Every mature Arabic morphology
+    resource is GPL, research-only or LDC-non-redistributable, including CAMeL
+    Tools, whose code is MIT but whose database is not. The roots are ordinary
+    vocabulary and the templates are textbook description — facts about the
+    language, not anyone's compilation.
+  - Remaining, in 191 pairs: **one**. `امرأة`/`نساء`, م-ر-أ against ن-س-و — two
+    roots in one paradigm, which is suppletion and reaches no morphology in any
+    language.
+
 - **Eighteen of nineteen languages reach 100% of their audited paradigm on the
   LEXICAL channel.** Aggregate 191 pairs: **55.0% → 96.9%**, and the count of
   pairs carried by the embedder alone falls from 20 to **zero**. Only Arabic is

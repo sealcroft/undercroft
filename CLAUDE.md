@@ -121,6 +121,15 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   marker names it (`2568` is a quantity, `พ.ศ. 2568` is 2025) — the same trade
   `month_name_is_deliberate` makes, and the only route by which 令和/民國 mean
   anything since those are written with a year and no month.
+  `AR_ROOTS` × `AR_PATTERNS` → `ar_root_family`: Arabic is root-and-pattern, so
+  144 roots poured into 20 templates generate 2859 forms once and two words meet
+  only when ONE ROOT explains both. An ALLOWLIST — a form the table cannot
+  generate matches nothing — which is why it succeeds where three subsequence
+  families failed: `بيت`→`بيوت` and `يجب`→`يجيب` are the same string operation
+  and no rule over shape separates them. Measured HALF the shipped skeleton
+  rule's promiscuity (3.25 vs 6.67) while taking 5 of its 6 drops. Ours, of
+  necessity: every mature Arabic resource is GPL, research-only or LDC-
+  non-redistributable (CAMeL Tools' code is MIT, its database is not).
   `AMBIGUOUS_ERA_MARKERS` (bare `م`/`ه`) take TWO signals strongest-first, the
   `DateOrder` shape: `a_year_noun_governs` the number (reusing `AR_UNITS`'
   `Unit::Year` vocabulary through `ar_unit`, so every plural and article comes

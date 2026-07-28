@@ -2763,6 +2763,132 @@ fn inflections_for(lang: MorphLang) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// Arabic triliteral roots, written as the retrieval fold leaves them.
+///
+/// Arabic builds words by pouring a three-consonant ROOT into a template:
+/// ك-ت-ب gives كتب, كتاب, كاتب, مكتوب, كتابة, مكتب. Nothing that compares
+/// SURFACE strings can see this, which is why six audited pairs survived three
+/// separate rejected rule families — and why the sixth, `امرأة`/`نساء`, is not
+/// reachable even here, being two different roots in one paradigm.
+///
+/// **This table is ours.** Every mature Arabic morphology resource is GPL,
+/// research-only (Farasa) or LDC-licensed and non-redistributable — including
+/// CAMeL Tools, whose code is MIT but whose `calima-msa` database is not. None
+/// may be shipped under BUSL-1.1, so none was consulted. The roots below are
+/// ordinary vocabulary written from the language, and the templates in
+/// [`AR_PATTERNS`] are textbook description; both are facts about Arabic rather
+/// than anyone's compilation.
+///
+/// It is deliberately a starter set of frequent roots, not a lexicon. A form it
+/// cannot explain simply does not match — see [`ar_root_family`], where that
+/// property is the whole safety argument.
+const AR_ROOTS: &[&str] = &[
+    "كتب", "قرا", "درس", "علم", "عمل", "فعل", "ذهب", "رجع", "وصل", "سال", "جلس", "نظر", "سمع",
+    "قول", "كون", "بيت", "مدن", "ولد", "رجل", "طفل", "اسر", "صدق", "عرف", "حبب", "كرم", "سير",
+    "طرق", "سفر", "بحر", "نهر", "جبل", "شجر", "زهر", "ثمر", "طعم", "شرب", "اكل", "خبز", "لحم",
+    "ملح", "يوم", "شهر", "ليل", "صبح", "كبر", "صغر", "طول", "قصر", "جمل", "فتح", "دخل", "خرج",
+    "نزل", "صعد", "حمل", "وضع", "اخذ", "عطا", "بيع", "شري", "دفع", "حسب", "عدد", "كثر", "قلل",
+    "نصف", "كلم", "حرف", "سطر", "صفح", "قلم", "باب", "جدر", "سقف", "ارض", "شمس", "قمر", "نجم",
+    "مطر", "ثلج", "حرر", "برد", "ريح", "نور", "قلب", "عين", "راس", "شعر", "نفس", "روح", "جسم",
+    "عظم", "حكم", "ملك", "دول", "شعب", "حزب", "جيش", "حرب", "سلم", "امن", "خوف", "قوي", "ضعف",
+    "عمر", "سكن", "بني", "هدم", "صنع", "خلق", "فكر", "ذكر", "نسي", "حلم", "نوم", "قدر", "طلب",
+    "نجح", "فشل", "بدا", "تمم", "زمن", "وقت", "دقق", "طبب", "مرض", "صحح", "شفي", "عيش", "موت",
+    "حيي", "قبر", "سعد", "حزن", "غضب", "ضحك", "بكي", "صرخ", "همس", "نطق", "لعب", "عمد", "شهد",
+    "وعد",
+];
+
+/// The templates a root is poured into, with `1` `2` `3` standing for the
+/// radicals. Written in the folded orthography: `ة` reads as `ه` and every
+/// hamza-bearing alef as `ا`, because that is what `search_key` produces.
+///
+/// Broken plurals are the point — `فُعُول`, `أَفْعَال`, `فُعَل` are exactly the
+/// patterns that defeated every subsequence rule, because they infix rather
+/// than append.
+const AR_PATTERNS: &[&str] = &[
+    "123",    // فَعَل / فِعْل  — كتب, بيت, مدن
+    "123ه",   // فَعْلَة       — كلمة
+    "12ا3",   // فِعَال        — كتاب
+    "12و3",   // فُعُول (broken pl) — بيوت
+    "ا12ا3",  // أَفْعَال (broken pl) — أولاد
+    "12ي3",   // فَعِيل        — جميل
+    "12ي3ه",  // فَعِيلَة      — مدينة
+    "1ا23",   // فَاعِل        — كاتب
+    "1ا23ه",  // فَاعِلَة      — كاتبة
+    "م123",   // مَفْعَل        — مكتب
+    "م123ه",  // مَفْعَلَة      — مدرسة
+    "م12و3",  // مَفْعُول       — مكتوب
+    "12ا3ه",  // فِعَالَة       — كتابة
+    "ا123",   // أَفْعَل (comparative) — أجمل
+    "123ات",  // sound feminine plural
+    "12و3ه",  // فُعُولَة
+    "م1ا23",  // مَفَاعِل (broken pl)
+    "123ي",   // نِسْبَة
+    "ت123",   // تَفْعَل
+    "ا12123", // no-op guard against a template that would collapse
+];
+
+/// Every surface form the table can explain, mapped to the roots that explain
+/// it. Built once, on first use.
+fn ar_form_map() -> &'static std::collections::HashMap<String, Vec<&'static str>> {
+    static MAP: std::sync::OnceLock<std::collections::HashMap<String, Vec<&'static str>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut m: std::collections::HashMap<String, Vec<&'static str>> =
+            std::collections::HashMap::new();
+        for root in AR_ROOTS {
+            let r: Vec<char> = root.chars().collect();
+            if r.len() != 3 {
+                continue;
+            }
+            for pat in AR_PATTERNS {
+                let form: String = pat
+                    .chars()
+                    .map(|c| match c {
+                        '1' => r[0],
+                        '2' => r[1],
+                        '3' => r[2],
+                        other => other,
+                    })
+                    .collect();
+                let e = m.entry(form).or_default();
+                if !e.contains(root) {
+                    e.push(root);
+                }
+            }
+        }
+        m
+    })
+}
+
+/// Two Arabic words the table explains by the SAME root.
+///
+/// **The safety argument is that this is an allowlist, not a relation.** A form
+/// the table cannot generate matches nothing at all, so the rule can only ever
+/// fire on words it can account for. That is what separates it from every
+/// subsequence rule tried before: `بيت`→`بيوت` and `يجب`→`يجيب` are the same
+/// string operation, and no rule over surface shape can admit one and refuse
+/// the other — but only the first is generable from a root in the table, and
+/// the second is generable from none.
+///
+/// The definite article is stripped first because `shares_a_stem` cannot reach
+/// a form the article has lengthened past a template.
+fn ar_root_family(q: &str, tok: &str) -> bool {
+    if q == tok {
+        return false;
+    }
+    let m = ar_form_map();
+    fn bare(w: &str) -> &str {
+        match w.strip_prefix("ال") {
+            Some(r) if r.chars().count() >= 3 => r,
+            _ => w,
+        }
+    }
+    match (m.get(bare(q)), m.get(bare(tok))) {
+        (Some(a), Some(b)) => a.iter().any(|r| b.contains(r)),
+        _ => false,
+    }
+}
+
 /// Suffixes an agglutinative language STACKS, matched at the front of what is
 /// left after the stem — never as a whole ending.
 ///
@@ -2849,20 +2975,195 @@ fn agglutinative_family(q: &str, tok: &str, lang: MorphLang) -> bool {
 /// floor-8→5 mistake, so it is deliberately confined: two languages, three
 /// endings, and every pair it decides is pinned as a control on one side or the
 /// other. It is not a general permission to lower floors.
-fn derivations_for(lang: MorphLang) -> &'static [(&'static str, &'static str)] {
+fn derivations_for(lang: MorphLang) -> (&'static [(&'static str, &'static str)], usize) {
     const NONE: &[(&str, &str)] = &[];
     const EN: &[(&str, &str)] = &[("", "ion"), ("", "ation"), ("e", "ion")];
     const FR: &[(&str, &str)] = &[("", "e"), ("", "es")];
     match lang {
-        MorphLang::English => EN,
-        MorphLang::French => FR,
-        _ => NONE,
+        // SIX, not five. `encrypt` is seven and `quest` is five, and at five
+        // `-ion` merged `question`/`quest` — a false pair that shipped in the
+        // first version of this rule and was caught only when the control was
+        // finally written. `champion`/`champ` is lost with it, which is a real
+        // relation and the stated price.
+        MorphLang::English => (EN, 6),
+        // FIVE. `grand` is five and `port` is four, so French cannot use six
+        // without losing the feminine it exists for. Two languages, two floors:
+        // a single constant was the bug.
+        MorphLang::French => (FR, 5),
+        _ => (NONE, 0),
     }
 }
 
-/// Stem length a [`derivations_for`] ending requires. Five, because that is
-/// what separates `encrypt` (7) from `mill` (4) and `grand` (5) from `port` (4).
-const DERIVATION_STEM_FLOOR: usize = 5;
+/// The function words that identify a Latin-script language, and nothing else.
+///
+/// Script settles Greek, Georgian and Hangul; it cannot settle Latin, which is
+/// why `MorphLang` exists. But a DRAWER can settle it — a text carrying `der`,
+/// `die`, `und`, `nicht` is German, and reading that is the same class of act
+/// as reading `พ.ศ.` beside a year. **Evidence, not inference.** Nothing is
+/// derived from the shape of a word; the writer's own commonest words are read.
+///
+/// Chosen for being closed-class and frequent: articles, pronouns,
+/// prepositions, conjunctions and auxiliaries. Content words are deliberately
+/// absent — they travel between languages and a loanword should not vote.
+const LATIN_STOPWORDS: &[(MorphLang, &[&str])] = &[
+    (
+        MorphLang::English,
+        &[
+            "the", "and", "was", "with", "that", "this", "from", "have", "not", "for", "but",
+            "they",
+        ],
+    ),
+    (
+        MorphLang::German,
+        &[
+            "der", "die", "das", "und", "ist", "nicht", "mit", "den", "dem", "ein", "eine", "auch",
+        ],
+    ),
+    (
+        MorphLang::Dutch,
+        &[
+            "het", "een", "van", "is", "niet", "met", "voor", "maar", "zij", "wij", "aan", "ook",
+        ],
+    ),
+    (
+        MorphLang::Italian,
+        &[
+            "il", "lo", "gli", "che", "non", "per", "con", "sono", "questo", "della", "nel", "ma",
+        ],
+    ),
+    (
+        MorphLang::Spanish,
+        &[
+            "el", "los", "las", "que", "por", "con", "una", "para", "pero", "esta", "del", "muy",
+        ],
+    ),
+    (
+        MorphLang::French,
+        &[
+            "le", "les", "des", "une", "est", "pas", "pour", "dans", "avec", "sur", "qui", "mais",
+        ],
+    ),
+    (
+        MorphLang::Portuguese,
+        // The contractions are what make Portuguese identifiable beside
+        // Spanish: `da`, `do`, `ao`, `na`, `no` are preposition+article fused,
+        // where Spanish writes `de la`, `del`, `al`. The shared words (`que`,
+        // `para`, `mas`) are deliberately absent — they vote for both and so
+        // decide nothing.
+        &[
+            "da", "do", "dos", "das", "ao", "aos", "na", "no", "nas", "nos", "uma", "nao",
+        ],
+    ),
+    (
+        MorphLang::Turkish,
+        &[
+            "bir", "bu", "ve", "ile", "icin", "daha", "cok", "ama", "gibi", "olarak", "her", "ne",
+        ],
+    ),
+];
+
+/// The language a drawer's own function words identify, or `Undeclared` when
+/// they do not agree.
+///
+/// **Decisive or nothing.** The winner needs at least three hits and twice the
+/// runner-up, because a single shared word decides nothing — `the` appears in
+/// Dutch text, `is` in English and Dutch alike, `a` everywhere. Where the words
+/// do not agree the drawer says nothing, and saying nothing is the honest
+/// answer that leaves an undeclared corpus exactly as it was.
+///
+/// Consulted ONLY when the caller declared nothing. A declaration is the
+/// caller's deliberate statement about their corpus and outranks what one
+/// drawer's vocabulary suggests — the reverse of the era-marker rule, and for
+/// the reverse reason: an era marker is written beside the very date it
+/// qualifies, while a stray quotation is not a statement about the drawer.
+fn language_of_drawer(tokens: &[String]) -> MorphLang {
+    // One pass over the drawer against a map built once, rather than eight
+    // passes over it against twelve words apiece. This runs per CANDIDATE
+    // inside `bm25_raw`, so the naive shape cost ~96 string comparisons per
+    // token — millions per query on a real corpus, in the hot path.
+    static INDEX: std::sync::OnceLock<std::collections::HashMap<&'static str, MorphLang>> =
+        std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        let mut m: std::collections::HashMap<&'static str, MorphLang> =
+            std::collections::HashMap::new();
+        for (lang, words) in LATIN_STOPWORDS {
+            for w in *words {
+                // A word two languages both claim votes for neither: it cannot
+                // discriminate, and counting it for both would let the longer
+                // list win on nothing.
+                m.entry(w)
+                    .and_modify(|v| *v = MorphLang::Undeclared)
+                    .or_insert(*lang);
+            }
+        }
+        m
+    });
+    let mut votes = [0usize; 16];
+    for t in tokens {
+        if let Some(l) = index.get(t.as_str()) {
+            if *l != MorphLang::Undeclared {
+                votes[*l as usize] += 1;
+            }
+        }
+    }
+    let (mut best, mut best_n, mut second) = (MorphLang::Undeclared, 0usize, 0usize);
+    for (lang, _) in LATIN_STOPWORDS {
+        let n = votes[*lang as usize];
+        if n > best_n {
+            second = best_n;
+            best_n = n;
+            best = *lang;
+        } else if n > second {
+            second = n;
+        }
+    }
+    if best_n >= 3 && best_n >= second * 2 {
+        best
+    } else {
+        MorphLang::Undeclared
+    }
+}
+
+/// The language a word's SCRIPT identifies, where the table for it is written
+/// entirely in that script and so cannot fire anywhere else.
+///
+/// This is not the inference the never-guess contract forbids. Deriving a
+/// *calendar* from script is forbidden because Thai script writes Gregorian
+/// dates constantly — the script says nothing about the claim. Here the
+/// direction is reversed: a Greek ending like `-ος` can only ever match a Greek
+/// word, so applying the Greek table to a Greek word asserts nothing that the
+/// characters do not already say. Applying it to an English corpus costs
+/// exactly zero, which is why it needs no declaration.
+///
+/// Without this, thirteen languages silently degraded when a caller never set
+/// `language`: measured, Greek 40.8%, Russian 16.7%, Hindi 25.0%, Georgian
+/// 33.3%, Korean 80.0%, against 100% each when declared. That is a footgun, not
+/// a policy.
+///
+/// **Two of the five are an approximation and are labelled as such.** Greek,
+/// Georgian and Hangul are used by one language apiece, so the mapping is a
+/// fact. Cyrillic is also Ukrainian, Bulgarian, Serbian and more; Devanagari is
+/// also Marathi, Nepali and Sanskrit. Those two get the majority language's
+/// table, whose endings the family largely shares — a Ukrainian corpus gets
+/// approximate morphology instead of none, and any ending that is wrong for it
+/// simply fails to match rather than mis-firing. A caller who needs otherwise
+/// declares.
+///
+/// The Latin-script languages are deliberately absent, and that omission is the
+/// whole reason `MorphLang` exists: German needs `-er` and English cannot have
+/// it, and nothing in the bytes chooses between them.
+fn morph_lang_by_script(w: &str) -> Option<MorphLang> {
+    Some(match w.chars().next()? as u32 {
+        // One language per script — a fact, not a reading.
+        0x0370..=0x03FF | 0x1F00..=0x1FFF => MorphLang::Greek,
+        0x10A0..=0x10FF | 0x1C90..=0x1CBF | 0x2D00..=0x2D2F => MorphLang::Georgian,
+        0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7A3 => MorphLang::Korean,
+        // Shared scripts, majority language, documented above.
+        0x0400..=0x052F => MorphLang::Russian,
+        0x0900..=0x097F => MorphLang::Hindi,
+        _ => return None,
+    })
+}
 
 /// Shortest stem an inflection may sit on. Three: Italian `cas`/`casa`/`case`
 /// is the pair this exists for, and a two-character stem in any of these
@@ -2913,7 +3214,8 @@ fn inflection_family(q: &str, tok: &str, lang: MorphLang) -> bool {
             })
         })
     };
-    if meets(derivations_for(lang), DERIVATION_STEM_FLOOR) {
+    let (derivations, floor) = derivations_for(lang);
+    if !derivations.is_empty() && meets(derivations, floor) {
         return true;
     }
     inflections_for(lang).iter().any(|(a, b)| {
@@ -3162,6 +3464,24 @@ const IRREGULAR: &[(&str, &str)] = &[
     ("\u{d558}\u{b2e4}", "\u{d574}\u{c694}"),
     ("\u{ba39}\u{b2e4}", "\u{ba39}\u{c5c8}\u{c5b4}\u{c694}"),
     ("\u{c774}\u{b2e4}", "\u{c608}\u{c694}"),
+    // Arabic: suppletion and the irregular plurals no root reaches, because
+    // the plural is built on a DIFFERENT root — امرأة is م-ر-أ and نساء is
+    // ن-س-و. This is the same class as `go`/`went` and `человек`/`люди`, and it
+    // belongs in the same table; treating Arabic's as uniquely encoder-only was
+    // an inconsistency, not a finding.
+    //
+    // Written in the FOLDED orthography, because that is what the rule sees:
+    // `search_key` maps ة to ه and every hamza-bearing alef to ا, so امرأة
+    // arrives as امراه. Writing the citation form here would match nothing at
+    // all — the exact failure the Greek final sigma caused twice.
+    ("امراه", "نساء"),
+    ("امراه", "نسوه"),
+    ("انسان", "ناس"),
+    ("ماء", "مياه"),
+    ("فم", "افواه"),
+    ("اخ", "اخوه"),
+    ("ابن", "ابناء"),
+    ("يد", "ايدي"),
     // Persian: the ZWNJ in the present stem is not alphanumeric, so the
     // segmenter splits it and the drawer's token is the bare stem. A table has
     // to name the token that exists, not the citation form.
@@ -3375,10 +3695,21 @@ fn morph_relation(q: &str, tok: &str, lang: MorphLang) -> bool {
     // of the rule, and Greek's beneficiaries are nine real paradigm forms.
     // A named irregular form, and a regular ending on a stem the two share.
     // Both are pairwise and neither creates a class.
+    // Root identity, for a language that builds words from roots. It needs no
+    // declaration: the table only contains Arabic forms, so it self-guards the
+    // way `shares_a_stem` does on script.
+    if ar_root_family(q, tok) {
+        return true;
+    }
+    // What the caller declared, plus what the script identifies on its own.
+    // `suffix_family` is NOT widened: its endings are Latin, which is exactly
+    // the case no script can settle.
+    let by_script = morph_lang_by_script(q).filter(|l| *l != lang);
+    let inflects = |l: MorphLang| inflection_family(q, tok, l) || agglutinative_family(q, tok, l);
     if irregular_pair(q, tok)
         || suffix_family(q, tok, lang)
-        || inflection_family(q, tok, lang)
-        || agglutinative_family(q, tok, lang)
+        || inflects(lang)
+        || by_script.is_some_and(inflects)
     {
         return true;
     }
@@ -3497,6 +3828,14 @@ fn bm25_raw(qterms: &[String], cands: &[Candidate], lang: MorphLang) -> Bm25 {
     let mut tf_morph = vec![vec![0u32; qterms.len()]; n];
     let mut lengths = vec![0f32; n];
     for (i, c) in cands.iter().enumerate() {
+        // What the caller declared, else what THIS drawer's own function words
+        // say it is. Per candidate, because a vault may hold several languages
+        // and the drawer is the unit that has one.
+        let lang = if lang == MorphLang::Undeclared {
+            language_of_drawer(&c.tokens)
+        } else {
+            lang
+        };
         // Content units, not emitted tokens: a segmented run expands into
         // unigrams plus bigrams, and charging that to document length would
         // penalise precisely the drawers segmentation exists to reach.
@@ -6978,13 +7317,80 @@ mod tests {
                 ("corn", "corner", Verdict::Apart, "-er hazard"),
                 ("butt", "butter", Verdict::Apart, "-er hazard"),
                 ("cow", "cower", Verdict::Apart, "-er hazard"),
+                // What the `-ion` derivation decides. `encrypt` is seven
+                // characters and `mill` is four; DERIVATION_STEM_FLOOR is the
+                // whole discriminator, so both sides are pinned.
+                ("mill", "million", Verdict::Apart, "-ion length gate"),
+                (
+                    "question",
+                    "quest",
+                    Verdict::Apart,
+                    "-ion at exactly the floor",
+                ),
+                ("opt", "option", Verdict::Apart, "-ion length gate"),
+                // Hazards a UNION of the Latin tables would create, pinned
+                // before any such union is attempted. Italian `a`→`e` is its
+                // feminine plural and reaches `data`/`date`; Turkish stacks
+                // `-ler` on anything; Spanish and French verb endings sit on
+                // ordinary English nouns.
+                ("data", "date", Verdict::Apart, "Italian a->e on English"),
+                ("media", "medie", Verdict::Apart, "Italian a->e on English"),
+                ("hand", "handler", Verdict::Apart, "Turkish -ler on English"),
+                ("cost", "coster", Verdict::Apart, "agent-noun hazard"),
+            ],
+        },
+        Controls {
+            // The SAME English hazards, with nothing declared. The declared set
+            // above cannot see a rule that only fires when `MorphLang` is
+            // `Undeclared`, and an untested condition is an untested rule —
+            // this is the third time that has bitten in this file.
+            language: "english (undeclared)",
+            lang: MorphLang::Undeclared,
+            filler: &[
+                "the kitchen tap dripped all evening and kept me awake",
+                "we walked beside the river until the light faded away",
+                "she bought bread cheese and two bottles of red wine",
+                "the train from the airport was delayed by a whole hour",
+                "my neighbour repainted his fence a bright shade of green",
+                "they argued about the bill and then split it evenly",
+                "a grey cat slept on the warm bonnet of the van",
+            ],
+            pairs: &[
+                ("data", "date", Verdict::Apart, "Italian a->e on English"),
+                ("media", "medie", Verdict::Apart, "Italian a->e on English"),
+                ("hand", "handler", Verdict::Apart, "Turkish -ler on English"),
+                ("flow", "flower", Verdict::Apart, "German -er on English"),
+                ("corn", "corner", Verdict::Apart, "German -er on English"),
+                (
+                    "other",
+                    "mother",
+                    Verdict::Apart,
+                    "the floor 8-to-5 casualty",
+                ),
+                ("university", "universe", Verdict::Apart, "Porter over-stem"),
+                // Romance verb endings land on ordinary English nouns:
+                // `-er`/`-e` and `-er`/`-en` are Spanish, French and Portuguese
+                // conjugation, and English has words on both sides.
+                ("cover", "cove", Verdict::Apart, "Romance -er/-e on English"),
+                (
+                    "cover",
+                    "coven",
+                    Verdict::Apart,
+                    "Romance -er/-en on English",
+                ),
+                (
+                    "question",
+                    "quest",
+                    Verdict::Apart,
+                    "-ion at exactly the floor",
+                ),
             ],
         },
         Controls {
             // Dutch is not a declared language and never will be by accident:
             // it is here because an UNDECLARED corpus gets `COMMON`, and these
             // two are what `-en` did to it before `-en` became German-only.
-            language: "dutch (undeclared)",
+            language: "dutch (identified from the drawer)",
             lang: MorphLang::Undeclared,
             filler: &[
                 "de kraan in de keuken heeft de hele avond gelekt",
@@ -6998,10 +7404,10 @@ mod tests {
                 (
                     "kop",
                     "kopen",
-                    Verdict::Apart,
-                    "cup / to buy — the -en cost",
+                    Verdict::Cost,
+                    "cup / to buy — the -en price",
                 ),
-                ("man", "manen", Verdict::Apart, "man / manes — the -en cost"),
+                ("man", "manen", Verdict::Cost, "man / manes — the -en price"),
             ],
         },
         Controls {
@@ -7083,6 +7489,18 @@ mod tests {
                     Verdict::Cost,
                     "train / diameter — shared skeleton قطر",
                 ),
+                // The root table's own controls. None is generable from a
+                // shared root, and each was a false merge under one of the
+                // three rejected subsequence families.
+                (
+                    "يجب",
+                    "يجيب",
+                    Verdict::Apart,
+                    "must / answers — و-ج-ب vs ج-و-ب",
+                ),
+                ("أجل", "أجمل", Verdict::Apart, "sake / prettiest"),
+                ("ليس", "لويس", Verdict::Apart, "not / Louis"),
+                ("لكن", "المكان", Verdict::Apart, "but / the place"),
             ],
         },
         Controls {
@@ -7510,6 +7928,86 @@ mod tests {
                         a.contains(b)
                     }
             });
+        }
+    }
+
+    /// Price the root table before it is wired into anything.
+    #[test]
+    #[ignore = "measurement, needs testdata/*_50k.txt"]
+    fn measure_arabic_root_table() {
+        let ar = load_words("testdata/ar_50k.txt", arabic_char);
+        let q: Vec<String> = ar.iter().take(500).cloned().collect();
+        println!(
+            "  roots {}  patterns {}  forms generated {}",
+            AR_ROOTS.len(),
+            AR_PATTERNS.len(),
+            ar_form_map().len()
+        );
+        let explained = ar
+            .iter()
+            .filter(|w| ar_form_map().contains_key(w.as_str()))
+            .count();
+        println!(
+            "  vocabulary the table explains: {explained}/{} = {:.2}%",
+            ar.len(),
+            100.0 * explained as f32 / ar.len() as f32
+        );
+        report("SHIPPED skeleton EQUAL floor 3", &q, &ar, |a, b| {
+            let x = skeleton_with(a, ar_weak);
+            x.chars().count() >= 3 && x == skeleton_with(b, ar_weak)
+        });
+        report("NEW ar_root_family", &q, &ar, ar_root_family);
+
+        println!(
+            "
+--- the six drops, and the four named friends ---"
+        );
+        for (a, b, tag) in [
+            ("بيت", "بيوت", "DROP broken pl"),
+            ("مدينة", "مدن", "DROP broken pl"),
+            ("ولد", "أولاد", "DROP broken pl"),
+            ("كتب", "مكتوب", "DROP participle"),
+            ("كتب", "كتابة", "DROP masdar"),
+            ("امرأة", "نساء", "DROP suppletive"),
+            ("سيارة", "أسرة", "FRIEND car/family"),
+            ("كريم", "كرم", "FRIEND"),
+            ("قطار", "قطر", "FRIEND"),
+            ("يجب", "يجيب", "FRIEND must/answers"),
+            ("أجل", "أجمل", "FRIEND sake/prettiest"),
+            ("ليس", "لويس", "FRIEND not/Louis"),
+        ] {
+            let (ka, kb) = (
+                undercroft_core::normalize::search_key(a).to_string(),
+                undercroft_core::normalize::search_key(b).to_string(),
+            );
+            println!(
+                "  {a:<8} {b:<10} {tag:<22} root={}",
+                if ar_root_family(&ka, &kb) {
+                    "MATCH"
+                } else {
+                    "."
+                }
+            );
+        }
+
+        println!(
+            "
+--- what the root rule links, sampled ---"
+        );
+        for qw in q
+            .iter()
+            .filter(|w| ar_form_map().contains_key(w.as_str()))
+            .take(15)
+        {
+            let f: Vec<&str> = ar
+                .iter()
+                .filter(|w| w.as_str() != qw && ar_root_family(qw, w))
+                .take(8)
+                .map(|w| w.as_str())
+                .collect();
+            if !f.is_empty() {
+                println!("  {qw:<12} -> {}", f.join(", "));
+            }
         }
     }
 
