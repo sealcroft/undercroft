@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 810" width="900" height="810" role="img" aria-labelledby="t d">
+<title id="t">How a language is resolved and what it admits</title>
+<desc id="d">Language is resolved strongest-first: a caller declaration, else the script where one script means one language, else the drawer's own closed-class function words. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
+</style>
+<rect width="900" height="810" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">Which language, and what that admits</text>
+<text x="28" y="58" class="f b dim">A signal is read; a convention is declared; nothing is inferred. The whole design of this layer is that distinction.</text>
+
+<rect x="24" y="76" width="852" height="206" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">1 · resolving the language</text>
+<text x="600" y="102" class="f s dim">strongest signal first, stop at the first hit</text>
+
+<rect x="42" y="116" width="266" height="140" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8"/>
+<text x="58" y="139" class="f l" fill="var(--d-teal-ink,#0d6b62)">1. declared</text>
+<text x="58" y="159" class="f mono dim">language on /v1/search</text>
+<text x="58" y="178" class="f s dim">A deliberate statement about a corpus,</text>
+<text x="58" y="193" class="f s dim">made at READ time — so a vault ingested</text>
+<text x="58" y="208" class="f s dim">under one language answers correctly</text>
+<text x="58" y="223" class="f s dim">under another with no re-ingest.</text>
+<text x="58" y="244" class="f s" fill="var(--d-teal-ink,#0d6b62)">Outranks everything below.</text>
+
+<rect x="320" y="116" width="266" height="140" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.8"/>
+<text x="336" y="139" class="f l" fill="var(--d-blue-ink,#33527d)">2. else the script</text>
+<text x="336" y="159" class="f s dim">where a script settles it</text>
+<text x="336" y="180" class="f s dim">Greek · Georgian · Hangul — one script,</text>
+<text x="336" y="195" class="f s dim">one language. A fact, not a reading.</text>
+<text x="336" y="218" class="f s dim">Cyrillic → Russian, Devanagari → Hindi:</text>
+<text x="336" y="233" class="f s dim">the majority language, and labelled</text>
+<text x="336" y="248" class="f s dim">approximate because that is what it is.</text>
+
+<rect x="598" y="116" width="260" height="140" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.8"/>
+<text x="614" y="139" class="f l" fill="var(--d-violet-ink,#523a86)">3. else the drawer itself</text>
+<text x="614" y="159" class="f mono dim">language_of_drawer</text>
+<text x="614" y="180" class="f s dim">A text carrying der, die, und, nicht is</text>
+<text x="614" y="195" class="f s dim">German. Only CLOSED-class words vote —</text>
+<text x="614" y="210" class="f s dim">a loanword does not get one.</text>
+<text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Decisive or nothing: three hits and</text>
+<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">twice the runner-up, else stay silent.</text>
+
+<text x="42" y="274" class="f s dim">Read per candidate, not per query: a vault may hold several languages, and the drawer is the unit that has one.</text>
+
+<rect x="24" y="298" width="852" height="220" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="324" class="f l ink">2 · five rules, every one of them pairwise</text>
+<text x="560" y="324" class="f s dim">each answers about two strings and builds no class</text>
+
+<rect x="42" y="338" width="158" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="54" y="358" class="f mono ink">suffix_family</text>
+<text x="54" y="376" class="f s dim">SHAPE, not length.</text>
+<text x="54" y="391" class="f s dim">-er is German-only:</text>
+<text x="54" y="406" class="f s dim">Kind/Kinder, Haus/Häuser</text>
+
+<rect x="212" y="338" width="158" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="224" y="358" class="f mono ink">inflection_family</text>
+<text x="224" y="376" class="f s dim">A CLOSED set of endings</text>
+<text x="224" y="391" class="f s dim">per language, stem ≥ 3:</text>
+<text x="224" y="406" class="f s dim">libro/libri, книга/книги</text>
+
+<rect x="382" y="338" width="158" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="394" y="358" class="f mono ink">agglutinative_family</text>
+<text x="394" y="376" class="f s dim">Endings that stack:</text>
+<text x="394" y="391" class="f s dim">Turkish, Korean,</text>
+<text x="394" y="406" class="f s dim">Georgian, Hungarian</text>
+
+<rect x="552" y="338" width="158" height="80" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
+<text x="564" y="358" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">ar_root_family</text>
+<text x="564" y="376" class="f s dim">144 roots × 20 patterns</text>
+<text x="564" y="391" class="f s dim">= 2859 forms. Two words</text>
+<text x="564" y="406" class="f s dim">meet only if ONE root fits.</text>
+
+<rect x="722" y="338" width="136" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="734" y="358" class="f mono ink">IRREGULAR</text>
+<text x="734" y="376" class="f s dim">~110 forms no rule</text>
+<text x="734" y="391" class="f s dim">over shape can reach:</text>
+<text x="734" y="406" class="f s dim">go/went, Mann/Männer</text>
+
+<rect x="42" y="430" width="404" height="74" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="58" y="450" class="f l" fill="var(--d-red-ink,#993a30)">Why not a stemmer</text>
+<text x="58" y="468" class="f s dim">A stemmer builds an equivalence class, and one false friend</text>
+<text x="58" y="483" class="f s dim">poisons every member. Measured: Snowball Greek merges πολύ</text>
+<text x="58" y="497" class="f s dim">(much) with πόλη (city). A pairwise rule costs only its own pair.</text>
+
+<rect x="458" y="430" width="400" height="74" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
+<text x="474" y="450" class="f l" fill="var(--d-amber-ink,#8d5a1d)">Why Arabic needed its own table</text>
+<text x="474" y="468" class="f s dim">An ALLOWLIST: a form the table cannot generate matches nothing.</text>
+<text x="474" y="483" class="f s dim">Subsequence rules failed three times — بيت→بيوت and يجب→يجيب</text>
+<text x="474" y="497" class="f s dim">are the same string operation, and no rule over shape separates them.</text>
+
+<rect x="24" y="534" width="852" height="122" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="560" class="f l ink">3 · three channels, and only two of them are a claim about words</text>
+
+<rect x="42" y="574" width="266" height="66" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
+<text x="58" y="595" class="f mono" fill="var(--d-green-ink,#22603c)">lexical_exact</text>
+<text x="58" y="614" class="f s dim">The drawer said the word.</text>
+<text x="58" y="630" class="f s" fill="var(--d-green-ink,#22603c)">admits</text>
+
+<rect x="320" y="574" width="266" height="66" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.6"/>
+<text x="336" y="595" class="f mono" fill="var(--d-violet-ink,#523a86)">lexical_morph</text>
+<text x="336" y="614" class="f s dim">It holds a word BUILT ON it.</text>
+<text x="336" y="630" class="f s" fill="var(--d-violet-ink,#523a86)">admits — and says so separately</text>
+
+<rect x="598" y="574" width="260" height="66" rx="7" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
+<text x="614" y="595" class="f mono" fill="var(--d-blue-ink,#33527d)">semantic</text>
+<text x="614" y="614" class="f s dim">Cosine, above the gate the</text>
+<text x="614" y="630" class="f s dim">EMBEDDER itself calibrates.</text>
+
+<rect x="24" y="672" width="418" height="118" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.6"/>
+<text x="42" y="694" class="f l" fill="var(--d-teal-ink,#0d6b62)">Measured — 191 paradigm pairs, 19 languages</text>
+<text x="42" y="716" class="f b dim">lexical recall, declared</text>
+<text x="300" y="716" class="f b" fill="var(--d-teal-ink,#0d6b62)">55.0% → 100%</text>
+<text x="42" y="736" class="f b dim">lexical recall, undeclared</text>
+<text x="300" y="736" class="f b" fill="var(--d-teal-ink,#0d6b62)">→ 100%</text>
+<text x="42" y="756" class="f b dim">pairs resting on the embedder alone</text>
+<text x="300" y="756" class="f b" fill="var(--d-teal-ink,#0d6b62)">20 → 0</text>
+<text x="42" y="776" class="f b dim">negative controls</text>
+<text x="300" y="776" class="f b" fill="var(--d-teal-ink,#0d6b62)">0 → 48</text>
+
+<rect x="454" y="672" width="422" height="118" rx="9" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.6"/>
+<text x="472" y="694" class="f l" fill="var(--d-red-ink,#993a30)">The prices, pinned rather than hidden</text>
+<text x="472" y="714" class="f s dim">Declaring German is what makes -er legal, and -er also relates</text>
+<text x="472" y="729" class="f s dim">flow/flower, corn/corner, butt/butter. That is the trade, stated.</text>
+<text x="472" y="749" class="f s dim">A recall measurement cannot justify a precision decision: adding</text>
+<text x="472" y="764" class="f s dim">-er moved the population figure by 0.21 links per query — invisible —</text>
+<text x="472" y="779" class="f s dim">and broke five negative controls. The controls are what caught it.</text>
+</svg>

@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 776" width="900" height="776" role="img" aria-labelledby="t d">
+<title id="t">From text to tokens</title>
+<desc id="d">Text passes through a six-stage retrieval fold and then a script-aware split. Delimiting scripts yield whole words; scripts that attach without a delimiter yield bigrams flagged as n-grams and refused the exact match channel; Han yields unigrams because a character is a morpheme.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
+</style>
+<rect width="900" height="776" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">From text to tokens — the fold, then the split</text>
+<text x="28" y="58" class="f b dim">The query and the drawer take exactly this path. Stored bytes are never folded: the promise is verbatim, so this produces comparison keys only.</text>
+
+<rect x="24" y="76" width="852" height="256" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">1 · the fold</text>
+<text x="130" y="102" class="f mono dim">normalize::search_key</text>
+<text x="700" y="102" class="f s dim">one direction, never reversed</text>
+
+<rect x="42" y="116" width="112" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="52" y="136" class="f s ink">S0 ascii path</text>
+<text x="52" y="152" class="f s dim">lowercase, done</text>
+
+<rect x="166" y="116" width="92" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="176" y="136" class="f s ink">S1 NFC</text>
+<text x="176" y="152" class="f s dim">compose</text>
+
+<rect x="270" y="116" width="118" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="280" y="136" class="f s ink">S2 compat</text>
+<text x="280" y="152" class="f s dim">scoped, not NFKC</text>
+
+<rect x="400" y="116" width="96" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="410" y="136" class="f s ink">S3 recompose</text>
+<text x="410" y="152" class="f s dim">if S2 fired</text>
+
+<rect x="508" y="116" width="104" height="52" rx="6" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
+<text x="518" y="136" class="f s" fill="var(--d-amber-ink,#8d5a1d)">S4 lowercase</text>
+<text x="518" y="152" class="f s dim">must be here</text>
+
+<rect x="624" y="116" width="112" height="52" rx="6" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
+<text x="634" y="136" class="f s" fill="var(--d-amber-ink,#8d5a1d)">S5 strip marks</text>
+<text x="634" y="152" class="f s dim">+ invisibles</text>
+
+<rect x="748" y="116" width="110" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="758" y="136" class="f s ink">S6 letter map</text>
+<text x="758" y="152" class="f s dim">ß→ss, ø→o</text>
+
+<rect x="42" y="182" width="404" height="64" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
+<text x="58" y="203" class="f l" fill="var(--d-amber-ink,#8d5a1d)">Why S4 precedes S5</text>
+<text x="58" y="221" class="f s dim">İ is not a mark, so S5 cannot see it. Lowercasing is what</text>
+<text x="58" y="237" class="f s dim">manufactures the U+0307 that S5 then removes.</text>
+
+<rect x="458" y="182" width="400" height="64" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="474" y="203" class="f l ink">The observable</text>
+<text x="474" y="222" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">İZMİR → izmir</text>
+<text x="592" y="222" class="f s dim">not the fragment zmi</text>
+<text x="474" y="239" class="f s dim">No Turkish special-casing anywhere in the fold.</text>
+
+<rect x="42" y="258" width="404" height="58" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
+<text x="58" y="278" class="f l" fill="var(--d-green-ink,#22603c)">Conflations, each pinned by test</text>
+<text x="58" y="299" class="f mono dim">على/علي · كتابة/كتابه · Masse/Maße · πότε/ποτέ · все/всё</text>
+
+<rect x="458" y="258" width="400" height="58" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="474" y="278" class="f l" fill="var(--d-red-ink,#993a30)">Deliberately NOT stripped</text>
+<text x="474" y="297" class="f s dim">ZWSP is Khmer's word delimiter · ZWJ is contrastive in</text>
+<text x="474" y="311" class="f s dim">Malayalam · a blanket Cyrillic strip would make й into и</text>
+
+<rect x="24" y="348" width="852" height="322" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="374" class="f l ink">2 · the split</text>
+<text x="130" y="374" class="f mono dim">script::segment</text>
+<text x="600" y="374" class="f s dim">the script decides, and the script alone</text>
+<text x="42" y="394" class="f s dim">Splitting on “not alphanumeric” finds no boundary at all in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao or Myanmar — a whole clause became one token.</text>
+
+<rect x="42" y="408" width="266" height="188" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
+<text x="58" y="432" class="f l" fill="var(--d-blue-ink,#33527d)">delimiting</text>
+<text x="58" y="452" class="f s dim">Latin · Cyrillic · Greek · Georgian ·</text>
+<text x="58" y="467" class="f s dim">Tibetan · Devanagari · everything else</text>
+<text x="58" y="491" class="f b ink">whole words</text>
+<text x="58" y="510" class="f s dim">Untouched by segmentation — their</text>
+<text x="58" y="525" class="f s dim">defects are folding and morphology,</text>
+<text x="58" y="540" class="f s dim">which n-grams do not address.</text>
+<text x="58" y="564" class="f s dim">A joining mark (virama, nukta) is</text>
+<text x="58" y="578" class="f s dim">word-INTERNAL here: नमस्ते stays whole.</text>
+
+<rect x="320" y="408" width="266" height="188" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.6"/>
+<text x="336" y="432" class="f l" fill="var(--d-violet-ink,#523a86)">attaches without a delimiter</text>
+<text x="336" y="452" class="f s dim">Arabic · Hebrew · Khmer · Thai · Lao ·</text>
+<text x="336" y="467" class="f s dim">Myanmar · Kana · Hangul · Bopomofo</text>
+<text x="336" y="491" class="f b ink">bigrams over same-script runs</text>
+<text x="336" y="510" class="f s dim">Arabic and Hebrew space their words,</text>
+<text x="336" y="525" class="f s dim">but their clitics do not: كتاب cannot</text>
+<text x="336" y="540" class="f s dim">reach الكتاب by any split.</text>
+<text x="336" y="564" class="f s" fill="var(--d-violet-ink,#523a86)">flagged ngram ⇒ refused the exact slot</text>
+<text x="336" y="578" class="f s dim">Whole-word containment carries it instead.</text>
+
+<rect x="598" y="408" width="260" height="188" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.6"/>
+<text x="614" y="432" class="f l" fill="var(--d-teal-ink,#0d6b62)">logographic</text>
+<text x="614" y="452" class="f s dim">Han, and Han only</text>
+<text x="614" y="476" class="f b ink">unigrams + bigrams</text>
+<text x="614" y="495" class="f s dim">A character is a morpheme, so emitting</text>
+<text x="614" y="510" class="f s dim">one alone is evidence rather than noise.</text>
+<text x="614" y="534" class="f s dim">NOT flagged as an n-gram — this is the</text>
+<text x="614" y="549" class="f s dim">one script where a short unit is a word.</text>
+<text x="614" y="573" class="f s dim">Latin and digit runs inside CJK stay</text>
+<text x="614" y="587" class="f s dim">whole, so a brand name survives.</text>
+
+<rect x="42" y="608" width="816" height="48" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="58" y="628" class="f l ink">Why the exact slot is refused to n-grams, measured</text>
+<text x="58" y="647" class="f s dim">Bigram-to-bigram equality admitted <tspan class="f s" fill="var(--d-red-ink,#993a30)">74.3%</tspan> of a real Arabic corpus on one query, against <tspan class="f s" fill="var(--d-blue-ink,#33527d)">6.9%</tspan> for Greek through the same code.</text>
+
+<rect x="24" y="686" width="852" height="68" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<text x="42" y="708" class="f l" fill="var(--d-teal-ink,#0d6b62)">The failure this closed was silence, not bad ranking</text>
+<text x="42" y="727" class="f s dim">Search drops a hit with no lexical evidence and a neutral cosine. Before segmentation, a query for a word the drawer visibly</text>
+<text x="42" y="743" class="f s dim">contained shared no token with it at all — so the observable was an empty result set, not a result in the wrong order.</text>
+</svg>

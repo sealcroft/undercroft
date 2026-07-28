@@ -59,7 +59,7 @@
 <rect x="24" y="322" width="640" height="66" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <circle cx="48" cy="355" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="360" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">4</text>
 <text x="72" y="348" class="f l ink">relevance gate</text>
-<text x="72" y="367" class="f mono ink">lexical &gt; 0 || semantic &gt; 0.56</text>
+<text x="72" y="367" class="f mono ink">lexical &gt; 0 || semantic &gt; the embedder's gate</text>
 <text x="72" y="383" class="f b dim">an unrelated row still scores ~0.35 from the cosine midpoint — require real evidence</text>
 <rect x="676" y="322" width="200" height="66" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
 <text x="690" y="346" class="f s" fill="var(--d-red-ink,#94382f)">passes on ANY shared term,</text>

@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 856" width="900" height="856" role="img" aria-labelledby="t d">
+<title id="t">Reading a date the writer already wrote</title>
+<desc id="d">An era marker typed beside a year outranks the calendar the caller declared. Field order takes four signals strongest-first: declared, demonstrated by an unambiguous date in the same text, implied by the language per CLDR, then day-first as a documented default. Script and numeral system are never treated as evidence.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
+</style>
+<rect width="900" height="856" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">Reading a date the writer already wrote</text>
+<text x="28" y="58" class="f b dim">Four read-time declarations, and one signal that outranks every one of them. Dates are read live, so a fix reaches existing vaults with no migration.</text>
+
+<rect x="24" y="76" width="852" height="146" rx="10" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.8"/>
+<text x="42" y="102" class="f l" fill="var(--d-amber-ink,#8d5a1d)">The marker beside the year outranks the calendar the caller declared</text>
+<text x="42" y="122" class="f s dim">The declaration is a statement about a corpus. The marker is the writer's statement about THIS date. Reading it is evidence, so it wins.</text>
+
+<rect x="42" y="136" width="404" height="70" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-amber,#b5762a)" stroke-width="1.3"/>
+<text x="58" y="157" class="f s dim">Recognised, before the year, after it, or glued to it:</text>
+<text x="58" y="179" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">พ.ศ. · ค.ศ. · هـ · 民國 · 令和 · 平成 · 昭和</text>
+<text x="58" y="198" class="f s dim">A bare year is a mention only where a marker names it.</text>
+
+<rect x="458" y="136" width="400" height="70" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.3"/>
+<text x="474" y="157" class="f s dim">so, with no declaration at all:</text>
+<text x="474" y="178" class="f mono dim">2568</text>
+<text x="530" y="178" class="f s dim">is a quantity —</text>
+<text x="624" y="178" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">พ.ศ. 2568</text>
+<text x="712" y="178" class="f s dim">is 2025</text>
+<text x="474" y="197" class="f s dim">Disagreeing markers settle nothing: the declaration stands.</text>
+
+<rect x="24" y="238" width="418" height="212" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="264" class="f l ink">Field order — four signals, strongest first</text>
+
+<rect x="42" y="278" width="382" height="36" rx="6" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<text x="56" y="300" class="f s" fill="var(--d-teal-ink,#0d6b62)">1 · declared on Locale</text>
+
+<rect x="42" y="322" width="382" height="52" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.4"/>
+<text x="56" y="342" class="f s" fill="var(--d-blue-ink,#33527d)">2 · demonstrated by the text itself</text>
+<text x="56" y="360" class="f s dim">13/05 can only be day-first — the convention, stated by example</text>
+
+<rect x="42" y="382" width="382" height="52" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.4"/>
+<text x="56" y="402" class="f s" fill="var(--d-blue-ink,#33527d)">3 · implied by the language, per CLDR</text>
+<text x="56" y="420" class="f s dim">Arabic is d/M/y in every territory. English splits, so it implies nothing.</text>
+
+<text x="56" y="446" class="f s dim">4 · else day-first — a documented default, not a confident reading</text>
+
+<rect x="454" y="238" width="422" height="212" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="472" y="264" class="f l ink">Ten calendars, two kinds of conversion</text>
+
+<rect x="472" y="278" width="386" height="70" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="486" y="298" class="f b ink">a renumbered year — arithmetic</text>
+<text x="486" y="317" class="f s dim">Buddhist −543 · Minguo +1911 · 令和 +2018 · 平成 +1988</text>
+<text x="486" y="334" class="f s dim">昭和 +1925 · 大正 +1911 · 明治 +1867</text>
+
+<rect x="472" y="358" width="386" height="76" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
+<text x="486" y="378" class="f b" fill="var(--d-violet-ink,#523a86)">a different calendar — the whole date converts</text>
+<text x="486" y="397" class="f s dim">Hijri, Umm al-Qura — the Saudi CIVIL calendar printed on documents,</text>
+<text x="486" y="412" class="f s dim">deliberately not the tabular variant, which is wrong by a day or two.</text>
+<text x="486" y="428" class="f s dim">Jalali turns at the vernal equinox, so no offset reaches it either.</text>
+
+<rect x="24" y="466" width="852" height="76" rx="9" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>
+<text x="42" y="490" class="f l" fill="var(--d-green-ink,#22603c)">A Japanese era is bounded, so its first and last years are PARTIAL</text>
+<text x="42" y="511" class="f mono dim">令和1年 = 1 May – 31 Dec 2019</text>
+<text x="266" y="511" class="f s dim">— reading it as the whole of 2019 would claim four months that were 平成31年.</text>
+<text x="42" y="530" class="f s dim">That is wrong rather than rounded, so the era carries a first and last day and the mention resolves to the period it actually names.</text>
+
+<rect x="24" y="558" width="852" height="112" rx="9" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.6"/>
+<text x="42" y="582" class="f l" fill="var(--d-red-ink,#993a30)">What is deliberately NOT read as evidence</text>
+<text x="42" y="604" class="f s dim">Script is not a calendar. Thai script writes Gregorian dates constantly, and a corpus is not Buddhist because of the glyphs it uses.</text>
+<text x="42" y="623" class="f s dim">A numeral system is not a calendar either: <tspan class="f mono">๒๐๒๖</tspan> is an ordinary Gregorian 2026 typed in Thai digits. Reading the glyphs as an era claim</text>
+<text x="42" y="638" class="f s dim">resolved it to <tspan class="f s" fill="var(--d-red-ink,#993a30)">1483</tspan> — a real bug, and the reason the rule is stated this bluntly.</text>
+<text x="42" y="659" class="f s dim">A number's SIZE is not evidence of its kind either — so a range check is the wrong fix for the case below. The noun governing it IS evidence.</text>
+
+<rect x="24" y="686" width="418" height="150" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-red,#b5453a)" stroke-width="1.5"/>
+<text x="42" y="710" class="f l" fill="var(--d-red-ink,#993a30)">A wrong reading, and the signal that would fix it</text>
+<text x="42" y="731" class="f s dim"><tspan class="f mono">١٩٩٥م</tspan> is how Arabic writes a year; <tspan class="f mono">١٥٠٠ م</tspan> how it writes</text>
+<text x="42" y="746" class="f s dim">a quantity. The difference is one space.</text>
+<text x="42" y="768" class="f s dim">So <tspan class="f mono">على ارتفاع ٢٥٠٠م</tspan> is an altitude in <tspan class="f s" fill="var(--d-red-ink,#993a30)">METRES</tspan>, and the</text>
+<text x="42" y="783" class="f s dim">engine reads it as the year 2500.</text>
+<text x="42" y="805" class="f s dim">A bare <tspan class="f mono">م</tspan> counts when a YEAR NOUN governs the number OR the</text>
+<text x="42" y="820" class="f s dim">marker is glued. Only the second fires — and <tspan class="f mono">ارتفاع</tspan> goes unread.</text>
+
+<rect x="454" y="686" width="422" height="150" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="472" y="710" class="f l ink">Two open gaps, recorded as gaps</text>
+<text x="472" y="731" class="f s dim">The altitude above is <tspan class="f s" fill="var(--d-red-ink,#993a30)">not an impossibility</tspan> — the governing noun is</text>
+<text x="472" y="746" class="f s dim">in the token stream. A year noun is already read as confirming</text>
+<text x="472" y="761" class="f s dim">evidence; a measurement noun pointing the other way is the same</text>
+<text x="472" y="776" class="f s dim">class of signal, and is simply not consulted yet.</text>
+<text x="472" y="798" class="f s dim">Separately, in-text scanners exist for <tspan class="f s" fill="var(--d-blue-ink,#33527d)">English and Arabic only</tspan>. Greek</text>
+<text x="472" y="813" class="f s dim">and Russian have full paradigm coverage and still cannot read a</text>
+<text x="472" y="828" class="f s dim">date in their own text — that machinery is language-agnostic.</text>
+</svg>

@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t d">
+<title id="t">How a write, a read and an open are actually handled</title>
+<desc id="d">A write seals the content, tags it with an HMAC, advances the audit chain, and commits all three in one SQLite transaction before the manifest anchor is fsynced. A read recomputes the tag before the row becomes data. At open the anchor is compared with the committed chain head: behind means a crash and fast-forwards, ahead means the database was rolled back and raises a tamper alarm.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
+</style>
+<rect width="900" height="812" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">The process — one write, one read, one open</text>
+<text x="28" y="58" class="f b dim">Integrity is enforced at the moment data is used, not audited afterwards. Nothing here is a background job that could be behind.</text>
+
+<rect x="24" y="76" width="430" height="396" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">A write</text>
+<text x="330" y="102" class="f s dim">saving one drawer</text>
+
+<circle cx="58" cy="130" r="11" fill="var(--d-teal,#12897e)"/>
+<text x="58" y="134" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">1</text>
+<text x="80" y="128" class="f b ink">seal the content</text>
+<text x="80" y="145" class="f s dim">zstd first, then encrypt — ciphertext has no</text>
+<text x="80" y="159" class="f s dim">redundancy left to compress, so the order matters.</text>
+
+<circle cx="58" cy="188" r="11" fill="var(--d-green,#2f7d4f)"/>
+<text x="58" y="192" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">2</text>
+<text x="80" y="186" class="f b ink">tag the row</text>
+<text x="80" y="204" class="f mono dim">HMAC(mac_key, id ‖ meta_json ‖ sealed)</text>
+<text x="80" y="220" class="f s dim">The tag covers the bytes as stored, ciphertext included.</text>
+
+<circle cx="58" cy="248" r="11" fill="var(--d-green,#2f7d4f)"/>
+<text x="58" y="252" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">3</text>
+<text x="80" y="246" class="f b ink">advance the chain</text>
+<text x="80" y="264" class="f mono dim">head' = HMAC(mac_key, head ‖ tag)</text>
+<text x="80" y="280" class="f s dim">Each head commits to every write that came before it.</text>
+
+<rect x="42" y="296" width="394" height="76" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.8"/>
+<circle cx="60" cy="322" r="11" fill="var(--d-blue,#4a6fa5)"/>
+<text x="60" y="326" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">4</text>
+<text x="82" y="320" class="f b" fill="var(--d-blue-ink,#33527d)">ONE SQLite transaction</text>
+<text x="82" y="338" class="f s dim">the row, the new chain head, and the chain entry</text>
+<text x="82" y="353" class="f s dim">commit together — or none of them do. There is no</text>
+<text x="82" y="366" class="f s dim">window where data exists without its audit entry.</text>
+
+<circle cx="58" cy="400" r="11" fill="var(--d-amber,#b5762a)"/>
+<text x="58" y="404" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">5</text>
+<text x="80" y="398" class="f b ink">only then, the manifest anchor</text>
+<text x="80" y="416" class="f s dim">Written to a temp file, atomically renamed, and the</text>
+<text x="80" y="430" class="f s dim">directory fsynced. It deliberately <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">lags</tspan> the database.</text>
+<text x="80" y="452" class="f s dim">Bulk ingest keeps this shape: one transaction and one</text>
+<text x="80" y="466" class="f s dim">anchor per batch, not per drawer.</text>
+
+<rect x="466" y="76" width="410" height="182" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="484" y="102" class="f l ink">A read</text>
+<text x="770" y="102" class="f s dim">every single one</text>
+<text x="484" y="126" class="f s dim">1 · load the row exactly as stored</text>
+<text x="484" y="148" class="f s dim">2 · recompute the tag over those bytes</text>
+<text x="484" y="170" class="f s dim">3 · compare</text>
+<rect x="484" y="182" width="374" height="30" rx="6" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.2"/>
+<text x="498" y="202" class="f s" fill="var(--d-red-ink,#993a30)">mismatch ⇒ the row is refused and never becomes data</text>
+<text x="484" y="232" class="f s dim">4 · only now decrypt, and return the words</text>
+<text x="484" y="250" class="f s dim">Verification precedes use — it is not a separate verify pass.</text>
+
+<rect x="466" y="274" width="410" height="198" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="484" y="300" class="f l ink">An open — reconciling the anchor</text>
+<text x="484" y="322" class="f s dim">Compare the lagging manifest anchor with the committed head:</text>
+
+<rect x="484" y="334" width="374" height="40" rx="6" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.3"/>
+<text x="498" y="352" class="f s" fill="var(--d-green-ink,#22603c)">anchor BEHIND the database</text>
+<text x="498" y="367" class="f s dim">a crash between commit and anchor — fast-forward, benign</text>
+
+<rect x="484" y="382" width="374" height="40" rx="6" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.6"/>
+<text x="498" y="400" class="f s" fill="var(--d-red-ink,#993a30)">anchor AHEAD of the database</text>
+<text x="498" y="415" class="f s dim">the database went backwards — rollback, raise the alarm</text>
+
+<text x="484" y="442" class="f s dim">This is the whole reason the anchor must never lead. If it could,</text>
+<text x="484" y="456" class="f s dim">an ordinary power loss would be indistinguishable from someone</text>
+<text x="484" y="466" class="f s dim">restoring an older copy of the file.</text>
+
+<rect x="24" y="488" width="852" height="128" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
+<text x="42" y="512" class="f l" fill="var(--d-teal-ink,#0d6b62)">Durability is pinned, not assumed — the ordering above only means something if the writes actually land</text>
+<text x="42" y="534" class="f s dim">SQLite runs <tspan class="f mono">WAL</tspan> + <tspan class="f mono">synchronous=FULL</tspan> on both binaries, so a committed transaction has reached the disk before the call returns.</text>
+<text x="42" y="555" class="f s dim">The manifest anchor is fsynced through an atomic rename plus a directory sync, so it is never half-written — a torn anchor would read as</text>
+<text x="42" y="570" class="f s dim">corruption on a vault that is in fact intact.</text>
+<text x="42" y="591" class="f s dim">Key material is fsynced at creation. A key that is not durable is a vault nobody can open again, which is data loss wearing a security hat.</text>
+<text x="42" y="606" class="f s dim">The invariant tying it together: <tspan class="f s" fill="var(--d-teal-ink,#0d6b62)">the anchor may lag the database and must never lead it.</tspan></text>
+
+<rect x="24" y="632" width="852" height="158" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="656" class="f l ink">What this detects, and what it does not</text>
+
+<rect x="42" y="668" width="404" height="106" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.3"/>
+<text x="58" y="688" class="f b" fill="var(--d-green-ink,#22603c)">caught</text>
+<text x="58" y="708" class="f s dim">An edited row — the tag no longer matches its bytes.</text>
+<text x="58" y="725" class="f s dim">A deleted or reordered history — the chain will not replay.</text>
+<text x="58" y="742" class="f s dim">A restored older database file — the anchor leads.</text>
+<text x="58" y="759" class="f s dim">A blob moved between vaults or rows — the AAD fails.</text>
+
+<rect x="458" y="668" width="418" height="106" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.3"/>
+<text x="474" y="688" class="f b" fill="var(--d-amber-ink,#8d5a1d)">not caught — and worth saying plainly</text>
+<text x="474" y="708" class="f s dim">Anyone holding the master key can rewrite history and re-tag it</text>
+<text x="474" y="723" class="f s dim">so that it verifies. The chain proves the file has not been</text>
+<text x="474" y="738" class="f s dim">altered <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">by someone without the key</tspan> — it is not a defence</text>
+<text x="474" y="753" class="f s dim">against the key holder, and no local scheme could be. External</text>
+<text x="474" y="768" class="f s dim">anchoring is what would close that, and it is not built.</text>
+</svg>

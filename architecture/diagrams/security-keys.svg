@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t d">
+<title id="t">Key derivation and the AAD that binds every ciphertext</title>
+<desc id="d">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use X25519 to a recipient key.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+  @media (prefers-color-scheme: dark) {
+    svg { --d-bg:#0f1419; --d-card:#161c23; --d-card2:#1b222b; --d-line:#2b3540;
+      --d-line2:#4a5b6b; --d-ink:#e4ebf1; --d-dim:#9aabba; --d-on:#0f1419;
+      --d-teal:#2ba99c; --d-teal-bg:#0e2523; --d-teal-bg2:#123430; --d-teal-ink:#6fd8cc;
+      --d-blue:#6d94c8; --d-blue-bg:#131d2b; --d-blue-ink:#9dbde3;
+      --d-amber:#d1953f; --d-amber-bg:#261c0f; --d-amber-ink:#e8bc78;
+      --d-violet:#9277c9; --d-violet-bg:#1c1730; --d-violet-bg2:#241d3d; --d-violet-ink:#b9a3e3;
+      --d-green:#4fa570; --d-green-bg:#10231a; --d-green-bg2:#153021; --d-green-ink:#86cf9f;
+      --d-red:#d1685c; --d-red-bg:#2a1614; --d-red-ink:#eb9a90; }
+  }
+</style>
+<rect width="900" height="812" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">One master key, a separate key per vault, and an AAD that names the row</text>
+<text x="28" y="58" class="f b dim">Isolation is cryptographic, not a WHERE clause: a blob lifted from one vault into another does not decrypt, because the vault id is authenticated.</text>
+
+<rect x="24" y="76" width="852" height="188" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">Derivation</text>
+<text x="700" y="102" class="f s dim">HKDF-SHA256, per vault</text>
+
+<rect x="42" y="116" width="196" height="60" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.3"/>
+<text x="56" y="137" class="f b ink">master key</text>
+<text x="56" y="155" class="f s dim">master.key, mode 0600 —</text>
+<text x="56" y="169" class="f s dim">or derived from a passphrase</text>
+
+<path d="M242 146 L282 146" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+  <path d="M0 0 L10 5 L0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
+
+<rect x="286" y="110" width="326" height="72" rx="7" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
+<text x="300" y="130" class="f b" fill="var(--d-blue-ink,#33527d)">HKDF(master, salt = vault_salt, info)</text>
+<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc</text>
+<text x="300" y="167" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/mac</text>
+
+<path d="M616 146 L656 146" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="660" y="110" width="198" height="34" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
+<text x="674" y="132" class="f mono" fill="var(--d-teal-ink,#0d6b62)">enc_key</text>
+<text x="740" y="132" class="f s dim">XChaCha20-Poly1305</text>
+
+<rect x="660" y="150" width="198" height="34" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>
+<text x="674" y="172" class="f mono" fill="var(--d-green-ink,#22603c)">mac_key</text>
+<text x="740" y="172" class="f s dim">HMAC-SHA256 + chain</text>
+
+<text x="42" y="204" class="f s dim">The two keys are independent outputs of the same derivation, so an integrity tag can never be forged from a decryption key and the two roles stay separate.</text>
+<text x="42" y="224" class="f s dim">Both live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation — a key that is not durable is a vault that</text>
+<text x="42" y="239" class="f s dim">cannot be opened again after a power loss.</text>
+<text x="42" y="256" class="f s dim">A vault carries a <tspan class="f mono">keycheck</tspan> marker, so a wrong passphrase is refused up front rather than surfacing later as a wall of decryption failures.</text>
+
+<rect x="24" y="280" width="852" height="176" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="306" class="f l ink">What every sealed blob authenticates alongside itself</text>
+<text x="42" y="326" class="f s dim">The AEAD's associated data is not decoration — it is what makes a ciphertext meaningful only in the exact position it was written.</text>
+
+<rect x="42" y="338" width="404" height="100" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<text x="58" y="358" class="f b" fill="var(--d-teal-ink,#0d6b62)">AAD = vault id + record id + domain</text>
+<text x="58" y="379" class="f mono dim">&lt;drawer id&gt;</text>
+<text x="180" y="379" class="f s dim">content</text>
+<text x="58" y="396" class="f mono dim">&lt;drawer id&gt;/emb</text>
+<text x="180" y="396" class="f s dim">embedding</text>
+<text x="58" y="413" class="f mono dim">&lt;drawer id&gt;/tok</text>
+<text x="180" y="413" class="f s dim">ColBERT token matrix</text>
+<text x="58" y="430" class="f mono dim">&lt;drawer id&gt;/pq</text>
+<text x="180" y="430" class="f s dim">PQ codes, codebook, pages</text>
+
+<rect x="458" y="338" width="400" height="100" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="474" y="358" class="f b" fill="var(--d-red-ink,#993a30)">so all of these FAIL, not merely return nothing</text>
+<text x="474" y="379" class="f s dim">A blob copied from vault A into vault B — the id differs.</text>
+<text x="474" y="396" class="f s dim">A row's ciphertext moved onto another row — the record id differs.</text>
+<text x="474" y="413" class="f s dim">An embedding swapped in where content was expected — the</text>
+<text x="474" y="428" class="f s dim">domain suffix differs.</text>
+
+<rect x="24" y="472" width="418" height="150" rx="9" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.5"/>
+<text x="42" y="496" class="f l" fill="var(--d-violet-ink,#523a86)">Rotation — a new key, the same history</text>
+<text x="42" y="517" class="f s dim">Every artifact is decrypted under the old key and re-sealed</text>
+<text x="42" y="532" class="f s dim">under the new one in <tspan class="f s" fill="var(--d-violet-ink,#523a86)">a single transaction</tspan>, and the chain is</text>
+<text x="42" y="547" class="f s dim">re-keyed over the audit bytes it already had — the history is</text>
+<text x="42" y="562" class="f s dim">preserved, not restarted.</text>
+<text x="42" y="583" class="f s dim">The manifest is staged as <tspan class="f mono">vault.json.next</tspan> and swapped, so a</text>
+<text x="42" y="598" class="f s dim">crash mid-rotation leaves one of two consistent states and is</text>
+<text x="42" y="613" class="f s dim">reconciled at the next open.</text>
+
+<rect x="454" y="472" width="422" height="150" rx="9" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
+<text x="472" y="496" class="f l" fill="var(--d-blue-ink,#33527d)">Sharing — an export bundle for one recipient</text>
+<text x="472" y="517" class="f s dim">X25519 ephemeral-static to the recipient's public key, through</text>
+<text x="472" y="532" class="f s dim">HKDF, into XChaCha20-Poly1305. The sender's vault keys never</text>
+<text x="472" y="547" class="f s dim">leave the machine and the bundle is readable by exactly one</text>
+<text x="472" y="562" class="f s dim">holder of the matching private key.</text>
+<text x="472" y="583" class="f s dim">This is the no-lock-in path: a vault can be handed over whole</text>
+<text x="472" y="598" class="f s dim">without ever exposing it to the operator moving it.</text>
+
+<rect x="24" y="638" width="852" height="152" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="662" class="f l ink">Where the boundary honestly sits</text>
+<text x="42" y="683" class="f s dim">Sealing protects data <tspan class="f s" fill="var(--d-blue-ink,#33527d)">at rest</tspan>. A running process holds the derived keys in memory, so an attacker with live access to the process, or an</text>
+<text x="42" y="698" class="f s dim">operator hosting the engine, is inside the boundary — no at-rest scheme changes that, and claiming otherwise would be dishonest.</text>
+<text x="42" y="719" class="f s dim">What it does buy, precisely: a stolen disk, a leaked backup, a snapshot, a decommissioned drive, or a copied database file yields ciphertext and</text>
+<text x="42" y="734" class="f s dim">the metadata inventory — never the words.</text>
+<text x="42" y="755" class="f s dim">The remote index tier is treated as <tspan class="f s" fill="var(--d-red-ink,#993a30)">untrusted</tspan> on the same reasoning: only sealed payloads are pushed to it, and anything it returns is</text>
+<text x="42" y="770" class="f s dim">re-verified locally against the vault's own HMAC before a single byte reaches the caller. An accelerator is not a source of truth.</text>
+</svg>

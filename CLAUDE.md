@@ -295,12 +295,27 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
-- `architecture/` — illustrated architecture reference: four theme-aware
-  SVG diagrams (`diagrams/`), the same as PDF (`pdf/`, rebuilt by
-  `build.sh` — librsvg has no CSS-variable support, so the build
-  flattens each `var()` to its light fallback first), and `index.html`
+- `architecture/` — illustrated architecture reference: ten theme-aware
+  SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
   which inlines them and documents every layer plus all 61
-  `UNDERCROFT_*` variables
+  `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
+  the inlined copies are both DERIVED, and `build.sh` regenerates both
+  — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
+  re-derives every `<h3>` id and the whole sidebar from the sections,
+  and fails if a heading and a rail entry disagree: a hand-added
+  heading otherwise gets no id and no rail entry and nothing complains
+  (this happened once). librsvg
+  has no CSS-variable support, so the PDF pass flattens each `var()` to
+  its light fallback; it also needs `fonts-noto-core`/`-cjk` or Thai,
+  Han, Kana and Devanagari render as tofu boxes — a defect the browser
+  hides and only a rendered PDF page shows. The inline pass **strips
+  each diagram's dark media query**: inlined, it sets `--d-*` on the
+  `svg`, which beats the `:root` values, so the diagram would follow the
+  SYSTEM theme while the page follows its manual toggle. `build.sh`
+  fails if an inlined copy still carries one. The page shows **one
+  section at a time** behind a sidebar, enabled by script (`body.paged`)
+  so that with JS off every section stays visible and the document still
+  reads end to end
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
   under `src/`
 - `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,

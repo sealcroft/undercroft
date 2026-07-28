@@ -1,5 +1,69 @@
 # Changelog
 
+## Unreleased — the security model, drawn
+
+- **Three diagrams for the security section**, which was a wall of prose about
+  the one part of the system readers most need to be precise about.
+  `security-levels` puts Sealed and HmacOnly side by side artifact by artifact —
+  content, embeddings, token matrices, PQ artifacts, the fts5 index, metadata,
+  the row tag, the chain entry — and carries the unsealed-metadata inventory.
+  `security-keys` shows HKDF deriving a separate encryption and MAC key per
+  vault, the AAD every blob authenticates, rotation, and recipient-encrypted
+  export. `security-integrity` walks a write, a read and an open, including the
+  anchor reconciliation that separates a crash from a rollback.
+- Each diagram states the boundary rather than implying there isn't one. A
+  running process holds the derived keys, so an operator hosting the engine is
+  inside the boundary; and anyone holding the master key can rewrite history and
+  re-tag it so it verifies. The chain proves the file was not altered *by
+  someone without the key* — external anchoring is what would close that, and it
+  is not built.
+- The section gained four headings, so it now has rail entries; it previously
+  had none.
+- **`build.sh` now re-derives every `<h3>` id and the whole sidebar from the
+  sections**, and fails if a heading and a rail entry disagree. Adding a heading
+  by hand gives it no id and no rail entry and nothing complains — the page just
+  grows a heading nobody can link to. That happened while writing this change,
+  which is why it is now generated rather than maintained.
+
+## Unreleased — the architecture reference gets a language chapter and a sidebar
+
+- **Three new diagrams covering how the engine handles languages**, which was
+  the largest undocumented area of the reference: `language-tokens` (the
+  six-stage retrieval fold, then the script-aware split into whole words,
+  bigrams or unigrams), `language-morphology` (language resolved by
+  declaration → script → the drawer's own function words, the five pairwise
+  rules, and what each declaration costs), and `language-dates` (an era marker
+  outranking a declared calendar, field order's four signals, ten calendars,
+  and the two open gaps).
+- **`architecture/index.html` now shows one section at a time behind a
+  sidebar.** Ten sections had become one unnavigable scroll. Paging is added by
+  script (`body.paged`), never in the markup, so with JS off or broken every
+  section stays visible and the document still reads end to end; print does the
+  same. Deep links, back/forward and prev/next all route through one handler.
+- **`build.sh` now regenerates the inlined copies in `index.html` too**, so
+  `diagrams/` is the single source and `pdf/` plus the inlined copies are both
+  derived. This is not tidying — inlining by hand had already reintroduced the
+  bug it prevents. A standalone SVG needs its own dark media query to be
+  readable when opened directly, but **inlined, that block sets `--d-*` on the
+  `svg` element and beats the `:root` values the page sets**, so the diagram
+  follows the system theme while the page follows its manual toggle and the two
+  disagree. The build now strips it and *fails* if an inlined copy still has one.
+- **The PDF pass needed CJK and Thai fonts.** Without `fonts-noto-core` and
+  `fonts-noto-cjk`, librsvg renders `พ.ศ.`, `令和`, `๒๐๒๖` and `नमस्ते` as tofu
+  boxes. The browser has those families and the container did not, so this was
+  a defect visible only in the PDF — check a rendered page, never just the SVG.
+- Corrected two things the new diagrams surfaced in existing text. The
+  relevance gate was still documented as `semantic > 0.56`, a fixed number the
+  per-embedder gate had just made false. And the Arabic altitude case
+  (`على ارتفاع ٢٥٠٠م`, which is **2500 metres** and reads as the year 2500) was
+  written up as an accepted trade on the grounds that no string relation
+  separates it from a year — which is wrong. The governing noun `ارتفاع` is
+  right there in the token stream, and a year noun is *already* read as
+  confirming evidence; a measurement noun pointing the other way is the same
+  class of signal and is simply not consulted yet. That is a gap, not a
+  principled refusal, and it is now recorded as one. What would still not be
+  legitimate is a range check on the number — magnitude is not evidence of kind.
+
 ## Unreleased — the relevance gate belongs to the vector space, not to a constant
 
 - **A model embedder used to retire the relevance gate by being installed.**

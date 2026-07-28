@@ -69,7 +69,9 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 16px; line-height: 1.65;
   }
-  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px 96px; }
+  /* Only the header uses this now, and it must track `.shell` exactly or the
+     title sits on a different left edge from the rail beneath it. */
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px 96px; }
   header { border-bottom: 1px solid var(--line); background: var(--card); margin-bottom: 40px; }
   header .wrap { padding: 40px 24px 32px; }
   h1 { font-size: 30px; line-height: 1.25; margin: 0 0 10px; font-weight: 600; }
@@ -142,34 +144,206 @@
   .themebtn .glyph { font-size: 14px; line-height: 1; }
   @media print { .themebtn { display: none; } }
   @media (max-width: 720px) { nav.toc ol { columns: 1; } h1 { font-size: 25px; } }
+
+  /* ---- The rail ---------------------------------------------------------
+     Ten sections had become one unnavigable scroll, so the page shows a single
+     section at a time behind a fixed contents rail. The paging and the rail's
+     controls are switched on by script (`body.paged`), never in the markup:
+     with JS off or broken every section stays visible, the rail is a plain
+     list of links, and the document still reads end to end. */
+  :root { --rail: 296px; }
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: var(--rail); z-index: 40;
+             display: flex; flex-direction: column; overflow: hidden;
+             background: var(--card); border-right: 1px solid var(--line);
+             transition: transform .18s ease; }
+  .sb-top { display: flex; align-items: center; gap: 8px;
+            padding: 15px 12px 13px 18px; border-bottom: 1px solid var(--line); }
+  .sb-brand { flex: 1; text-decoration: none; color: var(--ink);
+              font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
+  .sb-brand span { display: block; color: var(--faint); font-weight: 400; font-size: 12.5px; }
+  .sb-icon, .sb-show { border: 1px solid var(--line); background: var(--bg); color: var(--dim);
+                       border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1;
+                       padding: 7px 9px; font-family: inherit; }
+  .sb-icon:hover, .sb-show:hover { color: var(--ink); border-color: var(--line-strong); }
+  .sb-icon:focus-visible, .sb-show:focus-visible, .sb-filter input:focus-visible,
+  .sb-nav a:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .sb-filter { padding: 12px 14px 6px; }
+  .sb-filter input { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+                     padding: 7px 10px; border-radius: 8px; color: var(--ink);
+                     background: var(--bg); border: 1px solid var(--line); }
+  .sb-nav { flex: 1; overflow-y: auto; padding: 6px 10px 14px; }
+  .sb-nav ol { list-style: none; margin: 0; padding: 0; counter-reset: sec; }
+  .sb-nav .sb-sec { counter-increment: sec; }
+  .sb-nav a { display: block; text-decoration: none; border-radius: 7px;
+              color: var(--dim); font-size: 13.5px; line-height: 1.35; }
+  .sb-link { padding: 7px 10px 7px 32px; position: relative; }
+  .sb-link::before { content: counter(sec); position: absolute; left: 11px; top: 7px;
+                     font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .sb-nav a:hover { background: var(--bg); color: var(--ink); }
+  .sb-link[aria-current="page"] { background: var(--blue-bg); color: var(--blue-ink); font-weight: 600; }
+  .sb-link[aria-current="page"]::before { color: var(--blue-ink); }
+  /* Sub-items belong to the open section only. Showing all 26 at once is a
+     wall of text that hides the ten things someone is actually choosing between. */
+  .sb-sub { list-style: none; margin: 2px 0 10px 15px; padding-left: 16px; display: none;
+            border-left: 1px solid var(--line); }
+  .sb-sec.open .sb-sub, body:not(.paged) .sb-sub { display: block; }
+  .sb-sublink { padding: 5px 9px; font-size: 12.5px; color: var(--faint); }
+  .sb-sublink[aria-current="true"] { color: var(--blue-ink); background: var(--blue-bg); }
+  .sb-sec.nomatch { display: none; }
+  .sb-foot { margin: 0; padding: 12px 18px; border-top: 1px solid var(--line);
+             font-size: 11.5px; color: var(--faint); line-height: 1.55; }
+  .sb-foot a { color: var(--blue-ink); }
+  .sb-scrim { position: fixed; inset: 0; z-index: 39; background: rgba(10,16,22,.5); }
+
+  /* The opener exists only while the rail is away. */
+  .sb-show { position: fixed; top: 14px; left: 14px; z-index: 41; display: none; }
+  body.nav-collapsed .sb-show { display: block; }
+  body.nav-collapsed .sidebar { transform: translateX(-100%); }
+  body.nav-collapsed .main-area { margin-left: 0; }
+
+  .main-area { margin-left: var(--rail); transition: margin-left .18s ease; }
+  /* 900 − 80 padding = 820px of text. The column is sized to the measure rather
+     than the measure capped inside a wider column, which is what used to strand
+     ~300px beside every paragraph. Left unbounded it reaches ~120 characters on
+     a wide monitor, which is well past readable. */
+  .wrap, .content { max-width: 900px; margin: 0 auto; padding: 0 40px 96px; }
+  .content { min-width: 0; }
+  /* The column is the measure now; a per-element cap would only re-stand the
+     ~300px of dead space beside every paragraph that sizing it here removed. */
+  .content p, .content .lede { max-width: none; }
+  .content > .doc-section > h2 { margin-top: 0; }
+
+  .secnav { display: flex; gap: 16px; margin-top: 52px;
+            border-top: 1px solid var(--line); padding-top: 20px; }
+  .secnav a { color: var(--blue-ink); text-decoration: none; font-size: 14px; max-width: 47%; }
+  .secnav a:hover { text-decoration: underline; }
+  .secnav .nx { margin-left: auto; text-align: right; }
+  body.paged .doc-section { display: none; }
+  body.paged .doc-section.current { display: block; }
+
+  /* Print and find-in-page both want the whole document, not one section. */
+  @media print {
+    body.paged .doc-section { display: block !important; }
+    .sidebar, .secnav, .themebtn, .sb-show, .sb-scrim { display: none; }
+    .main-area { margin-left: 0; }
+  }
+  /* Narrow: the rail becomes an off-canvas drawer over the content. */
+  @media (max-width: 980px) {
+    .main-area { margin-left: 0; }
+    .sidebar { transform: translateX(-100%); box-shadow: 0 0 40px rgba(0,0,0,.3); }
+    body.nav-open .sidebar { transform: none; }
+    .sb-show { display: block; }
+    body.nav-open .sb-show { display: none; }
+    .wrap, .content { padding: 0 22px 72px; }
+    header .wrap { padding-top: 62px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar, .main-area { transition: none; }
+  }
 </style>
 </head>
 <body>
+<button class="sb-show" id="sbshow" type="button" title="Show contents" aria-label="Show contents" aria-controls="sidebar" aria-expanded="false">&#9776;</button>
 <button class="themebtn" id="themebtn" type="button" aria-live="polite">
   <span class="glyph" aria-hidden="true">◐</span><span id="themelabel">Theme</span>
 </button>
+
+<aside class="sidebar" id="sidebar">
+  <div class="sb-top">
+    <a class="sb-brand" href="#idea">Undercroft <span>architecture</span></a>
+    <button class="sb-icon" id="sbhide" type="button" title="Hide contents" aria-label="Hide contents" aria-controls="sidebar" aria-expanded="true">&#8676;</button>
+  </div>
+  <div class="sb-filter">
+    <input id="navfilter" type="search" placeholder="Filter contents…" aria-label="Filter contents" autocomplete="off">
+  </div>
+<nav class="sb-nav" aria-label="Sections"><ol>
+  <li class="sb-sec" data-sec="idea">
+    <a class="sb-link" href="#idea">The one idea</a>
+  </li>
+  <li class="sb-sec" data-sec="domain">
+    <a class="sb-link" href="#domain">Palace, wing, room, drawer</a>
+    <ul class="sb-sub">
+      <li><a class="sb-sublink" href="#domain-drawer-the-unit-of-memory">Drawer — the unit of memory</a></li>
+      <li><a class="sb-sublink" href="#domain-room-topic-session-or-ticket">Room — topic, session, or ticket</a></li>
+      <li><a class="sb-sublink" href="#domain-wing-the-isolation-unit-within-a-vault">Wing — the isolation unit within a vault</a></li>
+      <li><a class="sb-sublink" href="#domain-vault-the-cryptographic-boundary">Vault — the cryptographic boundary</a></li>
+    </ul>
+  </li>
+  <li class="sb-sec" data-sec="layers">
+    <a class="sb-link" href="#layers">Layers and trust boundaries</a>
+  </li>
+  <li class="sb-sec" data-sec="write">
+    <a class="sb-link" href="#write">The write path</a>
+    <ul class="sb-sub">
+      <li><a class="sb-sublink" href="#write-normalisation-has-two-modes">Normalisation has two modes</a></li>
+      <li><a class="sb-sublink" href="#write-derived-structure-added-never-substituted">Derived structure — added, never substituted</a></li>
+      <li><a class="sb-sublink" href="#write-one-transaction">One transaction</a></li>
+    </ul>
+  </li>
+  <li class="sb-sec" data-sec="retrieval">
+    <a class="sb-link" href="#retrieval">The retrieval stack</a>
+    <ul class="sb-sub">
+      <li><a class="sb-sublink" href="#retrieval-stage-2-candidate-prefilter-opt-in">Stage 2 — candidate prefilter opt-in</a></li>
+      <li><a class="sb-sublink" href="#retrieval-stage-3-verify-decrypt-score">Stage 3 — verify, decrypt, score</a></li>
+      <li><a class="sb-sublink" href="#retrieval-stage-4-the-relevance-gate">Stage 4 — the relevance gate</a></li>
+      <li><a class="sb-sublink" href="#retrieval-stage-5-second-stage-opt-in">Stage 5 — second stage opt-in</a></li>
+      <li><a class="sb-sublink" href="#retrieval-stage-6-select-top-k">Stage 6 — select top-k</a></li>
+      <li><a class="sb-sublink" href="#retrieval-stage-7-assemble-context-caller-side">Stage 7 — assemble context caller side</a></li>
+    </ul>
+  </li>
+  <li class="sb-sec" data-sec="recall">
+    <a class="sb-link" href="#recall">Recall vs precision, measured</a>
+  </li>
+  <li class="sb-sec" data-sec="language">
+    <a class="sb-link" href="#language">Languages</a>
+    <ul class="sb-sub">
+      <li><a class="sb-sublink" href="#language-the-fold-and-what-it-deliberately-leaves-alo">The fold, and what it deliberately leaves alone</a></li>
+      <li><a class="sb-sublink" href="#language-splitting-a-script-that-has-no-spaces">Splitting a script that has no spaces</a></li>
+      <li><a class="sb-sublink" href="#language-reaching-a-word-s-other-forms">Reaching a word's other forms</a></li>
+      <li><a class="sb-sublink" href="#language-what-each-declaration-costs">What each declaration costs</a></li>
+      <li><a class="sb-sublink" href="#language-dates-eras-and-calendars">Dates, eras and calendars</a></li>
+    </ul>
+  </li>
+  <li class="sb-sec" data-sec="security">
+    <a class="sb-link" href="#security">Security model</a>
+    <ul class="sb-sub">
+      <li><a class="sb-sublink" href="#security-choosing-a-level">Choosing a level</a></li>
+      <li><a class="sb-sublink" href="#security-keys-and-why-isolation-is-cryptographic">Keys, and why isolation is cryptographic</a></li>
+      <li><a class="sb-sublink" href="#security-the-process-a-write-a-read-an-open">The process — a write, a read, an open</a></li>
+      <li><a class="sb-sublink" href="#security-what-sealing-does-and-does-not-cover">What sealing does and does not cover</a></li>
+    </ul>
+  </li>
+  <li class="sb-sec" data-sec="config">
+    <a class="sb-link" href="#config">Configuration reference</a>
+    <ul class="sb-sub">
+      <li><a class="sb-sublink" href="#config-core">Core</a></li>
+      <li><a class="sb-sublink" href="#config-retrieval">Retrieval</a></li>
+      <li><a class="sb-sublink" href="#config-models">Models</a></li>
+      <li><a class="sb-sublink" href="#config-optional-llm-for-refine-only">Optional LLM (for refine only)</a></li>
+      <li><a class="sb-sublink" href="#config-server-and-multi-tenancy">Server and multi-tenancy</a></li>
+      <li><a class="sb-sublink" href="#config-remote-vector-backends-untrusted-accelerator">Remote vector backends untrusted accelerators</a></li>
+      <li><a class="sb-sublink" href="#config-observability-compiled-out-by-default">Observability compiled out by default</a></li>
+      <li><a class="sb-sublink" href="#config-per-request-options-not-environment">Per-request options (not environment)</a></li>
+    </ul>
+  </li>
+  <li class="sb-sec" data-sec="defaults">
+    <a class="sb-link" href="#defaults">Why the defaults are what they are</a>
+  </li>
+</ol></nav>
+  <p class="sb-foot">Engine v0.42.0 · BUSL-1.1<br><a href="diagrams/">SVG</a> · <a href="pdf/">PDF</a></p>
+</aside>
+<div class="sb-scrim" id="sbscrim" hidden></div>
+<div class="main-area" id="mainarea">
 <header><div class="wrap">
   <h1>Undercroft architecture</h1>
   <p class="sub">How a memory is stored, protected, and found again — the palace model, the retrieval stack, the write path, and every knob that changes their behaviour.</p>
   <p class="meta">Engine v0.42.0 · light and dark themes, following your system by default ·
      diagrams also available as <a href="diagrams/">SVG</a> and <a href="pdf/">PDF</a></p>
 </div></header>
+<main class="content" id="content">
 
-<div class="wrap">
-
-<nav class="toc"><ol>
-  <li><a href="#idea">The one idea</a></li>
-  <li><a href="#domain">Palace, wing, room, drawer</a></li>
-  <li><a href="#layers">Layers and trust boundaries</a></li>
-  <li><a href="#write">The write path</a></li>
-  <li><a href="#retrieval">The retrieval stack</a></li>
-  <li><a href="#recall">Recall vs precision, measured</a></li>
-  <li><a href="#security">Security model</a></li>
-  <li><a href="#config">Configuration reference</a></li>
-  <li><a href="#defaults">Why the defaults are what they are</a></li>
-</ol></nav>
-
-<h2 id="idea">The one idea</h2>
+<section class="doc-section" id="idea" aria-labelledby="h_idea">
+<h2 id="h_idea">The one idea</h2>
 <p class="lede">Most memory systems summarise what you tell them. Undercroft stores the words and adds structure alongside them.</p>
 <p>That single decision explains almost every design choice below. If content is kept verbatim, then retrieval has to be good enough to find the right passage rather than relying on a pre-digested summary — hence a hybrid lexical + semantic stack with optional reranking. If nothing is thrown away, then metadata that arrives with the content has to be preserved too, not just the text. And if the store holds the user's actual words, it had better be encrypted, integrity-tagged, and tamper-evident.</p>
 
@@ -178,8 +352,11 @@
   <div class="card"><h4>Local-first</h4><p>Default builds have no telemetry dependencies, contact no external API, and use a deterministic offline embedder. Every outward path is an explicit opt-in.</p></div>
   <div class="card"><h4>Provable</h4><p>Every row carries a keyed HMAC verified on read; every write advances a tamper-evident audit chain inside the same transaction.</p></div>
 </div>
+<nav class="secnav"><a class="nx" href="#domain">Palace, wing, room, drawer →</a></nav>
+</section>
 
-<h2 id="domain">Palace, wing, room, drawer</h2>
+<section class="doc-section" id="domain" aria-labelledby="h_domain">
+<h2 id="h_domain">Palace, wing, room, drawer</h2>
 <p class="lede">Four nested levels, each with exactly one job.</p>
 
 <figure>
@@ -261,14 +438,14 @@
 <figcaption>The domain model. <a href="diagrams/domain-model.svg">SVG</a> · <a href="pdf/domain-model.pdf">PDF</a></figcaption>
 </figure>
 
-<h3>Drawer — the unit of memory</h3>
+<h3 id="domain-drawer-the-unit-of-memory">Drawer — the unit of memory</h3>
 <p>One verbatim chunk of content plus its metadata. Its identity is deliberately <em>structural</em>, not content-based:</p>
 <p><code>drawer_id = hash(wing, room, source, chunk_index, normalize_version)</code></p>
 <p>Content is not in that hash. This is what makes re-mining a source idempotent: process the same file twice and the same chunk lands in the same slot, updating in place instead of creating a duplicate. It also means changing any of those five inputs changes the drawer's identity — which is why giving <code>room</code> new meaning only applies to newly created vaults.</p>
 <p><strong>A save that arrives through an API has no source</strong> to be the fourth chunk of, so <code>chunk_index</code> carries a unique append index instead of a position, and identity becomes unique-per-call rather than idempotent: posting the same text twice creates two drawers. That is the intended reading — the same words written on a different day are a different event, not a mistake to be silently swallowed. Collapsing repeats is deduplication's job, and it keeps every date the text appeared on rather than discarding all but one.</p>
 <p>The append index has to be monotonic. It once came from <code>COUNT(*)</code>, which <em>decreases</em> when a drawer is deleted — so the next save was handed an index still in use, derived an id that already existed, and overwrote the unrelated drawer holding it. It now comes from SQLite's <code>AUTOINCREMENT</code> sequence, which never reuses a rowid.</p>
 
-<h3>Room — topic, session, or ticket</h3>
+<h3 id="domain-room-topic-session-or-ticket">Room — topic, session, or ticket</h3>
 <p>A room groups drawers within a wing and doubles as a search filter. Because it is both a label and a predicate, it can carry real structure — one room per conversation session, per support ticket, per meeting — at no extra cost. The distilled knowledge surface uses this: fact-drawers live in their own room (<code>facts</code> by default), so a caller chooses between verbatim recall, distilled facts, or both purely by varying the room filter.</p>
 
 <div class="note">
@@ -277,18 +454,21 @@
   <p>That check is what makes a fact's <strong>grounding</strong> knowable: <code>stated</code> when the note's own words support it, <code>background</code> when they do not, and <code>unevaluated</code> for facts distilled before the check existed — three states, because "we did not look" and "we looked and found nothing" are different claims. Background is a provenance kind, <em>not</em> a quality grade: "Leeds is in the United Kingdom" is absent from the note and is exactly the edge that answers which country someone works in. Filtering is opt-in and the default returns all three, because excluding background facts would break the multi-hop questions a graph exists to answer.</p>
 </div>
 
-<h3>Wing — the isolation unit within a vault</h3>
+<h3 id="domain-wing-the-isolation-unit-within-a-vault">Wing — the isolation unit within a vault</h3>
 <p>A person, a project, or a tenant's user. Search is normally wing-scoped, so a wing bounds how much work every retrieval stage has to do.</p>
 
-<h3>Vault — the cryptographic boundary</h3>
+<h3 id="domain-vault-the-cryptographic-boundary">Vault — the cryptographic boundary</h3>
 <p>Each vault has its own key, derived from the palace master key via HKDF, and every sealed artifact binds the vault identity into its AEAD associated data. Cross-vault access therefore fails <em>cryptographically</em>, not merely because a check rejected it. One vault is one SQLite database with one audit chain.</p>
 
 <div class="note teal">
   <span class="tag">Design note</span>
   <p>Metadata rides inside a single serialized <code>meta_json</code> column that the row's HMAC already covers. Adding an optional metadata field therefore needs no schema migration and leaves existing rows byte-identical — their tags still verify. That property is why <code>content_date</code>, <code>time_mentions</code>, and <code>entities</code> could be introduced without touching storage or keys.</p>
 </div>
+<nav class="secnav"><a class="pv" href="#idea">← The one idea</a><a class="nx" href="#layers">Layers and trust boundaries →</a></nav>
+</section>
 
-<h2 id="layers">Layers and trust boundaries</h2>
+<section class="doc-section" id="layers" aria-labelledby="h_layers">
+<h2 id="h_layers">Layers and trust boundaries</h2>
 <p class="lede">One process holds one palace. Tenancy is expressed as vaults, not as separate palaces.</p>
 
 <figure>
@@ -324,7 +504,7 @@
 <text x="674" y="126" class="f b dim">admin console /ui</text>
 <text x="674" y="140" class="f s dim">served on every build</text>
 
-<path d="M450 158 L450 178" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.8" marker-end="url(#a_layers)"/>
+<path d="M450 158 L450 178" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.8" marker-end="url(#a)"/>
 <text x="462" y="174" class="f s dim">bearer + optional per-vault assertion (HMAC, time-boxed)</text>
 
 <rect x="24" y="182" width="600" height="176" rx="9" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="2"/>
@@ -357,7 +537,7 @@
 <text x="672" y="322" class="f s dim">untrusted accelerators — sealed</text>
 <text x="672" y="336" class="f s dim">payloads only, re-verified on read</text>
 
-<path d="M320 360 L320 380" stroke="var(--d-teal,#12897e)" stroke-width="1.8" marker-end="url(#a_layers)"/>
+<path d="M320 360 L320 380" stroke="var(--d-teal,#12897e)" stroke-width="1.8" marker-end="url(#a)"/>
 <line x1="24" y1="374" x2="876" y2="374" stroke="var(--d-teal,#12897e)" stroke-width="1.6" stroke-dasharray="8 5"/>
 <text x="336" y="370" class="f s" fill="var(--d-teal-ink,#0d6b62)">everything below this line is ciphertext</text>
 
@@ -383,7 +563,7 @@
 <text x="42" y="549" class="f b ink">Default posture: local-first and offline. No telemetry deps compiled in, no external API, deterministic embedder.</text>
 <text x="42" y="568" class="f s dim">Each outward path is a deliberate opt-in: UNDERCROFT_LLM_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL, UNDERCROFT_LLM_KEY.</text>
 
-<defs><marker id="a_layers" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
+<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
 
 <figcaption>Deployment layers, with the ciphertext boundary marked. <a href="diagrams/layers.svg">SVG</a> · <a href="pdf/layers.pdf">PDF</a></figcaption>
@@ -391,8 +571,11 @@
 
 <p>Callers reach the engine three ways — MCP over stdio for local agents, HTTP <code>/v1</code> for applications, and the CLI — and all three land on the same store. An admin console is served at <code>/ui</code> on every build.</p>
 <p>Two components sit deliberately outside the engine. The <strong>orchestrator</strong> is a separate binary and a pure <code>/v1</code> client: it maps tenants to vaults and proxies requests, and the engine never links it. <strong>Remote vector backends</strong> (Qdrant, Chroma, pgvector, Milvus, Weaviate) are treated as untrusted accelerators — they receive sealed payloads only, and anything they return is re-verified locally before use.</p>
+<nav class="secnav"><a class="pv" href="#domain">← Palace, wing, room, drawer</a><a class="nx" href="#write">The write path →</a></nav>
+</section>
 
-<h2 id="write">The write path</h2>
+<section class="doc-section" id="write" aria-labelledby="h_write">
+<h2 id="h_write">The write path</h2>
 <p class="lede">Normalise, derive, embed, then commit everything atomically.</p>
 
 <figure>
@@ -419,7 +602,7 @@
 <text x="42" y="134" class="f b dim">control chars, CRLF → LF</text>
 <text x="42" y="150" class="f s" fill="var(--d-amber-ink,#8d5a1d)">Code mode keeps every space</text>
 
-<path d="M292 115 L318 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M292 115 L318 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="322" y="74" width="262" height="82" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
 <text x="340" y="98" class="f l" fill="var(--d-violet-ink,#523a86)">2 · derive, never alter</text>
@@ -427,7 +610,7 @@
 <text x="340" y="134" class="f b dim">content_date anchors relative dates</text>
 <text x="340" y="150" class="f s dim">runs in Drawer::new — no path forgets</text>
 
-<path d="M590 115 L616 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M590 115 L616 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="620" y="74" width="256" height="82" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="638" y="98" class="f l ink">3 · embed</text>
@@ -435,7 +618,7 @@
 <text x="638" y="134" class="f b dim">by default — no model, no network</text>
 <text x="638" y="150" class="f s dim">computed before the lock is taken</text>
 
-<path d="M450 160 L450 182" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M450 160 L450 182" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="186" width="852" height="176" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2.2"/>
 <text x="42" y="212" class="f l" fill="var(--d-teal-ink,#0d6b62)">4 · one SQLite transaction — all of it, or none of it</text>
@@ -464,7 +647,7 @@
 
 <text x="42" y="354" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer — measured ≈55× fewer fsyncs at 200 drawers.</text>
 
-<path d="M450 366 L450 388" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_writepath)"/>
+<path d="M450 366 L450 388" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="392" width="404" height="70" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="42" y="416" class="f l ink">5 · then, outside the transaction</text>
@@ -481,13 +664,13 @@
 <text x="42" y="518" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
 <text x="42" y="530" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
 
-<defs><marker id="a_writepath" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
+<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
 
 <figcaption>One drawer being written. <a href="diagrams/write-path.svg">SVG</a> · <a href="pdf/write-path.pdf">PDF</a></figcaption>
 </figure>
 
-<h3>Normalisation has two modes</h3>
+<h3 id="write-normalisation-has-two-modes">Normalisation has two modes</h3>
 <p>A safety floor applies always: NUL and lone control characters are stripped (they corrupt terminals and log pipelines) and CRLF becomes LF so hashes are stable across platforms. Tabs and newlines always survive.</p>
 <table>
   <thead><tr><th>Mode</th><th>Additional behaviour</th><th>Chosen for</th></tr></thead>
@@ -498,7 +681,7 @@
 </table>
 <p>The reason for the split is simple: in a Python file leading whitespace <em>is</em> the semantics, and a trailing-space diff is a real change. Tidying it away is a silent edit to user data. <code>normalize_version</code> is stamped into each drawer's metadata and into its id, so a change in normalisation output is detectable rather than invisible.</p>
 
-<h3>Derived structure — added, never substituted</h3>
+<h3 id="write-derived-structure-added-never-substituted">Derived structure — added, never substituted</h3>
 <table>
   <thead><tr><th>Field</th><th>What it holds</th><th>How it is produced</th></tr></thead>
   <tbody>
@@ -521,15 +704,18 @@
   <p>With no anchor, a relative time mention is recorded <em>unresolved</em> rather than assigned a plausible date. An honest gap is useful; an invented date is the failure mode this design exists to remove. The extraction runs inside the drawer constructor rather than at each call site, so no write path — REST, MCP, CLI, mining, import, sweeper — can silently skip it.</p>
 </div>
 
-<h3>One transaction</h3>
+<h3 id="write-one-transaction">One transaction</h3>
 <p>Sealing the content and embedding, computing the row tag, and appending to the audit chain all happen inside a single SQLite transaction. There is no committed write that lacks its audit entry. Bulk ingest takes one transaction and one manifest anchor per <em>batch</em> rather than per drawer, measured at roughly 55× fewer fsyncs on a 200-drawer import.</p>
 
 <div class="note green">
   <span class="tag">The asymmetry is the detector</span>
   <p>The manifest anchor is fsynced after the transaction commits, so it deliberately <em>lags</em> the database. At open: anchor behind the database means power was lost mid-write, and it fast-forwards. Anchor <em>ahead</em> of the database means someone restored an older copy of the file — a tamper alarm. Keeping them merely "in sync" would make those two cases indistinguishable; the directional invariant is what makes rollback detectable.</p>
 </div>
+<nav class="secnav"><a class="pv" href="#layers">← Layers and trust boundaries</a><a class="nx" href="#retrieval">The retrieval stack →</a></nav>
+</section>
 
-<h2 id="retrieval">The retrieval stack</h2>
+<section class="doc-section" id="retrieval" aria-labelledby="h_retrieval">
+<h2 id="h_retrieval">The retrieval stack</h2>
 <p class="lede">Seven stages. Two are optional tiers that are off until you enable them.</p>
 
 <figure>
@@ -557,7 +743,7 @@
 <rect x="676" y="72" width="200" height="58" rx="8" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="690" y="96" class="f s dim">decides how much work</text>
 <text x="690" y="113" class="f s dim">everything below must do</text>
-<path d="M344 130 L344 148" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 130 L344 148" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="150" width="640" height="66" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8" stroke-dasharray="6 4"/>
 <circle cx="48" cy="183" r="13" fill="var(--d-teal,#12897e)"/><text x="48" y="188" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">2</text>
@@ -568,7 +754,7 @@
 <text x="690" y="174" class="f s" fill="var(--d-teal-ink,#0d6b62)">measured at 20k drawers:</text>
 <text x="690" y="191" class="f s" fill="var(--d-teal-ink,#0d6b62)">flat 499 ms → pq 12 ms</text>
 <text x="690" y="208" class="f s dim">first query builds the index</text>
-<path d="M344 216 L344 234" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 216 L344 234" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="236" width="640" height="66" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <circle cx="48" cy="269" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="274" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">3</text>
@@ -579,18 +765,18 @@
 <text x="690" y="260" class="f mono" fill="var(--d-blue-ink,#33527d)">UNDERCROFT_FUSION</text>
 <text x="690" y="277" class="f s dim">bm25 (default) · rrf · legacy</text>
 <text x="690" y="294" class="f s dim">integrity is not optional</text>
-<path d="M344 302 L344 320" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 302 L344 320" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="322" width="640" height="66" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <circle cx="48" cy="355" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="360" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">4</text>
 <text x="72" y="348" class="f l ink">relevance gate</text>
-<text x="72" y="367" class="f mono ink">lexical &gt; 0 || semantic &gt; 0.56</text>
+<text x="72" y="367" class="f mono ink">lexical &gt; 0 || semantic &gt; the embedder's gate</text>
 <text x="72" y="383" class="f b dim">an unrelated row still scores ~0.35 from the cosine midpoint — require real evidence</text>
 <rect x="676" y="322" width="200" height="66" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
 <text x="690" y="346" class="f s" fill="var(--d-red-ink,#94382f)">passes on ANY shared term,</text>
 <text x="690" y="363" class="f s" fill="var(--d-red-ink,#94382f)">so it rarely empties a result</text>
 <text x="690" y="380" class="f s dim">— why a "thin" flag failed</text>
-<path d="M344 388 L344 406" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 388 L344 406" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="408" width="640" height="66" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.8" stroke-dasharray="6 4"/>
 <circle cx="48" cy="441" r="13" fill="var(--d-violet,#6b4fa8)"/><text x="48" y="446" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">5</text>
@@ -601,7 +787,7 @@
 <text x="690" y="432" class="f mono" fill="var(--d-violet-ink,#523a86)">UNDERCROFT_RERANKER</text>
 <text x="690" y="449" class="f s dim">onnx · ort · colbert</text>
 <text x="690" y="466" class="f s dim">RERANK_TOP_N default 50</text>
-<path d="M344 474 L344 492" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 474 L344 492" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="494" width="640" height="66" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-amber,#b5762a)" stroke-width="1.8"/>
 <circle cx="48" cy="527" r="13" fill="var(--d-amber,#b5762a)"/><text x="48" y="532" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">6</text>
@@ -612,7 +798,7 @@
 <text x="690" y="518" class="f s" fill="var(--d-amber-ink,#8d5a1d)">the budget that decides</text>
 <text x="690" y="535" class="f s" fill="var(--d-amber-ink,#8d5a1d)">what the model ever sees</text>
 <text x="690" y="552" class="f s dim">room_cap=2 measured −5.6 pp</text>
-<path d="M344 560 L344 578" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a_retrievalstack)"/>
+<path d="M344 560 L344 578" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="580" width="640" height="72" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.8"/>
 <circle cx="48" cy="616" r="13" fill="var(--d-green,#2f7d4f)"/><text x="48" y="621" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">7</text>
@@ -628,43 +814,47 @@
 <text x="42" y="691" class="f b ink">Recall is decided at stages 2–5. Precision at stage 6. Interpretability at stage 7.</text>
 <text x="42" y="710" class="f s dim">Measured: the multi-session evidence we were missing sat between rank 10 and 50 — a stage-6 budget limit, not stage 2–5 blindness.</text>
 
-<defs><marker id="a_retrievalstack" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
+<defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
 
 <figcaption>One query descending the stack, with measured latencies. <a href="diagrams/retrieval-stack.svg">SVG</a> · <a href="pdf/retrieval-stack.pdf">PDF</a></figcaption>
 </figure>
 
-<h3>Stage 2 — candidate prefilter <span class="pill off">opt-in</span></h3>
+<h3 id="retrieval-stage-2-candidate-prefilter-opt-in">Stage 2 — candidate prefilter <span class="pill off">opt-in</span></h3>
 <p>By default, search scans the wing. Past a certain size that becomes the dominant cost, and three approximate tiers exist to avoid it: <strong>PQ/IVF</strong> clusters vectors into lists and probes only the nearest ones (roughly O(√N)), <strong>MUVERA FDE</strong> gives token-aware candidates, and an experimental in-memory <strong>HNSW</strong> graph gives O(log N).</p>
 <div class="note violet">
   <span class="tag">Measured</span>
   <p>On a deliberately adversarial 20,000-drawer corpus (every query lexically matching every drawer), flat scan ran at <strong>499 ms</strong> p50 while <code>UNDERCROFT_RETRIEVAL=pq</code> ran at <strong>12 ms</strong> p50 — a 41× difference. Two caveats before enabling it anywhere that matters: these tiers are <em>approximate</em>, so recall must be checked against a flat baseline first; and the first query after ingest pays a one-time index build (66 s in that test), which wants warming at startup rather than ambushing a user.</p>
 </div>
 
-<h3>Stage 3 — verify, decrypt, score</h3>
+<h3 id="retrieval-stage-3-verify-decrypt-score">Stage 3 — verify, decrypt, score</h3>
 <p>Every candidate row's HMAC is verified before its content is used; integrity is not an optional tier. Scoring then fuses a lexical BM25 signal with cosine semantic similarity. <code>UNDERCROFT_FUSION</code> selects <code>bm25</code> (the default), <code>rrf</code> for reciprocal-rank fusion, or <code>legacy</code>.</p>
 
-<h3>Stage 4 — the relevance gate</h3>
-<p>An unrelated record still scores around 0.35 from the neutral cosine midpoint alone, so the gate demands actual evidence: <code>lexical &gt; 0 || semantic &gt; 0.56</code>. Failing rows are removed, not merely down-ranked.</p>
+<h3 id="retrieval-stage-4-the-relevance-gate">Stage 4 — the relevance gate</h3>
+<p>An unrelated record still scores around 0.35 from the neutral cosine midpoint alone, so the gate demands actual evidence: <code>lexical &gt; 0 || semantic &gt; <em>gate</em></code>. Failing rows are removed, not merely down-ranked.</p>
+<p>That threshold is <strong>a property of the embedder, not a constant</strong>. The default hashed embedder puts unrelated text at a cosine of almost exactly zero, so its gate sits at 0.56 — but a trained encoder does not behave that way at all, and E5- and BGE-family models place <em>unrelated</em> pairs near 0.75. A single shared number would therefore sit <em>below</em> a model's floor, making the disjunct vacuously true for every hit and silently retiring the gate. Each embedder now declares its own gate or has it measured against known-unrelated probe pairs at open; an external vault, whose vectors come from a model this process has never seen, refuses semantic-only admission until an operator declares one. <code>UNDERCROFT_SEMANTIC_GATE</code> overrides it.</p>
 <div class="note red">
   <span class="tag">Known limitation</span>
   <p>Because <code>lexical &gt; 0</code> passes on <em>any</em> shared term, this gate rarely empties a result set in practice. A caller cannot use "the gate rejected everything" as a signal that the corpus lacks an answer — measured on an adversarial benchmark, unanswerable questions received exactly as much context as answerable ones. Deciding that retrieved text fails to answer a question requires reading it against the question, which is the answering model's job, not retrieval's. What the layer does provide is per-hit <code>score</code>, <code>semantic</code>, and <code>lexical</code> values so a caller can set its own policy.</p>
 </div>
 
-<h3>Stage 5 — second stage <span class="pill off">opt-in</span></h3>
+<h3 id="retrieval-stage-5-second-stage-opt-in">Stage 5 — second stage <span class="pill off">opt-in</span></h3>
 <p>A cross-encoder rescores the top-N candidates on the full (query, content) pair — the interaction a bi-encoder cannot capture — then results are re-sorted. Alternatively ColBERT late interaction computes MaxSim over token matrices built at ingest. Bounded to <code>UNDERCROFT_RERANK_TOP_N</code> forward passes, default 50.</p>
 
-<h3>Stage 6 — select top-k</h3>
+<h3 id="retrieval-stage-6-select-top-k">Stage 6 — select top-k</h3>
 <p>Results are truncated to the requested limit. An optional <code>room_cap</code> takes at most <em>N</em> hits per room and then refills any remaining slots in score order — a soft cap, so a genuinely single-room question still receives the full limit and recall is never traded for spread.</p>
 <div class="note amber">
   <span class="tag">Measured — enable with care</span>
   <p>On a corpus where evidence is <em>concentrated</em> (one session holds the answer), <code>room_cap=2</code> measured <strong>5.6 points worse</strong> overall. Forcing room diversity pulls in unrelated sessions and displaces the chunks that actually contained the answer. Spreading trades precision for breadth; when precision is what the question needs, that trade loses. Default off for this reason.</p>
 </div>
 
-<h3>Stage 7 — assemble context <span class="pill exp">caller side</span></h3>
+<h3 id="retrieval-stage-7-assemble-context-caller-side">Stage 7 — assemble context <span class="pill exp">caller side</span></h3>
 <p>The final step belongs to whoever builds the prompt: label each hit with its <code>content_date</code>, optionally order them chronologically, then hand the text to the model.</p>
+<nav class="secnav"><a class="pv" href="#write">← The write path</a><a class="nx" href="#recall">Recall vs precision, measured →</a></nav>
+</section>
 
-<h2 id="recall">Recall vs precision, measured</h2>
+<section class="doc-section" id="recall" aria-labelledby="h_recall">
+<h2 id="h_recall">Recall vs precision, measured</h2>
 <p class="lede">Different stages control different failure modes — worth knowing before tuning any of them.</p>
 <table>
   <thead><tr><th>Property</th><th>Decided at</th><th>What goes wrong when it is weak</th></tr></thead>
@@ -679,8 +869,447 @@
   <p>Questions needing evidence from several sessions were failing. Measuring gold-document presence separated the causes cleanly: where <em>all</em> the required documents reached the context, answers were correct 97% of the time; where one was missing, they failed. Probing recall at increasing k showed the missing documents ranked between position 10 and 50 — findable, but below the budget. That made it a stage-6 problem, ruled out reranking (stage 5) as the fix, and explained why forcing room diversity had made things worse: the issue was depth of recall for weakly-matching evidence, never spread.</p>
   <p>The same measurement also showed roughly 40% of those failures had every required document present and still answered wrongly — an aggregation limit of the answering model that no retrieval change can lift. Knowing which portion is which prevents spending effort on the part that is not retrieval's to solve.</p>
 </div>
+<nav class="secnav"><a class="pv" href="#retrieval">← The retrieval stack</a><a class="nx" href="#language">Languages →</a></nav>
+</section>
 
-<h2 id="security">Security model</h2>
+<section class="doc-section" id="language" aria-labelledby="h_language">
+<h2 id="h_language">Languages</h2>
+<p class="lede">Nineteen languages reach 100% of an audited paradigm on the lexical channel — and none of them has to be declared.</p>
+
+<p>Three separate things can stop a query from finding a drawer that visibly contains its answer, and they fail in different layers. The word may be <em>spelled</em> differently — a diacritic, a ligature, a different Unicode normalisation form. The script may not <em>mark word boundaries at all</em>, so there is nothing to split on. Or the drawer may hold the word in a different <em>grammatical form</em> — a plural, a case ending, an Arabic broken plural sharing barely any letters with its singular. Dates add a fourth problem of their own: the words a writer typed beside a number decide which calendar counted it.</p>
+
+<p>These are handled in different places by deliberately different mechanisms, and it is worth knowing which is which, because none of them substitutes for another. Folding cannot reach morphology; segmentation cannot fix a diacritic; and no amount of either delivers cross-lingual retrieval, which belongs to the embedder alone.</p>
+
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 776" width="900" height="776" role="img" aria-labelledby="t_languagetokens d_languagetokens">
+<title id="t_languagetokens">From text to tokens</title>
+<desc id="d_languagetokens">Text passes through a six-stage retrieval fold and then a script-aware split. Delimiting scripts yield whole words; scripts that attach without a delimiter yield bigrams flagged as n-grams and refused the exact match channel; Han yields unigrams because a character is a morpheme.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+</style>
+<rect width="900" height="776" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">From text to tokens — the fold, then the split</text>
+<text x="28" y="58" class="f b dim">The query and the drawer take exactly this path. Stored bytes are never folded: the promise is verbatim, so this produces comparison keys only.</text>
+
+<rect x="24" y="76" width="852" height="256" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">1 · the fold</text>
+<text x="130" y="102" class="f mono dim">normalize::search_key</text>
+<text x="700" y="102" class="f s dim">one direction, never reversed</text>
+
+<rect x="42" y="116" width="112" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="52" y="136" class="f s ink">S0 ascii path</text>
+<text x="52" y="152" class="f s dim">lowercase, done</text>
+
+<rect x="166" y="116" width="92" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="176" y="136" class="f s ink">S1 NFC</text>
+<text x="176" y="152" class="f s dim">compose</text>
+
+<rect x="270" y="116" width="118" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="280" y="136" class="f s ink">S2 compat</text>
+<text x="280" y="152" class="f s dim">scoped, not NFKC</text>
+
+<rect x="400" y="116" width="96" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="410" y="136" class="f s ink">S3 recompose</text>
+<text x="410" y="152" class="f s dim">if S2 fired</text>
+
+<rect x="508" y="116" width="104" height="52" rx="6" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
+<text x="518" y="136" class="f s" fill="var(--d-amber-ink,#8d5a1d)">S4 lowercase</text>
+<text x="518" y="152" class="f s dim">must be here</text>
+
+<rect x="624" y="116" width="112" height="52" rx="6" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
+<text x="634" y="136" class="f s" fill="var(--d-amber-ink,#8d5a1d)">S5 strip marks</text>
+<text x="634" y="152" class="f s dim">+ invisibles</text>
+
+<rect x="748" y="116" width="110" height="52" rx="6" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="758" y="136" class="f s ink">S6 letter map</text>
+<text x="758" y="152" class="f s dim">ß→ss, ø→o</text>
+
+<rect x="42" y="182" width="404" height="64" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
+<text x="58" y="203" class="f l" fill="var(--d-amber-ink,#8d5a1d)">Why S4 precedes S5</text>
+<text x="58" y="221" class="f s dim">İ is not a mark, so S5 cannot see it. Lowercasing is what</text>
+<text x="58" y="237" class="f s dim">manufactures the U+0307 that S5 then removes.</text>
+
+<rect x="458" y="182" width="400" height="64" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="474" y="203" class="f l ink">The observable</text>
+<text x="474" y="222" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">İZMİR → izmir</text>
+<text x="592" y="222" class="f s dim">not the fragment zmi</text>
+<text x="474" y="239" class="f s dim">No Turkish special-casing anywhere in the fold.</text>
+
+<rect x="42" y="258" width="404" height="58" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
+<text x="58" y="278" class="f l" fill="var(--d-green-ink,#22603c)">Conflations, each pinned by test</text>
+<text x="58" y="299" class="f mono dim">على/علي · كتابة/كتابه · Masse/Maße · πότε/ποτέ · все/всё</text>
+
+<rect x="458" y="258" width="400" height="58" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="474" y="278" class="f l" fill="var(--d-red-ink,#993a30)">Deliberately NOT stripped</text>
+<text x="474" y="297" class="f s dim">ZWSP is Khmer's word delimiter · ZWJ is contrastive in</text>
+<text x="474" y="311" class="f s dim">Malayalam · a blanket Cyrillic strip would make й into и</text>
+
+<rect x="24" y="348" width="852" height="322" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="374" class="f l ink">2 · the split</text>
+<text x="130" y="374" class="f mono dim">script::segment</text>
+<text x="600" y="374" class="f s dim">the script decides, and the script alone</text>
+<text x="42" y="394" class="f s dim">Splitting on “not alphanumeric” finds no boundary at all in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao or Myanmar — a whole clause became one token.</text>
+
+<rect x="42" y="408" width="266" height="188" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
+<text x="58" y="432" class="f l" fill="var(--d-blue-ink,#33527d)">delimiting</text>
+<text x="58" y="452" class="f s dim">Latin · Cyrillic · Greek · Georgian ·</text>
+<text x="58" y="467" class="f s dim">Tibetan · Devanagari · everything else</text>
+<text x="58" y="491" class="f b ink">whole words</text>
+<text x="58" y="510" class="f s dim">Untouched by segmentation — their</text>
+<text x="58" y="525" class="f s dim">defects are folding and morphology,</text>
+<text x="58" y="540" class="f s dim">which n-grams do not address.</text>
+<text x="58" y="564" class="f s dim">A joining mark (virama, nukta) is</text>
+<text x="58" y="578" class="f s dim">word-INTERNAL here: नमस्ते stays whole.</text>
+
+<rect x="320" y="408" width="266" height="188" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.6"/>
+<text x="336" y="432" class="f l" fill="var(--d-violet-ink,#523a86)">attaches without a delimiter</text>
+<text x="336" y="452" class="f s dim">Arabic · Hebrew · Khmer · Thai · Lao ·</text>
+<text x="336" y="467" class="f s dim">Myanmar · Kana · Hangul · Bopomofo</text>
+<text x="336" y="491" class="f b ink">bigrams over same-script runs</text>
+<text x="336" y="510" class="f s dim">Arabic and Hebrew space their words,</text>
+<text x="336" y="525" class="f s dim">but their clitics do not: كتاب cannot</text>
+<text x="336" y="540" class="f s dim">reach الكتاب by any split.</text>
+<text x="336" y="564" class="f s" fill="var(--d-violet-ink,#523a86)">flagged ngram ⇒ refused the exact slot</text>
+<text x="336" y="578" class="f s dim">Whole-word containment carries it instead.</text>
+
+<rect x="598" y="408" width="260" height="188" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.6"/>
+<text x="614" y="432" class="f l" fill="var(--d-teal-ink,#0d6b62)">logographic</text>
+<text x="614" y="452" class="f s dim">Han, and Han only</text>
+<text x="614" y="476" class="f b ink">unigrams + bigrams</text>
+<text x="614" y="495" class="f s dim">A character is a morpheme, so emitting</text>
+<text x="614" y="510" class="f s dim">one alone is evidence rather than noise.</text>
+<text x="614" y="534" class="f s dim">NOT flagged as an n-gram — this is the</text>
+<text x="614" y="549" class="f s dim">one script where a short unit is a word.</text>
+<text x="614" y="573" class="f s dim">Latin and digit runs inside CJK stay</text>
+<text x="614" y="587" class="f s dim">whole, so a brand name survives.</text>
+
+<rect x="42" y="608" width="816" height="48" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="58" y="628" class="f l ink">Why the exact slot is refused to n-grams, measured</text>
+<text x="58" y="647" class="f s dim">Bigram-to-bigram equality admitted <tspan class="f s" fill="var(--d-red-ink,#993a30)">74.3%</tspan> of a real Arabic corpus on one query, against <tspan class="f s" fill="var(--d-blue-ink,#33527d)">6.9%</tspan> for Greek through the same code.</text>
+
+<rect x="24" y="686" width="852" height="68" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<text x="42" y="708" class="f l" fill="var(--d-teal-ink,#0d6b62)">The failure this closed was silence, not bad ranking</text>
+<text x="42" y="727" class="f s dim">Search drops a hit with no lexical evidence and a neutral cosine. Before segmentation, a query for a word the drawer visibly</text>
+<text x="42" y="743" class="f s dim">contained shared no token with it at all — so the observable was an empty result set, not a result in the wrong order.</text>
+</svg>
+<figcaption>Folding, then splitting — one path taken by the query and the drawer alike. <a href="diagrams/language-tokens.svg">SVG</a> · <a href="pdf/language-tokens.pdf">PDF</a></figcaption>
+</figure>
+
+<h3 id="language-the-fold-and-what-it-deliberately-leaves-alo">The fold, and what it deliberately leaves alone</h3>
+<p>Every comparison — query against drawer, on both the lexical and the embedding side — runs over a folded <em>comparison key</em>, never over the stored bytes. The stored bytes are the user's words and stay exactly as given; the fold exists only so that two spellings of one word can meet.</p>
+<p>Stage order carries a real constraint. Lowercasing must happen <em>before</em> marks are stripped, because <code>İ</code> is not a combining mark and the strip cannot see it — lowercasing is the operation that manufactures the <code>U+0307</code> that the strip then removes. That single ordering is why <code>İZMİR</code> folds to <code>izmir</code> rather than tokenising to the fragment <code>zmi</code>, with no Turkish-specific special-casing anywhere in the code.</p>
+<div class="note red">
+  <span class="tag">Pinned as NOT stripped</span>
+  <p>A fold that removes everything invisible is wrong, and each exception is held by a test. <strong>ZWSP is Khmer's word delimiter</strong> — stripping it destroys the only boundary that script has. <strong>ZWJ is contrastive in Malayalam</strong>, so removing it changes the word. And a blanket decompose-and-strip over Cyrillic turns <code>й</code> into <code>и</code>, merging two distinct letters; Cyrillic therefore gets only a narrow stress-mark rule plus <code>ё→е</code>.</p>
+</div>
+
+<h3 id="language-splitting-a-script-that-has-no-spaces">Splitting a script that has no spaces</h3>
+<p>Splitting on "not alphanumeric" finds no boundary whatsoever in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao or Myanmar — every one of those characters is a Unicode letter, so an entire clause used to become a single token. The consequence was not bad ranking. Search drops a hit that has no lexical evidence and only a neutral cosine, so a query for a word the drawer plainly contained returned <em>an empty result set</em>.</p>
+<p>Segmentation emits bigrams over maximal same-script runs, and unigrams only where a single character is itself a unit of meaning — which is Han, and Han alone. Emitting unigrams in an alphabetic script would make <code>قطار</code> "match" <code>المستشفى</code> on a shared alef, and since a hit is admitted on any lexical evidence at all, that does not merely add noise to the ranking: it retires the relevance gate.</p>
+<div class="note amber">
+  <span class="tag">Measured — why an n-gram is refused the exact channel</span>
+  <p>A bigram is a fragment, not a word, so tokens from a non-delimiting script are flagged and barred from filling the <em>exact</em> match slot. The asymmetry that forced this: bigram-to-bigram equality admitted <strong>74.3%</strong> of a real Arabic corpus on a single query, against <strong>6.9%</strong> for Greek through identical code. A shared two-character substring in an unvocalised abjad is simply not evidence. Whole-word containment carries the clitics instead, on the morphology channel where an approximate claim belongs.</p>
+</div>
+
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 810" width="900" height="810" role="img" aria-labelledby="t_languagemorphology d_languagemorphology">
+<title id="t_languagemorphology">How a language is resolved and what it admits</title>
+<desc id="d_languagemorphology">Language is resolved strongest-first: a caller declaration, else the script where one script means one language, else the drawer's own closed-class function words. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+</style>
+<rect width="900" height="810" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">Which language, and what that admits</text>
+<text x="28" y="58" class="f b dim">A signal is read; a convention is declared; nothing is inferred. The whole design of this layer is that distinction.</text>
+
+<rect x="24" y="76" width="852" height="206" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">1 · resolving the language</text>
+<text x="600" y="102" class="f s dim">strongest signal first, stop at the first hit</text>
+
+<rect x="42" y="116" width="266" height="140" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8"/>
+<text x="58" y="139" class="f l" fill="var(--d-teal-ink,#0d6b62)">1. declared</text>
+<text x="58" y="159" class="f mono dim">language on /v1/search</text>
+<text x="58" y="178" class="f s dim">A deliberate statement about a corpus,</text>
+<text x="58" y="193" class="f s dim">made at READ time — so a vault ingested</text>
+<text x="58" y="208" class="f s dim">under one language answers correctly</text>
+<text x="58" y="223" class="f s dim">under another with no re-ingest.</text>
+<text x="58" y="244" class="f s" fill="var(--d-teal-ink,#0d6b62)">Outranks everything below.</text>
+
+<rect x="320" y="116" width="266" height="140" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.8"/>
+<text x="336" y="139" class="f l" fill="var(--d-blue-ink,#33527d)">2. else the script</text>
+<text x="336" y="159" class="f s dim">where a script settles it</text>
+<text x="336" y="180" class="f s dim">Greek · Georgian · Hangul — one script,</text>
+<text x="336" y="195" class="f s dim">one language. A fact, not a reading.</text>
+<text x="336" y="218" class="f s dim">Cyrillic → Russian, Devanagari → Hindi:</text>
+<text x="336" y="233" class="f s dim">the majority language, and labelled</text>
+<text x="336" y="248" class="f s dim">approximate because that is what it is.</text>
+
+<rect x="598" y="116" width="260" height="140" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.8"/>
+<text x="614" y="139" class="f l" fill="var(--d-violet-ink,#523a86)">3. else the drawer itself</text>
+<text x="614" y="159" class="f mono dim">language_of_drawer</text>
+<text x="614" y="180" class="f s dim">A text carrying der, die, und, nicht is</text>
+<text x="614" y="195" class="f s dim">German. Only CLOSED-class words vote —</text>
+<text x="614" y="210" class="f s dim">a loanword does not get one.</text>
+<text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Decisive or nothing: three hits and</text>
+<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">twice the runner-up, else stay silent.</text>
+
+<text x="42" y="274" class="f s dim">Read per candidate, not per query: a vault may hold several languages, and the drawer is the unit that has one.</text>
+
+<rect x="24" y="298" width="852" height="220" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="324" class="f l ink">2 · five rules, every one of them pairwise</text>
+<text x="560" y="324" class="f s dim">each answers about two strings and builds no class</text>
+
+<rect x="42" y="338" width="158" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="54" y="358" class="f mono ink">suffix_family</text>
+<text x="54" y="376" class="f s dim">SHAPE, not length.</text>
+<text x="54" y="391" class="f s dim">-er is German-only:</text>
+<text x="54" y="406" class="f s dim">Kind/Kinder, Haus/Häuser</text>
+
+<rect x="212" y="338" width="158" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="224" y="358" class="f mono ink">inflection_family</text>
+<text x="224" y="376" class="f s dim">A CLOSED set of endings</text>
+<text x="224" y="391" class="f s dim">per language, stem ≥ 3:</text>
+<text x="224" y="406" class="f s dim">libro/libri, книга/книги</text>
+
+<rect x="382" y="338" width="158" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="394" y="358" class="f mono ink">agglutinative_family</text>
+<text x="394" y="376" class="f s dim">Endings that stack:</text>
+<text x="394" y="391" class="f s dim">Turkish, Korean,</text>
+<text x="394" y="406" class="f s dim">Georgian, Hungarian</text>
+
+<rect x="552" y="338" width="158" height="80" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
+<text x="564" y="358" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">ar_root_family</text>
+<text x="564" y="376" class="f s dim">144 roots × 20 patterns</text>
+<text x="564" y="391" class="f s dim">= 2859 forms. Two words</text>
+<text x="564" y="406" class="f s dim">meet only if ONE root fits.</text>
+
+<rect x="722" y="338" width="136" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="734" y="358" class="f mono ink">IRREGULAR</text>
+<text x="734" y="376" class="f s dim">~110 forms no rule</text>
+<text x="734" y="391" class="f s dim">over shape can reach:</text>
+<text x="734" y="406" class="f s dim">go/went, Mann/Männer</text>
+
+<rect x="42" y="430" width="404" height="74" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="58" y="450" class="f l" fill="var(--d-red-ink,#993a30)">Why not a stemmer</text>
+<text x="58" y="468" class="f s dim">A stemmer builds an equivalence class, and one false friend</text>
+<text x="58" y="483" class="f s dim">poisons every member. Measured: Snowball Greek merges πολύ</text>
+<text x="58" y="497" class="f s dim">(much) with πόλη (city). A pairwise rule costs only its own pair.</text>
+
+<rect x="458" y="430" width="400" height="74" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
+<text x="474" y="450" class="f l" fill="var(--d-amber-ink,#8d5a1d)">Why Arabic needed its own table</text>
+<text x="474" y="468" class="f s dim">An ALLOWLIST: a form the table cannot generate matches nothing.</text>
+<text x="474" y="483" class="f s dim">Subsequence rules failed three times — بيت→بيوت and يجب→يجيب</text>
+<text x="474" y="497" class="f s dim">are the same string operation, and no rule over shape separates them.</text>
+
+<rect x="24" y="534" width="852" height="122" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="560" class="f l ink">3 · three channels, and only two of them are a claim about words</text>
+
+<rect x="42" y="574" width="266" height="66" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
+<text x="58" y="595" class="f mono" fill="var(--d-green-ink,#22603c)">lexical_exact</text>
+<text x="58" y="614" class="f s dim">The drawer said the word.</text>
+<text x="58" y="630" class="f s" fill="var(--d-green-ink,#22603c)">admits</text>
+
+<rect x="320" y="574" width="266" height="66" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.6"/>
+<text x="336" y="595" class="f mono" fill="var(--d-violet-ink,#523a86)">lexical_morph</text>
+<text x="336" y="614" class="f s dim">It holds a word BUILT ON it.</text>
+<text x="336" y="630" class="f s" fill="var(--d-violet-ink,#523a86)">admits — and says so separately</text>
+
+<rect x="598" y="574" width="260" height="66" rx="7" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
+<text x="614" y="595" class="f mono" fill="var(--d-blue-ink,#33527d)">semantic</text>
+<text x="614" y="614" class="f s dim">Cosine, above the gate the</text>
+<text x="614" y="630" class="f s dim">EMBEDDER itself calibrates.</text>
+
+<rect x="24" y="672" width="418" height="118" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.6"/>
+<text x="42" y="694" class="f l" fill="var(--d-teal-ink,#0d6b62)">Measured — 191 paradigm pairs, 19 languages</text>
+<text x="42" y="716" class="f b dim">lexical recall, declared</text>
+<text x="300" y="716" class="f b" fill="var(--d-teal-ink,#0d6b62)">55.0% → 100%</text>
+<text x="42" y="736" class="f b dim">lexical recall, undeclared</text>
+<text x="300" y="736" class="f b" fill="var(--d-teal-ink,#0d6b62)">→ 100%</text>
+<text x="42" y="756" class="f b dim">pairs resting on the embedder alone</text>
+<text x="300" y="756" class="f b" fill="var(--d-teal-ink,#0d6b62)">20 → 0</text>
+<text x="42" y="776" class="f b dim">negative controls</text>
+<text x="300" y="776" class="f b" fill="var(--d-teal-ink,#0d6b62)">0 → 48</text>
+
+<rect x="454" y="672" width="422" height="118" rx="9" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.6"/>
+<text x="472" y="694" class="f l" fill="var(--d-red-ink,#993a30)">The prices, pinned rather than hidden</text>
+<text x="472" y="714" class="f s dim">Declaring German is what makes -er legal, and -er also relates</text>
+<text x="472" y="729" class="f s dim">flow/flower, corn/corner, butt/butter. That is the trade, stated.</text>
+<text x="472" y="749" class="f s dim">A recall measurement cannot justify a precision decision: adding</text>
+<text x="472" y="764" class="f s dim">-er moved the population figure by 0.21 links per query — invisible —</text>
+<text x="472" y="779" class="f s dim">and broke five negative controls. The controls are what caught it.</text>
+</svg>
+<figcaption>How the language is decided, and what each rule is allowed to admit. <a href="diagrams/language-morphology.svg">SVG</a> · <a href="pdf/language-morphology.pdf">PDF</a></figcaption>
+</figure>
+
+<h3 id="language-reaching-a-word-s-other-forms">Reaching a word's other forms</h3>
+<p>Five rules relate a query term to a word built on it: a suffix family, an inflection family, an agglutinative family, an Arabic root family, and a table of irregular forms no rule over shape can reach. Every one of them is <strong>pairwise</strong> — it answers a question about two strings and builds no equivalence class.</p>
+<p>That constraint is the whole design, and it is why a stemmer was measured and rejected. A stemmer maps many words onto one class, so a single false friend poisons every member of it; <code>snowball_stemmers_rs</code> is spec-correct against 42,649 official test vectors and still merges Greek <code>πολύ</code> (much) with <code>πόλη</code> (city). A pairwise rule that is wrong costs exactly the pair it names.</p>
+<p>Arabic needed a different tool again. It is a root-and-pattern language, so 144 roots poured into 20 templates generate 2,859 forms once, and two words are related only when one root explains both. That is an <em>allowlist</em>: a form the table cannot generate matches nothing. Three successive attempts to do it by subsequence all failed for the same reason — <code>بيت</code>→<code>بيوت</code> (a legitimate plural) and <code>يجب</code>→<code>يجيب</code> (two unrelated verbs) are the identical string operation, and no rule over shape separates them.</p>
+
+<h3 id="language-what-each-declaration-costs">What each declaration costs</h3>
+<p>Morphology <em>admits</em> drawers rather than merely reordering them, so every rule has a price. None is hidden; each is held by a negative control that fails in both directions, so a cost disappearing is news that must be recorded rather than quietly absorbed.</p>
+<table>
+  <thead><tr><th>Declaring</th><th>Also merges — the accepted cost</th></tr></thead>
+  <tbody>
+    <tr><td><code>de</code></td><td><code>flow</code>/<code>flower</code> — German needs <code>-er</code> for <code>Kind</code>/<code>Kinder</code>, and English cannot have it</td></tr>
+    <tr><td><code>nl</code></td><td><code>kop</code>/<code>kopen</code>, <code>man</code>/<code>manen</code> — Dutch <code>-en</code></td></tr>
+    <tr><td><code>it</code></td><td><code>pesca</code>/<code>pesce</code> — <code>a→e</code> carries the feminine plural</td></tr>
+    <tr><td><code>tr</code></td><td><code>kar</code>/<code>kara</code></td></tr>
+    <tr><td><code>en</code></td><td><code>champion</code>/<code>champ</code> is <em>lost</em>, not merged — <code>-ion</code> needs a six-character stem to keep <code>question</code>/<code>quest</code> apart</td></tr>
+    <tr><td>always on</td><td>Arabic <code>سيارة</code>/<code>أسرة</code> — the consonantal skeleton rule, which predates this work</td></tr>
+  </tbody>
+</table>
+<div class="note violet">
+  <span class="tag">A rule this layer learned the hard way</span>
+  <p><strong>A recall measurement cannot justify a precision decision.</strong> The instrument used for most of this work counts how many words of a real 50,000-word vocabulary a query links to — it measures reach and is blind to whether a link is <em>correct</em>. Enabling <code>-er</code> for English moved that population figure by 0.21 links per query, indistinguishable from noise, while breaking five negative controls. Used to justify lowering a containment floor from 8 to 5, the same instrument admitted <code>other</code>/<code>mother</code> and <code>count</code>/<code>accounting</code>. Any rule that admits needs controls, not a link count.</p>
+</div>
+<div class="note red">
+  <span class="tag">Known limitation</span>
+  <p>Every figure above is <strong>within-language</strong>. Cross-lingual retrieval — an English query finding an Arabic drawer — is the embedder's job and the default cannot do it at all: <code>HashEmbedder</code> is feature hashing over surface forms, so a translation pair scores <em>below</em> an unrelated sentence, and <code>car</code> does not match <code>automobile</code> either. That needs a multilingual model via <code>onnx</code>/<code>ort</code>, or an external vault supplying its own vectors.</p>
+</div>
+
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 856" width="900" height="856" role="img" aria-labelledby="t_languagedates d_languagedates">
+<title id="t_languagedates">Reading a date the writer already wrote</title>
+<desc id="d_languagedates">An era marker typed beside a year outranks the calendar the caller declared. Field order takes four signals strongest-first: declared, demonstrated by an unambiguous date in the same text, implied by the language per CLDR, then day-first as a documented default. Script and numeral system are never treated as evidence.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+</style>
+<rect width="900" height="856" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">Reading a date the writer already wrote</text>
+<text x="28" y="58" class="f b dim">Four read-time declarations, and one signal that outranks every one of them. Dates are read live, so a fix reaches existing vaults with no migration.</text>
+
+<rect x="24" y="76" width="852" height="146" rx="10" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.8"/>
+<text x="42" y="102" class="f l" fill="var(--d-amber-ink,#8d5a1d)">The marker beside the year outranks the calendar the caller declared</text>
+<text x="42" y="122" class="f s dim">The declaration is a statement about a corpus. The marker is the writer's statement about THIS date. Reading it is evidence, so it wins.</text>
+
+<rect x="42" y="136" width="404" height="70" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-amber,#b5762a)" stroke-width="1.3"/>
+<text x="58" y="157" class="f s dim">Recognised, before the year, after it, or glued to it:</text>
+<text x="58" y="179" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">พ.ศ. · ค.ศ. · هـ · 民國 · 令和 · 平成 · 昭和</text>
+<text x="58" y="198" class="f s dim">A bare year is a mention only where a marker names it.</text>
+
+<rect x="458" y="136" width="400" height="70" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.3"/>
+<text x="474" y="157" class="f s dim">so, with no declaration at all:</text>
+<text x="474" y="178" class="f mono dim">2568</text>
+<text x="530" y="178" class="f s dim">is a quantity —</text>
+<text x="624" y="178" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">พ.ศ. 2568</text>
+<text x="712" y="178" class="f s dim">is 2025</text>
+<text x="474" y="197" class="f s dim">Disagreeing markers settle nothing: the declaration stands.</text>
+
+<rect x="24" y="238" width="418" height="212" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="264" class="f l ink">Field order — four signals, strongest first</text>
+
+<rect x="42" y="278" width="382" height="36" rx="6" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<text x="56" y="300" class="f s" fill="var(--d-teal-ink,#0d6b62)">1 · declared on Locale</text>
+
+<rect x="42" y="322" width="382" height="52" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.4"/>
+<text x="56" y="342" class="f s" fill="var(--d-blue-ink,#33527d)">2 · demonstrated by the text itself</text>
+<text x="56" y="360" class="f s dim">13/05 can only be day-first — the convention, stated by example</text>
+
+<rect x="42" y="382" width="382" height="52" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.4"/>
+<text x="56" y="402" class="f s" fill="var(--d-blue-ink,#33527d)">3 · implied by the language, per CLDR</text>
+<text x="56" y="420" class="f s dim">Arabic is d/M/y in every territory. English splits, so it implies nothing.</text>
+
+<text x="56" y="446" class="f s dim">4 · else day-first — a documented default, not a confident reading</text>
+
+<rect x="454" y="238" width="422" height="212" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="472" y="264" class="f l ink">Ten calendars, two kinds of conversion</text>
+
+<rect x="472" y="278" width="386" height="70" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
+<text x="486" y="298" class="f b ink">a renumbered year — arithmetic</text>
+<text x="486" y="317" class="f s dim">Buddhist −543 · Minguo +1911 · 令和 +2018 · 平成 +1988</text>
+<text x="486" y="334" class="f s dim">昭和 +1925 · 大正 +1911 · 明治 +1867</text>
+
+<rect x="472" y="358" width="386" height="76" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
+<text x="486" y="378" class="f b" fill="var(--d-violet-ink,#523a86)">a different calendar — the whole date converts</text>
+<text x="486" y="397" class="f s dim">Hijri, Umm al-Qura — the Saudi CIVIL calendar printed on documents,</text>
+<text x="486" y="412" class="f s dim">deliberately not the tabular variant, which is wrong by a day or two.</text>
+<text x="486" y="428" class="f s dim">Jalali turns at the vernal equinox, so no offset reaches it either.</text>
+
+<rect x="24" y="466" width="852" height="76" rx="9" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>
+<text x="42" y="490" class="f l" fill="var(--d-green-ink,#22603c)">A Japanese era is bounded, so its first and last years are PARTIAL</text>
+<text x="42" y="511" class="f mono dim">令和1年 = 1 May – 31 Dec 2019</text>
+<text x="266" y="511" class="f s dim">— reading it as the whole of 2019 would claim four months that were 平成31年.</text>
+<text x="42" y="530" class="f s dim">That is wrong rather than rounded, so the era carries a first and last day and the mention resolves to the period it actually names.</text>
+
+<rect x="24" y="558" width="852" height="112" rx="9" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.6"/>
+<text x="42" y="582" class="f l" fill="var(--d-red-ink,#993a30)">What is deliberately NOT read as evidence</text>
+<text x="42" y="604" class="f s dim">Script is not a calendar. Thai script writes Gregorian dates constantly, and a corpus is not Buddhist because of the glyphs it uses.</text>
+<text x="42" y="623" class="f s dim">A numeral system is not a calendar either: <tspan class="f mono">๒๐๒๖</tspan> is an ordinary Gregorian 2026 typed in Thai digits. Reading the glyphs as an era claim</text>
+<text x="42" y="638" class="f s dim">resolved it to <tspan class="f s" fill="var(--d-red-ink,#993a30)">1483</tspan> — a real bug, and the reason the rule is stated this bluntly.</text>
+<text x="42" y="659" class="f s dim">A number's SIZE is not evidence of its kind either — so a range check is the wrong fix for the case below. The noun governing it IS evidence.</text>
+
+<rect x="24" y="686" width="418" height="150" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-red,#b5453a)" stroke-width="1.5"/>
+<text x="42" y="710" class="f l" fill="var(--d-red-ink,#993a30)">A wrong reading, and the signal that would fix it</text>
+<text x="42" y="731" class="f s dim"><tspan class="f mono">١٩٩٥م</tspan> is how Arabic writes a year; <tspan class="f mono">١٥٠٠ م</tspan> how it writes</text>
+<text x="42" y="746" class="f s dim">a quantity. The difference is one space.</text>
+<text x="42" y="768" class="f s dim">So <tspan class="f mono">على ارتفاع ٢٥٠٠م</tspan> is an altitude in <tspan class="f s" fill="var(--d-red-ink,#993a30)">METRES</tspan>, and the</text>
+<text x="42" y="783" class="f s dim">engine reads it as the year 2500.</text>
+<text x="42" y="805" class="f s dim">A bare <tspan class="f mono">م</tspan> counts when a YEAR NOUN governs the number OR the</text>
+<text x="42" y="820" class="f s dim">marker is glued. Only the second fires — and <tspan class="f mono">ارتفاع</tspan> goes unread.</text>
+
+<rect x="454" y="686" width="422" height="150" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="472" y="710" class="f l ink">Two open gaps, recorded as gaps</text>
+<text x="472" y="731" class="f s dim">The altitude above is <tspan class="f s" fill="var(--d-red-ink,#993a30)">not an impossibility</tspan> — the governing noun is</text>
+<text x="472" y="746" class="f s dim">in the token stream. A year noun is already read as confirming</text>
+<text x="472" y="761" class="f s dim">evidence; a measurement noun pointing the other way is the same</text>
+<text x="472" y="776" class="f s dim">class of signal, and is simply not consulted yet.</text>
+<text x="472" y="798" class="f s dim">Separately, in-text scanners exist for <tspan class="f s" fill="var(--d-blue-ink,#33527d)">English and Arabic only</tspan>. Greek</text>
+<text x="472" y="813" class="f s dim">and Russian have full paradigm coverage and still cannot read a</text>
+<text x="472" y="828" class="f s dim">date in their own text — that machinery is language-agnostic.</text>
+</svg>
+<figcaption>The precedence for reading a date, and the two gaps that remain. <a href="diagrams/language-dates.svg">SVG</a> · <a href="pdf/language-dates.pdf">PDF</a></figcaption>
+</figure>
+
+<h3 id="language-dates-eras-and-calendars">Dates, eras and calendars</h3>
+<p>A date in the text is read live at query time rather than stored, which is why a fix to a scanner or a change of declared locale reaches existing vaults with no migration at all.</p>
+<p>The precedence is the interesting part. A caller can declare a calendar, but an era marker the writer typed beside the year — <code>พ.ศ.</code>, <code>هـ</code>, <code>民國</code>, <code>令和</code> — <strong>outranks that declaration</strong>. The reasoning is that a declaration is a statement about a whole corpus while the marker is the writer's statement about this one date, and reading it is evidence. Where markers on both sides disagree, they settle nothing and the declaration stands.</p>
+<p>Field order resolves the same way: what you declared, else what an unambiguous date in the same text <em>demonstrates</em> (<code>13/05</code> can only be day-first, so the writer has stated their convention by example), else what the language implies per CLDR (Arabic is <code>d/M/y</code> in every territory; English splits US from Commonwealth and therefore implies nothing), else day-first as a documented default.</p>
+<div class="note teal">
+  <span class="tag">The line this layer holds</span>
+  <p>A signal is read; a convention is declared; <strong>nothing is inferred</strong>. Script is not evidence — Thai script writes Gregorian dates constantly — and a numeral system is not a calendar: <code>๒๐๒๖</code> is an ordinary Gregorian 2026 typed in Thai digits, and reading the glyphs as an era claim once resolved it to the year <strong>1483</strong>. Where no signal exists the honest answers are a documented default or a recorded-but-unresolved mention, never a confident value and never silence.</p>
+</div>
+<div class="note red">
+  <span class="tag">A wrong reading, and the signal that would fix it</span>
+  <p><code>١٩٩٥م</code> is how Arabic writes a year and <code>١٥٠٠ م</code> is how it writes a quantity — the difference is a single space. A bare <code>م</code> is therefore treated as an era marker when <em>either</em> a year noun governs the number <em>or</em> the marker is glued to it.</p>
+  <p>That disjunction misfires. In <code>على ارتفاع ٢٥٠٠م</code> — an altitude, <strong>2500 metres</strong> — the year-noun test correctly fails, but the glued test fires on its own and the engine reads the year 2500. <strong>This is a gap, not a principled trade.</strong> The noun <code>ارتفاع</code> is sitting right there in the token stream: a year noun is already read as confirming evidence, and a measurement noun pointing the other way is precisely the same class of signal. It is simply not consulted yet. What would <em>not</em> be legitimate is a range check on the number — a value's magnitude is not evidence of its kind, which is the same line the calendar rules hold everywhere else.</p>
+</div>
+<div class="note violet">
+  <span class="tag">Open gap</span>
+  <p>In-text date scanners exist for <strong>English and Arabic only</strong>. Greek and Russian now have full morphological paradigm coverage on the lexical channel and still cannot read a date written in their own text. The era, calendar and field-order machinery above is language-agnostic; the scanners that feed it are not.</p>
+</div>
+<nav class="secnav"><a class="pv" href="#recall">← Recall vs precision, measured</a><a class="nx" href="#security">Security model →</a></nav>
+</section>
+
+<section class="doc-section" id="security" aria-labelledby="h_security">
+<h2 id="h_security">Security model</h2>
 <table>
   <thead><tr><th>Property</th><th>Mechanism</th></tr></thead>
   <tbody>
@@ -696,6 +1325,329 @@
     <tr><td>Secrets in memory</td><td>Key material lives in a zeroize-on-drop wrapper and is never <code>Debug</code>-printed</td></tr>
   </tbody>
 </table>
+
+<h3 id="security-choosing-a-level">Choosing a level</h3>
+<p>A vault is created <code>sealed</code> or <code>hmac-only</code> and keeps that level for life. The choice is about confidentiality only: integrity has no off switch at either level, so the question is never <em>whether</em> a row is verified but whether its bytes are readable to someone holding the file.</p>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 826" width="900" height="826" role="img" aria-labelledby="t_securitylevels d_securitylevels">
+<title id="t_securitylevels">The two security levels and what each protects</title>
+<desc id="d_securitylevels">A vault is created Sealed or HmacOnly. Sealed encrypts content, embeddings, token matrices and index artifacts and has no full-text index; HmacOnly keeps content in plaintext and indexes it. Both carry a per-row HMAC and join the audit chain. Drawer metadata is unsealed at both levels, and the exposed fields are listed.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+</style>
+<rect width="900" height="826" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">Two levels, and what each one actually protects</text>
+<text x="28" y="58" class="f b dim">Chosen per vault at creation. The difference is confidentiality alone — integrity is not a tier and has no off switch at either level.</text>
+
+<rect x="24" y="76" width="852" height="330" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">What is written to disk</text>
+<rect x="470" y="112" width="196" height="26" rx="6" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<text x="568" y="130" class="f l" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">Sealed — the default</text>
+<rect x="678" y="112" width="180" height="26" rx="6" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
+<text x="768" y="130" class="f l" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">HmacOnly</text>
+
+<line x1="42" y1="148" x2="858" y2="148" stroke="var(--d-line,#c9d4dd)" stroke-width="1"/>
+<text x="42" y="170" class="f b ink">drawer content</text>
+<text x="568" y="170" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">zstd, then encrypted</text>
+<text x="768" y="170" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">plaintext</text>
+
+<text x="42" y="196" class="f b ink">embedding</text>
+<text x="42" y="211" class="f s dim">i8-quantized first — a vector of the text leaks the text</text>
+<text x="568" y="196" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">encrypted</text>
+<text x="768" y="196" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">in clear</text>
+
+<text x="42" y="238" class="f b ink">ColBERT token matrices</text>
+<text x="568" y="238" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">encrypted</text>
+<text x="768" y="238" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">in clear</text>
+
+<text x="42" y="264" class="f b ink">PQ codes, codebook, pages</text>
+<text x="568" y="264" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">encrypted</text>
+<text x="768" y="264" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">in clear</text>
+
+<text x="42" y="290" class="f b ink">full-text (fts5) index</text>
+<text x="568" y="290" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">never exists</text>
+<text x="768" y="290" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">built, and used as a prefilter</text>
+
+<text x="42" y="316" class="f b" fill="var(--d-red-ink,#993a30)">drawer metadata (meta_json)</text>
+<text x="568" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
+<text x="768" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
+
+<line x1="42" y1="330" x2="858" y2="330" stroke="var(--d-line,#c9d4dd)" stroke-width="1"/>
+<text x="42" y="352" class="f b ink">per-row HMAC tag</text>
+<text x="568" y="352" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — verified on every read</text>
+<text x="768" y="352" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+
+<text x="42" y="378" class="f b ink">audit chain entry</text>
+<text x="568" y="378" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — same transaction</text>
+<text x="768" y="378" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+
+<rect x="24" y="422" width="418" height="88" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
+<text x="42" y="446" class="f l" fill="var(--d-teal-ink,#0d6b62)">The standing rule for a sealed vault</text>
+<text x="42" y="467" class="f s dim">No plaintext, and nothing derived from plaintext, is written to</text>
+<text x="42" y="482" class="f s dim">disk in clear. Search runs over decrypt-once RAM caches, and</text>
+<text x="42" y="497" class="f s dim">any new derived artifact has to follow the same pattern.</text>
+
+<rect x="454" y="422" width="422" height="88" rx="9" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.5"/>
+<text x="472" y="446" class="f l" fill="var(--d-amber-ink,#8d5a1d)">When HmacOnly is the right answer</text>
+<text x="472" y="467" class="f s dim">The database stays readable with ordinary SQLite tools and the</text>
+<text x="472" y="482" class="f s dim">lexical prefilter exists, which matters at scale. You are trading</text>
+<text x="472" y="497" class="f s dim">confidentiality for inspectability — not integrity, which stays.</text>
+
+<rect x="24" y="526" width="852" height="174" rx="9" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.6"/>
+<text x="42" y="550" class="f l" fill="var(--d-red-ink,#993a30)">What an attacker holding a SEALED database file can still read</text>
+<text x="42" y="570" class="f s dim">Measured against the actual bytes, not asserted. meta_json is stored unsealed so it can be filtered in SQL, and these fields sit inside it:</text>
+
+<rect x="42" y="582" width="816" height="30" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-red,#b5453a)" stroke-width="1.1"/>
+<text x="56" y="602" class="f mono" fill="var(--d-red-ink,#993a30)">wing · room · source_file · added_by · hall · content_date · the dates resolved out of the content</text>
+
+<text x="42" y="632" class="f s dim">They read <tspan class="f s" fill="var(--d-green-ink,#22603c)">no word of the content itself</tspan>. But in practice a wing is a person or a case, a room is a topic, and a source path carries a username</text>
+<text x="42" y="647" class="f s dim">and a project — so until this closes, treat those names as public labels and keep the secret out of the name.</text>
+<text x="42" y="668" class="f s dim">Pinned by a test that fails in BOTH directions: it fails if content ever leaks, and it fails if a listed field stops being readable — so shrinking</text>
+<text x="42" y="683" class="f s dim">the exposure forces the inventory to be updated rather than letting it quietly go stale.</text>
+
+<rect x="24" y="716" width="852" height="90" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="740" class="f l ink">Closing it does not mean giving up queryability — both halves already exist in the engine</text>
+<text x="42" y="762" class="f s dim">Fields that must be filtered in SQL (wing, room) become a <tspan class="f s" fill="var(--d-blue-ink,#33527d)">keyed blind index</tspan> — store a truncated HMAC and filter on that, exactly as</text>
+<text x="42" y="777" class="f s dim">duplicate detection already does with its keyed fingerprint. Everything else moves into a <tspan class="f s" fill="var(--d-blue-ink,#33527d)">sealed blob with a RAM cache</tspan>, exactly as</text>
+<text x="42" y="792" class="f s dim">embeddings, PQ codes and ColBERT matrices already are. The pattern for having both is in use four times over.</text>
+</svg>
+<figcaption>The two levels, artifact by artifact, and the metadata that stays unsealed at both. <a href="diagrams/security-levels.svg">SVG</a> · <a href="pdf/security-levels.pdf">PDF</a></figcaption>
+</figure>
+
+<h3 id="security-keys-and-why-isolation-is-cryptographic">Keys, and why isolation is cryptographic</h3>
+<p>Per-vault isolation is not a <code>WHERE</code> clause that could be forgotten on one code path. Each vault derives its own encryption and MAC keys from the master key, and every sealed blob authenticates the vault id, the record id and the artifact domain alongside itself — so a ciphertext lifted into another vault, moved onto another row, or substituted for a different artifact does not decrypt.</p>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t_securitykeys d_securitykeys">
+<title id="t_securitykeys">Key derivation and the AAD that binds every ciphertext</title>
+<desc id="d_securitykeys">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use X25519 to a recipient key.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+</style>
+<rect width="900" height="812" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">One master key, a separate key per vault, and an AAD that names the row</text>
+<text x="28" y="58" class="f b dim">Isolation is cryptographic, not a WHERE clause: a blob lifted from one vault into another does not decrypt, because the vault id is authenticated.</text>
+
+<rect x="24" y="76" width="852" height="188" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">Derivation</text>
+<text x="700" y="102" class="f s dim">HKDF-SHA256, per vault</text>
+
+<rect x="42" y="116" width="196" height="60" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.3"/>
+<text x="56" y="137" class="f b ink">master key</text>
+<text x="56" y="155" class="f s dim">master.key, mode 0600 —</text>
+<text x="56" y="169" class="f s dim">or derived from a passphrase</text>
+
+<path d="M242 146 L282 146" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+  <path d="M0 0 L10 5 L0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
+
+<rect x="286" y="110" width="326" height="72" rx="7" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
+<text x="300" y="130" class="f b" fill="var(--d-blue-ink,#33527d)">HKDF(master, salt = vault_salt, info)</text>
+<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc</text>
+<text x="300" y="167" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/mac</text>
+
+<path d="M616 146 L656 146" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
+
+<rect x="660" y="110" width="198" height="34" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
+<text x="674" y="132" class="f mono" fill="var(--d-teal-ink,#0d6b62)">enc_key</text>
+<text x="740" y="132" class="f s dim">XChaCha20-Poly1305</text>
+
+<rect x="660" y="150" width="198" height="34" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>
+<text x="674" y="172" class="f mono" fill="var(--d-green-ink,#22603c)">mac_key</text>
+<text x="740" y="172" class="f s dim">HMAC-SHA256 + chain</text>
+
+<text x="42" y="204" class="f s dim">The two keys are independent outputs of the same derivation, so an integrity tag can never be forged from a decryption key and the two roles stay separate.</text>
+<text x="42" y="224" class="f s dim">Both live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation — a key that is not durable is a vault that</text>
+<text x="42" y="239" class="f s dim">cannot be opened again after a power loss.</text>
+<text x="42" y="256" class="f s dim">A vault carries a <tspan class="f mono">keycheck</tspan> marker, so a wrong passphrase is refused up front rather than surfacing later as a wall of decryption failures.</text>
+
+<rect x="24" y="280" width="852" height="176" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="306" class="f l ink">What every sealed blob authenticates alongside itself</text>
+<text x="42" y="326" class="f s dim">The AEAD's associated data is not decoration — it is what makes a ciphertext meaningful only in the exact position it was written.</text>
+
+<rect x="42" y="338" width="404" height="100" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<text x="58" y="358" class="f b" fill="var(--d-teal-ink,#0d6b62)">AAD = vault id + record id + domain</text>
+<text x="58" y="379" class="f mono dim">&lt;drawer id&gt;</text>
+<text x="180" y="379" class="f s dim">content</text>
+<text x="58" y="396" class="f mono dim">&lt;drawer id&gt;/emb</text>
+<text x="180" y="396" class="f s dim">embedding</text>
+<text x="58" y="413" class="f mono dim">&lt;drawer id&gt;/tok</text>
+<text x="180" y="413" class="f s dim">ColBERT token matrix</text>
+<text x="58" y="430" class="f mono dim">&lt;drawer id&gt;/pq</text>
+<text x="180" y="430" class="f s dim">PQ codes, codebook, pages</text>
+
+<rect x="458" y="338" width="400" height="100" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="474" y="358" class="f b" fill="var(--d-red-ink,#993a30)">so all of these FAIL, not merely return nothing</text>
+<text x="474" y="379" class="f s dim">A blob copied from vault A into vault B — the id differs.</text>
+<text x="474" y="396" class="f s dim">A row's ciphertext moved onto another row — the record id differs.</text>
+<text x="474" y="413" class="f s dim">An embedding swapped in where content was expected — the</text>
+<text x="474" y="428" class="f s dim">domain suffix differs.</text>
+
+<rect x="24" y="472" width="418" height="150" rx="9" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.5"/>
+<text x="42" y="496" class="f l" fill="var(--d-violet-ink,#523a86)">Rotation — a new key, the same history</text>
+<text x="42" y="517" class="f s dim">Every artifact is decrypted under the old key and re-sealed</text>
+<text x="42" y="532" class="f s dim">under the new one in <tspan class="f s" fill="var(--d-violet-ink,#523a86)">a single transaction</tspan>, and the chain is</text>
+<text x="42" y="547" class="f s dim">re-keyed over the audit bytes it already had — the history is</text>
+<text x="42" y="562" class="f s dim">preserved, not restarted.</text>
+<text x="42" y="583" class="f s dim">The manifest is staged as <tspan class="f mono">vault.json.next</tspan> and swapped, so a</text>
+<text x="42" y="598" class="f s dim">crash mid-rotation leaves one of two consistent states and is</text>
+<text x="42" y="613" class="f s dim">reconciled at the next open.</text>
+
+<rect x="454" y="472" width="422" height="150" rx="9" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
+<text x="472" y="496" class="f l" fill="var(--d-blue-ink,#33527d)">Sharing — an export bundle for one recipient</text>
+<text x="472" y="517" class="f s dim">X25519 ephemeral-static to the recipient's public key, through</text>
+<text x="472" y="532" class="f s dim">HKDF, into XChaCha20-Poly1305. The sender's vault keys never</text>
+<text x="472" y="547" class="f s dim">leave the machine and the bundle is readable by exactly one</text>
+<text x="472" y="562" class="f s dim">holder of the matching private key.</text>
+<text x="472" y="583" class="f s dim">This is the no-lock-in path: a vault can be handed over whole</text>
+<text x="472" y="598" class="f s dim">without ever exposing it to the operator moving it.</text>
+
+<rect x="24" y="638" width="852" height="152" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="662" class="f l ink">Where the boundary honestly sits</text>
+<text x="42" y="683" class="f s dim">Sealing protects data <tspan class="f s" fill="var(--d-blue-ink,#33527d)">at rest</tspan>. A running process holds the derived keys in memory, so an attacker with live access to the process, or an</text>
+<text x="42" y="698" class="f s dim">operator hosting the engine, is inside the boundary — no at-rest scheme changes that, and claiming otherwise would be dishonest.</text>
+<text x="42" y="719" class="f s dim">What it does buy, precisely: a stolen disk, a leaked backup, a snapshot, a decommissioned drive, or a copied database file yields ciphertext and</text>
+<text x="42" y="734" class="f s dim">the metadata inventory — never the words.</text>
+<text x="42" y="755" class="f s dim">The remote index tier is treated as <tspan class="f s" fill="var(--d-red-ink,#993a30)">untrusted</tspan> on the same reasoning: only sealed payloads are pushed to it, and anything it returns is</text>
+<text x="42" y="770" class="f s dim">re-verified locally against the vault's own HMAC before a single byte reaches the caller. An accelerator is not a source of truth.</text>
+</svg>
+<figcaption>Derivation, the AAD every blob carries, rotation, and recipient-encrypted export. <a href="diagrams/security-keys.svg">SVG</a> · <a href="pdf/security-keys.pdf">PDF</a></figcaption>
+</figure>
+
+<h3 id="security-the-process-a-write-a-read-an-open">The process — a write, a read, an open</h3>
+<p>The ordering below is the load-bearing part. Sealing, tagging and advancing the audit chain happen inside a single SQLite transaction, so there is no window in which a row exists without its audit entry; and the manifest anchor is written only afterwards, so it lags the database on purpose.</p>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t_securityintegrity d_securityintegrity">
+<title id="t_securityintegrity">How a write, a read and an open are actually handled</title>
+<desc id="d_securityintegrity">A write seals the content, tags it with an HMAC, advances the audit chain, and commits all three in one SQLite transaction before the manifest anchor is fsynced. A read recomputes the tag before the row becomes data. At open the anchor is compared with the committed chain head: behind means a crash and fast-forwards, ahead means the database was rolled back and raises a tamper alarm.</desc>
+<style>
+  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .h { font-size: 17px; font-weight: 600; }
+  .l { font-size: 13.5px; font-weight: 600; }
+  .b { font-size: 12px; }
+  .s { font-size: 11px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .ink { fill: var(--d-ink,#14202b); }
+  .dim { fill: var(--d-dim,#55697a); }
+  .white { fill: var(--d-card,#ffffff); }
+</style>
+<rect width="900" height="812" fill="var(--d-bg,#fbfcfd)"/>
+
+<text x="28" y="38" class="f h ink">The process — one write, one read, one open</text>
+<text x="28" y="58" class="f b dim">Integrity is enforced at the moment data is used, not audited afterwards. Nothing here is a background job that could be behind.</text>
+
+<rect x="24" y="76" width="430" height="396" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="102" class="f l ink">A write</text>
+<text x="330" y="102" class="f s dim">saving one drawer</text>
+
+<circle cx="58" cy="130" r="11" fill="var(--d-teal,#12897e)"/>
+<text x="58" y="134" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">1</text>
+<text x="80" y="128" class="f b ink">seal the content</text>
+<text x="80" y="145" class="f s dim">zstd first, then encrypt — ciphertext has no</text>
+<text x="80" y="159" class="f s dim">redundancy left to compress, so the order matters.</text>
+
+<circle cx="58" cy="188" r="11" fill="var(--d-green,#2f7d4f)"/>
+<text x="58" y="192" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">2</text>
+<text x="80" y="186" class="f b ink">tag the row</text>
+<text x="80" y="204" class="f mono dim">HMAC(mac_key, id ‖ meta_json ‖ sealed)</text>
+<text x="80" y="220" class="f s dim">The tag covers the bytes as stored, ciphertext included.</text>
+
+<circle cx="58" cy="248" r="11" fill="var(--d-green,#2f7d4f)"/>
+<text x="58" y="252" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">3</text>
+<text x="80" y="246" class="f b ink">advance the chain</text>
+<text x="80" y="264" class="f mono dim">head' = HMAC(mac_key, head ‖ tag)</text>
+<text x="80" y="280" class="f s dim">Each head commits to every write that came before it.</text>
+
+<rect x="42" y="296" width="394" height="76" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.8"/>
+<circle cx="60" cy="322" r="11" fill="var(--d-blue,#4a6fa5)"/>
+<text x="60" y="326" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">4</text>
+<text x="82" y="320" class="f b" fill="var(--d-blue-ink,#33527d)">ONE SQLite transaction</text>
+<text x="82" y="338" class="f s dim">the row, the new chain head, and the chain entry</text>
+<text x="82" y="353" class="f s dim">commit together — or none of them do. There is no</text>
+<text x="82" y="366" class="f s dim">window where data exists without its audit entry.</text>
+
+<circle cx="58" cy="400" r="11" fill="var(--d-amber,#b5762a)"/>
+<text x="58" y="404" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">5</text>
+<text x="80" y="398" class="f b ink">only then, the manifest anchor</text>
+<text x="80" y="416" class="f s dim">Written to a temp file, atomically renamed, and the</text>
+<text x="80" y="430" class="f s dim">directory fsynced. It deliberately <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">lags</tspan> the database.</text>
+<text x="80" y="452" class="f s dim">Bulk ingest keeps this shape: one transaction and one</text>
+<text x="80" y="466" class="f s dim">anchor per batch, not per drawer.</text>
+
+<rect x="466" y="76" width="410" height="182" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="484" y="102" class="f l ink">A read</text>
+<text x="770" y="102" class="f s dim">every single one</text>
+<text x="484" y="126" class="f s dim">1 · load the row exactly as stored</text>
+<text x="484" y="148" class="f s dim">2 · recompute the tag over those bytes</text>
+<text x="484" y="170" class="f s dim">3 · compare</text>
+<rect x="484" y="182" width="374" height="30" rx="6" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.2"/>
+<text x="498" y="202" class="f s" fill="var(--d-red-ink,#993a30)">mismatch ⇒ the row is refused and never becomes data</text>
+<text x="484" y="232" class="f s dim">4 · only now decrypt, and return the words</text>
+<text x="484" y="250" class="f s dim">Verification precedes use — it is not a separate verify pass.</text>
+
+<rect x="466" y="274" width="410" height="198" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="484" y="300" class="f l ink">An open — reconciling the anchor</text>
+<text x="484" y="322" class="f s dim">Compare the lagging manifest anchor with the committed head:</text>
+
+<rect x="484" y="334" width="374" height="40" rx="6" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.3"/>
+<text x="498" y="352" class="f s" fill="var(--d-green-ink,#22603c)">anchor BEHIND the database</text>
+<text x="498" y="367" class="f s dim">a crash between commit and anchor — fast-forward, benign</text>
+
+<rect x="484" y="382" width="374" height="40" rx="6" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.6"/>
+<text x="498" y="400" class="f s" fill="var(--d-red-ink,#993a30)">anchor AHEAD of the database</text>
+<text x="498" y="415" class="f s dim">the database went backwards — rollback, raise the alarm</text>
+
+<text x="484" y="442" class="f s dim">This is the whole reason the anchor must never lead. If it could,</text>
+<text x="484" y="456" class="f s dim">an ordinary power loss would be indistinguishable from someone</text>
+<text x="484" y="466" class="f s dim">restoring an older copy of the file.</text>
+
+<rect x="24" y="488" width="852" height="128" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
+<text x="42" y="512" class="f l" fill="var(--d-teal-ink,#0d6b62)">Durability is pinned, not assumed — the ordering above only means something if the writes actually land</text>
+<text x="42" y="534" class="f s dim">SQLite runs <tspan class="f mono">WAL</tspan> + <tspan class="f mono">synchronous=FULL</tspan> on both binaries, so a committed transaction has reached the disk before the call returns.</text>
+<text x="42" y="555" class="f s dim">The manifest anchor is fsynced through an atomic rename plus a directory sync, so it is never half-written — a torn anchor would read as</text>
+<text x="42" y="570" class="f s dim">corruption on a vault that is in fact intact.</text>
+<text x="42" y="591" class="f s dim">Key material is fsynced at creation. A key that is not durable is a vault nobody can open again, which is data loss wearing a security hat.</text>
+<text x="42" y="606" class="f s dim">The invariant tying it together: <tspan class="f s" fill="var(--d-teal-ink,#0d6b62)">the anchor may lag the database and must never lead it.</tspan></text>
+
+<rect x="24" y="632" width="852" height="158" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
+<text x="42" y="656" class="f l ink">What this detects, and what it does not</text>
+
+<rect x="42" y="668" width="404" height="106" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.3"/>
+<text x="58" y="688" class="f b" fill="var(--d-green-ink,#22603c)">caught</text>
+<text x="58" y="708" class="f s dim">An edited row — the tag no longer matches its bytes.</text>
+<text x="58" y="725" class="f s dim">A deleted or reordered history — the chain will not replay.</text>
+<text x="58" y="742" class="f s dim">A restored older database file — the anchor leads.</text>
+<text x="58" y="759" class="f s dim">A blob moved between vaults or rows — the AAD fails.</text>
+
+<rect x="458" y="668" width="418" height="106" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.3"/>
+<text x="474" y="688" class="f b" fill="var(--d-amber-ink,#8d5a1d)">not caught — and worth saying plainly</text>
+<text x="474" y="708" class="f s dim">Anyone holding the master key can rewrite history and re-tag it</text>
+<text x="474" y="723" class="f s dim">so that it verifies. The chain proves the file has not been</text>
+<text x="474" y="738" class="f s dim">altered <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">by someone without the key</tspan> — it is not a defence</text>
+<text x="474" y="753" class="f s dim">against the key holder, and no local scheme could be. External</text>
+<text x="474" y="768" class="f s dim">anchoring is what would close that, and it is not built.</text>
+</svg>
+<figcaption>One write, one read, and the reconciliation that separates a crash from a rollback. <a href="diagrams/security-integrity.svg">SVG</a> · <a href="pdf/security-integrity.pdf">PDF</a></figcaption>
+</figure>
+
+<h3 id="security-what-sealing-does-and-does-not-cover">What sealing does and does not cover</h3>
 <p>For sealed vaults there is an additional standing rule: no plaintext or plaintext-derived data is ever written to disk in clear. No full-text index exists for them, and search operates over decrypt-once RAM caches.</p>
 
 <div class="note amber">
@@ -704,11 +1656,14 @@
   <p>Two fields used to be worse. <code>time_mentions[].text</code> held every date expression as written and <code>entities</code> held every name, both lifted verbatim out of the content and both sitting in unsealed metadata. They are now emptied before the row is written; what survives is the resolutions — byte offsets and ISO dates, which are not content. The exposure that remains is pinned by a test that fails if content ever leaks <em>and</em> fails if a listed field stops being readable, so the inventory cannot quietly go out of date.</p>
   <p>Closing the rest does not require giving up queryability, and the engine already contains both halves of the answer. Fields that must be filtered in SQL — wing, room — can become a <strong>keyed blind index</strong>: store a truncated HMAC of the value and filter on that, exactly as duplicate detection already does with its keyed fingerprint. Everything else moves into a sealed blob decrypted once into a RAM cache at query time, exactly as embeddings, PQ codes and ColBERT matrices already are. Sealing and searchability are not in tension here; the pattern for having both is already in use four times over.</p>
 </div>
+<nav class="secnav"><a class="pv" href="#language">← Languages</a><a class="nx" href="#config">Configuration reference →</a></nav>
+</section>
 
-<h2 id="config">Configuration reference</h2>
+<section class="doc-section" id="config" aria-labelledby="h_config">
+<h2 id="h_config">Configuration reference</h2>
 <p class="lede">Everything is environment-driven, and every default is the conservative choice.</p>
 
-<h3>Core</h3>
+<h3 id="config-core">Core</h3>
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
@@ -718,7 +1673,7 @@
   </tbody>
 </table>
 
-<h3>Retrieval</h3>
+<h3 id="config-retrieval">Retrieval</h3>
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
@@ -733,7 +1688,7 @@
   </tbody>
 </table>
 
-<h3>Models</h3>
+<h3 id="config-models">Models</h3>
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
@@ -748,7 +1703,7 @@
   </tbody>
 </table>
 
-<h3>Optional LLM (for <code>refine</code> only)</h3>
+<h3 id="config-optional-llm-for-refine-only">Optional LLM (for <code>refine</code> only)</h3>
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
@@ -759,7 +1714,7 @@
   </tbody>
 </table>
 
-<h3>Server and multi-tenancy</h3>
+<h3 id="config-server-and-multi-tenancy">Server and multi-tenancy</h3>
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
@@ -769,7 +1724,7 @@
   </tbody>
 </table>
 
-<h3>Remote vector backends <span class="pill exp">untrusted accelerators</span></h3>
+<h3 id="config-remote-vector-backends-untrusted-accelerator">Remote vector backends <span class="pill exp">untrusted accelerators</span></h3>
 <table>
   <thead><tr><th>Variable</th><th>Backend</th></tr></thead>
   <tbody>
@@ -782,7 +1737,7 @@
 </table>
 <p>These receive sealed content only, and everything they return is re-verified locally. They accelerate candidate generation; they are never trusted as a source of truth.</p>
 
-<h3>Observability <span class="pill off">compiled out by default</span></h3>
+<h3 id="config-observability-compiled-out-by-default">Observability <span class="pill off">compiled out by default</span></h3>
 <table>
   <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
   <tbody>
@@ -795,7 +1750,7 @@
 </table>
 <p>Telemetry requires a <code>--features telemetry</code> build. Default builds carry zero telemetry dependencies and emit nothing. Even when enabled, signals are metadata and counts only — never drawer content, never key material.</p>
 
-<h3>Per-request options (not environment)</h3>
+<h3 id="config-per-request-options-not-environment">Per-request options (not environment)</h3>
 <table>
   <thead><tr><th>Option</th><th>Where</th><th>Effect</th></tr></thead>
   <tbody>
@@ -806,8 +1761,11 @@
     <tr><td><code>fact_room</code> · <code>wing</code> · <code>room</code> · <code>limit</code></td><td><code>POST …/refine</code></td><td>Which drawers to distil and where fact-drawers land</td></tr>
   </tbody>
 </table>
+<nav class="secnav"><a class="pv" href="#security">← Security model</a><a class="nx" href="#defaults">Why the defaults are what they are →</a></nav>
+</section>
 
-<h2 id="defaults">Why the defaults are what they are</h2>
+<section class="doc-section" id="defaults" aria-labelledby="h_defaults">
+<h2 id="h_defaults">Why the defaults are what they are</h2>
 <p class="lede">Almost every optional tier is off. That is a position, not an oversight.</p>
 <div class="cards">
   <div class="card"><h4>Approximate tiers are opt-in</h4><p>PQ, FDE, and HNSW trade exactness for speed. A memory product that silently loses recall to save milliseconds has broken its main promise, so each stays off until measured on the workload in question.</p></div>
@@ -815,6 +1773,8 @@
   <div class="card"><h4>Outward paths are explicit</h4><p>No LLM URL, no OTLP endpoint, no remote index, no API key by default. Each is one variable, and setting it is a visible decision about data leaving the machine.</p></div>
   <div class="card"><h4>Integrity is not a tier</h4><p>Verification, sealing, and the audit chain have no off switch. They are the parts you cannot bolt on afterwards.</p></div>
 </div>
+<nav class="secnav"><a class="pv" href="#config">← Configuration reference</a></nav>
+</section>
 
 <footer>
   <p>Undercroft engine v0.42.0 · BUSL-1.1. Diagrams in <a href="diagrams/">diagrams/</a> (SVG) and <a href="pdf/">pdf/</a>;
@@ -822,8 +1782,162 @@
   Measured figures come from internal benchmark runs and are not protocol-comparable with third-party published results.</p>
 </footer>
 
+</main>
 </div>
 <script>
+// Section paging + the rail's controls. Enabled here rather than in the
+// markup so a browser with no JS gets the whole document, a plain list of
+// links, and no dead buttons.
+(function () {
+  var secs = [].slice.call(document.querySelectorAll('.doc-section'));
+  if (!secs.length) return;
+  var body = document.body,
+      rail = document.getElementById('sidebar'),
+      hide = document.getElementById('sbhide'),
+      show = document.getElementById('sbshow'),
+      scrim = document.getElementById('sbscrim'),
+      filter = document.getElementById('navfilter'),
+      items = [].slice.call(document.querySelectorAll('.sb-sec')),
+      links = [].slice.call(document.querySelectorAll('.sb-link')),
+      subs = [].slice.call(document.querySelectorAll('.sb-sublink')),
+      narrow = window.matchMedia('(max-width: 980px)'),
+      KEY = 'undercroft-arch-rail',
+      base = document.title;
+
+  body.classList.add('paged');
+
+  // ---- rail visibility ------------------------------------------------------
+  // Two different defaults, one control: wide screens remember a collapse,
+  // narrow ones start closed because the rail covers the text.
+  function setRail(open, remember) {
+    if (narrow.matches) {
+      body.classList.toggle('nav-open', open);
+      body.classList.remove('nav-collapsed');
+    } else {
+      body.classList.toggle('nav-collapsed', !open);
+      body.classList.remove('nav-open');
+      if (remember) { try { open ? localStorage.removeItem(KEY) : localStorage.setItem(KEY, '1'); } catch (e) {} }
+    }
+    scrim.hidden = !(narrow.matches && open);
+    hide.setAttribute('aria-expanded', String(open));
+    show.setAttribute('aria-expanded', String(open));
+    if (open && narrow.matches) rail.querySelector('.sb-brand').focus({ preventScroll: true });
+  }
+  function railOpen() {
+    return narrow.matches ? body.classList.contains('nav-open')
+                          : !body.classList.contains('nav-collapsed');
+  }
+  hide.addEventListener('click', function () { setRail(false, true); show.focus(); });
+  show.addEventListener('click', function () { setRail(true, true); });
+  scrim.addEventListener('click', function () { setRail(false, false); show.focus(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && narrow.matches && railOpen()) { setRail(false, false); show.focus(); }
+  });
+  narrow.addEventListener('change', function () { setRail(!narrow.matches, false); });
+  var collapsed = false;
+  try { collapsed = localStorage.getItem(KEY) === '1'; } catch (e) {}
+  setRail(narrow.matches ? false : !collapsed, false);
+
+  // ---- which section is showing --------------------------------------------
+  function pick(id) {
+    for (var i = 0; i < secs.length; i++) if (secs[i].id === id) return secs[i];
+    return null;
+  }
+  function show_(id, scroll) {
+    var target = pick(id) || secs[0];
+    secs.forEach(function (s) { s.classList.toggle('current', s === target); });
+    links.forEach(function (a) {
+      var on = a.getAttribute('href').slice(1) === target.id;
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    items.forEach(function (li) { li.classList.toggle('open', li.dataset.sec === target.id); });
+    var h = target.querySelector('h2');
+    document.title = h ? h.textContent + ' — ' + base : base;
+    if (scroll) window.scrollTo(0, 0);
+    spy();
+  }
+
+  // A heading link inside a section that is not open has to switch section
+  // first, then scroll — otherwise it targets a hidden element and does nothing.
+  function sectionOf(el) {
+    while (el && el !== document.body) {
+      if (el.classList && el.classList.contains('doc-section')) return el;
+      el = el.parentNode;
+    }
+    return null;
+  }
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest ? e.target.closest('a[href^="#"]') : null;
+    if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
+    var id = a.getAttribute('href').slice(1), sec = pick(id), head = null;
+    if (!sec) {
+      head = document.getElementById(id);
+      sec = sectionOf(head);
+      if (!sec) return;
+    }
+    e.preventDefault();
+    if (location.hash.slice(1) !== id) history.pushState(null, '', '#' + id);
+    show_(sec.id, !head);
+    if (head) head.scrollIntoView({ block: 'start' });
+    if (narrow.matches && railOpen()) setRail(false, false);
+  });
+
+  window.addEventListener('popstate', function () {
+    var id = location.hash.slice(1), sec = pick(id), head = null;
+    if (!sec) { head = document.getElementById(id); sec = sectionOf(head); }
+    show_(sec ? sec.id : '', !head);
+    if (head) head.scrollIntoView({ block: 'start' });
+  });
+
+  // ---- which heading is in view --------------------------------------------
+  function spy() {
+    var best = null, bestTop = -1e9;
+    [].forEach.call(document.querySelectorAll('.doc-section.current h3[id]'), function (h) {
+      var t = h.getBoundingClientRect().top - 90;
+      if (t <= 0 && t > bestTop) { bestTop = t; best = h.id; }
+    });
+    subs.forEach(function (a) {
+      if (best && a.getAttribute('href').slice(1) === best) a.setAttribute('aria-current', 'true');
+      else a.removeAttribute('aria-current');
+    });
+  }
+  var ticking = false;
+  window.addEventListener('scroll', function () {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () { spy(); ticking = false; });
+  }, { passive: true });
+
+  // ---- filter ---------------------------------------------------------------
+  filter.addEventListener('input', function () {
+    var q = filter.value.trim().toLowerCase();
+    items.forEach(function (li) {
+      if (!q) { li.classList.remove('nomatch'); return; }
+      var hit = li.textContent.toLowerCase().indexOf(q) >= 0;
+      li.classList.toggle('nomatch', !hit);
+    });
+    // While filtering, show every surviving section's headings — the match may
+    // well be one of them, and hiding it would make the filter look broken.
+    items.forEach(function (li) {
+      if (q) li.classList.add('open');
+      else li.classList.toggle('open', li.dataset.sec === (document.querySelector('.doc-section.current') || {}).id);
+    });
+  });
+  filter.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    filter.value = '';
+    filter.dispatchEvent(new Event('input'));
+  });
+
+  var startId = location.hash.slice(1);
+  var startSec = pick(startId) || sectionOf(document.getElementById(startId));
+  show_(startSec ? startSec.id : '', false);
+  if (startSec && !pick(startId)) {
+    var h = document.getElementById(startId);
+    if (h) h.scrollIntoView({ block: 'start' });
+  }
+})();
+
 (function () {
   var root = document.documentElement,
       btn = document.getElementById('themebtn'),
