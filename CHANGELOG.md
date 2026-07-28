@@ -2,6 +2,63 @@
 
 ## Unreleased — the comparison layer, and dates that are declared rather than guessed
 
+- **An era the writer typed outranks the calendar the caller declared.** `พ.ศ.`,
+  `ค.ศ.`, `هـ`, `هجري`, `ميلادي`, `民國`, `公元`, `西暦`, `令和`, `平成`, `昭和`,
+  `大正`, `明治` and their unabbreviated forms are read wherever they stand
+  beside a year — before it, after it, or glued to it. A declaration is a
+  statement about a corpus; a marker is the writer's statement about one date,
+  so the more specific evidence wins. This is still reading and never inference:
+  the era is written down, exactly as an unambiguous `13/05` states a field
+  order by example. Markers that disagree on both sides settle nothing and leave
+  the declaration standing, which is what `order_demonstrated_by` already does
+  for a contradictory field order.
+  - **The tokenizer was the blocker, and Latin is deliberately not fixed.**
+    `tokens()` kept any run of alphanumerics together, so `1447هـ`, `2568พ.ศ.`,
+    `ค.ศ.2023` and `令和6年` arrived as one mixed token in which the digits were
+    not a number and the marker was not a marker — a fully specified date read
+    as nothing at all. The break is taken only where a digit meets a letter from
+    a script that attaches without a delimiter. The delimiting scripts glue
+    **identifiers** — `covid19`, `mp3`, `H1N1`, `5th` — and breaking those would
+    hand `count_of` a bare number that the `<n> <unit> ago` arm reads as a count,
+    inventing a date out of a product name. `-` and `/` stay opaque to the break
+    or `٢٠٢٣-أيار-٠٧` would split at its month name; `.` is transparent so that
+    `ค.ศ.2023` breaks after the marker.
+  - **A bare year is a mention only where a marker names it.** `2568` alone is a
+    quantity, a room, a part code; `พ.ศ. 2568` is the year 2025 and resolves as
+    a whole-year period. It is the trade `month_name_is_deliberate` already
+    makes for a bare "May", and the only route by which `令和` and `民國` mean
+    anything, since those eras are written with a year and no month at all. A
+    two-digit year is still never given a century, marker or no marker.
+  - **Japanese eras are bounded, because their first and last years are
+    partial.** 令和 began on 1 May 2019, so `令和1年` is that May to December —
+    reading it as the whole of 2019 would claim four months that were `平成31年`,
+    a wrong date rather than a rounded one. `平成31年` ends 30 April 2019 and
+    `昭和64年` ran seven days. Declarable too: `reiwa`, `heisei`, `showa`,
+    `taisho`, `meiji` on `/v1/search` and `undercroft_search`.
+  - **A marker that is also an ordinary word is read in context, because
+    Arabic is.** Bare `م` and `ه` abbreviate ميلادي and هجري — and `م` is also
+    *metres*, `ه` a list letter — so the word alone settles nothing. Two signals
+    confirm it, strongest first, the shape `DateOrder` already uses. **A year
+    noun governing the number**: `سنة ٢٠٢٣م`, `عام ١٩٩٥ م`, `في العام ٢٠٠٠م`,
+    spaced or glued. The vocabulary is `AR_UNITS`' own `Unit::Year` set through
+    `ar_unit`, so it inherits every spelling, plural and article the relative
+    arms already match — confirming evidence, never a blocklist, which is the
+    trade the `من` guard makes and for the reason it records. Failing that,
+    **the marker glued to the year with no separator at all**: `١٩٩٥م` is how
+    Arabic writes a year, `١٥٠٠ م` with the space is how it writes a quantity,
+    and SI asks for that space. A spaced marker with no year noun stays unread.
+  - **The cost of the glued signal is real and pinned by test.** Arabic
+    geography writes `على ارتفاع ٢٥٠٠م` — an altitude — glued, and it now reads
+    as the year 2500. Nothing in the string separates the two, and reading the
+    number's *size* would be the inference this module refuses. The collision is
+    confined to four-digit quantities written without their space, the Gregorian
+    gate wanting four digits and `٥٠٠م` having three. The same trade day-first
+    takes: a wrong year is in the record and correctable, where silence is
+    neither.
+  - **Two gaps, stated rather than glossed.** The month-name arms in both
+    scanners build Gregorian-only and always have, so a *declared* calendar
+    never reached them either. CJK numeric dates (`2023年5月7日`) are still
+    unparsed.
 - **A date's calendar and field order are DECLARED, never inferred.** `Locale`
   gains `calendar` and `date_order` beside `language` and `week_start`, all
   read-time, so an already-ingested corpus answers correctly the moment a caller

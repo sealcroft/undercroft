@@ -406,12 +406,16 @@ pub enum DateOrder {
 /// typed in Thai digits, and treating the glyphs as an era claim resolved it
 /// to 1483.
 ///
+/// Declared by the caller — or, stronger, read from an era marker the writer
+/// typed beside the year. `พ.ศ.`, `هـ`, `民國`, `令和` are the writer's
+/// statement about one date and outrank the caller's statement about a corpus.
+///
 /// Only the calendars whose conversion is exact arithmetic are here. A
-/// renumbered year is all Buddhist and Minguo are: same months, same lengths,
-/// same leap rule, a different count. Hijri is lunar and drifts about eleven
-/// days a year, and Jalali turns at the vernal equinox with different month
-/// lengths — neither is reachable by subtracting a constant, so neither is
-/// offered rather than being offered wrongly.
+/// renumbered year is all Buddhist, Minguo and the Japanese eras are: same
+/// months, same lengths, same leap rule, a different count. Hijri is lunar and
+/// drifts about eleven days a year, and Jalali turns at the vernal equinox with
+/// different month lengths — neither is reachable by subtracting a constant, so
+/// both convert whole dates rather than being offered wrongly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Calendar {
     /// Read years as written.
@@ -423,6 +427,16 @@ pub enum Calendar {
     Buddhist,
     /// Republic of China / Taiwan: `y + 1911`.
     Minguo,
+    /// Japanese era 令和, from 1 May 2019: `y + 2018`.
+    Reiwa,
+    /// Japanese era 平成, 8 January 1989 to 30 April 2019: `y + 1988`.
+    Heisei,
+    /// Japanese era 昭和, 25 December 1926 to 7 January 1989: `y + 1925`.
+    Showa,
+    /// Japanese era 大正, 30 July 1912 to 24 December 1926: `y + 1911`.
+    Taisho,
+    /// Japanese era 明治, 23 October 1868 to 29 July 1912: `y + 1867`.
+    Meiji,
     /// Islamic Hijri, Umm al-Qura — the Saudi CIVIL calendar, the one printed
     /// on documents. Lunar: a year is about eleven days shorter than a solar
     /// one, so no offset reaches it and the whole date must be converted.
@@ -450,12 +464,41 @@ fn date_from_rata_die(rd: calendrical_calculations::rata_die::RataDie) -> Option
 }
 
 impl Calendar {
+    /// A Japanese era as `(years added to an era year, first day, last day)`,
+    /// or `None` for every other calendar.
+    ///
+    /// The bounds are the entry's point, not decoration. An era begins and ends
+    /// on a known day, so its first and last era years are **partial**: Reiwa 1
+    /// runs from 1 May 2019 and does not include that January, and Heisei 31
+    /// ended on 30 April. Reading an era year as a whole Gregorian year would
+    /// claim four months the era did not cover — a wrong date, not a rounded
+    /// one — so a date outside the era is refused instead.
+    ///
+    /// Japan adopted the Gregorian calendar in Meiji 6 (1873). The four later
+    /// eras are wholly inside that, so their arithmetic is exact. Meiji opened
+    /// under the lunisolar Tenpō calendar and its first five era years do not
+    /// line up with the Gregorian years they overlap; the offset below is the
+    /// post-adoption one, which is what a modern text writing 明治 means, and
+    /// the bound is the era's own start.
+    fn japanese(self) -> Option<(i32, Date, Date)> {
+        let (base, first, last) = match self {
+            Calendar::Reiwa => (2018, (2019, Month::May, 1), (9999, Month::December, 31)),
+            Calendar::Heisei => (1988, (1989, Month::January, 8), (2019, Month::April, 30)),
+            Calendar::Showa => (1925, (1926, Month::December, 25), (1989, Month::January, 7)),
+            Calendar::Taisho => (1911, (1912, Month::July, 30), (1926, Month::December, 24)),
+            Calendar::Meiji => (1867, (1868, Month::October, 23), (1912, Month::July, 29)),
+            _ => return None,
+        };
+        let at = |(y, m, d): (i32, Month, u8)| Date::from_calendar_date(y, m, d).ok();
+        Some((base, at(first)?, at(last)?))
+    }
+
     /// The Gregorian date that `(y, m, d)` names in this calendar.
     ///
-    /// A whole date, not a year: Buddhist and Minguo only renumber the year and
-    /// could have been an offset, but Hijri and Jalali have different month
-    /// lengths, so converting the year and keeping the Gregorian month would
-    /// produce a date neither calendar contains.
+    /// A whole date, not a year: Buddhist, Minguo and the Japanese eras only
+    /// renumber the year and could have been an offset, but Hijri and Jalali
+    /// have different month lengths, so converting the year and keeping the
+    /// Gregorian month would produce a date neither calendar contains.
     fn to_gregorian(self, y: i32, m: u8, d: u8) -> Option<Date> {
         use calendrical_calculations::{islamic, persian};
         let shifted = |y: i32| Date::from_calendar_date(y, Month::try_from(m).ok()?, d).ok();
@@ -463,6 +506,18 @@ impl Calendar {
             Calendar::Gregorian => shifted(y)?,
             Calendar::Buddhist => shifted(y.checked_sub(543)?)?,
             Calendar::Minguo => shifted(y.checked_add(1911)?)?,
+            Calendar::Reiwa
+            | Calendar::Heisei
+            | Calendar::Showa
+            | Calendar::Taisho
+            | Calendar::Meiji => {
+                let (base, first, last) = self.japanese()?;
+                let date = shifted(y.checked_add(base)?)?;
+                if date < first || date > last {
+                    return None;
+                }
+                date
+            }
             Calendar::Hijri => {
                 if !(1..=12).contains(&m) || !(1..=30).contains(&d) {
                     return None;
@@ -499,6 +554,208 @@ fn read_date(cal: Calendar, y: i32, m: u8, d: u8) -> Option<Option<Date>> {
         return None;
     }
     Some(cal.to_gregorian(y, m, d))
+}
+
+/// Era markers a writer types beside a year, and the calendar each one names.
+///
+/// A marker **outranks** the calendar declared on [`Locale`]. The declaration is
+/// the caller's statement about a corpus; the marker is the writer's statement
+/// about this one date, in the drawer, in their own words — so the more
+/// specific evidence wins. This is reading, not inference: the era is written
+/// down. It is the same class of signal as an unambiguous `13/05` settling
+/// [`DateOrder`], and the exact opposite of deriving a calendar from the
+/// surrounding script or from a numeral system, which this module refuses.
+///
+/// Matched as a WHOLE token, after a trailing `.` is trimmed, so `พ.ศ.` and
+/// `พ.ศ` are one entry.
+///
+/// Every entry here settles a year on its own. The two that cannot —
+/// bare `م` and bare `ه` — live in [`AMBIGUOUS_ERA_MARKERS`] and are read only
+/// where the sentence confirms them.
+const ERA_MARKERS: &[(&str, Calendar)] = &[
+    // Thai: พ.ศ. = พุทธศักราช, Buddhist Era; ค.ศ. = คริสต์ศักราช, Christian Era.
+    ("พ.ศ", Calendar::Buddhist),
+    ("พศ", Calendar::Buddhist),
+    ("พุทธศักราช", Calendar::Buddhist),
+    ("ค.ศ", Calendar::Gregorian),
+    ("คศ", Calendar::Gregorian),
+    ("คริสต์ศักราช", Calendar::Gregorian),
+    // Arabic, unabbreviated plus the tatweel form.
+    ("هـ", Calendar::Hijri),
+    ("هجري", Calendar::Hijri),
+    ("هجرية", Calendar::Hijri),
+    ("ميلادي", Calendar::Gregorian),
+    ("ميلادية", Calendar::Gregorian),
+    // Chinese in both scripts, and the three words for a Gregorian year.
+    ("民國", Calendar::Minguo),
+    ("民国", Calendar::Minguo),
+    ("公元", Calendar::Gregorian),
+    ("西元", Calendar::Gregorian),
+    ("西暦", Calendar::Gregorian),
+    // Japanese eras.
+    ("令和", Calendar::Reiwa),
+    ("平成", Calendar::Heisei),
+    ("昭和", Calendar::Showa),
+    ("大正", Calendar::Taisho),
+    ("明治", Calendar::Meiji),
+];
+
+/// Era markers that are also ordinary words, read where the writing confirms
+/// them.
+///
+/// `م` and `ه` abbreviate ميلادي and هجري, and `٢٠٢٣م` is an everyday way to
+/// write a Gregorian year — but `م` is also a **metre** and `ه` a list letter,
+/// so unlike every entry in [`ERA_MARKERS`] the word alone settles nothing.
+/// Which is the point Arabic makes about itself: it reads in context, and the
+/// context is on the page. Two signals, strongest first — the shape
+/// [`DateOrder`] already uses:
+///
+/// 1. **a year noun governs the number.** سنة ٢٠٢٣م, عام ١٩٩٥ م, في العام
+///    ٢٠٠٠م — the sentence states which reading it means, spaced or glued. The
+///    vocabulary is `AR_UNITS`' own [`Unit::Year`] set through [`ar_unit`],
+///    article and plurals included. Confirming evidence, never a blocklist:
+///    the trade [`ar_ago_is_temporal`] makes for من, for the reason it records
+///    — a list of the words that would rule the reading out fabricates on the
+///    first one nobody thought of.
+/// 2. **the marker is glued to the year**, no separator at all
+///    ([`glued_to_what_precedes`]). `٢٠٢٣م` is how Arabic writes a year;
+///    `١٥٠٠ م` is how it writes a quantity, and SI asks for that space. The
+///    absence of it is the writer's own orthography, so it is read — as a
+///    **default**, which in this module means the answer where nothing stronger
+///    was written, never a certainty.
+///
+/// A spaced marker with no year noun stays unread.
+///
+/// **The cost of signal 2 is real, and pinned by test.** Arabic geography
+/// writes `على ارتفاع ٢٥٠٠م` — an altitude — glued, and that now reads as the
+/// year 2500. The collision is confined to four-digit quantities written
+/// without their space: `٥٠٠م` is out of reach already, since the Gregorian
+/// gate wants four digits. Taken deliberately, and the trade is the one
+/// `DateOrder`'s last step takes — a wrong year is visible in the record and
+/// correctable, where the alternative left the commonest written form of a
+/// Gregorian year in Arabic unreadable.
+const AMBIGUOUS_ERA_MARKERS: &[(&str, Calendar)] =
+    &[("م", Calendar::Gregorian), ("ه", Calendar::Hijri)];
+
+/// Whether the token beginning at byte offset `off` is glued to what precedes
+/// it — no separator whatever between them in the text as written.
+///
+/// Read from the RAW text rather than from token arithmetic: tokens are
+/// lowercased, and NFC-folded again in the Arabic scanner, so `off + w.len()`
+/// is not reliably where the previous token ended. The character immediately
+/// before is, and it needs no lengths at all.
+///
+/// A lone `م` can only be glued to digits, because [`push_run`] breaks a run
+/// exactly there — between a digit and a letter of an attaching script — and
+/// nowhere else inside a word.
+fn glued_to_what_precedes(text: &str, off: usize) -> bool {
+    text[..off].chars().next_back().is_some_and(is_token_char)
+}
+
+/// The word CJK writes after a year, absorbed into the recorded span so that
+/// `令和6年` comes back whole. It names no era by itself and sets no calendar.
+const CJK_YEAR: &str = "年";
+
+/// The calendar an era marker names, or `None` for every other word.
+fn era_of(tok: &str) -> Option<Calendar> {
+    let t = tok.trim_end_matches('.');
+    ERA_MARKERS
+        .iter()
+        .find(|(name, _)| *name == t)
+        .map(|(_, c)| *c)
+}
+
+/// The calendar an [ambiguous][`AMBIGUOUS_ERA_MARKERS`] marker would name, said
+/// without deciding whether it is one — the caller supplies the confirmation.
+fn ambiguous_era_of(tok: &str) -> Option<Calendar> {
+    let t = tok.trim_end_matches('.');
+    AMBIGUOUS_ERA_MARKERS
+        .iter()
+        .find(|(name, _)| *name == t)
+        .map(|(_, c)| *c)
+}
+
+/// Whether a noun meaning "year" governs the number at `i`, which is the
+/// sentence stating that this number counts years — سنة ٢٠٢٣, العام ١٩٩٥.
+///
+/// Reuses `AR_UNITS` rather than repeating its vocabulary: [`ar_unit`] already
+/// strips the definite article and already knows every spelling and plural the
+/// relative arms match.
+fn a_year_noun_governs(toks: &[(usize, String)], i: usize) -> bool {
+    i.checked_sub(1)
+        .and_then(|k| toks.get(k))
+        .and_then(|(_, w)| ar_unit(w))
+        == Some(Unit::Year)
+}
+
+/// An era marker standing beside the single-token date or year at `i`.
+///
+/// Returns the calendar it names, the byte offset the span should start from,
+/// and how many tokens after `i` the expression absorbs — so `พ.ศ. 2568`,
+/// `2568 พ.ศ.` and `令和6年` each come back as one mention over its own words.
+///
+/// Markers on both sides that disagree yield `None`, which leaves the declared
+/// calendar standing. A drawer holding `ค.ศ. 2023 พ.ศ.` was written by someone
+/// inconsistent or is quoting two sources, and picking a winner is exactly what
+/// [`order_demonstrated_by`] already declines to do for field order.
+fn era_beside(text: &str, toks: &[(usize, String)], i: usize) -> Option<(Calendar, usize, usize)> {
+    let before = i
+        .checked_sub(1)
+        .and_then(|k| toks.get(k))
+        .and_then(|(o, w)| era_of(w).map(|c| (c, *o)));
+    let after = toks.get(i + 1);
+    let after_era = after.and_then(|(o, w)| {
+        // A marker that is also an ordinary word needs the writing behind it:
+        // the sentence naming a year, or the writer withholding the space.
+        era_of(w).or_else(|| {
+            ambiguous_era_of(w)
+                .filter(|_| a_year_noun_governs(toks, i) || glued_to_what_precedes(text, *o))
+        })
+    });
+    let cal = match (before.map(|(c, _)| c), after_era) {
+        (Some(a), Some(b)) if a != b => return None,
+        (Some(c), _) | (None, Some(c)) => c,
+        (None, None) => return None,
+    };
+    let joins = after_era.is_some() || after.is_some_and(|(_, w)| w == CJK_YEAR);
+    Some((
+        cal,
+        before.map_or(toks[i].0, |(_, o)| o),
+        usize::from(joins),
+    ))
+}
+
+/// The first and last Gregorian day of year `y` in `cal`.
+///
+/// Taken from the calendar's own new year rather than from a year offset, so a
+/// lunar or equinoctial year is the period it really covers: Hijri 1447 opens
+/// in June 2025 and closes in June 2026, and reading it as a Gregorian year
+/// would be wrong at both ends.
+///
+/// A Japanese era is clipped to its own bounds instead, because its first and
+/// last years are partial. 令和1年 is 1 May to 31 December 2019 — not the whole
+/// of 2019, four months of which were 平成31年.
+fn era_year_range(cal: Calendar, y: i32) -> Option<(Date, Date)> {
+    let (start, end) = match cal.japanese() {
+        Some((base, first, last)) => {
+            let g = y.checked_add(base)?;
+            (
+                Date::from_calendar_date(g, Month::January, 1)
+                    .ok()?
+                    .max(first),
+                Date::from_calendar_date(g, Month::December, 31)
+                    .ok()?
+                    .min(last),
+            )
+        }
+        None => (
+            cal.to_gregorian(y, 1, 1)?,
+            cal.to_gregorian(y.checked_add(1)?, 1, 1)?.previous_day()?,
+        ),
+    };
+    // An era year outside its own era inverts the pair rather than naming a
+    // period; that is not a date, so nothing is returned.
+    (start <= end).then_some((start, end))
 }
 
 /// Languages whose temporal expressions this module can read.
@@ -742,26 +999,88 @@ fn week_range(d: Date, ws: WeekStart) -> Option<(Date, Date)> {
     Some((start, shift_days(start, 6)?))
 }
 
-/// Split into lowercase word tokens with their byte offsets, keeping digits
-/// and hyphens together so "2023-05-07" survives as one token.
+/// Characters a temporal token may hold: word characters, plus the separators
+/// that keep a written date in one piece.
+fn is_token_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '-' || ch == '/' || ch == '.'
+}
+
+/// Whether a token must break between `prev` — the last digit or letter seen,
+/// with `.` transparent and `-`/`/` opaque — and `ch`.
+///
+/// A digit run glued to a letter run is a single token to [`is_token_char`],
+/// which is right for `2023-05-07` and wrong for every era marker a writer
+/// attaches to a year: `1447هـ`, `2568พ.ศ.`, `ค.ศ.2023`, `令和6年` all arrive
+/// whole, and whole they are neither a number the digit readers accept nor a
+/// marker [`ERA_MARKERS`] recognises. A fully specified, unambiguous date read
+/// as nothing at all.
+///
+/// The break is taken only where the letter belongs to a script that
+/// [attaches without a delimiter](crate::script::Script::attaches_without_delimiter).
+/// Those are the scripts that glue markers and morphology on with no space.
+/// The delimiting ones glue **identifiers** — `covid19`, `mp3`, `H1N1`, `5th` —
+/// and breaking those would hand `count_of` a bare number that the
+/// `<n> <unit> ago` arm would then read as a count, inventing a date out of a
+/// product name. So the rule is scoped to where the evidence is, and Latin,
+/// Cyrillic, Greek and Devanagari are left exactly as they were.
+///
+/// `-` and `/` are opaque deliberately. With them transparent `٢٠٢٣-أيار-٠٧`
+/// would break at the month name and [`named_date_token`], which exists to read
+/// precisely that, would never see three fields. `.` is transparent so that
+/// `ค.ศ.2023` breaks after the marker; it costs `07.05.2023` nothing, where
+/// both sides of every dot are digits.
+fn breaks_before(prev: char, ch: char) -> bool {
+    let attaches = |c: char| crate::script::script_of(c).attaches_without_delimiter();
+    (prev.is_numeric() && ch.is_alphabetic() && attaches(ch))
+        || (prev.is_alphabetic() && ch.is_numeric() && attaches(prev))
+}
+
+/// Split into lowercase word tokens with their byte offsets, keeping digits and
+/// hyphens together so "2023-05-07" survives as one token, and breaking a glued
+/// era marker off its year — see [`breaks_before`].
 fn tokens(text: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut start = None;
     for (i, ch) in text.char_indices() {
-        let keep = ch.is_alphanumeric() || ch == '-' || ch == '/' || ch == '.';
-        match (keep, start) {
+        match (is_token_char(ch), start) {
             (true, None) => start = Some(i),
             (false, Some(s)) => {
-                out.push((s, text[s..i].to_lowercase()));
+                push_run(&mut out, text, s, i);
                 start = None;
             }
             _ => {}
         }
     }
     if let Some(s) = start {
-        out.push((s, text[s..].to_lowercase()));
+        push_run(&mut out, text, s, text.len());
     }
     out
+}
+
+/// Push `text[from..to]` as one or more lowercase tokens, breaking wherever
+/// [`breaks_before`] says a marker meets a year. Every piece carries its own
+/// byte offset, so a span recorded from one still points into the raw text.
+fn push_run(out: &mut Vec<(usize, String)>, text: &str, from: usize, to: usize) {
+    let mut piece = from;
+    let mut prev: Option<char> = None;
+    for (i, ch) in text[from..to].char_indices() {
+        let at = from + i;
+        if at > piece && prev.is_some_and(|p| breaks_before(p, ch)) {
+            out.push((piece, text[piece..at].to_lowercase()));
+            piece = at;
+        }
+        match ch {
+            // A field separator ends the run of evidence: what stood before it
+            // says nothing about what follows it.
+            '-' | '/' => prev = None,
+            // A dot inside an abbreviation does not.
+            '.' => {}
+            _ => prev = Some(ch),
+        }
+    }
+    if to > piece {
+        out.push((piece, text[piece..to].to_lowercase()));
+    }
 }
 
 /// Parse a bare `YYYY-MM-DD` (or `YYYY/MM/DD`) token.
@@ -1320,6 +1639,71 @@ fn dmy_token(tok: &str, cal: Calendar, order: DateOrder) -> Option<Option<Date>>
     }
 }
 
+/// The three numeric date readers plus the bare year, under the calendar an
+/// adjacent era marker names — falling back to the declared one wherever the
+/// text says nothing.
+///
+/// Returns the byte offset the span starts at, how many extra tokens it
+/// absorbs, and the period, or `None` when the token begins no numeric date at
+/// all. Shared by both scanners: a date written in digits is the same date in
+/// whatever prose surrounds it, and so is the marker beside it.
+///
+/// **A bare year is a mention only where a marker names it.** `2568` alone is a
+/// number — a quantity, a room, a part code — and recording every four-digit
+/// token as a year would bury real dates in noise. `พ.ศ. 2568` is not: the
+/// writer wrote an era, which is a statement that this number counts years.
+/// That is the same trade `month_name_is_deliberate` makes for a bare "May",
+/// and it is the only route by which `令和` and `民國` mean anything, since
+/// those eras are written with a year and no month at all.
+///
+/// The era reaches the numeric readers and the bare year, and stops there. The
+/// month-name arms in both scanners build their dates Gregorian-only and always
+/// have — a *declared* calendar does not reach them either — so extending them
+/// is a gap in its own right, recorded rather than half-closed here.
+struct NumericDate {
+    /// Byte offset the recorded span begins at — the era marker's, when one
+    /// stands in front of the year.
+    start: usize,
+    /// Tokens after the date's own that the span absorbs: a trailing marker,
+    /// or the `年` that closes a CJK era year.
+    extra: usize,
+    /// The period named, or `None` for recorded-but-not-resolvable.
+    period: Option<(Date, Date)>,
+}
+
+fn numeric_or_era(
+    text: &str,
+    toks: &[(usize, String)],
+    i: usize,
+    month: impl Fn(&str) -> Option<Month>,
+    loc: Locale,
+    order: DateOrder,
+) -> Option<NumericDate> {
+    let w = toks[i].1.as_str();
+    let era = era_beside(text, toks, i);
+    let cal = era.map_or(loc.calendar, |(c, _, _)| c);
+    let period = if let Some(d) = named_date_token(w, month, cal) {
+        d.map(point)
+    } else if let Some(d) = iso_token(w, cal) {
+        d.map(point)
+    } else if let Some(d) = dmy_token(w, cal, order) {
+        d.map(point)
+    } else {
+        let (cal, _, _) = era?;
+        let y: i32 = ascii_digits(w)?.parse().ok()?;
+        // The same gate every other year passes, so a marker cannot smuggle a
+        // two-digit year past the rule that this module never guesses a century.
+        read_date(cal, y, 1, 1)?;
+        era_year_range(cal, y)
+    };
+    let (start, extra) = era.map_or((toks[i].0, 0), |(_, s, e)| (s, e));
+    Some(NumericDate {
+        start,
+        extra,
+        period,
+    })
+}
+
 /// Find every temporal expression in `text`, resolving what the `anchor`
 /// allows. Absolute mentions resolve with or without an anchor; relative
 /// ones resolve only with it.
@@ -1403,18 +1787,16 @@ fn scan_arabic(text: &str, anchor: Option<Date>, loc: Locale) -> Vec<TimeMention
     let at = |k: usize| -> &str { toks.get(k).map(|(_, w)| w.as_str()).unwrap_or("") };
 
     while i < toks.len() {
-        let (off, ref w) = toks[i];
+        let (mut off, ref w) = toks[i];
         let mut consumed = 0usize;
         let mut mention: Option<(TimeKind, Option<(Date, Date)>)> = None;
 
         // Language-neutral numeric forms first — a date written 2023-05-07 is
-        // the same date in any prose around it.
-        if let Some(d) = named_date_token(w, ar_month, loc.calendar) {
-            mention = Some((TimeKind::Absolute, d.map(point)));
-        } else if let Some(d) = iso_token(w, loc.calendar) {
-            mention = Some((TimeKind::Absolute, d.map(point)));
-        } else if let Some(resolved) = dmy_token(w, loc.calendar, order) {
-            mention = Some((TimeKind::Absolute, resolved.map(point)));
+        // the same date in any prose around it, and so is ١٤٤٧هـ.
+        if let Some(d) = numeric_or_era(text, &toks, i, ar_month, loc, order) {
+            off = d.start;
+            consumed = d.extra;
+            mention = Some((TimeKind::Absolute, d.period));
         } else if let Some(month) = ar_month(w).or_else(|| {
             // Two-word Levantine names: كانون الثاني, تشرين الأول.
             ar_month(&format!("{w} {}", at(i + 1)))
@@ -1584,19 +1966,17 @@ fn scan_english(text: &str, anchor: Option<Date>, loc: Locale) -> Vec<TimeMentio
     };
 
     while i < toks.len() {
-        let (off, ref w) = toks[i];
+        let (mut off, ref w) = toks[i];
         let mut consumed = 0usize;
         // The period the text names, as an inclusive first/last day pair.
         // A single day is the pair repeated; `None` is "recorded, not
         // resolvable", which stays distinct from "resolved to one day".
         let mut mention: Option<(TimeKind, Option<(Date, Date)>)> = None;
 
-        if let Some(d) = named_date_token(w, month_of, loc.calendar) {
-            mention = Some((TimeKind::Absolute, d.map(point)));
-        } else if let Some(d) = iso_token(w, loc.calendar) {
-            mention = Some((TimeKind::Absolute, d.map(point)));
-        } else if let Some(resolved) = dmy_token(w, loc.calendar, order) {
-            mention = Some((TimeKind::Absolute, resolved.map(point)));
+        if let Some(d) = numeric_or_era(text, &toks, i, month_of, loc, order) {
+            off = d.start;
+            consumed = d.extra;
+            mention = Some((TimeKind::Absolute, d.period));
         } else if let Some(month) = month_of(w) {
             // "May 7, 2023" / "May 2023" / "May 7"
             let day = toks.get(i + 1).and_then(|(_, t)| t.parse::<u8>().ok());
@@ -3111,5 +3491,266 @@ mod tests {
     #[test]
     fn describe_interval_refuses_garbage() {
         assert!(describe_interval("nope", "2023-05-03").is_none());
+    }
+
+    // --- Era markers, and the tokenizer break that reaches them -----------
+
+    fn toks_of(text: &str) -> Vec<String> {
+        tokens(text).into_iter().map(|(_, w)| w).collect()
+    }
+
+    #[test]
+    fn an_attached_era_marker_comes_off_its_year() {
+        // Every one of these is a single token to the old rule: alphanumerics
+        // run together, so the digits are not a number and the marker is not a
+        // marker. Neither half survives the join.
+        for (text, want) in [
+            ("١٤٤٧هـ", vec!["١٤٤٧", "هـ"]),
+            ("2568พ.ศ.", vec!["2568", "พ.ศ."]),
+            ("ค.ศ.2023", vec!["ค.ศ.", "2023"]),
+            ("令和6年", vec!["令和", "6", "年"]),
+            ("民國114年", vec!["民國", "114", "年"]),
+        ] {
+            assert_eq!(toks_of(text), want, "{text}");
+        }
+        // The offsets stay honest: each piece points at its own bytes.
+        let t = tokens("令和6年");
+        assert_eq!(t[1].0, "令和".len(), "the year starts after the era");
+        assert_eq!(&"令和6年"[t[2].0..], "年");
+    }
+
+    #[test]
+    fn a_delimiting_script_keeps_its_identifiers_whole() {
+        // The negative control, and the reason the break is scoped to scripts
+        // that attach without a delimiter. Latin glues IDENTIFIERS, and
+        // breaking them hands `count_of` a bare number.
+        for text in ["covid19", "mp3", "h1n1", "5th", "windows95", "2fa"] {
+            assert_eq!(toks_of(text), vec![text], "{text} must stay one token");
+        }
+        // Which is the failure that would matter: a product name must not
+        // become a count, and no date may be invented from one.
+        for text in [
+            "the covid19 days ago problem",
+            "we shipped mp3 years ago",
+            "run 1500 m today",
+        ] {
+            let dates: Vec<_> = extract_time_mentions(text, anchor())
+                .into_iter()
+                .filter(|m| m.kind == TimeKind::Absolute || m.resolved.is_some())
+                .filter(|m| m.text != "today")
+                .collect();
+            assert!(dates.is_empty(), "{text} invented {dates:?}");
+        }
+    }
+
+    #[test]
+    fn a_field_separator_still_holds_a_date_together() {
+        // `-` and `/` stay opaque to the break, or `named_date_token` never
+        // sees three fields and a fully specified date reads as nothing.
+        for text in ["2023-05-07", "٢٠٢٣-أيار-٠٧", "07.05.2023", "13/05/2023"] {
+            assert_eq!(toks_of(text), vec![text], "{text} must stay one token");
+        }
+        // And it still resolves end to end, which the token count alone does
+        // not prove.
+        let m = extract_time_mentions_in("كتبت ٢٠٢٣-أيار-٠٧", None, Locale::ARABIC);
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert_eq!(m[0].resolved.as_deref(), Some("2023-05-07"));
+    }
+
+    #[test]
+    fn an_era_marker_outranks_the_declared_calendar() {
+        // The caller declared a corpus-wide Buddhist era; this drawer says
+        // คริสต์ศักราช — Christian Era — about this one year. The writer's
+        // statement about the date beats the caller's about the corpus.
+        let thai = Locale::ENGLISH.with_calendar(Calendar::Buddhist);
+        let m = extract_time_mentions_in("เขียนเมื่อ ค.ศ. 2023", None, thai);
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert_eq!(m[0].resolved.as_deref(), Some("2023-01-01"));
+        assert_eq!(m[0].resolved_end.as_deref(), Some("2023-12-31"));
+        // Neutralise the fix and the same text reads as Buddhist 2023, i.e.
+        // 1480 — which is what makes the assertion above load-bearing.
+        assert_eq!(
+            era_of("ค.ศ."),
+            Some(Calendar::Gregorian),
+            "the marker is what carries it"
+        );
+        assert_eq!(
+            era_year_range(Calendar::Buddhist, 2023).map(|(s, _)| s.year()),
+            Some(1480)
+        );
+
+        // And the other direction: a Gregorian corpus, a Buddhist year.
+        let m = extract_time_mentions_in("เขียนเมื่อ พ.ศ. 2568", None, Locale::ENGLISH);
+        assert_eq!(m[0].resolved.as_deref(), Some("2025-01-01"));
+        assert_eq!(m[0].resolved_end.as_deref(), Some("2025-12-31"));
+    }
+
+    #[test]
+    fn a_bare_year_is_a_mention_only_where_an_era_names_it() {
+        // A four-digit number is a quantity, a room, a part code. Recording
+        // every one as a year would bury the real dates.
+        for text in ["order 2568 units", "room 2023", "part 1447 shipped"] {
+            assert!(
+                extract_time_mentions(text, anchor()).is_empty(),
+                "{text} must name no date"
+            );
+        }
+        // The marker is the writer saying this number counts years.
+        let m = extract_time_mentions("filed under พ.ศ. 2568", anchor());
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert_eq!(m[0].kind, TimeKind::Absolute);
+        assert_eq!(m[0].resolved.as_deref(), Some("2025-01-01"));
+        // A century is still never guessed, marker or no marker.
+        assert!(extract_time_mentions("filed under ค.ศ. 68", anchor()).is_empty());
+    }
+
+    #[test]
+    fn the_recorded_span_covers_the_marker_and_the_year() {
+        for (text, want) in [
+            ("เขียนเมื่อ พ.ศ. 2568 ที่บ้าน", "พ.ศ. 2568"),
+            ("เขียนเมื่อ 2568 พ.ศ. ที่บ้าน", "2568 พ.ศ."),
+            ("published 令和6年 in Tokyo", "令和6年"),
+            ("published 民國114年 in Taipei", "民國114年"),
+        ] {
+            let m = extract_time_mentions(text, anchor());
+            assert_eq!(m.len(), 1, "{text}: {m:?}");
+            assert_eq!(m[0].text, want, "{text}");
+            // The offset must still index the raw text, or a span is a lie.
+            let off = m[0].offset as usize;
+            assert_eq!(&text[off..off + want.len()], want, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_japanese_era_year_is_only_the_part_of_the_year_it_covered() {
+        // Reiwa began on 1 May 2019. Reading 令和1年 as the whole of 2019
+        // claims four months that were 平成31年 — a wrong date, not a rounded
+        // one, which is why the era carries its bounds.
+        let one = extract_time_mentions("令和1年", anchor());
+        assert_eq!(one.len(), 1, "{one:?}");
+        assert_eq!(one[0].resolved.as_deref(), Some("2019-05-01"));
+        assert_eq!(one[0].resolved_end.as_deref(), Some("2019-12-31"));
+        // Heisei closed on 30 April 2019, the day before.
+        let last = extract_time_mentions("平成31年", anchor());
+        assert_eq!(last[0].resolved.as_deref(), Some("2019-01-01"));
+        assert_eq!(last[0].resolved_end.as_deref(), Some("2019-04-30"));
+        // Showa 64 ran seven days.
+        let showa = extract_time_mentions("昭和64年", anchor());
+        assert_eq!(showa[0].resolved.as_deref(), Some("1989-01-01"));
+        assert_eq!(showa[0].resolved_end.as_deref(), Some("1989-01-07"));
+        // A whole year inside an era is a whole year.
+        let six = extract_time_mentions("令和6年", anchor());
+        assert_eq!(six[0].resolved.as_deref(), Some("2024-01-01"));
+        assert_eq!(six[0].resolved_end.as_deref(), Some("2024-12-31"));
+        // Minguo 114 is 2025, and it is not bounded.
+        let roc = extract_time_mentions("民國114年", anchor());
+        assert_eq!(roc[0].resolved.as_deref(), Some("2025-01-01"));
+        assert_eq!(roc[0].resolved_end.as_deref(), Some("2025-12-31"));
+        // A date outside its own era is not a date that era names.
+        assert_eq!(era_year_range(Calendar::Reiwa, 0), None);
+        assert_eq!(Calendar::Heisei.to_gregorian(31, 12, 1), None);
+    }
+
+    #[test]
+    fn an_arabic_year_carries_its_era_in_either_position() {
+        // ١٤٤٧هـ — the common written form, and the one the tokenizer break
+        // exists for.
+        let m = extract_time_mentions_in("ولد سنة ١٤٤٧هـ", None, Locale::ARABIC);
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert_eq!(m[0].text, "١٤٤٧هـ");
+        // A lunar year opens mid-Gregorian-year and closes in the next: the
+        // exact days come from Umm al-Qura, but the shape is checkable.
+        let (start, end) = (
+            m[0].resolved.as_deref().expect("Hijri 1447 must resolve"),
+            m[0].resolved_end.as_deref().expect("and must be a period"),
+        );
+        assert!(start.starts_with("2025-"), "{start}");
+        assert!(end.starts_with("2026-"), "{end}");
+        assert!(start < end);
+        // A full Hijri date takes the era from the marker beside it.
+        let d = extract_time_mentions_in("بتاريخ ١٤٤٧-٠١-٠١ هـ", None, Locale::ARABIC);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].resolved.as_deref(), Some(start));
+        assert_eq!(d[0].resolved_end, None, "one day, not a period");
+    }
+
+    #[test]
+    fn a_bare_arabic_letter_needs_the_sentence_to_confirm_it() {
+        // م abbreviates ميلادي and also means METRES; ه abbreviates هجري and is
+        // also a list letter. Spaced, with no year noun, neither settles
+        // anything — the space is how Arabic writes a quantity.
+        for text in ["جريت ١٥٠٠ م", "المسافة ٢٠٢٣ م", "الملف ١٤٤٧ ه"]
+        {
+            let m = extract_time_mentions_in(text, None, Locale::ARABIC);
+            assert!(m.is_empty(), "{text} invented {m:?}");
+        }
+        assert_eq!(era_of("م"), None, "not a marker by itself");
+        assert_eq!(era_of("ه"), None, "not a marker by itself");
+
+        // Signal 1 — a year noun governing the number, spaced or glued. The
+        // phrase names a YEAR, so the mention is the whole year: ولد سنة ٢٠٢٣م
+        // is "born in 2023", not "born on 1 January 2023", and the pair has to
+        // say so or the record answers a question nobody asked.
+        for (text, first, last) in [
+            ("ولد سنة ٢٠٢٣م", "2023-01-01", "2023-12-31"),
+            ("صدر عام ١٩٩٥ م", "1995-01-01", "1995-12-31"),
+            ("في العام ٢٠٠٠م", "2000-01-01", "2000-12-31"),
+        ] {
+            let m = extract_time_mentions_in(text, None, Locale::ARABIC);
+            assert_eq!(m.len(), 1, "{text}: {m:?}");
+            assert_eq!(m[0].kind, TimeKind::Absolute, "{text}");
+            assert_eq!(m[0].resolved.as_deref(), Some(first), "{text}");
+            assert_eq!(m[0].resolved_end.as_deref(), Some(last), "{text} is a year");
+        }
+        // Signal 2 — the writer withheld the space, which is how Arabic writes
+        // a year and not how it writes a quantity. No year noun anywhere.
+        let glued = extract_time_mentions_in("ولد ١٩٩٥م وتوفي بعدها", None, Locale::ARABIC);
+        assert_eq!(glued.len(), 1, "{glued:?}");
+        assert_eq!(glued[0].text, "١٩٩٥م");
+        assert_eq!(glued[0].resolved.as_deref(), Some("1995-01-01"));
+        assert_eq!(glued[0].resolved_end.as_deref(), Some("1995-12-31"));
+
+        // THE COST OF SIGNAL 2, pinned so it stays visible. Arabic geography
+        // writes an altitude glued, exactly as it writes a year, and no string
+        // relation separates them — reading the number's size would be the
+        // inference this module refuses. A wrong year is in the record and
+        // correctable; the alternative left ١٩٩٥م unreadable.
+        let altitude = extract_time_mentions_in("على ارتفاع ٢٥٠٠م", None, Locale::ARABIC);
+        assert_eq!(altitude.len(), 1, "the cost is taken, not dodged");
+        assert_eq!(altitude[0].resolved.as_deref(), Some("2500-01-01"));
+        // Its bound: the Gregorian gate wants four digits, so ordinary
+        // measurements stay out of reach entirely.
+        assert!(extract_time_mentions_in("على ارتفاع ٥٠٠م", None, Locale::ARABIC).is_empty());
+
+        // The Hijri one converts rather than renumbering.
+        let h = extract_time_mentions_in("سنة ١٤٤٧ ه", None, Locale::ARABIC);
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(h[0]
+            .resolved
+            .as_deref()
+            .is_some_and(|r| r.starts_with("2025-")));
+
+        // The unabbreviated words never needed confirming.
+        assert_eq!(era_of("ميلادي"), Some(Calendar::Gregorian));
+        assert_eq!(era_of("هجري"), Some(Calendar::Hijri));
+    }
+
+    #[test]
+    fn markers_that_contradict_each_other_settle_nothing() {
+        // Written by someone inconsistent, or quoting two sources. Picking a
+        // winner is what `order_demonstrated_by` already declines to do, so
+        // the declared calendar is left standing.
+        let both = "ค.ศ. 2023 พ.ศ.";
+        let toks = tokens(both);
+        assert_eq!(era_beside(both, &toks, 1), None, "{toks:?}");
+        // Standing alone, each still speaks.
+        assert_eq!(
+            era_beside("ค.ศ. 2023", &tokens("ค.ศ. 2023"), 1).map(|(c, _, _)| c),
+            Some(Calendar::Gregorian)
+        );
+        assert_eq!(
+            era_beside("2023 พ.ศ.", &tokens("2023 พ.ศ."), 0).map(|(c, _, _)| c),
+            Some(Calendar::Buddhist)
+        );
     }
 }

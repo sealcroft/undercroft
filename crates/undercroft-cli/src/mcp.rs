@@ -172,7 +172,7 @@ fn tool_definitions() -> Value {
             json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
-            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar") }),
+            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year across this corpus: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali, reiwa, heisei, showa, taisho, meiji. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar. An era marker in a memory's own words (พ.ศ. ค.ศ. هـ 民國 令和) outranks this, being the writer's statement about one date rather than yours about the whole corpus") }),
             &["query"]),
         tool("undercroft_wake_up", "Load session context: recent essential memories.",
             json!({ "wing": s("scope to wing") }), &[]),
@@ -328,6 +328,11 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 Some("jalali") | Some("persian") | Some("solar_hijri") => {
                     locale.with_calendar(undercroft_core::temporal::Calendar::Jalali)
                 }
+                Some("reiwa") => locale.with_calendar(undercroft_core::temporal::Calendar::Reiwa),
+                Some("heisei") => locale.with_calendar(undercroft_core::temporal::Calendar::Heisei),
+                Some("showa") => locale.with_calendar(undercroft_core::temporal::Calendar::Showa),
+                Some("taisho") => locale.with_calendar(undercroft_core::temporal::Calendar::Taisho),
+                Some("meiji") => locale.with_calendar(undercroft_core::temporal::Calendar::Meiji),
                 _ => locale,
             };
             let mut out = String::new();

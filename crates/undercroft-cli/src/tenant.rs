@@ -94,13 +94,20 @@ fn locale_from(body: &Value) -> undercroft_core::temporal::Locale {
             _ => DateOrder::Undeclared,
         });
     }
-    // Which calendar counted the year. Never inferred — see `Calendar`.
+    // Which calendar counted the year. Never inferred — see `Calendar`. This is
+    // the corpus-wide default only: an era marker in a drawer's own words
+    // (พ.ศ., هـ, 民國, 令和) outranks whatever is declared here.
     if let Some(cal) = body.get("calendar").and_then(Value::as_str) {
         locale = locale.with_calendar(match cal {
             "buddhist" | "be" | "thai" => Calendar::Buddhist,
             "minguo" | "roc" | "taiwan" => Calendar::Minguo,
             "hijri" | "islamic" | "umalqura" => Calendar::Hijri,
             "jalali" | "persian" | "solar_hijri" => Calendar::Jalali,
+            "reiwa" => Calendar::Reiwa,
+            "heisei" => Calendar::Heisei,
+            "showa" => Calendar::Showa,
+            "taisho" => Calendar::Taisho,
+            "meiji" => Calendar::Meiji,
             _ => Calendar::Gregorian,
         });
     }
@@ -1475,6 +1482,11 @@ mod tests {
             ("umalqura", Calendar::Hijri),
             ("jalali", Calendar::Jalali),
             ("persian", Calendar::Jalali),
+            ("reiwa", Calendar::Reiwa),
+            ("heisei", Calendar::Heisei),
+            ("showa", Calendar::Showa),
+            ("taisho", Calendar::Taisho),
+            ("meiji", Calendar::Meiji),
         ] {
             let l = locale_from(&serde_json::json!({"calendar": v}));
             assert_eq!(l.calendar, want, "calendar {v:?}");

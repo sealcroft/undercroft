@@ -102,12 +102,50 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   script is not evidence (Thai script writes Gregorian constantly) and a
   numeral system is not a calendar (`๒๐๒๖` is an ordinary Gregorian 2026 in
   Thai digits and reading the glyphs as an era claim resolved it to **1483**).
-  `Calendar::{Gregorian,Buddhist,Minguo,Hijri,Jalali}` — the first three are a
-  renumbered year and convert by arithmetic; Hijri (**Umm al-Qura**, the Saudi
+  `Calendar::{Gregorian,Buddhist,Minguo,Hijri,Jalali,Reiwa,Heisei,Showa,
+  Taisho,Meiji}` — all but two are a renumbered year and convert by arithmetic;
+  Hijri (**Umm al-Qura**, the Saudi
   civil calendar, NOT the tabular variant that is easy to write and wrong by a
   day or two) and Jalali are different calendars, so conversion is whole-date
   via `calendrical_calculations` (Apache-2.0, 3 transitive deps, pure algorithm,
-  no data files, Unicode Consortium/ICU4X — attributed in NOTICE).
+  no data files, Unicode Consortium/ICU4X — attributed in NOTICE). A Japanese
+  era is a renumbered year that is also **bounded** (`Calendar::japanese` →
+  offset + first/last day): an era's first and last years are PARTIAL, so
+  令和1年 is 1 May–31 Dec 2019 and reading it as the whole year would claim four
+  months that were 平成31年 — wrong, not rounded. `ERA_MARKERS` +
+  `era_beside` + `era_year_range`: a marker the writer typed beside a year
+  (`พ.ศ.` `ค.ศ.` `هـ` `民國` `令和`, before/after/glued) **OUTRANKS** the declared
+  calendar — the declaration is about a corpus, the marker about one date, and
+  reading it is EVIDENCE. Markers that disagree on both sides settle nothing and
+  leave the declaration standing. A **bare year** is a mention only where a
+  marker names it (`2568` is a quantity, `พ.ศ. 2568` is 2025) — the same trade
+  `month_name_is_deliberate` makes, and the only route by which 令和/民國 mean
+  anything since those are written with a year and no month.
+  `AMBIGUOUS_ERA_MARKERS` (bare `م`/`ه`) take TWO signals strongest-first, the
+  `DateOrder` shape: `a_year_noun_governs` the number (reusing `AR_UNITS`'
+  `Unit::Year` vocabulary through `ar_unit`, so every plural and article comes
+  free — confirming evidence, never a blocklist), else
+  `glued_to_what_precedes` — no separator at all, read from the RAW text since
+  tokens are lowercased and NFC'd so `off + w.len()` is not where the previous
+  token ended. `١٩٩٥م` is how Arabic writes a year, `١٥٠٠ م` how it writes a
+  quantity, SI asks for that space. **The cost is a wrong reading and it is
+  PINNED, not hidden**: `على ارتفاع ٢٥٠٠م` is an ordinary glued altitude and
+  now resolves as the year 2500 — no string relation separates them and reading
+  the number's SIZE would be inference; confined to four-digit quantities since
+  the Gregorian gate wants four digits. Same trade as day-first: wrong-and-
+  correctable beats silent. The era reaches the numeric readers and the bare
+  year only — the
+  month-name arms build Gregorian-only and always have, so a *declared* calendar
+  never reached them either (recorded gap, both directions).
+  `tokens()` breaks a run where a digit meets a letter from a script that
+  `attaches_without_delimiter` (`push_run`/`breaks_before`): `1447هـ` and
+  `令和6年` were single mixed tokens, so the digits were not a number and the
+  marker was not a marker. Latin is deliberately excluded — it glues
+  IDENTIFIERS (`covid19`, `mp3`, `5th`) and breaking those hands `count_of` a
+  bare number that the `<n> <unit> ago` arm reads as a count, inventing a date
+  from a product name. `-`/`/` stay opaque to the break or `٢٠٢٣-أيار-٠٧` would
+  split at the month name and `named_date_token` would never see three fields;
+  `.` is transparent so `ค.ศ.2023` breaks after the marker.
   `DateOrder` takes four signals strongest-first: declared; **demonstrated by
   the text** (`13/05` can only be day-first, so an unambiguous date states the
   writer's convention by example — EVIDENCE, not inference); implied by the
