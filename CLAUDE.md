@@ -324,6 +324,21 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
   variables change
+- `docs/AMB_REPLICATION.md` — how to run the Agent Memory Benchmark's
+  own protocol against this engine with **Claude subagents in the two
+  model roles and no external LLM API**. Deliberately carries **no AMB
+  prompt text and no AMB code** — their clone ships no LICENSE, so it is
+  all-rights-reserved by default and must never enter this repo or its
+  history; the procedure asks the operator for their clone path and maps
+  prompts, schemas and cached splits from there. Covers all five cached
+  datasets and warns they are not interchangeable (`personamem` is MCQ
+  with **no judge at all**, `beam` is a continuous rubric whose
+  `build_judge_prompt` is never called, `locomo` alone skips a category).
+  Its traps section is load-bearing: `task_type: "open"` needs a
+  reasoning+answer schema, `query_timestamp` uses a LEXICOGRAPHIC
+  session sort, LoCoMo's category ints are 1 single-hop / 3 multi-hop,
+  and `k` defaults to **10** — at k=30 that was 34% of a whole
+  conversation and the resulting 94.4% was uninterpretable
 - `SECURITY.md` (disclosure policy; private vulnerability reporting is
   enabled on the repo), `NOTICE` (MemPalace MIT heritage attribution),
   `LICENSE` (BUSL 1.1 — see Conventions)

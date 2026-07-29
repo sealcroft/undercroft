@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — AMB, run against ourselves without an external API
+
+- **`docs/AMB_REPLICATION.md`** — a procedure for running the Agent Memory
+  Benchmark's own protocol (its datasets, document model, prompts and judging
+  rules) against Undercroft, with Claude subagents filling the two model roles
+  AMB normally fills with a hosted API. No key, no Gemini, no local model
+  server. Covers all five datasets with local caches and records that they are
+  not interchangeable: `personamem` is multiple-choice with **no judge model at
+  all**, `beam` is a continuous rubric whose `build_judge_prompt` is never
+  called, and `locomo` is the only one that skips a category.
+- **It carries no AMB prompt text and no AMB code, deliberately.** Their clone
+  ships no LICENSE file, so the source is all-rights-reserved by default and
+  must not enter a BUSL-1.1 repository or its history. The procedure asks the
+  operator for their clone path and maps every prompt, schema and cached split
+  from there, which also makes it portable rather than pinned to one machine.
+- **First result: 1349/1540 = 87.6%** on `locomo10` at AMB's default `k=10`,
+  Sonnet 5 in both roles, sealed vault, 876 drawers from 272 session documents.
+  Integrity: 0 fabricated verdicts, 0 missing, 0 extra, every qid graded once.
+  Not comparable to AMB's published rows — different models — and not
+  comparable to our earlier Gemini-judged 72.6%, which also differed in judge,
+  ingest granularity and `k`.
+- **Gold-evidence recall, measured for the first time.** Using AMB's own
+  `gold_ids`: all required evidence reached the context for **83.0%** of
+  queries, some for 94.1%. Accuracy was 91.8% with all gold present, 68.2% with
+  partial, 65.6% with none. **104 of 189 failures had every required document in
+  context** — more than half of what we would have booked as a memory failure
+  was the answering model. We have been reporting memory+reader as one number.
+- Four defects in the harness were found before any number was believed, three
+  of which would have produced a publishable-looking result: prompts written by
+  us rather than read from AMB (67.9%), a `k` of 30 that fed the model a third
+  of each conversation (94.4%), gold answers sitting in the answering model's
+  own input file, and a judge that padded to 20 verdicts by duplicating an id —
+  a grade for a question nobody answered, which passed every aggregate check and
+  was caught only by reconciling verdict ids against answer ids.
+- ROADMAP gains the five measured retrieval gaps in cost order, and the list of
+  changes explicitly refused as benchmark-fitting.
+
 ## Unreleased — the security model, drawn
 
 - **Three diagrams for the security section**, which was a wall of prose about

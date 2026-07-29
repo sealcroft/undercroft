@@ -455,6 +455,49 @@ Nothing below should be built until its trigger fires; each entry
 records the design so a future session starts from a plan, not a blank
 page.
 
+### Retrieval quality — five gaps, measured (AMB locomo10, 2026-07-29)
+
+The first run of `docs/AMB_REPLICATION.md`: AMB's protocol, AMB's
+prompts, `k=10`, Sonnet 5 in both model roles, sealed vault, no external
+API. **1349/1540 = 87.6%.** Using AMB's own `gold_ids`, retrieval put
+**all** required evidence in context for 83.0% of queries and some for
+94.1%; accuracy was 91.8% when all gold was present, 68.2% when partial,
+65.6% when none.
+
+The ordering below is by measured cost, not by appetite.
+
+1. **A semantic embedder is the single biggest lever.** `single-hop` —
+   one fact, one session, the easiest category — has gold-recall of
+   **43.4%**, because the question paraphrases and `HashEmbedder` is
+   feature hashing over surface forms. `martial arts` never meets
+   `kickboxing`. **Now unblocked**: the per-embedder
+   `semantic_admission_gate` was the blocker, since one const retired
+   the relevance gate for any real model.
+2. **Deduplicate candidates by source document.** 14% of retrieval slots
+   are consumed by repeat chunks of a document already returned — a mean
+   of 8.6 distinct sessions per 10 slots, worst cases 6. **This is not
+   `room_cap`**, which spreads across rooms and is measured −5.6pp on
+   concentrated evidence; this removes redundancy inside one document
+   and hands the slots back. Compounds with `multi-hop` (gold-recall
+   53.9%), which needs several *distinct* documents.
+3. **Wire a query-side date into search.** `SearchOptions` is
+   `{morph_lang, wing, room, limit, room_cap}` — no date field. The
+   temporal engine resolves dates *inside* drawers and was never
+   connected to the query side, so "in September 2023" competes as a
+   bare token against text saying "last week".
+4. **Gold-evidence recall as a standing bench metric.** 104 of 189
+   failures had every required document in context — more than half of
+   what we would have called a memory failure was the reader. Cheap:
+   no model calls, `gold_ids` are already in the datasets.
+5. **Abstention**, which is downstream of (1): the gate can only mean
+   something once the vector space has a real floor. Currently 0/12 on
+   an LLM-free probe, because `lexical > 0` passes on any shared term.
+
+**Explicitly refused, as benchmark-fitting rather than engineering:**
+raising `k`; tuning chunk size to LoCoMo; making chronological assembly
+a default because *this* corpus is temporal; conversational heuristics;
+and `room_cap` tuning.
+
 ### 1. Inverted FDE tier (BUILT v0.39.0 — measured, shipped OPT-IN)
 
 - **Outcome** (fde-synth, contiguous-slab harness, within-run): the
