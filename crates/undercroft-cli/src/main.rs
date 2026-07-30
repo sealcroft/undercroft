@@ -637,8 +637,18 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
                  (cargo build -p undercroft-cli --features ort)"
             );
         }
+        // A model served over HTTP — Ollama, llama.cpp server, LM Studio,
+        // vLLM, text-embeddings-inference. No feature gate: the client is
+        // `ureq`, which the LLM crate already links for `refine`.
+        Ok("http") => {
+            let embedder = undercroft_llm::HttpEmbedder::from_env()
+                .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
+            PalaceStore::open_with_embedder(v, Box::new(embedder))?
+        }
         Ok("hash") | Ok("") | Err(_) => PalaceStore::open(v)?,
-        Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx, ort)"),
+        Ok(other) => {
+            bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, http, onnx, ort)")
+        }
     };
     attach_reranker(&mut store)?;
     attach_retrieval(&mut store)?;

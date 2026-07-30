@@ -249,6 +249,7 @@ per vault on first write, and a model swap is refused unless you set
 | Value | What | When |
 |---|---|---|
 | `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo R@10 92.7% with hybrid search. **Single-language only** — see below |
+| `http` | a model served over HTTP — Ollama, llama.cpp server, LM Studio, vLLM, TEI. `UNDERCROFT_EMBED_URL` + `_MODEL` (+ optional `_API`, `_KEY`, `_DIM`); dimension is probed from the endpoint | no ONNX export needed, and the largest measured lever on retrieval quality: **+3.2 to +4.2pp** turn all-gold over `hash` across four models, which span only 1.0pp between them. Costs one request per drawer at ingest (11–29×) and +20–57% search. **Drawer text leaves the process in the clear** — loopback or a private container network unless you mean otherwise |
 | `onnx` | user-supplied MiniLM-class ONNX via tract (pure Rust); needs `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`, build `--features onnx` | best recall, pure-Rust constraint |
 | `ort` | same models via ONNX Runtime (C++ dep, build `--features ort`); ~2.5× faster/forward, int8 support, ~4–5× faster ingest | throughput matters; same env vars, switching is one env change |
 
@@ -411,6 +412,28 @@ once at ingest, **one** query forward + MaxSim at search — ~96.5–96.8% at
 a flat ~93 ms/q (tract) or ~70 ms/q (ort), independent of core count.
 Model paths via `UNDERCROFT_RERANK_*` / `UNDERCROFT_COLBERT_*`. BERT-family
 models only (tract cannot run DeBERTa rerankers).
+
+**The two stages have separate depths, and this matters.**
+`UNDERCROFT_RERANK_TOP_N` (50) is a *latency cap* — one transformer forward
+per candidate. `UNDERCROFT_LATE_TOP_N` (**200**) is a *rescore depth* — MaxSim
+is arithmetic over matrices built at ingest, so depth is far cheaper per
+candidate. They were one constant until the split, which meant late
+interaction inherited a budget it never spent.
+
+What the depth is worth, stated with the configuration it was measured in:
+**+2.1pp** of turn-level evidence delivery on LoCoMo **with the token codebook
+disabled** (exact int8), which is the only configuration where two runs are
+comparable. In the shipped configuration for a corpus past `TOK_PQ_MIN` — v2
+PQ-ADC — the same 50→200 step measured +1.7pp and +0.0pp on two runs, so its
+default-configuration value is **not established**; both sit inside the
+per-vault training draw's own spread. 200 is a judgement (enough depth to take
+the measured gain without unbounded rescore), **not** a measured optimum: 400
+was higher in two of three sweeps and lower by one question in the third.
+
+Note the depth applies to the un-truncated candidate list, so on a sealed
+vault with no prefilter it reaches the whole corpus. Setting only
+`UNDERCROFT_RERANK_TOP_N` still drives both stages, so a pinned deployment
+keeps the behaviour it pinned.
 
 **Candidate generation** (`UNDERCROFT_RETRIEVAL`): unset = full scan with
 FTS prefilter (fine to ~10⁴ drawers); `pq` = bounded-RAM PQ/IVF prefilter

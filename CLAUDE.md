@@ -262,7 +262,16 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
-  `refine` → KG extraction; no external API by default
+  `refine` → KG extraction, **and `embed.rs`: `HttpEmbedder`**, an `Embedder`
+  backed by a served model (`UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`
+  /`_MODEL`/`_API`/`_KEY`/`_DIM`). Both API shapes, dimension **probed** from
+  the endpoint rather than assumed, identity `http:<model>` so the existing
+  swap-refusal covers it. Two hazards it states rather than hides: drawer text
+  is sent **in the clear** (warned at construction when the host is not
+  loopback — sealing protects a vault at rest, not content handed to another
+  host), and a failed embed cannot fail a write, so it degrades to a **counted**
+  zero vector (lexically findable, semantically invisible until re-embedded).
+  No external API by default: nothing is contacted unless a URL is set
 - `crates/undercroft-embed-onnx` — feature-gated ONNX embedder, cross-encoder
   reranker, **and** ColBERT late-interaction encoder (tract, pure Rust; two
   fixed-shape plans per ColBERT export — dynamic-axis exports carry ops tract
@@ -373,7 +382,23 @@ docker compose run --rm ort-build    # compile-check CLI with --features onnx,or
 docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5.4;
                                       # mermaid via vendored website/assets/mermaid.min.js)
 docker build -t undercroft .           # runtime image
+
+# A quantized text embedder on the compose network, CPU only — so a
+# measurement is reproducible instead of depending on a desktop app on the
+# host (which the bench container cannot reach anyway):
+docker compose up -d embeddings
+docker compose run --rm embed-pull    # one-time model fetch into a volume
+UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=http://embeddings:11434 \
+  UNDERCROFT_EMBED_MODEL=nomic-embed-text  # then run cli/bench with these
 ```
+
+**The `undercroft-target` volume can serve a STALE artifact.** `cargo` reused a
+release rlib of `undercroft-vault` that predated a new method, and the resulting
+"no method named …" error looked exactly like a source bug for three attempts
+while the same tree compiled clean elsewhere. `cargo clean --release -p <crate>`
+is the fix. Same family as the `--build` hazard above, one level down: **when an
+error contradicts the source you are reading, suspect a cached artifact before
+suspecting the code.**
 
 **Always pass `--build`.** The battery images COPY the source, they do not
 mount it — `docker compose run --rm test` without `--build` silently
@@ -451,9 +476,18 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   bigrams + char trigrams, SHA-256 into 384 buckets), so texts match only on
   shared literal tokens/trigrams — measured, an EN/AR translation pair scores
   *below* an unrelated sentence, and `car`/`automobile` do not match either.
-  Needs a multilingual model via `onnx`/`ort`, or an external vault. Reading
-  dates *inside* the text is the **scanner's** job (`language` per request)
-  and is independent of which embedder found the drawer.
+  Needs a multilingual model via `onnx`/`ort`/**`http`**, or an external
+  vault. Reading dates *inside* the text is the **scanner's** job (`language`
+  per request) and is independent of which embedder found the drawer.
+  **A served embedder is worth far more than the repo used to think.** The
+  standing conclusion was "a semantic embedder is NOT the biggest lever",
+  resting on MiniLM measuring **+0.3pp** of turn all-gold on LoCoMo. That was
+  a fact about MiniLM. Four served models measured on the same corpus give
+  **+3.2 to +4.2pp** (hash 74.2% → nomic-embed-text 77.4, Qwen3-Embedding-0.6B
+  78.1, bge-m3 77.9, mxbai-embed-large 78.4), i.e. the jump from hash to *any*
+  modern embedder is the lever, and the spread *between* modern embedders is
+  ≤1.0pp — public leaderboard order does not transfer here. Cost is 11–29×
+  ingest (one HTTP call per drawer) and +20–57% search.
 - Every write must update the audit chain **atomically with its data**: the
   committed head lives in `chain_meta` and advances via `chain_append` inside
   the same SQLite transaction (the manifest holds a lagging rollback anchor,

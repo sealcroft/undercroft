@@ -839,7 +839,7 @@
 </div>
 
 <h3 id="retrieval-stage-5-second-stage-opt-in">Stage 5 — second stage <span class="pill off">opt-in</span></h3>
-<p>A cross-encoder rescores the top-N candidates on the full (query, content) pair — the interaction a bi-encoder cannot capture — then results are re-sorted. Alternatively ColBERT late interaction computes MaxSim over token matrices built at ingest. Bounded to <code>UNDERCROFT_RERANK_TOP_N</code> forward passes, default 50.</p>
+<p>A cross-encoder rescores the top-N candidates on the full (query, content) pair — the interaction a bi-encoder cannot capture — then results are re-sorted. Alternatively ColBERT late interaction computes MaxSim over token matrices built at ingest. Bounded to <code>UNDERCROFT_RERANK_TOP_N</code> forward passes, default 50. Late interaction has its own depth, <code>UNDERCROFT_LATE_TOP_N</code> (default 200): MaxSim costs arithmetic per candidate rather than a forward pass, so it can look far deeper than a cross-encoder can afford to. Measured worth +2.1pp of turn-level evidence delivery on LoCoMo <em>with the token codebook disabled</em> — the one configuration where two runs are comparable; in the shipped v2 packing the same step measured +1.7pp and +0.0pp, so its default-configuration value is not established.</p>
 
 <h3 id="retrieval-stage-6-select-top-k">Stage 6 — select top-k</h3>
 <p>Results are truncated to the requested limit. An optional <code>room_cap</code> takes at most <em>N</em> hits per room and then refills any remaining slots in score order — a soft cap, so a genuinely single-room question still receives the full limit and recall is never traded for spread.</p>
@@ -1695,7 +1695,13 @@
     <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds). <strong>Required for cross-lingual retrieval</strong> — see below</td></tr>
     <tr><td><code>UNDERCROFT_ONNX_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>User-supplied embedding model files</td></tr>
     <tr><td><code>UNDERCROFT_RERANKER</code></td><td>unset — no second stage</td><td><code>onnx</code> · <code>ort</code> · <code>colbert</code> · <code>colbert-ort</code></td></tr>
-    <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores</td></tr>
+    <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores — a latency cap (one forward pass each)</td></tr>
+<tr><td><code>UNDERCROFT_LATE_TOP_N</code></td><td>200</td><td>Candidates late interaction rescores — a depth, not a latency cap (MaxSim is arithmetic). Falls back to <code>UNDERCROFT_RERANK_TOP_N</code></td></tr>
+<tr><td><code>UNDERCROFT_EMBED_URL</code></td><td>unset</td><td>Embeddings endpoint for <code>UNDERCROFT_EMBEDDER=http</code>. Unset ⇒ nothing is contacted. Drawer text is sent there in the clear</td></tr>
+<tr><td><code>UNDERCROFT_EMBED_MODEL</code></td><td><code>nomic-embed-text</code></td><td>Model name asked of that endpoint; recorded as the vault identity <code>http:&lt;model&gt;</code></td></tr>
+<tr><td><code>UNDERCROFT_EMBED_API</code></td><td>guessed</td><td><code>openai</code> | <code>ollama</code>; guessed from whether the URL contains <code>/v1</code></td></tr>
+<tr><td><code>UNDERCROFT_EMBED_KEY</code></td><td>unset</td><td>Bearer credential, for a gateway that demands one. Local runtimes need none</td></tr>
+<tr><td><code>UNDERCROFT_EMBED_DIM</code></td><td>probed</td><td>Declare the dimension to skip the probe embed at construction</td></tr>
     <tr><td><code>UNDERCROFT_RERANK_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Reranker model files</td></tr>
     <tr><td><code>UNDERCROFT_COLBERT_MODEL</code> · <code>_QUERY_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Late-interaction encoder exports</td></tr>
     <tr><td><code>UNDERCROFT_ORT_POOL</code></td><td>1</td><td>ONNX Runtime session-pool size</td></tr>

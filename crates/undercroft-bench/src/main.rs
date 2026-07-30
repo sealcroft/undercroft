@@ -289,6 +289,15 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
             #[cfg(not(any(feature = "onnx", feature = "ort")))]
             anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires --features onnx or ort");
         }
+        // A model served over HTTP (`UNDERCROFT_EMBED_URL`) — no feature gate,
+        // so the default build can benchmark a real embedder without ONNX
+        // exports. One request per drawer at ingest: expect the ingest phase
+        // to be dominated by it.
+        Ok("http") => {
+            let embedder = undercroft_llm::HttpEmbedder::from_env()
+                .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
+            PalaceStore::open_with_embedder(vault, Box::new(embedder))?
+        }
         _ => PalaceStore::open(vault)?,
     };
     // Optional second-stage reranker (pairs with either embedder). ORT wins

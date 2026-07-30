@@ -1624,6 +1624,8 @@ dependencies = [
 name = "undercroft-llm"
 version = "0.42.0"
 dependencies = [
+ "undercroft-core",
+ "undercroft-obs",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

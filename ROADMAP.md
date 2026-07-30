@@ -642,13 +642,13 @@ cheap, and without them the later work is unmeasurable.*
   **78.1%** and ColBERT-with-keyed **78.9% / 78.1%** across two vault keys —
   the keyed spread brackets the stride, so **the draw makes no measurable
   difference there**.
-- **The +6.5pp / 80.4% ColBERT boundary figure is not reproducible, and every
-  mechanism that could explain it has been tested and eliminated.** On
-  `locomo3_merged` the hash baseline reproduces to the decimal (**73.9%**),
-  which fixes corpus, chunking, `k`, pool and fusion. Against that, five
-  ColBERT configurations were measured:
+- **The +6.5pp / 80.4% ColBERT boundary figure: reachable, but not
+  attributable.** On `locomo3_merged` the hash baseline reproduces to the
+  decimal (**73.9%**), which fixes corpus, chunking, `k`, pool and fusion.
+  Against that, at the depth those runs used (50), five ColBERT
+  configurations were measured:
 
-  | configuration | turn all-gold @10 |
+  | configuration (rescore depth 50) | turn all-gold @10 |
   |---|---|
   | tract · stratified keyed draw · PQ-ADC | 78.9% / 78.1% (two vault keys) |
   | tract · even stride · PQ-ADC | 78.1% |
@@ -656,13 +656,18 @@ cheap, and without them the later work is unmeasurable.*
   | **ort** · stratified keyed draw · PQ-ADC | 78.7% |
   | recorded in session 20 | **80.4%** |
 
-  Backend, training draw, and which side of the packing boundary are all
-  ruled out; the export pair is ruled out because only one pair exists in the
-  model directory. Everything clusters at **77.7–78.9%**, so the ColBERT gain
-  at this site is **+3.8 to +5.0pp** and 80.4% should be treated as an error
-  in the record rather than a configuration nobody can find. **A measurement
-  recorded without its configuration is not a measurement** — every future
-  figure carries backend, export and thresholds beside it.
+  Backend, training draw and packing side are all ruled out, and the export
+  pair is ruled out because only one pair exists. But two later findings
+  account for the gap without any of them, and **neither was recorded with the
+  original number**: the **rescore depth** was governed by an environment
+  variable and raising it moves this exact figure (see the R2 entry — the same
+  corpus reaches 80.4% at depth 200 in one run), and the **per-vault training
+  draw** puts ~1.5pp of spread on any single ColBERT number here. So 80.4% is
+  reachable and is *not* an error in the record; it is simply not attributable
+  to any one setting, and a lone run cannot separate a real effect from the
+  draw. **A measurement recorded without its configuration is not a
+  measurement** — every future figure carries backend, export, thresholds,
+  rescore depth and repeat count beside it.
 - **A vault built by the old stride keeps its codebook, and nothing repairs
   it.** Upgrading the binary deliberately does not re-quantize: the stored
   codebook and every code pointing at it stay exactly as they were, so an
@@ -689,11 +694,57 @@ cheap, and without them the later work is unmeasurable.*
   generation as 0 — which reads as "never trained" rather than "unknown".
 - A generation bump lost to a busy database warns rather than retries.
 
+**Reach status, so the next session does not have to reconstruct it.** Reach
+was the whole point of this plan, and only part of it has moved:
+
+| sense | item | state |
+|---|---|---|
+| **candidate** — who is considered | R1 wing as retrieval unit, R4 FDE as generator | **untouched.** 0.91 ms/drawer, linear ⇒ ~913 s/query at 10⁶ |
+| **delivery** — how deep the set goes | R2 rescore depth | **built** (value in the shipped config unestablished) |
+| | R3 pagination | **not started** |
+| **representation** — what can match | served embedder | **done, unplanned: +3.2–4.2pp** |
+
+**The ordering from here is R3, then R1.** R3 is small, has no measurement
+ambiguity, and is the only thing that lets a caller iterate rather than re-ask
+the same question — Letta measured iteration as *the* differentiator. R1 is the
+only item on this list that addresses 913 s/query at all, and it changes the API
+contract (cross-wing queries need fan-out or a fallback), so it wants **design
+agreement before code**. Note R2 nudges candidate reach the wrong way: rescoring
+200 instead of 50 adds per-query work to the path that is already the bottleneck.
+
 **Phase 1 — reach, with no new storage and no new model.** *Users and agents;
 this is where the measured headroom is.*
 
-- **Split rescore depth from the latency cap** — largest measured lever, one
-  constant into two, no footprint, no invariant cost.
+- **Split rescore depth from the latency cap — BUILT.**
+  `UNDERCROFT_LATE_TOP_N` (default **200**) is now separate from
+  `UNDERCROFT_RERANK_TOP_N` (50). One constant served both, and the two budgets
+  buy different things: a cross-encoder spends a forward pass per candidate, so
+  its depth is a genuine latency cap, while MaxSim is arithmetic over
+  ingest-time matrices. Late interaction was inheriting a cap it never spent.
+  Measured on the merged corpus with the token codebook disabled (no codebook,
+  no keyed draw, depth the only variable): **77.7% → 79.8% turn all-gold,
+  +2.1pp, for +9% search time**. Under v2 packing the same depth is nearly free
+  (334 → 337 ms/q). Setting only the old variable still drives both stages.
+  **Three limits on that number, all of which an earlier draft of this entry
+  got wrong:**
+  - The **+2.1pp belongs to the codebook-disabled configuration**. Any corpus
+    past `TOK_PQ_MIN` runs v2 PQ-ADC, and there the same step measured +1.7pp
+    and +0.0pp on two runs — so the default-configuration value is
+    **unmeasured**, bracketed by those two, both inside the draw's own spread.
+  - **200 is a judgement, not a peak.** The claim that 400 "scores lower"
+    rested on 79.6% against 79.8% — one question out of 495, one run per depth
+    — while the two v2 sweeps put 400 *above* 200. Depth beyond 50 helps;
+    100–400 are not separable by this evidence.
+  - **It moves published ColBERT figures.** The rescore runs on the
+    un-truncated candidate list, so on a sealed vault with no prefilter it
+    reaches the whole corpus — a 127-drawer conversation goes from
+    `min(127, 50)` to `min(127, 200)`. The full-corpus 79.1% / +4.9pp describe
+    depth 50 and want re-measuring at the new default.
+
+  *Instrument note:* the per-vault training draw contributes ~1.5pp of spread
+  on this corpus (estimated from one pair of repeats, so treat it as an order
+  of magnitude, not a figure), which is why any ColBERT comparison here needs
+  the codebook disabled or repeated runs.
 - **A tunable, bounded, logged fusion weight** — next, because it makes the
   above interpretable instead of a comparison at a weight tuned for nothing.
 - **Pagination / a stable cursor on `SearchOptions`** — an interface
@@ -789,14 +840,32 @@ measured headroom, zero footprint and zero invariant cost coincide.
 5. **Abstention.** Still downstream of a scorer with a real floor:
    `lexical > 0` passes on any shared term, and the default embedder
    puts two unrelated drawers at cosine 0.73 against a 0.56 gate.
-6. **A semantic embedder is NOT the biggest lever — contradicted.** The
-   claim rested on the mislabelled category above. Measured: MiniLM
-   ONNX moves turn all-gold **+0.3pp** (74.2 → 74.5) and session
-   all-gold **0.0pp**, at 11× ingest and 2.2× search. A bi-encoder —
-   hash or model — pools a whole 800-byte chunk into one vector and
-   dilutes the specific sentence identically. Keep it for cross-lingual
-   work, where the default genuinely cannot compete; do not expect
-   recall from it.
+6. **A semantic embedder IS a large lever — this entry was wrong twice,
+   and the second correction is the useful one.** It first claimed the
+   embedder was *the* biggest lever, on a mislabelled category. It was
+   then corrected to "NOT the biggest lever" on the strength of MiniLM
+   ONNX moving turn all-gold **+0.3pp** (74.2 → 74.5) — a fact about
+   MiniLM, generalised to model embedders as a class. Measured against
+   four **served** models (`UNDERCROFT_EMBEDDER=http`, full corpus):
+
+   | model | session `R@10` | turn all-gold | ingest | ms/q |
+   |---|---|---|---|---|
+   | hash (default) | 95.5% | 74.2% | 16 s | 110 |
+   | nomic-embed-text (137M) | 96.8% | 77.4% | 177 s | 132 |
+   | mxbai-embed-large (335M) | 96.9% | **78.4%** | 416 s | 149 |
+   | bge-m3 (567M) | 96.9% | 77.9% | 469 s | 172 |
+   | Qwen3-Embedding-0.6B Q8 | **97.0%** | 78.1% | 413 s | 171 |
+
+   **+3.2 to +4.2pp**, comparable to ColBERT's +4.9pp, at no storage
+   cost and no ONNX export. The dilution argument above (a bi-encoder
+   pools an 800-byte chunk into one vector) is still true and still
+   bounds the gain — it just does not bound it at +0.3pp. The other
+   reading matters as much: the four modern models span **1.0pp**, so
+   the lever is *using a real embedder at all*, and MTEB order does not
+   transfer (Qwen3-0.6B is far above nomic publicly, +0.7pp here at 2.3×
+   the ingest). **No winner is claimed** — one run each, and the served
+   path is not shown run-to-run deterministic. Cross-lingual, the one
+   thing hash provably cannot do, is still unmeasured: LoCoMo is English.
 
 #### Measured and failed — do not re-propose without new evidence
 

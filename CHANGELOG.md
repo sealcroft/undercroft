@@ -1,5 +1,117 @@
 # Changelog
 
+## Unreleased — a served embedder, and a standing conclusion overturned
+
+- **`UNDERCROFT_EMBEDDER=http` — an `Embedder` backed by a served model.** The
+  engine could embed exactly three ways: the built-in hash, an ONNX file on
+  disk (`onnx`/`ort`), or not at all (`external:` is an *identity* for vaults
+  whose vectors the caller computes elsewhere — its `embed()` returns a zero
+  vector and is documented as unreachable). A model served over HTTP had no
+  route in, though the same runtimes have driven `refine` since v0.5.0.
+  `undercroft_llm::HttpEmbedder` closes that, reusing the LLM client's
+  conventions rather than inventing new ones: both API shapes (OpenAI
+  `/v1/embeddings` and Ollama native, both verified against a live server),
+  `UNDERCROFT_EMBED_URL`/`_MODEL`/`_API`/`_KEY`/`_DIM`, and the same default-off
+  posture — nothing is contacted unless a URL is set.
+  - **The dimension is probed, not assumed**: one embed at construction, whose
+    length is the dimension. Reading it is evidence; inferring 768 from a model
+    name would be inference.
+  - **Identity is `http:<model>`**, so the existing embedder-swap refusal
+    covers a silently changed served model exactly as it covers an ONNX swap.
+  - **Two hazards stated rather than hidden.** Drawer text is sent **in the
+    clear** — warned at construction when the host is not loopback, because
+    sealing protects a vault at rest, not content handed to another host. And
+    a failed embed cannot fail a write (`Embedder::embed` has no error
+    channel), so it degrades to a **counted** zero vector: the drawer stays
+    verbatim and lexically findable, but is semantically invisible until
+    re-embedded.
+- **`embeddings` + `embed-pull` compose services** run a quantized embedder on
+  the compose network, **CPU only**. A desktop runtime on the host is neither
+  reproducible nor reachable from the bench container; this is, and it keeps
+  the Docker-only rule intact.
+- **The standing conclusion "a semantic embedder is NOT the biggest lever" is
+  overturned.** It rested on MiniLM measuring **+0.3pp** of turn all-gold on
+  LoCoMo — a fact about MiniLM, generalised to model embedders as a class.
+  Four served models, full corpus, same k and pool:
+
+  | model | params | session `R@10` | turn all-gold | ingest | ms/q |
+  |---|---|---|---|---|---|
+  | hash (default) | — | 95.5% | 74.2% | 16 s | 110 |
+  | nomic-embed-text | 137M | 96.8% | 77.4% | 177 s | 132 |
+  | mxbai-embed-large | 335M | 96.9% | **78.4%** | 416 s | 149 |
+  | bge-m3 | 567M | 96.9% | 77.9% | 469 s | 172 |
+  | Qwen3-Embedding-0.6B (Q8) | 600M | **97.0%** | 78.1% | 413 s | 171 |
+
+  **+3.2 to +4.2pp** over hash — comparable to ColBERT's +4.9pp, at no storage
+  cost and with no ONNX export. And the second reading matters as much: the
+  four modern models span **1.0pp**, so the lever is *using a real embedder at
+  all*, not choosing the best one. Public leaderboard order does not transfer —
+  Qwen3-0.6B sits far above nomic on MTEB and lands within 0.7pp here at 2.3×
+  the ingest cost.
+  - **No winner is claimed.** One run per model, and the served path has not
+    been shown run-to-run deterministic; a 1.0pp spread deserves the same
+    suspicion that already cost this session two retracted findings.
+  - **Untested, and it is the part that would matter most:** LoCoMo is English,
+    so bge-m3's and Qwen3's multilingual training buys nothing visible here.
+    Cross-lingual is the one capability the hash embedder provably cannot do at
+    all, and none of the above measures it.
+  - Qwen3-Embedding is **not** in Ollama's library at 0.5.7–0.11.4; it was
+    pulled from `hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF`. Mistral's embedder is
+    API-only (no weights, so it cannot run in the container and would be real
+    external egress); the open Mistral-family embedders are all 7B, ~10× the
+    CPU cost of the 0.6B, and were not run.
+
+## Unreleased — the rescore depth was a latency cap in disguise
+
+- **Late interaction gets its own depth, `UNDERCROFT_LATE_TOP_N` (200).** It
+  shared `UNDERCROFT_RERANK_TOP_N` (50) with the cross-encoder, and the two
+  budgets buy different things: a cross-encoder spends one transformer forward
+  per candidate, so its depth *is* a latency cap, while MaxSim is arithmetic
+  over matrices built at ingest. Late interaction was therefore inheriting a
+  cap it never spent — the single largest measured constraint on how deep the
+  engine looks.
+- **Measured on the merged LoCoMo corpus with the token codebook disabled**, so
+  no codebook is trained, there is no keyed draw, and rescore depth is the only
+  variable (turn all-gold in the 10 slots, against search ms/query):
+
+  | depth | all-gold | ms/q |
+  |---|---|---|
+  | 50 (the old shared cap) | 77.7% | 342 |
+  | 100 | 78.7% | 352 |
+  | **200 (new default)** | **79.8%** | **374** |
+  | 400 | 79.6% | 417 |
+
+  **+2.1pp for +9% search time in that configuration** — and the qualifier is
+  load-bearing. Any corpus past `TOK_PQ_MIN` (256 matrices) runs v2 PQ-ADC
+  instead, and this one does; there the same 50 → 200 step measured **+1.7pp
+  in one run and +0.0pp in another**, both inside the per-vault draw's spread.
+  **The default-configuration value of the change is therefore unmeasured**,
+  bracketed by 0.0 and 1.7. Under v2 the same sweep moved 334 → 337 ms/q, so
+  the depth is nearly free there: a coded row costs `m` table lookups, not a
+  full-dimension dot.
+- **200 is a judgement, not a measured optimum.** An earlier draft of this
+  entry called it a peak because 400 scored 79.6% against 200's 79.8% — a
+  difference of **one question out of 495**, from one run per depth, while the
+  two other sweeps in the same record put 400 *above* 200 (80.6 vs 80.4; 80.2
+  vs 78.9). What the evidence supports is that depth beyond 50 helps and that
+  100–400 are not separable here. 200 takes the measured gain without paying
+  unbounded rescore on a large candidate set.
+- **This moves published ColBERT figures, and they have not been re-measured.**
+  `late_rescore` runs on the un-truncated candidate list, so on a sealed vault
+  with no prefilter the depth reaches the whole corpus: a 127-drawer LoCoMo
+  conversation goes from `min(127, 50)` to `min(127, 200)` — every drawer
+  rescored rather than 50. The full-corpus ColBERT numbers (79.1%, +4.9pp)
+  describe depth 50 and no longer describe the default.
+- **Deconfounding was necessary, and the first attempt at this measurement did
+  not do it.** A sweep with the codebook live reported +1.7pp and put depth 200
+  at exactly the 80.4% that a previous session had recorded — both of which
+  evaporated on a repeat run at the same settings (78.9%). Each fresh vault
+  draws its own training sample, so per-vault spread is ~1.5pp on this corpus,
+  the same size as the effect. Numbers here come from the configuration where
+  that variance does not exist.
+- Setting only `UNDERCROFT_RERANK_TOP_N` still drives both stages, so a
+  deployment that pinned the old knob keeps exactly the behaviour it pinned.
+
 ## Unreleased — what a drawer costs, and who gets to shape a codebook
 
 The guardrails the measurement work needed before anything built on it:
@@ -122,18 +234,30 @@ objects in the engine are no longer either guessable or silent.
     **78.9%** and **78.1%** on two runs with different vault keys. The keyed
     spread brackets the stride, so **at this site the draw makes no measurable
     difference**.
-  - **A recorded figure that no configuration reproduces.** That same corpus
-    previously reported ColBERT at **80.4% (+6.5pp)**. The hash baseline
-    reproduces to the decimal (73.9%), which fixes corpus, chunking, `k`, pool
-    and fusion — so the difference had to be in the ColBERT path, and every
-    mechanism there was tested: the training draw (stride 78.1%, keyed
-    78.9%/78.1%), the packing boundary (exact int8 with
-    `UNDERCROFT_TOK_PQ_MIN=off`, 77.7%), and the backend (**ort**, 78.7%). The
-    export pair is ruled out because only one exists. Five configurations,
-    all 77.7–78.9%. The gain at this site is **+3.8 to +5.0pp**, and 80.4% is
-    treated as an error in the record rather than a setting nobody can find.
-    The lesson is the general one: a figure written down without the backend,
-    export and thresholds that produced it cannot be defended later.
+  - **A recorded figure, and what it took to account for it.** That same
+    corpus previously reported ColBERT at **80.4% (+6.5pp)**. The hash
+    baseline reproduces to the decimal (73.9%), fixing corpus, chunking, `k`,
+    pool and fusion, so the difference had to be in the ColBERT path. Tested
+    and eliminated there: the training draw (stride 78.1%, keyed 78.9%/78.1%),
+    the packing boundary (exact int8, 77.7%), the backend (**ort**, 78.7%),
+    and the export pair (only one exists). Two things were then found that
+    together account for it, and **neither was recorded with the number**:
+    - **Rescore depth.** It was governed by `UNDERCROFT_RERANK_TOP_N`, an
+      environment variable, and raising it moves this exact figure — see the
+      R2 entry below, where depth 200 measures 79.8% against 77.7% at 50.
+    - **Per-vault variance of ~1.5pp.** With the token codebook live, two runs
+      at identical settings scored 80.4% and 78.9%, because each fresh vault
+      draws a different training sample. Any single ColBERT number on this
+      corpus carries that spread.
+
+    So 80.4% is reachable — it is not an error in the record — but it is not
+    attributable to any one setting, and a lone run cannot distinguish a real
+    +1.5pp from the draw. **Both facts are instrument defects that this
+    session's own first sweep walked straight into**, reading a single run and
+    concluding depth was worth +1.7pp. The deconfounded sweep (codebook
+    disabled, so the draw is out of the picture) is what the R2 numbers rest
+    on. A figure without its backend, export, thresholds and repeat count is
+    not defensible later.
   - **`benchmarks/RESULTS.md`'s "Recall is identical across every version
     (deterministic pipeline)" is now false** and is corrected there: the draw
     is keyed on a per-vault subkey, so two fresh vaults over identical content
