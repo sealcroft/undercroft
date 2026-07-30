@@ -642,30 +642,41 @@ cheap, and without them the later work is unmeasurable.*
   **78.1%** and ColBERT-with-keyed **78.9% / 78.1%** across two vault keys —
   the keyed spread brackets the stride, so **the draw makes no measurable
   difference there**.
-- **The +6.5pp / 80.4% ColBERT boundary figure does not reproduce** on this
-  build with either draw, while the hash baseline on the same corpus
-  reproduces to the decimal. Corpus or config drift would have moved both, so
-  the difference is somewhere in the ColBERT path. This build measures the
-  ColBERT gain there at **+4.2 to +5.0pp**. Do not quote +6.5pp again until it
-  is reproduced or explained. Three candidates, none of them recorded when the
-  figure was taken, which is the actual lesson: the **backend** (`colbert` on
-  tract versus `colbert-ort` on ONNX Runtime — same weights, different kernels
-  and rounding), the **export pair** (a different doc-length export changes
-  rows per drawer, hence MaxSim *and* whether the token codebook trains), and
-  **which side of the packing boundary** the run was on. Settling it is two
-  runs. **A measurement recorded without its configuration is not a
-  measurement** — every future figure needs backend, export and thresholds
-  beside it.
+- **The +6.5pp / 80.4% ColBERT boundary figure is not reproducible, and every
+  mechanism that could explain it has been tested and eliminated.** On
+  `locomo3_merged` the hash baseline reproduces to the decimal (**73.9%**),
+  which fixes corpus, chunking, `k`, pool and fusion. Against that, five
+  ColBERT configurations were measured:
+
+  | configuration | turn all-gold @10 |
+  |---|---|
+  | tract · stratified keyed draw · PQ-ADC | 78.9% / 78.1% (two vault keys) |
+  | tract · even stride · PQ-ADC | 78.1% |
+  | tract · exact int8 (`UNDERCROFT_TOK_PQ_MIN=off`) | 77.7% |
+  | **ort** · stratified keyed draw · PQ-ADC | 78.7% |
+  | recorded in session 20 | **80.4%** |
+
+  Backend, training draw, and which side of the packing boundary are all
+  ruled out; the export pair is ruled out because only one pair exists in the
+  model directory. Everything clusters at **77.7–78.9%**, so the ColBERT gain
+  at this site is **+3.8 to +5.0pp** and 80.4% should be treated as an error
+  in the record rather than a configuration nobody can find. **A measurement
+  recorded without its configuration is not a measurement** — every future
+  figure carries backend, export and thresholds beside it.
 - **A vault built by the old stride keeps its codebook, and nothing repairs
   it.** Upgrading the binary deliberately does not re-quantize: the stored
   codebook and every code pointing at it stay exactly as they were, so an
   upgrade changes no ranking and costs no write. The consequence is that a
   vault whose corpus size aligned with its ingest period keeps a degenerate
-  codebook until something forces a retrain, and there is no detection for it.
-  Remediation today is manual (force a re-embed, or drop the index so the
-  self-heal rebuilds). A cheap detector is possible — a codebook whose
-  centroids collapse onto far fewer distinct cells than `k` is measurable at
-  train time — and is not built.
+  codebook until something forces a retrain. Remediation is manual (force a
+  re-embed, or drop the index so the self-heal rebuilds). **Detection now
+  exists**: every codebook is checked at train time against a second keyed
+  draw it did not train on (`ProductQuantizer::fit_report`), and a sample that
+  reconstructs its own rows more than 1.5× better than unseen ones warns with
+  both errors and the ratio. That converts the whole class from "invisible
+  until someone benchmarks the unlucky corpus size" into a line in the log at
+  the moment it happens — but it fires only when a codebook is *trained*, so
+  an already-degenerate vault stays silent until its next retrain.
 - The seeding stride *inside* `kmeans` is not keyed. The sample arrives in
   insertion order, so seed slot *c* is its *c/k* quantile and a writer who
   owns a contiguous stretch of insertions and makes those rows identical can

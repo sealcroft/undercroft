@@ -485,7 +485,7 @@ impl PalaceStore {
             return Ok(());
         }
         // Keyed draw, not an even stride over insertion order — see
-        // `pqidx::take_lowest`.
+        // `pqidx::stratified_keyed`.
         let sample: Vec<Vec<f32>> = self
             .keyed_sample(CODEBOOK_FDE, &raw, FDE_PQ_SAMPLE, |(id, _)| {
                 id.as_bytes().to_vec()
@@ -505,6 +505,19 @@ impl PalaceStore {
         };
         self.fde_meta_put("codebook", &pq.to_bytes())?;
         self.codebook_generation_bump(CODEBOOK_FDE);
+        if raw.len() > FDE_PQ_SAMPLE {
+            let probe: Vec<Vec<f32>> = self
+                .keyed_sample(
+                    "fde-fit-probe",
+                    &raw,
+                    crate::pqidx::PQ_FIT_PROBE,
+                    |(id, _)| id.as_bytes().to_vec(),
+                )
+                .into_iter()
+                .map(|i| raw[i].1.clone())
+                .collect();
+            self.warn_unrepresentative(CODEBOOK_FDE, &pq, &sample, &probe);
+        }
         // Repack every raw row to v2 with the codebook in hand (list -1 —
         // reserved, see the module docs).
         for (id, fde) in &raw {

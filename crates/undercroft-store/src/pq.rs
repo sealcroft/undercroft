@@ -43,7 +43,7 @@
 //!   comparison against it is false, so it silently owns or breaks a cluster.
 //!   Vectors arriving from `external:` embedders are the path worth guarding.
 //!
-//! Which rows train is the caller's job: see `pqidx::take_lowest` for the keyed
+//! Which rows train is the caller's job: see `pqidx::stratified_keyed` for the keyed
 //! draw that replaced a guessable even stride.
 //!
 //! This module is storage- and crypto-agnostic: it turns vectors into codes and
@@ -54,6 +54,53 @@
 /// Centroids per subspace. A code byte indexes one of these, so it is fixed at
 /// 256 (the range of `u8`).
 const K: usize = 256;
+
+/// Vectors measured per side by [`ProductQuantizer::fit_report`].
+const FIT_CAP: usize = 512;
+
+/// How much worse a codebook may reconstruct data it did not train on before
+/// the sample is called unrepresentative. A well-drawn sample reconstructs the
+/// rest of its corpus about as well as itself; the ratio rises with the *shape*
+/// difference between sample and corpus, not with corpus size, so this is a
+/// threshold on a unitless quantity.
+const UNREPRESENTATIVE_RATIO: f32 = 1.5;
+
+/// How well a trained quantizer fits data it did not train on.
+///
+/// This exists because of a measured failure, not a hypothetical one: sampling
+/// a training set by an even stride over a corpus whose insertion order is
+/// periodic can draw one repeating slice, and the resulting codebook quantizes
+/// the rest of the corpus badly — `synth --n 16384` scored R@5 83.0% that way
+/// against 99.7%. Nothing about the codebook's own bytes says this happened,
+/// and its error *on its own sample* looks fine. The gap between the two is
+/// what shows it.
+#[derive(Debug, Clone, Copy)]
+pub struct FitReport {
+    /// Mean squared reconstruction error over the training sample.
+    pub sample_error: f32,
+    /// The same over vectors the codebook did not train on.
+    pub probe_error: f32,
+}
+
+impl FitReport {
+    /// Whether the codebook reconstructs unseen vectors materially worse than
+    /// its own sample — i.e. the sample did not represent the corpus.
+    pub fn looks_unrepresentative(&self) -> bool {
+        self.sample_error > 0.0 && self.probe_error > self.sample_error * UNREPRESENTATIVE_RATIO
+    }
+
+    /// `probe / sample`, for reporting. Infinite when the sample reconstructs
+    /// perfectly and the probe does not.
+    pub fn ratio(&self) -> f32 {
+        if self.sample_error > 0.0 {
+            self.probe_error / self.sample_error
+        } else if self.probe_error > 0.0 {
+            f32::INFINITY
+        } else {
+            1.0
+        }
+    }
+}
 
 /// A trained product quantizer: `m` subspace codebooks of `K` centroids each.
 #[derive(Clone, Debug)]
@@ -93,7 +140,7 @@ impl ProductQuantizer {
     /// stable on-disk codes). Returns `None` on bad shape or an empty set.
     ///
     /// Deterministic *given the sample* — **which** rows reach it is decided by
-    /// the caller's keyed draw (`pqidx::take_lowest`), not here.
+    /// the caller's keyed draw (`pqidx::stratified_keyed`), not here.
     ///
     /// The seeding stride is **not** keyed, and that residual is worth stating
     /// rather than glossing: the sample arrives in corpus (insertion) order, so
@@ -154,6 +201,41 @@ impl ProductQuantizer {
             }
         }
         tables
+    }
+
+    /// Squared L2 between a (normalized) vector and its own round-trip through
+    /// this codebook — how much information encoding it loses.
+    pub fn reconstruction_error(&self, v: &[f32]) -> f32 {
+        let norm = normalized(v);
+        let decoded = self.decode(&self.encode(&norm));
+        if decoded.len() != norm.len() {
+            return f32::INFINITY;
+        }
+        l2_sq(&norm, &decoded)
+    }
+
+    /// Compare how well this codebook reconstructs the vectors it trained on
+    /// against vectors it did not — a train/test gap, and the cheapest signal
+    /// that a codebook was trained on an unrepresentative slice of its corpus.
+    ///
+    /// Both sides are capped at [`FIT_CAP`] vectors, so this costs an encode
+    /// and a decode of a few hundred rows regardless of corpus size.
+    pub fn fit_report(&self, sample: &[Vec<f32>], probe: &[Vec<f32>]) -> FitReport {
+        let mean = |rows: &[Vec<f32>]| -> f32 {
+            let n = rows.len().min(FIT_CAP);
+            if n == 0 {
+                return 0.0;
+            }
+            rows.iter()
+                .take(n)
+                .map(|v| self.reconstruction_error(v))
+                .sum::<f32>()
+                / n as f32
+        };
+        FitReport {
+            sample_error: mean(sample),
+            probe_error: mean(probe),
+        }
     }
 
     /// Approximate squared distance of an encoded `code` given `distance_tables`.
@@ -454,6 +536,63 @@ impl CoarseQuantizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A codebook trained on one repeating slice of a periodic corpus must
+    /// announce itself, and one trained on a representative sample must not.
+    ///
+    /// This is the exact shape of a measured production failure: `synth`
+    /// generates facts from `FACT_TEMPLATES[i % 4]`, and a training sample
+    /// drawn by an even stride of 4 took one template — R@5 83.0% against
+    /// 99.7%, invisible in the codebook's own bytes and invisible in its error
+    /// on its own sample. Both directions matter: the false alarm is as bad as
+    /// the miss, because a detector that fires on healthy corpora gets muted.
+    #[test]
+    fn a_codebook_trained_on_one_slice_is_detectable() {
+        // Four well-separated clusters, one per residue class of i % 4 — a
+        // corpus whose insertion order is periodic, as a round-robin ingest or
+        // an alternating-speaker transcript is.
+        let dim = 32;
+        let corpus: Vec<Vec<f32>> = (0..2048)
+            .map(|i| {
+                let cluster = i % 4;
+                let mut v = vec![0f32; dim];
+                for (j, slot) in v.iter_mut().enumerate() {
+                    // Each cluster occupies its own quarter of the dimensions,
+                    // plus a small deterministic jitter so members differ.
+                    let own = j / (dim / 4) == cluster;
+                    *slot = if own { 1.0 } else { 0.0 } + ((i * 7 + j * 13) % 97) as f32 / 970.0;
+                }
+                v
+            })
+            .collect();
+
+        // The failure: stride 4 over a period-4 corpus draws cluster 0 only.
+        let one_slice: Vec<Vec<f32>> = corpus.iter().step_by(4).cloned().collect();
+        let pq = ProductQuantizer::train(&one_slice, dim / 8, 12).unwrap();
+        let report = pq.fit_report(&one_slice, &corpus);
+        assert!(
+            report.looks_unrepresentative(),
+            "a codebook trained on one cluster of four must be flagged: \
+             sample {:.6}, probe {:.6}, ratio {:.2}",
+            report.sample_error,
+            report.probe_error,
+            report.ratio()
+        );
+
+        // The healthy case: stride 5 is coprime with the period, so the sample
+        // spans every cluster. Same corpus, same sample size, no alarm.
+        let spanning: Vec<Vec<f32>> = corpus.iter().step_by(5).cloned().collect();
+        let pq = ProductQuantizer::train(&spanning, dim / 8, 12).unwrap();
+        let report = pq.fit_report(&spanning, &corpus);
+        assert!(
+            !report.looks_unrepresentative(),
+            "a representative sample must not raise a false alarm: \
+             sample {:.6}, probe {:.6}, ratio {:.2}",
+            report.sample_error,
+            report.probe_error,
+            report.ratio()
+        );
+    }
 
     /// Deterministic pseudo-random vectors (no `rand` dep — reproducible).
     fn synth(n: usize, dim: usize) -> Vec<Vec<f32>> {

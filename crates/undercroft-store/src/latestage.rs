@@ -179,12 +179,16 @@ impl PalaceStore {
         // lowest — the same draw the PQ codebooks use, per (drawer, row), so a
         // bulk writer cannot predict which of their tokens shape the codebook
         // every other drawer's tokens are then coded against.
-        let chosen: Vec<usize> = if TOK_PQ_SAMPLE >= total_rows {
-            (0..total_rows).collect()
+        // Rank every token row twice in one walk: once for the training draw,
+        // once for an independent probe used to check the trained codebook.
+        // The flattened walk order is the stratification axis, so row `i`
+        // keeps its position in both. Below the cap neither is needed — the
+        // whole corpus trains and a probe would sit inside the sample.
+        let (chosen, ranks_probe): (Vec<usize>, Vec<u64>) = if TOK_PQ_SAMPLE >= total_rows {
+            ((0..total_rows).collect(), Vec::new())
         } else {
-            // Rank every token row once — the flattened walk order is the
-            // stratification axis, so row `i` of the walk keeps its position.
             let mut ranks: Vec<u64> = Vec::with_capacity(total_rows);
+            let mut probe: Vec<u64> = Vec::with_capacity(total_rows);
             for (id, matrix, dim) in &v1 {
                 let mut ident = Vec::with_capacity(id.len() + 4);
                 for r in 0..matrix.len() / (*dim).max(1) {
@@ -192,9 +196,13 @@ impl PalaceStore {
                     ident.extend_from_slice(id.as_bytes());
                     ident.extend((r as u32).to_le_bytes());
                     ranks.push(self.vault.sample_rank(CODEBOOK_TOK, &ident));
+                    probe.push(self.vault.sample_rank("tok-fit-probe", &ident));
                 }
             }
-            crate::pqidx::stratified_keyed(total_rows, TOK_PQ_SAMPLE, |i| ranks[i])
+            (
+                crate::pqidx::stratified_keyed(total_rows, TOK_PQ_SAMPLE, |i| ranks[i]),
+                probe,
+            )
         };
         let mut sample: Vec<Vec<f32>> = Vec::with_capacity(chosen.len());
         let mut next = chosen.iter().peekable();
@@ -219,6 +227,28 @@ impl PalaceStore {
         let Some(pq) = ProductQuantizer::train(&sample, m, TOK_PQ_ITERS) else {
             return Ok(false);
         };
+        // Check the fresh codebook against rows it did not train on — a second
+        // keyed draw over the same walk, so it is not the training sample.
+        // Only meaningful above the cap, where a sample was actually drawn.
+        if total_rows > TOK_PQ_SAMPLE {
+            let probe_at =
+                crate::pqidx::stratified_keyed(total_rows, crate::pqidx::PQ_FIT_PROBE, |i| {
+                    ranks_probe[i]
+                });
+            let mut probe: Vec<Vec<f32>> = Vec::with_capacity(probe_at.len());
+            let mut next = probe_at.iter().peekable();
+            let mut i = 0usize;
+            for (_, matrix, dim) in &v1 {
+                for row in matrix.chunks_exact(*dim) {
+                    if next.peek() == Some(&&i) {
+                        probe.push(row.to_vec());
+                        next.next();
+                    }
+                    i += 1;
+                }
+            }
+            self.warn_unrepresentative(CODEBOOK_TOK, &pq, &sample, &probe);
+        }
         // Persist (sealed on sealed vaults), then repack every v1 row.
         let blob = self.vault.tokens_at_rest("tok/codebook", &pq.to_bytes());
         self.conn.execute(

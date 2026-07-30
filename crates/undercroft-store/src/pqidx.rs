@@ -181,6 +181,9 @@ impl PqCache {
 /// well, and training is a one-time cost we keep to seconds.
 const PQ_TRAIN_ITERS: usize = 12;
 const PQ_TRAIN_SAMPLE: usize = 4096;
+/// Vectors drawn — by a second keyed label, so they are not the training
+/// sample — to check a fresh codebook against the corpus it will encode.
+pub(crate) const PQ_FIT_PROBE: usize = 512;
 
 /// `want` training-sample indices, ascending — **stratified by position and
 /// keyed within each stratum**.
@@ -826,10 +829,50 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Warn when a freshly trained codebook fits its own training sample much
+    /// better than the corpus it will encode.
+    ///
+    /// The failure this catches is measured, not hypothetical: a sample drawn
+    /// by an even stride over a corpus with periodic insertion order took one
+    /// repeating slice, and `synth --n 16384` scored R@5 83.0% against 99.7%.
+    /// Nothing in the codebook's bytes says that happened and its error on its
+    /// own sample looks fine — only the gap to unseen vectors shows it. The
+    /// draw that caused it is gone, but a codebook can still be handed an
+    /// unrepresentative corpus (one enormous near-duplicate cluster, an
+    /// `external:` embedder with a degenerate space), and a vault trained by
+    /// an older build keeps its codebook until something forces a retrain.
+    ///
+    /// Advisory: it never fails a training pass. The probe is a second keyed
+    /// draw, so it overlaps the sample only by chance and only slightly.
+    pub(crate) fn warn_unrepresentative(
+        &self,
+        artifact: &str,
+        pq: &ProductQuantizer,
+        sample: &[Vec<f32>],
+        probe: &[Vec<f32>],
+    ) {
+        if probe.is_empty() {
+            return;
+        }
+        let fit = pq.fit_report(sample, probe);
+        if fit.looks_unrepresentative() {
+            undercroft_obs::diag_warn!(
+                "codebook {artifact}: trained sample reconstructs at {:.5} but \
+                 unseen vectors at {:.5} ({:.1}x). The training sample does not \
+                 represent this corpus, so approximate distances will be worse \
+                 than they should be for everything outside it. If this corpus \
+                 was ingested in a repeating order, re-train the index.",
+                fit.sample_error,
+                fit.probe_error,
+                fit.ratio()
+            );
+        }
+    }
+
     /// Indices of the keyed training sample over `items`, each identified by
-    /// `ident` — the draw described on [`take_lowest`]. `label` separates one
-    /// artifact's draw from another's, so two codebooks trained from the same
-    /// corpus do not train on the same rows.
+    /// `ident` — the draw described on [`stratified_keyed`]. `label` separates
+    /// one artifact's draw from another's, so two codebooks trained from the
+    /// same corpus do not train on the same rows.
     pub(crate) fn keyed_sample<T>(
         &self,
         label: &str,
@@ -903,6 +946,18 @@ impl PalaceStore {
                 };
                 self.pq_meta_put("codebook", &pq.to_bytes())?;
                 self.codebook_generation_bump(CODEBOOK_PQ);
+                // Only meaningful when a sample was actually drawn: below the
+                // cap the sample *is* the corpus and the probe is inside it.
+                if items.len() > PQ_TRAIN_SAMPLE {
+                    let probe: Vec<Vec<f32>> = self
+                        .keyed_sample("pq-fit-probe", &items, PQ_FIT_PROBE, |(seq, _)| {
+                            seq.to_le_bytes().to_vec()
+                        })
+                        .into_iter()
+                        .map(|i| items[i].1.clone())
+                        .collect();
+                    self.warn_unrepresentative(CODEBOOK_PQ, &pq, &sample, &probe);
+                }
                 pq
             }
         };

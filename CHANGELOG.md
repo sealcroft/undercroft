@@ -81,6 +81,19 @@ objects in the engine are no longer either guessable or silent.
     alignment that made it fragile. The two keyed variants are within noise of
     each other (uniform 97.8/99.4 against stratified 97.9/99.4 at n=20,000), so
     the strata are kept for the reasoning they support, not for a recall win.
+  - **And the failure class now announces itself.** Fixing the draw does not
+    help a vault trained by an older build, and an unrepresentative corpus can
+    arrive by other routes (one enormous near-duplicate cluster, an `external:`
+    embedder with a degenerate space). So every codebook is checked at train
+    time against a **second keyed draw it did not train on**
+    (`ProductQuantizer::fit_report`): reconstruct its own sample more than 1.5×
+    better than unseen vectors and it warns, with both errors and the ratio.
+    Pinned in both directions by a test built to the exact shape of the real
+    failure — a four-cluster corpus sampled at stride 4 must fire, the same
+    corpus at stride 5 must not, because a detector that cries wolf on healthy
+    corpora gets muted. Advisory: it never fails a training pass, and it is
+    silent until a codebook is actually trained, so an already-degenerate vault
+    stays quiet until its next retrain.
   - `sample_rank` is keyed by a **fourth HKDF-derived subkey** (label
     `sample`), deliberately not the MAC key: these ranks are published by
     their effects — which rows shaped a codebook — and must not share a key
@@ -109,14 +122,18 @@ objects in the engine are no longer either guessable or silent.
     **78.9%** and **78.1%** on two runs with different vault keys. The keyed
     spread brackets the stride, so **at this site the draw makes no measurable
     difference**.
-  - **An unexplained discrepancy, recorded rather than absorbed.** That same
-    corpus previously reported ColBERT at **80.4% (+6.5pp)**, and it does not
-    reproduce on this build with *either* draw, while the hash baseline
-    reproduces to the decimal (73.9%). A retrieval-side corpus or config drift
-    would have moved the baseline too, so the difference sits somewhere in the
-    ColBERT path and is not accounted for. The delta this build measures is
-    **+4.2 to +5.0pp**; the +6.5pp figure should not be quoted again until it
-    is either reproduced or explained.
+  - **A recorded figure that no configuration reproduces.** That same corpus
+    previously reported ColBERT at **80.4% (+6.5pp)**. The hash baseline
+    reproduces to the decimal (73.9%), which fixes corpus, chunking, `k`, pool
+    and fusion — so the difference had to be in the ColBERT path, and every
+    mechanism there was tested: the training draw (stride 78.1%, keyed
+    78.9%/78.1%), the packing boundary (exact int8 with
+    `UNDERCROFT_TOK_PQ_MIN=off`, 77.7%), and the backend (**ort**, 78.7%). The
+    export pair is ruled out because only one exists. Five configurations,
+    all 77.7–78.9%. The gain at this site is **+3.8 to +5.0pp**, and 80.4% is
+    treated as an error in the record rather than a setting nobody can find.
+    The lesson is the general one: a figure written down without the backend,
+    export and thresholds that produced it cannot be defended later.
   - **`benchmarks/RESULTS.md`'s "Recall is identical across every version
     (deterministic pipeline)" is now false** and is corrected there: the draw
     is keyed on a per-vault subkey, so two fresh vaults over identical content

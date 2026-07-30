@@ -124,7 +124,7 @@ const DEFAULT_RERANK_TOP_N: usize = 50;
 
 // The five trained index artifacts. Each name is used for BOTH its generation
 // counter (`PalaceStore::codebook_generation_bump`) and its keyed
-// training-sample label (`pqidx::take_lowest`) — one string, two roles, so they
+// training-sample label (`pqidx::stratified_keyed`) — one string, two roles, so they
 // cannot drift apart: every call site passes the const, never a literal, so
 // changing a value here moves the counter key and the draw together (a literal
 // at one of the five sites would silently split them, which is how the first
