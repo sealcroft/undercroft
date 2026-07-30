@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased — a caller can iterate now, instead of re-asking
+
+- **`SearchOptions` pages: `offset` + `ranked_at`.** There was no way to see
+  rank 11: a second call could only re-ask the same question and get the same
+  top-10 back. Letta measured iteration as *the* differentiator (74.0% on
+  LoCoMo with plain grep plus tool rules), and iteration was the one thing the
+  interface could not do. A page is defined as ranks
+  `[offset, offset + limit)` of the very list one deeper call would produce —
+  an *offset*, not a keyset cursor, because the stages after fusion
+  (cross-encoder, MaxSim, room diversification) re-order candidates, so "score
+  of the last hit I saw" names no stable position in this pipeline while a
+  rank does.
+- **`ranked_at` is the clock the ranking is computed against.** Recency decay
+  read the host clock at every call, so two pages seconds apart sliced two
+  *different* rankings — near-ties could swap across the boundary and a hit
+  could appear twice or never. A paging caller repeats the first page's
+  instant and every page slices one identical ranking. Declared, never
+  inferred: absent, the host clock applies, exactly as before.
+- **The room cap's selection order is now depth-independent.** The soft cap's
+  refill engaged as a function of the *requested* depth, so page 2 diversified
+  at depth 4 could re-select a hit page 1 had already returned at depth 2 —
+  a duplicate across a page boundary, and a dropped hit to pay for it. The
+  selection stream is now computed once over the whole list (cap-eligible in
+  score order, then the cap's leftovers in score order) and pages slice that
+  stream. At offset 0 this reproduces the shipped selection exactly — the
+  pinned refill-order test did not move.
+- **The candidate over-fetch scales with the page's far edge.** Every
+  prefilter fetched `max(256, limit·32)` candidates; a page starting past
+  that floor sliced into ranks the prefilter never fetched and returned
+  nothing while shallower pages were full. All four (FDE, PQ, HNSW, FTS) now
+  fetch to `offset + limit`, pinned by a 400-drawer test that pages to rank
+  360.
+- **Every surface states the continuation instead of assuming the caller
+  knows it.** `POST /v1/…/search` accepts `offset`/`ranked_at` and returns
+  `next_offset` plus the `ranked_at` it ranked at (additive keys — existing
+  clients see the response they always saw; an unparseable `ranked_at` is a
+  400, never a silent fall-back to the host clock). `undercroft_search` gains
+  the same two parameters, numbers hits by absolute rank (on page 2, "1."
+  would claim a rank the hit does not hold), and a *full* page ends with the
+  exact call that continues it — a short page means the ranking is exhausted
+  and says nothing. The CLI gains `--offset`. The remote-index path
+  (`search_with_index`) applies the same page semantics, so a mirror-backed
+  search paginates identically to a local one.
+
 ## Unreleased — a served embedder, and a standing conclusion overturned
 
 - **`UNDERCROFT_EMBEDDER=http` — an `Embedder` backed by a served model.** The

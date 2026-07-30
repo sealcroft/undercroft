@@ -636,6 +636,7 @@ fn run_longmemeval(
                 room: None,
                 limit: k * 8,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let mut ranked_sessions: Vec<String> = Vec::new();
@@ -768,6 +769,7 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
                 room: None,
                 limit: 5,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         if hits.first().map(|h| &h.drawer.id) == Some(id) {
@@ -1079,6 +1081,7 @@ impl vs::MemorySystem for NativeSystem {
             room: None,
             limit: k * 6,
             room_cap: None,
+            ..Default::default()
         };
         let hits = store.search(question, &opts)?;
         let mut rooms: Vec<String> = Vec::new();
@@ -1596,6 +1599,7 @@ fn locomo_eval(
                 room: None,
                 limit: if pool > 0 { pool } else { k * 6 },
                 room_cap: None,
+                ..Default::default()
             };
             let search_started = Instant::now();
             let hits = match index.as_mut() {
@@ -1817,6 +1821,7 @@ fn score_pass(
                 room: None,
                 limit: k * 6,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let mut rooms: Vec<String> = Vec::new();
@@ -2037,6 +2042,7 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
                 room: None,
                 limit: k,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let recall = if hits
@@ -2113,6 +2119,7 @@ fn membench_eval(raw: &Value, topic: &str, k: usize, limit: Option<usize>) -> Re
                 room: None,
                 limit: k,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let recall = if hits

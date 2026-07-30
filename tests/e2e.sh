@@ -48,6 +48,8 @@ check "second memory"             0 "Filed drawer"                   -- "$BIN" r
   "Team lunch every Thursday at the ramen place" --wing social
 check "search finds relevant"     0 "eng/decisions"                  -- "$BIN" search "why rust migration"
 check "search scoped empty"       0 "No memories matched"            -- "$BIN" search "rust" --wing social
+# Page 2 of a two-hit ranking: one hit, numbered by absolute rank.
+check "search offset pages deeper" 0 "2. ["                          -- "$BIN" search "search thursday" -n 1 --offset 1
 check "wake-up shows layers"      0 "L1 — ESSENTIAL STORY"           -- "$BIN" wake-up
 check "wake-up surfaces memory"   0 "Rust"                           -- "$BIN" wake-up
 
@@ -340,11 +342,13 @@ echo "== Benchmark harness =="
 check "bench synth passes"        0 "SYNTH OK"                       -- "${BIN%/*}/undercroft-bench" synth --n 60
 
 echo "== MCP server (JSON-RPC over stdio) =="
-MCP_OUT="$(printf '%s\n%s\n%s\n%s\n' \
+MCP_OUT="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"undercroft_save","arguments":{"content":"mcp saved this memory","wing":"agents"}}}' \
   '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"undercroft_search","arguments":{"query":"mcp saved"}}}' \
+  '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"undercroft_search","arguments":{"query":"mcp saved","limit":1}}}' \
+  '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"undercroft_search","arguments":{"query":"mcp saved","offset":5}}}' \
   | "$BIN" serve-mcp 2>/dev/null)"
 mcp_check() {
   local name="$1" sub="$2"
@@ -358,6 +362,9 @@ mcp_check "initialize handshake"    '"serverInfo"'
 mcp_check "tools/list has 4 tools"  '"undercroft_verify"'
 mcp_check "save tool works"         'saved drawer'
 mcp_check "search tool round-trips" 'mcp saved this memory'
+# A full page names its continuation; past the end says so instead of "no match".
+mcp_check "full page names continuation" 'deeper results may exist'
+mcp_check "past the end says so"    'no more memories past rank 5'
 
 echo "== Multi-tenant HTTP REST surface =="
 REST_HOME="$(mktemp -d)"
@@ -432,6 +439,33 @@ rest_body "dedup first insert"  '"deduped":false' -- -X POST "$API/vaults/acme/d
 rest_body "dedup refresh"       '"deduped":true'  -- -X POST "$API/vaults/acme/drawers" \
   -H "X-Vault-Assertion: $(sign acme)" \
   -d '{"text":"the release train ships on thursday","wing":"eng","room":"process","dedup_threshold":0.9}'
+
+# Pagination: a page names its continuation (next_offset + the ranked_at to
+# repeat), and page 2 continues the ranking rather than repeating it.
+P1="$(curl -s -X POST "$API/vaults/acme/search" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"query":"postgres release","limit":1}')"
+RANKED_AT="$(sed -n 's/.*"ranked_at":"\([^"]*\)".*/\1/p' <<<"$P1")"
+P2="$(curl -s -X POST "$API/vaults/acme/search" -H "X-Vault-Assertion: $(sign acme)" \
+  -d "{\"query\":\"postgres release\",\"limit\":1,\"offset\":1,\"ranked_at\":\"$RANKED_AT\"}")"
+if grep -qF '"next_offset":1' <<<"$P1" && [ -n "$RANKED_AT" ]; then
+  echo "ok    search page names continuation"; PASS=$((PASS+1))
+else
+  echo "FAIL  search page names continuation"; echo "$P1" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if grep -qF '"next_offset":2' <<<"$P2"; then
+  echo "ok    page 2 advances the cursor"; PASS=$((PASS+1))
+else
+  echo "FAIL  page 2 advances the cursor"; echo "$P2" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# Both drawers must appear across the two pages — a repeated page would
+# show one of them twice and the other never.
+if grep -qF 'postgres' <<<"$P1$P2" && grep -qF 'release train' <<<"$P1$P2"; then
+  echo "ok    pages tile the ranking"; PASS=$((PASS+1))
+else
+  echo "FAIL  pages tile the ranking"; printf '%s\n%s\n' "$P1" "$P2" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rest_code "bad ranked_at 400" 400 -- -X POST "$API/vaults/acme/search" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"x","ranked_at":"not-a-date"}'
 
 # External-embedding vault: dimension enforced exactly.
 rest_body "create external"     '"created":true'  -- -X POST "$API/vaults" \

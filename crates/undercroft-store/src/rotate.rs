@@ -537,6 +537,7 @@ mod tests {
                             room: None,
                             limit: 3,
                             room_cap: None,
+                            ..Default::default()
                         },
                     )
                     .unwrap();
@@ -579,6 +580,7 @@ mod tests {
                         room: None,
                         limit: 3,
                         room_cap: None,
+                        ..Default::default()
                     },
                 )
                 .unwrap();

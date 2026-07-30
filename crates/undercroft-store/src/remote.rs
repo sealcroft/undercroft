@@ -112,6 +112,10 @@ impl PalaceStore {
         opts: &SearchOptions,
     ) -> Result<Vec<SearchHit>, StoreError> {
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
+        // Rank to the page's far edge, slice at the end — the same page
+        // semantics as the local path, so a caller iterating over a mirror
+        // sees the same contract as one iterating locally.
+        let depth = opts.offset.saturating_add(limit);
         // A mirror built in a different embedding space cannot rank: the
         // query is embedded here and compared there, so the candidates come
         // back effectively at random and local re-scoring then drops them —
@@ -134,8 +138,10 @@ impl PalaceStore {
             &collection,
             &qvec,
             opts.wing.as_deref(),
-            (limit * 4).max(20),
+            depth.saturating_mul(4).max(20),
         )?;
+        // One clock for every page of an iteration, exactly as locally.
+        let now = opts.ranked_at.unwrap_or_else(time::OffsetDateTime::now_utc);
         let mut hits = Vec::new();
         for c in candidates {
             // Local load = HMAC verify + decrypt. Unknown ids (index drift
@@ -153,7 +159,7 @@ impl PalaceStore {
                     continue;
                 }
             }
-            hits.push(self.score_drawer(drawer, query, &qvec));
+            hits.push(self.score_drawer(drawer, query, &qvec, now));
         }
         // The exact channel, for the same reason as the local gate: an
         // approximate match should reorder a result set, never populate one.
@@ -170,7 +176,10 @@ impl PalaceStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        hits.truncate(limit);
+        hits.truncate(depth);
+        if opts.offset > 0 {
+            hits.drain(..opts.offset.min(hits.len()));
+        }
         Ok(hits)
     }
 

@@ -701,16 +701,14 @@ was the whole point of this plan, and only part of it has moved:
 |---|---|---|
 | **candidate** — who is considered | R1 wing as retrieval unit, R4 FDE as generator | **untouched.** 0.91 ms/drawer, linear ⇒ ~913 s/query at 10⁶ |
 | **delivery** — how deep the set goes | R2 rescore depth | **built** (value in the shipped config unestablished) |
-| | R3 pagination | **not started** |
+| | R3 pagination | **built** (`offset` + `ranked_at` on `SearchOptions`, all four surfaces) |
 | **representation** — what can match | served embedder | **done, unplanned: +3.2–4.2pp** |
 
-**The ordering from here is R3, then R1.** R3 is small, has no measurement
-ambiguity, and is the only thing that lets a caller iterate rather than re-ask
-the same question — Letta measured iteration as *the* differentiator. R1 is the
-only item on this list that addresses 913 s/query at all, and it changes the API
-contract (cross-wing queries need fan-out or a fallback), so it wants **design
-agreement before code**. Note R2 nudges candidate reach the wrong way: rescoring
-200 instead of 50 adds per-query work to the path that is already the bottleneck.
+**The ordering from here is R1.** It is the only item on this list that
+addresses 913 s/query at all, and it changes the API contract (cross-wing
+queries need fan-out or a fallback), so it wants **design agreement before
+code**. Note R2 nudges candidate reach the wrong way: rescoring 200 instead of
+50 adds per-query work to the path that is already the bottleneck.
 
 **Phase 1 — reach, with no new storage and no new model.** *Users and agents;
 this is where the measured headroom is.*
@@ -747,9 +745,23 @@ this is where the measured headroom is.*
   the codebook disabled or repeated runs.
 - **A tunable, bounded, logged fusion weight** — next, because it makes the
   above interpretable instead of a comparison at a weight tuned for nothing.
-- **Pagination / a stable cursor on `SearchOptions`** — an interface
-  addition, and the only thing that lets a caller iterate. Letta measured
-  iteration as *the* differentiator (74.0% with plain grep and tool rules).
+- **Pagination on `SearchOptions` — BUILT.** `offset` (a page is ranks
+  `[offset, offset + limit)` of the list one deeper call would produce) plus
+  `ranked_at` (the clock recency decays against, repeated by every page so
+  one iteration slices one ranking, not one per host-clock read). Letta
+  measured iteration as *the* differentiator (74.0% with plain grep and tool
+  rules); before this, call 2 could only re-ask call 1's question. Three
+  hazards closed on the way: the room cap's refill was a function of
+  requested depth (page 2 could re-select page 1's hits — the selection
+  stream is now depth-independent, byte-identical at offset 0); every
+  prefilter's over-fetch was `max(256, limit·32)` computed from `limit`
+  alone (a page past the floor sliced into ranks never fetched); and the
+  remote-index path ranked against its own clock. Surfaces: `/v1` search
+  (`offset`/`ranked_at` in, `next_offset`/`ranked_at` echo out, additive),
+  `undercroft_search` (absolute-rank numbering, a full page ends with its
+  exact continuation), CLI `--offset`. An offset, not a keyset cursor —
+  rescore and diversification re-order candidates, so a rank names a stable
+  position and a last-seen score does not.
 - **A query-side date filter** — small recall (~+1pp ceiling) but the only
   **poison-positive** item: `content_date` is HMAC-covered, so the filter
   rests on tamper-evident declared metadata rather than learned similarity.

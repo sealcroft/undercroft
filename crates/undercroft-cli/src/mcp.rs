@@ -172,7 +172,7 @@ fn tool_definitions() -> Value {
             json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
-            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year across this corpus: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali, reiwa, heisei, showa, taisho, meiji. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar. An era marker in a memory's own words (พ.ศ. ค.ศ. هـ 民國 令和) outranks this, being the writer's statement about one date rather than yours about the whole corpus") }),
+            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results"), "offset": i("rank to continue from — pass the offset a previous page's footer gave you to go deeper instead of re-asking the same question"), "ranked_at": s("RFC 3339 instant from a previous page's footer; repeat it so every page slices one identical ranking instead of one that drifts between calls"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year across this corpus: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali, reiwa, heisei, showa, taisho, meiji. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar. An era marker in a memory's own words (พ.ศ. ค.ศ. هـ 民國 令和) outranks this, being the writer's statement about one date rather than yours about the whole corpus") }),
             &["query"]),
         tool("undercroft_wake_up", "Load session context: recent essential memories.",
             json!({ "wing": s("scope to wing") }), &[]),
@@ -278,6 +278,20 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let wing = opt_str(args, "wing").map(str::to_string);
             let room = opt_str(args, "room").map(str::to_string);
             let limit = opt_u64(args, "limit").unwrap_or(5) as usize;
+            // Rank to continue from — the previous page's footer names it.
+            let offset = opt_u64(args, "offset").unwrap_or(0) as usize;
+            // The instant the ranking is computed as of. Resolved here so the
+            // footer can state the exact value the next page must repeat:
+            // pages of one iteration slice one ranking, pinned to one clock.
+            // A value that does not parse is an error said out loud, never a
+            // silent fall-back to the host clock.
+            let ranked_at = match opt_str(args, "ranked_at") {
+                Some(s) => {
+                    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                        .map_err(|_| anyhow::anyhow!("ranked_at must be an RFC 3339 instant"))?
+                }
+                None => time::OffsetDateTime::now_utc(),
+            };
             let hits = store.search(
                 query,
                 &SearchOptions {
@@ -302,10 +316,16 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     room,
                     limit,
                     room_cap: None,
+                    offset,
+                    ranked_at: Some(ranked_at),
                 },
             )?;
             if hits.is_empty() {
-                return Ok("no memories matched".into());
+                return Ok(if offset > 0 {
+                    format!("no more memories past rank {offset}")
+                } else {
+                    "no memories matched".into()
+                });
             }
             // Reference date for elapsed time. The engine holds the dates, so
             // it does the calendar arithmetic — month lengths and leap years
@@ -406,7 +426,9 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 };
                 out.push_str(&format!(
                     "{}. [score {:.3}] ({}/{}, {}{}){}{}\n{}\n\n",
-                    i + 1,
+                    // Absolute rank, not position within the page: on a later
+                    // page "1." would claim a rank this hit does not hold.
+                    offset + i + 1,
                     h.score,
                     h.drawer.meta.wing,
                     h.drawer.meta.room,
@@ -415,6 +437,17 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     seen,
                     mentions,
                     h.drawer.content
+                ));
+            }
+            // A full page may have more below it; say exactly how to continue.
+            // A short page means the ranking is exhausted and says nothing.
+            if hits.len() == limit {
+                let echo = ranked_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "— deeper results may exist: repeat this search with offset={} and ranked_at={echo}\n",
+                    offset + hits.len(),
                 ));
             }
             Ok(out.trim_end().to_string())

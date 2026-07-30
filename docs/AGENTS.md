@@ -488,7 +488,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | Tool | W | Does |
 |---|---|---|
 | `undercroft_save` | W | save one memory verbatim |
-| `undercroft_search` | | hybrid semantic+lexical search. Pass `language: "ar"` to read the stored text as Arabic (Saturday-first weeks by default). Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, and the further days the same text was recorded on |
+| `undercroft_search` | | hybrid semantic+lexical search. Pass `language: "ar"` to read the stored text as Arabic (Saturday-first weeks by default). Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, and the further days the same text was recorded on. A full page ends with the exact continuation to go deeper — repeat the search with the stated `offset` and `ranked_at` instead of re-asking the same question; a short page means the ranking is exhausted |
 | `undercroft_wake_up` | | recent essential memories for session start |
 | `undercroft_verify` | | verify HMACs + audit chain |
 | `undercroft_status` | | palace statistics |
@@ -527,7 +527,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`) |
-| POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`) |
+| POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |

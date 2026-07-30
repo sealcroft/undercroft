@@ -124,6 +124,10 @@ enum Command {
         /// Max results
         #[arg(short = 'n', long, default_value_t = 5)]
         limit: usize,
+        /// Rank to continue from: ranks [offset, offset+limit) of the same
+        /// ranking a single deeper call would produce
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
         /// Retrieval backend: local (scan), or a remote vector index
         /// (qdrant | chroma | pgvector) used as an untrusted accelerator —
         /// results are always re-verified and re-ranked locally
@@ -1152,6 +1156,7 @@ fn main() -> Result<()> {
             wing,
             room,
             limit,
+            offset,
             backend,
         } => {
             let store = open_store(&cli, vault)?;
@@ -1160,7 +1165,8 @@ fn main() -> Result<()> {
                 wing: wing.clone(),
                 room: room.clone(),
                 limit: *limit,
-                room_cap: None,
+                offset: *offset,
+                ..Default::default()
             };
             let hits = if backend == "local" {
                 store.search(query, &opts)?
@@ -1174,7 +1180,9 @@ fn main() -> Result<()> {
             for (i, hit) in hits.iter().enumerate() {
                 println!(
                     "{}. [{:.3}] {}/{} — {} ({})",
-                    i + 1,
+                    // Absolute rank: on a page past the first, "1." would
+                    // claim a rank the hit does not hold.
+                    offset + i + 1,
                     hit.score,
                     hit.drawer.meta.wing,
                     hit.drawer.meta.room,

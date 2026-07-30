@@ -622,6 +622,19 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let query = body_str(&body, "query")?;
+        // The instant this ranking is computed as of. Resolved here — not
+        // inside the store — so the response can echo the exact value a
+        // second page must repeat: pages of one iteration slice one ranking,
+        // pinned to one clock, and the caller pins it by sending this field
+        // back verbatim. A value that does not parse is a caller error, said
+        // out loud rather than silently ranked against the host clock.
+        let ranked_at = match body.get("ranked_at").and_then(Value::as_str) {
+            Some(s) => {
+                time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                    .map_err(|_| RestError::new(400, "ranked_at must be an RFC 3339 instant"))?
+            }
+            None => time::OffsetDateTime::now_utc(),
+        };
         let opts = SearchOptions {
             // The SAME `language` the date scanner reads. One declaration per
             // request; each consumer documents what it supports and falls back
@@ -631,6 +644,11 @@ impl Tenancy {
             wing: body.get("wing").and_then(Value::as_str).map(String::from),
             room: body.get("room").and_then(Value::as_str).map(String::from),
             limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
+            // Rank-space page start: pass the previous response's
+            // `next_offset` (with its `ranked_at`) to continue deeper instead
+            // of re-asking the same question.
+            offset: body.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize,
+            ranked_at: Some(ranked_at),
             // Soft per-room cap: spreads the returned hits across rooms so a
             // question whose answer spans several sessions is not starved by
             // the most verbose one. Absent ⇒ pure score order, as before.
@@ -731,7 +749,23 @@ impl Tenancy {
                 })
             })
             .collect();
-        Ok((200, Body::Json(json!({ "hits": hits }))))
+        // The continuation, spelled out: repeat the request with
+        // `offset: next_offset` and this same `ranked_at` for the next page.
+        // A page shorter than `limit` means the ranking is exhausted. Both
+        // fields are additive — a caller that ignores them sees exactly the
+        // response this route always returned.
+        let next_offset = opts.offset + hits.len();
+        let ranked_at_echo = ranked_at
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default();
+        Ok((
+            200,
+            Body::Json(json!({
+                "hits": hits,
+                "next_offset": next_offset,
+                "ranked_at": ranked_at_echo,
+            })),
+        ))
     }
 
     fn delete_drawer(&mut self, id: &str, drawer_id: &str, req: &Request, now: i64) -> RestResult {

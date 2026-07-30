@@ -374,40 +374,46 @@ pub enum StoreError {
 /// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
 type SearchRow = (String, String, Vec<u8>, Vec<u8>, Vec<u8>);
 
-/// Take `limit` hits from `hits` (already best-first) allowing at most `cap`
-/// per room, then refill any slots the cap left empty in score order.
+/// Take the hits at selection ranks `[offset, offset + limit)` from `hits`
+/// (already best-first), allowing at most `cap` per room before the cap's
+/// leftovers refill in score order.
+///
+/// The selection order is computed over the *whole* list and is independent
+/// of `offset` and `limit`: every hit that fits under the cap, in score
+/// order, then every hit the cap skipped, in score order. Pages slice that
+/// one stream. This is what lets page 2 continue page 1 — a refill that
+/// engaged at one requested depth and not at another would otherwise
+/// duplicate a hit across a page boundary. At `offset` 0 the first `limit`
+/// of the stream is exactly the set (and order) the depth-bounded version
+/// of this function always chose, so single-page callers see no change.
 ///
 /// Order within the result stays score-descending, so a caller that ignores
 /// rooms sees nothing surprising. Single pass plus a small counter map: no
 /// re-scoring, no extra decryption, no allocation per candidate.
-fn diversify_by_room(hits: Vec<SearchHit>, limit: usize, cap: usize) -> Vec<SearchHit> {
+fn diversify_by_room(
+    hits: Vec<SearchHit>,
+    offset: usize,
+    limit: usize,
+    cap: usize,
+) -> Vec<SearchHit> {
     let mut per_room: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let mut taken = vec![false; hits.len()];
-    let mut chosen = 0usize;
+    let mut stream: Vec<usize> = Vec::with_capacity(hits.len());
+    // Refill candidates: the cap is a spreading preference, not a quota to
+    // enforce at the cost of returning fewer memories than asked for.
+    let mut overflow: Vec<usize> = Vec::new();
     for (i, h) in hits.iter().enumerate() {
-        if chosen == limit {
-            break;
-        }
         let n = per_room.entry(h.drawer.meta.room.as_str()).or_insert(0);
         if *n < cap {
             *n += 1;
-            taken[i] = true;
-            chosen += 1;
+            stream.push(i);
+        } else {
+            overflow.push(i);
         }
     }
-    // Refill: the cap is a spreading preference, not a quota to enforce at
-    // the cost of returning fewer memories than asked for.
-    if chosen < limit {
-        for (i, slot) in taken.iter_mut().enumerate() {
-            if chosen == limit {
-                break;
-            }
-            if !*slot {
-                *slot = true;
-                chosen += 1;
-            }
-            let _ = i;
-        }
+    stream.extend(overflow);
+    let mut taken = vec![false; hits.len()];
+    for &i in stream.iter().skip(offset).take(limit) {
+        taken[i] = true;
     }
     hits.into_iter()
         .zip(taken)
@@ -489,6 +495,26 @@ pub struct SearchOptions {
     /// score order, so a genuinely single-room question still gets its
     /// evidence and recall is never traded away.
     pub room_cap: Option<usize>,
+    /// Rank-space page start: the returned hits are ranks
+    /// `[offset, offset + limit)` of the same fully-ranked list one deeper
+    /// call would produce. `0` (the default) is the first page — exactly the
+    /// behaviour that shipped before this field existed.
+    ///
+    /// An offset rather than a keyset cursor, deliberately: the stages after
+    /// fusion (cross-encoder rescore, MaxSim, room diversification) re-order
+    /// candidates, so "everything below the last score I saw" names no stable
+    /// position in this pipeline, while a rank does. The boundary is exact
+    /// when the palace has not changed between calls and [`Self::ranked_at`]
+    /// pins the clock; a write in between may shift ranks, and should — new
+    /// evidence outranks a stale page boundary.
+    pub offset: usize,
+    /// The instant the ranking is computed *as of*: recency decay is measured
+    /// against this instead of the host clock when set. A paging caller
+    /// repeats the first page's instant on every later page, so all pages
+    /// slice one identical ranking rather than one that drifts with the
+    /// seconds between calls. Declared, never inferred — `None` means the
+    /// host clock at call time, the behaviour that always shipped.
+    pub ranked_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2050,6 +2076,11 @@ impl PalaceStore {
         let _span = undercroft_obs::scope("search", self.vault.id());
         let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
+        // Everything below ranks to `depth` and slices the page off at the
+        // end: a page is defined as ranks `[offset, offset + limit)` of the
+        // list one deeper call would produce, so the ranking must be built
+        // to the page's far edge, not to its size.
+        let depth = opts.offset.saturating_add(limit);
         // Declared by the caller, never read off the text: German and English
         // share a script, so nothing in the bytes says which endings are legal.
         let lang = opts.morph_lang;
@@ -2060,18 +2091,18 @@ impl PalaceStore {
             // the load-once FDE cache (falls back to the fusion scan when no
             // late encoder / no FDE rows exist). Over-fetch generously so
             // BM25 fusion still has material.
-            self.fde_candidates(query, std::cmp::max(256, limit * 32))?
+            self.fde_candidates(query, std::cmp::max(256, depth.saturating_mul(32)))?
         } else if self.pq_enabled {
             // On-disk PQ prefilter: ADC over the RAM code cache, bounded at
             // any corpus size. Over-fetch generously so BM25 fusion still
             // has material.
-            self.pq_candidates(&qvec, std::cmp::max(256, limit * 32))?
+            self.pq_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?
         } else if self.hnsw_enabled {
             // Semantic ANN prefilter: cut to the vector top-K before verify +
             // fusion. Over-fetch generously so BM25 fusion still has material.
             #[cfg(feature = "hnsw")]
             {
-                self.hnsw_candidates(&qvec, std::cmp::max(256, limit * 32))?
+                self.hnsw_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?
             }
             #[cfg(not(feature = "hnsw"))]
             {
@@ -2085,7 +2116,7 @@ impl PalaceStore {
                         && !needs_full_scan(&qterms)
                         && self.count()? >= min as u64 =>
                 {
-                    self.fts_candidates(&qterms, std::cmp::max(256, limit * 32))
+                    self.fts_candidates(&qterms, std::cmp::max(256, depth.saturating_mul(32)))
                 }
                 _ => None,
             }
@@ -2121,7 +2152,10 @@ impl PalaceStore {
         // Pass 1: verify + decrypt every candidate, and gather the signals
         // that don't need corpus statistics (cosine, recency). Content
         // tokens are kept only when a BM25-based fusion needs them.
-        let now = OffsetDateTime::now_utc();
+        // Recency decays against the caller's declared instant when one was
+        // given: pages of one iteration must rank against one clock, not
+        // against however many seconds separated the calls.
+        let now = opts.ranked_at.unwrap_or_else(OffsetDateTime::now_utc);
         let mut cands: Vec<Candidate> = Vec::with_capacity(rows.len());
         for (id, meta_json, content_rest, emb_rest, tag) in rows {
             self.vault
@@ -2278,11 +2312,21 @@ impl PalaceStore {
             // matrices, one query-encode forward total (no-op when unset).
             self.late_rescore(query, &mut hits);
         }
+        // The page cut. With a room cap the slice must come off the cap's own
+        // depth-independent selection stream (see `diversify_by_room`);
+        // without one it is a plain slice of score order. Either way the
+        // result is ranks `[offset, offset + limit)` of the list a single
+        // call with limit `depth` would return.
         match opts.room_cap {
-            Some(cap) if cap > 0 && hits.len() > limit => {
-                hits = diversify_by_room(std::mem::take(&mut hits), limit, cap)
+            Some(cap) if cap > 0 => {
+                hits = diversify_by_room(std::mem::take(&mut hits), opts.offset, limit, cap)
             }
-            _ => hits.truncate(limit),
+            _ => {
+                hits.truncate(depth);
+                if opts.offset > 0 {
+                    hits.drain(..opts.offset.min(hits.len()));
+                }
+            }
         }
 
         let fusion_label = match self.fusion {
@@ -2351,12 +2395,13 @@ impl PalaceStore {
         drawer: undercroft_core::Drawer,
         query: &str,
         qvec: &[f32],
+        now: OffsetDateTime,
     ) -> SearchHit {
         let qterms: Vec<String> = tokenize(query);
         let emb = self.embedder.embed(&drawer.content);
         let semantic = ((cosine(qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
         let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
-        let recency = recency_boost(&drawer.meta.filed_at, OffsetDateTime::now_utc());
+        let recency = recency_boost(&drawer.meta.filed_at, now);
         let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
         SearchHit {
             drawer,
@@ -4397,7 +4442,7 @@ mod tests {
             hit("b", 0.50, 4),
             hit("c", 0.40, 5),
         ];
-        let out = diversify_by_room(hits, 4, 2);
+        let out = diversify_by_room(hits, 0, 4, 2);
         let rooms: Vec<&str> = out.iter().map(|h| h.drawer.meta.room.as_str()).collect();
         assert_eq!(rooms, vec!["a", "a", "b", "c"], "{rooms:?}");
         // Score order is preserved within the result.
@@ -4410,7 +4455,7 @@ mod tests {
         let hits: Vec<SearchHit> = (0..6)
             .map(|i| hit("solo", 0.9 - i as f32 * 0.01, i))
             .collect();
-        let out = diversify_by_room(hits, 4, 2);
+        let out = diversify_by_room(hits, 0, 4, 2);
         assert_eq!(out.len(), 4, "soft cap must refill to the limit");
         assert!(out.iter().all(|h| h.drawer.meta.room == "solo"));
     }
@@ -4424,7 +4469,7 @@ mod tests {
             hit("b", 0.60, 3),
         ];
         // cap 1: a gets one, b gets one, then refill takes a's next best.
-        let out = diversify_by_room(hits, 3, 1);
+        let out = diversify_by_room(hits, 0, 3, 1);
         let ids: Vec<u32> = out.iter().map(|h| h.drawer.meta.chunk_index).collect();
         assert_eq!(ids, vec![0, 1, 3], "{ids:?}");
     }
@@ -4466,6 +4511,180 @@ mod tests {
         assert_eq!(capped.len(), 3, "capped search still fills the limit");
         // The cap can only change WHICH rooms appear, never how many hits.
         assert!(capped.iter().any(|h| h.drawer.meta.room == "quiet"));
+    }
+
+    /// The pagination contract: pages are slices of the one ranking a single
+    /// deeper call would produce — no repeats, no gaps, same order.
+    #[test]
+    fn pages_tile_the_single_call_ranking() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        let fillers = [
+            "zebra migration plan for the auth service",
+            "the zebra printer jammed again on floor two",
+            "zebra crossing incident report from tuesday",
+            "notes on zebra striping in the results table",
+            "zebra herd counts from the field survey",
+            "zebra client library upgrade checklist",
+            "why the zebra cache key needed a version",
+            "zebra dashboard latency regression notes",
+            "zebra release retro action items",
+        ];
+        for (i, f) in fillers.iter().enumerate() {
+            s.upsert(&drawer("w", "r", f, i as u32)).unwrap();
+        }
+        // One clock for every call, as a paging caller would pin it.
+        let at = OffsetDateTime::now_utc();
+        let opts = |offset: usize, limit: usize| SearchOptions {
+            limit,
+            offset,
+            ranked_at: Some(at),
+            ..Default::default()
+        };
+        let all: Vec<String> = s
+            .search("zebra", &opts(0, 9))
+            .unwrap()
+            .into_iter()
+            .map(|h| h.drawer.id)
+            .collect();
+        assert_eq!(all.len(), 9);
+        let mut paged: Vec<String> = Vec::new();
+        for page in 0..3 {
+            paged.extend(
+                s.search("zebra", &opts(page * 3, 3))
+                    .unwrap()
+                    .into_iter()
+                    .map(|h| h.drawer.id),
+            );
+        }
+        assert_eq!(paged, all, "three pages of three must tile the one call");
+    }
+
+    /// With a room cap, the selection order must not depend on how deep the
+    /// caller asked: a refill that engages at one requested depth and not at
+    /// another would duplicate a hit across a page boundary. The pages must
+    /// partition what a single deep call returns.
+    #[test]
+    fn room_cap_pages_never_repeat_and_never_drop() {
+        // Room "a" holds the two best hits; cap 1 defers a's second-best to
+        // the refill. This is exactly the shape where diversifying at each
+        // page's own depth returns hit b twice and never returns a's second.
+        let make = || vec![hit("a", 0.99, 0), hit("a", 0.98, 1), hit("b", 0.60, 2)];
+        let single: Vec<u32> = diversify_by_room(make(), 0, 3, 1)
+            .into_iter()
+            .map(|h| h.drawer.meta.chunk_index)
+            .collect();
+        let mut paged: Vec<u32> = Vec::new();
+        for page in 0..2 {
+            paged.extend(
+                diversify_by_room(make(), page * 2, 2, 1)
+                    .into_iter()
+                    .map(|h| h.drawer.meta.chunk_index),
+            );
+        }
+        let mut single_sorted = single.clone();
+        single_sorted.sort_unstable();
+        let mut paged_sorted = paged.clone();
+        paged_sorted.sort_unstable();
+        assert_eq!(
+            paged_sorted, single_sorted,
+            "pages must partition the deep call: single {single:?}, paged {paged:?}"
+        );
+    }
+
+    #[test]
+    fn an_offset_past_the_end_is_empty_not_an_error() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..3u32 {
+            s.upsert(&drawer("w", "r", "heron notes for the wetland map", i))
+                .unwrap();
+        }
+        let hits = s
+            .search(
+                "heron wetland",
+                &SearchOptions {
+                    limit: 5,
+                    offset: 100,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(hits.is_empty(), "past the end is an exhausted ranking");
+        // And the far edge must not overflow either.
+        let hits = s
+            .search(
+                "heron wetland",
+                &SearchOptions {
+                    limit: usize::MAX,
+                    offset: usize::MAX,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    /// `ranked_at` must actually reach scoring: the same corpus ranked a year
+    /// later has decayed its recency, so the score moves. This is the field
+    /// that lets every page of one iteration rank against one clock.
+    #[test]
+    fn ranked_at_is_the_clock_recency_decays_against() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "osprey nest survey results", 0))
+            .unwrap();
+        let now = OffsetDateTime::now_utc();
+        let score_at = |at: OffsetDateTime| {
+            s.search(
+                "osprey nest",
+                &SearchOptions {
+                    limit: 1,
+                    ranked_at: Some(at),
+                    ..Default::default()
+                },
+            )
+            .unwrap()[0]
+                .score
+        };
+        let fresh = score_at(now);
+        let stale = score_at(now + time::Duration::days(365));
+        // Recency carries 0.10 of the score and a year is >12 half-lives.
+        assert!(
+            fresh - stale > 0.05,
+            "a year of decay must move the score: fresh {fresh}, stale {stale}"
+        );
+    }
+
+    /// A deep page must widen the candidate over-fetch: the prefilter floor
+    /// (max(256, depth×32)) used to be computed from `limit` alone, so any
+    /// page starting past the floor sliced into ranks the prefilter never
+    /// fetched and returned nothing while shallower pages were full.
+    #[test]
+    fn deep_pages_reach_past_the_prefilter_floor() {
+        let (_dir, mut s) = store(SecurityLevel::HmacOnly);
+        s.set_fts_prefilter_min(Some(0));
+        for i in 0..400u32 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("manatee sighting number {i} in the estuary"),
+                i,
+            ))
+            .unwrap();
+        }
+        let page = s
+            .search(
+                "manatee estuary",
+                &SearchOptions {
+                    limit: 10,
+                    offset: 350,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            page.len(),
+            10,
+            "rank 350 exists in a 400-drawer corpus; the prefilter must fetch to the page's far edge"
+        );
     }
 
     /// Exactly what `POST /v1/vaults/{id}/drawers` does: index the new
@@ -4583,6 +4802,7 @@ mod tests {
                         room: None,
                         limit: 5,
                         room_cap: None,
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -4656,6 +4876,7 @@ mod tests {
                         room: None,
                         limit: 2,
                         room_cap: None,
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -5295,6 +5516,7 @@ mod tests {
             room: None,
             limit: 3,
             room_cap: None,
+            ..Default::default()
         };
 
         // Baseline (no reranker) returns all three, fusion-ordered.
@@ -6224,6 +6446,7 @@ mod tests {
                     room: None,
                     limit: 10,
                     room_cap: None,
+                    ..Default::default()
                 },
             )
             .unwrap();
