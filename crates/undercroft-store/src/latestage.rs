@@ -27,7 +27,7 @@ use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInte
 use rusqlite::{params, OptionalExtension};
 
 use crate::pq::ProductQuantizer;
-use crate::{rerank_top_n, PalaceStore, SearchHit, StoreError, CODEBOOK_TOK};
+use crate::{PalaceStore, SearchHit, StoreError, CODEBOOK_TOK};
 
 /// Stored-matrix count at which the token codebook trains (v2 packing).
 /// Below it, int8 (v1) is already small and PQ would train on too few
@@ -70,6 +70,18 @@ impl PalaceStore {
     /// (it is the more accurate, more expensive option).
     pub fn set_late(&mut self, late: Option<Box<dyn LateInteraction + Send + Sync>>) {
         self.late = late;
+    }
+
+    /// How many fusion-ranked candidates this stage re-scores.
+    ///
+    /// **Not the cross-encoder's `UNDERCROFT_RERANK_TOP_N`**, which is a
+    /// latency cap of one transformer forward per candidate; MaxSim is
+    /// arithmetic over matrices built at ingest, so this stage can afford to
+    /// look much deeper. Defaults from `UNDERCROFT_LATE_TOP_N` at open — see
+    /// [`crate::DEFAULT_LATE_TOP_N`] for what the default rests on, and what
+    /// it does not.
+    pub fn set_late_top_n(&mut self, n: usize) {
+        self.late_top_n = n.max(1);
     }
 
     pub(crate) fn late_schema(&self) -> Result<(), StoreError> {
@@ -478,7 +490,13 @@ impl PalaceStore {
         if qmatrix.is_empty() {
             return;
         }
-        let pool = hits.len().min(rerank_top_n());
+        // Rescore depth, NOT the cross-encoder's latency cap: MaxSim costs
+        // arithmetic per candidate, not a forward pass, so this stage can look
+        // far deeper than a reranker can afford to. Note `hits` is the
+        // un-truncated candidate list — on a sealed vault with no prefilter
+        // that is the whole corpus, so this depth is what decides how much of
+        // it gets a second opinion.
+        let pool = hits.len().min(self.late_top_n);
         let mut stmt = match self
             .conn
             .prepare("SELECT tok FROM drawer_tok WHERE id = ?1 AND model = ?2")

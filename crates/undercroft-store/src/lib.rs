@@ -117,10 +117,61 @@ const KNOWN_EMBEDDER_UPGRADES: &[(&str, &str)] = &[
 // This is a judgement that a whole-fleet re-embed is not worth one script's
 // cosine leg, not a claim that nothing changed. If Hebrew corpora become a
 // real workload, the fix is a v4 row above and it costs 45.9 µs/drawer.
-/// Default number of fusion-ranked candidates a reranker re-scores per search
-/// (override with `UNDERCROFT_RERANK_TOP_N`). One cross-encoder forward pass
-/// runs per candidate, so this bounds the added latency.
+/// Default number of fusion-ranked candidates a **cross-encoder** re-scores
+/// per search (override with `UNDERCROFT_RERANK_TOP_N`). One transformer
+/// forward pass runs per candidate, so this is a genuine latency cap: the
+/// depth you can afford *is* the depth you rescore.
 const DEFAULT_RERANK_TOP_N: usize = 50;
+
+/// Default depth for **late-interaction** rescoring (override with
+/// `UNDERCROFT_LATE_TOP_N`).
+///
+/// A separate budget from the cross-encoder's, because it buys a different
+/// thing. MaxSim over a stored matrix is arithmetic against precomputed
+/// vectors — no forward pass per candidate, one query encode for the whole
+/// search — so depth costs microseconds a row rather than a model call. While
+/// both stages shared `UNDERCROFT_RERANK_TOP_N`, late interaction inherited a
+/// latency cap it does not spend, and that was the binding constraint on
+/// delivery.
+///
+/// **What 200 rests on, and what it does not.** Swept on the merged LoCoMo
+/// corpus (495 questions) with the token codebook disabled — MaxSim then runs
+/// exact int8, nothing is trained, and depth is the only variable, which is
+/// the only configuration here in which two runs are comparable:
+///
+/// | depth | all-gold | ms/q |
+/// |---|---|---|
+/// | 50 | 77.7% | 342 |
+/// | 100 | 78.7% | 352 |
+/// | 200 | 79.8% | 374 |
+/// | 400 | 79.6% | 417 |
+///
+/// Read that carefully, because it says less than it appears to:
+///
+/// * **The +2.1pp at 200 belongs to that configuration, not to a default
+///   deployment.** Any vault past `TOK_PQ_MIN` (256 matrices) runs v2 PQ-ADC
+///   instead, and there the same 50 → 200 step measured **+1.7pp in one run
+///   and +0.0pp in another**. The default-configuration value of this change
+///   is *unmeasured*: bracketed by those two, both inside the per-vault draw's
+///   own spread.
+/// * **200 is not a measured peak.** 79.8 against 79.6 at 400 is one question
+///   out of 495, from one run per depth, and the two v2 sweeps put 400
+///   *above* 200 (80.6 vs 80.4; 80.2 vs 78.9). What the evidence supports is
+///   that depth beyond 50 helps and that 100–400 are not separable here. 200
+///   is chosen as enough to take the measured gain without paying unbounded
+///   rescore on a large candidate set — a judgement, not a measurement.
+/// * **Cost depends on packing**, and the cheap case is the shipped one: at v2
+///   the same sweep moved 334 → 337 ms/q, because a coded row costs `m` table
+///   lookups rather than a full-dimension dot product. The 342 → 374 (+9%) and
+///   → 417 (+22% over 50, +11.5% over 200) figures above are the exact-int8
+///   path.
+///
+/// **This changes published ColBERT figures.** `late_rescore` runs on the
+/// un-truncated candidate list, so on a sealed vault with no prefilter the
+/// depth applies to the whole corpus: a 127-drawer LoCoMo conversation goes
+/// from `min(127, 50)` to `min(127, 200)` — every drawer rescored instead of
+/// 50. Numbers recorded before this constant existed describe depth 50.
+const DEFAULT_LATE_TOP_N: usize = 200;
 
 // The five trained index artifacts. Each name is used for BOTH its generation
 // counter (`PalaceStore::codebook_generation_bump`) and its keyed
@@ -195,6 +246,51 @@ pub(crate) fn rerank_top_n() -> usize {
         .and_then(|v| v.parse().ok())
         .filter(|&n| n > 0)
         .unwrap_or(DEFAULT_RERANK_TOP_N)
+}
+
+/// Depth of the late-interaction rescore — see [`DEFAULT_LATE_TOP_N`].
+///
+/// Falls back to `UNDERCROFT_RERANK_TOP_N` when only that is set, so an
+/// operator who pinned the old single knob keeps the behaviour they pinned;
+/// `UNDERCROFT_LATE_TOP_N` wins when both are set.
+///
+/// **The fallback covers unparseable values too**, and that is not
+/// pedantry: `UNDERCROFT_RERANK_TOP_N=0` (or `abc`, or empty) has always meant
+/// "50" to the reranker, because the parse fails and the default applies. If
+/// only presence-and-valid were honoured here, that same setting would newly
+/// mean 200 — a silent 4× increase in rescore depth for a deployment that
+/// changed nothing. So a *present* `UNDERCROFT_RERANK_TOP_N` pins this stage to
+/// whatever the reranker resolves it to, valid or not.
+pub(crate) fn late_top_n() -> usize {
+    resolve_late_top_n(
+        std::env::var("UNDERCROFT_LATE_TOP_N").ok().as_deref(),
+        std::env::var("UNDERCROFT_RERANK_TOP_N").ok().as_deref(),
+    )
+}
+
+/// The resolution rule, as a pure function of the two variables' values.
+///
+/// Pure so it can be tested exhaustively without mutating the environment:
+/// `std::env::set_var` is process-global and the suite runs tests in parallel,
+/// so an env-driven test of this is a flake generator aimed at every other
+/// test that happens to run beside it.
+fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
+    if let Some(n) = late.and_then(|v| v.parse().ok()).filter(|&n| n > 0) {
+        return n;
+    }
+    match rerank {
+        // Present at all ⇒ this stage tracks the old knob, *including* values
+        // that do not parse. `UNDERCROFT_RERANK_TOP_N=0` has always resolved to
+        // 50 for the reranker; honouring only valid values here would newly
+        // resolve it to 200 and quadruple rescore depth for a deployment that
+        // changed nothing.
+        Some(v) => v
+            .parse()
+            .ok()
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_RERANK_TOP_N),
+        None => DEFAULT_LATE_TOP_N,
+    }
 }
 
 /// How the semantic and lexical signals are combined at rank time.
@@ -483,6 +579,11 @@ pub struct PalaceStore {
     ivf_min: usize,
     /// Inverted lists probed per query (`None` ⇒ `max(8, nlist/4)`).
     ivf_nprobe: Option<usize>,
+    /// Depth of the late-interaction rescore, resolved at open from
+    /// `UNDERCROFT_LATE_TOP_N` / `UNDERCROFT_RERANK_TOP_N`
+    /// ([`DEFAULT_LATE_TOP_N`]). Distinct from the cross-encoder's cap:
+    /// see [`PalaceStore::set_late_top_n`].
+    late_top_n: usize,
     /// Sealed vaults: corpus size at which PQ codes keep to one AEAD page
     /// per IVF list instead of per-row seals (`usize::MAX` ⇒ never — the
     /// default; the page tier is opt-in until the RAM trigger fires).
@@ -971,6 +1072,9 @@ impl PalaceStore {
             ivf_nprobe: std::env::var("UNDERCROFT_IVF_NPROBE")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            // Resolved once at open like every other tunable, rather than read
+            // from the environment on each search.
+            late_top_n: late_top_n(),
             pq_page_min: match std::env::var("UNDERCROFT_PQ_PAGE_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
                 Ok(v) => v.parse().unwrap_or(usize::MAX),
@@ -5916,6 +6020,135 @@ mod tests {
                 (CODEBOOK_TOK.to_string(), 0),
             ],
             "and it must be visible from the stats surface, not only internally"
+        );
+    }
+
+    /// The two rescore budgets resolve independently, and a deployment that
+    /// pinned the old single knob keeps what it pinned — **including when the
+    /// value it pinned is unparseable.**
+    ///
+    /// That last case is the whole reason this test exists.
+    /// `UNDERCROFT_RERANK_TOP_N=0` has always resolved to 50, because the
+    /// `n > 0` filter fails and the default applies. A fallback that only
+    /// honoured *valid* values would newly resolve the same setting to 200 —
+    /// quadrupling rescore depth for someone who changed nothing. Serial,
+    /// because environment variables are process-global.
+    #[test]
+    fn the_two_rescore_depths_resolve_independently() {
+        assert_ne!(
+            DEFAULT_RERANK_TOP_N, DEFAULT_LATE_TOP_N,
+            "the split is pointless if the two defaults agree"
+        );
+        // Nothing set: the late stage gets its own default.
+        assert_eq!(resolve_late_top_n(None, None), DEFAULT_LATE_TOP_N);
+
+        // Only the old knob: the late stage tracks it — the compatibility
+        // promise a deployment that pinned 37 is owed.
+        assert_eq!(resolve_late_top_n(None, Some("37")), 37);
+
+        // Only the old knob, set to something that does not parse. It has
+        // always meant 50 to the reranker, so it must still mean 50 here —
+        // honouring only valid values would quadruple the depth for someone
+        // who changed nothing.
+        for pinned in ["0", "-1", "abc", "", "99999999999999999999"] {
+            assert_eq!(
+                resolve_late_top_n(None, Some(pinned)),
+                DEFAULT_RERANK_TOP_N,
+                "UNDERCROFT_RERANK_TOP_N={pinned:?} must not silently deepen \
+                 the late stage to {DEFAULT_LATE_TOP_N}"
+            );
+        }
+
+        // The new knob wins when both are set.
+        assert_eq!(resolve_late_top_n(Some("512"), Some("37")), 512);
+        // A junk late value falls through to the old knob, not to the new
+        // default, for the same compatibility reason.
+        assert_eq!(resolve_late_top_n(Some("0"), Some("37")), 37);
+        assert_eq!(resolve_late_top_n(Some("abc"), None), DEFAULT_LATE_TOP_N);
+    }
+
+    /// A late-interaction mock with exactly one synonym: `backlog` encodes as
+    /// `queue`. That is the whole point — it lets MaxSim prefer a drawer the
+    /// lexical channels cannot see, so a test can tell the rescore apart from
+    /// the fusion ranking that feeds it.
+    struct SynonymLate;
+    impl undercroft_core::late::LateInteraction for SynonymLate {
+        fn model_name(&self) -> &str {
+            "synonym-mock"
+        }
+        fn dim(&self) -> usize {
+            3
+        }
+        /// Three explicit buckets, so nothing can collide by accident: the
+        /// query's first term, the synonym pair, and everything else. A hashed
+        /// mock put a filler level with the target on a bucket collision, which
+        /// is a fine way to spend an afternoon disbelieving a real result.
+        fn encode_doc(&self, text: &str) -> Vec<f32> {
+            let mut m = Vec::new();
+            for w in text.split_whitespace() {
+                let bucket = match w {
+                    "kafka" => 0,
+                    "queue" | "backlog" => 1,
+                    _ => 2,
+                };
+                let mut row = vec![0f32; 3];
+                row[bucket] = 1.0;
+                m.extend(row);
+            }
+            m
+        }
+        fn encode_query(&self, text: &str) -> Vec<f32> {
+            self.encode_doc(text)
+        }
+    }
+
+    /// The late stage must rescore to its OWN depth, not the reranker's cap.
+    ///
+    /// Getting this test to mean anything took two attempts, and the first
+    /// failure is the instructive one: a target that covers every query term
+    /// is ranked first by *fusion*, so it sits inside any cap and the
+    /// assertion passes whichever constant the code reads — vacuous in exactly
+    /// the way every other late-interaction test here is, because they all
+    /// write fewer drawers than the smaller cap.
+    ///
+    /// So the target has to be reachable only by the deeper rescore: 60
+    /// fillers repeat the query's one lexical term until fusion ranks them all
+    /// above it, putting it past the cross-encoder's 50, while MaxSim sees
+    /// through the synonym and lifts it from there. Depth 50 leaves it
+    /// unrescored and buried; depth 80 finds it.
+    #[test]
+    fn the_late_stage_rescores_to_its_own_depth_not_the_reranker_cap() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        s.set_late(Some(Box::new(SynonymLate)));
+        // Via the setter, not the environment: `set_var` is process-global and
+        // the suite runs in parallel, so an env-driven test here would be a
+        // flake aimed at whatever test happens to run beside it.
+        s.set_late_top_n(80);
+        for i in 0..60u32 {
+            s.upsert(&drawer("w", "r", &format!("kafka kafka kafka note {i}"), i))
+                .unwrap();
+        }
+        // Covers both query tokens once the synonym is applied (kafka + queue),
+        // where every filler covers only one — but it says "kafka" once, so
+        // BM25 and the cosine both rank it below all sixty.
+        let target = drawer("w", "r", "kafka backlog rework", 100);
+        s.upsert(&target).unwrap();
+        let hits = s
+            .search(
+                "kafka queue",
+                &SearchOptions {
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let at = hits.iter().position(|h| h.drawer.id == target.id);
+        assert_eq!(
+            at,
+            Some(0),
+            "the target is fusion-ranked past 50 and only MaxSim can lift it, \
+             so it leads at depth 80 and is invisible at the reranker's 50 — \
+             it came back at {at:?}"
         );
     }
 
