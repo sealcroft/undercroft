@@ -1071,8 +1071,14 @@ fn main() -> Result<()> {
             if normalized.is_empty() {
                 bail!("nothing to remember: content is empty after normalization");
             }
-            let count_before = store.count()?;
-            let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli")
+            // A unique append slot, never `count()`. `COUNT(*)` goes *down*
+            // after a delete, so the next save is handed an index still in
+            // use, the derived id collides, and `ON CONFLICT(id) DO UPDATE`
+            // overwrites the unrelated drawer holding it — a record destroyed
+            // by writing a different one. The `/v1` and MCP save paths already
+            // use this; the CLI was the last one that did not.
+            let idx = store.next_append_index()? as u32;
+            let drawer = Drawer::new(wing, room, normalized, None, idx, "cli")
                 .with_content_date(content_date.clone());
             store.upsert(&drawer)?;
             println!(
@@ -1761,6 +1767,19 @@ fn main() -> Result<()> {
             );
             println!("writes:  {}", st.writes);
             println!("db size: {} bytes", st.db_bytes);
+            // Trained index artifacts, but only the ones that exist: a
+            // generation of 0 means this vault never trained that codebook,
+            // and listing five zeroes on every default vault would bury the
+            // one line that matters — a generation that moved.
+            let trained: Vec<String> = st
+                .codebooks
+                .iter()
+                .filter(|(_, gen)| *gen > 0)
+                .map(|(a, gen)| format!("{a} gen {gen}"))
+                .collect();
+            if !trained.is_empty() {
+                println!("codebooks: {}", trained.join(", "));
+            }
             println!("wings:");
             for (w, n) in st.wings {
                 println!("  {w:<24} {n}");
