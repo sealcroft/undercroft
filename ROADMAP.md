@@ -645,9 +645,27 @@ cheap, and without them the later work is unmeasurable.*
 - **The +6.5pp / 80.4% ColBERT boundary figure does not reproduce** on this
   build with either draw, while the hash baseline on the same corpus
   reproduces to the decimal. Corpus or config drift would have moved both, so
-  the difference is somewhere in the ColBERT path and is unexplained. This
-  build measures the ColBERT gain there at **+4.2 to +5.0pp**. Do not quote
-  +6.5pp again until it is reproduced or explained.
+  the difference is somewhere in the ColBERT path. This build measures the
+  ColBERT gain there at **+4.2 to +5.0pp**. Do not quote +6.5pp again until it
+  is reproduced or explained. Three candidates, none of them recorded when the
+  figure was taken, which is the actual lesson: the **backend** (`colbert` on
+  tract versus `colbert-ort` on ONNX Runtime — same weights, different kernels
+  and rounding), the **export pair** (a different doc-length export changes
+  rows per drawer, hence MaxSim *and* whether the token codebook trains), and
+  **which side of the packing boundary** the run was on. Settling it is two
+  runs. **A measurement recorded without its configuration is not a
+  measurement** — every future figure needs backend, export and thresholds
+  beside it.
+- **A vault built by the old stride keeps its codebook, and nothing repairs
+  it.** Upgrading the binary deliberately does not re-quantize: the stored
+  codebook and every code pointing at it stay exactly as they were, so an
+  upgrade changes no ranking and costs no write. The consequence is that a
+  vault whose corpus size aligned with its ingest period keeps a degenerate
+  codebook until something forces a retrain, and there is no detection for it.
+  Remediation today is manual (force a re-embed, or drop the index so the
+  self-heal rebuilds). A cheap detector is possible — a codebook whose
+  centroids collapse onto far fewer distinct cells than `k` is measurable at
+  train time — and is not built.
 - The seeding stride *inside* `kmeans` is not keyed. The sample arrives in
   insertion order, so seed slot *c* is its *c/k* quantile and a writer who
   owns a contiguous stretch of insertions and makes those rows identical can
