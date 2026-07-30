@@ -6,9 +6,14 @@
 //! using the vault id and a per-vault random salt as domain separation:
 //!
 //! ```text
-//! enc_key = HKDF(master, salt=vault_salt, info="undercroft.v1/vault/<id>/enc")
-//! mac_key = HKDF(master, salt=vault_salt, info="undercroft.v1/vault/<id>/mac")
+//! enc_key    = HKDF(master, salt=vault_salt, info="undercroft.v1/vault/<id>/enc")
+//! mac_key    = HKDF(master, salt=vault_salt, info="undercroft.v1/vault/<id>/mac")
+//! sample_key = HKDF(master, salt=vault_salt, info="undercroft.v1/vault/<id>/sample")
 //! ```
+//!
+//! (`manifest` is derived the same way; `sample` keys the training-sample draw
+//! of trained index artifacts — see [`super::Vault::sample_rank`] — and is
+//! separate from `mac` so a rank never shares a key with record integrity.)
 //!
 //! Vaults therefore never share working keys: leaking one vault's derived
 //! keys does not expose siblings, and ciphertext cannot be transplanted

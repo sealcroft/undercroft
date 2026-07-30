@@ -63,7 +63,7 @@ use undercroft_vault::SecurityLevel;
 use rusqlite::{params, OptionalExtension};
 
 use crate::pq::{CoarseQuantizer, ProductQuantizer};
-use crate::{PalaceStore, StoreError};
+use crate::{PalaceStore, StoreError, CODEBOOK_PQ, CODEBOOK_PQ_IVF};
 
 /// The PQ RAM code cache, slab-grouped by IVF list: `list → (seqs,
 /// contiguous codes)`. A probe scans only its lists' slabs — no per-row
@@ -181,6 +181,72 @@ impl PqCache {
 /// well, and training is a one-time cost we keep to seconds.
 const PQ_TRAIN_ITERS: usize = 12;
 const PQ_TRAIN_SAMPLE: usize = 4096;
+
+/// `want` training-sample indices, ascending — **stratified by position and
+/// keyed within each stratum**.
+///
+/// Every codebook and centroid set in this crate trains on a *sample* of the
+/// corpus, and that sample used to be an even stride over insertion order:
+/// reproducible, and equally reproducible to a writer who never held the vault
+/// key. k-means has an unbounded breakdown point, so knowing which rows train
+/// the quantizer every other row is then encoded against is a lever on
+/// unrelated drawers' recall — the one cross-drawer coupling the codebooks
+/// already carry (see the poison-resistance invariant in CLAUDE.md).
+///
+/// **The stride was also a latent recall landmine, and that is measured.** A
+/// fixed interval over a corpus whose insertion order is *periodic* samples one
+/// residue class: if the interval shares a factor with the period, the sample
+/// is homogeneous and the codebook trains on a slice of the space. On
+/// `synth --n 16384` with `UNDERCROFT_RETRIEVAL=pq` — where `⌈n/4096⌉ = 4` meets
+/// a corpus built from `FACT_TEMPLATES[i % 4]` — the stride scores **R@5 83.0%
+/// / R@1 82.5%**, failing that harness's own ≥95% regression gate, while this
+/// draw scores **99.7% / 98.9%**. At `n = 20000` the interval is 5, coprime
+/// with the period, and the stride is a perfectly balanced systematic sample
+/// (99.8% / 99.2%) against this draw's 99.4% / 97.9% — so the stride's apparent
+/// edge is alignment luck between two measured points, and its collapse sits
+/// between them. Periodic insertion order is not exotic: round-robin ingest
+/// per source, alternating speakers, one session per day all produce it.
+///
+/// **Why stratify rather than take the `want` lowest ranks.** Blocks preserve
+/// the one property the stride had that was worth keeping — coverage across the
+/// corpus — while the keyed choice *inside* each block breaks the residue
+/// alignment that made it fragile. Measured, the two keyed variants are within
+/// noise of each other (uniform 97.8/99.4, stratified 97.9/99.4 at n=20000), so
+/// this is chosen for the reasoning it supports, not a recall win.
+///
+/// What it costs an attacker: under the stride a writer knew exactly which seqs
+/// would train (`seq ≡ 0 mod stride`), so **one** crafted row placed on a
+/// sampled position entered the training set. Now they know their block
+/// contributes one row but not which, so certainty costs them every row in the
+/// block, and a single crafted row is a `1/blocksize` chance.
+///
+/// Below the cap every index is returned, exactly as the stride did at
+/// `stride == 1` — so nothing changes for a corpus smaller than the sample.
+pub(crate) fn stratified_keyed(n: usize, want: usize, rank: impl Fn(usize) -> u64) -> Vec<usize> {
+    if want == 0 {
+        return Vec::new();
+    }
+    if want >= n {
+        return (0..n).collect();
+    }
+    let mut chosen = Vec::with_capacity(want);
+    for b in 0..want {
+        let lo = b * n / want;
+        let hi = (((b + 1) * n / want).max(lo + 1)).min(n);
+        let mut best = lo;
+        let mut best_rank = u64::MAX;
+        for i in lo..hi {
+            let r = rank(i);
+            // `<` keeps the first on a tie, so the draw is total-ordered.
+            if r < best_rank {
+                best_rank = r;
+                best = i;
+            }
+        }
+        chosen.push(best);
+    }
+    chosen
+}
 
 /// IVF partitioning kicks in above this corpus size by default — below it the
 /// flat ADC scan is already a few milliseconds and partitions would only add
@@ -760,6 +826,22 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Indices of the keyed training sample over `items`, each identified by
+    /// `ident` — the draw described on [`take_lowest`]. `label` separates one
+    /// artifact's draw from another's, so two codebooks trained from the same
+    /// corpus do not train on the same rows.
+    pub(crate) fn keyed_sample<T>(
+        &self,
+        label: &str,
+        items: &[T],
+        want: usize,
+        ident: impl Fn(&T) -> Vec<u8>,
+    ) -> Vec<usize> {
+        stratified_keyed(items.len(), want, |i| {
+            self.vault.sample_rank(label, &ident(&items[i]))
+        })
+    }
+
     /// Fill the RAM cache from the persisted IVF centroids, if any.
     fn ivf_load(&self) -> Result<(), StoreError> {
         let stored = self.pq_meta_get("ivf")?;
@@ -808,17 +890,19 @@ impl PalaceStore {
                 else {
                     return Ok(false);
                 };
-                // Train on an even sample; codebooks tolerate sampling well.
-                let stride = items.len().div_ceil(PQ_TRAIN_SAMPLE).max(1);
-                let sample: Vec<Vec<f32>> = items
-                    .iter()
-                    .step_by(stride)
-                    .map(|(_, v)| v.clone())
+                // Train on a keyed sample; codebooks tolerate sampling well.
+                let sample: Vec<Vec<f32>> = self
+                    .keyed_sample(CODEBOOK_PQ, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
+                        seq.to_le_bytes().to_vec()
+                    })
+                    .into_iter()
+                    .map(|i| items[i].1.clone())
                     .collect();
                 let Some(pq) = ProductQuantizer::train(&sample, m, PQ_TRAIN_ITERS) else {
                     return Ok(false);
                 };
                 self.pq_meta_put("codebook", &pq.to_bytes())?;
+                self.codebook_generation_bump(CODEBOOK_PQ);
                 pq
             }
         };
@@ -840,15 +924,19 @@ impl PalaceStore {
                 // inverted-FDE tier's clamp.
                 let nlist = (n as f64).sqrt() as usize;
                 let nlist = nlist.clamp(16, 4096);
-                let stride = n.div_ceil(PQ_TRAIN_SAMPLE).max(1);
-                let sample: Vec<Vec<f32>> = items
-                    .iter()
-                    .step_by(stride)
-                    .map(|(_, v)| v.clone())
+                // A separate label from the codebook's: two independent draws
+                // rather than the identical stride both used to take.
+                let sample: Vec<Vec<f32>> = self
+                    .keyed_sample(CODEBOOK_PQ_IVF, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
+                        seq.to_le_bytes().to_vec()
+                    })
+                    .into_iter()
+                    .map(|i| items[i].1.clone())
                     .collect();
                 match CoarseQuantizer::train(&sample, nlist, IVF_TRAIN_ITERS, n as u64) {
                     Some(cq) => {
                         self.pq_meta_put("ivf", &cq.to_bytes())?;
+                        self.codebook_generation_bump(CODEBOOK_PQ_IVF);
                         *self.ivf.borrow_mut() = Some(cq);
                     }
                     None => {
@@ -1142,7 +1230,59 @@ impl PalaceStore {
 
 #[cfg(test)]
 mod tests {
-    use super::PqCache;
+    use super::{stratified_keyed, PqCache};
+
+    /// The selection half of the keyed draw, and both of its properties: the
+    /// **strata** (measured worth 1.4pp of R@1 on `synth --n 20000`) and the
+    /// **unpredictability inside them** (the reason for the change at all).
+    #[test]
+    fn stratified_keyed_keeps_the_strata_and_randomises_within_them() {
+        // Below the cap, everything trains — exactly what stride 1 did.
+        let id = |i: usize| i as u64;
+        assert_eq!(stratified_keyed(10, 10, id), (0..10).collect::<Vec<_>>());
+        assert_eq!(stratified_keyed(10, 99, id), (0..10).collect::<Vec<_>>());
+        assert!(stratified_keyed(10, 0, id).is_empty());
+
+        // One pick per block: [0,2) [2,4) [4,6) — the lowest rank in each.
+        let ranks = [50u64, 3, 90, 1, 70, 2];
+        assert_eq!(stratified_keyed(6, 3, |i| ranks[i]), vec![1, 3, 5]);
+
+        // PRF-shaped ranks over 1000 items, 50 wanted.
+        let prf: Vec<u64> = (0..1000u64)
+            .map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .collect();
+        let chosen = stratified_keyed(1000, 50, |i| prf[i]);
+        assert_eq!(chosen.len(), 50, "exactly `want`, never fewer");
+        assert!(
+            chosen.windows(2).all(|w| w[0] < w[1]),
+            "ascending, no dupes"
+        );
+
+        // STRATIFIED: exactly one pick from each equal block, so the sample
+        // spans the corpus the way the stride did — the half that carries the
+        // recall.
+        for (b, &i) in chosen.iter().enumerate() {
+            let lo = b * 1000 / 50;
+            let hi = (b + 1) * 1000 / 50;
+            assert!(
+                (lo..hi).contains(&i),
+                "block {b} picked {i}, outside {lo}..{hi}"
+            );
+        }
+
+        // KEYED: not the stride's first-of-block, which is what a bulk writer
+        // could predict. Either property alone is the bug.
+        let stride: Vec<usize> = (0..1000).step_by(1000 / 50).collect();
+        assert_ne!(chosen, stride, "a keyed draw must not reproduce the stride");
+
+        // Deterministic for the same ranks — the vault key is what makes the
+        // ranks themselves reproducible (see `Vault::sample_rank`).
+        assert_eq!(chosen, stratified_keyed(1000, 50, |i| prf[i]));
+
+        // A degenerate rank function degrades to exactly the old stride
+        // rather than to something arbitrary.
+        assert_eq!(stratified_keyed(1000, 50, |_| 7), stride);
+    }
 
     /// The slab contract: rows group by list with a fixed stride, probe
     /// scans see exactly their lists' rows, removal keeps strides intact

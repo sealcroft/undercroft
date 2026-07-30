@@ -27,7 +27,7 @@ use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInte
 use rusqlite::{params, OptionalExtension};
 
 use crate::pq::ProductQuantizer;
-use crate::{rerank_top_n, PalaceStore, SearchHit, StoreError};
+use crate::{rerank_top_n, PalaceStore, SearchHit, StoreError, CODEBOOK_TOK};
 
 /// Stored-matrix count at which the token codebook trains (v2 packing).
 /// Below it, int8 (v1) is already small and PQ would train on too few
@@ -160,8 +160,7 @@ impl PalaceStore {
             .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
         drop(stmt);
-        // Gather an even sample of token rows across the v1 matrices.
-        let mut sample: Vec<Vec<f32>> = Vec::new();
+        // Gather a keyed sample of token rows across the v1 matrices.
         let mut v1: Vec<(String, Vec<f32>, usize)> = Vec::new();
         for (id, blob) in &blobs {
             let Ok(packed) = self.vault.tokens_from_rest(id, blob) else {
@@ -176,12 +175,35 @@ impl PalaceStore {
         if total_rows == 0 {
             return Ok(false);
         }
-        let stride = total_rows.div_ceil(TOK_PQ_SAMPLE).max(1);
+        // Rank every token row under the vault's sample key and keep the
+        // lowest — the same draw the PQ codebooks use, per (drawer, row), so a
+        // bulk writer cannot predict which of their tokens shape the codebook
+        // every other drawer's tokens are then coded against.
+        let chosen: Vec<usize> = if TOK_PQ_SAMPLE >= total_rows {
+            (0..total_rows).collect()
+        } else {
+            // Rank every token row once — the flattened walk order is the
+            // stratification axis, so row `i` of the walk keeps its position.
+            let mut ranks: Vec<u64> = Vec::with_capacity(total_rows);
+            for (id, matrix, dim) in &v1 {
+                let mut ident = Vec::with_capacity(id.len() + 4);
+                for r in 0..matrix.len() / (*dim).max(1) {
+                    ident.clear();
+                    ident.extend_from_slice(id.as_bytes());
+                    ident.extend((r as u32).to_le_bytes());
+                    ranks.push(self.vault.sample_rank(CODEBOOK_TOK, &ident));
+                }
+            }
+            crate::pqidx::stratified_keyed(total_rows, TOK_PQ_SAMPLE, |i| ranks[i])
+        };
+        let mut sample: Vec<Vec<f32>> = Vec::with_capacity(chosen.len());
+        let mut next = chosen.iter().peekable();
         let mut i = 0usize;
         for (_, matrix, dim) in &v1 {
             for row in matrix.chunks_exact(*dim) {
-                if i.is_multiple_of(stride) {
+                if next.peek() == Some(&&i) {
                     sample.push(row.to_vec());
+                    next.next();
                 }
                 i += 1;
             }
@@ -207,6 +229,7 @@ impl PalaceStore {
             "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook_model', ?1)",
             params![model.as_bytes()],
         )?;
+        self.codebook_generation_bump(CODEBOOK_TOK);
         for (id, matrix, dim) in &v1 {
             let rows = matrix.len() / dim;
             let mut codes = Vec::with_capacity(rows * pq.code_len());

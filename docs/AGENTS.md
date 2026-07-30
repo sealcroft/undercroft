@@ -499,7 +499,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | POST | `/v1/vaults` | create vault (`level`, optional `embedder`) |
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
-| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes |
+| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
 | POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `vector`, `dedup_threshold`) |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |

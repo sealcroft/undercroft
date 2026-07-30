@@ -122,6 +122,28 @@ const KNOWN_EMBEDDER_UPGRADES: &[(&str, &str)] = &[
 /// runs per candidate, so this bounds the added latency.
 const DEFAULT_RERANK_TOP_N: usize = 50;
 
+// The five trained index artifacts. Each name is used for BOTH its generation
+// counter (`PalaceStore::codebook_generation_bump`) and its keyed
+// training-sample label (`pqidx::take_lowest`) — one string, two roles, so they
+// cannot drift apart: every call site passes the const, never a literal, so
+// changing a value here moves the counter key and the draw together (a literal
+// at one of the five sites would silently split them, which is how the first
+// version of this shipped). They are the only
+// cross-drawer objects in the engine besides BM25's IDF, so both the draw that
+// shapes them and the event that replaces them are tracked by name.
+pub(crate) const CODEBOOK_PQ: &str = "pq-codebook";
+pub(crate) const CODEBOOK_PQ_IVF: &str = "pq-ivf";
+pub(crate) const CODEBOOK_FDE: &str = "fde-codebook";
+pub(crate) const CODEBOOK_FDE_IVF: &str = "fde-ivf";
+pub(crate) const CODEBOOK_TOK: &str = "tok-codebook";
+pub(crate) const CODEBOOK_ARTIFACTS: [&str; 5] = [
+    CODEBOOK_PQ,
+    CODEBOOK_PQ_IVF,
+    CODEBOOK_FDE,
+    CODEBOOK_FDE_IVF,
+    CODEBOOK_TOK,
+];
+
 /// Append an audit entry **and** advance the committed chain head, inside
 /// the caller's open transaction (a [`rusqlite::Transaction`] derefs to
 /// `Connection`, so both work). Returns `(new_head_hex, writes)` for the
@@ -718,6 +740,102 @@ impl PalaceStore {
         )?;
         self.drop_derived_caches();
         Ok(())
+    }
+
+    /// How many times `artifact`'s codebook (or centroid set) has been trained
+    /// in this vault. Zero means never.
+    pub(crate) fn codebook_generation(&self, artifact: &str) -> u64 {
+        self.conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![format!("codebook_generation/{artifact}")],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Record that `artifact` was just (re)trained; returns the new generation.
+    ///
+    /// **Why this exists.** Nothing in a row's bytes says which generation of a
+    /// trained artifact produced them, so "the index was rebuilt from the
+    /// artifact it already had" and "the artifact was replaced and every row
+    /// re-derived against the new one" look identical from outside. That is the
+    /// same class of invisible change to a vector space that
+    /// `KNOWN_EMBEDDER_UPGRADES` exists to make explicit, one level down, and it
+    /// matters because these artifacts are the only cross-drawer objects here
+    /// besides BM25's IDF: replacing one changes what happens to *unrelated*
+    /// drawers.
+    ///
+    /// **What a step means differs by artifact, and the difference is not
+    /// cosmetic:**
+    /// - `pq-codebook`, `fde-codebook`, `tok-codebook` — **re-quantization**.
+    ///   Every code byte is recomputed; the same vector now maps to a different
+    ///   centroid, so approximate distances move.
+    /// - `pq-ivf`, `fde-ivf` — **re-partitioning**. Code bytes are
+    ///   byte-identical before and after; only the list assignment changes, so
+    ///   what moves is which candidates a probe *offers*. Availability, not
+    ///   score — the same split the coupling rule draws.
+    ///
+    /// It lives in `meta` rather than in the artifact's own table on purpose:
+    /// a generation is history, and `invalidate_embedding_space` drops
+    /// `pq_meta` wholesale — which is precisely the event most worth counting.
+    /// Being unsealed is deliberate too: a count of training events is
+    /// content-independent (safe to log), and `meta` already holds the embedder
+    /// identity in clear. **It is not integrity evidence**: the row is outside
+    /// HMAC coverage, so anyone who can write the database file can reset or
+    /// forge it. It distinguishes honest ambiguity, not tampering.
+    ///
+    /// **Two known gaps, stated rather than implied.** Export/import is
+    /// per-drawer and copies no `meta` rows, so a migrated vault reports 0 —
+    /// which reads as "never trained" rather than "unknown". And a bump lost to
+    /// a busy database is warned about, not retried: advisory like the encode
+    /// paths that call it, because it must never fail a training pass and must
+    /// never open a transaction.
+    pub(crate) fn codebook_generation_bump(&self, artifact: &str) -> u64 {
+        let next = self.codebook_generation(artifact) + 1;
+        if let Err(e) = self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![format!("codebook_generation/{artifact}"), next.to_string()],
+        ) {
+            // Silence here would be the worst outcome: the artifact IS new and
+            // the counter would keep claiming the old generation, which is
+            // exactly the invisibility this counter exists to remove.
+            undercroft_obs::diag_warn!(
+                "codebook {artifact} was retrained but its generation counter \
+                 could not be advanced ({e}); the reported generation is now \
+                 behind the artifact on disk"
+            );
+        }
+        undercroft_obs::set_gauge(
+            &Self::codebook_gauge_name(artifact),
+            self.vault.id(),
+            next as f64,
+        );
+        next
+    }
+
+    /// The telemetry gauge name for `artifact`. A gauge set under a name that
+    /// `undercroft_obs::GAUGE_NAMES` does not list is silently dropped, so the
+    /// mapping is one function and
+    /// `every_codebook_gauge_name_is_registered_in_obs` pins it against that
+    /// list — the first version of this call emitted five names none of which
+    /// were registered, and looked live at the call site.
+    pub(crate) fn codebook_gauge_name(artifact: &str) -> String {
+        format!("codebook_generation_{}", artifact.replace('-', "_"))
+    }
+
+    /// Every tracked artifact's generation, in a stable order — the visible
+    /// surface for [`Self::codebook_generation_bump`].
+    pub fn codebook_generations(&self) -> Vec<(String, u64)> {
+        CODEBOOK_ARTIFACTS
+            .iter()
+            .map(|a| ((*a).to_string(), self.codebook_generation(a)))
+            .collect()
     }
 
     fn record_embedder_identity(&self) -> Result<(), StoreError> {
@@ -4618,6 +4736,13 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(meta, 1, "codebook must persist");
+            // …and the training event is counted. Without this the FDE bump
+            // could be deleted and the whole suite would stay green.
+            assert_eq!(
+                s.codebook_generation(CODEBOOK_FDE),
+                1,
+                "training the FDE codebook must advance its generation"
+            );
             let fde_dim = s.fde_encoder.borrow().as_ref().unwrap().dim();
             let blob: Vec<u8> = s
                 .conn
@@ -4717,6 +4842,14 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(meta, 1, "centroids must persist");
+            // A centroid-set generation means RE-PARTITIONING, not
+            // re-quantization: the code bytes are untouched, what moves is which
+            // candidates a probe offers.
+            assert_eq!(
+                s.codebook_generation(CODEBOOK_FDE_IVF),
+                1,
+                "training FDE centroids must advance their generation"
+            );
             match s.fde_cache.borrow().as_ref() {
                 Some(fdeidx::FdeCache::Coded { slabs, .. }) => {
                     assert!(
@@ -4968,6 +5101,12 @@ mod tests {
                     .count() as i64
             };
             assert_eq!(v2, 8, "every stored matrix repacked to v2 at {level:?}");
+            // The repack IS a re-quantization of every token row, so it counts.
+            assert_eq!(
+                s.codebook_generation(CODEBOOK_TOK),
+                1,
+                "training the token codebook must advance its generation"
+            );
 
             // New writes pack v2 directly, and remain findable via LUTs.
             s.upsert(&drawer("w", "r", "zebra migration ledger", 60))
@@ -5421,6 +5560,385 @@ mod tests {
         }
     }
 
+    /// **What a drawer costs on disk, pinned — every artifact, every byte.**
+    ///
+    /// "Never grow large" is a first-class constraint of this project, and it
+    /// was the only load-bearing property with no test: the byte formulas lived
+    /// in comments, the totals lived in arithmetic over them, and a change that
+    /// doubled the per-drawer footprint would have shipped green.
+    ///
+    /// The mechanism is **one table driving both halves**. `PRICED` names each
+    /// per-drawer artifact together with the query that measures it and the
+    /// formula it must equal; the inventory assertion is built from that same
+    /// array. So a new artifact cannot be silenced by adding a name — a name
+    /// with no formula beside it does not compile. The first version of this
+    /// test kept the two halves separate and was refuted for exactly that: one
+    /// string literal made it green with zero bytes measured.
+    ///
+    /// Three assertions:
+    ///
+    /// 1. **The inventory is the whole schema**, not a name prefix. Every table
+    ///    is either priced per-drawer or listed as not-per-drawer with a
+    ///    reason. A prefix filter (`drawer%`) is a naming convention, and a
+    ///    future store called `sparse_terms` would pass it silently.
+    /// 2. **`drawers`' columns are pinned**, because the cheapest way to add
+    ///    per-drawer bytes is a column, which no table-level check can see.
+    /// 3. **The bytes are equalities** — a shrink fails too, so good news gets
+    ///    recorded here rather than absorbed silently.
+    ///
+    /// Measured on a **sealed** vault: the level with the strictest guarantees,
+    /// and the one whose artifacts are all AEAD-wrapped (+40 B each: 24-byte
+    /// nonce, 16-byte tag). It is *not* the larger level — hmac-only stores
+    /// content as plaintext and adds an fts5 index plus four shadow tables over
+    /// it, which for a compressible chunk costs more than everything here.
+    #[test]
+    fn one_drawer_costs_exactly_this_many_bytes() {
+        const SEAL: usize = 40; // 24-byte XChaCha20 nonce + 16-byte Poly1305 tag
+        const EMB_HEADER: usize = 6; // 2 magic + f32 scale
+        const DIM: usize = undercroft_core::embed::EMBED_DIM; // 384
+        const TOK_DIM: usize = 16; // WordLate, the test's late-interaction mock
+        const FDE_DIM: usize = 8 * (1 << 4) * 16; // reps × 2^ksim × dproj = 2048
+
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.set_late(Some(Box::new(WordLate)));
+        s.set_fde(true);
+        s.set_pq(true);
+        for i in 0..30 {
+            s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                .unwrap();
+        }
+        // An ~800-byte subject at the shipped chunk size, and it has to be real
+        // prose. A synthetic `word000 word001 …` body compressed to 151 B — six
+        // times better than English does — which made the content ratio below
+        // meaningless in the flattering direction.
+        let body = "The harbour survey finished late on Thursday, and the pilot noted that \
+             the western channel had silted again beyond the second marker. Dredging was \
+             scheduled for spring, but the tender documents were still circulating between \
+             the port authority and the regional office, so nobody expected work to begin \
+             before the equinox. Meanwhile the ferry operators rerouted their evening \
+             crossings through the eastern approach, which added eleven minutes and \
+             irritated the commuters who had complained about the timetable in March. The \
+             lighthouse keeper, who had watched three such cycles, remarked that the sand \
+             always returns to where the current wants it, and that committees rarely move \
+             faster than sediment. His logbook, kept in pencil since nineteen eighty four, \
+             records every reroute the harbour has ever made."
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            (700..900).contains(&body.len()),
+            "the subject must be about one shipped chunk: {} B",
+            body.len()
+        );
+        let subject = drawer("w", "r", &body, 100);
+        let tok_rows = body.split_whitespace().count(); // WordLate: one row per word
+        s.upsert(&subject).unwrap();
+        // Drive the PQ build directly rather than through `search`: the
+        // prefilters are an `else if` chain and the FDE tier enabled above wins
+        // it, so a search here would never reach PQ.
+        let qvec = s.embedder.embed("word001 word002 word003");
+        s.pq_candidates(&qvec, 20).unwrap().expect("PQ index");
+
+        // Every per-drawer artifact: (table, measuring query, expected bytes).
+        // Adding a table to the inventory means adding a row here.
+        let priced: Vec<(&str, &str, usize)> = vec![
+            (
+                "drawers",
+                "SELECT length(embedding) FROM drawers WHERE id = ?1",
+                // int8 + one f32 scale + 2 magic, sealed.
+                SEAL + EMB_HEADER + DIM,
+            ),
+            (
+                "drawer_pq",
+                "SELECT length(code) FROM drawer_pq WHERE seq = \
+                 (SELECT seq FROM drawers WHERE id = ?1)",
+                // i32 IVF list id inside the seal + dim/8 code bytes.
+                SEAL + 4 + DIM / 8,
+            ),
+            (
+                "drawer_tok",
+                "SELECT length(tok) FROM drawer_tok WHERE id = ?1",
+                // v1: 9-byte header + per row an f32 scale and dim int8s.
+                SEAL + 9 + tok_rows * (4 + TOK_DIM),
+            ),
+            (
+                "drawer_fde",
+                "SELECT length(fde) FROM drawer_fde WHERE id = ?1",
+                // Raw f32 FDE — the expensive one, and why the tier is
+                // default-off. Above `fde_pq_min` rows this repacks to
+                // `40 + 5 + fde_dim/8` = 301 B, so this figure is the
+                // *small-corpus* cost, not the steady state.
+                SEAL + 1 + FDE_DIM * 4,
+            ),
+        ];
+
+        // 1. The inventory: every table in the schema is either priced above or
+        //    justified here. Not a name prefix — a prefix is a convention, and
+        //    the next derived store may not follow it.
+        // Not per-drawer. Each entry carries the reason, and each may be absent
+        // here (several are created lazily on first use) — the assertion below
+        // is one-sided: an UNCLASSIFIED table fails, a listed-but-absent one is
+        // fine.
+        let not_per_drawer: &[(&str, &str)] = &[
+            (
+                "meta",
+                "store-level facts: embedder identity, codebook generations",
+            ),
+            (
+                "audit",
+                "one row per WRITE — per-drawer only for a never-updated drawer",
+            ),
+            ("chain_meta", "one row: the committed chain head"),
+            ("tunnels", "one row per cross-wing tunnel"),
+            (
+                "pq_meta",
+                "PQ codebook + IVF centroids + counters, index-wide",
+            ),
+            ("tok_meta", "token codebook, index-wide"),
+            ("fde_meta", "FDE params + codebook + centroids, index-wide"),
+            (
+                "pq_page",
+                "sealed page tier — REPLACES drawer_pq rows, see below",
+            ),
+            (
+                "kg_entities",
+                "knowledge graph: one row per entity, not per drawer",
+            ),
+            ("kg_triples", "knowledge graph: one row per fact"),
+            ("sqlite_sequence", "SQLite's own AUTOINCREMENT bookkeeping"),
+        ];
+        let tables: Vec<String> = s
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let known: Vec<&str> = priced
+            .iter()
+            .map(|(t, _, _)| *t)
+            .chain(not_per_drawer.iter().map(|(t, _)| *t))
+            .collect();
+        let unknown: Vec<&String> = tables
+            .iter()
+            .filter(|t| !known.contains(&t.as_str()))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "new table(s) {unknown:?}: add them to `priced` WITH A FORMULA if they \
+             hold one row per drawer, or to `not_per_drawer` with the reason they \
+             do not. Silence is the one option this test removes"
+        );
+        for (t, _, _) in &priced {
+            assert!(
+                tables.iter().any(|x| x == t),
+                "priced table {t} does not exist — the formula below is measuring \
+                 nothing, which is how a footprint test passes while blind"
+            );
+        }
+        // A sealed vault has no plaintext-derived FTS index, ever — fts5
+        // creates `drawers_fts` plus `_data`/`_idx`/`_content`/`_docsize`
+        // shadow tables, so the substring covers the whole family.
+        let fts: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%_fts%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts, 0, "a sealed vault must never carry an FTS index");
+
+        // 2. `drawers`' columns, because a new per-drawer artifact is cheapest
+        //    to add as a column and no table-level check can see one.
+        let cols: Vec<String> = s
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('drawers') ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            cols.join(","),
+            "content,embedding,filed_at,fp,id,meta_json,room,seq,tag,updated_at,wing",
+            "a column on `drawers` is per-drawer bytes: price it in `priced` or say \
+             here why it is free. Unpriced today and known: `fp` (a truncated-HMAC \
+             blind index), `meta_json` (unsealed metadata, whose exposure is pinned \
+             by a_sealed_vault_exposes_metadata_but_never_content), `tag` (the \
+             record HMAC) — all fixed-size or metadata-sized, none scaling with \
+             content"
+        );
+
+        // 3. The bytes, artifact by artifact — equalities.
+        let len = |sql: &str| -> usize {
+            s.conn
+                .query_row(sql, params![subject.id], |r| r.get::<_, i64>(0))
+                .unwrap() as usize
+        };
+        let mut derived_total = 0usize;
+        for (table, sql, expected) in &priced {
+            let got = len(sql);
+            assert_eq!(
+                got, *expected,
+                "{table} is {got} B/drawer, the formula says {expected} B. Both \
+                 directions matter: a shrink means the formula in CHANGELOG and \
+                 CLAUDE.md is now wrong too"
+            );
+            derived_total += got;
+        }
+
+        // What an ordinary vault pays, measured rather than asserted from a
+        // remembered figure. The default is NEITHER accelerator tier — with
+        // `UNDERCROFT_RETRIEVAL` unset there is no PQ row and no FDE row at all —
+        // so the default derived cost is the sealed embedding alone, and the
+        // published claim for it is "≈1x the sealed content it indexes".
+        let content = len("SELECT length(content) FROM drawers WHERE id = ?1");
+        let emb = len(priced[0].1);
+        // Printed unconditionally: whoever needs the figure for CHANGELOG or
+        // compression-and-security should read it out of a run, not out of a
+        // memory of a run. `cargo test -- --nocapture one_drawer_costs`.
+        println!(
+            "footprint/drawer — prose {} B → sealed content {content} B · \
+             embedding {emb} B · PQ row {} B · tokens ({tok_rows} rows) {} B · \
+             raw FDE {} B · every tier {derived_total} B",
+            body.len(),
+            priced[1].2,
+            priced[2].2,
+            priced[3].2
+        );
+        assert!(
+            content < body.len(),
+            "prose must compress: {} B became {content} B at rest",
+            body.len()
+        );
+        assert!(
+            emb * 2 > content && emb < content * 2,
+            "the default derived footprint is one sealed embedding: {emb} B against \
+             {content} B of sealed content (from {} B of prose). The published \
+             figure is ~1x, and this band is [0.5x, 2x]. If this trips, the \
+             number in compression-and-security and CHANGELOG moved and both \
+             need updating — in whichever direction",
+            body.len()
+        );
+        assert!(
+            derived_total > 20 * emb,
+            "with every tier on, one drawer costs {derived_total} B — {}x the \
+             sealed content and {}x the default. The raw FDE row is ~8.2 KB of \
+             that, which is the whole reason the tier is default-off",
+            derived_total / content.max(1),
+            derived_total / emb.max(1)
+        );
+    }
+
+    /// A codebook that moved must be visible, because a codebook that moved
+    /// silently re-quantized every row encoded against its predecessor.
+    #[test]
+    fn training_a_codebook_advances_a_visible_generation() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        assert!(
+            s.codebook_generations().iter().all(|(_, g)| *g == 0),
+            "an untrained vault must report every generation as zero"
+        );
+        for i in 0..30 {
+            s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                .unwrap();
+        }
+        s.set_pq(true);
+        s.search("routine filler", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            1,
+            "the first PQ codebook is generation 1"
+        );
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ_IVF),
+            0,
+            "IVF is untrained below its threshold and must not claim a generation"
+        );
+
+        // A rebuild that reuses the stored codebook is NOT a new generation:
+        // the counter tracks the artifact being replaced, not index maintenance.
+        //
+        // This has to force a REAL rebuild to mean anything. Merely clearing the
+        // caches makes `pq_build` reload and return early, so an assertion there
+        // could not fail however the bump was placed — the first version of this
+        // test asserted exactly that and was vacuous. Deleting a code row makes
+        // `matched != drawers`, which is the drift condition that drives a full
+        // rebuild through the `Some(codebook)` arm: every row re-encoded, no
+        // retrain.
+        s.conn
+            .execute(
+                "DELETE FROM drawer_pq WHERE seq = (SELECT MIN(seq) FROM drawer_pq)",
+                [],
+            )
+            .unwrap();
+        s.pq_cache.borrow_mut().take();
+        s.pq_verified.set(false);
+        let q = s.embedder.embed("routine filler");
+        s.pq_candidates(&q, 5).unwrap().expect("index rebuilds");
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 30,
+            "the deleted row must be back — a rebuild really ran"
+        );
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            1,
+            "a rebuild that reuses the stored codebook must not advance it"
+        );
+
+        // Dropping the vector space forces a retrain — and this is exactly the
+        // event the counter exists for, so it must survive the table drop that
+        // comes with it.
+        s.invalidate_embedding_space().unwrap();
+        s.pq_cache.borrow_mut().take();
+        s.pq_verified.set(false);
+        s.search("routine filler", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            2,
+            "a re-quantization must advance the generation, not reset it"
+        );
+        assert_eq!(
+            s.stats().unwrap().codebooks,
+            vec![
+                (CODEBOOK_PQ.to_string(), 2),
+                (CODEBOOK_PQ_IVF.to_string(), 0),
+                (CODEBOOK_FDE.to_string(), 0),
+                (CODEBOOK_FDE_IVF.to_string(), 0),
+                (CODEBOOK_TOK.to_string(), 0),
+            ],
+            "and it must be visible from the stats surface, not only internally"
+        );
+    }
+
+    /// A gauge set under a name `undercroft_obs` does not register is dropped
+    /// without a trace — it looks live at the call site and is absent from
+    /// `/metrics` and OTLP. The first version of the codebook counter emitted
+    /// five such names and shipped a battery-green claim that the value was
+    /// "surfaced as a telemetry gauge". This makes that unrepeatable, and it
+    /// works in a build without the `telemetry` feature because the name list
+    /// is a plain const.
+    #[test]
+    fn every_codebook_gauge_name_is_registered_in_obs() {
+        for artifact in CODEBOOK_ARTIFACTS {
+            let name = PalaceStore::codebook_gauge_name(artifact);
+            assert!(
+                undercroft_obs::GAUGE_NAMES.contains(&name.as_str()),
+                "gauge {name:?} (for artifact {artifact:?}) is not in \
+                 undercroft_obs::GAUGE_NAMES, so setting it is a no-op. Add it \
+                 there or stop claiming this artifact is observable"
+            );
+        }
+    }
+
     #[test]
     fn hmac_only_content_is_plaintext_but_tagged() {
         let (dir, mut s) = store(SecurityLevel::HmacOnly);
@@ -5786,6 +6304,19 @@ mod tests {
             })
             .unwrap();
         assert_eq!(stored_ivf, 1, "IVF centroids must persist");
+        // The centroid set is a trained artifact, so its training is counted —
+        // as re-PARTITIONING (the code bytes do not change; which candidates a
+        // probe offers does). The PQ codebook trained once, in the flat pass.
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ_IVF),
+            1,
+            "training IVF centroids must advance their generation"
+        );
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            1,
+            "enabling IVF must not re-train the codebook"
+        );
 
         // Incremental write gets a list id and stays findable through the
         // probed path.

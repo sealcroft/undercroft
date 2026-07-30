@@ -23,15 +23,7 @@ use crate::DiagLevel;
 
 const METER_NAME: &str = "undercroft";
 
-/// Base names of the gauges we surface. Each is exported as
-/// `undercroft_<name>{vault="…"}`.
-const GAUGE_NAMES: &[&str] = &[
-    "drawers",
-    "kg_triples",
-    "kg_entities",
-    "audit_chain_height",
-    "store_bytes",
-];
+use crate::GAUGE_NAMES;
 
 fn gauges() -> &'static Mutex<HashMap<(String, String), f64>> {
     static G: OnceLock<Mutex<HashMap<(String, String), f64>>> = OnceLock::new();

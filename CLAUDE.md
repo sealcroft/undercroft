@@ -416,7 +416,26 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   and codebooks, and ColBERT token matrices are AEAD-sealed under distinct
   AAD domains (search uses decrypt-once RAM caches; the opt-in PQ page tier
   decrypts lazily per probed list). Tests assert the at-rest bytes; new
-  derived artifacts must follow the same pattern. **`meta_json` is stored
+  derived artifacts must follow the same pattern. **What a drawer costs is
+  pinned too** — `one_drawer_costs_exactly_this_many_bytes` asserts each
+  artifact's exact length against its formula (`40+6+dim` embedding = 430 B,
+  `40+4+dim/8` PQ row = 92 B, `40+9+rows·(4+dim)` v1 tokens,
+  `40+1+reps·2^ksim·dproj·4` raw FDE = 8,233 B; 40 = nonce+tag). **One
+  `priced` table drives both the formulas and the inventory**, so a new
+  artifact cannot be silenced by adding a name — the first version kept them
+  separate and one added string literal made it green with nothing measured.
+  The inventory is the **whole schema** (every table either priced
+  per-drawer or justified as not) plus `drawers`' **column list**, because a
+  name prefix is only a convention and a column is the cheapest unpriced
+  per-drawer byte. Measured: 804 B of prose → 515 B sealed content, so the
+  default vault's one derived artifact is **0.83×** the content and every
+  tier at once is **22×**. Sealed is the strictest level, **not** the
+  largest — hmac-only keeps plaintext and adds fts5 plus four shadow tables.
+  Note the prefilters are an `else if` chain, FDE first: with the FDE tier
+  on, `search` never builds the PQ index, and an FDE row is 8,233 B raw
+  below `fde_pq_min` (256) but **301 B PQ'd above it**, so "8 KB/drawer" is
+  a small-corpus figure.
+  **`meta_json` is stored
   UNSEALED**, so nothing that copies words out of the content may live in it
   — `Drawer::meta_at_rest()` empties `time_mentions[].text` and `entities`
   before a row is written, keeping only resolutions (offsets + ISO dates,
@@ -470,6 +489,72 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   decisive Greek pair as already-related because the filler literally contained
   the query, so it measured the padding — flatteringly, and in the one place
   it mattered most.
+- **No compression unit may ever span two drawers' plaintext.** Content is
+  zstd-3 framed *then* sealed (`compress_frame` → `content_at_rest`), so
+  ciphertext length already reveals a drawer's compressibility on top of the
+  length AEAD leaks. That is bounded only because every drawer is compressed
+  in its **own independent frame with no shared dictionary** — an attacker
+  who writes a drawer never shares a compression unit with a secret one.
+  This was true by implementation rather than by policy until it was written
+  down here. The at-rest attack class has a name (DBREACH, IEEE S&P 2023:
+  plaintext extraction from engines that compress pages and encrypt at
+  rest). Two consequences: a **shared zstd dictionary is forbidden**, and
+  the **4096-row PQ pages must never be compressed** — sealed-but-uncompressed
+  is deliberate, and that page geometry is already InnoDB's, so compressing
+  it satisfies DBREACH's precondition in one commit. Prefer **fixed-rate**
+  compression (quantization, whose output length is content-independent —
+  embeddings are already int8 at `6 + dim` bytes) over entropy coding
+  anywhere new.
+- **Independent per-item scoring is a poison-resistance property, and
+  spending it is a decision.** A poisoned drawer can win its own slot and
+  nothing else: `HashEmbedder` is a function of one drawer's text, `maxsim`
+  maximises over one drawer's rows, the admission gate is a constant from
+  probe pairs, and the lexical channels are deliberately **pairwise** ("a
+  stemmer builds an equivalence class one false friend poisons"). The only
+  cross-drawer objects are BM25's IDF and the trained codebooks. So: anything
+  that couples drawers may **propose candidates**, never **decide score** —
+  the same rule `undercroft-index` applies to remote backends. Coupling in
+  candidate generation risks *availability* (a legitimate drawer is not
+  offered); coupling in scoring risks *integrity* and moves what decides the
+  answer outside HMAC coverage. Codebook k-means is bounded only because
+  vectors are L2-normalized before both training and encoding (`pq.rs`): on
+  the unit sphere an attacker cannot buy influence with **magnitude**, only
+  with **count**, which is what makes an unbounded breakdown point bounded at
+  all — so that normalization is a security property, not only a
+  distance-ordering one. It is **not** a small displacement bound (every
+  centroid is a mean of in-ball points, so "at most the diameter" bounds
+  nothing), and two channels stay open: **density** (owning fraction *f* buys
+  ≈*f* of any uniform sample — a per-source cap's job) and a **NaN/Inf**
+  vector from an `external:` embedder, which escapes it entirely.
+  **Which** rows train is a **stratified keyed** draw, never a stride:
+  `pqidx::stratified_keyed` takes one row per equal block of insertion order,
+  chosen by `Vault::sample_rank` (a fourth HKDF subkey, label `sample`,
+  deliberately not the MAC key, length-prefixed) — reproducible **per vault**
+  (not per corpus), unguessable to a bulk writer, exactly a no-op below the
+  sampling cap, and a different label per artifact so the PQ codebook and the
+  IVF centroids no longer train on the same rows. **An even stride was not
+  only predictable, it was a landmine**: a systematic sample of a periodic
+  corpus collapses when the interval shares a factor with the period —
+  measured on `synth --n 16384` (interval 4, `FACT_TEMPLATES[i % 4]`) at
+  **R@5 83.0%** against this draw's 99.7%, failing that harness's own gate,
+  while `--n 20000` (interval 5) makes the stride look *better* at 99.8% vs
+  99.4%. Never reintroduce position-only sampling; periodic insertion order
+  is ordinary (round-robin per source, alternating speakers, one file a day). Caps differ by unit: 4,096 **drawers** at four sites, 16,384
+  **token rows** for the token codebook. **Above a cap the sample's size and
+  membership both change**, so a measurement taken there does not reproduce
+  across builds or across vaults. The `kmeans` seed stride is *not* keyed and
+  the residual is documented in `pq.rs` — accepted because density grants the
+  same expected capture anyway. Every codebook write bumps a **generation
+  counter** in `meta` (not in the artifact's own table —
+  `invalidate_embedding_space` drops `pq_meta`, and that drop is the event
+  most worth counting), surfaced on `PalaceStats.codebooks`, `/v1/…/stats`
+  (a hand-projected handler: adding a struct field does not reach the wire),
+  and a gauge whose name must be in `undercroft_obs::GAUGE_NAMES` or it is
+  silently dropped. A step means **re-quantization** for the three codebooks
+  and **re-partitioning** for `pq-ivf`/`fde-ivf` (code bytes unchanged; the
+  candidate set moves). A rebuild that reuses the stored codebook is not a new
+  generation. The counter is outside HMAC coverage, so it is evidence about
+  ambiguity, never about tampering.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path

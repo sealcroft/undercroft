@@ -35,7 +35,8 @@ the model — tenancy is vaults, not palaces.
 POST   /v1/vaults                      {id, level?, embedder?}   create vault
 DELETE /v1/vaults/{id}                                           delete vault
 GET    /v1/vaults/{id}/stats            (records, level, writes, chain head,
-                                         wings, rooms, kg, tunnels, db_bytes)
+                                         wings, rooms, kg, tunnels, db_bytes,
+                                         codebooks)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}
 GET    /v1/vaults/{id}/drawers          ?wing=&room=&limit=&offset=  paged summaries
 GET    /v1/vaults/{id}/drawers/{drawer_id}                       one full drawer

@@ -273,9 +273,11 @@ second 24-core host, so these tables compare only within their own runs:
 | + event-driven coherence (no per-search join-count) | — | ~+14% on probed cells |
 | + scan without the per-row `drawers` join | **34.4** | **38.3** |
 
-Recall is identical across every version (deterministic pipeline) and tracks
-the probed **fraction**: 3% → 68.7%, 11% → 86.9%, 23% → 99.6% = flat parity —
-hence the fraction-based `nprobe` default.
+Recall tracked the probed **fraction**: 3% → 68.7%, 11% → 86.9%, 23% → 99.6%
+= flat parity — hence the fraction-based `nprobe` default. It was also
+identical across every version at the time, because the training sample was a
+deterministic function of position; **that is no longer true** — see the
+codebook-draw section below.
 
 Final (all fixes, one uncontended run):
 
@@ -283,6 +285,39 @@ Final (all fixes, one uncontended run):
 |---|---|---|---|
 | 20,000 | 34.4 q/s | **38.3 q/s** (+11%) | 99.6% |
 | 50,000 | 14.8 q/s | **15.9 q/s** (+7%) | 99.1% |
+
+#### The codebook training draw: the even stride was a landmine
+
+The samples above were drawn by an even stride over insertion order
+(`step_by(⌈n/4096⌉)`). That is a **systematic sample**, and a systematic
+sample of a *periodic* population collapses when the interval shares a factor
+with the period. `synth` is periodic by construction —
+`FACT_TEMPLATES[i % 4]`, `["budget","deadline","vendor","owner"][i % 4]` — and
+at `--n 16384` the interval is exactly `⌈16384/4096⌉ = 4`, so every sampled
+fact carries one template and one key prefix.
+
+Within-run, one host, `UNDERCROFT_RETRIEVAL=pq`, hmac-only, 2,000 queries:
+
+| N | interval | draw | R@1 | R@5 |
+|---|---|---|---|---|
+| 20,000 | 5 (coprime with 4) | even stride | 99.2% | 99.8% |
+| 20,000 | — | stratified keyed | 97.9% | 99.4% |
+| **16,384** | **4 (aligned)** | **even stride** | **82.5%** | **83.0%** |
+| 16,384 | — | stratified keyed | **98.9%** | **99.7%** |
+
+83.0% fails this harness's own `>= 95%` regression gate. The stride's edge at
+20,000 is alignment luck between two measured sizes, and its failure sits
+between them: 20,000 and 50,000 (interval 13) are both coprime with the
+period, which is why the numbers above never showed it.
+
+The draw is now **stratified and keyed**: one row per equal block of insertion
+order, chosen by a per-vault HKDF-keyed rank. Blocks keep the coverage,
+the keyed choice inside each block breaks the residue alignment, and a bulk
+writer can no longer predict which of their rows trains the codebook. Two
+consequences for reading this file: the PQ figures above move by a few tenths
+(99.8% → 99.4% R@5 at 20,000), and recall is now reproducible **per vault**
+rather than per corpus — three keyed runs at n=20,000 spanned R@1 97.4–97.9%,
+R@5 99.4–99.6%.
 
 **Impact:** the fixes lifted **flat PQ itself ~45%** at both sizes — every PQ
 user gets that. IVF's marginal gain is +7–11% here because the pure ADC

@@ -1,5 +1,253 @@
 # Changelog
 
+## Unreleased — what a drawer costs, and who gets to shape a codebook
+
+The guardrails the measurement work needed before anything built on it:
+footprint is now asserted rather than computed, and the two cross-drawer
+objects in the engine are no longer either guessable or silent.
+
+- **A drawer's on-disk cost is pinned, per artifact, in both directions.**
+  "Never grow large" is a first-class constraint of this project and was the
+  only load-bearing property with no test — the byte formulas lived in
+  comments and the totals in arithmetic over them, so a change that doubled
+  the per-drawer footprint would have shipped green.
+  `one_drawer_costs_exactly_this_many_bytes` measures a real 804-byte prose
+  chunk on a **sealed** vault and asserts every artifact against its formula:
+  sealed embedding `40+6+dim` = **430 B** at 384 dims, sealed PQ row
+  `40+4+dim/8` = **92 B**, v1 token matrix `40+9+rows·(4+dim)`, raw FDE
+  `40+1+reps·2^ksim·dproj·4` = **8,233 B** — the 40 being XChaCha20's 24-byte
+  nonce plus Poly1305's 16-byte tag. Equality, not an upper bound, so a
+  *shrink* fails too and good news has to be recorded instead of quietly
+  absorbed. Measured at rest for that chunk: content **515 B**, so the default
+  configuration's only derived artifact — the embedding — is **0.83×** the
+  content it indexes, and every tier at once is **11,304 B, 22×**.
+  - **The mechanism is one table driving both halves.** `priced` names each
+    artifact with the query that measures it *and* the formula it must equal,
+    and the inventory assertion is built from that same array — so a new
+    artifact cannot be silenced by adding a name, because a name with no
+    formula beside it does not compile. The first version of this test kept the
+    halves separate and was refuted for exactly that: **one string literal made
+    it green with zero bytes measured.**
+  - The inventory is now the **whole schema**, not a `drawer%` prefix: every
+    table is either priced per-drawer or listed as not-per-drawer with its
+    reason. A prefix is a naming convention, and a future store called
+    `sparse_terms` would have passed it silently. `drawers`' **column list** is
+    pinned too, because a column is the cheapest way to add per-drawer bytes
+    and no table-level check can see one.
+  - Sealed is the level with the strictest *guarantees*, **not** the larger
+    footprint: hmac-only keeps content as plaintext and adds an fts5 index plus
+    four shadow tables over it. The earlier claim that sealed is "the worst
+    case" was wrong.
+  - Found while writing it: **with the FDE tier enabled, `search` never builds
+    the PQ index** — the prefilters are an `else if` chain with FDE first. The
+    per-drawer FDE cost depends on which side of `fde_pq_min` (256 rows) the
+    corpus is: **8,233 B raw below it, 301 B PQ'd above it**. Any statement
+    about "8 KB per drawer" is about a small corpus, not the steady state.
+
+- **The training sample of every trained index artifact is now a stratified
+  keyed draw, not an even stride — and the stride turned out to be a latent
+  recall landmine, not only a predictable one.** It was `div_ceil` + `step_by`
+  at all five sites: four capped at 4,096 **drawers** (PQ codebook, IVF
+  centroids, FDE codebook, FDE IVF centroids), the token codebook at 16,384
+  **token rows** — a different unit and 4× the figure.
+  - **The security reason it changed.** The stride is reproducible, and equally
+    reproducible to a writer who never held the vault key: `seq ≡ 0 mod stride`
+    told them exactly which of their rows would train the quantizer every
+    *other* row is then encoded against. k-means has an unbounded breakdown
+    point, so that is a lever on unrelated drawers' recall, invisible to every
+    HMAC because nothing was tampered with.
+  - **The correctness reason it had to change, measured.** A fixed interval
+    over a corpus whose insertion order is *periodic* samples one residue
+    class. `synth` builds facts from `FACT_TEMPLATES[i % 4]`, and at
+    `--n 16384` the interval is exactly `⌈16384/4096⌉ = 4`: every sampled fact
+    shares one template and one key prefix. Within-run, one host,
+    `UNDERCROFT_RETRIEVAL=pq`, hmac-only, 2,000 queries:
+
+    | n | interval | draw | R@1 | R@5 |
+    |---|---|---|---|---|
+    | 20,000 | 5 (coprime with 4) | stride | 99.2% | 99.8% |
+    | 20,000 | — | stratified keyed | 97.9% | 99.4% |
+    | **16,384** | **4 (aligned)** | **stride** | **82.5%** | **83.0%** |
+    | 16,384 | — | stratified keyed | **98.9%** | **99.7%** |
+
+    The stride's edge at 20,000 is alignment luck between two measured points;
+    its collapse sits between them, and at 16,384 it **fails `synth`'s own
+    ≥95% regression gate** — a shipped default that a benchmark already in this
+    repo would have caught at a corpus size nobody happened to run. Periodic
+    insertion order is not exotic: round-robin ingest per source, alternating
+    speakers, one session per day all produce it.
+  - **Stratified, not simply lowest-ranked.** Blocks keep the coverage the
+    stride had; the keyed choice *inside* each block breaks the residue
+    alignment that made it fragile. The two keyed variants are within noise of
+    each other (uniform 97.8/99.4 against stratified 97.9/99.4 at n=20,000), so
+    the strata are kept for the reasoning they support, not for a recall win.
+  - `sample_rank` is keyed by a **fourth HKDF-derived subkey** (label
+    `sample`), deliberately not the MAC key: these ranks are published by
+    their effects — which rows shaped a codebook — and must not share a key
+    with record integrity. The label is **length-prefixed, not delimited**, so
+    no two (label, ident) pairs can re-cut into one rank.
+  - **Below a cap it is exactly a no-op** — the whole corpus trains, as it did
+    at `stride == 1`. **Above a cap both the membership and the size of the
+    sample change**: the old stride took `n/⌈n/cap⌉` rows, so a 50,000-row
+    corpus trained on 3,847 where this trains on 4,096. A measurement taken
+    above a cap is therefore **not reproduced by this build**.
+  - **Which published numbers that touches, exactly** — because the answer is
+    narrower than it first looks. `locomo_eval` builds a **fresh vault per
+    conversation** (~127 drawers), which is below `TOK_PQ_MIN` (256) and below
+    every drawer-level cap, so **no codebook of any kind trains there**: the
+    headline LoCoMo figures (session `R@10` 95.5%, turn all-gold 74.2%, and
+    ColBERT's 79.1% / +4.9pp) are untouched, and ColBERT runs there as exact
+    int8 MaxSim. Affected: the **`synth` PQ/IVF recall** figures — measured
+    above, 99.8% → **99.4%** R@5 at n=20,000 — and the **`TOK_PQ_MIN` boundary
+    run**, re-measured below. Unaffected for a third reason: the 10⁷ page-tier
+    spike and the FDE-synth containment numbers train on their harnesses' own
+    synthetic samples, not the store's.
+  - **The token-codebook site, re-measured** (`locomo3_merged`, ~380 drawers,
+    ~47,500 token rows against a 16,384 cap — the one place a LoCoMo run
+    trains a codebook). Turn all-gold in the 10 slots: hash baseline **73.9%**,
+    ColBERT with the stride **78.1%**, ColBERT with the stratified keyed draw
+    **78.9%** and **78.1%** on two runs with different vault keys. The keyed
+    spread brackets the stride, so **at this site the draw makes no measurable
+    difference**.
+  - **An unexplained discrepancy, recorded rather than absorbed.** That same
+    corpus previously reported ColBERT at **80.4% (+6.5pp)**, and it does not
+    reproduce on this build with *either* draw, while the hash baseline
+    reproduces to the decimal (73.9%). A retrieval-side corpus or config drift
+    would have moved the baseline too, so the difference sits somewhere in the
+    ColBERT path and is not accounted for. The delta this build measures is
+    **+4.2 to +5.0pp**; the +6.5pp figure should not be quoted again until it
+    is either reproduced or explained.
+  - **`benchmarks/RESULTS.md`'s "Recall is identical across every version
+    (deterministic pipeline)" is now false** and is corrected there: the draw
+    is keyed on a per-vault subkey, so two fresh vaults over identical content
+    above a cap train different codebooks. The observed spread across three
+    keyed runs at n=20,000 was R@1 97.4–97.9%, R@5 99.4–99.6%.
+  - Reproducibility is now **per vault**, not per corpus. Two fresh vaults
+    ingesting identical content above a cap train different codebooks, so a
+    bench harness that builds a new vault per run no longer reproduces itself
+    exactly at that scale.
+  - The PQ codebook and the IVF centroids draw under **different labels** —
+    two independent samples where one stride gave both the same rows.
+  - Pinned by unit tests on both halves (keying, selection). Stated as a
+    gap: not end-to-end, which would need a corpus above a cap.
+
+- **Every codebook write bumps a visible generation counter.** Nothing in a
+  row's bytes says which generation of a trained artifact produced it, so "the
+  index was rebuilt from the artifact it already had" and "the artifact was
+  replaced and every row re-derived" look identical from outside — the same
+  class of invisible change to a vector space that `KNOWN_EMBEDDER_UPGRADES`
+  exists to make explicit, one level down.
+  - **What a step means differs by artifact**: for the three codebooks it is
+    **re-quantization** (every code byte recomputed); for `pq-ivf` and
+    `fde-ivf` it is **re-partitioning** — the code bytes are byte-identical and
+    what changes is which candidates a probe *offers*. Availability, not score.
+  - Counters live in `meta` rather than in each artifact's own table because
+    `invalidate_embedding_space` drops `pq_meta` wholesale and **that drop is
+    the event most worth counting**; the test asserts the generation survives it
+    and reads 2, not 1. A rebuild that reuses the stored codebook is **not** a
+    new generation — pinned by forcing a real drift-driven rebuild, because an
+    assertion that merely clears the caches cannot fail whatever the code does.
+  - Visible on `PalaceStats.codebooks`, `GET /v1/vaults/{id}/stats` (the
+    handler projects fields by hand and had to be taught the new one — adding
+    it to the struct was not enough), the MCP `undercroft_status` tool,
+    `undercroft stats`, and as a **registered** telemetry gauge:
+    `undercroft_obs::GAUGE_NAMES` is an allowlist and a gauge set under any
+    other name is silently dropped, so all five names are listed there and
+    `every_codebook_gauge_name_is_registered_in_obs` pins the mapping.
+  - **It is not integrity evidence.** The row is outside HMAC coverage, so
+    anyone who can write the database file can reset or forge it; it
+    distinguishes honest ambiguity, not tampering. Two stated gaps:
+    export/import copies no `meta` rows, so a migrated vault reports 0 — which
+    reads as "never trained" rather than "unknown"; and a bump lost to a busy
+    database is warned about, not retried.
+
+- **L2 normalisation is documented as the poison mitigation it already was**
+  (`pq.rs` module docs) — and the bound is stated correctly this time. With
+  every point on the unit sphere an attacker cannot buy influence with
+  *magnitude*, only with **count**, which is what makes the breakdown bounded
+  at all. What it does **not** give is a small displacement bound: with all
+  points in the unit ball every centroid is already in that ball, so "at most
+  the diameter" bounds nothing. Two residual channels are named rather than
+  implied: **density** (owning a fraction *f* of the corpus buys ≈*f* of any
+  uniform sample — a per-source cap's job, not a sampling scheme's) and
+  **non-finite input** (a NaN from an `external:` embedder escapes the bound
+  entirely). The seeding stride inside `kmeans` is likewise **not** keyed, and
+  the residual is written down where it lives.
+
+## Unreleased — gold evidence, and a data-destroying append index
+
+- **`remember` no longer derives a drawer id from `count()`.**
+  `crates/undercroft-cli/src/main.rs` now uses `next_append_index()`, matching
+  the `/v1` and MCP save paths. `COUNT(*)` goes *down* after a delete, so the
+  next save was handed an index still in use, the derived id collided, and
+  `ON CONFLICT(id) DO UPDATE` overwrote the unrelated drawer holding it — a
+  record destroyed by writing a different one, which is exactly the failure
+  the store documents and `CLAUDE.md` pins as an invariant. Regression test
+  drives the real binary through remember → remember → `drawer delete` →
+  remember and asserts the survivor is intact; reintroducing `count()` makes
+  it fail, so it is not vacuous. Vaults that have never deleted are
+  unaffected — `next_append_index()` equals `count()` there, so no existing
+  id moves.
+
+- **`undercroft-bench locomo` reports gold-evidence recall at turn
+  granularity**, alongside the session-level row it has always printed, and
+  still without a single model call — the evidence ids ship with the dataset.
+  The historical row asks whether a gold *session* appears among the top-k
+  rooms; the new one asks whether the gold *turn* is inside the k drawers a
+  reader is handed. Full corpus at `k=10`: session **any 95.5% / all 87.9%**
+  at pool depth and **94.3% / 85.8%** within the 10 slots, turn **any 84.1% /
+  all 74.2%**.
+- **Session rows are reported at two depths, because the two granularities are
+  only comparable at equal depth.** The session row collects distinct rooms by
+  scanning the whole `k*6` candidate pool; the turn row sees only the `k`
+  returned slots, so a room first appearing at hit 47 counts for the former and
+  cannot count for the latter. Measured against each other at equal depth, the
+  granularity difference is **11.6pp** and the depth difference **2.1pp** —
+  reported separately so neither is mistaken for the other.
+- Coverage is an interval test over byte ranges in the ingested body, not a
+  substring search. Ingest windows 800-byte chunks with 100 bytes of overlap
+  over a session that is one long paragraph, so turns land across boundaries
+  routinely; testing each chunk alone would book a miss the reader never
+  suffered, while the union of the returned chunks is exactly what the prompt
+  contains. Gold turns that cannot be located (9 of roughly 2,800) are
+  excluded **and printed**, so the denominator cannot quietly shrink.
+- **LoCoMo image captions now reach the vault.** The corpus is multimodal:
+  `blip_caption` appears on 1,226 of 5,882 turns, including 1,064 of the 2,806
+  gold-evidence turn references — **37.9%**. The harness formatted `speaker`
+  and `text` only, so those turns were stored incomplete. Now ingested;
+  `img_url` and `query` stay out, being the dataset's own sourcing scaffolding
+  rather than anything a participant said. Retrieval moves ±0.2pp: a
+  corpus-fidelity fix, not a quality one.
+- **Deduplicating retrieval candidates by source document: a per-document cap
+  is refused, byte-level redundancy removal is a small win.** The cap costs
+  **−17.5pp** of turn all-gold at ≤1 slot and **−1.8pp** at ≤2, and split by
+  population it loses at *every* evidence count — evidence averages 1.17 turns
+  per session, so a cap blocks the second turn of the *right* session as often
+  as it admits a new one. Removing only *duplicated bytes* — byte-budget
+  selection with overlapping text charged once — **gains +0.3pp** and fits 11.3
+  chunks where 10 fit before, the only selection-policy change measured that
+  loses nowhere. Its ceiling is now known: duplicated bytes are **2.1%** of what
+  the reader receives. Both counterfactuals stay in the harness (`DOC_CAPS`,
+  `select_within_budget`) so they are re-measured rather than re-proposed.
+- **LoCoMo's category integers are `1 = multi-hop, 2 = temporal,
+  3 = open-domain, 4 = single-hop, 5 = adversarial`.** The counts and the
+  evidence statistics both fix this: category 1 carries a mean 3.13 evidence
+  turns over 2.68 distinct sessions, category 4 carries 1.07 over 1.00, and 841
+  questions are category 4. Per-category figures elsewhere in this file and in
+  ROADMAP are labelled to this mapping. It matters for prioritisation: the
+  43.4% all-gold figure belongs to **multi-hop**, where 3.13 turns across 2.68
+  sessions makes it unremarkable, while **single-hop measures 97.1%**.
+- **Late interaction is the only retrieval change measured to help.** ColBERT
+  rescoring: **+4.9pp** turn all-gold on the full corpus (74.2 → 79.1) and
+  session `R@10` 95.5 → **96.9%**, at 2.0× search and 43× ingest; **+6.5pp**
+  above the `TOK_PQ_MIN=256` boundary where MaxSim runs PQ-ADC instead of
+  exact int8. A cross-encoder reaches +6.7pp at **58× search**. Against them:
+  a MiniLM bi-encoder is +0.3pp, `Fusion::Rrf` −7.3pp, `Fusion::Legacy`
+  −8.2pp, per-query channel rescaling −9.4pp, finer chunks −10 to −28pp,
+  writer-declared turn boundaries −6.8pp, and the semantic gate off is
+  byte-identical. ROADMAP records the full list so none of it is
+  re-proposed.
+
 ## Unreleased — AMB, run against ourselves without an external API
 
 - **`docs/AMB_REPLICATION.md`** — a procedure for running the Agent Memory
@@ -34,8 +282,8 @@
   own input file, and a judge that padded to 20 verdicts by duplicating an id —
   a grade for a question nobody answered, which passed every aggregate check and
   was caught only by reconciling verdict ids against answer ids.
-- ROADMAP gains the five measured retrieval gaps in cost order, and the list of
-  changes explicitly refused as benchmark-fitting.
+- ROADMAP gains the measured retrieval gaps and the list of changes explicitly
+  refused as benchmark-fitting.
 
 ## Unreleased — the security model, drawn
 

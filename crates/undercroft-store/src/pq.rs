@@ -14,6 +14,38 @@
 //! (ADC): per-query, per-subspace distance tables are summed over the code
 //! bytes, a handful of adds per candidate.
 //!
+//! **That normalization is also this crate's only bound on codebook
+//! poisoning.** A codebook is one of the two cross-drawer objects in the engine
+//! (the other is BM25's IDF): every row is quantized against it, so a sample
+//! that shifts a centroid degrades the recall of *unrelated* drawers —
+//! invisibly, because nothing was tampered with and every HMAC still verifies.
+//! Unnormalized, k-means has an unbounded breakdown point: a centroid is the
+//! mean of its assigned points, so one sample of arbitrary magnitude drags it
+//! arbitrarily far and can do so *from outside* the region legitimate vectors
+//! occupy. Normalizing before **both** [`ProductQuantizer::train`] and
+//! [`ProductQuantizer::encode`] removes the magnitude channel entirely: every
+//! training point lies on the unit sphere, so a crafted vector is
+//! indistinguishable in norm from an honest one and can only compete for
+//! centroids on direction, alongside every other point.
+//!
+//! Be precise about what that is worth. It is **not** a small bound on
+//! displacement — with all points in the unit ball every centroid is already in
+//! that ball, so "at most the diameter" bounds nothing. What it buys is that
+//! the breakdown is *bounded at all*, and that an attacker cannot buy influence
+//! with magnitude, only with **count**. Two residual channels it does not
+//! close, both real:
+//!
+//! * **Density.** An attacker owning a fraction *f* of the corpus gets ≈*f* of
+//!   any uniform sample, hence competes for ≈*f* of the centroids. No sampling
+//!   scheme fixes this; a per-source cap on candidate sets does.
+//! * **Non-finite input.** A NaN or infinity reaching a vector escapes the
+//!   bound completely — `normalized()` propagates it and every distance
+//!   comparison against it is false, so it silently owns or breaks a cluster.
+//!   Vectors arriving from `external:` embedders are the path worth guarding.
+//!
+//! Which rows train is the caller's job: see `pqidx::take_lowest` for the keyed
+//! draw that replaced a guessable even stride.
+//!
 //! This module is storage- and crypto-agnostic: it turns vectors into codes and
 //! scores codes against a query. Where codes live (SQLite blob, encrypted for
 //! sealed vaults) and how candidates are shortlisted (flat scan first, IVF
@@ -59,6 +91,22 @@ impl ProductQuantizer {
     /// Deterministic: centroids are seeded by an even stride over the training
     /// set, so the same input yields the same quantizer (reproducible tests,
     /// stable on-disk codes). Returns `None` on bad shape or an empty set.
+    ///
+    /// Deterministic *given the sample* — **which** rows reach it is decided by
+    /// the caller's keyed draw (`pqidx::take_lowest`), not here.
+    ///
+    /// The seeding stride is **not** keyed, and that residual is worth stating
+    /// rather than glossing: the sample arrives in corpus (insertion) order, so
+    /// seed slot *c* is the sample's *c/k* quantile of insertion order. A writer
+    /// who owns a contiguous stretch of insertions and makes those rows
+    /// identical does not need to predict *which* of their rows was drawn — any
+    /// of them is the same vector — so they can still land ≈*f·k* seeds for a
+    /// corpus fraction *f*. The reason this is accepted rather than fixed: at
+    /// that same *f* they would win ≈*f·k* centroids through density anyway
+    /// (see the module docs), so keying the seed order would convert a certainty
+    /// into a same-mean probability while changing every codebook in every
+    /// vault. The capability to remove is density, and the instrument for it is
+    /// a per-source cap, not a sampling change.
     pub fn train(vectors: &[Vec<f32>], m: usize, iters: usize) -> Option<Self> {
         if vectors.is_empty() || m == 0 {
             return None;

@@ -116,6 +116,11 @@ pub struct Vault {
     enc_key: SecretKey,
     mac_key: SecretKey,
     manifest_key: SecretKey,
+    /// Keys [`Vault::sample_rank`] — the draw that decides what a trained
+    /// index artifact trains on. Separate from the MAC key on purpose: those
+    /// ranks are published *by their effects* (which rows shaped a codebook)
+    /// and must not share a key with record integrity.
+    sample_key: SecretKey,
     manifest: Manifest,
     /// A pending key-rotation manifest (`vault.json.next`), attached at
     /// unlock when one exists so the store's open path can reconcile it
@@ -273,6 +278,38 @@ impl Vault {
     /// Verify a record tag (constant-time).
     pub fn verify_tag(&self, canonical: &[u8], tag: &[u8]) -> Result<(), VaultError> {
         Ok(verify_hmac(&self.mac_key, canonical, tag)?)
+    }
+
+    /// A keyed pseudorandom rank for one *choice* — not an integrity claim.
+    ///
+    /// The caller ranks candidates by this and takes the lowest; the result is
+    /// a sample that is **reproducible for whoever holds the vault key and
+    /// unguessable to everyone else**. Its reason for existing is the training
+    /// sample of a trained index artifact (PQ codebooks, IVF centroids): a
+    /// deterministic even stride over insertion order is reproducible *and*
+    /// predictable, so a writer who can bulk-insert knows in advance which of
+    /// their own rows will shape a codebook that every other drawer is then
+    /// quantized against. k-means has an unbounded breakdown point, so that
+    /// is a lever on other drawers' recall.
+    ///
+    /// Keyed on its own HKDF-derived subkey (label `sample`), not the MAC key:
+    /// ranks are handed to code that decides what to train on, and nothing
+    /// derived from them should ever be usable against a record tag. Key
+    /// rotation re-derives it (fresh salt), so a *later* retrain draws a
+    /// different sample — codes already on disk are re-sealed, never
+    /// re-quantized, so that changes nothing already stored.
+    /// The encoding is **length-prefixed, not delimited**: a separator is only
+    /// injective while no label contains it, and this is a `pub` method, so
+    /// `("a\x1fb", b"c")` and `("a", b"b\x1fc")` would have collided into one
+    /// rank under a delimiter — two artifacts drawing the same sample while
+    /// appearing not to.
+    pub fn sample_rank(&self, label: &str, ident: &[u8]) -> u64 {
+        let mut canonical = Vec::with_capacity(8 + label.len() + ident.len());
+        canonical.extend((label.len() as u64).to_le_bytes());
+        canonical.extend_from_slice(label.as_bytes());
+        canonical.extend_from_slice(ident);
+        let tag = record_hmac(&self.sample_key, &canonical);
+        u64::from_le_bytes(tag[..8].try_into().expect("HMAC-SHA256 is 32 bytes"))
     }
 
     /// Advance the audit chain for one write and persist the manifest.
@@ -575,6 +612,7 @@ impl VaultManager {
             enc_key: derive_vault_key(&self.master, &salt, &id, "enc"),
             mac_key: derive_vault_key(&self.master, &salt, &id, "mac"),
             manifest_key: derive_vault_key(&self.master, &salt, &id, "manifest"),
+            sample_key: derive_vault_key(&self.master, &salt, &id, "sample"),
             level: manifest.level,
             id,
             dir,
@@ -584,7 +622,11 @@ impl VaultManager {
     }
 
     /// Build the next key generation for a vault: same identity, level, and
-    /// history metadata, **fresh salt** ⇒ fresh enc/mac/manifest keys.
+    /// history metadata, **fresh salt** ⇒ fresh enc/mac/manifest/sample keys.
+    /// The fourth one moves the training-sample draw
+    /// ([`Vault::sample_rank`]), so a *future* retrain in a rotated vault draws
+    /// a different sample; rotation itself only re-seals, never re-quantizes,
+    /// so nothing already on disk changes.
     /// Nothing is written here — the store's rotation stages the manifest
     /// once it has replayed the chain under the new keys.
     pub fn rotation_candidate(&self, id: &str) -> Result<Vault, VaultError> {
@@ -703,6 +745,42 @@ mod tests {
         assert_ne!(blob, b"remember this verbatim"); // actually encrypted
         let back = v.content_from_rest("rec1", &blob).unwrap();
         assert_eq!(back, b"remember this verbatim");
+    }
+
+    /// The training-sample draw must be reproducible for the key holder,
+    /// independent per label, and *different* per vault — that last part is
+    /// the whole point: a bulk writer who knows the algorithm still cannot
+    /// know which of their rows will train a codebook.
+    #[test]
+    fn sample_rank_is_reproducible_per_vault_and_not_shared() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let a = mgr.create("vault-a", SecurityLevel::Sealed).unwrap();
+        let b = mgr.create("vault-b", SecurityLevel::Sealed).unwrap();
+
+        // Reproducible: same vault, same label, same ident.
+        assert_eq!(a.sample_rank("pq", b"7"), a.sample_rank("pq", b"7"));
+        // Survives a reopen — the key is derived, never stored.
+        let a2 = mgr.unlock("vault-a").unwrap();
+        assert_eq!(a.sample_rank("pq", b"7"), a2.sample_rank("pq", b"7"));
+
+        // Independent across vaults, labels, and idents.
+        assert_ne!(a.sample_rank("pq", b"7"), b.sample_rank("pq", b"7"));
+        assert_ne!(a.sample_rank("pq", b"7"), a.sample_rank("ivf", b"7"));
+        assert_ne!(a.sample_rank("pq", b"7"), a.sample_rank("pq", b"8"));
+        // Length-prefixed, so no (label, ident) pair can be re-cut into
+        // another: ("pq", "17") vs ("pq1", "7"), and — the case a delimiter
+        // gets wrong — a label that contains the delimiter itself.
+        assert_ne!(a.sample_rank("pq", b"17"), a.sample_rank("pq1", b"7"));
+        assert_ne!(a.sample_rank("a\x1fb", b"c"), a.sample_rank("a", b"b\x1fc"));
+
+        // Distinct from the record tag over the same bytes — different key.
+        let tag = a.tag(b"pq\x1f7");
+        assert_ne!(
+            a.sample_rank("pq", b"7"),
+            u64::from_le_bytes(tag[..8].try_into().unwrap()),
+            "the sample draw must not be the MAC key under another name"
+        );
     }
 
     #[test]

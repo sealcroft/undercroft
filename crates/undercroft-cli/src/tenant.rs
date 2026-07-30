@@ -455,6 +455,18 @@ impl Tenancy {
                 "kg": serde_json::to_value(&full.kg).unwrap_or_else(|_| json!({})),
                 "tunnels": full.tunnels,
                 "db_bytes": full.db_bytes,
+                // Trained index artifacts and how many times each has been
+                // trained here. Projected by hand like every field above —
+                // this route does NOT serialize `PalaceStats`, so a field
+                // added to that struct does not reach the wire until it is
+                // added here too.
+                "codebooks": full.codebooks
+                    .iter()
+                    .map(|(artifact, generation)| json!({
+                        "artifact": artifact,
+                        "generation": generation,
+                    }))
+                    .collect::<Vec<_>>(),
             })),
         ))
     }
