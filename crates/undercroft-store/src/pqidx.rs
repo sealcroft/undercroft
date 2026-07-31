@@ -81,6 +81,33 @@ pub(crate) struct PqCache {
     loaded: Option<std::collections::HashSet<i64>>,
 }
 
+/// One wing's private PQ state: its own codebook, its own optional IVF
+/// partitions, and a fully-resident RAM code cache over its own rows.
+///
+/// This exists because the wing is the retrieval unit a caller actually
+/// scopes to, and the global prefilter is wing-blind twice over: its
+/// candidate set is drawn from the whole corpus (so a scoped query's cost is
+/// corpus-sized, ~913 s/query at 10⁶ measured 0.91 ms/drawer), and its
+/// top-k can starve a wing entirely (the intersection of global candidates
+/// with `WHERE wing = ?` can be empty while the wing holds the answer).
+/// A per-wing index bounds a scoped query by the wing's size and makes its
+/// recall a property of the wing, not of what the rest of the corpus looks
+/// like.
+///
+/// The codebook is per wing deliberately — a wing's population is *more*
+/// homogeneous than the vault's, so its codebook quantizes it better, and
+/// derived-structure scope then matches the isolation unit (the wing)
+/// rather than the crypto unit (the vault): a writer in one wing no longer
+/// shapes the codebook that scores another. What stays global, stated
+/// honestly: BM25's IDF — the wing is an isolation unit for *candidates*,
+/// not for scores.
+pub(crate) struct WingPq {
+    pq: ProductQuantizer,
+    ivf: Option<CoarseQuantizer>,
+    cache: PqCache,
+    live: i64,
+}
+
 impl PqCache {
     fn new(code_len: usize) -> Self {
         Self {
@@ -269,6 +296,22 @@ const PQ_PAGE_CAP: usize = 4096;
 /// (they are fully searchable either way).
 const PQ_TAIL_FOLD: usize = 256;
 
+/// A wing earns its own PQ index at this many drawers. Below the floor a
+/// scoped query skips the prefilter and full-scans its wing — the `WHERE
+/// wing` clause bounds that scan by the wing's size, so the floor is also
+/// the worst-case row count a scoped query ever pays without an index.
+///
+/// The floor exists for two measured reasons, not taste: k-means with 256
+/// centroids per subspace on a few hundred vectors produces duplicate
+/// centroids (a codebook must be *earned* by population), and a codebook is
+/// ~hundreds of KB — a thousand tiny wings would pay 100× more in codebooks
+/// than in the 92 B/drawer codes they index. 4096 aligns with
+/// `PQ_TRAIN_SAMPLE`: the smallest per-wing codebook trains on a full-size
+/// sample. Tunable: `UNDERCROFT_WING_PQ_MIN` (`off` disables the per-wing
+/// tier — scoped queries then intersect the global candidates, the
+/// pre-tier behavior) / [`PalaceStore::set_wing_pq_min`].
+pub const WING_PQ_MIN_DEFAULT: usize = 4096;
+
 impl PalaceStore {
     /// Enable (or disable) the on-disk PQ ANN prefilter — both security
     /// levels. hmac-only vaults store plain codes; **sealed vaults store
@@ -279,6 +322,17 @@ impl PalaceStore {
     /// per open, at either level.
     pub fn set_pq(&mut self, on: bool) {
         self.pq_enabled = on;
+    }
+
+    /// Tune the per-wing PQ floor: wings holding at least `min` drawers get
+    /// their own codebook, IVF partitions and code rows, and a wing-scoped
+    /// search probes those instead of intersecting corpus-wide candidates.
+    /// `usize::MAX` ⇒ tier off (scoped queries keep the global-candidate
+    /// behavior exactly). Default from `UNDERCROFT_WING_PQ_MIN` at open
+    /// (`off` ⇒ never).
+    pub fn set_wing_pq_min(&mut self, min: usize) {
+        self.wing_pq_min = min;
+        self.wing_pq.borrow_mut().clear();
     }
 
     fn pq_sealed(&self) -> bool {
@@ -488,7 +542,24 @@ impl PalaceStore {
                  pageno INTEGER NOT NULL,
                  blob   BLOB NOT NULL,
                  PRIMARY KEY (list, pageno)
-             ) WITHOUT ROWID;",
+             ) WITHOUT ROWID;
+             -- Per-wing PQ rows (the wing-as-retrieval-unit tier): same
+             -- clustered layout as drawer_pq, one dimension up. The wing
+             -- name is plaintext because `drawers.wing` already is — the
+             -- sealed-metadata exposure test pins that — and the sealed
+             -- list id stays inside the blob for the same reason as the
+             -- global rows. Rows exist only for wings past the floor.
+             CREATE TABLE IF NOT EXISTS drawer_pq_wing (
+                 wing TEXT NOT NULL,
+                 list INTEGER NOT NULL,
+                 seq  INTEGER NOT NULL,
+                 code BLOB NOT NULL,
+                 PRIMARY KEY (wing, list, seq)
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS drawer_pq_wing_seq ON drawer_pq_wing(seq);
+             -- A scoped query's first step is 'how big is this wing' — make
+             -- that a range scan, not a table scan.
+             CREATE INDEX IF NOT EXISTS drawers_wing ON drawers(wing);",
         )?;
         Ok(())
     }
@@ -860,8 +931,13 @@ impl PalaceStore {
                 "codebook {artifact}: trained sample reconstructs at {:.5} but \
                  unseen vectors at {:.5} ({:.1}x). The training sample does not \
                  represent this corpus, so approximate distances will be worse \
-                 than they should be for everything outside it. If this corpus \
-                 was ingested in a repeating order, re-train the index.",
+                 than they should be for everything outside it. Two known \
+                 causes: a codebook trained by a pre-keyed-draw build (an even \
+                 stride over a periodic ingest — re-train the index), or a \
+                 corpus whose rows each carry unique content the sample cap \
+                 cannot represent (ids, keys, codes — a larger corpus makes \
+                 the gap wider, not wrong; check retrieval recall before \
+                 acting).",
                 fit.sample_error,
                 fit.probe_error,
                 fit.ratio()
@@ -1065,6 +1141,9 @@ impl PalaceStore {
         if !self.pq_enabled {
             return;
         }
+        // The wing tier first: it has its own codebook and its own coherence
+        // story, and must not be skipped by the global early-returns below.
+        self.wing_pq_encode_row(id, embedding, created);
         let code = match self.pq.borrow().as_ref() {
             Some(pq) => pq.encode(embedding),
             // No codebook yet ⇒ no index to keep coherent; the verify
@@ -1149,13 +1228,17 @@ impl PalaceStore {
     /// Advisory: any failure arms the next search's verification.
     pub(crate) fn pq_purge_row(&self, id: &str) {
         let outcome: Result<(), StoreError> = (|| {
-            let seq: Option<i64> = self
+            let row: Option<(i64, String)> = self
                 .conn
-                .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
-                    r.get(0)
-                })
+                .query_row(
+                    "SELECT seq, wing FROM drawers WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
                 .optional()?;
-            let Some(seq) = seq else { return Ok(()) };
+            let Some((seq, wing)) = row else {
+                return Ok(());
+            };
             let tail = self
                 .conn
                 .execute("DELETE FROM drawer_pq WHERE seq = ?1", params![seq])?;
@@ -1163,10 +1246,382 @@ impl PalaceStore {
                 let d = self.pq_count_get("deleted")?;
                 self.pq_count_put("deleted", d + 1)?;
             }
+            // The wing tier mirrors the tail: per-row deletes, no page
+            // tier, and the wing's RAM cache is updated surgically (both
+            // sides of its matched-count equation lose one row).
+            let _ = self
+                .conn
+                .execute("DELETE FROM drawer_pq_wing WHERE seq = ?1", params![seq]);
+            if let Some(Some(st)) = self.wing_pq.borrow_mut().get_mut(&wing) {
+                st.cache.remove_seq(seq);
+                st.live -= 1;
+            }
             Ok(())
         })();
         if outcome.is_err() {
             self.pq_verified.set(false);
+            self.wing_pq.borrow_mut().clear();
+        }
+    }
+
+    /// Vector top-`k` candidate seqs for one wing, from that wing's own
+    /// index. `None` ⇒ the wing has no usable index (below the floor, or a
+    /// dimension PQ can't split) — the caller falls back to the full scan,
+    /// which the `WHERE wing` clause bounds by the wing's size. That
+    /// fallback is a *recall* choice as much as a cost one: intersecting
+    /// corpus-wide candidates with a wing can starve it entirely, while a
+    /// full scan of a below-floor wing is exact and floor-bounded.
+    ///
+    /// Verification is per wing and event-driven, mirroring the global
+    /// tier: the first scoped query after open (or after a write this
+    /// session couldn't index) runs the wing's matched-count check and
+    /// rebuilds on drift; a verified wing stays on the fast path.
+    pub(crate) fn wing_pq_candidates(
+        &self,
+        wing: &str,
+        qvec: &[f32],
+        k: usize,
+    ) -> Result<Option<Vec<i64>>, StoreError> {
+        if !self.wing_pq.borrow().contains_key(wing) {
+            let built = self.wing_pq_build(wing)?;
+            self.wing_pq.borrow_mut().insert(wing.to_string(), built);
+        }
+        // Growth re-check on the fast path (cheap, in-RAM counters): a wing
+        // that crossed the IVF threshold, or doubled past its partitions'
+        // training size, rebuilds once rather than silently degrading.
+        let outgrown = match self.wing_pq.borrow().get(wing) {
+            Some(Some(st)) => match st.ivf.as_ref() {
+                Some(cq) => st.live as u64 > cq.trained_n().saturating_mul(2),
+                None => st.live as usize >= self.ivf_min,
+            },
+            _ => false,
+        };
+        if outgrown {
+            let rebuilt = self.wing_pq_build(wing)?;
+            self.wing_pq.borrow_mut().insert(wing.to_string(), rebuilt);
+        }
+        let map = self.wing_pq.borrow();
+        let Some(Some(st)) = map.get(wing) else {
+            return Ok(None);
+        };
+        let tables = st.pq.distance_tables(qvec);
+        let probe: Option<Vec<i64>> = st.ivf.as_ref().and_then(|cq| {
+            let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 4).max(8));
+            let lists = cq.probe(qvec, nprobe);
+            if lists.is_empty() {
+                None
+            } else {
+                let mut l: Vec<i64> = lists.into_iter().map(i64::from).collect();
+                l.push(-1);
+                Some(l)
+            }
+        });
+        let widen = match &probe {
+            Some(lists) => st.cache.rows_in(lists) < k,
+            None => true,
+        };
+        let mut scored: Vec<(f32, i64)> = Vec::new();
+        match &probe {
+            Some(lists) if !widen => st.cache.scan(&st.pq, &tables, Some(lists), &mut scored),
+            _ => st.cache.scan(&st.pq, &tables, None, &mut scored),
+        }
+        if scored.len() > k {
+            scored.select_nth_unstable_by(k - 1, |a, b| {
+                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scored.truncate(k);
+        }
+        undercroft_obs::search_wings_probed(1);
+        Ok(Some(scored.into_iter().map(|(_, seq)| seq).collect()))
+    }
+
+    /// Verify-or-build one wing's index. `Ok(None)` means the wing earns no
+    /// index (below the floor, or unquantizable) and the caller should
+    /// full-scan; the `None` is cached in the session map so the check runs
+    /// once, invalidated by any write to that wing.
+    fn wing_pq_build(&self, wing: &str) -> Result<Option<WingPq>, StoreError> {
+        self.pq_schema()?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM drawers WHERE wing = ?1",
+            params![wing],
+            |r| r.get(0),
+        )?;
+        if (count as usize) < self.wing_pq_min {
+            // A wing that shrank below the floor sheds its artifacts —
+            // a stale codebook silently kept is the exact failure class the
+            // generation counters exist to make visible elsewhere.
+            self.conn
+                .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
+            self.conn.execute(
+                "DELETE FROM pq_meta WHERE key IN (?1, ?2)",
+                params![format!("codebook/{wing}"), format!("ivf/{wing}")],
+            )?;
+            return Ok(None);
+        }
+
+        // The wing's vectors, decrypted once for whichever path runs.
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, id, embedding FROM drawers WHERE wing = ?1")?;
+        let rows: Vec<(i64, String, Vec<u8>)> = stmt
+            .query_map(params![wing], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        let mut items = Vec::with_capacity(rows.len());
+        for (seq, id, rest) in rows {
+            let emb =
+                self.vault
+                    .embedding_from_rest(&id, &rest)
+                    .map_err(|e| StoreError::CorruptRow {
+                        id: id.clone(),
+                        reason: e.to_string(),
+                    })?;
+            items.push((seq, emb));
+        }
+        if items.is_empty() {
+            return Ok(None);
+        }
+
+        let codebook_key = format!("codebook/{wing}");
+        let ivf_key = format!("ivf/{wing}");
+        let stored = self
+            .pq_meta_get(&codebook_key)?
+            .and_then(|b| ProductQuantizer::from_bytes(&b));
+        let want_ivf = (count as usize) >= self.ivf_min;
+
+        // Coherent-load path: stored codebook, every live wing drawer has a
+        // row (orphans are excluded by the join and are harmless), and the
+        // partitions are neither missing-when-wanted nor outgrown.
+        if let Some(pq) = &stored {
+            let matched: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM drawer_pq_wing p JOIN drawers d \
+                 ON d.seq = p.seq AND d.wing = p.wing WHERE p.wing = ?1",
+                params![wing],
+                |r| r.get(0),
+            )?;
+            let ivf = self
+                .pq_meta_get(&ivf_key)?
+                .and_then(|b| CoarseQuantizer::from_bytes(&b));
+            let ivf_ok = if want_ivf {
+                ivf.as_ref()
+                    .is_some_and(|cq| count as u64 <= cq.trained_n().saturating_mul(2))
+            } else {
+                true
+            };
+            if matched == count && ivf_ok {
+                let mut cache = PqCache::new(pq.code_len());
+                let sealed = self.pq_sealed();
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT seq, list, code FROM drawer_pq_wing WHERE wing = ?1")?;
+                let stored_rows: Vec<(i64, i64, Vec<u8>)> = stmt
+                    .query_map(params![wing], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<Result<_, _>>()?;
+                for (seq, list, blob) in stored_rows {
+                    if sealed {
+                        // A row that fails to open is skipped, not fatal —
+                        // it costs its candidate slot until a rebuild, the
+                        // same trade the global cache makes.
+                        if let Ok(plain) = self
+                            .vault
+                            .index_from_rest(&format!("pqrow/{wing}/{seq}"), &blob)
+                        {
+                            if let Some((list, code)) = Self::pq_row_unpack(&plain) {
+                                cache.push(seq, list, &code);
+                            }
+                        }
+                    } else {
+                        cache.push(seq, list, &blob);
+                    }
+                }
+                return Ok(Some(WingPq {
+                    pq: pq.clone(),
+                    ivf: if want_ivf { ivf } else { None },
+                    cache,
+                    live: count,
+                }));
+            }
+        }
+
+        // Rebuild. The codebook is reused when stored (a rebuild is not a
+        // retrain and must not advance the generation); trained fresh
+        // otherwise, on a keyed sample whose label carries the wing — every
+        // wing draws independently, and the artifact string is one string
+        // in two roles (draw label + generation key), same as the global
+        // five.
+        let pq = match stored {
+            Some(pq) => pq,
+            None => {
+                let dim = items[0].1.len();
+                let Some(m) = [8usize, 4]
+                    .iter()
+                    .find(|&&dsub| dim % dsub == 0)
+                    .map(|&dsub| dim / dsub)
+                else {
+                    return Ok(None);
+                };
+                let artifact = format!("{wing}/{CODEBOOK_PQ}");
+                let sample: Vec<Vec<f32>> = self
+                    .keyed_sample(&artifact, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
+                        seq.to_le_bytes().to_vec()
+                    })
+                    .into_iter()
+                    .map(|i| items[i].1.clone())
+                    .collect();
+                let Some(pq) = ProductQuantizer::train(&sample, m, PQ_TRAIN_ITERS) else {
+                    return Ok(None);
+                };
+                self.pq_meta_put(&codebook_key, &pq.to_bytes())?;
+                self.codebook_generation_bump(&artifact);
+                if items.len() > PQ_TRAIN_SAMPLE {
+                    let probe: Vec<Vec<f32>> = self
+                        .keyed_sample(
+                            &format!("{wing}/pq-fit-probe"),
+                            &items,
+                            PQ_FIT_PROBE,
+                            |(seq, _)| seq.to_le_bytes().to_vec(),
+                        )
+                        .into_iter()
+                        .map(|i| items[i].1.clone())
+                        .collect();
+                    self.warn_unrepresentative(&artifact, &pq, &sample, &probe);
+                }
+                pq
+            }
+        };
+
+        let ivf = if want_ivf {
+            let fresh = self
+                .pq_meta_get(&ivf_key)?
+                .and_then(|b| CoarseQuantizer::from_bytes(&b))
+                .filter(|cq| count as u64 <= cq.trained_n().saturating_mul(2));
+            match fresh {
+                Some(cq) => Some(cq),
+                None => {
+                    let nlist = ((count as f64).sqrt() as usize).clamp(16, 4096);
+                    let artifact = format!("{wing}/{CODEBOOK_PQ_IVF}");
+                    let sample: Vec<Vec<f32>> = self
+                        .keyed_sample(&artifact, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
+                            seq.to_le_bytes().to_vec()
+                        })
+                        .into_iter()
+                        .map(|i| items[i].1.clone())
+                        .collect();
+                    match CoarseQuantizer::train(&sample, nlist, IVF_TRAIN_ITERS, count as u64) {
+                        Some(cq) => {
+                            self.pq_meta_put(&ivf_key, &cq.to_bytes())?;
+                            self.codebook_generation_bump(&artifact);
+                            Some(cq)
+                        }
+                        None => None,
+                    }
+                }
+            }
+        } else {
+            self.conn
+                .execute("DELETE FROM pq_meta WHERE key = ?1", params![ivf_key])?;
+            None
+        };
+
+        // Rebuild always writes from scratch — also the migration path of
+        // last resort for this wing, exactly like the global rebuild.
+        self.conn
+            .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
+        let mut ins = self.conn.prepare(
+            "INSERT OR REPLACE INTO drawer_pq_wing (wing, list, seq, code) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        let sealed = self.pq_sealed();
+        let mut cache = PqCache::new(pq.code_len());
+        for (seq, vec) in &items {
+            let list: i64 = ivf.as_ref().map_or(-1, |cq| cq.assign(vec) as i64);
+            let code = pq.encode(vec);
+            if sealed {
+                let blob = self.vault.index_at_rest(
+                    &format!("pqrow/{wing}/{seq}"),
+                    &Self::pq_row_pack(list, &code),
+                );
+                ins.execute(params![wing, -1i64, seq, blob])?;
+            } else {
+                ins.execute(params![wing, list, seq, code])?;
+            }
+            cache.push(*seq, list, &code);
+        }
+        drop(ins);
+        Ok(Some(WingPq {
+            pq,
+            ivf,
+            cache,
+            live: count,
+        }))
+    }
+
+    /// Keep the written drawer's wing index coherent (advisory, mirrors the
+    /// global incremental encode): a wing verified this session gets the row
+    /// encoded in place; a wing checked-and-skipped gets its verdict
+    /// invalidated on growth so the next scoped query re-checks the floor;
+    /// a wing never consulted needs nothing — its first scoped query runs
+    /// the matched-count verify anyway.
+    fn wing_pq_encode_row(&self, id: &str, embedding: &[f32], created: bool) {
+        if self.wing_pq_min == usize::MAX {
+            return;
+        }
+        let Ok((seq, wing)) = self.conn.query_row(
+            "SELECT seq, wing FROM drawers WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+        ) else {
+            return;
+        };
+        let invalidate = {
+            let mut map = self.wing_pq.borrow_mut();
+            match map.get_mut(&wing) {
+                Some(Some(st)) => {
+                    let code = st.pq.encode(embedding);
+                    let list: i64 = st.ivf.as_ref().map_or(-1, |cq| cq.assign(embedding) as i64);
+                    let outcome: Result<(), rusqlite::Error> = (|| {
+                        self.conn
+                            .execute("DELETE FROM drawer_pq_wing WHERE seq = ?1", params![seq])?;
+                        if self.pq_sealed() {
+                            let blob = self.vault.index_at_rest(
+                                &format!("pqrow/{wing}/{seq}"),
+                                &Self::pq_row_pack(list, &code),
+                            );
+                            self.conn.execute(
+                                "INSERT OR REPLACE INTO drawer_pq_wing (wing, list, seq, code) \
+                                 VALUES (?1, -1, ?2, ?3)",
+                                params![wing, seq, blob],
+                            )?;
+                        } else {
+                            self.conn.execute(
+                                "INSERT OR REPLACE INTO drawer_pq_wing (wing, list, seq, code) \
+                                 VALUES (?1, ?2, ?3, ?4)",
+                                params![wing, list, seq, code],
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    match outcome {
+                        Ok(()) => {
+                            st.cache.remove_seq(seq);
+                            st.cache.push(seq, list, &code);
+                            if created {
+                                st.live += 1;
+                            }
+                            false
+                        }
+                        // A write the index couldn't absorb arms the wing's
+                        // re-verify instead of leaving a silent hole.
+                        Err(_) => true,
+                    }
+                }
+                // The wing may have just crossed the floor.
+                Some(None) if created => true,
+                _ => false,
+            }
+        };
+        if invalidate {
+            self.wing_pq.borrow_mut().remove(&wing);
         }
     }
 

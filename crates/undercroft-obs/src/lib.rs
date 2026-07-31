@@ -123,6 +123,17 @@ pub fn search_completed(
     imp::search_completed(duration, hits, fusion, prefiltered);
 }
 
+/// Record how many per-wing indexes served one query's candidate set — the
+/// honest cost metric for anything fan-out shaped. The dual-index tier
+/// probes exactly one (the scoped wing); a future cross-wing fan-out must
+/// report its real count here rather than let an unbounded fan-out hide
+/// inside one query. Content-free: a count, never a wing name.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn search_wings_probed(wings: u64) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add("undercroft_search_wings_probed_total", wings, &[]);
+}
+
 /// Record a drawer write (created or deduplicated).
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn drawer_write(outcome: WriteOutcome) {

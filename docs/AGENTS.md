@@ -249,7 +249,7 @@ per vault on first write, and a model swap is refused unless you set
 | Value | What | When |
 |---|---|---|
 | `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo R@10 92.7% with hybrid search. **Single-language only** — see below |
-| `http` | a model served over HTTP — Ollama, llama.cpp server, LM Studio, vLLM, TEI. `UNDERCROFT_EMBED_URL` + `_MODEL` (+ optional `_API`, `_KEY`, `_DIM`); dimension is probed from the endpoint | no ONNX export needed, and the largest measured lever on retrieval quality: **+3.2 to +4.2pp** turn all-gold over `hash` across four models, which span only 1.0pp between them. Costs one request per drawer at ingest (11–29×) and +20–57% search. **Drawer text leaves the process in the clear** — loopback or a private container network unless you mean otherwise |
+| `http` | a model served over HTTP — Ollama, llama.cpp server, LM Studio, vLLM, TEI. `UNDERCROFT_EMBED_URL` + `_MODEL` (+ optional `_API`, `_KEY`, `_DIM`); dimension is probed from the endpoint | **the recommended configuration when the endpoint is loopback or a private container network** — the largest measured lever on retrieval quality (**+3.2 to +4.2pp** turn all-gold over `hash` across four models, which span only 1.0pp between them; each figure is n=1, so no specific model is recommended until repeat runs separate them), and no ONNX export needed. Stays opt-in rather than default because **drawer text leaves the process in the clear** — the default must remain zero-egress, and that posture is the product's, not a tuning knob. Costs one request per drawer at ingest (11–29×) and +20–57% search |
 | `onnx` | user-supplied MiniLM-class ONNX via tract (pure Rust); needs `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`, build `--features onnx` | best recall, pure-Rust constraint |
 | `ort` | same models via ONNX Runtime (C++ dep, build `--features ort`); ~2.5× faster/forward, int8 support, ~4–5× faster ingest | throughput matters; same env vars, switching is one env change |
 
@@ -584,6 +584,10 @@ on cosine evidence alone, `off` refuses semantic-only admission entirely.
 Set it only if you have measured your own corpus — the default is measured
 from the embedder in hand, and an external vault refuses until you declare) ·
 `UNDERCROFT_IVF_MIN` (8192) · `UNDERCROFT_IVF_NPROBE` ·
+`UNDERCROFT_WING_PQ_MIN` (4096 — wings at least this large carry their own
+PQ codebook and code rows, so a wing-scoped search probes the wing's index
+instead of intersecting corpus-wide candidates; smaller wings full-scan
+themselves, bounded and exact; `off` disables the per-wing tier) ·
 `UNDERCROFT_PQ_PAGE_MIN` (off by default — sealed page tier: one AEAD
 page per IVF list, lazy per-probe decrypt) ·
 `UNDERCROFT_TOK_PQ_MIN` (256) · `UNDERCROFT_FDE_PQ_MIN` (256) ·

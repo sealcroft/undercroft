@@ -25,6 +25,7 @@ mod rotate;
 
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, Triple};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
+pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use rotate::RotationReport;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -600,6 +601,16 @@ pub struct PalaceStore {
     /// Live drawer count as of the last verification, maintained on writes —
     /// drives the IVF thresholds without per-search `COUNT(*)`.
     pq_live: std::cell::Cell<i64>,
+    /// Per-wing PQ state, verified lazily per wing per session: the wing is
+    /// the retrieval unit a scoped query pays for, so each wing past
+    /// `wing_pq_min` carries its own codebook, partitions and code cache.
+    /// `None` in the map = checked this session and below the floor (or
+    /// unquantizable) — the scoped query full-scans its wing instead.
+    wing_pq: std::cell::RefCell<std::collections::HashMap<String, Option<pqidx::WingPq>>>,
+    /// Wing size at which a wing earns its own PQ index (`usize::MAX` ⇒
+    /// tier off — scoped queries intersect global candidates, the pre-tier
+    /// behavior). See `pqidx::WING_PQ_MIN_DEFAULT`.
+    wing_pq_min: usize,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
     ivf_min: usize,
@@ -863,6 +874,7 @@ impl PalaceStore {
         self.conn.execute_batch(
             "DROP TABLE IF EXISTS drawer_pq;
              DROP TABLE IF EXISTS pq_page;
+             DROP TABLE IF EXISTS drawer_pq_wing;
              DROP TABLE IF EXISTS pq_meta;",
         )?;
         self.drop_derived_caches();
@@ -962,6 +974,40 @@ impl PalaceStore {
         CODEBOOK_ARTIFACTS
             .iter()
             .map(|a| ((*a).to_string(), self.codebook_generation(a)))
+            .chain({
+                // Per-wing artifacts are dynamic keys (`<wing>/pq-codebook`,
+                // `<wing>/pq-ivf`) — a fixed list cannot enumerate them, and
+                // a trained codebook that no surface reports is exactly the
+                // invisible-change class the counters exist to prevent.
+                // Sorted so the surface is stable across calls. These reach
+                // stats and `/v1/…/stats`; the per-artifact *gauges* stay the
+                // static five — `set_gauge` drops unregistered names by
+                // design, because per-wing gauge cardinality is unbounded.
+                let mut dynamic: Vec<(String, u64)> = self
+                    .conn
+                    .prepare(
+                        "SELECT key, value FROM meta \
+                         WHERE key LIKE 'codebook_generation/%/%' ORDER BY key",
+                    )
+                    .and_then(|mut stmt| {
+                        stmt.query_map([], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let artifact = k
+                            .strip_prefix("codebook_generation/")
+                            .unwrap_or(&k)
+                            .to_string();
+                        (artifact, v.parse().unwrap_or(0))
+                    })
+                    .collect();
+                dynamic.sort();
+                dynamic
+            })
             .collect()
     }
 
@@ -1090,6 +1136,12 @@ impl PalaceStore {
             },
             pq_verified: std::cell::Cell::new(false),
             pq_live: std::cell::Cell::new(0),
+            wing_pq: std::cell::RefCell::new(std::collections::HashMap::new()),
+            wing_pq_min: match std::env::var("UNDERCROFT_WING_PQ_MIN") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(pqidx::WING_PQ_MIN_DEFAULT),
+                Err(_) => pqidx::WING_PQ_MIN_DEFAULT,
+            },
             ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
                 Ok(v) => v.parse().unwrap_or(pqidx::IVF_MIN_DEFAULT),
@@ -2095,8 +2147,19 @@ impl PalaceStore {
         } else if self.pq_enabled {
             // On-disk PQ prefilter: ADC over the RAM code cache, bounded at
             // any corpus size. Over-fetch generously so BM25 fusion still
-            // has material.
-            self.pq_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?
+            // has material. A wing-scoped query probes the wing's own index
+            // when it has one: corpus-wide candidates intersected with a
+            // wing can starve it entirely, and their cost is corpus-sized
+            // when the question was wing-sized. `None` from the wing tier
+            // means "full-scan instead" — the `WHERE wing` clause below
+            // bounds that scan by the wing, which is the floor working as
+            // designed, not a missing index.
+            match &opts.wing {
+                Some(w) if self.wing_pq_min != usize::MAX => {
+                    self.wing_pq_candidates(w, &qvec, std::cmp::max(256, depth.saturating_mul(32)))?
+                }
+                _ => self.pq_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?,
+            }
         } else if self.hnsw_enabled {
             // Semantic ANN prefilter: cut to the vector top-K before verify +
             // fusion. Over-fetch generously so BM25 fusion still has material.
@@ -5964,6 +6027,12 @@ mod tests {
         // it, so a search here would never reach PQ.
         let qvec = s.embedder.embed("word001 word002 word003");
         s.pq_candidates(&qvec, 20).unwrap().expect("PQ index");
+        // And the per-wing tier, floor forced to 1 so this one-wing corpus
+        // earns its index and the wing row exists to be priced.
+        s.set_wing_pq_min(1);
+        s.wing_pq_candidates("w", &qvec, 20)
+            .unwrap()
+            .expect("per-wing PQ index");
 
         // Every per-drawer artifact: (table, measuring query, expected bytes).
         // Adding a table to the inventory means adding a row here.
@@ -5979,6 +6048,16 @@ mod tests {
                 "SELECT length(code) FROM drawer_pq WHERE seq = \
                  (SELECT seq FROM drawers WHERE id = ?1)",
                 // i32 IVF list id inside the seal + dim/8 code bytes.
+                SEAL + 4 + DIM / 8,
+            ),
+            (
+                "drawer_pq_wing",
+                "SELECT length(code) FROM drawer_pq_wing WHERE seq = \
+                 (SELECT seq FROM drawers WHERE id = ?1)",
+                // The dual index's second code row: same formula as the
+                // global row — the wing lives in a plaintext column (already
+                // exposed via drawers.wing), the list id inside the seal.
+                // Paid only by drawers in wings past `wing_pq_min`.
                 SEAL + 4 + DIM / 8,
             ),
             (
@@ -6127,12 +6206,14 @@ mod tests {
         // memory of a run. `cargo test -- --nocapture one_drawer_costs`.
         println!(
             "footprint/drawer — prose {} B → sealed content {content} B · \
-             embedding {emb} B · PQ row {} B · tokens ({tok_rows} rows) {} B · \
-             raw FDE {} B · every tier {derived_total} B",
+             embedding {emb} B · PQ row {} B · wing PQ row {} B · \
+             tokens ({tok_rows} rows) {} B · raw FDE {} B · \
+             every tier {derived_total} B",
             body.len(),
             priced[1].2,
             priced[2].2,
-            priced[3].2
+            priced[3].2,
+            priced[4].2
         );
         assert!(
             content < body.len(),
@@ -6242,6 +6323,233 @@ mod tests {
                 (CODEBOOK_TOK.to_string(), 0),
             ],
             "and it must be visible from the stats surface, not only internally"
+        );
+    }
+
+    /// Build the starvation corpus: 400 drawers in wing "pacific" that share
+    /// every query term, and a small wing "arctic" whose one relevant drawer
+    /// shares only one — so the corpus-wide candidate top-k is filled
+    /// entirely by the loud wing and the scoped answer never enters it.
+    fn starved_wing_store() -> (TempDir, PalaceStore, String) {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..400u32 {
+            s.upsert(&drawer(
+                "pacific",
+                "r",
+                &format!("kelp harvest quota memo number {i}"),
+                i,
+            ))
+            .unwrap();
+        }
+        for i in 0..9u32 {
+            s.upsert(&drawer(
+                "arctic",
+                "r",
+                &format!("arctic station maintenance note {i}"),
+                400 + i,
+            ))
+            .unwrap();
+        }
+        let target = drawer(
+            "arctic",
+            "r",
+            "kelp beds mapped near the arctic station",
+            500,
+        );
+        s.upsert(&target).unwrap();
+        s.set_pq(true);
+        (dir, s, target.id)
+    }
+
+    /// The defect the wing tier closes, pinned from both sides: corpus-wide
+    /// candidates intersected with a wing can starve it entirely, and a
+    /// wing-scoped query must instead be answered from the wing itself.
+    #[test]
+    fn a_scoped_query_is_answered_by_its_wing_not_by_the_corpus_top() {
+        let (_d, mut s, target) = starved_wing_store();
+        let arctic = || SearchOptions {
+            wing: Some("arctic".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        // Pre-tier behavior (`off`): the global prefilter's top-k is all
+        // pacific, the wing filter then leaves nothing. This is the measured
+        // defect, asserted so its disappearance would be noticed too.
+        s.set_wing_pq_min(usize::MAX);
+        let starved = s.search("kelp harvest quota", &arctic()).unwrap();
+        assert!(
+            starved.iter().all(|h| h.drawer.id != target),
+            "if the corpus-wide candidates now include the scoped answer, the \
+             starvation premise of this test is gone — investigate, don't delete"
+        );
+        // The wing's own index (floor forced below the wing's size).
+        s.set_wing_pq_min(8);
+        let hits = s.search("kelp harvest quota", &arctic()).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "a wing-scoped query must find the wing's own evidence"
+        );
+        // And the index really is per-wing: rows exist for the scoped wing,
+        // under its own codebook key and its own generation artifact.
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq_wing WHERE wing = 'arctic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 10, "one code row per arctic drawer");
+        assert_eq!(
+            s.codebook_generation(&format!("arctic/{CODEBOOK_PQ}")),
+            1,
+            "the wing's codebook claims its own generation"
+        );
+        assert!(
+            s.stats()
+                .unwrap()
+                .codebooks
+                .contains(&(format!("arctic/{CODEBOOK_PQ}"), 1)),
+            "and the stats surface lists the dynamic artifact"
+        );
+    }
+
+    /// Below the floor a wing earns no codebook — and must still be immune
+    /// to starvation, because the fallback is a full scan of the wing (the
+    /// `WHERE wing` clause bounds it), not the corpus-wide candidate set.
+    #[test]
+    fn below_the_floor_a_scoped_query_full_scans_its_wing() {
+        let (_d, mut s, target) = starved_wing_store();
+        s.set_wing_pq_min(50); // arctic holds 10 — below the floor
+        let hits = s
+            .search(
+                "kelp harvest quota",
+                &SearchOptions {
+                    wing: Some("arctic".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "a below-floor wing full-scans itself and cannot be starved"
+        );
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq_wing", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "below the floor no per-wing rows exist");
+        assert_eq!(
+            s.codebook_generation(&format!("arctic/{CODEBOOK_PQ}")),
+            0,
+            "and no codebook was trained for it"
+        );
+    }
+
+    /// The floor is two-sided: a wing that crossed it sheds its artifacts on
+    /// the next check, because a stale codebook silently kept is the exact
+    /// invisible-change class the generation counters exist to expose.
+    #[test]
+    fn a_wing_that_shrinks_below_the_floor_sheds_its_artifacts() {
+        let (_d, mut s, _target) = starved_wing_store();
+        s.set_wing_pq_min(8);
+        let q = s.embedder.embed("kelp");
+        s.wing_pq_candidates("arctic", &q, 5)
+            .unwrap()
+            .expect("arctic earns an index at floor 8");
+        let ids: Vec<String> = s
+            .conn
+            .prepare("SELECT id FROM drawers WHERE wing = 'arctic' LIMIT 5")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for id in ids {
+            s.delete_drawer(&id).unwrap();
+        }
+        // Force the per-session verdict to be re-derived, as a fresh open
+        // would.
+        s.wing_pq.borrow_mut().clear();
+        assert!(
+            s.wing_pq_candidates("arctic", &q, 5).unwrap().is_none(),
+            "5 drawers is below floor 8 — no index"
+        );
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq_wing WHERE wing = 'arctic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "the shrunk wing's rows are gone");
+        let meta: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pq_meta WHERE key IN ('codebook/arctic', 'ivf/arctic')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(meta, 0, "and so is its codebook");
+    }
+
+    /// A write to an indexed wing lands in that wing's index immediately
+    /// (incremental encode), and a scoped query sees it without a rebuild.
+    #[test]
+    fn a_write_to_an_indexed_wing_is_immediately_findable_scoped() {
+        let (_d, mut s, _target) = starved_wing_store();
+        s.set_wing_pq_min(8);
+        let opts = SearchOptions {
+            wing: Some("arctic".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        s.search("kelp", &opts).unwrap(); // builds the arctic index
+        let fresh = drawer("arctic", "r", "walrus haul-out survey completed", 600);
+        s.upsert(&fresh).unwrap();
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq_wing WHERE wing = 'arctic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 11, "the write was encoded into the wing index");
+        let hits = s.search("walrus haul-out", &opts).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == fresh.id),
+            "and the scoped query finds it with no rebuild"
+        );
+    }
+
+    /// Key rotation reseals the per-wing rows and the per-wing codebook —
+    /// dynamic keys a fixed enumeration cannot cover — and a scoped search
+    /// answers identically afterwards.
+    #[test]
+    fn rotation_carries_the_per_wing_index() {
+        let (dir, mut s, target) = starved_wing_store();
+        s.set_wing_pq_min(8);
+        let opts = SearchOptions {
+            wing: Some("arctic".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        s.search("kelp harvest quota", &opts).unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let candidate = mgr.rotation_candidate("test").unwrap();
+        let report = s.rotate_keys(candidate).unwrap();
+        assert_eq!(
+            report.wing_pq_rows, 10,
+            "every arctic code row was resealed"
+        );
+        let hits = s.search("kelp harvest quota", &opts).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "the rotated wing index still answers"
         );
     }
 

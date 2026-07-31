@@ -340,6 +340,9 @@ check "model-eval memories gated" 1 "UNDERCROFT_LLM_URL"              -- "${BIN%
 
 echo "== Benchmark harness =="
 check "bench synth passes"        0 "SYNTH OK"                       -- "${BIN%/*}/undercroft-bench" synth --n 60
+# Per-wing tier end to end: 4 wings of 100, floor 50 → the subject wing
+# earns its own index and the scoped recall gate must hold.
+check "bench wingscale passes"    0 "WINGSCALE OK"                   -- "${BIN%/*}/undercroft-bench" wingscale --n 400 --wings 4 --queries 50 --floors 50,off
 
 echo "== MCP server (JSON-RPC over stdio) =="
 MCP_OUT="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \

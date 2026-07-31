@@ -1047,10 +1047,11 @@ fn main() -> Result<()> {
                 );
                 println!("  tunnels:             {}", report.tunnels);
                 println!(
-                    "  derived artifacts:   {} token, {} pq (+{} pages), {} fde, {} meta",
+                    "  derived artifacts:   {} token, {} pq (+{} pages, +{} wing rows), {} fde, {} meta",
                     report.token_matrices,
                     report.pq_rows,
                     report.pq_pages,
+                    report.wing_pq_rows,
                     report.fde_rows,
                     report.meta_artifacts
                 );

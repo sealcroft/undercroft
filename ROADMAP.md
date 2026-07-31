@@ -699,16 +699,23 @@ was the whole point of this plan, and only part of it has moved:
 
 | sense | item | state |
 |---|---|---|
-| **candidate** — who is considered | R1 wing as retrieval unit, R4 FDE as generator | **untouched.** 0.91 ms/drawer, linear ⇒ ~913 s/query at 10⁶ |
+| **candidate** — who is considered | R1 wing as retrieval unit | **built, phase 1.** Build cost proven wing-shaped; query-latency claim unproven at tested sizes (≤65k; it lives at 10⁶) |
+| | R4 FDE as generator | untouched |
 | **delivery** — how deep the set goes | R2 rescore depth | **built** (value in the shipped config unestablished) |
-| | R3 pagination | **built** (`offset` + `ranked_at` on `SearchOptions`, all four surfaces) |
+| | R3 pagination | **built + delivered: 74.2% → 85.9% all-gold via 4×10 pages, 0/1977 tiling mismatches — the largest measured gain in the program** |
 | **representation** — what can match | served embedder | **done, unplanned: +3.2–4.2pp** |
 
-**The ordering from here is R1.** It is the only item on this list that
-addresses 913 s/query at all, and it changes the API contract (cross-wing
-queries need fan-out or a fallback), so it wants **design agreement before
-code**. Note R2 nudges candidate reach the wrong way: rescoring 200 instead of
-50 adds per-query work to the path that is already the bottleneck.
+**R1 phase 2 — cross-wing fan-out — is designed but deliberately not built**
+until scoped queries prove the model. Its three hard requirements are
+recorded now, because R3's pagination contract imposes them: the merge must
+be **deterministic** (sorted wing iteration, ties broken on drawer id — score
+ties are common and `sort_by` only preserves input order), `ranked_at` must
+thread into **every** wing's ranking or the pages-slice-one-ranking promise
+dies at the merge, and the fan-out must be **bounded** (cap wings probed per
+query and report `wings_probed` — the obs counter already exists) or it is
+the linear scan with extra bookkeeping. Note R2 nudges candidate reach the
+wrong way: rescoring 200 instead of 50 adds per-query work to the path that
+is already the bottleneck.
 
 **Phase 1 — reach, with no new storage and no new model.** *Users and agents;
 this is where the measured headroom is.*
@@ -765,9 +772,38 @@ this is where the measured headroom is.*
 - **A query-side date filter** — small recall (~+1pp ceiling) but the only
   **poison-positive** item: `content_date` is HMAC-covered, so the filter
   rests on tamper-evident declared metadata rather than learned similarity.
-- **Wing as the retrieval unit, not a filter** — the biggest scale win, and
-  it changes the API contract (cross-wing queries need fan-out or a
-  fallback), so it wants design agreement before code.
+- **Wing as the retrieval unit — BUILT (phase 1, dual index); build
+  economics PROVEN, query-latency claim NOT.** Per-wing PQ
+  codebooks/IVF/rows for wings past `UNDERCROFT_WING_PQ_MIN` (4096); a
+  wing-scoped search probes the wing's own index, a below-floor wing
+  full-scans itself (floor-bounded, exact), and unscoped queries keep the
+  global index unchanged — no API contract change, which is what made
+  phase 1 shippable without fan-out. Measured honestly (wingscale,
+  corrected instrument — full table in CHANGELOG): **both** latency
+  columns are flat across 4× corpus growth (scoped 24.1→23.8, unscoped
+  24.0→24.5 ms/q at 16k→65k) — the global PQ tier already bounds the pool
+  at these sizes, so the per-wing tier buys no query latency here and runs
+  3.5× slower than tier-off. What it provably buys is **wing-shaped build
+  cost**: 3.9/15.5 s vs the global index's 59/240 s, a maintenance
+  property that compounds. The 913 s/query motivator was a full-scan
+  figure; the residual claim lives at 10⁶ and 65k is 15× below it. The
+  starvation delta (99.0 vs 100.0 scoped R@5, 2 queries in 196 against
+  ±0.5pp draw wobble) is suggestive, not established; the catastrophic
+  empty-wing shape is pinned by unit test, which needs no scale.
+  **The one number that settles the query claim: unscoped PQ latency vs
+  corpus size, pushed until it degrades.** Flat to 10⁶ ⇒ the tier is a
+  build-cost optimisation and gets documented as exactly that; a break
+  between 10⁵ and 10⁶ ⇒ that is where scoped wins. The defect it closes is recall as much
+  as cost: the global prefilter's top-k intersected with a wing can starve
+  it entirely (pinned by test). Honest limits, recorded: BM25 IDF stays
+  global (the wing isolates candidates, not scores; per-wing IDF was
+  rejected — RRF-style rank fusion measured −7.3pp here and per-query
+  channel rescaling −9.4pp, so no per-wing score normalisation either);
+  the hmac FTS prefilter keeps the same scoped-starvation shape (gap);
+  ingest is now the un-addressed scaling axis — a served embedder costs
+  11–29× ingest and per-wing indexes do not help writes. Phase 2 (fan-out
+  for unscoped queries) waits on scoped queries proving the model; its
+  three requirements are recorded beside the Reach table.
 
 **Phase 2 — representation, gated.** *Operators as much as users.*
 

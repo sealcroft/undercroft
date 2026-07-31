@@ -1,5 +1,92 @@
 # Changelog
 
+## Unreleased — the wing becomes the retrieval unit it always claimed to be
+
+- **Per-wing PQ indexes (`UNDERCROFT_WING_PQ_MIN`, default 4096).** `wing` was
+  a SQL `WHERE` on one global table: every index was vault-wide, so a
+  wing-scoped query paid corpus-shaped costs and — worse — could lose its
+  answer to the corpus. The prefilter's top-k is drawn from the whole vault,
+  and intersecting it with a wing can leave *nothing*, while the wing holds
+  the evidence: pinned by test, 400 loud drawers in one wing empty a scoped
+  query against another under the pre-tier path. Wings past the floor now
+  carry their own codebook, their own IVF partitions and their own code rows
+  (`drawer_pq_wing`), and a wing-scoped search probes those; below the floor
+  a scoped query skips the prefilter and full-scans its wing — bounded by
+  the floor, exact, and equally starvation-free. Unscoped queries keep the
+  global index and today's behavior exactly (dual index, no fan-out, no API
+  change); `off` restores the pre-tier behavior for scoped ones too.
+- **The floor is earned, two-sided, and its artifacts shed.** k-means with
+  256 centroids per subspace on a few hundred vectors makes duplicate
+  centroids, and a codebook is ~hundreds of KB against 92 B/drawer of codes —
+  so a wing *earns* its codebook at 4096 drawers (the training-sample cap:
+  the smallest per-wing codebook trains on a full-size sample). A wing that
+  shrinks below the floor sheds rows and codebook on its next check rather
+  than keeping a stale quantizer silently.
+- **Per-wing codebooks are the blast-radius decision implemented.** A wing's
+  population is more homogeneous than the vault's, so its codebook fits it
+  better — and derived-structure scope now matches the isolation unit (the
+  wing) instead of the crypto unit (the vault): a bulk writer in one wing no
+  longer shapes the codebook that scores another. Each wing trains on its own
+  keyed draw (label = `<wing>/pq-codebook`, one string in two roles exactly
+  like the global five), gets its own `fit_report` representativeness check,
+  and bumps its own generation counter — dynamic artifacts on the same
+  `stats`/`/v1/…/stats` surface, deliberately *not* per-wing gauges (the
+  gauge allowlist stays static because per-wing cardinality is unbounded).
+  Stated honestly, both ways: BM25's IDF stays global — the wing is an
+  isolation unit for **candidates**, not for scores — and the hmac-level FTS
+  prefilter keeps the same starvation shape for scoped queries (recorded gap;
+  its fallback-on-empty softens but does not close it).
+- **Every coherence path knows the new artifacts.** Writes encode into the
+  wing's index in place (or arm its re-verify); deletes purge surgically;
+  `invalidate_embedding_space` drops the wing table with the rest; key
+  rotation reseals every wing row (`pqrow/<wing>/<seq>`) *and* the dynamic
+  meta keys (`codebook/<wing>`, `ivf/<wing>`) — enumerated by scan, because
+  a fixed key list cannot cover dynamic artifacts, and a rotation that
+  missed one would leave a wing's index sealed under retired keys. The
+  footprint test prices the second code row (92 B sealed at 384 dims, only
+  for drawers in indexed wings) in both directions, and `wingscale` joins
+  the bench harness to measure scoped-vs-unscoped recall and latency on
+  both sides of the floor.
+- **Measured** (`wingscale`, sealed, hash embedder, 16 wings, `k`=5,
+  candidate pool 256, `IVF_MIN` 8192, steady state with the per-pass
+  warm-up — the one-time index build — reported separately; the harness's
+  own first version folded those builds into per-query averages and
+  manufactured a 15× "effect". One run per cell; per-vault draw wobble
+  ~±0.5pp on the recall column, observed directly as 98.5%/99.0% for the
+  same cell across two fresh vaults:
+
+  | corpus | wing | config | scoped R@5 / ms/q | unscoped R@5 / ms/q | build |
+  |---|---|---|---|---|---|
+  | 16,384 | 1,024 | floor 4096 (below — full scan) | 100% / 104.6 | 100% / 23.2 | 0.2 s |
+  | 16,384 | 1,024 | floor 512 (indexed) | 100% / 24.1 | 100% / 24.0 | 3.9 s |
+  | 16,384 | 1,024 | tier off | 100% / 6.2 | 100% / 23.7 | — |
+  | 65,536 | 4,096 | floor 4096 (indexed) | 100% / 23.8 | 99.0% / 24.5 | 15.5 s |
+  | 65,536 | 4,096 | tier off | 99.0% / 7.2 | 99.0% / 23.7 | — |
+
+  **Read both latency columns before crediting either.** Scoped is flat
+  across 4× corpus growth (24.1 → 23.8 ms/q) — and so is unscoped
+  (24.0 → 24.5): at these sizes the *global* PQ tier already bounds the
+  candidate pool, so the per-wing tier buys **no query latency at all**
+  here, and against tier-off it is 3.5× slower (24 vs 6–7 ms/q — tier-off
+  is cheap because ~15/16 of its candidate budget lands outside the wing
+  and is discarded before hydration). **What is proven is the build
+  economics**: indexing the wing costs 3.9 s / 15.5 s where the global
+  index costs 59 s / 240 s at the same corpus sizes — wing-shaped versus
+  corpus-shaped, a maintenance property that compounds with every retrain.
+  **What is not proven**: the query-latency claim. The 913 s/query figure
+  that motivated wing-as-retrieval-unit was a *full-scan* figure; the PQ
+  tier addresses it, and 65,536 is 15× below the 10⁶ where the residual
+  claim lives — untested there. The starvation signal (tier-off scoped
+  99.0% vs 100.0%) is 2 queries in 196 against ±0.5pp draw wobble —
+  suggestive, not established, by this repo's own evidence bar; the
+  catastrophic shape (a wing emptied entirely by a louder one) is pinned
+  by unit test, which does not need scale. The below-floor 104.6 ms/q is
+  the floor working: bounded by wing size, exact, and the price of not
+  training codebooks on 1,024-row populations. **Next single number**:
+  unscoped PQ latency versus corpus size, pushed until it degrades — flat
+  to 10⁶ kills the query claim and reclassifies the tier as a build-cost
+  optimisation; a break between 10⁵ and 10⁶ is where scoped wins.
+
 ## Unreleased — a caller can iterate now, instead of re-asking
 
 - **`SearchOptions` pages: `offset` + `ranked_at`.** There was no way to see
@@ -43,6 +130,20 @@
   and says nothing. The CLI gains `--offset`. The remote-index path
   (`search_with_index`) applies the same page semantics, so a mirror-backed
   search paginates identically to a local one.
+- **Measured: the largest delivered gain in the reach program.** LoCoMo,
+  default config (hash embedder, no reranker, `UNDERCROFT_RETRIEVAL` unset,
+  pool 400, k 10, deterministic — one run is exact), asserted per
+  turn-scored query by `locomo --paging-contract`: four pinned pages of ten
+  tile one call of forty with **0 mismatches in 1,977 queries** (ids and
+  order), and the all-gold evidence a paging reader actually receives goes
+  **74.2% → 85.9%** — identical, to the decimal, to the depth CDF's
+  within-top-40 row, which had been quoted as a ceiling since session 20 and
+  is now a result. Four calls instead of one is the price, and making that
+  trade available was the point. For comparison: ColBERT bought +4.9pp,
+  the served embedder +3.2–4.2pp, R2 +2.1pp in a configuration nobody runs.
+  Unpinned repeats (no `ranked_at`) differed on **4 of 1,977 queries
+  (0.2%)** — the documented host-clock recency drift, now with a measured
+  rate instead of a doc comment.
 
 ## Unreleased — a served embedder, and a standing conclusion overturned
 

@@ -99,6 +99,31 @@ enum Command {
         #[arg(long, default_value_t = 256)]
         k: usize,
     },
+    /// Wing-as-retrieval-unit scaling: scoped vs unscoped recall and
+    /// latency on a multi-wing corpus, under the per-wing PQ tier. The
+    /// number that matters is scoped R@5 as the corpus grows: corpus-wide
+    /// candidates intersected with a wing starve it, a wing's own index
+    /// does not. Run at two corpus sizes ≥4x apart and on both sides of
+    /// the floor (--wing-pq-min) before believing any figure.
+    Wingscale {
+        /// Total drawers across all wings
+        #[arg(long, default_value_t = 16_384)]
+        n: usize,
+        /// Number of wings (round-robin ingest; every wing is n/wings)
+        #[arg(long, default_value_t = 16)]
+        wings: usize,
+        /// Queries per pass (evenly sampled over the subject wing's facts)
+        #[arg(long, default_value_t = 200)]
+        queries: usize,
+        /// Comma-separated per-wing floors to measure against ONE ingested
+        /// corpus: numbers, `default` (the store's own floor), or `off`
+        /// (tier disabled — scoped queries intersect corpus-wide
+        /// candidates, the pre-tier behavior).
+        #[arg(long, default_value = "default,off")]
+        floors: String,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -168,6 +193,13 @@ enum Command {
         /// smaller pool is worse".
         #[arg(long, default_value_t = 0)]
         pool: usize,
+        /// Assert the R3 paging contract per turn-scored query: four calls
+        /// of limit 10 at offsets 0/10/20/30 under one pinned `ranked_at`
+        /// must tile one call of limit 40 exactly (ids and order), the
+        /// all-gold they deliver must equal the depth CDF's ≤40 row, and an
+        /// unpinned repeat records what the host clock drifts.
+        #[arg(long)]
+        paging_contract: bool,
     },
     /// Head-to-head vs external memory systems (competitive track C1.1):
     /// the LoCoMo protocol + scorer, driven through a system adapter —
@@ -799,6 +831,166 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
         anyhow::bail!("regression: synthetic Recall@5 {r5_pct:.1}% (expected >= 95%)");
     }
     println!("SYNTH OK");
+    Ok(())
+}
+
+/// Wing-as-retrieval-unit scaling harness. Round-robin ingest across
+/// `wings` wings (deliberately periodic — that is ordinary ingest order and
+/// exactly what the keyed training draw must tolerate) ONCE, then for each
+/// requested floor two query passes over the subject wing's facts: scoped
+/// to that wing, and unscoped. Scoped R@5 is the gated number — it is what
+/// corpus-wide candidate sets take away from a wing and what the per-wing
+/// tier restores.
+///
+/// Each pass runs ONE untimed warm-up query first and reports its cost
+/// separately: the first search after open trains/builds whatever index its
+/// path needs, and folding minutes of one-time build into a per-query
+/// average is how this harness's own first version produced a 15x
+/// scoped-vs-unscoped "difference" that was really "which pass paid the
+/// build". Timed columns are steady state; `warmup` carries the build.
+/// The columns also include hydration and fusion, not candidate generation
+/// alone, so at equal candidate counts the passes converge — recall and
+/// warmup are where the tier shows.
+fn run_wingscale(
+    n: usize,
+    wings: usize,
+    queries: usize,
+    floors: &str,
+    level: SecurityLevel,
+) -> Result<()> {
+    let (_tmp, mut store) = fresh_store(level)?;
+    store.set_pq(true);
+    let wings = wings.max(1);
+    let subject = "wing-000";
+
+    let ingest_started = Instant::now();
+    let mut keys: Vec<(String, String, String)> = Vec::new();
+    for i in 0..n {
+        let wing = format!("wing-{:03}", i % wings);
+        let topic = TOPICS[i % TOPICS.len()];
+        let key = format!(
+            "{}-{:05}",
+            ["budget", "deadline", "vendor", "owner"][i % 4],
+            i
+        );
+        let detail = format!("the {key} is finalized as option {}", (i * 7) % 100);
+        let fact = FACT_TEMPLATES[i % FACT_TEMPLATES.len()]
+            .replace("{topic}", topic)
+            .replace("{detail}", &detail);
+        let drawer = Drawer::new(&wing, topic, fact, None, i as u32, "bench");
+        store.upsert(&drawer)?;
+        if i % wings == 0 {
+            keys.push((key, topic.to_string(), drawer.id));
+        }
+    }
+    let ingest_secs = ingest_started.elapsed().as_secs_f32();
+    let wing_size = keys.len();
+    println!(
+        "Wingscale — n={n} wings={wings} wing_size={wing_size} level={level:?} \
+         ingest {ingest_secs:.2}s ({:.1} docs/s)",
+        n as f32 / ingest_secs
+    );
+
+    if keys.is_empty() {
+        anyhow::bail!("no drawers in the subject wing — raise --n or lower --wings");
+    }
+    let stride = keys.len().div_ceil(queries.max(1)).max(1);
+    let sampled: Vec<&(String, String, String)> = keys.iter().step_by(stride).collect();
+    let q_total = sampled.len();
+
+    let query_for = |qi: usize, key: &str, topic: &str| {
+        let q = QUERY_TEMPLATES[qi % QUERY_TEMPLATES.len()]
+            .replace("{topic}", topic)
+            .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
+        format!("{q} {key}")
+    };
+
+    for floor_spec in floors.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let floor_label = if floor_spec.eq_ignore_ascii_case("off") {
+            store.set_wing_pq_min(usize::MAX);
+            "off".to_string()
+        } else if floor_spec.eq_ignore_ascii_case("default") {
+            store.set_wing_pq_min(undercroft_store::WING_PQ_MIN_DEFAULT);
+            format!("default({})", undercroft_store::WING_PQ_MIN_DEFAULT)
+        } else {
+            let min: usize = floor_spec.parse().map_err(|_| {
+                anyhow::anyhow!(
+                    "--floors entries are numbers, `default` or `off`, got {floor_spec:?}"
+                )
+            })?;
+            store.set_wing_pq_min(min);
+            min.to_string()
+        };
+
+        let pass = |wing: Option<String>| -> Result<(f32, f32, f32)> {
+            // Warm-up: the one query that pays index build/train for this
+            // path, reported on its own so the timed loop is steady state.
+            let (key, topic, _) = sampled[0];
+            let warm_started = Instant::now();
+            store.search(
+                &query_for(0, key, topic),
+                &SearchOptions {
+                    wing: wing.clone(),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )?;
+            let warmup_ms = 1000.0 * warm_started.elapsed().as_secs_f32();
+            let mut r5 = 0u32;
+            let started = Instant::now();
+            for (qi, (key, topic, id)) in sampled.iter().copied().enumerate() {
+                let hits = store.search(
+                    &query_for(qi, key, topic),
+                    &SearchOptions {
+                        wing: wing.clone(),
+                        limit: 5,
+                        ..Default::default()
+                    },
+                )?;
+                if hits.iter().any(|h| &h.drawer.id == id) {
+                    r5 += 1;
+                }
+            }
+            let secs = started.elapsed().as_secs_f32();
+            Ok((
+                100.0 * r5 as f32 / q_total.max(1) as f32,
+                1000.0 * secs / q_total.max(1) as f32,
+                warmup_ms,
+            ))
+        };
+        let (scoped_r5, scoped_ms, scoped_warm) = pass(Some(subject.to_string()))?;
+        let (unscoped_r5, unscoped_ms, unscoped_warm) = pass(None)?;
+
+        // Whether the scoped pass actually probed a wing index: the tier
+        // must be on AND the wing's codebook trained. Reading only the
+        // generation counter lied here — a codebook trained by an earlier
+        // floor entry persists in meta while `off` routes around it.
+        let tier_on = !floor_spec.eq_ignore_ascii_case("off");
+        let wing_indexed = tier_on
+            && store
+                .stats()?
+                .codebooks
+                .iter()
+                .any(|(a, g)| a == &format!("{subject}/pq-codebook") && *g > 0);
+
+        println!("floor={floor_label} wing_index_used={wing_indexed} ({q_total} queries)");
+        println!(
+            "  scoped:   R@5 {scoped_r5:.1}%  {scoped_ms:.1} ms/q  (warmup {scoped_warm:.0} ms)"
+        );
+        println!(
+            "  unscoped: R@5 {unscoped_r5:.1}%  {unscoped_ms:.1} ms/q  (warmup {unscoped_warm:.0} ms)"
+        );
+        // `off` entries exist to document the pre-tier behavior (corpus-wide
+        // candidates crowding out the wing) — that is the measurement, not a
+        // regression, so only tier-on entries are gated.
+        if !floor_spec.eq_ignore_ascii_case("off") && scoped_r5 < 95.0 {
+            anyhow::bail!(
+                "regression: scoped Recall@5 {scoped_r5:.1}% (expected >= 95%) — a wing-scoped \
+                 query must be answered from its wing at any corpus size"
+            );
+        }
+    }
+    println!("WINGSCALE OK");
     Ok(())
 }
 
@@ -1454,8 +1646,18 @@ struct GoldRecall {
     /// populations with opposite responses says nothing about either.
     by_goldcount_cap2: [(f32, u32); 5],
     by_goldcount_budget: [(f32, u32); 5],
+    /// R3 paging-contract tallies (populated only under `--paging-contract`):
+    /// queries checked, exact-tiling mismatches (four pinned pages of ten vs
+    /// one pinned call of forty — ids and order), all-gold delivered by
+    /// those four pages, and unpinned repeats that differed from the pinned
+    /// ranking (the documented host-clock recency drift).
+    page_queries: u32,
+    page_mismatches: u32,
+    page_all: f32,
+    page_unpinned_drift: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn locomo_eval(
     samples: &[Value],
     k: usize,
@@ -1464,6 +1666,7 @@ fn locomo_eval(
     budget: usize,
     pool: usize,
     turn_units: bool,
+    paging: bool,
 ) -> Result<(f32, u32, CategoryScores, PhaseTiming, GoldRecall)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
@@ -1676,6 +1879,51 @@ fn locomo_eval(
             }
             if !wanted.is_empty() {
                 gold.turn_queries += 1;
+                // ---- R3 paging contract, asserted end to end. Pages are
+                // defined as ranks [offset, offset+limit) of the one ranking
+                // a single deeper call would produce, with `ranked_at`
+                // pinning the clock — so four pinned pages of ten must tile
+                // one pinned call of forty exactly, and the all-gold they
+                // deliver must equal what the depth CDF says sits within
+                // top-40. An unpinned repeat is run purely to record what
+                // the host clock actually drifts.
+                if paging {
+                    gold.page_queries += 1;
+                    let pinned = time::OffsetDateTime::now_utc();
+                    let popts = |offset: usize, limit: usize, at: Option<time::OffsetDateTime>| {
+                        SearchOptions {
+                            limit,
+                            offset,
+                            ranked_at: at,
+                            ..Default::default()
+                        }
+                    };
+                    fn same_ids(a: &[SearchHit], b: &[SearchHit]) -> bool {
+                        a.len() == b.len()
+                            && a.iter()
+                                .zip(b.iter())
+                                .all(|(x, y)| x.drawer.id == y.drawer.id)
+                    }
+                    let single = store.search(question, &popts(0, 40, Some(pinned)))?;
+                    let mut paged: Vec<SearchHit> = Vec::new();
+                    for page in 0..4 {
+                        paged.extend(store.search(question, &popts(page * 10, 10, Some(pinned)))?);
+                    }
+                    if !same_ids(&single, &paged) {
+                        gold.page_mismatches += 1;
+                    }
+                    let prefs: Vec<&SearchHit> = paged.iter().collect();
+                    if covered_turns(&prefs, &chunk_span, &wanted) == wanted.len() {
+                        gold.page_all += 1.0;
+                    }
+                    let mut unpinned: Vec<SearchHit> = Vec::new();
+                    for page in 0..4 {
+                        unpinned.extend(store.search(question, &popts(page * 10, 10, None))?);
+                    }
+                    if !same_ids(&unpinned, &paged) {
+                        gold.page_unpinned_drift += 1;
+                    }
+                }
                 let got = covered_turns(&slots, &chunk_span, &wanted);
                 if got > 0 {
                     gold.turn_any += 1.0;
@@ -2853,6 +3101,13 @@ fn main() -> Result<()> {
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
+        Command::Wingscale {
+            n,
+            wings,
+            queries,
+            floors,
+            level,
+        } => run_wingscale(n, wings, queries, &floors, level_of(&level)),
         Command::PqpageSynth {
             n,
             dim,
@@ -2877,6 +3132,7 @@ fn main() -> Result<()> {
             budget_bytes,
             unit,
             pool,
+            paging_contract,
         } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
@@ -2893,6 +3149,7 @@ fn main() -> Result<()> {
                 budget_bytes,
                 pool,
                 unit == "turn",
+                paging_contract,
             )?;
             // RAW line carries the exact numerator/denominator so sharded runs
             // (convos [start,end)) sum to the full R@k without rounding drift.
@@ -3070,6 +3327,23 @@ fn main() -> Result<()> {
                     g.turn_queries
                 )
             );
+            if g.page_queries > 0 {
+                // The contract, delivered: the ≤40 CDF row is a diagnostic
+                // about the ranking; the paged row is what four calls of
+                // limit 10 actually hand a caller. R3's claim is that they
+                // are the same number.
+                let cdf40: u32 = g.gold_all_rank[..3].iter().sum();
+                println!(
+                    "  R3 paging contract ({} queries): tiling mismatches {} · \
+                     all-gold via 4x10 pinned pages {:.1}% vs CDF within top-40 {:.1}% · \
+                     unpinned repeats differing {}",
+                    g.page_queries,
+                    g.page_mismatches,
+                    pct(g.page_all, g.page_queries),
+                    pct(cdf40 as f32, g.turn_queries),
+                    g.page_unpinned_drift
+                );
+            }
             if g.unlocatable_turns > 0 {
                 println!(
                     "  {} gold turns could not be located in the ingested body \
@@ -3256,7 +3530,11 @@ mod tests {
             ]
         });
         let (recall, n, per_cat, _timing, gold) =
-            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false).unwrap();
+            // The trailing `true` runs the R3 paging contract inside the
+            // fixture too — asserted below, so the contract check itself
+            // has coverage rather than existing only when an operator
+            // passes the flag.
+            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true).unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);
@@ -3271,6 +3549,14 @@ mod tests {
             "the gold turn itself must be in the slots"
         );
         assert_eq!(gold.session_all, 1.0);
+        // The paging contract on the fixture: pages tile, deliver the gold,
+        // and the pinned repeat cannot drift.
+        assert_eq!(gold.page_queries, 1, "the contract check must have run");
+        assert_eq!(
+            gold.page_mismatches, 0,
+            "4x10 pinned pages must tile one call of 40"
+        );
+        assert_eq!(gold.page_all, 1.0, "the pages must deliver the gold turn");
     }
 
     #[test]

@@ -241,7 +241,29 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   pqidx.rs index; both levels scan a load-once RAM code cache, slab-grouped
   by IVF list since v0.41.0; opt-in sealed page tier since v0.42.0 —
   `UNDERCROFT_PQ_PAGE_MIN`, one AEAD page per list + lazy per-probe
-  decrypt + tail fold per batch, default off), MUVERA FDE
+  decrypt + tail fold per batch, default off; **per-wing tier** — the wing
+  is the retrieval unit a caller scopes to, and the global prefilter was
+  wing-blind: its top-k can starve a wing entirely (candidates ∩
+  `WHERE wing` = ∅ while the wing holds the answer — pinned by test) and
+  its BUILD cost is corpus-shaped. What the tier provably buys is the
+  build economics (wing 3.9/15.5 s vs global 59/240 s at 16k/65k) and the
+  starvation fix; its QUERY-latency benefit is unproven at tested sizes —
+  both scoped and unscoped run ~24 ms/q flat to 65k because the global PQ
+  tier already bounds the pool there, and the 913 s/query motivator was a
+  full-scan figure whose residual claim lives at 10⁶, untested.
+  Wings past `UNDERCROFT_WING_PQ_MIN` (4096, `off` = pre-tier behavior)
+  carry their own codebook/IVF/rows (`drawer_pq_wing`, sealed under
+  `pqrow/<wing>/<seq>`; meta keys `codebook/<wing>`/`ivf/<wing>`, resealed
+  dynamically at rotation since a fixed list cannot enumerate them);
+  below the floor a scoped query full-scans its wing — bounded by the
+  floor, exact, and still starvation-free. A wing's population is MORE
+  homogeneous than the vault's, so its codebook fits better, and
+  derived-structure scope matches the isolation unit (wing) rather than
+  the crypto unit (vault) — a writer in one wing no longer shapes the
+  codebook scoring another. Stated honestly: BM25's IDF stays global, so
+  the wing isolates candidates, not scores; per-wing generation counters
+  are dynamic artifacts `<wing>/pq-codebook` on the same stats surface,
+  deliberately NOT per-wing gauges — cardinality), MUVERA FDE
   token-aware candidates (fdeidx.rs; core fde.rs construction; sealed
   `drawer_fde` + `fde_meta`; opt-in inverted tier via
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
@@ -301,12 +323,17 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `/healthz` mode+last_write lag surface).
   Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
-  harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding)
+  harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding),
+  plus synthetic instruments: `synth`, `wingscale` (per-wing tier: scoped vs
+  unscoped R@5 + steady-state ms/q, ONE ingest per corpus with `--floors`
+  iterated in-process, per-pass warm-up reported separately — folding a
+  one-time index build into a per-query average manufactured a 15× "effect"
+  in this instrument's own first version)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 61
+  which inlines them and documents every layer plus all 62
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -369,7 +396,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (249)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (164 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (165 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
@@ -399,6 +426,26 @@ while the same tree compiled clean elsewhere. `cargo clean --release -p <crate>`
 is the fix. Same family as the `--build` hazard above, one level down: **when an
 error contradicts the source you are reading, suspect a cached artifact before
 suspecting the code.**
+
+**Two more ways a run silently uses the wrong binary** (both fired in one
+session; together they put a pre-change binary under a measurement whose
+matching numbers then proved nothing):
+- **Git Bash mangles container paths in `-e` and `-w` values** (MSYS path
+  conversion): `-e CARGO_TARGET_DIR=/build` became a `C:\…` path inside the
+  container, cargo failed with "path segment contains separator", and the
+  failure hid behind a `| grep … ; echo` pipeline that exited 0 — so the
+  volume kept serving its old binary. Prefix every docker command that
+  carries `-v`/`-e`/`-w` container paths with `MSYS_NO_PATHCONV=1`, and
+  never let a pipeline's tail mask an exit code you depend on.
+- **`docker compose build` can serve a STALE BUILD CONTEXT** (Docker
+  Desktop file-share cache): the image's `/src` was hours older than the
+  host file and a rebuild did not refresh it, while a *mounted* build
+  (`docker run -v <repo>:/src`) saw the current bytes. When compose output
+  looks impossibly cached, verify `/src` content in-container
+  (`grep -c <new-symbol> …`) and fall back to a mounted build.
+**Before trusting any run of a freshly built binary, prove the binary is
+fresh**: probe it for a symbol only the new code has (`--help | grep -c
+<new-flag>`). A stale binary passes every old test by construction.
 
 **Always pass `--build`.** The battery images COPY the source, they do not
 mount it — `docker compose run --rm test` without `--build` silently
