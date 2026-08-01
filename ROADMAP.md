@@ -796,15 +796,20 @@ this is where the measured headroom is.*
   plus the scoped-starvation fix.** The probe also surfaced **an open
   defect and an open cost, both with named fixes — neither is accepted as
   a property**:
-  - **Defect: unscoped recall leaks with corpus size** (100.0 → 96.8 R@5
-    over the checkpoints). Violates the prefilter charter (narrow, never
-    lose). Root cause: candidate pool fixed at 256 while competitors grow;
-    exact re-scoring downstream confines the loss to candidate selection.
-    Fix program: `pqscale --pools` sweep → corpus-scaled pool policy
-    (declared formula; pool costs only hydration at ~0.09 ms/row).
-    **Gate: R@5 at 10⁶ back to ~100%, price recorded.** Fallback levers:
-    dim/4 codes, parallel hydration. FTS prefilter shares the fixed-k
-    shape — same class.
+  - **Defect: unscoped recall leaks with corpus size — CLOSED, gate met
+    at every checkpoint.** (Was: 100.0 → 96.8 R@5, fixed 256-candidate
+    pool vs linearly growing competitors.) Shipped as a **two-stage
+    pool**: `live/64` ADC net (`UNDERCROFT_POOL_DIV`) → exact-cosine cut
+    to `live/512` (never below — a sealed vault has no lexical
+    prefilter, so hydration is BM25's only door; cutting to the fixed
+    floor by pure cosine measurably regressed 1M to 98.9%) → hydrate.
+    Plus the 1.5× IVF freshness rule (`ivf_fresh`, retiring strictly-\>2×
+    which let a corpus sit at exactly double its training size stale).
+    **Measured in the shipped default: R@5 100.0% at 131k/262k/524k/1M —
+    34.4/69.6/138.4/280.6 ms/q.** The linear price is the recorded cost
+    of not losing answers; parallel hydration and dim/4 codes are the
+    named levers that shrink it without touching recall. Full narrative
+    incl. the two instructive intermediate configurations in CHANGELOG.
   - **Cost: corpus-shaped maintenance debt — ROOT-CAUSED AND FIXED.** The
     17 min at 131k / 73 min at 524k per retrain were **not computation**:
     the rebuild loop wrote every code row as an autocommit INSERT — one

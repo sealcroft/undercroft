@@ -151,22 +151,41 @@
   | 524,288 | 97.1 | 97.7 | **100.0** | 100.0 |
   | 1,048,576 | 97.9 | 98.9 | **100.0** / 106.9 ms/q | 100.0 / 206.4 |
 
-  **Shipped fix: `UNDERCROFT_POOL_DIV` (default 512)** — every prefilter
-  (global PQ, per-wing PQ, FTS) now fetches at least `live/512`
-  candidates against its own verified live count, which lands both
-  measured failure sizes exactly on their proven-100% pools (524k → 1024,
-  1M → 2048). `off` restores the fixed floor, i.e. the measured-leaky
-  behavior, for an operator who prefers the latency. Pinned by a
-  mechanism test whose counterfactual is in the same test (scaling on →
-  live/div candidates; off → exactly the old floor), and **verified
-  end-to-end in the shipped default**: a fresh 524,288-drawer vault — the
-  worst raw-pool point, 97.1% — reads **R@5 100.0% at 102.5 ms/q** with
-  no flags set. Two footnotes the
-  sweep also earned: the 262k row plateaus at 99.4% at every pool — that
-  checkpoint rode a codebook trained at *exactly half* its corpus (the
-  outgrown condition is strictly >2×, so 2.0× never retrains; one query
-  paid; recovered fully after the 524k retrain) — a boundary-condition
-  observation on the doubling rule, recorded not yet acted on; and the
+  **Shipped fix, arrived at in three measured steps** (each intermediate
+  recorded because each taught something):
+  1. *A scaled single-stage pool* (`live/512`, hydrating everything it
+     fetched) recovered 524k and 1M to 100.0% — but a fresh-vault control
+     at 262k still read 98.8%, refuting "codebook staleness" as the sole
+     cause of that row and proving the divisor insufficient mid-size.
+  2. *A wider net cut to the fixed floor by exact cosine* regressed 1M
+     from 100.0% to 98.9% — the instructive failure: **a sealed vault has
+     no lexical prefilter, so hydration is the only door through which
+     BM25 evidence reaches fusion**, and a pure-cosine cut below the
+     proven hydration pool drops lexical-carried golds. A wide net is
+     worthless if the cut metric ignores why fusion would have ranked
+     its contents.
+  3. **The shipped design — a two-stage pool**: stage 1 fetches
+     `live/64` ADC candidates (`UNDERCROFT_POOL_DIV`, `off` = fixed
+     floor); stage 2 cuts by exact cosine over just those candidates'
+     embeddings (~µs each) down to `stage1/8` = `live/512` — the
+     hydration size the raw sweep proved — never below it; stage 3
+     hydrates as before. Combined with the freshness rule below, the
+     shipped default reads **R@5 100.0% at every checkpoint**: 131k
+     (34.4 ms/q), 262k (69.6), 524k (138.4), 1M (280.6). The price curve
+     is linear-in-corpus by design (hydration `live/512` × ~0.09 ms +
+     stage-2 `live/64` × ~5 µs) and is the recorded cost of not losing
+     answers; the named levers if it ever matters are parallel hydration
+     and dim/4 codes, both of which shrink it without touching recall.
+  Pinned by a mechanism test whose counterfactual is in the same test
+  (scaling on → live/div candidates; off → exactly the old floor).
+  **The freshness rule also changed** (`ivf_fresh`, all seven sites, FDE
+  included): retrain at 1.5× the training size instead of strictly-\>2× —
+  the doubling rule was priced when a retrain cost 73 minutes, a 524k
+  rebuild now costs ~14 s, and the strict boundary let a corpus sit at
+  exactly 2.0× untrained (measured at 262k, where staleness sank one
+  query's gold beyond a 2048 pool). The 262k row required all three at
+  once — fresh partitions, the wide net, and the full fusion pool — and
+  no single-lever configuration ever recovered it. Also: the
   corrected instrument's whole 131k→1M run took **~14 minutes against the
   original 10.5 hours** (warm-ups 1,022 s → 5.6 s and 4,355 s → 13.5 s
   from the fsync fix + parallel encode; bulk ingest 7.2 min, though the

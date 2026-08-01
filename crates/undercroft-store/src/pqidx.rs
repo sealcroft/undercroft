@@ -312,17 +312,32 @@ const PQ_TAIL_FOLD: usize = 256;
 /// pre-tier behavior) / [`PalaceStore::set_wing_pq_min`].
 pub const WING_PQ_MIN_DEFAULT: usize = 4096;
 
-/// Corpus-scaled candidate pool divisor: every approximate prefilter
-/// fetches at least `live_rows / POOL_DIV` candidates. 512 is measured,
+/// Corpus-scaled stage-1 candidate pool divisor: the semantic prefilters
+/// fetch at least `live_rows / POOL_DIV` ADC candidates, which the exact
+/// second stage (`refine_by_exact_cosine`) then cuts back to hydration
+/// size using the true vectors. The pool is the only place recall can
+/// leak — everything downstream re-scores exactly — and it is measured,
 /// not chosen: a fixed 256-candidate pool leaked unscoped R@5 from 100.0%
-/// to 96.8% between 131k and 1M drawers (the pqscale probe — constant
-/// per-vector quantization error, linearly growing competitors), and the
-/// recall-vs-pool sweep put both measured failure sizes back at exactly
-/// 100.0% on this divisor (524k → 1024 candidates, 1M → 2048), at
-/// ~0.1 ms per hydrated candidate. Exact re-scoring downstream means the
-/// pool is the only place recall can leak, which is why the fix lives
-/// here and not in ranking.
-pub(crate) const POOL_DIV_DEFAULT: usize = 512;
+/// to 96.8% between 131k and 1M (constant per-vector quantization error,
+/// linearly growing competitors), /512 recovered 524k and 1M but left
+/// residual misses at 262k even with a fresh codebook, and /64 is the
+/// deeper net the refine stage makes affordable: stage-2 pays
+/// microseconds per embedding instead of ~0.09 ms per hydration, so a
+/// 16k-candidate pool at 1M costs embedding decrypts, not row loads.
+pub(crate) const POOL_DIV_DEFAULT: usize = 64;
+
+/// Whether IVF partitions trained on `trained` rows are still fresh for a
+/// corpus of `live` rows. The factor is 1.5×, down from the original
+/// strictly-greater 2×, for two measured reasons: the doubling rule was
+/// priced when a retrain cost 73 minutes (the per-row-fsync rebuild bug —
+/// post-fix a 524k rebuild is ~13 s, so freshness is nearly free), and the
+/// strict boundary let a corpus sit at *exactly* double its training size
+/// without ever retraining — measured at 262k riding 131k-trained
+/// partitions, where staleness sank one query's gold beyond a 2048
+/// candidate pool.
+pub(crate) fn ivf_fresh(live: u64, trained: u64) -> bool {
+    live <= trained.saturating_mul(3) / 2
+}
 
 impl PalaceStore {
     /// Enable (or disable) the on-disk PQ ANN prefilter — both security
@@ -640,7 +655,7 @@ impl PalaceStore {
                 }
                 match self.ivf.borrow().as_ref() {
                     None => true,
-                    Some(cq) => drawers as u64 > cq.trained_n().saturating_mul(2),
+                    Some(cq) => !ivf_fresh(drawers as u64, cq.trained_n()),
                 }
             };
             if self.pq.borrow().is_none() || matched != drawers || ivf_stale {
@@ -687,7 +702,7 @@ impl PalaceStore {
         if want_ivf && !just_verified {
             let outgrown = match self.ivf.borrow().as_ref() {
                 None => true,
-                Some(cq) => live as u64 > cq.trained_n().saturating_mul(2),
+                Some(cq) => !ivf_fresh(live as u64, cq.trained_n()),
             };
             if outgrown {
                 self.pq_verified.set(false);
@@ -1069,7 +1084,7 @@ impl PalaceStore {
         if n >= self.ivf_min {
             let fresh = matches!(
                 self.ivf.borrow().as_ref(),
-                Some(cq) if n as u64 <= cq.trained_n().saturating_mul(2)
+                Some(cq) if ivf_fresh(n as u64, cq.trained_n())
             );
             if !fresh {
                 // √N lists, clamped. The upper clamp sat at 1024 until the
@@ -1343,7 +1358,7 @@ impl PalaceStore {
         // training size, rebuilds once rather than silently degrading.
         let outgrown = match self.wing_pq.borrow().get(wing) {
             Some(Some(st)) => match st.ivf.as_ref() {
-                Some(cq) => st.live as u64 > cq.trained_n().saturating_mul(2),
+                Some(cq) => !ivf_fresh(st.live as u64, cq.trained_n()),
                 None => st.live as usize >= self.ivf_min,
             },
             _ => false,
@@ -1459,7 +1474,7 @@ impl PalaceStore {
                 .and_then(|b| CoarseQuantizer::from_bytes(&b));
             let ivf_ok = if want_ivf {
                 ivf.as_ref()
-                    .is_some_and(|cq| count as u64 <= cq.trained_n().saturating_mul(2))
+                    .is_some_and(|cq| ivf_fresh(count as u64, cq.trained_n()))
             } else {
                 true
             };
@@ -1549,7 +1564,7 @@ impl PalaceStore {
             let fresh = self
                 .pq_meta_get(&ivf_key)?
                 .and_then(|b| CoarseQuantizer::from_bytes(&b))
-                .filter(|cq| count as u64 <= cq.trained_n().saturating_mul(2));
+                .filter(|cq| ivf_fresh(count as u64, cq.trained_n()));
             match fresh {
                 Some(cq) => Some(cq),
                 None => {

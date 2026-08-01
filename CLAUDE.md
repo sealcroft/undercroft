@@ -254,16 +254,23 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   starvation fix; its QUERY-LATENCY benefit is **dead,
   settled at 10⁶** (`pqscale`: unscoped PQ holds 24.3 → 31.0 ms/q from
   131k to 1M, no break — the 913 s/query figure was the *full-scan*
-  path, which the global PQ tier answers alone). `pqscale` also filed an
-  **OPEN DEFECT, not an accepted property**: unscoped R@5 leaks with
-  corpus size (100.0 → 96.8 to 1M) because the candidate pool is FIXED at
-  256 while competitors grow — a violation of the prefilter charter
-  (narrow, never lose). Exact re-scoring downstream confines the loss to
-  candidate selection, so the fix is a corpus-scaled pool policy priced
-  by hydration (~0.09 ms/row), gated on R@5 ~100% at 10⁶ (see ROADMAP;
-  FTS prefilter shares the fixed-k shape). A fixed-size wing showed no
-  leak — any scoped-recall claim still needs its own instrument and must
-  not ride on the defect staying unfixed.
+  path, which the global PQ tier answers alone). `pqscale` also filed a
+  recall-leak defect (unscoped R@5 100.0 → 96.8 to 1M; fixed 256 pool vs
+  growing competitors), **CLOSED by a two-stage pool + a freshness
+  rule**: stage 1 fetches `live/64` ADC candidates (`UNDERCROFT_POOL_DIV`,
+  `off` = the measured-leaky fixed floor), stage 2 cuts by exact cosine
+  over just those candidates' embeddings to `stage1/8` = `live/512` —
+  NEVER below, because a sealed vault has no lexical prefilter, so
+  **hydration is the only door through which BM25 evidence reaches
+  fusion**, and cutting to the fixed floor by pure cosine measurably
+  regressed 1M to 98.9% — stage 3 hydrates as before; IVF partitions
+  retrain at 1.5× training size (`ivf_fresh`, every site incl. FDE — the
+  strictly-\>2× rule let a corpus sit at exactly 2.0× stale, and
+  retrains cost seconds post-fsync-fix). **Shipped default measures R@5
+  100.0% at every checkpoint 131k→1M (34.4/69.6/138.4/280.6 ms/q)** —
+  the linear price of not losing answers; parallel hydration and dim/4
+  codes are the named shrink levers. A fixed-size wing showed no leak —
+  any scoped-recall claim still needs its own instrument.
   Wings past `UNDERCROFT_WING_PQ_MIN` (4096, `off` = pre-tier behavior)
   carry their own codebook/IVF/rows (`drawer_pq_wing`, sealed under
   `pqrow/<wing>/<seq>`; meta keys `codebook/<wing>`/`ivf/<wing>`, resealed

@@ -604,9 +604,11 @@ impl PalaceStore {
             .borrow()
             .as_ref()
             .map_or(0, |c| c.coded_rows());
+        // Same freshness rule as the embedding-space IVF (1.5×, see
+        // `pqidx::ivf_fresh` for why the 2× doubling rule was retired).
         let fresh = matches!(
             self.fde_ivf.borrow().as_ref(),
-            Some(cq) if (n as u64) <= cq.trained_n().saturating_mul(2)
+            Some(cq) if crate::pqidx::ivf_fresh(n as u64, cq.trained_n())
         );
         if n < self.fde_ivf_min || fresh {
             return Ok(());

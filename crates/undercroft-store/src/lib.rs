@@ -611,13 +611,12 @@ pub struct PalaceStore {
     /// tier off — scoped queries intersect global candidates, the pre-tier
     /// behavior). See `pqidx::WING_PQ_MIN_DEFAULT`.
     wing_pq_min: usize,
-    /// Corpus-scaled candidate pool: every approximate prefilter fetches at
-    /// least `live_rows / pool_div` candidates (on top of the 256 floor and
-    /// the depth·32 term). `usize::MAX` ⇒ scaling off, the fixed floor
-    /// only — which is the measured recall-leak defect: a fixed 256 pool
-    /// leaked R@5 100 → 96.8 from 131k to 1M while /512 scaling restored
-    /// 100.0% at both measured failure sizes (524k → 1024, 1M → 2048),
-    /// priced at ~0.1 ms per hydrated candidate.
+    /// Corpus-scaled stage-1 candidate pool: the semantic prefilters fetch
+    /// at least `live_rows / pool_div` ADC candidates (on top of the 256
+    /// floor and the depth·32 term), and `refine_by_exact_cosine` cuts the
+    /// pool back to hydration size with the true vectors. `usize::MAX` ⇒
+    /// scaling off, the fixed floor only — the measured recall-leak defect
+    /// (R@5 100 → 96.8 from 131k to 1M at a fixed 256 pool).
     /// `UNDERCROFT_POOL_DIV` (number, `off`) / [`Self::set_pool_div`].
     pool_div: usize,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
@@ -2152,6 +2151,7 @@ impl PalaceStore {
         let lang = opts.morph_lang;
         let qterms: Vec<String> = tokenize(query);
 
+        let mut refine_semantic = false;
         let candidates = if self.fde_enabled {
             // MUVERA FDE candidates: token-aware single-vector ranking over
             // the load-once FDE cache (falls back to the fusion scan when no
@@ -2168,6 +2168,7 @@ impl PalaceStore {
             // means "full-scan instead" — the `WHERE wing` clause below
             // bounds that scan by the wing, which is the floor working as
             // designed, not a missing index.
+            refine_semantic = true;
             match &opts.wing {
                 Some(w) if self.wing_pq_min != usize::MAX => {
                     self.wing_pq_candidates(w, &qvec, std::cmp::max(256, depth.saturating_mul(32)))?
@@ -2202,6 +2203,25 @@ impl PalaceStore {
                 }
                 _ => None,
             }
+        };
+        // Second stage on the semantic pools (PQ, per-wing PQ): the
+        // corpus-scaled stage-1 pool is cut by exact cosine over the
+        // candidates' embeddings alone — but only down to `stage1/8`
+        // (= live/512, the hydration size the raw sweep proved at 100%),
+        // NEVER to the fixed floor. Measured the hard way: cutting to 256
+        // regressed 1M from 100.0% to 98.9%, because a sealed vault has no
+        // lexical prefilter — hydration is the only door through which
+        // BM25 evidence can reach fusion, and a pure-cosine cut below the
+        // proven hydration pool slams it on lexical-carried golds. FDE
+        // keeps its token-aware ordering (a single-vector cut would fight
+        // MaxSim) and FTS keeps every lexical candidate.
+        let hydrate_k = std::cmp::max(256, depth.saturating_mul(32));
+        let candidates = match candidates {
+            Some(seqs) if refine_semantic && seqs.len() > hydrate_k => {
+                let keep = hydrate_k.max(seqs.len() / 8);
+                Some(self.refine_by_exact_cosine(&qvec, seqs, keep)?)
+            }
+            other => other,
         };
         let obs_prefiltered = candidates.is_some();
 
@@ -2430,6 +2450,56 @@ impl PalaceStore {
             self.is_sealed(),
         );
         Ok(hits)
+    }
+
+    /// Cut a semantic candidate pool to `keep` seqs by **exact** cosine
+    /// over only the candidates' sealed embeddings — the second stage that
+    /// makes a wide first-stage pool affordable.
+    ///
+    /// The economics, measured: full hydration (HMAC verify + content
+    /// decrypt + tokenize) costs ~0.09 ms per candidate, so a corpus-scaled
+    /// pool priced in hydration reintroduces a linear per-query term. An
+    /// embedding row is 430 sealed bytes and decrypts in microseconds, so
+    /// cutting the wide pool by exact cosine first holds hydration at
+    /// `keep` while recall follows the wide pool — and the cut is *better*
+    /// than the quantized ranking that built the pool, because it uses the
+    /// true vectors. Lexical (FTS) pools are never cut this way: a drawer
+    /// that said the word must reach BM25 fusion regardless of its cosine.
+    ///
+    /// Rows that fail to open are skipped, not fatal — they already fail
+    /// every hydrated read; losing their candidate slot is the same trade
+    /// the code caches make.
+    fn refine_by_exact_cosine(
+        &self,
+        qvec: &[f32],
+        seqs: Vec<i64>,
+        keep: usize,
+    ) -> Result<Vec<i64>, StoreError> {
+        if seqs.len() <= keep {
+            return Ok(seqs);
+        }
+        let list: Vec<String> = seqs.iter().map(i64::to_string).collect();
+        let sql = format!(
+            "SELECT seq, id, embedding FROM drawers WHERE seq IN ({})",
+            list.join(",")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows: Vec<(i64, String, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut scored: Vec<(f32, i64)> = Vec::with_capacity(rows.len());
+        for (seq, id, rest) in rows {
+            if let Ok(emb) = self.vault.embedding_from_rest(&id, &rest) {
+                scored.push((cosine(qvec, &emb), seq));
+            }
+        }
+        if scored.len() > keep {
+            scored.select_nth_unstable_by(keep - 1, |a, b| {
+                b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scored.truncate(keep);
+        }
+        Ok(scored.into_iter().map(|(_, s)| s).collect())
     }
 
     /// BM25 top-`k` candidate seqs from the FTS5 index. `None` means "no
