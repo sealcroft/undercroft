@@ -312,6 +312,18 @@ const PQ_TAIL_FOLD: usize = 256;
 /// pre-tier behavior) / [`PalaceStore::set_wing_pq_min`].
 pub const WING_PQ_MIN_DEFAULT: usize = 4096;
 
+/// Corpus-scaled candidate pool divisor: every approximate prefilter
+/// fetches at least `live_rows / POOL_DIV` candidates. 512 is measured,
+/// not chosen: a fixed 256-candidate pool leaked unscoped R@5 from 100.0%
+/// to 96.8% between 131k and 1M drawers (the pqscale probe — constant
+/// per-vector quantization error, linearly growing competitors), and the
+/// recall-vs-pool sweep put both measured failure sizes back at exactly
+/// 100.0% on this divisor (524k → 1024 candidates, 1M → 2048), at
+/// ~0.1 ms per hydrated candidate. Exact re-scoring downstream means the
+/// pool is the only place recall can leak, which is why the fix lives
+/// here and not in ranking.
+pub(crate) const POOL_DIV_DEFAULT: usize = 512;
+
 impl PalaceStore {
     /// Enable (or disable) the on-disk PQ ANN prefilter — both security
     /// levels. hmac-only vaults store plain codes; **sealed vaults store
@@ -333,6 +345,14 @@ impl PalaceStore {
     pub fn set_wing_pq_min(&mut self, min: usize) {
         self.wing_pq_min = min;
         self.wing_pq.borrow_mut().clear();
+    }
+
+    /// Tune the corpus-scaled candidate pool (candidates ≥ live/div;
+    /// `usize::MAX` ⇒ fixed floor only, the measured-leaky pre-fix
+    /// behavior). Default from `UNDERCROFT_POOL_DIV` at open (`off` ⇒
+    /// scaling off). See [`POOL_DIV_DEFAULT`] for why 512.
+    pub fn set_pool_div(&mut self, div: usize) {
+        self.pool_div = div.max(1);
     }
 
     fn pq_sealed(&self) -> bool {
@@ -652,6 +672,10 @@ impl PalaceStore {
         if live == 0 {
             return Ok(None);
         }
+        // Corpus-scaled pool, applied against the verified live count: a
+        // fixed floor is the measured recall-leak defect (R@5 100 → 96.8
+        // over 131k → 1M at 256 candidates; 100.0% restored at live/512).
+        let k = k.max(live as usize / self.pool_div.max(1));
         // Growth re-check on the fast path (cheap, cached counters): a
         // corpus that crossed the IVF threshold, or doubled past the
         // partitions' training size, re-verifies once so they (re)train
@@ -1332,6 +1356,9 @@ impl PalaceStore {
         let Some(Some(st)) = map.get(wing) else {
             return Ok(None);
         };
+        // Same corpus-scaled pool as the global path, against the wing's
+        // own live count — a wing large enough to leak gets the same cure.
+        let k = k.max(st.live as usize / self.pool_div.max(1));
         let tables = st.pq.distance_tables(qvec);
         let probe: Option<Vec<i64>> = st.ivf.as_ref().and_then(|cq| {
             let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 4).max(8));

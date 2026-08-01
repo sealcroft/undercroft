@@ -588,6 +588,10 @@ from the embedder in hand, and an external vault refuses until you declare) ·
 PQ codebook and code rows, so a wing-scoped search probes the wing's index
 instead of intersecting corpus-wide candidates; smaller wings full-scan
 themselves, bounded and exact; `off` disables the per-wing tier) ·
+`UNDERCROFT_POOL_DIV` (512 — prefilters fetch at least `live/div`
+candidates so recall cannot leak as the corpus grows; measured: fixed 256
+leaked R@5 100→96.8% by 1M drawers, `/512` restored 100.0% at ~0.1 ms per
+extra candidate; `off` = fixed floor) ·
 `UNDERCROFT_PQ_PAGE_MIN` (off by default — sealed page tier: one AEAD
 page per IVF list, lazy per-probe decrypt) ·
 `UNDERCROFT_TOK_PQ_MIN` (256) · `UNDERCROFT_FDE_PQ_MIN` (256) ·

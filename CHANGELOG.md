@@ -139,7 +139,39 @@
   the pqscale instrument yields the recall-vs-pool curve, and a
   corpus-scaled pool policy (a declared formula, env-overridable) closes
   the defect. **Acceptance gate: R@5 at 10⁶ restored to ~100%, with the
-  ms/q price recorded beside it.** Second-order levers if the curve prices
+  ms/q price recorded beside it.**
+
+  **The sweep ran and the gate is met.** Recall-vs-pool (sealed, hash,
+  one cumulative vault, scaling off — the raw curve; one run):
+
+  | corpus | 256 | 512 | 1024 | 2048 |
+  |---|---|---|---|---|
+  | 131,072 | 100.0 | 100.0 | 100.0 | 100.0 |
+  | 262,144 | 98.2 | 99.4 | 99.4 | 99.4 |
+  | 524,288 | 97.1 | 97.7 | **100.0** | 100.0 |
+  | 1,048,576 | 97.9 | 98.9 | **100.0** / 106.9 ms/q | 100.0 / 206.4 |
+
+  **Shipped fix: `UNDERCROFT_POOL_DIV` (default 512)** — every prefilter
+  (global PQ, per-wing PQ, FTS) now fetches at least `live/512`
+  candidates against its own verified live count, which lands both
+  measured failure sizes exactly on their proven-100% pools (524k → 1024,
+  1M → 2048). `off` restores the fixed floor, i.e. the measured-leaky
+  behavior, for an operator who prefers the latency. Pinned by a
+  mechanism test whose counterfactual is in the same test (scaling on →
+  live/div candidates; off → exactly the old floor), and **verified
+  end-to-end in the shipped default**: a fresh 524,288-drawer vault — the
+  worst raw-pool point, 97.1% — reads **R@5 100.0% at 102.5 ms/q** with
+  no flags set. Two footnotes the
+  sweep also earned: the 262k row plateaus at 99.4% at every pool — that
+  checkpoint rode a codebook trained at *exactly half* its corpus (the
+  outgrown condition is strictly >2×, so 2.0× never retrains; one query
+  paid; recovered fully after the 524k retrain) — a boundary-condition
+  observation on the doubling rule, recorded not yet acted on; and the
+  corrected instrument's whole 131k→1M run took **~14 minutes against the
+  original 10.5 hours** (warm-ups 1,022 s → 5.6 s and 4,355 s → 13.5 s
+  from the fsync fix + parallel encode; bulk ingest 7.2 min, though the
+  rate declines 16,187 → 1,693 docs/s over the growth — the B-tree/encode
+  slope, recorded for the next person who needs it). Second-order levers if the curve prices
   pool scaling too high: wider codes (dim/4, footprint-priced) and
   parallel candidate hydration. The hmac-level FTS prefilter shares the
   fixed-`k` shape — same defect class, flagged. Separately, a fixed-size

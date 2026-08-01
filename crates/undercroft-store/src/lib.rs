@@ -611,6 +611,15 @@ pub struct PalaceStore {
     /// tier off — scoped queries intersect global candidates, the pre-tier
     /// behavior). See `pqidx::WING_PQ_MIN_DEFAULT`.
     wing_pq_min: usize,
+    /// Corpus-scaled candidate pool: every approximate prefilter fetches at
+    /// least `live_rows / pool_div` candidates (on top of the 256 floor and
+    /// the depth·32 term). `usize::MAX` ⇒ scaling off, the fixed floor
+    /// only — which is the measured recall-leak defect: a fixed 256 pool
+    /// leaked R@5 100 → 96.8 from 131k to 1M while /512 scaling restored
+    /// 100.0% at both measured failure sizes (524k → 1024, 1M → 2048),
+    /// priced at ~0.1 ms per hydrated candidate.
+    /// `UNDERCROFT_POOL_DIV` (number, `off`) / [`Self::set_pool_div`].
+    pool_div: usize,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
     ivf_min: usize,
@@ -1141,6 +1150,11 @@ impl PalaceStore {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
                 Ok(v) => v.parse().unwrap_or(pqidx::WING_PQ_MIN_DEFAULT),
                 Err(_) => pqidx::WING_PQ_MIN_DEFAULT,
+            },
+            pool_div: match std::env::var("UNDERCROFT_POOL_DIV") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(pqidx::POOL_DIV_DEFAULT),
+                Err(_) => pqidx::POOL_DIV_DEFAULT,
             },
             ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
@@ -2173,13 +2187,18 @@ impl PalaceStore {
             }
         } else {
             match self.fts_min {
-                Some(min)
-                    if self.fts
-                        && !qterms.is_empty()
-                        && !needs_full_scan(&qterms)
-                        && self.count()? >= min as u64 =>
-                {
-                    self.fts_candidates(&qterms, std::cmp::max(256, depth.saturating_mul(32)))
+                Some(min) if self.fts && !qterms.is_empty() && !needs_full_scan(&qterms) => {
+                    let n = self.count()?;
+                    if n >= min as u64 {
+                        // Same corpus-scaled pool as the PQ path: the FTS
+                        // prefilter shares the fixed-k recall-leak shape,
+                        // so it gets the same cure from the same count.
+                        let k = std::cmp::max(256, depth.saturating_mul(32))
+                            .max(n as usize / self.pool_div.max(1));
+                        self.fts_candidates(&qterms, k)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             }
@@ -4714,6 +4733,38 @@ mod tests {
             fresh - stale > 0.05,
             "a year of decay must move the score: fresh {fresh}, stale {stale}"
         );
+    }
+
+    /// The candidate pool must scale with the corpus: a fixed floor is the
+    /// measured recall-leak defect (unscoped R@5 100 → 96.8 from 131k to
+    /// 1M at 256 candidates; restored to 100.0% at live/512 — pqscale).
+    /// Pinned at the mechanism level: with scaling on, the prefilter
+    /// returns live/div candidates; with it off, exactly the old floor —
+    /// so a revert fails the first assertion and cannot pass both.
+    #[test]
+    fn the_candidate_pool_scales_with_the_corpus() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        for i in 0..600u32 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("plankton bloom reading number {i}"),
+                i,
+            ))
+            .unwrap();
+        }
+        s.set_pq(true);
+        let q = s.embedder.embed("plankton bloom");
+        s.set_pool_div(2); // 600/2 = 300 > the 256 floor
+        let scaled = s.pq_candidates(&q, 256).unwrap().expect("index");
+        assert_eq!(
+            scaled.len(),
+            300,
+            "the pool must grow to live/div past the fixed floor"
+        );
+        s.set_pool_div(usize::MAX); // scaling off = the pre-fix behavior
+        let fixed = s.pq_candidates(&q, 256).unwrap().expect("index");
+        assert_eq!(fixed.len(), 256, "off must reproduce the fixed floor");
     }
 
     /// A deep page must widen the candidate over-fetch: the prefilter floor

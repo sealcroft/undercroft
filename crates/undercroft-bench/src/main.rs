@@ -146,6 +146,13 @@ enum Command {
         /// per drawer and measures a different product surface.
         #[arg(long, default_value_t = 4096)]
         batch: usize,
+        /// Corpus-scaled pool divisor for the run: unset = the engine's
+        /// shipped default (the pools below then act as floors under the
+        /// live policy — this measures the SHIPPED config); `off` =
+        /// scaling disabled, so the pools sweep raw candidate counts (the
+        /// instrument mode that produced the recall-vs-pool curve).
+        #[arg(long)]
+        pool_div: Option<String>,
         #[arg(long, default_value = "sealed")]
         level: String,
     },
@@ -872,6 +879,7 @@ fn run_pqscale(
     queries: usize,
     pools: &str,
     batch: usize,
+    pool_div: Option<&str>,
     level: SecurityLevel,
 ) -> Result<()> {
     let checkpoints: Vec<usize> = sizes
@@ -907,6 +915,20 @@ fn run_pqscale(
     let batch = batch.max(1);
     let (_tmp, mut store) = fresh_store(level)?;
     store.set_pq(true);
+    let div_label = match pool_div {
+        Some(v) if v.eq_ignore_ascii_case("off") => {
+            store.set_pool_div(usize::MAX);
+            "off".to_string()
+        }
+        Some(v) => {
+            let d: usize = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("--pool-div takes a number or `off`, got {v:?}"))?;
+            store.set_pool_div(d);
+            d.to_string()
+        }
+        None => "default".to_string(),
+    };
 
     // Every 512th fact is a query candidate — bounded memory at 10^6.
     const KEY_STRIDE: usize = 512;
@@ -914,7 +936,7 @@ fn run_pqscale(
     let mut ingested = 0usize;
     println!(
         "Pqscale — level={level:?} retrieval=pq checkpoints={checkpoints:?} \
-         pools={pool_limits:?} batch={batch}"
+         pools={pool_limits:?} batch={batch} pool_div={div_label}"
     );
     for &target in &checkpoints {
         let seg_start = ingested;
@@ -3277,8 +3299,16 @@ fn main() -> Result<()> {
             queries,
             pools,
             batch,
+            pool_div,
             level,
-        } => run_pqscale(&sizes, queries, &pools, batch, level_of(&level)),
+        } => run_pqscale(
+            &sizes,
+            queries,
+            &pools,
+            batch,
+            pool_div.as_deref(),
+            level_of(&level),
+        ),
         Command::Wingscale {
             n,
             wings,
