@@ -35,6 +35,13 @@ pub struct PalaceStats {
     pub writes: u64,
     pub level: String,
     pub db_bytes: u64,
+    /// `(artifact, generation)` for every trained index artifact — how many
+    /// times each codebook or centroid set has been trained in this vault.
+    /// Zero means never. A generation that moved means every row encoded
+    /// against the previous one was silently re-quantized, which nothing else
+    /// in this struct can tell you (see
+    /// `PalaceStore::codebook_generation_bump`).
+    pub codebooks: Vec<(String, u64)>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -354,6 +361,7 @@ impl PalaceStore {
             writes: self.vault.writes(),
             level: self.vault.level().to_string(),
             db_bytes,
+            codebooks: self.codebook_generations(),
         })
     }
 

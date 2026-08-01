@@ -14,6 +14,10 @@
 //! Extraction prompts force JSON output and parsing is defensive — a
 //! chatty model that wraps JSON in prose still parses.
 
+pub mod embed;
+
+pub use embed::HttpEmbedder;
+
 use serde::Deserialize;
 use serde_json::{json, Value};
 

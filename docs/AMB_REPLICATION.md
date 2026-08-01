@@ -143,9 +143,14 @@ procedure on its first attempt.
   or more sessions. **Consuming the cached `queries.json.gz` avoids this
   entirely**, because the cache already holds AMB's computed value — which is
   the main reason to prefer the cache over re-deriving from raw data.
-* **Category integers are not intuitive.** For LoCoMo: `1` single-hop,
-  `2` temporal, `3` multi-hop, `4` open-domain, `5` adversarial. Getting `1`
-  and `3` backwards silently mislabels every per-category figure.
+* **Category integers are not intuitive.** For LoCoMo: `1` **multi-hop**,
+  `2` temporal, `3` **open-domain**, `4` **single-hop**, `5` adversarial.
+  Getting `1` and `4` backwards silently mislabels every per-category figure —
+  and this document had them backwards, in this very list, while warning about
+  exactly that. Two independent checks settle it: the **counts** (category 4 is
+  by far the largest) and the **evidence statistics** (category 1 carries ~3.1
+  evidence turns over ~2.7 distinct sessions; category 4 carries ~1.1 over
+  1.0 — a single-hop question cannot span three turns in three sessions).
 * **`gold_answers` is a list**, and judges may use only its first element.
 * **`retrieval_query`** falls back to the raw question when a dataset does not
   set it; where a dataset *does* set it, retrieving on the raw question is wrong.

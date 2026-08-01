@@ -249,6 +249,7 @@ per vault on first write, and a model swap is refused unless you set
 | Value | What | When |
 |---|---|---|
 | `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo R@10 92.7% with hybrid search. **Single-language only** — see below |
+| `http` | a model served over HTTP — Ollama, llama.cpp server, LM Studio, vLLM, TEI. `UNDERCROFT_EMBED_URL` + `_MODEL` (+ optional `_API`, `_KEY`, `_DIM`); dimension is probed from the endpoint | **the recommended configuration when the endpoint is loopback or a private container network** — the largest measured lever on retrieval quality (**+3.2 to +4.2pp** turn all-gold over `hash` across four models, which span only 1.0pp between them; each figure is n=1, so no specific model is recommended until repeat runs separate them), and no ONNX export needed. Stays opt-in rather than default because **drawer text leaves the process in the clear** — the default must remain zero-egress, and that posture is the product's, not a tuning knob. Costs one request per drawer at ingest (11–29×) and +20–57% search |
 | `onnx` | user-supplied MiniLM-class ONNX via tract (pure Rust); needs `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`, build `--features onnx` | best recall, pure-Rust constraint |
 | `ort` | same models via ONNX Runtime (C++ dep, build `--features ort`); ~2.5× faster/forward, int8 support, ~4–5× faster ingest | throughput matters; same env vars, switching is one env change |
 
@@ -412,6 +413,28 @@ a flat ~93 ms/q (tract) or ~70 ms/q (ort), independent of core count.
 Model paths via `UNDERCROFT_RERANK_*` / `UNDERCROFT_COLBERT_*`. BERT-family
 models only (tract cannot run DeBERTa rerankers).
 
+**The two stages have separate depths, and this matters.**
+`UNDERCROFT_RERANK_TOP_N` (50) is a *latency cap* — one transformer forward
+per candidate. `UNDERCROFT_LATE_TOP_N` (**200**) is a *rescore depth* — MaxSim
+is arithmetic over matrices built at ingest, so depth is far cheaper per
+candidate. They were one constant until the split, which meant late
+interaction inherited a budget it never spent.
+
+What the depth is worth, stated with the configuration it was measured in:
+**+2.1pp** of turn-level evidence delivery on LoCoMo **with the token codebook
+disabled** (exact int8), which is the only configuration where two runs are
+comparable. In the shipped configuration for a corpus past `TOK_PQ_MIN` — v2
+PQ-ADC — the same 50→200 step measured +1.7pp and +0.0pp on two runs, so its
+default-configuration value is **not established**; both sit inside the
+per-vault training draw's own spread. 200 is a judgement (enough depth to take
+the measured gain without unbounded rescore), **not** a measured optimum: 400
+was higher in two of three sweeps and lower by one question in the third.
+
+Note the depth applies to the un-truncated candidate list, so on a sealed
+vault with no prefilter it reaches the whole corpus. Setting only
+`UNDERCROFT_RERANK_TOP_N` still drives both stages, so a pinned deployment
+keeps the behaviour it pinned.
+
 **Candidate generation** (`UNDERCROFT_RETRIEVAL`): unset = full scan with
 FTS prefilter (fine to ~10⁴ drawers); `pq` = bounded-RAM PQ/IVF prefilter
 (recall flat in corpus size, works on sealed vaults via a decrypt-once RAM
@@ -465,7 +488,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | Tool | W | Does |
 |---|---|---|
 | `undercroft_save` | W | save one memory verbatim |
-| `undercroft_search` | | hybrid semantic+lexical search. Pass `language: "ar"` to read the stored text as Arabic (Saturday-first weeks by default). Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, and the further days the same text was recorded on |
+| `undercroft_search` | | hybrid semantic+lexical search. Pass `language: "ar"` to read the stored text as Arabic (Saturday-first weeks by default). Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, and the further days the same text was recorded on. A full page ends with the exact continuation to go deeper — repeat the search with the stated `offset` and `ranked_at` instead of re-asking the same question; a short page means the ranking is exhausted |
 | `undercroft_wake_up` | | recent essential memories for session start |
 | `undercroft_verify` | | verify HMACs + audit chain |
 | `undercroft_status` | | palace statistics |
@@ -499,12 +522,12 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | POST | `/v1/vaults` | create vault (`level`, optional `embedder`) |
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
-| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes |
+| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
 | POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `vector`, `dedup_threshold`) |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`) |
-| POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`) |
+| POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |
@@ -561,6 +584,16 @@ on cosine evidence alone, `off` refuses semantic-only admission entirely.
 Set it only if you have measured your own corpus — the default is measured
 from the embedder in hand, and an external vault refuses until you declare) ·
 `UNDERCROFT_IVF_MIN` (8192) · `UNDERCROFT_IVF_NPROBE` ·
+`UNDERCROFT_WING_PQ_MIN` (4096 — wings at least this large carry their own
+PQ codebook and code rows, so a wing-scoped search probes the wing's index
+instead of intersecting corpus-wide candidates; smaller wings full-scan
+themselves, bounded and exact; `off` disables the per-wing tier) ·
+`UNDERCROFT_POOL_DIV` (64 — semantic prefilters fetch at least `live/div`
+stage-1 ADC candidates, and an exact-cosine second stage over just those
+candidates' embeddings cuts back to hydration size, so recall follows the
+wide pool while hydration stays fixed; measured: fixed 256 leaked R@5
+100→96.8% by 1M drawers; `off` = fixed floor, the measured-leaky
+behavior) ·
 `UNDERCROFT_PQ_PAGE_MIN` (off by default — sealed page tier: one AEAD
 page per IVF list, lazy per-probe decrypt) ·
 `UNDERCROFT_TOK_PQ_MIN` (256) · `UNDERCROFT_FDE_PQ_MIN` (256) ·

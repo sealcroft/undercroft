@@ -14,6 +14,7 @@ authors.workspace = true
 hnsw = ["dep:instant-distance"]
 
 [dependencies]
+rayon = { workspace = true }
 undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-index = { path = "../undercroft-index" }

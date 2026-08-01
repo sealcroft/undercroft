@@ -47,6 +47,9 @@ pub struct RotationReport {
     pub pq_rows: usize,
     /// Sealed PQ pages re-sealed (the opt-in page tier; 0 in per-row mode).
     pub pq_pages: usize,
+    /// Per-wing PQ rows re-sealed (the wing-as-retrieval-unit tier; 0 when
+    /// no wing has crossed its floor).
+    pub wing_pq_rows: usize,
     pub fde_rows: usize,
     pub audit_entries: usize,
     /// Sealed meta artifacts re-sealed (codebooks, IVF centroids, FDE params).
@@ -259,8 +262,10 @@ impl PalaceStore {
         let mut tok_upds: Vec<(String, Vec<u8>)> = Vec::new();
         let mut pq_upds: Vec<(i64, Vec<u8>)> = Vec::new();
         let mut page_upds: Vec<(i64, i64, Vec<u8>)> = Vec::new();
+        let mut wing_pq_upds: Vec<(String, i64, Vec<u8>)> = Vec::new();
         let mut fde_upds: Vec<(String, Vec<u8>)> = Vec::new();
         let mut meta_upds: Vec<(&'static str, &'static str, Vec<u8>)> = Vec::new();
+        let mut meta_dyn_upds: Vec<(String, Vec<u8>)> = Vec::new();
         if sealed {
             {
                 let mut stmt = self.conn.prepare("SELECT id, tok FROM drawer_tok")?;
@@ -311,6 +316,30 @@ impl PalaceStore {
                 }
             }
             {
+                // Per-wing PQ rows: same reseal as the global rows, one
+                // dimension up — the AAD carries the wing so a row cannot be
+                // replayed into another wing's index.
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT wing, seq, code FROM drawer_pq_wing")?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (wing, seq, code) = row?;
+                    let new = self.vault.reseal_at_rest(
+                        &next,
+                        &format!("pqrow/{wing}/{seq}/pq"),
+                        &code,
+                    )?;
+                    wing_pq_upds.push((wing, seq, new));
+                }
+            }
+            {
                 let mut stmt = self.conn.prepare("SELECT id, fde FROM drawer_fde")?;
                 let rows = stmt.query_map([], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
@@ -347,12 +376,34 @@ impl PalaceStore {
                     meta_upds.push((table, key, new));
                 }
             }
+            // Per-wing codebooks and centroids are dynamic keys — a fixed
+            // list cannot enumerate them, and a key rotation that missed one
+            // would leave a wing's index sealed under retired keys (it would
+            // self-heal by rebuild, but rotation's contract is byte-exact
+            // reseal of *every* artifact, not most of them).
+            {
+                let mut stmt = self.conn.prepare(
+                    "SELECT key, value FROM pq_meta \
+                     WHERE key LIKE 'codebook/%' OR key LIKE 'ivf/%'",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+                })?;
+                for row in rows {
+                    let (key, blob) = row?;
+                    let new = self
+                        .vault
+                        .reseal_at_rest(&next, &format!("pq/{key}/pq"), &blob)?;
+                    meta_dyn_upds.push((key, new));
+                }
+            }
         }
         report.token_matrices = tok_upds.len();
         report.pq_rows = pq_upds.len();
         report.pq_pages = page_upds.len();
+        report.wing_pq_rows = wing_pq_upds.len();
         report.fde_rows = fde_upds.len();
-        report.meta_artifacts = meta_upds.len();
+        report.meta_artifacts = meta_upds.len() + meta_dyn_upds.len();
 
         // ---- Phase 2: replay the chain under the new mac key; stage ----
         let audit_tags: Vec<Vec<u8>> = {
@@ -414,6 +465,15 @@ impl PalaceStore {
                     up.execute(params![seq, code])?;
                 }
                 let mut up =
+                    tx.prepare("UPDATE drawer_pq_wing SET code = ?3 WHERE wing = ?1 AND seq = ?2")?;
+                for (wing, seq, code) in &wing_pq_upds {
+                    up.execute(params![wing, seq, code])?;
+                }
+                let mut up = tx.prepare("UPDATE pq_meta SET value = ?2 WHERE key = ?1")?;
+                for (key, blob) in &meta_dyn_upds {
+                    up.execute(params![key, blob])?;
+                }
+                let mut up =
                     tx.prepare("UPDATE pq_page SET blob = ?3 WHERE list = ?1 AND pageno = ?2")?;
                 for (list, pageno, blob) in &page_upds {
                     up.execute(params![list, pageno, blob])?;
@@ -458,6 +518,7 @@ impl PalaceStore {
         *self.ivf.borrow_mut() = None;
         *self.pq_cache.borrow_mut() = None;
         self.pq_verified.set(false);
+        self.wing_pq.borrow_mut().clear();
         *self.tok_pq.borrow_mut() = None;
         self.tok_pq_checked.set(false);
         *self.fde_encoder.borrow_mut() = None;
@@ -537,6 +598,7 @@ mod tests {
                             room: None,
                             limit: 3,
                             room_cap: None,
+                            ..Default::default()
                         },
                     )
                     .unwrap();
@@ -579,6 +641,7 @@ mod tests {
                         room: None,
                         limit: 3,
                         room_cap: None,
+                        ..Default::default()
                     },
                 )
                 .unwrap();

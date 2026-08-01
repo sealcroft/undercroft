@@ -103,6 +103,46 @@ services:
       target: builder
     command: ["/src/target/release/undercroft-bench", "synth", "--n", "200"]
 
+  # A quantized text embedder served on the compose network, CPU only.
+  #
+  #   docker compose up -d embeddings
+  #   docker compose run --rm embed-pull            # once: fetch the model
+  #   docker compose run --rm -e UNDERCROFT_EMBEDDER=http \
+  #     -e UNDERCROFT_EMBED_URL=http://embeddings:11434 \
+  #     -e UNDERCROFT_EMBED_MODEL=nomic-embed-text bench
+  #
+  # Why a container rather than a desktop runtime on the host: everything this
+  # project measures runs in Docker, and a benchmark that reaches out to an app
+  # on the developer's machine is neither reproducible nor reachable from the
+  # bench container. This is on the compose network, pinned by digest-able tag,
+  # and CPU-only — no GPU, so a second machine gets the same numbers rather
+  # than the same numbers divided by whatever accelerator was present.
+  #
+  # `UNDERCROFT_EMBED_API` is inferred from the URL: this one has no `/v1`, so
+  # the native Ollama route is used. Append `/v1` to exercise the
+  # OpenAI-compatible route instead — the same server answers both, which makes
+  # it a fair test of either shape.
+  embeddings:
+    image: ollama/ollama:0.11.4
+    environment:
+      # Keep it honest about the CPU claim: no GPU is requested anywhere, and
+      # the model stays resident so per-request latency is not a cold start.
+      OLLAMA_KEEP_ALIVE: "30m"
+    volumes:
+      - undercroft-models:/root/.ollama
+
+  # One-time model fetch into the shared volume. Separate from `embeddings` so
+  # the download is an explicit act, not a side effect of starting a service.
+  embed-pull:
+    image: ollama/ollama:0.11.4
+    depends_on:
+      - embeddings
+    entrypoint: ["sh", "-c"]
+    command:
+      - "OLLAMA_HOST=http://embeddings:11434 ollama pull ${UNDERCROFT_EMBED_MODEL:-nomic-embed-text}"
+    volumes:
+      - undercroft-models:/root/.ollama
+
   qdrant:
     image: qdrant/qdrant:v1.12.4
 
@@ -179,3 +219,5 @@ services:
 
 volumes:
   undercroft-data:
+  # Embedding model weights, so `embed-pull` is a one-time download.
+  undercroft-models:

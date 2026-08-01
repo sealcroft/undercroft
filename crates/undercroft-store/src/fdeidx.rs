@@ -55,7 +55,7 @@ use undercroft_core::late::dequantize_tokens;
 use rusqlite::{params, OptionalExtension};
 
 use crate::pq::{CoarseQuantizer, ProductQuantizer};
-use crate::{PalaceStore, StoreError};
+use crate::{PalaceStore, StoreError, CODEBOOK_FDE, CODEBOOK_FDE_IVF};
 
 /// Stored-FDE count at which the FDE codebook trains (v2 packing).
 pub(crate) const FDE_PQ_MIN_DEFAULT: usize = 256;
@@ -484,8 +484,15 @@ impl PalaceStore {
         if raw.len() < self.fde_pq_min {
             return Ok(());
         }
-        let stride = raw.len().div_ceil(FDE_PQ_SAMPLE).max(1);
-        let sample: Vec<Vec<f32>> = raw.iter().step_by(stride).map(|(_, f)| f.clone()).collect();
+        // Keyed draw, not an even stride over insertion order — see
+        // `pqidx::stratified_keyed`.
+        let sample: Vec<Vec<f32>> = self
+            .keyed_sample(CODEBOOK_FDE, &raw, FDE_PQ_SAMPLE, |(id, _)| {
+                id.as_bytes().to_vec()
+            })
+            .into_iter()
+            .map(|i| raw[i].1.clone())
+            .collect();
         let Some(m) = [8usize, 4]
             .iter()
             .find(|&&d| fde_dim.is_multiple_of(d))
@@ -497,6 +504,20 @@ impl PalaceStore {
             return Ok(());
         };
         self.fde_meta_put("codebook", &pq.to_bytes())?;
+        self.codebook_generation_bump(CODEBOOK_FDE);
+        if raw.len() > FDE_PQ_SAMPLE {
+            let probe: Vec<Vec<f32>> = self
+                .keyed_sample(
+                    "fde-fit-probe",
+                    &raw,
+                    crate::pqidx::PQ_FIT_PROBE,
+                    |(id, _)| id.as_bytes().to_vec(),
+                )
+                .into_iter()
+                .map(|i| raw[i].1.clone())
+                .collect();
+            self.warn_unrepresentative(CODEBOOK_FDE, &pq, &sample, &probe);
+        }
         // Repack every raw row to v2 with the codebook in hand (list -1 —
         // reserved, see the module docs).
         for (id, fde) in &raw {
@@ -583,9 +604,11 @@ impl PalaceStore {
             .borrow()
             .as_ref()
             .map_or(0, |c| c.coded_rows());
+        // Same freshness rule as the embedding-space IVF (1.5×, see
+        // `pqidx::ivf_fresh` for why the 2× doubling rule was retired).
         let fresh = matches!(
             self.fde_ivf.borrow().as_ref(),
-            Some(cq) if (n as u64) <= cq.trained_n().saturating_mul(2)
+            Some(cq) if crate::pqidx::ivf_fresh(n as u64, cq.trained_n())
         );
         if n < self.fde_ivf_min || fresh {
             return Ok(());
@@ -613,17 +636,19 @@ impl PalaceStore {
                 }
             }
         }
-        let stride = rows.len().div_ceil(FDE_PQ_SAMPLE).max(1);
-        let sample: Vec<Vec<f32>> = rows
-            .iter()
-            .step_by(stride)
-            .map(|(_, _, f)| f.clone())
+        let sample: Vec<Vec<f32>> = self
+            .keyed_sample(CODEBOOK_FDE_IVF, &rows, FDE_PQ_SAMPLE, |(seq, _, _)| {
+                seq.to_le_bytes().to_vec()
+            })
+            .into_iter()
+            .map(|i| rows[i].2.clone())
             .collect();
         let nlist = ((n as f64).sqrt() as usize).clamp(16, 4096);
         let Some(cq) = CoarseQuantizer::train(&sample, nlist, FDE_IVF_ITERS, n as u64) else {
             return Ok(());
         };
         self.fde_meta_put("ivf", &cq.to_bytes())?;
+        self.codebook_generation_bump(CODEBOOK_FDE_IVF);
         // Rewrite every row's list field in place, re-sealed; regroup the
         // cache from the assignments in hand.
         let id_of: std::collections::HashMap<i64, String> = self

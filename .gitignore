@@ -30,6 +30,10 @@ website/book/
 # Local brainstorming / design-scratch documents (never committed)
 /brainstorming/
 
+# Session findings: measurements, verification logs, research digests.
+# Local only — the durable conclusions belong in ROADMAP/CHANGELOG/CLAUDE.md.
+findings/
+
 # Session handover notes (local only — never committed)
 /HANDOVER.md
 HANDOVER*.md

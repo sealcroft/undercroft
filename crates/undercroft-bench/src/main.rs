@@ -26,7 +26,7 @@ use serde_json::Value;
 use std::time::Instant;
 
 use undercroft_core::Drawer;
-use undercroft_store::{PalaceStore, SearchOptions};
+use undercroft_store::{PalaceStore, SearchHit, SearchOptions};
 use undercroft_vault::{SecurityLevel, VaultManager};
 
 #[derive(Parser)]
@@ -99,6 +99,63 @@ enum Command {
         #[arg(long, default_value_t = 256)]
         k: usize,
     },
+    /// Wing-as-retrieval-unit scaling: scoped vs unscoped recall and
+    /// latency on a multi-wing corpus, under the per-wing PQ tier. The
+    /// number that matters is scoped R@5 as the corpus grows: corpus-wide
+    /// candidates intersected with a wing starve it, a wing's own index
+    /// does not. Run at two corpus sizes ≥4x apart and on both sides of
+    /// the floor (--wing-pq-min) before believing any figure.
+    Wingscale {
+        /// Total drawers across all wings
+        #[arg(long, default_value_t = 16_384)]
+        n: usize,
+        /// Number of wings (round-robin ingest; every wing is n/wings)
+        #[arg(long, default_value_t = 16)]
+        wings: usize,
+        /// Queries per pass (evenly sampled over the subject wing's facts)
+        #[arg(long, default_value_t = 200)]
+        queries: usize,
+        /// Comma-separated per-wing floors to measure against ONE ingested
+        /// corpus: numbers, `default` (the store's own floor), or `off`
+        /// (tier disabled — scoped queries intersect corpus-wide
+        /// candidates, the pre-tier behavior).
+        #[arg(long, default_value = "default,off")]
+        floors: String,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
+    /// Unscoped PQ latency versus corpus size, one cumulative vault,
+    /// pushed until it degrades. The single number that settles the R1
+    /// query claim: flat to 10^6 means the per-wing tier is a build-cost
+    /// optimisation; a break between 10^5 and 10^6 is where scoped wins.
+    Pqscale {
+        /// Cumulative corpus checkpoints, comma-separated ascending
+        #[arg(long, default_value = "131072,262144,524288,1048576")]
+        sizes: String,
+        /// Timed queries per checkpoint (evenly sampled over the corpus so far)
+        #[arg(long, default_value_t = 200)]
+        queries: usize,
+        /// Candidate-pool sweep per checkpoint, comma-separated (the
+        /// recall-leak fix instrument: recall-vs-pool with hydration cost
+        /// beside it). Pools are rounded up to the engine's limit*32 grid.
+        #[arg(long, default_value = "256,512,1024,2048")]
+        pools: String,
+        /// Ingest batch size (`upsert_many` — one transaction + one
+        /// manifest anchor per batch, the engine's bulk path). 1 = the
+        /// interactive single-write path, which pays its durability fsyncs
+        /// per drawer and measures a different product surface.
+        #[arg(long, default_value_t = 4096)]
+        batch: usize,
+        /// Corpus-scaled pool divisor for the run: unset = the engine's
+        /// shipped default (the pools below then act as floors under the
+        /// live policy — this measures the SHIPPED config); `off` =
+        /// scaling disabled, so the pools sweep raw candidate counts (the
+        /// instrument mode that produced the recall-vs-pool curve).
+        #[arg(long)]
+        pool_div: Option<String>,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -134,6 +191,47 @@ enum Command {
         /// NOT run BM25 fusion or the reranker (see `search_with_index`).
         #[arg(long, default_value = "local")]
         backend: String,
+        /// Ingest chunk size in bytes. Sweeping this is how we learn whether
+        /// the *unit* is the lever, which is only interpretable against a
+        /// fixed `--budget-bytes`: smaller chunks otherwise win for free by
+        /// letting more of them into a fixed slot count.
+        #[arg(long, default_value_t = 800)]
+        chunk_size: usize,
+        /// Reader context budget in bytes for the budget-selected row, with
+        /// overlapping text charged once. Held constant across a chunk-size
+        /// sweep so any gain is more *distinct evidence* in the same context,
+        /// not more text.
+        #[arg(long, default_value_t = 8000)]
+        budget_bytes: usize,
+        /// How a session body is cut into drawers: `window` (the shipped
+        /// `chunk_text` sliding window) or `turn` (one drawer per dialogue
+        /// turn).
+        ///
+        /// These separate two things `--chunk-size` measures together. A
+        /// 200-byte window holds fragments of two turns; a 138-byte turn holds
+        /// one whole one. The sweep that found finer units worse only varied
+        /// the window, so it says nothing about boundaries the *writer* made —
+        /// which is the declared-unit question, and the one that generalises
+        /// to code and prose where an arbitrary cut lands mid-function.
+        #[arg(long, default_value = "window")]
+        unit: String,
+        /// Candidate pool size passed to `search` as `limit`. 0 keeps the
+        /// historical `k*6`.
+        ///
+        /// This must be scaled when sweeping `--chunk-size`, or the sweep is
+        /// confounded: `k*6` counts *chunks*, so halving the chunk size also
+        /// halves the bytes of corpus the selector may choose from, and
+        /// "smaller chunks are worse" becomes indistinguishable from "a
+        /// smaller pool is worse".
+        #[arg(long, default_value_t = 0)]
+        pool: usize,
+        /// Assert the R3 paging contract per turn-scored query: four calls
+        /// of limit 10 at offsets 0/10/20/30 under one pinned `ranked_at`
+        /// must tile one call of limit 40 exactly (ids and order), the
+        /// all-gold they deliver must equal the depth CDF's ≤40 row, and an
+        /// unpinned repeat records what the host clock drifts.
+        #[arg(long)]
+        paging_contract: bool,
     },
     /// Head-to-head vs external memory systems (competitive track C1.1):
     /// the LoCoMo protocol + scorer, driven through a system adapter —
@@ -254,6 +352,15 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
             }
             #[cfg(not(any(feature = "onnx", feature = "ort")))]
             anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires --features onnx or ort");
+        }
+        // A model served over HTTP (`UNDERCROFT_EMBED_URL`) — no feature gate,
+        // so the default build can benchmark a real embedder without ONNX
+        // exports. One request per drawer at ingest: expect the ingest phase
+        // to be dominated by it.
+        Ok("http") => {
+            let embedder = undercroft_llm::HttpEmbedder::from_env()
+                .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
+            PalaceStore::open_with_embedder(vault, Box::new(embedder))?
         }
         _ => PalaceStore::open(vault)?,
     };
@@ -593,6 +700,7 @@ fn run_longmemeval(
                 room: None,
                 limit: k * 8,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let mut ranked_sessions: Vec<String> = Vec::new();
@@ -725,6 +833,7 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
                 room: None,
                 limit: 5,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         if hits.first().map(|h| &h.drawer.id) == Some(id) {
@@ -754,6 +863,327 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
         anyhow::bail!("regression: synthetic Recall@5 {r5_pct:.1}% (expected >= 95%)");
     }
     println!("SYNTH OK");
+    Ok(())
+}
+
+/// Unscoped-PQ scaling probe: ONE cumulative vault, ingested to each
+/// checkpoint in turn, an untimed warm-up at each (which pays whatever the
+/// event-driven machinery owes at that size — verify pass, codebook train,
+/// IVF retrain when the corpus doubled — and is reported as the maintenance
+/// cost curve), then a timed unscoped pass sampled evenly over everything
+/// ingested so far. No gate: whatever the recall and latency curves do IS
+/// the result, and a probe that bails on the interesting region would be
+/// the stride landmine again.
+fn run_pqscale(
+    sizes: &str,
+    queries: usize,
+    pools: &str,
+    batch: usize,
+    pool_div: Option<&str>,
+    level: SecurityLevel,
+) -> Result<()> {
+    let checkpoints: Vec<usize> = sizes
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse()
+                .map_err(|_| anyhow::anyhow!("--sizes entries are numbers, got {s:?}"))
+        })
+        .collect::<Result<_>>()?;
+    if checkpoints.is_empty() {
+        anyhow::bail!("--sizes is empty");
+    }
+    // Candidate pools map through `limit`: the prefilter fetches
+    // max(256, limit*32) candidates, so a requested pool rounds up to that
+    // grid. R@5 is always scored over the first five hits.
+    let pool_limits: Vec<(usize, usize)> = pools
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| -> Result<(usize, usize)> {
+            let p: usize = s
+                .parse()
+                .map_err(|_| anyhow::anyhow!("--pools entries are numbers, got {s:?}"))?;
+            let limit = p.div_ceil(32).max(8);
+            Ok((limit.saturating_mul(32).max(256), limit))
+        })
+        .collect::<Result<_>>()?;
+    if pool_limits.is_empty() {
+        anyhow::bail!("--pools is empty");
+    }
+    let batch = batch.max(1);
+    let (_tmp, mut store) = fresh_store(level)?;
+    store.set_pq(true);
+    let div_label = match pool_div {
+        Some(v) if v.eq_ignore_ascii_case("off") => {
+            store.set_pool_div(usize::MAX);
+            "off".to_string()
+        }
+        Some(v) => {
+            let d: usize = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("--pool-div takes a number or `off`, got {v:?}"))?;
+            store.set_pool_div(d);
+            d.to_string()
+        }
+        None => "default".to_string(),
+    };
+
+    // Every 512th fact is a query candidate — bounded memory at 10^6.
+    const KEY_STRIDE: usize = 512;
+    let mut keys: Vec<(String, String, String)> = Vec::new();
+    let mut ingested = 0usize;
+    println!(
+        "Pqscale — level={level:?} retrieval=pq checkpoints={checkpoints:?} \
+         pools={pool_limits:?} batch={batch} pool_div={div_label}"
+    );
+    for &target in &checkpoints {
+        let seg_start = ingested;
+        let ingest_started = Instant::now();
+        let mut pending: Vec<Drawer> = Vec::with_capacity(batch.min(target));
+        while ingested < target {
+            let i = ingested;
+            let topic = TOPICS[i % TOPICS.len()];
+            let key = format!(
+                "{}-{:07}",
+                ["budget", "deadline", "vendor", "owner"][i % 4],
+                i
+            );
+            let detail = format!("the {key} is finalized as option {}", (i * 7) % 100);
+            let fact = FACT_TEMPLATES[i % FACT_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{detail}", &detail);
+            let drawer = Drawer::new("bench", topic, fact, None, i as u32, "bench");
+            if i.is_multiple_of(KEY_STRIDE) {
+                keys.push((key, topic.to_string(), drawer.id.clone()));
+            }
+            pending.push(drawer);
+            if pending.len() >= batch {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+            ingested += 1;
+        }
+        if !pending.is_empty() {
+            store.upsert_many(&pending)?;
+        }
+        let ingest_secs = ingest_started.elapsed().as_secs_f32();
+        let db_gb = store.stats().map(|s| s.db_bytes).unwrap_or(0) as f64 / 1e9;
+
+        let stride = keys.len().div_ceil(queries.max(1)).max(1);
+        let sampled: Vec<&(String, String, String)> = keys.iter().step_by(stride).collect();
+        let q_total = sampled.len();
+        let query_for = |qi: usize, key: &str, topic: &str| {
+            let q = QUERY_TEMPLATES[qi % QUERY_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
+            format!("{q} {key}")
+        };
+
+        // Warm-up: one query that pays the size's event-driven debts
+        // (verify pass, codebook train, IVF retrain) outside every timed
+        // column below.
+        let (wk, wt, _) = sampled[0];
+        let warm_started = Instant::now();
+        store.search(
+            &query_for(0, wk, wt),
+            &SearchOptions {
+                limit: 5,
+                ..Default::default()
+            },
+        )?;
+        let warmup_s = warm_started.elapsed().as_secs_f32();
+        println!(
+            "  n={ingested:>8}  db {db_gb:.2} GB  ingest {ingest_secs:.1}s \
+             ({:.0} docs/s)  warmup {warmup_s:.1}s  ({q_total} queries/pool)",
+            ((target - seg_start) as f32 / ingest_secs.max(f32::EPSILON))
+        );
+
+        for &(pool, limit) in &pool_limits {
+            let mut r5 = 0u32;
+            let timed = Instant::now();
+            for (qi, (key, topic, id)) in sampled.iter().copied().enumerate() {
+                let hits = store.search(
+                    &query_for(qi, key, topic),
+                    &SearchOptions {
+                        limit,
+                        ..Default::default()
+                    },
+                )?;
+                if hits.iter().take(5).any(|h| &h.drawer.id == id) {
+                    r5 += 1;
+                }
+            }
+            let secs = timed.elapsed().as_secs_f32();
+            println!(
+                "    pool={pool:>5}  unscoped R@5 {:.1}%  {:.1} ms/q",
+                100.0 * r5 as f32 / q_total.max(1) as f32,
+                1000.0 * secs / q_total.max(1) as f32,
+            );
+        }
+    }
+    println!("PQSCALE DONE");
+    Ok(())
+}
+
+/// Wing-as-retrieval-unit scaling harness. Round-robin ingest across
+/// `wings` wings (deliberately periodic — that is ordinary ingest order and
+/// exactly what the keyed training draw must tolerate) ONCE, then for each
+/// requested floor two query passes over the subject wing's facts: scoped
+/// to that wing, and unscoped. Scoped R@5 is the gated number — it is what
+/// corpus-wide candidate sets take away from a wing and what the per-wing
+/// tier restores.
+///
+/// Each pass runs ONE untimed warm-up query first and reports its cost
+/// separately: the first search after open trains/builds whatever index its
+/// path needs, and folding minutes of one-time build into a per-query
+/// average is how this harness's own first version produced a 15x
+/// scoped-vs-unscoped "difference" that was really "which pass paid the
+/// build". Timed columns are steady state; `warmup` carries the build.
+/// The columns also include hydration and fusion, not candidate generation
+/// alone, so at equal candidate counts the passes converge — recall and
+/// warmup are where the tier shows.
+fn run_wingscale(
+    n: usize,
+    wings: usize,
+    queries: usize,
+    floors: &str,
+    level: SecurityLevel,
+) -> Result<()> {
+    let (_tmp, mut store) = fresh_store(level)?;
+    store.set_pq(true);
+    let wings = wings.max(1);
+    let subject = "wing-000";
+
+    let ingest_started = Instant::now();
+    let mut keys: Vec<(String, String, String)> = Vec::new();
+    for i in 0..n {
+        let wing = format!("wing-{:03}", i % wings);
+        let topic = TOPICS[i % TOPICS.len()];
+        let key = format!(
+            "{}-{:05}",
+            ["budget", "deadline", "vendor", "owner"][i % 4],
+            i
+        );
+        let detail = format!("the {key} is finalized as option {}", (i * 7) % 100);
+        let fact = FACT_TEMPLATES[i % FACT_TEMPLATES.len()]
+            .replace("{topic}", topic)
+            .replace("{detail}", &detail);
+        let drawer = Drawer::new(&wing, topic, fact, None, i as u32, "bench");
+        store.upsert(&drawer)?;
+        if i % wings == 0 {
+            keys.push((key, topic.to_string(), drawer.id));
+        }
+    }
+    let ingest_secs = ingest_started.elapsed().as_secs_f32();
+    let wing_size = keys.len();
+    println!(
+        "Wingscale — n={n} wings={wings} wing_size={wing_size} level={level:?} \
+         ingest {ingest_secs:.2}s ({:.1} docs/s)",
+        n as f32 / ingest_secs
+    );
+
+    if keys.is_empty() {
+        anyhow::bail!("no drawers in the subject wing — raise --n or lower --wings");
+    }
+    let stride = keys.len().div_ceil(queries.max(1)).max(1);
+    let sampled: Vec<&(String, String, String)> = keys.iter().step_by(stride).collect();
+    let q_total = sampled.len();
+
+    let query_for = |qi: usize, key: &str, topic: &str| {
+        let q = QUERY_TEMPLATES[qi % QUERY_TEMPLATES.len()]
+            .replace("{topic}", topic)
+            .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
+        format!("{q} {key}")
+    };
+
+    for floor_spec in floors.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let floor_label = if floor_spec.eq_ignore_ascii_case("off") {
+            store.set_wing_pq_min(usize::MAX);
+            "off".to_string()
+        } else if floor_spec.eq_ignore_ascii_case("default") {
+            store.set_wing_pq_min(undercroft_store::WING_PQ_MIN_DEFAULT);
+            format!("default({})", undercroft_store::WING_PQ_MIN_DEFAULT)
+        } else {
+            let min: usize = floor_spec.parse().map_err(|_| {
+                anyhow::anyhow!(
+                    "--floors entries are numbers, `default` or `off`, got {floor_spec:?}"
+                )
+            })?;
+            store.set_wing_pq_min(min);
+            min.to_string()
+        };
+
+        let pass = |wing: Option<String>| -> Result<(f32, f32, f32)> {
+            // Warm-up: the one query that pays index build/train for this
+            // path, reported on its own so the timed loop is steady state.
+            let (key, topic, _) = sampled[0];
+            let warm_started = Instant::now();
+            store.search(
+                &query_for(0, key, topic),
+                &SearchOptions {
+                    wing: wing.clone(),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )?;
+            let warmup_ms = 1000.0 * warm_started.elapsed().as_secs_f32();
+            let mut r5 = 0u32;
+            let started = Instant::now();
+            for (qi, (key, topic, id)) in sampled.iter().copied().enumerate() {
+                let hits = store.search(
+                    &query_for(qi, key, topic),
+                    &SearchOptions {
+                        wing: wing.clone(),
+                        limit: 5,
+                        ..Default::default()
+                    },
+                )?;
+                if hits.iter().any(|h| &h.drawer.id == id) {
+                    r5 += 1;
+                }
+            }
+            let secs = started.elapsed().as_secs_f32();
+            Ok((
+                100.0 * r5 as f32 / q_total.max(1) as f32,
+                1000.0 * secs / q_total.max(1) as f32,
+                warmup_ms,
+            ))
+        };
+        let (scoped_r5, scoped_ms, scoped_warm) = pass(Some(subject.to_string()))?;
+        let (unscoped_r5, unscoped_ms, unscoped_warm) = pass(None)?;
+
+        // Whether the scoped pass actually probed a wing index: the tier
+        // must be on AND the wing's codebook trained. Reading only the
+        // generation counter lied here — a codebook trained by an earlier
+        // floor entry persists in meta while `off` routes around it.
+        let tier_on = !floor_spec.eq_ignore_ascii_case("off");
+        let wing_indexed = tier_on
+            && store
+                .stats()?
+                .codebooks
+                .iter()
+                .any(|(a, g)| a == &format!("{subject}/pq-codebook") && *g > 0);
+
+        println!("floor={floor_label} wing_index_used={wing_indexed} ({q_total} queries)");
+        println!(
+            "  scoped:   R@5 {scoped_r5:.1}%  {scoped_ms:.1} ms/q  (warmup {scoped_warm:.0} ms)"
+        );
+        println!(
+            "  unscoped: R@5 {unscoped_r5:.1}%  {unscoped_ms:.1} ms/q  (warmup {unscoped_warm:.0} ms)"
+        );
+        // `off` entries exist to document the pre-tier behavior (corpus-wide
+        // candidates crowding out the wing) — that is the measurement, not a
+        // regression, so only tier-on entries are gated.
+        if !floor_spec.eq_ignore_ascii_case("off") && scoped_r5 < 95.0 {
+            anyhow::bail!(
+                "regression: scoped Recall@5 {scoped_r5:.1}% (expected >= 95%) — a wing-scoped \
+                 query must be answered from its wing at any corpus size"
+            );
+        }
+    }
+    println!("WINGSCALE OK");
     Ok(())
 }
 
@@ -1036,6 +1466,7 @@ impl vs::MemorySystem for NativeSystem {
             room: None,
             limit: k * 6,
             room_cap: None,
+            ..Default::default()
         };
         let hits = store.search(question, &opts)?;
         let mut rooms: Vec<String> = Vec::new();
@@ -1048,15 +1479,393 @@ impl vs::MemorySystem for NativeSystem {
     }
 }
 
+/// One LoCoMo dialogue turn as it is ingested.
+///
+/// LoCoMo is a **multimodal** corpus: 1,226 of its 5,882 turns carry a
+/// `blip_caption` describing an image the speaker shared, and 1,064 of the
+/// 2,806 gold-evidence turn references — **37.9%** — point at one of them.
+/// Formatting only `speaker` and `text` stored those turns incomplete and then
+/// scored retrieval on its failure to find them, which books a corpus defect
+/// as a memory failure. The caption is how a text-only memory sees the image,
+/// so omitting it is not a modality choice, it is dropping content.
+///
+/// `query` and `img_url` stay out deliberately: they are the dataset's own
+/// scaffolding for sourcing the image, not anything a participant said or saw.
+fn locomo_turn_text(d: &Value) -> Option<String> {
+    let speaker = d.get("speaker").and_then(Value::as_str).unwrap_or("?");
+    let said = d.get("text").and_then(Value::as_str)?;
+    let mut line = format!("{speaker} said, \"{said}\"");
+    if let Some(cap) = d.get("blip_caption").and_then(Value::as_str) {
+        let cap = cap.trim();
+        if !cap.is_empty() {
+            line.push_str(" [shared an image: ");
+            line.push_str(cap);
+            line.push(']');
+        }
+    }
+    Some(line)
+}
+
+/// A byte range inside one session's normalized body.
+type Span = (usize, usize);
+
+/// Merge overlapping or touching spans into disjoint intervals, ascending.
+fn merge_spans(mut v: Vec<Span>) -> Vec<Span> {
+    v.sort_unstable();
+    let mut out: Vec<Span> = Vec::with_capacity(v.len());
+    for (s, e) in v {
+        match out.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => out.push((s, e)),
+        }
+    }
+    out
+}
+
+/// Bytes of `spans` that `have` does not already cover. `have` must be sorted
+/// and disjoint (i.e. straight out of [`merge_spans`]).
+///
+/// This is what a slot *actually costs the reader*: two adjacent 800-byte
+/// windows overlap by 100, so the second one delivers 700 bytes of new text
+/// and 100 bytes the reader already has. Charging both at 800 is what makes a
+/// slot-counted budget lie about how much evidence fits.
+fn marginal_bytes(have: &[Span], spans: &[Span]) -> usize {
+    let mut total = 0usize;
+    for &(s, e) in spans {
+        let mut cur = s;
+        for &(hs, he) in have {
+            if he <= cur {
+                continue;
+            }
+            if hs >= e {
+                break;
+            }
+            if hs > cur {
+                total += hs.min(e) - cur;
+            }
+            cur = cur.max(he);
+            if cur >= e {
+                break;
+            }
+        }
+        if cur < e {
+            total += e - cur;
+        }
+    }
+    total
+}
+
+/// Select hits in score order until `budget` bytes of *new* text are spent,
+/// charging each hit only for what it adds beyond what is already selected.
+///
+/// This is the honest frame for comparing selections: a reader has a context
+/// budget, not a slot count. Holding bytes fixed means a change cannot win by
+/// simply returning more text — the k=30 mistake — and it lets selections with
+/// different chunk sizes compete on equal terms.
+fn select_within_budget(
+    hits: &[SearchHit],
+    chunk_span: &std::collections::HashMap<String, Vec<Span>>,
+    budget: usize,
+) -> Vec<usize> {
+    let mut per_room: std::collections::HashMap<&str, Vec<Span>> = Default::default();
+    let mut spent = 0usize;
+    let mut picked: Vec<usize> = Vec::new();
+    for (i, h) in hits.iter().enumerate() {
+        let Some(spans) = chunk_span.get(&h.drawer.id) else {
+            continue;
+        };
+        let room = h.drawer.meta.room.as_str();
+        let have = per_room.entry(room).or_default();
+        let add = marginal_bytes(have, spans);
+        // Adds nothing the reader does not already have: pure redundancy, and
+        // the only thing a dedup step can remove without losing evidence.
+        if add == 0 {
+            continue;
+        }
+        if spent + add > budget {
+            continue;
+        }
+        spent += add;
+        have.extend(spans.iter().copied());
+        let merged = merge_spans(std::mem::take(have));
+        *have = merged;
+        picked.push(i);
+    }
+    picked
+}
+
+/// Smallest prefix of the ranked hits whose union covers **every** gold turn,
+/// or `None` if the whole candidate list never does.
+///
+/// This is the ceiling diagnostic, and it separates the two failures that
+/// look identical from the top-k: evidence that was *retrieved and ranked*
+/// but sat below the cut, versus evidence the matcher never surfaced at any
+/// depth. The first is recoverable by a better second stage over the same
+/// candidates; the second is the first-stage matcher's floor and no amount of
+/// reranking reaches it.
+fn rank_covering_all(
+    hits: &[SearchHit],
+    chunk_span: &std::collections::HashMap<String, Vec<Span>>,
+    wanted: &[(&str, Span)],
+) -> Option<usize> {
+    let mut per_room: std::collections::HashMap<&str, Vec<Span>> = Default::default();
+    for (i, h) in hits.iter().enumerate() {
+        if let Some(spans) = chunk_span.get(&h.drawer.id) {
+            let have = per_room.entry(h.drawer.meta.room.as_str()).or_default();
+            have.extend(spans.iter().copied());
+            let merged = merge_spans(std::mem::take(have));
+            *have = merged;
+        }
+        let all = wanted
+            .iter()
+            .all(|(room, sp)| per_room.get(room).is_some_and(|m| covers(m, *sp)));
+        if all {
+            return Some(i + 1);
+        }
+    }
+    None
+}
+
+/// Depths at which the ceiling diagnostic is bucketed.
+const RANK_BUCKETS: [usize; 5] = [10, 20, 40, 80, 160];
+
+/// Whether `needle` sits wholly inside one of the merged intervals.
+///
+/// The union, rather than any single chunk, is what a prompt actually shows:
+/// ingest windows an 800-byte chunk with 100 bytes of overlap over a session
+/// body that is one long paragraph, so a turn lands across a boundary
+/// routinely, and the two chunks either side *together* carry the evidence.
+/// Asking each chunk alone would book that as a retrieval miss the reader
+/// never suffered — the exact class of error this instrument exists to stop.
+fn covers(merged: &[Span], needle: Span) -> bool {
+    merged.iter().any(|&(s, e)| s <= needle.0 && needle.1 <= e)
+}
+
+/// Byte ranges of `chunk` inside `body`, scanning forward from `cursor`.
+///
+/// `chunk_text` emits verbatim slices of the body in order, so a rolling scan
+/// is exact and cheap. The cursor advances to each chunk's *start*, not its
+/// end, because consecutive windows overlap. The one chunk that is not a
+/// single slice is the trailing runt, which `chunk_text` merges into its
+/// predecessor with a `\n\n` join — hence pieces, and hence a `Vec`.
+fn locate_chunk(body: &str, chunk: &str, cursor: &mut usize) -> Vec<Span> {
+    let mut out = Vec::new();
+    for piece in chunk.split("\n\n") {
+        let piece = piece.trim();
+        if piece.is_empty() {
+            continue;
+        }
+        let from = (*cursor).min(body.len());
+        if let Some(rel) = body[from..].find(piece) {
+            let s = from + rel;
+            out.push((s, s + piece.len()));
+            *cursor = s;
+        }
+    }
+    out
+}
+
+/// How many of `wanted` gold turns the selected slots actually put in front
+/// of a reader, testing each turn against the union of that session's
+/// selected chunk ranges.
+fn covered_turns(
+    selected: &[&SearchHit],
+    chunk_span: &std::collections::HashMap<String, Vec<Span>>,
+    wanted: &[(&str, Span)],
+) -> usize {
+    let mut by_room: std::collections::HashMap<&str, Vec<Span>> = Default::default();
+    for h in selected {
+        if let Some(spans) = chunk_span.get(&h.drawer.id) {
+            by_room
+                .entry(h.drawer.meta.room.as_str())
+                .or_default()
+                .extend(spans.iter().copied());
+        }
+    }
+    let merged: std::collections::HashMap<&str, Vec<Span>> = by_room
+        .into_iter()
+        .map(|(r, v)| (r, merge_spans(v)))
+        .collect();
+    wanted
+        .iter()
+        .filter(|(room, sp)| merged.get(room).is_some_and(|m| covers(m, *sp)))
+        .count()
+}
+
+/// Per-document caps the gap-2 counterfactual is measured at. `1` is the
+/// strongest form of "one slot per document"; `2` is the softest cap that
+/// still removes anything, so a negative result covers the family rather
+/// than only its extreme.
+const DOC_CAPS: [usize; 2] = [1, 2];
+
+/// Indices of a selection over `hits` that allows at most `cap` slots per
+/// source document, capped at `k` and refilled in score order — the same
+/// soft-cap-then-refill shape `diversify_by_room` gives `room_cap`.
+fn cap_per_document(hits: &[SearchHit], k: usize, cap: usize) -> Vec<usize> {
+    let mut seen: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut picked: Vec<usize> = Vec::new();
+    for (i, h) in hits.iter().enumerate() {
+        if picked.len() == k {
+            break;
+        }
+        let n = seen.entry(h.drawer.meta.room.as_str()).or_insert(0);
+        if *n < cap {
+            *n += 1;
+            picked.push(i);
+        }
+    }
+    if picked.len() < k {
+        let taken: std::collections::BTreeSet<usize> = picked.iter().copied().collect();
+        for i in 0..hits.len() {
+            if picked.len() == k {
+                break;
+            }
+            if !taken.contains(&i) {
+                picked.push(i);
+            }
+        }
+    }
+    picked.sort_unstable();
+    picked
+}
+
+/// Gold-evidence recall at two granularities, plus the one-slot-per-document
+/// counterfactual.
+///
+/// The row this harness has always printed is `session_any`: at least one gold
+/// *session* somewhere in the top-k rooms. It cannot tell a memory failure
+/// from a reader failure, and it is blind to chunk choice — every gold turn
+/// can be absent from the prompt while the number reads 100%, because the
+/// session is "present" on the strength of a chunk that says nothing relevant.
+/// That blindness is not hypothetical: `room_cap` was adopted on document
+/// presence and measured −5.6pp, and the post-mortem was that the right
+/// *chunk* must be present, not the right document.
+///
+/// The AMB run measured 83.0% all-gold / 94.1% any-gold at session
+/// granularity against 87.6% end-to-end accuracy — 104 of 189 failures had
+/// every required document in context. These fields make that split standing
+/// and reproducible, and they cost no model calls: the evidence ids ship with
+/// the dataset.
+#[derive(Default, Clone, Copy)]
+struct GoldRecall {
+    /// Queries scored at session granularity (the historical denominator).
+    queries: u32,
+    /// ≥1 / every gold session among the top-k distinct rooms, where those
+    /// rooms are collected by scanning the **whole** `k*6` candidate pool.
+    /// This is the row the harness has always printed.
+    session_any: f32,
+    session_all: f32,
+    /// The same two over the rooms present in the `k` slots actually
+    /// returned — the depth the turn rows are scored at.
+    ///
+    /// Without these, comparing the pool-depth session row against the
+    /// slot-depth turn row measures **depth and granularity at once**: a room
+    /// first appearing at hit 47 counts for the former and cannot count for
+    /// the latter, so part of any gap between them is simply one row looking
+    /// six times deeper. These two isolate granularity.
+    slot_session_any: f32,
+    slot_session_all: f32,
+    /// ≥1 / every gold *turn* inside the top-k slots actually returned.
+    turn_any: f32,
+    turn_all: f32,
+    /// The same two under `cap_per_document`, one entry per [`DOC_CAPS`] —
+    /// what ROADMAP gap 2 would do to the very prompt the reader sees.
+    /// Measured, not assumed.
+    dedup_turn_any: [f32; DOC_CAPS.len()],
+    dedup_turn_all: [f32; DOC_CAPS.len()],
+    /// Slots filled by a document already represented, over slots returned.
+    /// This is the "14% of slots are repeat chunks" figure, re-derived.
+    repeat_slots: u32,
+    slots: u32,
+    /// The repeat slots split by whether they are actually redundant. A repeat
+    /// slot whose span **touches or overlaps** one already selected from the
+    /// same document duplicates text the reader has (`repeat_adjacent`); one
+    /// that is disjoint carries different sentences of the same document and
+    /// is not redundant at all (`repeat_disjoint`). The per-document cap
+    /// deleted both indiscriminately, which is why it lost evidence — and this
+    /// split says how much genuine redundancy there was to remove.
+    repeat_adjacent: u32,
+    repeat_disjoint: u32,
+    /// Bytes the reader is handed **twice**, over bytes handed to them at
+    /// all, across the k slots.
+    ///
+    /// The slot counts above say how many slots *touch* text already
+    /// returned; this says how much text that actually is. They are very
+    /// different questions: two adjacent 800-byte windows overlap by 100, so
+    /// the slot reads as "redundant" while 87.5% of it is new. Only this
+    /// ratio bounds what a dedup step could ever recover.
+    dup_bytes: u64,
+    slot_bytes: u64,
+    /// How deep the ranked list must go before every gold turn is covered,
+    /// bucketed by [`RANK_BUCKETS`] with a final bucket for "never, at any
+    /// depth in the pool".
+    ///
+    /// The first bucket is what we deliver today. Everything between it and
+    /// the last bucket is evidence the matcher *found and ranked* but placed
+    /// below the cut — the headroom a second stage can reach without a better
+    /// first stage. The last bucket is the first-stage floor.
+    gold_all_rank: [u32; 7],
+    /// Turn coverage under [`select_within_budget`] — same bytes to the
+    /// reader, redundancy charged once, slot count free to vary.
+    budget_turn_any: f32,
+    budget_turn_all: f32,
+    /// Chunks that fit in the budget, summed, so the mean is reportable.
+    budget_slots: u32,
+    /// Gold turns whose text could not be located in the ingested body, and
+    /// the queries that lost *every* gold turn that way and are therefore
+    /// excluded from the turn rows. Reported rather than absorbed: a silent
+    /// drop here would flatter exactly the numbers it touches.
+    unlocatable_turns: u32,
+    /// Denominator for the turn-level rows.
+    turn_queries: u32,
+    /// Turn-level all-gold, split by how many gold turns the query needs
+    /// (1, 2, 3, 4, 5+) and by LoCoMo category. `.0` is the numerator,
+    /// `.1` the denominator.
+    ///
+    /// This decides whether the remaining failures are a *ranking* problem or
+    /// a *budget* one. A query needing one turn that misses is a scoring
+    /// failure and more ranking work can reach it. A query needing six turns
+    /// spread over four sessions is competing for ten slots, and no reordering
+    /// fixes arithmetic — only more slots or more bytes do.
+    by_goldcount: [(f32, u32); 5],
+    by_category: [(f32, u32); 6],
+    /// The same split for the ≤2-per-document cap and for byte-budget
+    /// selection.
+    ///
+    /// The cap measured −17.5pp / −1.8pp *averaged over the corpus*, which is
+    /// 79% single-evidence questions where forcing a second document can only
+    /// displace the one right chunk. Multi-evidence questions need 2.68
+    /// distinct sessions, which is what a cap forces. An average over two
+    /// populations with opposite responses says nothing about either.
+    by_goldcount_cap2: [(f32, u32); 5],
+    by_goldcount_budget: [(f32, u32); 5],
+    /// R3 paging-contract tallies (populated only under `--paging-contract`):
+    /// queries checked, exact-tiling mismatches (four pinned pages of ten vs
+    /// one pinned call of forty — ids and order), all-gold delivered by
+    /// those four pages, and unpinned repeats that differed from the pinned
+    /// ranking (the documented host-clock recency drift).
+    page_queries: u32,
+    page_mismatches: u32,
+    page_all: f32,
+    page_unpinned_drift: u32,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn locomo_eval(
     samples: &[Value],
     k: usize,
     backend: &str,
-) -> Result<(f32, u32, CategoryScores, PhaseTiming)> {
+    chunk_size: usize,
+    budget: usize,
+    pool: usize,
+    turn_units: bool,
+    paging: bool,
+) -> Result<(f32, u32, CategoryScores, PhaseTiming, GoldRecall)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
     let mut per_cat: CategoryScores = Default::default();
     let mut timing = PhaseTiming::default();
+    let mut gold = GoldRecall::default();
     let total = samples.len();
     // Optional remote ANN accelerator. `local` ⇒ full-scan fusion path.
     let mut index = match backend {
@@ -1075,33 +1884,72 @@ fn locomo_eval(
             fresh_store(SecurityLevel::Sealed)?
         };
         // Ingest: one room per session.
+        //
+        // Alongside it, two maps that make turn-level gold recall possible:
+        // where each dialog turn sits in its session body, and which of that
+        // body each stored chunk covers. Both are byte ranges over the same
+        // normalized string, so "was this turn in the prompt" becomes an
+        // interval test rather than a substring guess.
         let ingest_started = Instant::now();
         let mut n = 1;
+        let mut turn_span: std::collections::HashMap<String, (String, Span)> = Default::default();
+        let mut chunk_span: std::collections::HashMap<String, Vec<Span>> = Default::default();
         while let Some(dialogs) = conv.get(format!("session_{n}")).and_then(Value::as_array) {
-            let text: Vec<String> = dialogs
+            let room = format!("session_{n}");
+            let turns: Vec<(String, String)> = dialogs
                 .iter()
                 .filter_map(|d| {
-                    Some(format!(
-                        "{} said, \"{}\"",
-                        d.get("speaker").and_then(Value::as_str).unwrap_or("?"),
-                        d.get("text").and_then(Value::as_str)?
-                    ))
+                    let line = locomo_turn_text(d)?;
+                    let id = d
+                        .get("dia_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    Some((id, line))
                 })
                 .collect();
+            let text: Vec<String> = turns.iter().map(|(_, l)| l.clone()).collect();
             let body = undercroft_core::normalize_content(&text.join("\n"));
-            for (ci, chunk) in
-                undercroft_core::chunk_text(&body, undercroft_core::ChunkOptions::default())
-                    .into_iter()
-                    .enumerate()
-            {
-                let d = Drawer::new(
-                    "locomo",
-                    &format!("session_{n}"),
-                    chunk,
-                    None,
-                    ci as u32,
-                    "bench",
-                );
+            // Locate every turn in the body it was ingested into. The scan
+            // rolls forward because turns keep their order; a turn that
+            // normalization reshaped is simply not recorded, and the query
+            // loop counts that rather than treating it as a miss.
+            let mut tcur = 0usize;
+            for (id, line) in &turns {
+                if id.is_empty() {
+                    continue;
+                }
+                let probe = undercroft_core::normalize_content(line);
+                let probe = probe.trim();
+                if probe.is_empty() {
+                    continue;
+                }
+                let from = tcur.min(body.len());
+                if let Some(rel) = body[from..].find(probe) {
+                    let s = from + rel;
+                    turn_span.insert(id.clone(), (room.clone(), (s, s + probe.len())));
+                    tcur = s + probe.len();
+                }
+            }
+            let mut ccur = 0usize;
+            let copts = undercroft_core::ChunkOptions {
+                chunk_size,
+                ..Default::default()
+            };
+            // Same bytes either way — only where the cuts fall differs.
+            let pieces: Vec<String> = if turn_units {
+                turns
+                    .iter()
+                    .map(|(_, l)| undercroft_core::normalize_content(l))
+                    .filter(|s| !s.trim().is_empty())
+                    .collect()
+            } else {
+                undercroft_core::chunk_text(&body, copts)
+            };
+            for (ci, chunk) in pieces.into_iter().enumerate() {
+                let spans = locate_chunk(&body, &chunk, &mut ccur);
+                let d = Drawer::new("locomo", &room, chunk, None, ci as u32, "bench");
+                chunk_span.insert(d.id.clone(), spans);
                 store.upsert(&d)?;
             }
             n += 1;
@@ -1145,8 +1993,9 @@ fn locomo_eval(
                 morph_lang: Default::default(),
                 wing: None,
                 room: None,
-                limit: k * 6,
+                limit: if pool > 0 { pool } else { k * 6 },
                 room_cap: None,
+                ..Default::default()
             };
             let search_started = Instant::now();
             let hits = match index.as_mut() {
@@ -1168,6 +2017,183 @@ fn locomo_eval(
             };
             recall_sum += recall;
             evaluated += 1;
+
+            // ---- gold-evidence recall: no model calls, ids ship with the
+            // dataset. The session rows restate what the line above scored;
+            // the turn rows say whether the evidence itself was in the
+            // prompt, which is the only one of the two a reader can use.
+            gold.queries += 1;
+            gold.session_any += recall;
+            if correct.iter().all(|c| topk.contains(&c)) {
+                gold.session_all += 1.0;
+            }
+            let slots: Vec<&SearchHit> = hits.iter().take(k).collect();
+            let mut slot_rooms: Vec<&str> = Vec::new();
+            // Per document, the spans already handed to the reader — so a
+            // repeat slot can be classified as duplicating text or as adding
+            // different text from the same document.
+            let mut seen_spans: std::collections::HashMap<&str, Vec<Span>> = Default::default();
+            for h in &slots {
+                gold.slots += 1;
+                let room = h.drawer.meta.room.as_str();
+                let spans = chunk_span.get(&h.drawer.id).cloned().unwrap_or_default();
+                let full: usize = spans.iter().map(|(s, e)| e - s).sum();
+                let fresh = marginal_bytes(seen_spans.entry(room).or_default(), &spans);
+                gold.slot_bytes += full as u64;
+                gold.dup_bytes += (full - fresh) as u64;
+                if slot_rooms.contains(&room) {
+                    gold.repeat_slots += 1;
+                    if fresh < full {
+                        gold.repeat_adjacent += 1;
+                    } else {
+                        gold.repeat_disjoint += 1;
+                    }
+                } else {
+                    slot_rooms.push(room);
+                }
+                let have = seen_spans.entry(room).or_default();
+                have.extend(spans);
+                let merged = merge_spans(std::mem::take(have));
+                *have = merged;
+            }
+            // Session presence at the depth the turn rows are scored at.
+            if correct.iter().any(|c| slot_rooms.contains(&c.as_str())) {
+                gold.slot_session_any += 1.0;
+            }
+            if correct.iter().all(|c| slot_rooms.contains(&c.as_str())) {
+                gold.slot_session_all += 1.0;
+            }
+            let mut wanted: Vec<(&str, Span)> = Vec::new();
+            for e in &evidence {
+                match turn_span.get(e.as_str()) {
+                    Some((room, sp)) => wanted.push((room.as_str(), *sp)),
+                    None => gold.unlocatable_turns += 1,
+                }
+            }
+            if !wanted.is_empty() {
+                gold.turn_queries += 1;
+                // ---- R3 paging contract, asserted end to end. Pages are
+                // defined as ranks [offset, offset+limit) of the one ranking
+                // a single deeper call would produce, with `ranked_at`
+                // pinning the clock — so four pinned pages of ten must tile
+                // one pinned call of forty exactly, and the all-gold they
+                // deliver must equal what the depth CDF says sits within
+                // top-40. An unpinned repeat is run purely to record what
+                // the host clock actually drifts.
+                if paging {
+                    gold.page_queries += 1;
+                    let pinned = time::OffsetDateTime::now_utc();
+                    let popts = |offset: usize, limit: usize, at: Option<time::OffsetDateTime>| {
+                        SearchOptions {
+                            limit,
+                            offset,
+                            ranked_at: at,
+                            ..Default::default()
+                        }
+                    };
+                    fn same_ids(a: &[SearchHit], b: &[SearchHit]) -> bool {
+                        a.len() == b.len()
+                            && a.iter()
+                                .zip(b.iter())
+                                .all(|(x, y)| x.drawer.id == y.drawer.id)
+                    }
+                    let single = store.search(question, &popts(0, 40, Some(pinned)))?;
+                    let mut paged: Vec<SearchHit> = Vec::new();
+                    for page in 0..4 {
+                        paged.extend(store.search(question, &popts(page * 10, 10, Some(pinned)))?);
+                    }
+                    if !same_ids(&single, &paged) {
+                        gold.page_mismatches += 1;
+                    }
+                    let prefs: Vec<&SearchHit> = paged.iter().collect();
+                    if covered_turns(&prefs, &chunk_span, &wanted) == wanted.len() {
+                        gold.page_all += 1.0;
+                    }
+                    let mut unpinned: Vec<SearchHit> = Vec::new();
+                    for page in 0..4 {
+                        unpinned.extend(store.search(question, &popts(page * 10, 10, None))?);
+                    }
+                    if !same_ids(&unpinned, &paged) {
+                        gold.page_unpinned_drift += 1;
+                    }
+                }
+                let got = covered_turns(&slots, &chunk_span, &wanted);
+                if got > 0 {
+                    gold.turn_any += 1.0;
+                }
+                let delivered = if got == wanted.len() {
+                    gold.turn_all += 1.0;
+                    1.0
+                } else {
+                    0.0
+                };
+                let gc = (wanted.len().clamp(1, 5)) - 1;
+                gold.by_goldcount[gc].0 += delivered;
+                gold.by_goldcount[gc].1 += 1;
+                let cat = qa
+                    .get("category")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .min(5) as usize;
+                gold.by_category[cat].0 += delivered;
+                gold.by_category[cat].1 += 1;
+                // The gap-2 counterfactual, over the same retrieval: at most
+                // `cap` slots per document, refilled in score order. Same k,
+                // same pool, so any difference is the cap and nothing else.
+                // How deep the ranked list must go before all gold is in hand.
+                match rank_covering_all(&hits, &chunk_span, &wanted) {
+                    Some(r) => {
+                        let b = RANK_BUCKETS
+                            .iter()
+                            .position(|&t| r <= t)
+                            .unwrap_or(RANK_BUCKETS.len());
+                        gold.gold_all_rank[b] += 1;
+                    }
+                    // Deeper than the last bucket, but still found: still
+                    // second-stage headroom, not a first-stage floor.
+                    None => gold.gold_all_rank[RANK_BUCKETS.len() + 1] += 1,
+                }
+                // Same bytes to the reader, redundancy charged once, slot
+                // count free to vary. This is the comparison a per-document
+                // cap should have been measured against: it removes only text
+                // the reader already has, and spends what it saves.
+                let budget_sel: Vec<&SearchHit> = select_within_budget(&hits, &chunk_span, budget)
+                    .into_iter()
+                    .map(|i| &hits[i])
+                    .collect();
+                gold.budget_slots += budget_sel.len() as u32;
+                let bgot = covered_turns(&budget_sel, &chunk_span, &wanted);
+                if bgot > 0 {
+                    gold.budget_turn_any += 1.0;
+                }
+                let gcb = (wanted.len().clamp(1, 5)) - 1;
+                gold.by_goldcount_budget[gcb].1 += 1;
+                if bgot == wanted.len() {
+                    gold.budget_turn_all += 1.0;
+                    gold.by_goldcount_budget[gcb].0 += 1.0;
+                }
+                for (ci, cap) in DOC_CAPS.iter().enumerate() {
+                    let dedup: Vec<&SearchHit> = cap_per_document(&hits, k, *cap)
+                        .into_iter()
+                        .map(|i| &hits[i])
+                        .collect();
+                    let dgot = covered_turns(&dedup, &chunk_span, &wanted);
+                    if dgot > 0 {
+                        gold.dedup_turn_any[ci] += 1.0;
+                    }
+                    if dgot == wanted.len() {
+                        gold.dedup_turn_all[ci] += 1.0;
+                    }
+                    if *cap == 2 {
+                        let g2 = (wanted.len().clamp(1, 5)) - 1;
+                        gold.by_goldcount_cap2[g2].1 += 1;
+                        if dgot == wanted.len() {
+                            gold.by_goldcount_cap2[g2].0 += 1.0;
+                        }
+                    }
+                }
+            }
+
             let cat = qa
                 .get("category")
                 .map(|c| c.to_string().trim_matches('"').to_string())
@@ -1182,7 +2208,7 @@ fn locomo_eval(
             100.0 * recall_sum / evaluated.max(1) as f32
         );
     }
-    Ok((recall_sum, evaluated, per_cat, timing))
+    Ok((recall_sum, evaluated, per_cat, timing, gold))
 }
 
 /// One session-recall pass over a conversation's QA against the current
@@ -1236,6 +2262,7 @@ fn score_pass(
                 room: None,
                 limit: k * 6,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let mut rooms: Vec<String> = Vec::new();
@@ -1456,6 +2483,7 @@ fn convomem_eval(items: &[Value], k: usize, limit: Option<usize>) -> Result<(f32
                 room: None,
                 limit: k,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let recall = if hits
@@ -1532,6 +2560,7 @@ fn membench_eval(raw: &Value, topic: &str, k: usize, limit: Option<usize>) -> Re
                 room: None,
                 limit: k,
                 room_cap: None,
+                ..Default::default()
             },
         )?;
         let recall = if hits
@@ -2265,6 +3294,28 @@ fn main() -> Result<()> {
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
+        Command::Pqscale {
+            sizes,
+            queries,
+            pools,
+            batch,
+            pool_div,
+            level,
+        } => run_pqscale(
+            &sizes,
+            queries,
+            &pools,
+            batch,
+            pool_div.as_deref(),
+            level_of(&level),
+        ),
+        Command::Wingscale {
+            n,
+            wings,
+            queries,
+            floors,
+            level,
+        } => run_wingscale(n, wings, queries, &floors, level_of(&level)),
         Command::PqpageSynth {
             n,
             dim,
@@ -2285,6 +3336,11 @@ fn main() -> Result<()> {
             limit,
             skip,
             backend,
+            chunk_size,
+            budget_bytes,
+            unit,
+            pool,
+            paging_contract,
         } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
@@ -2293,7 +3349,16 @@ fn main() -> Result<()> {
             let start = skip.min(total);
             let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
             let shard = &samples[start..end];
-            let (recall_sum, n, per_cat, timing) = locomo_eval(shard, k, &backend)?;
+            let (recall_sum, n, per_cat, timing, gold) = locomo_eval(
+                shard,
+                k,
+                &backend,
+                chunk_size,
+                budget_bytes,
+                pool,
+                unit == "turn",
+                paging_contract,
+            )?;
             // RAW line carries the exact numerator/denominator so sharded runs
             // (convos [start,end)) sum to the full R@k without rounding drift.
             println!(
@@ -2316,6 +3381,182 @@ fn main() -> Result<()> {
                 println!(
                     "  category {cat:<12} {:.1}%  ({cnt})",
                     100.0 * sum / cnt as f32
+                );
+            }
+            // Gold-evidence recall. RAW first, with every numerator and
+            // denominator, so sharded runs sum instead of averaging averages.
+            let g = gold;
+            println!(
+                "LOCOMO_GOLD_RAW convos={start}..{end}/{total} queries={} session_any={:.4} \
+                 session_all={:.4} slot_session_any={:.4} slot_session_all={:.4} \
+                 turn_queries={} turn_any={:.4} turn_all={:.4} \
+                 slots={} repeat_slots={} unlocatable_turns={}",
+                g.queries,
+                g.session_any,
+                g.session_all,
+                g.slot_session_any,
+                g.slot_session_all,
+                g.turn_queries,
+                g.turn_any,
+                g.turn_all,
+                g.slots,
+                g.repeat_slots,
+                g.unlocatable_turns
+            );
+            for (ci, cap) in DOC_CAPS.iter().enumerate() {
+                println!(
+                    "LOCOMO_DOCCAP_RAW convos={start}..{end}/{total} cap={cap} \
+                     turn_queries={} turn_any={:.4} turn_all={:.4}",
+                    g.turn_queries, g.dedup_turn_any[ci], g.dedup_turn_all[ci]
+                );
+            }
+            let pct = |num: f32, den: u32| 100.0 * num / den.max(1) as f32;
+            // Three rows, two depths. Only the last two are a like-for-like
+            // granularity comparison; the first scans the whole candidate
+            // pool for distinct rooms and is therefore the most generous
+            // reading available.
+            println!(
+                "Gold evidence, session, {}-hit pool scan: any {:.1}%  all {:.1}%   ({} q)",
+                k * 6,
+                pct(g.session_any, g.queries),
+                pct(g.session_all, g.queries),
+                g.queries
+            );
+            println!(
+                "Gold evidence, session, in the {k} slots:  any {:.1}%  all {:.1}%   ({} q)",
+                pct(g.slot_session_any, g.queries),
+                pct(g.slot_session_all, g.queries),
+                g.queries
+            );
+            println!(
+                "Gold evidence, turn,    in the {k} slots:  any {:.1}%  all {:.1}%   ({} q)",
+                pct(g.turn_any, g.turn_queries),
+                pct(g.turn_all, g.turn_queries),
+                g.turn_queries
+            );
+            for (ci, cap) in DOC_CAPS.iter().enumerate() {
+                println!(
+                    "  at most {cap} slot(s) per document:  any {:.1}%  all {:.1}%   \
+                     (all {:+.1}pp vs the same retrieval uncapped)",
+                    pct(g.dedup_turn_any[ci], g.turn_queries),
+                    pct(g.dedup_turn_all[ci], g.turn_queries),
+                    pct(g.dedup_turn_all[ci], g.turn_queries) - pct(g.turn_all, g.turn_queries)
+                );
+            }
+            println!(
+                "  budget-selected ({budget_bytes} B, overlap charged once): \
+                 any {:.1}%  all {:.1}%   (all {:+.1}pp, mean {:.1} chunks)",
+                pct(g.budget_turn_any, g.turn_queries),
+                pct(g.budget_turn_all, g.turn_queries),
+                pct(g.budget_turn_all, g.turn_queries) - pct(g.turn_all, g.turn_queries),
+                g.budget_slots as f32 / g.turn_queries.max(1) as f32
+            );
+            println!(
+                "  slots filled by an already-represented document: {}/{} = {:.1}%",
+                g.repeat_slots,
+                g.slots,
+                pct(g.repeat_slots as f32, g.slots)
+            );
+            println!(
+                "    of those, {} overlap text already returned and {} carry \
+                 different text from the same document",
+                g.repeat_adjacent, g.repeat_disjoint
+            );
+            println!(
+                "  bytes handed to the reader twice: {}/{} = {:.1}%  \
+                 (the ceiling on what any dedup can recover)",
+                g.dup_bytes,
+                g.slot_bytes,
+                100.0 * g.dup_bytes as f64 / g.slot_bytes.max(1) as f64
+            );
+            // What the remaining failures are made of.
+            for (i, (num, den)) in g.by_goldcount.iter().enumerate() {
+                if *den > 0 {
+                    let label = if i == 4 {
+                        "5+".to_string()
+                    } else {
+                        (i + 1).to_string()
+                    };
+                    println!(
+                        "  gold turns needed = {label:<3} all delivered {:.1}%  ({den} q)",
+                        pct(*num, *den)
+                    );
+                }
+            }
+            // Does forcing a second document help the queries that need one?
+            println!("  gold-turns-needed  baseline   cap<=2     budget");
+            for i in 0..5 {
+                let (n0, d0) = g.by_goldcount[i];
+                if d0 == 0 {
+                    continue;
+                }
+                let (n1, d1) = g.by_goldcount_cap2[i];
+                let (n2, d2) = g.by_goldcount_budget[i];
+                let label = if i == 4 {
+                    "5+".to_string()
+                } else {
+                    (i + 1).to_string()
+                };
+                println!(
+                    "    {label:<16} {:>6.1}%   {:>6.1}%   {:>6.1}%   ({d0} q)",
+                    pct(n0, d0),
+                    pct(n1, d1),
+                    pct(n2, d2)
+                );
+            }
+            for (c, (num, den)) in g.by_category.iter().enumerate() {
+                if *den > 0 {
+                    println!(
+                        "  category {c:<2} all delivered {:.1}%  ({den} q)",
+                        pct(*num, *den)
+                    );
+                }
+            }
+            // Ceiling diagnostic: how deep the ranked list must go before all
+            // gold is in hand. Cumulative, so each row is "what a perfect
+            // second stage over the top-N could deliver".
+            let mut cum = 0u32;
+            for (i, t) in RANK_BUCKETS.iter().enumerate() {
+                cum += g.gold_all_rank[i];
+                println!(
+                    "  all gold covered within top-{t:<4} {:.1}%  (cumulative)",
+                    pct(cum as f32, g.turn_queries)
+                );
+            }
+            // [len()] is "deeper than the last bucket but still found";
+            // [len()+1] is "never, at any depth".
+            cum += g.gold_all_rank[RANK_BUCKETS.len()];
+            println!(
+                "  all gold covered anywhere in the pool: {:.1}%  \
+                 — never, at any depth: {:.1}%  (the first-stage floor)",
+                pct(cum as f32, g.turn_queries),
+                pct(
+                    g.gold_all_rank[RANK_BUCKETS.len() + 1] as f32,
+                    g.turn_queries
+                )
+            );
+            if g.page_queries > 0 {
+                // The contract, delivered: the ≤40 CDF row is a diagnostic
+                // about the ranking; the paged row is what four calls of
+                // limit 10 actually hand a caller. R3's claim is that they
+                // are the same number.
+                let cdf40: u32 = g.gold_all_rank[..3].iter().sum();
+                println!(
+                    "  R3 paging contract ({} queries): tiling mismatches {} · \
+                     all-gold via 4x10 pinned pages {:.1}% vs CDF within top-40 {:.1}% · \
+                     unpinned repeats differing {}",
+                    g.page_queries,
+                    g.page_mismatches,
+                    pct(g.page_all, g.page_queries),
+                    pct(cdf40 as f32, g.turn_queries),
+                    g.page_unpinned_drift
+                );
+            }
+            if g.unlocatable_turns > 0 {
+                println!(
+                    "  {} gold turns could not be located in the ingested body \
+                     and are excluded from the turn rows",
+                    g.unlocatable_turns
                 );
             }
             Ok(())
@@ -2496,10 +3737,121 @@ mod tests {
                 {"question": "adversarial with no evidence", "category": 5}
             ]
         });
-        let (recall, n, per_cat, _timing) = locomo_eval(&[sample], 5, "local").unwrap();
+        let (recall, n, per_cat, _timing, gold) =
+            // The trailing `true` runs the R3 paging contract inside the
+            // fixture too — asserted below, so the contract check itself
+            // has coverage rather than existing only when an operator
+            // passes the flag.
+            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true).unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);
+        // Turn granularity must actually be exercised, not silently empty:
+        // a fixture whose gold turns fail to locate would leave every turn
+        // row at zero out of zero and pass any assertion phrased on the
+        // ratio alone.
+        assert_eq!(gold.unlocatable_turns, 0, "gold turn must be locatable");
+        assert_eq!(gold.turn_queries, 1, "turn row must have a denominator");
+        assert_eq!(
+            gold.turn_all, 1.0,
+            "the gold turn itself must be in the slots"
+        );
+        assert_eq!(gold.session_all, 1.0);
+        // The paging contract on the fixture: pages tile, deliver the gold,
+        // and the pinned repeat cannot drift.
+        assert_eq!(gold.page_queries, 1, "the contract check must have run");
+        assert_eq!(
+            gold.page_mismatches, 0,
+            "4x10 pinned pages must tile one call of 40"
+        );
+        assert_eq!(gold.page_all, 1.0, "the pages must deliver the gold turn");
+    }
+
+    #[test]
+    fn a_shared_image_is_ingested_not_dropped() {
+        // 37.9% of LoCoMo's gold-evidence turns carry a caption. A turn that
+        // reaches the vault without it is stored incomplete, and the miss it
+        // then causes is booked against retrieval.
+        let with = serde_json::json!({
+            "speaker": "Ana", "text": "Look where we ended up!",
+            "blip_caption": "a photo of a lighthouse at sunset",
+            "img_url": ["https://example.invalid/x.jpg"],
+            "query": "lighthouse sunset photo"
+        });
+        let line = locomo_turn_text(&with).unwrap();
+        assert!(line.contains("Look where we ended up!"));
+        assert!(
+            line.contains("a photo of a lighthouse at sunset"),
+            "the caption is content and must reach the vault: {line}"
+        );
+        // The dataset's own sourcing scaffolding is not content and must not.
+        assert!(!line.contains("example.invalid"), "img_url is not content");
+        assert!(
+            !line.contains("lighthouse sunset photo"),
+            "query is not content"
+        );
+        // A turn with no image is unchanged, so the corpus only grows where
+        // the dataset actually carries an image.
+        let without = serde_json::json!({"speaker": "Ben", "text": "Nice."});
+        assert_eq!(locomo_turn_text(&without).unwrap(), "Ben said, \"Nice.\"");
+        // No text at all is still not a turn.
+        assert!(locomo_turn_text(&serde_json::json!({"speaker": "Ben"})).is_none());
+    }
+
+    #[test]
+    fn spans_merge_and_contain() {
+        assert_eq!(
+            merge_spans(vec![(0, 5), (3, 9), (20, 25)]),
+            vec![(0, 9), (20, 25)]
+        );
+        // A turn split across a chunk boundary is covered by the union of the
+        // two chunks either side, and by neither of them alone — the whole
+        // reason coverage is tested against merged intervals.
+        let left = (100usize, 200usize);
+        let right = (190usize, 300usize);
+        let turn = (180usize, 210usize);
+        assert!(!covers(&[left], turn));
+        assert!(!covers(&[right], turn));
+        assert!(covers(&merge_spans(vec![left, right]), turn));
+        // A gap in the union is a real gap.
+        assert!(!covers(&merge_spans(vec![(0, 100), (250, 400)]), turn));
+    }
+
+    #[test]
+    fn locate_chunk_walks_overlapping_windows() {
+        let body = "alpha beta gamma delta epsilon";
+        let mut cur = 0usize;
+        assert_eq!(locate_chunk(body, "alpha beta", &mut cur), vec![(0, 10)]);
+        // Windows overlap, so the next chunk starts *before* the previous one
+        // ended; the cursor must not have skipped past it.
+        assert_eq!(locate_chunk(body, "beta gamma", &mut cur), vec![(6, 16)]);
+        // The trailing-runt merge joins two non-adjacent slices with "\n\n".
+        let mut cur = 0usize;
+        let spans = locate_chunk(body, "alpha\n\nepsilon", &mut cur);
+        assert_eq!(spans, vec![(0, 5), (23, 30)]);
+    }
+
+    #[test]
+    fn cap_per_document_caps_then_refills() {
+        let mk = |room: &str, id: &str| SearchHit {
+            drawer: Drawer::new("w", room, format!("body of {id}"), None, 0, "t"),
+            score: 0.0,
+            semantic: 0.0,
+            lexical: 0.0,
+            lexical_exact: 0.0,
+            lexical_morph: 0.0,
+        };
+        let hits = vec![mk("s1", "a"), mk("s1", "b"), mk("s2", "c"), mk("s1", "d")];
+        // Two documents, four slots asked for: the cap takes one of each, then
+        // hands the remaining slots back in score order rather than returning
+        // fewer memories than asked.
+        assert_eq!(cap_per_document(&hits, 4, 1), vec![0, 1, 2, 3]);
+        // When the slots are scarce the cap binds: s1's second chunk is
+        // displaced by s2's first — the displacement gap 2 proposes, and the
+        // one the LoCoMo run measures the cost of.
+        assert_eq!(cap_per_document(&hits, 2, 1), vec![0, 2]);
+        // A cap of 2 lets s1 keep its second chunk.
+        assert_eq!(cap_per_document(&hits, 2, 2), vec![0, 1]);
     }
 
     #[test]

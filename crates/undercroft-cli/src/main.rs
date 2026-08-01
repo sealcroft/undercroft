@@ -124,6 +124,10 @@ enum Command {
         /// Max results
         #[arg(short = 'n', long, default_value_t = 5)]
         limit: usize,
+        /// Rank to continue from: ranks [offset, offset+limit) of the same
+        /// ranking a single deeper call would produce
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
         /// Retrieval backend: local (scan), or a remote vector index
         /// (qdrant | chroma | pgvector) used as an untrusted accelerator —
         /// results are always re-verified and re-ranked locally
@@ -637,8 +641,18 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
                  (cargo build -p undercroft-cli --features ort)"
             );
         }
+        // A model served over HTTP — Ollama, llama.cpp server, LM Studio,
+        // vLLM, text-embeddings-inference. No feature gate: the client is
+        // `ureq`, which the LLM crate already links for `refine`.
+        Ok("http") => {
+            let embedder = undercroft_llm::HttpEmbedder::from_env()
+                .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
+            PalaceStore::open_with_embedder(v, Box::new(embedder))?
+        }
         Ok("hash") | Ok("") | Err(_) => PalaceStore::open(v)?,
-        Ok(other) => bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx, ort)"),
+        Ok(other) => {
+            bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, http, onnx, ort)")
+        }
     };
     attach_reranker(&mut store)?;
     attach_retrieval(&mut store)?;
@@ -1033,10 +1047,11 @@ fn main() -> Result<()> {
                 );
                 println!("  tunnels:             {}", report.tunnels);
                 println!(
-                    "  derived artifacts:   {} token, {} pq (+{} pages), {} fde, {} meta",
+                    "  derived artifacts:   {} token, {} pq (+{} pages, +{} wing rows), {} fde, {} meta",
                     report.token_matrices,
                     report.pq_rows,
                     report.pq_pages,
+                    report.wing_pq_rows,
                     report.fde_rows,
                     report.meta_artifacts
                 );
@@ -1071,8 +1086,14 @@ fn main() -> Result<()> {
             if normalized.is_empty() {
                 bail!("nothing to remember: content is empty after normalization");
             }
-            let count_before = store.count()?;
-            let drawer = Drawer::new(wing, room, normalized, None, count_before as u32, "cli")
+            // A unique append slot, never `count()`. `COUNT(*)` goes *down*
+            // after a delete, so the next save is handed an index still in
+            // use, the derived id collides, and `ON CONFLICT(id) DO UPDATE`
+            // overwrites the unrelated drawer holding it — a record destroyed
+            // by writing a different one. The `/v1` and MCP save paths already
+            // use this; the CLI was the last one that did not.
+            let idx = store.next_append_index()? as u32;
+            let drawer = Drawer::new(wing, room, normalized, None, idx, "cli")
                 .with_content_date(content_date.clone());
             store.upsert(&drawer)?;
             println!(
@@ -1136,6 +1157,7 @@ fn main() -> Result<()> {
             wing,
             room,
             limit,
+            offset,
             backend,
         } => {
             let store = open_store(&cli, vault)?;
@@ -1144,7 +1166,8 @@ fn main() -> Result<()> {
                 wing: wing.clone(),
                 room: room.clone(),
                 limit: *limit,
-                room_cap: None,
+                offset: *offset,
+                ..Default::default()
             };
             let hits = if backend == "local" {
                 store.search(query, &opts)?
@@ -1158,7 +1181,9 @@ fn main() -> Result<()> {
             for (i, hit) in hits.iter().enumerate() {
                 println!(
                     "{}. [{:.3}] {}/{} — {} ({})",
-                    i + 1,
+                    // Absolute rank: on a page past the first, "1." would
+                    // claim a rank the hit does not hold.
+                    offset + i + 1,
                     hit.score,
                     hit.drawer.meta.wing,
                     hit.drawer.meta.room,
@@ -1761,6 +1786,19 @@ fn main() -> Result<()> {
             );
             println!("writes:  {}", st.writes);
             println!("db size: {} bytes", st.db_bytes);
+            // Trained index artifacts, but only the ones that exist: a
+            // generation of 0 means this vault never trained that codebook,
+            // and listing five zeroes on every default vault would bury the
+            // one line that matters — a generation that moved.
+            let trained: Vec<String> = st
+                .codebooks
+                .iter()
+                .filter(|(_, gen)| *gen > 0)
+                .map(|(a, gen)| format!("{a} gen {gen}"))
+                .collect();
+            if !trained.is_empty() {
+                println!("codebooks: {}", trained.join(", "));
+            }
             println!("wings:");
             for (w, n) in st.wings {
                 println!("  {w:<24} {n}");

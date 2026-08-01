@@ -25,6 +25,7 @@ mod rotate;
 
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, Triple};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
+pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use rotate::RotationReport;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -117,10 +118,83 @@ const KNOWN_EMBEDDER_UPGRADES: &[(&str, &str)] = &[
 // This is a judgement that a whole-fleet re-embed is not worth one script's
 // cosine leg, not a claim that nothing changed. If Hebrew corpora become a
 // real workload, the fix is a v4 row above and it costs 45.9 µs/drawer.
-/// Default number of fusion-ranked candidates a reranker re-scores per search
-/// (override with `UNDERCROFT_RERANK_TOP_N`). One cross-encoder forward pass
-/// runs per candidate, so this bounds the added latency.
+/// Default number of fusion-ranked candidates a **cross-encoder** re-scores
+/// per search (override with `UNDERCROFT_RERANK_TOP_N`). One transformer
+/// forward pass runs per candidate, so this is a genuine latency cap: the
+/// depth you can afford *is* the depth you rescore.
 const DEFAULT_RERANK_TOP_N: usize = 50;
+
+/// Default depth for **late-interaction** rescoring (override with
+/// `UNDERCROFT_LATE_TOP_N`).
+///
+/// A separate budget from the cross-encoder's, because it buys a different
+/// thing. MaxSim over a stored matrix is arithmetic against precomputed
+/// vectors — no forward pass per candidate, one query encode for the whole
+/// search — so depth costs microseconds a row rather than a model call. While
+/// both stages shared `UNDERCROFT_RERANK_TOP_N`, late interaction inherited a
+/// latency cap it does not spend, and that was the binding constraint on
+/// delivery.
+///
+/// **What 200 rests on, and what it does not.** Swept on the merged LoCoMo
+/// corpus (495 questions) with the token codebook disabled — MaxSim then runs
+/// exact int8, nothing is trained, and depth is the only variable, which is
+/// the only configuration here in which two runs are comparable:
+///
+/// | depth | all-gold | ms/q |
+/// |---|---|---|
+/// | 50 | 77.7% | 342 |
+/// | 100 | 78.7% | 352 |
+/// | 200 | 79.8% | 374 |
+/// | 400 | 79.6% | 417 |
+///
+/// Read that carefully, because it says less than it appears to:
+///
+/// * **The +2.1pp at 200 belongs to that configuration, not to a default
+///   deployment.** Any vault past `TOK_PQ_MIN` (256 matrices) runs v2 PQ-ADC
+///   instead, and there the same 50 → 200 step measured **+1.7pp in one run
+///   and +0.0pp in another**. The default-configuration value of this change
+///   is *unmeasured*: bracketed by those two, both inside the per-vault draw's
+///   own spread.
+/// * **200 is not a measured peak.** 79.8 against 79.6 at 400 is one question
+///   out of 495, from one run per depth, and the two v2 sweeps put 400
+///   *above* 200 (80.6 vs 80.4; 80.2 vs 78.9). What the evidence supports is
+///   that depth beyond 50 helps and that 100–400 are not separable here. 200
+///   is chosen as enough to take the measured gain without paying unbounded
+///   rescore on a large candidate set — a judgement, not a measurement.
+/// * **Cost depends on packing**, and the cheap case is the shipped one: at v2
+///   the same sweep moved 334 → 337 ms/q, because a coded row costs `m` table
+///   lookups rather than a full-dimension dot product. The 342 → 374 (+9%) and
+///   → 417 (+22% over 50, +11.5% over 200) figures above are the exact-int8
+///   path.
+///
+/// **This changes published ColBERT figures.** `late_rescore` runs on the
+/// un-truncated candidate list, so on a sealed vault with no prefilter the
+/// depth applies to the whole corpus: a 127-drawer LoCoMo conversation goes
+/// from `min(127, 50)` to `min(127, 200)` — every drawer rescored instead of
+/// 50. Numbers recorded before this constant existed describe depth 50.
+const DEFAULT_LATE_TOP_N: usize = 200;
+
+// The five trained index artifacts. Each name is used for BOTH its generation
+// counter (`PalaceStore::codebook_generation_bump`) and its keyed
+// training-sample label (`pqidx::stratified_keyed`) — one string, two roles, so they
+// cannot drift apart: every call site passes the const, never a literal, so
+// changing a value here moves the counter key and the draw together (a literal
+// at one of the five sites would silently split them, which is how the first
+// version of this shipped). They are the only
+// cross-drawer objects in the engine besides BM25's IDF, so both the draw that
+// shapes them and the event that replaces them are tracked by name.
+pub(crate) const CODEBOOK_PQ: &str = "pq-codebook";
+pub(crate) const CODEBOOK_PQ_IVF: &str = "pq-ivf";
+pub(crate) const CODEBOOK_FDE: &str = "fde-codebook";
+pub(crate) const CODEBOOK_FDE_IVF: &str = "fde-ivf";
+pub(crate) const CODEBOOK_TOK: &str = "tok-codebook";
+pub(crate) const CODEBOOK_ARTIFACTS: [&str; 5] = [
+    CODEBOOK_PQ,
+    CODEBOOK_PQ_IVF,
+    CODEBOOK_FDE,
+    CODEBOOK_FDE_IVF,
+    CODEBOOK_TOK,
+];
 
 /// Append an audit entry **and** advance the committed chain head, inside
 /// the caller's open transaction (a [`rusqlite::Transaction`] derefs to
@@ -173,6 +247,51 @@ pub(crate) fn rerank_top_n() -> usize {
         .and_then(|v| v.parse().ok())
         .filter(|&n| n > 0)
         .unwrap_or(DEFAULT_RERANK_TOP_N)
+}
+
+/// Depth of the late-interaction rescore — see [`DEFAULT_LATE_TOP_N`].
+///
+/// Falls back to `UNDERCROFT_RERANK_TOP_N` when only that is set, so an
+/// operator who pinned the old single knob keeps the behaviour they pinned;
+/// `UNDERCROFT_LATE_TOP_N` wins when both are set.
+///
+/// **The fallback covers unparseable values too**, and that is not
+/// pedantry: `UNDERCROFT_RERANK_TOP_N=0` (or `abc`, or empty) has always meant
+/// "50" to the reranker, because the parse fails and the default applies. If
+/// only presence-and-valid were honoured here, that same setting would newly
+/// mean 200 — a silent 4× increase in rescore depth for a deployment that
+/// changed nothing. So a *present* `UNDERCROFT_RERANK_TOP_N` pins this stage to
+/// whatever the reranker resolves it to, valid or not.
+pub(crate) fn late_top_n() -> usize {
+    resolve_late_top_n(
+        std::env::var("UNDERCROFT_LATE_TOP_N").ok().as_deref(),
+        std::env::var("UNDERCROFT_RERANK_TOP_N").ok().as_deref(),
+    )
+}
+
+/// The resolution rule, as a pure function of the two variables' values.
+///
+/// Pure so it can be tested exhaustively without mutating the environment:
+/// `std::env::set_var` is process-global and the suite runs tests in parallel,
+/// so an env-driven test of this is a flake generator aimed at every other
+/// test that happens to run beside it.
+fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
+    if let Some(n) = late.and_then(|v| v.parse().ok()).filter(|&n| n > 0) {
+        return n;
+    }
+    match rerank {
+        // Present at all ⇒ this stage tracks the old knob, *including* values
+        // that do not parse. `UNDERCROFT_RERANK_TOP_N=0` has always resolved to
+        // 50 for the reranker; honouring only valid values here would newly
+        // resolve it to 200 and quadruple rescore depth for a deployment that
+        // changed nothing.
+        Some(v) => v
+            .parse()
+            .ok()
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_RERANK_TOP_N),
+        None => DEFAULT_LATE_TOP_N,
+    }
 }
 
 /// How the semantic and lexical signals are combined at rank time.
@@ -256,40 +375,46 @@ pub enum StoreError {
 /// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
 type SearchRow = (String, String, Vec<u8>, Vec<u8>, Vec<u8>);
 
-/// Take `limit` hits from `hits` (already best-first) allowing at most `cap`
-/// per room, then refill any slots the cap left empty in score order.
+/// Take the hits at selection ranks `[offset, offset + limit)` from `hits`
+/// (already best-first), allowing at most `cap` per room before the cap's
+/// leftovers refill in score order.
+///
+/// The selection order is computed over the *whole* list and is independent
+/// of `offset` and `limit`: every hit that fits under the cap, in score
+/// order, then every hit the cap skipped, in score order. Pages slice that
+/// one stream. This is what lets page 2 continue page 1 — a refill that
+/// engaged at one requested depth and not at another would otherwise
+/// duplicate a hit across a page boundary. At `offset` 0 the first `limit`
+/// of the stream is exactly the set (and order) the depth-bounded version
+/// of this function always chose, so single-page callers see no change.
 ///
 /// Order within the result stays score-descending, so a caller that ignores
 /// rooms sees nothing surprising. Single pass plus a small counter map: no
 /// re-scoring, no extra decryption, no allocation per candidate.
-fn diversify_by_room(hits: Vec<SearchHit>, limit: usize, cap: usize) -> Vec<SearchHit> {
+fn diversify_by_room(
+    hits: Vec<SearchHit>,
+    offset: usize,
+    limit: usize,
+    cap: usize,
+) -> Vec<SearchHit> {
     let mut per_room: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let mut taken = vec![false; hits.len()];
-    let mut chosen = 0usize;
+    let mut stream: Vec<usize> = Vec::with_capacity(hits.len());
+    // Refill candidates: the cap is a spreading preference, not a quota to
+    // enforce at the cost of returning fewer memories than asked for.
+    let mut overflow: Vec<usize> = Vec::new();
     for (i, h) in hits.iter().enumerate() {
-        if chosen == limit {
-            break;
-        }
         let n = per_room.entry(h.drawer.meta.room.as_str()).or_insert(0);
         if *n < cap {
             *n += 1;
-            taken[i] = true;
-            chosen += 1;
+            stream.push(i);
+        } else {
+            overflow.push(i);
         }
     }
-    // Refill: the cap is a spreading preference, not a quota to enforce at
-    // the cost of returning fewer memories than asked for.
-    if chosen < limit {
-        for (i, slot) in taken.iter_mut().enumerate() {
-            if chosen == limit {
-                break;
-            }
-            if !*slot {
-                *slot = true;
-                chosen += 1;
-            }
-            let _ = i;
-        }
+    stream.extend(overflow);
+    let mut taken = vec![false; hits.len()];
+    for &i in stream.iter().skip(offset).take(limit) {
+        taken[i] = true;
     }
     hits.into_iter()
         .zip(taken)
@@ -371,6 +496,26 @@ pub struct SearchOptions {
     /// score order, so a genuinely single-room question still gets its
     /// evidence and recall is never traded away.
     pub room_cap: Option<usize>,
+    /// Rank-space page start: the returned hits are ranks
+    /// `[offset, offset + limit)` of the same fully-ranked list one deeper
+    /// call would produce. `0` (the default) is the first page — exactly the
+    /// behaviour that shipped before this field existed.
+    ///
+    /// An offset rather than a keyset cursor, deliberately: the stages after
+    /// fusion (cross-encoder rescore, MaxSim, room diversification) re-order
+    /// candidates, so "everything below the last score I saw" names no stable
+    /// position in this pipeline, while a rank does. The boundary is exact
+    /// when the palace has not changed between calls and [`Self::ranked_at`]
+    /// pins the clock; a write in between may shift ranks, and should — new
+    /// evidence outranks a stale page boundary.
+    pub offset: usize,
+    /// The instant the ranking is computed *as of*: recency decay is measured
+    /// against this instead of the host clock when set. A paging caller
+    /// repeats the first page's instant on every later page, so all pages
+    /// slice one identical ranking rather than one that drifts with the
+    /// seconds between calls. Declared, never inferred — `None` means the
+    /// host clock at call time, the behaviour that always shipped.
+    pub ranked_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -456,11 +601,34 @@ pub struct PalaceStore {
     /// Live drawer count as of the last verification, maintained on writes —
     /// drives the IVF thresholds without per-search `COUNT(*)`.
     pq_live: std::cell::Cell<i64>,
+    /// Per-wing PQ state, verified lazily per wing per session: the wing is
+    /// the retrieval unit a scoped query pays for, so each wing past
+    /// `wing_pq_min` carries its own codebook, partitions and code cache.
+    /// `None` in the map = checked this session and below the floor (or
+    /// unquantizable) — the scoped query full-scans its wing instead.
+    wing_pq: std::cell::RefCell<std::collections::HashMap<String, Option<pqidx::WingPq>>>,
+    /// Wing size at which a wing earns its own PQ index (`usize::MAX` ⇒
+    /// tier off — scoped queries intersect global candidates, the pre-tier
+    /// behavior). See `pqidx::WING_PQ_MIN_DEFAULT`.
+    wing_pq_min: usize,
+    /// Corpus-scaled stage-1 candidate pool: the semantic prefilters fetch
+    /// at least `live_rows / pool_div` ADC candidates (on top of the 256
+    /// floor and the depth·32 term), and `refine_by_exact_cosine` cuts the
+    /// pool back to hydration size with the true vectors. `usize::MAX` ⇒
+    /// scaling off, the fixed floor only — the measured recall-leak defect
+    /// (R@5 100 → 96.8 from 131k to 1M at a fixed 256 pool).
+    /// `UNDERCROFT_POOL_DIV` (number, `off`) / [`Self::set_pool_div`].
+    pool_div: usize,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
     ivf_min: usize,
     /// Inverted lists probed per query (`None` ⇒ `max(8, nlist/4)`).
     ivf_nprobe: Option<usize>,
+    /// Depth of the late-interaction rescore, resolved at open from
+    /// `UNDERCROFT_LATE_TOP_N` / `UNDERCROFT_RERANK_TOP_N`
+    /// ([`DEFAULT_LATE_TOP_N`]). Distinct from the cross-encoder's cap:
+    /// see [`PalaceStore::set_late_top_n`].
+    late_top_n: usize,
     /// Sealed vaults: corpus size at which PQ codes keep to one AEAD page
     /// per IVF list instead of per-row seals (`usize::MAX` ⇒ never — the
     /// default; the page tier is opt-in until the RAM trigger fires).
@@ -714,10 +882,141 @@ impl PalaceStore {
         self.conn.execute_batch(
             "DROP TABLE IF EXISTS drawer_pq;
              DROP TABLE IF EXISTS pq_page;
+             DROP TABLE IF EXISTS drawer_pq_wing;
              DROP TABLE IF EXISTS pq_meta;",
         )?;
         self.drop_derived_caches();
         Ok(())
+    }
+
+    /// How many times `artifact`'s codebook (or centroid set) has been trained
+    /// in this vault. Zero means never.
+    pub(crate) fn codebook_generation(&self, artifact: &str) -> u64 {
+        self.conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![format!("codebook_generation/{artifact}")],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Record that `artifact` was just (re)trained; returns the new generation.
+    ///
+    /// **Why this exists.** Nothing in a row's bytes says which generation of a
+    /// trained artifact produced them, so "the index was rebuilt from the
+    /// artifact it already had" and "the artifact was replaced and every row
+    /// re-derived against the new one" look identical from outside. That is the
+    /// same class of invisible change to a vector space that
+    /// `KNOWN_EMBEDDER_UPGRADES` exists to make explicit, one level down, and it
+    /// matters because these artifacts are the only cross-drawer objects here
+    /// besides BM25's IDF: replacing one changes what happens to *unrelated*
+    /// drawers.
+    ///
+    /// **What a step means differs by artifact, and the difference is not
+    /// cosmetic:**
+    /// - `pq-codebook`, `fde-codebook`, `tok-codebook` — **re-quantization**.
+    ///   Every code byte is recomputed; the same vector now maps to a different
+    ///   centroid, so approximate distances move.
+    /// - `pq-ivf`, `fde-ivf` — **re-partitioning**. Code bytes are
+    ///   byte-identical before and after; only the list assignment changes, so
+    ///   what moves is which candidates a probe *offers*. Availability, not
+    ///   score — the same split the coupling rule draws.
+    ///
+    /// It lives in `meta` rather than in the artifact's own table on purpose:
+    /// a generation is history, and `invalidate_embedding_space` drops
+    /// `pq_meta` wholesale — which is precisely the event most worth counting.
+    /// Being unsealed is deliberate too: a count of training events is
+    /// content-independent (safe to log), and `meta` already holds the embedder
+    /// identity in clear. **It is not integrity evidence**: the row is outside
+    /// HMAC coverage, so anyone who can write the database file can reset or
+    /// forge it. It distinguishes honest ambiguity, not tampering.
+    ///
+    /// **Two known gaps, stated rather than implied.** Export/import is
+    /// per-drawer and copies no `meta` rows, so a migrated vault reports 0 —
+    /// which reads as "never trained" rather than "unknown". And a bump lost to
+    /// a busy database is warned about, not retried: advisory like the encode
+    /// paths that call it, because it must never fail a training pass and must
+    /// never open a transaction.
+    pub(crate) fn codebook_generation_bump(&self, artifact: &str) -> u64 {
+        let next = self.codebook_generation(artifact) + 1;
+        if let Err(e) = self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![format!("codebook_generation/{artifact}"), next.to_string()],
+        ) {
+            // Silence here would be the worst outcome: the artifact IS new and
+            // the counter would keep claiming the old generation, which is
+            // exactly the invisibility this counter exists to remove.
+            undercroft_obs::diag_warn!(
+                "codebook {artifact} was retrained but its generation counter \
+                 could not be advanced ({e}); the reported generation is now \
+                 behind the artifact on disk"
+            );
+        }
+        undercroft_obs::set_gauge(
+            &Self::codebook_gauge_name(artifact),
+            self.vault.id(),
+            next as f64,
+        );
+        next
+    }
+
+    /// The telemetry gauge name for `artifact`. A gauge set under a name that
+    /// `undercroft_obs::GAUGE_NAMES` does not list is silently dropped, so the
+    /// mapping is one function and
+    /// `every_codebook_gauge_name_is_registered_in_obs` pins it against that
+    /// list — the first version of this call emitted five names none of which
+    /// were registered, and looked live at the call site.
+    pub(crate) fn codebook_gauge_name(artifact: &str) -> String {
+        format!("codebook_generation_{}", artifact.replace('-', "_"))
+    }
+
+    /// Every tracked artifact's generation, in a stable order — the visible
+    /// surface for [`Self::codebook_generation_bump`].
+    pub fn codebook_generations(&self) -> Vec<(String, u64)> {
+        CODEBOOK_ARTIFACTS
+            .iter()
+            .map(|a| ((*a).to_string(), self.codebook_generation(a)))
+            .chain({
+                // Per-wing artifacts are dynamic keys (`<wing>/pq-codebook`,
+                // `<wing>/pq-ivf`) — a fixed list cannot enumerate them, and
+                // a trained codebook that no surface reports is exactly the
+                // invisible-change class the counters exist to prevent.
+                // Sorted so the surface is stable across calls. These reach
+                // stats and `/v1/…/stats`; the per-artifact *gauges* stay the
+                // static five — `set_gauge` drops unregistered names by
+                // design, because per-wing gauge cardinality is unbounded.
+                let mut dynamic: Vec<(String, u64)> = self
+                    .conn
+                    .prepare(
+                        "SELECT key, value FROM meta \
+                         WHERE key LIKE 'codebook_generation/%/%' ORDER BY key",
+                    )
+                    .and_then(|mut stmt| {
+                        stmt.query_map([], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let artifact = k
+                            .strip_prefix("codebook_generation/")
+                            .unwrap_or(&k)
+                            .to_string();
+                        (artifact, v.parse().unwrap_or(0))
+                    })
+                    .collect();
+                dynamic.sort();
+                dynamic
+            })
+            .collect()
     }
 
     fn record_embedder_identity(&self) -> Result<(), StoreError> {
@@ -845,6 +1144,17 @@ impl PalaceStore {
             },
             pq_verified: std::cell::Cell::new(false),
             pq_live: std::cell::Cell::new(0),
+            wing_pq: std::cell::RefCell::new(std::collections::HashMap::new()),
+            wing_pq_min: match std::env::var("UNDERCROFT_WING_PQ_MIN") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(pqidx::WING_PQ_MIN_DEFAULT),
+                Err(_) => pqidx::WING_PQ_MIN_DEFAULT,
+            },
+            pool_div: match std::env::var("UNDERCROFT_POOL_DIV") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().unwrap_or(pqidx::POOL_DIV_DEFAULT),
+                Err(_) => pqidx::POOL_DIV_DEFAULT,
+            },
             ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
                 Ok(v) => v.parse().unwrap_or(pqidx::IVF_MIN_DEFAULT),
@@ -853,6 +1163,9 @@ impl PalaceStore {
             ivf_nprobe: std::env::var("UNDERCROFT_IVF_NPROBE")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            // Resolved once at open like every other tunable, rather than read
+            // from the environment on each search.
+            late_top_n: late_top_n(),
             pq_page_min: match std::env::var("UNDERCROFT_PQ_PAGE_MIN") {
                 Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
                 Ok(v) => v.parse().unwrap_or(usize::MAX),
@@ -1828,28 +2141,46 @@ impl PalaceStore {
         let _span = undercroft_obs::scope("search", self.vault.id());
         let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
+        // Everything below ranks to `depth` and slices the page off at the
+        // end: a page is defined as ranks `[offset, offset + limit)` of the
+        // list one deeper call would produce, so the ranking must be built
+        // to the page's far edge, not to its size.
+        let depth = opts.offset.saturating_add(limit);
         // Declared by the caller, never read off the text: German and English
         // share a script, so nothing in the bytes says which endings are legal.
         let lang = opts.morph_lang;
         let qterms: Vec<String> = tokenize(query);
 
+        let mut refine_semantic = false;
         let candidates = if self.fde_enabled {
             // MUVERA FDE candidates: token-aware single-vector ranking over
             // the load-once FDE cache (falls back to the fusion scan when no
             // late encoder / no FDE rows exist). Over-fetch generously so
             // BM25 fusion still has material.
-            self.fde_candidates(query, std::cmp::max(256, limit * 32))?
+            self.fde_candidates(query, std::cmp::max(256, depth.saturating_mul(32)))?
         } else if self.pq_enabled {
             // On-disk PQ prefilter: ADC over the RAM code cache, bounded at
             // any corpus size. Over-fetch generously so BM25 fusion still
-            // has material.
-            self.pq_candidates(&qvec, std::cmp::max(256, limit * 32))?
+            // has material. A wing-scoped query probes the wing's own index
+            // when it has one: corpus-wide candidates intersected with a
+            // wing can starve it entirely, and their cost is corpus-sized
+            // when the question was wing-sized. `None` from the wing tier
+            // means "full-scan instead" — the `WHERE wing` clause below
+            // bounds that scan by the wing, which is the floor working as
+            // designed, not a missing index.
+            refine_semantic = true;
+            match &opts.wing {
+                Some(w) if self.wing_pq_min != usize::MAX => {
+                    self.wing_pq_candidates(w, &qvec, std::cmp::max(256, depth.saturating_mul(32)))?
+                }
+                _ => self.pq_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?,
+            }
         } else if self.hnsw_enabled {
             // Semantic ANN prefilter: cut to the vector top-K before verify +
             // fusion. Over-fetch generously so BM25 fusion still has material.
             #[cfg(feature = "hnsw")]
             {
-                self.hnsw_candidates(&qvec, std::cmp::max(256, limit * 32))?
+                self.hnsw_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?
             }
             #[cfg(not(feature = "hnsw"))]
             {
@@ -1857,16 +2188,40 @@ impl PalaceStore {
             }
         } else {
             match self.fts_min {
-                Some(min)
-                    if self.fts
-                        && !qterms.is_empty()
-                        && !needs_full_scan(&qterms)
-                        && self.count()? >= min as u64 =>
-                {
-                    self.fts_candidates(&qterms, std::cmp::max(256, limit * 32))
+                Some(min) if self.fts && !qterms.is_empty() && !needs_full_scan(&qterms) => {
+                    let n = self.count()?;
+                    if n >= min as u64 {
+                        // Same corpus-scaled pool as the PQ path: the FTS
+                        // prefilter shares the fixed-k recall-leak shape,
+                        // so it gets the same cure from the same count.
+                        let k = std::cmp::max(256, depth.saturating_mul(32))
+                            .max(n as usize / self.pool_div.max(1));
+                        self.fts_candidates(&qterms, k)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             }
+        };
+        // Second stage on the semantic pools (PQ, per-wing PQ): the
+        // corpus-scaled stage-1 pool is cut by exact cosine over the
+        // candidates' embeddings alone — but only down to `stage1/8`
+        // (= live/512, the hydration size the raw sweep proved at 100%),
+        // NEVER to the fixed floor. Measured the hard way: cutting to 256
+        // regressed 1M from 100.0% to 98.9%, because a sealed vault has no
+        // lexical prefilter — hydration is the only door through which
+        // BM25 evidence can reach fusion, and a pure-cosine cut below the
+        // proven hydration pool slams it on lexical-carried golds. FDE
+        // keeps its token-aware ordering (a single-vector cut would fight
+        // MaxSim) and FTS keeps every lexical candidate.
+        let hydrate_k = std::cmp::max(256, depth.saturating_mul(32));
+        let candidates = match candidates {
+            Some(seqs) if refine_semantic && seqs.len() > hydrate_k => {
+                let keep = hydrate_k.max(seqs.len() / 8);
+                Some(self.refine_by_exact_cosine(&qvec, seqs, keep)?)
+            }
+            other => other,
         };
         let obs_prefiltered = candidates.is_some();
 
@@ -1899,7 +2254,10 @@ impl PalaceStore {
         // Pass 1: verify + decrypt every candidate, and gather the signals
         // that don't need corpus statistics (cosine, recency). Content
         // tokens are kept only when a BM25-based fusion needs them.
-        let now = OffsetDateTime::now_utc();
+        // Recency decays against the caller's declared instant when one was
+        // given: pages of one iteration must rank against one clock, not
+        // against however many seconds separated the calls.
+        let now = opts.ranked_at.unwrap_or_else(OffsetDateTime::now_utc);
         let mut cands: Vec<Candidate> = Vec::with_capacity(rows.len());
         for (id, meta_json, content_rest, emb_rest, tag) in rows {
             self.vault
@@ -2056,11 +2414,21 @@ impl PalaceStore {
             // matrices, one query-encode forward total (no-op when unset).
             self.late_rescore(query, &mut hits);
         }
+        // The page cut. With a room cap the slice must come off the cap's own
+        // depth-independent selection stream (see `diversify_by_room`);
+        // without one it is a plain slice of score order. Either way the
+        // result is ranks `[offset, offset + limit)` of the list a single
+        // call with limit `depth` would return.
         match opts.room_cap {
-            Some(cap) if cap > 0 && hits.len() > limit => {
-                hits = diversify_by_room(std::mem::take(&mut hits), limit, cap)
+            Some(cap) if cap > 0 => {
+                hits = diversify_by_room(std::mem::take(&mut hits), opts.offset, limit, cap)
             }
-            _ => hits.truncate(limit),
+            _ => {
+                hits.truncate(depth);
+                if opts.offset > 0 {
+                    hits.drain(..opts.offset.min(hits.len()));
+                }
+            }
         }
 
         let fusion_label = match self.fusion {
@@ -2082,6 +2450,56 @@ impl PalaceStore {
             self.is_sealed(),
         );
         Ok(hits)
+    }
+
+    /// Cut a semantic candidate pool to `keep` seqs by **exact** cosine
+    /// over only the candidates' sealed embeddings — the second stage that
+    /// makes a wide first-stage pool affordable.
+    ///
+    /// The economics, measured: full hydration (HMAC verify + content
+    /// decrypt + tokenize) costs ~0.09 ms per candidate, so a corpus-scaled
+    /// pool priced in hydration reintroduces a linear per-query term. An
+    /// embedding row is 430 sealed bytes and decrypts in microseconds, so
+    /// cutting the wide pool by exact cosine first holds hydration at
+    /// `keep` while recall follows the wide pool — and the cut is *better*
+    /// than the quantized ranking that built the pool, because it uses the
+    /// true vectors. Lexical (FTS) pools are never cut this way: a drawer
+    /// that said the word must reach BM25 fusion regardless of its cosine.
+    ///
+    /// Rows that fail to open are skipped, not fatal — they already fail
+    /// every hydrated read; losing their candidate slot is the same trade
+    /// the code caches make.
+    fn refine_by_exact_cosine(
+        &self,
+        qvec: &[f32],
+        seqs: Vec<i64>,
+        keep: usize,
+    ) -> Result<Vec<i64>, StoreError> {
+        if seqs.len() <= keep {
+            return Ok(seqs);
+        }
+        let list: Vec<String> = seqs.iter().map(i64::to_string).collect();
+        let sql = format!(
+            "SELECT seq, id, embedding FROM drawers WHERE seq IN ({})",
+            list.join(",")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows: Vec<(i64, String, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut scored: Vec<(f32, i64)> = Vec::with_capacity(rows.len());
+        for (seq, id, rest) in rows {
+            if let Ok(emb) = self.vault.embedding_from_rest(&id, &rest) {
+                scored.push((cosine(qvec, &emb), seq));
+            }
+        }
+        if scored.len() > keep {
+            scored.select_nth_unstable_by(keep - 1, |a, b| {
+                b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scored.truncate(keep);
+        }
+        Ok(scored.into_iter().map(|(_, s)| s).collect())
     }
 
     /// BM25 top-`k` candidate seqs from the FTS5 index. `None` means "no
@@ -2129,12 +2547,13 @@ impl PalaceStore {
         drawer: undercroft_core::Drawer,
         query: &str,
         qvec: &[f32],
+        now: OffsetDateTime,
     ) -> SearchHit {
         let qterms: Vec<String> = tokenize(query);
         let emb = self.embedder.embed(&drawer.content);
         let semantic = ((cosine(qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
         let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
-        let recency = recency_boost(&drawer.meta.filed_at, OffsetDateTime::now_utc());
+        let recency = recency_boost(&drawer.meta.filed_at, now);
         let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
         SearchHit {
             drawer,
@@ -4175,7 +4594,7 @@ mod tests {
             hit("b", 0.50, 4),
             hit("c", 0.40, 5),
         ];
-        let out = diversify_by_room(hits, 4, 2);
+        let out = diversify_by_room(hits, 0, 4, 2);
         let rooms: Vec<&str> = out.iter().map(|h| h.drawer.meta.room.as_str()).collect();
         assert_eq!(rooms, vec!["a", "a", "b", "c"], "{rooms:?}");
         // Score order is preserved within the result.
@@ -4188,7 +4607,7 @@ mod tests {
         let hits: Vec<SearchHit> = (0..6)
             .map(|i| hit("solo", 0.9 - i as f32 * 0.01, i))
             .collect();
-        let out = diversify_by_room(hits, 4, 2);
+        let out = diversify_by_room(hits, 0, 4, 2);
         assert_eq!(out.len(), 4, "soft cap must refill to the limit");
         assert!(out.iter().all(|h| h.drawer.meta.room == "solo"));
     }
@@ -4202,7 +4621,7 @@ mod tests {
             hit("b", 0.60, 3),
         ];
         // cap 1: a gets one, b gets one, then refill takes a's next best.
-        let out = diversify_by_room(hits, 3, 1);
+        let out = diversify_by_room(hits, 0, 3, 1);
         let ids: Vec<u32> = out.iter().map(|h| h.drawer.meta.chunk_index).collect();
         assert_eq!(ids, vec![0, 1, 3], "{ids:?}");
     }
@@ -4244,6 +4663,212 @@ mod tests {
         assert_eq!(capped.len(), 3, "capped search still fills the limit");
         // The cap can only change WHICH rooms appear, never how many hits.
         assert!(capped.iter().any(|h| h.drawer.meta.room == "quiet"));
+    }
+
+    /// The pagination contract: pages are slices of the one ranking a single
+    /// deeper call would produce — no repeats, no gaps, same order.
+    #[test]
+    fn pages_tile_the_single_call_ranking() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        let fillers = [
+            "zebra migration plan for the auth service",
+            "the zebra printer jammed again on floor two",
+            "zebra crossing incident report from tuesday",
+            "notes on zebra striping in the results table",
+            "zebra herd counts from the field survey",
+            "zebra client library upgrade checklist",
+            "why the zebra cache key needed a version",
+            "zebra dashboard latency regression notes",
+            "zebra release retro action items",
+        ];
+        for (i, f) in fillers.iter().enumerate() {
+            s.upsert(&drawer("w", "r", f, i as u32)).unwrap();
+        }
+        // One clock for every call, as a paging caller would pin it.
+        let at = OffsetDateTime::now_utc();
+        let opts = |offset: usize, limit: usize| SearchOptions {
+            limit,
+            offset,
+            ranked_at: Some(at),
+            ..Default::default()
+        };
+        let all: Vec<String> = s
+            .search("zebra", &opts(0, 9))
+            .unwrap()
+            .into_iter()
+            .map(|h| h.drawer.id)
+            .collect();
+        assert_eq!(all.len(), 9);
+        let mut paged: Vec<String> = Vec::new();
+        for page in 0..3 {
+            paged.extend(
+                s.search("zebra", &opts(page * 3, 3))
+                    .unwrap()
+                    .into_iter()
+                    .map(|h| h.drawer.id),
+            );
+        }
+        assert_eq!(paged, all, "three pages of three must tile the one call");
+    }
+
+    /// With a room cap, the selection order must not depend on how deep the
+    /// caller asked: a refill that engages at one requested depth and not at
+    /// another would duplicate a hit across a page boundary. The pages must
+    /// partition what a single deep call returns.
+    #[test]
+    fn room_cap_pages_never_repeat_and_never_drop() {
+        // Room "a" holds the two best hits; cap 1 defers a's second-best to
+        // the refill. This is exactly the shape where diversifying at each
+        // page's own depth returns hit b twice and never returns a's second.
+        let make = || vec![hit("a", 0.99, 0), hit("a", 0.98, 1), hit("b", 0.60, 2)];
+        let single: Vec<u32> = diversify_by_room(make(), 0, 3, 1)
+            .into_iter()
+            .map(|h| h.drawer.meta.chunk_index)
+            .collect();
+        let mut paged: Vec<u32> = Vec::new();
+        for page in 0..2 {
+            paged.extend(
+                diversify_by_room(make(), page * 2, 2, 1)
+                    .into_iter()
+                    .map(|h| h.drawer.meta.chunk_index),
+            );
+        }
+        let mut single_sorted = single.clone();
+        single_sorted.sort_unstable();
+        let mut paged_sorted = paged.clone();
+        paged_sorted.sort_unstable();
+        assert_eq!(
+            paged_sorted, single_sorted,
+            "pages must partition the deep call: single {single:?}, paged {paged:?}"
+        );
+    }
+
+    #[test]
+    fn an_offset_past_the_end_is_empty_not_an_error() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..3u32 {
+            s.upsert(&drawer("w", "r", "heron notes for the wetland map", i))
+                .unwrap();
+        }
+        let hits = s
+            .search(
+                "heron wetland",
+                &SearchOptions {
+                    limit: 5,
+                    offset: 100,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(hits.is_empty(), "past the end is an exhausted ranking");
+        // And the far edge must not overflow either.
+        let hits = s
+            .search(
+                "heron wetland",
+                &SearchOptions {
+                    limit: usize::MAX,
+                    offset: usize::MAX,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    /// `ranked_at` must actually reach scoring: the same corpus ranked a year
+    /// later has decayed its recency, so the score moves. This is the field
+    /// that lets every page of one iteration rank against one clock.
+    #[test]
+    fn ranked_at_is_the_clock_recency_decays_against() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "osprey nest survey results", 0))
+            .unwrap();
+        let now = OffsetDateTime::now_utc();
+        let score_at = |at: OffsetDateTime| {
+            s.search(
+                "osprey nest",
+                &SearchOptions {
+                    limit: 1,
+                    ranked_at: Some(at),
+                    ..Default::default()
+                },
+            )
+            .unwrap()[0]
+                .score
+        };
+        let fresh = score_at(now);
+        let stale = score_at(now + time::Duration::days(365));
+        // Recency carries 0.10 of the score and a year is >12 half-lives.
+        assert!(
+            fresh - stale > 0.05,
+            "a year of decay must move the score: fresh {fresh}, stale {stale}"
+        );
+    }
+
+    /// The candidate pool must scale with the corpus: a fixed floor is the
+    /// measured recall-leak defect (unscoped R@5 100 → 96.8 from 131k to
+    /// 1M at 256 candidates; restored to 100.0% at live/512 — pqscale).
+    /// Pinned at the mechanism level: with scaling on, the prefilter
+    /// returns live/div candidates; with it off, exactly the old floor —
+    /// so a revert fails the first assertion and cannot pass both.
+    #[test]
+    fn the_candidate_pool_scales_with_the_corpus() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        for i in 0..600u32 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("plankton bloom reading number {i}"),
+                i,
+            ))
+            .unwrap();
+        }
+        s.set_pq(true);
+        let q = s.embedder.embed("plankton bloom");
+        s.set_pool_div(2); // 600/2 = 300 > the 256 floor
+        let scaled = s.pq_candidates(&q, 256).unwrap().expect("index");
+        assert_eq!(
+            scaled.len(),
+            300,
+            "the pool must grow to live/div past the fixed floor"
+        );
+        s.set_pool_div(usize::MAX); // scaling off = the pre-fix behavior
+        let fixed = s.pq_candidates(&q, 256).unwrap().expect("index");
+        assert_eq!(fixed.len(), 256, "off must reproduce the fixed floor");
+    }
+
+    /// A deep page must widen the candidate over-fetch: the prefilter floor
+    /// (max(256, depth×32)) used to be computed from `limit` alone, so any
+    /// page starting past the floor sliced into ranks the prefilter never
+    /// fetched and returned nothing while shallower pages were full.
+    #[test]
+    fn deep_pages_reach_past_the_prefilter_floor() {
+        let (_dir, mut s) = store(SecurityLevel::HmacOnly);
+        s.set_fts_prefilter_min(Some(0));
+        for i in 0..400u32 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("manatee sighting number {i} in the estuary"),
+                i,
+            ))
+            .unwrap();
+        }
+        let page = s
+            .search(
+                "manatee estuary",
+                &SearchOptions {
+                    limit: 10,
+                    offset: 350,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            page.len(),
+            10,
+            "rank 350 exists in a 400-drawer corpus; the prefilter must fetch to the page's far edge"
+        );
     }
 
     /// Exactly what `POST /v1/vaults/{id}/drawers` does: index the new
@@ -4361,6 +4986,7 @@ mod tests {
                         room: None,
                         limit: 5,
                         room_cap: None,
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -4434,6 +5060,7 @@ mod tests {
                         room: None,
                         limit: 2,
                         room_cap: None,
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -4618,6 +5245,13 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(meta, 1, "codebook must persist");
+            // …and the training event is counted. Without this the FDE bump
+            // could be deleted and the whole suite would stay green.
+            assert_eq!(
+                s.codebook_generation(CODEBOOK_FDE),
+                1,
+                "training the FDE codebook must advance its generation"
+            );
             let fde_dim = s.fde_encoder.borrow().as_ref().unwrap().dim();
             let blob: Vec<u8> = s
                 .conn
@@ -4717,6 +5351,14 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(meta, 1, "centroids must persist");
+            // A centroid-set generation means RE-PARTITIONING, not
+            // re-quantization: the code bytes are untouched, what moves is which
+            // candidates a probe offers.
+            assert_eq!(
+                s.codebook_generation(CODEBOOK_FDE_IVF),
+                1,
+                "training FDE centroids must advance their generation"
+            );
             match s.fde_cache.borrow().as_ref() {
                 Some(fdeidx::FdeCache::Coded { slabs, .. }) => {
                     assert!(
@@ -4968,6 +5610,12 @@ mod tests {
                     .count() as i64
             };
             assert_eq!(v2, 8, "every stored matrix repacked to v2 at {level:?}");
+            // The repack IS a re-quantization of every token row, so it counts.
+            assert_eq!(
+                s.codebook_generation(CODEBOOK_TOK),
+                1,
+                "training the token codebook must advance its generation"
+            );
 
             // New writes pack v2 directly, and remain findable via LUTs.
             s.upsert(&drawer("w", "r", "zebra migration ledger", 60))
@@ -5052,6 +5700,7 @@ mod tests {
             room: None,
             limit: 3,
             room_cap: None,
+            ..Default::default()
         };
 
         // Baseline (no reranker) returns all three, fusion-ordered.
@@ -5421,6 +6070,759 @@ mod tests {
         }
     }
 
+    /// **What a drawer costs on disk, pinned — every artifact, every byte.**
+    ///
+    /// "Never grow large" is a first-class constraint of this project, and it
+    /// was the only load-bearing property with no test: the byte formulas lived
+    /// in comments, the totals lived in arithmetic over them, and a change that
+    /// doubled the per-drawer footprint would have shipped green.
+    ///
+    /// The mechanism is **one table driving both halves**. `PRICED` names each
+    /// per-drawer artifact together with the query that measures it and the
+    /// formula it must equal; the inventory assertion is built from that same
+    /// array. So a new artifact cannot be silenced by adding a name — a name
+    /// with no formula beside it does not compile. The first version of this
+    /// test kept the two halves separate and was refuted for exactly that: one
+    /// string literal made it green with zero bytes measured.
+    ///
+    /// Three assertions:
+    ///
+    /// 1. **The inventory is the whole schema**, not a name prefix. Every table
+    ///    is either priced per-drawer or listed as not-per-drawer with a
+    ///    reason. A prefix filter (`drawer%`) is a naming convention, and a
+    ///    future store called `sparse_terms` would pass it silently.
+    /// 2. **`drawers`' columns are pinned**, because the cheapest way to add
+    ///    per-drawer bytes is a column, which no table-level check can see.
+    /// 3. **The bytes are equalities** — a shrink fails too, so good news gets
+    ///    recorded here rather than absorbed silently.
+    ///
+    /// Measured on a **sealed** vault: the level with the strictest guarantees,
+    /// and the one whose artifacts are all AEAD-wrapped (+40 B each: 24-byte
+    /// nonce, 16-byte tag). It is *not* the larger level — hmac-only stores
+    /// content as plaintext and adds an fts5 index plus four shadow tables over
+    /// it, which for a compressible chunk costs more than everything here.
+    #[test]
+    fn one_drawer_costs_exactly_this_many_bytes() {
+        const SEAL: usize = 40; // 24-byte XChaCha20 nonce + 16-byte Poly1305 tag
+        const EMB_HEADER: usize = 6; // 2 magic + f32 scale
+        const DIM: usize = undercroft_core::embed::EMBED_DIM; // 384
+        const TOK_DIM: usize = 16; // WordLate, the test's late-interaction mock
+        const FDE_DIM: usize = 8 * (1 << 4) * 16; // reps × 2^ksim × dproj = 2048
+
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.set_late(Some(Box::new(WordLate)));
+        s.set_fde(true);
+        s.set_pq(true);
+        for i in 0..30 {
+            s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                .unwrap();
+        }
+        // An ~800-byte subject at the shipped chunk size, and it has to be real
+        // prose. A synthetic `word000 word001 …` body compressed to 151 B — six
+        // times better than English does — which made the content ratio below
+        // meaningless in the flattering direction.
+        let body = "The harbour survey finished late on Thursday, and the pilot noted that \
+             the western channel had silted again beyond the second marker. Dredging was \
+             scheduled for spring, but the tender documents were still circulating between \
+             the port authority and the regional office, so nobody expected work to begin \
+             before the equinox. Meanwhile the ferry operators rerouted their evening \
+             crossings through the eastern approach, which added eleven minutes and \
+             irritated the commuters who had complained about the timetable in March. The \
+             lighthouse keeper, who had watched three such cycles, remarked that the sand \
+             always returns to where the current wants it, and that committees rarely move \
+             faster than sediment. His logbook, kept in pencil since nineteen eighty four, \
+             records every reroute the harbour has ever made."
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            (700..900).contains(&body.len()),
+            "the subject must be about one shipped chunk: {} B",
+            body.len()
+        );
+        let subject = drawer("w", "r", &body, 100);
+        let tok_rows = body.split_whitespace().count(); // WordLate: one row per word
+        s.upsert(&subject).unwrap();
+        // Drive the PQ build directly rather than through `search`: the
+        // prefilters are an `else if` chain and the FDE tier enabled above wins
+        // it, so a search here would never reach PQ.
+        let qvec = s.embedder.embed("word001 word002 word003");
+        s.pq_candidates(&qvec, 20).unwrap().expect("PQ index");
+        // And the per-wing tier, floor forced to 1 so this one-wing corpus
+        // earns its index and the wing row exists to be priced.
+        s.set_wing_pq_min(1);
+        s.wing_pq_candidates("w", &qvec, 20)
+            .unwrap()
+            .expect("per-wing PQ index");
+
+        // Every per-drawer artifact: (table, measuring query, expected bytes).
+        // Adding a table to the inventory means adding a row here.
+        let priced: Vec<(&str, &str, usize)> = vec![
+            (
+                "drawers",
+                "SELECT length(embedding) FROM drawers WHERE id = ?1",
+                // int8 + one f32 scale + 2 magic, sealed.
+                SEAL + EMB_HEADER + DIM,
+            ),
+            (
+                "drawer_pq",
+                "SELECT length(code) FROM drawer_pq WHERE seq = \
+                 (SELECT seq FROM drawers WHERE id = ?1)",
+                // i32 IVF list id inside the seal + dim/8 code bytes.
+                SEAL + 4 + DIM / 8,
+            ),
+            (
+                "drawer_pq_wing",
+                "SELECT length(code) FROM drawer_pq_wing WHERE seq = \
+                 (SELECT seq FROM drawers WHERE id = ?1)",
+                // The dual index's second code row: same formula as the
+                // global row — the wing lives in a plaintext column (already
+                // exposed via drawers.wing), the list id inside the seal.
+                // Paid only by drawers in wings past `wing_pq_min`.
+                SEAL + 4 + DIM / 8,
+            ),
+            (
+                "drawer_tok",
+                "SELECT length(tok) FROM drawer_tok WHERE id = ?1",
+                // v1: 9-byte header + per row an f32 scale and dim int8s.
+                SEAL + 9 + tok_rows * (4 + TOK_DIM),
+            ),
+            (
+                "drawer_fde",
+                "SELECT length(fde) FROM drawer_fde WHERE id = ?1",
+                // Raw f32 FDE — the expensive one, and why the tier is
+                // default-off. Above `fde_pq_min` rows this repacks to
+                // `40 + 5 + fde_dim/8` = 301 B, so this figure is the
+                // *small-corpus* cost, not the steady state.
+                SEAL + 1 + FDE_DIM * 4,
+            ),
+        ];
+
+        // 1. The inventory: every table in the schema is either priced above or
+        //    justified here. Not a name prefix — a prefix is a convention, and
+        //    the next derived store may not follow it.
+        // Not per-drawer. Each entry carries the reason, and each may be absent
+        // here (several are created lazily on first use) — the assertion below
+        // is one-sided: an UNCLASSIFIED table fails, a listed-but-absent one is
+        // fine.
+        let not_per_drawer: &[(&str, &str)] = &[
+            (
+                "meta",
+                "store-level facts: embedder identity, codebook generations",
+            ),
+            (
+                "audit",
+                "one row per WRITE — per-drawer only for a never-updated drawer",
+            ),
+            ("chain_meta", "one row: the committed chain head"),
+            ("tunnels", "one row per cross-wing tunnel"),
+            (
+                "pq_meta",
+                "PQ codebook + IVF centroids + counters, index-wide",
+            ),
+            ("tok_meta", "token codebook, index-wide"),
+            ("fde_meta", "FDE params + codebook + centroids, index-wide"),
+            (
+                "pq_page",
+                "sealed page tier — REPLACES drawer_pq rows, see below",
+            ),
+            (
+                "kg_entities",
+                "knowledge graph: one row per entity, not per drawer",
+            ),
+            ("kg_triples", "knowledge graph: one row per fact"),
+            ("sqlite_sequence", "SQLite's own AUTOINCREMENT bookkeeping"),
+        ];
+        let tables: Vec<String> = s
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let known: Vec<&str> = priced
+            .iter()
+            .map(|(t, _, _)| *t)
+            .chain(not_per_drawer.iter().map(|(t, _)| *t))
+            .collect();
+        let unknown: Vec<&String> = tables
+            .iter()
+            .filter(|t| !known.contains(&t.as_str()))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "new table(s) {unknown:?}: add them to `priced` WITH A FORMULA if they \
+             hold one row per drawer, or to `not_per_drawer` with the reason they \
+             do not. Silence is the one option this test removes"
+        );
+        for (t, _, _) in &priced {
+            assert!(
+                tables.iter().any(|x| x == t),
+                "priced table {t} does not exist — the formula below is measuring \
+                 nothing, which is how a footprint test passes while blind"
+            );
+        }
+        // A sealed vault has no plaintext-derived FTS index, ever — fts5
+        // creates `drawers_fts` plus `_data`/`_idx`/`_content`/`_docsize`
+        // shadow tables, so the substring covers the whole family.
+        let fts: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%_fts%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts, 0, "a sealed vault must never carry an FTS index");
+
+        // 2. `drawers`' columns, because a new per-drawer artifact is cheapest
+        //    to add as a column and no table-level check can see one.
+        let cols: Vec<String> = s
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('drawers') ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            cols.join(","),
+            "content,embedding,filed_at,fp,id,meta_json,room,seq,tag,updated_at,wing",
+            "a column on `drawers` is per-drawer bytes: price it in `priced` or say \
+             here why it is free. Unpriced today and known: `fp` (a truncated-HMAC \
+             blind index), `meta_json` (unsealed metadata, whose exposure is pinned \
+             by a_sealed_vault_exposes_metadata_but_never_content), `tag` (the \
+             record HMAC) — all fixed-size or metadata-sized, none scaling with \
+             content"
+        );
+
+        // 3. The bytes, artifact by artifact — equalities.
+        let len = |sql: &str| -> usize {
+            s.conn
+                .query_row(sql, params![subject.id], |r| r.get::<_, i64>(0))
+                .unwrap() as usize
+        };
+        let mut derived_total = 0usize;
+        for (table, sql, expected) in &priced {
+            let got = len(sql);
+            assert_eq!(
+                got, *expected,
+                "{table} is {got} B/drawer, the formula says {expected} B. Both \
+                 directions matter: a shrink means the formula in CHANGELOG and \
+                 CLAUDE.md is now wrong too"
+            );
+            derived_total += got;
+        }
+
+        // What an ordinary vault pays, measured rather than asserted from a
+        // remembered figure. The default is NEITHER accelerator tier — with
+        // `UNDERCROFT_RETRIEVAL` unset there is no PQ row and no FDE row at all —
+        // so the default derived cost is the sealed embedding alone, and the
+        // published claim for it is "≈1x the sealed content it indexes".
+        let content = len("SELECT length(content) FROM drawers WHERE id = ?1");
+        let emb = len(priced[0].1);
+        // Printed unconditionally: whoever needs the figure for CHANGELOG or
+        // compression-and-security should read it out of a run, not out of a
+        // memory of a run. `cargo test -- --nocapture one_drawer_costs`.
+        println!(
+            "footprint/drawer — prose {} B → sealed content {content} B · \
+             embedding {emb} B · PQ row {} B · wing PQ row {} B · \
+             tokens ({tok_rows} rows) {} B · raw FDE {} B · \
+             every tier {derived_total} B",
+            body.len(),
+            priced[1].2,
+            priced[2].2,
+            priced[3].2,
+            priced[4].2
+        );
+        assert!(
+            content < body.len(),
+            "prose must compress: {} B became {content} B at rest",
+            body.len()
+        );
+        assert!(
+            emb * 2 > content && emb < content * 2,
+            "the default derived footprint is one sealed embedding: {emb} B against \
+             {content} B of sealed content (from {} B of prose). The published \
+             figure is ~1x, and this band is [0.5x, 2x]. If this trips, the \
+             number in compression-and-security and CHANGELOG moved and both \
+             need updating — in whichever direction",
+            body.len()
+        );
+        assert!(
+            derived_total > 20 * emb,
+            "with every tier on, one drawer costs {derived_total} B — {}x the \
+             sealed content and {}x the default. The raw FDE row is ~8.2 KB of \
+             that, which is the whole reason the tier is default-off",
+            derived_total / content.max(1),
+            derived_total / emb.max(1)
+        );
+    }
+
+    /// A codebook that moved must be visible, because a codebook that moved
+    /// silently re-quantized every row encoded against its predecessor.
+    #[test]
+    fn training_a_codebook_advances_a_visible_generation() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        assert!(
+            s.codebook_generations().iter().all(|(_, g)| *g == 0),
+            "an untrained vault must report every generation as zero"
+        );
+        for i in 0..30 {
+            s.upsert(&drawer("w", "r", &format!("routine filler note {i}"), i))
+                .unwrap();
+        }
+        s.set_pq(true);
+        s.search("routine filler", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            1,
+            "the first PQ codebook is generation 1"
+        );
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ_IVF),
+            0,
+            "IVF is untrained below its threshold and must not claim a generation"
+        );
+
+        // A rebuild that reuses the stored codebook is NOT a new generation:
+        // the counter tracks the artifact being replaced, not index maintenance.
+        //
+        // This has to force a REAL rebuild to mean anything. Merely clearing the
+        // caches makes `pq_build` reload and return early, so an assertion there
+        // could not fail however the bump was placed — the first version of this
+        // test asserted exactly that and was vacuous. Deleting a code row makes
+        // `matched != drawers`, which is the drift condition that drives a full
+        // rebuild through the `Some(codebook)` arm: every row re-encoded, no
+        // retrain.
+        s.conn
+            .execute(
+                "DELETE FROM drawer_pq WHERE seq = (SELECT MIN(seq) FROM drawer_pq)",
+                [],
+            )
+            .unwrap();
+        s.pq_cache.borrow_mut().take();
+        s.pq_verified.set(false);
+        let q = s.embedder.embed("routine filler");
+        s.pq_candidates(&q, 5).unwrap().expect("index rebuilds");
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 30,
+            "the deleted row must be back — a rebuild really ran"
+        );
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            1,
+            "a rebuild that reuses the stored codebook must not advance it"
+        );
+
+        // Dropping the vector space forces a retrain — and this is exactly the
+        // event the counter exists for, so it must survive the table drop that
+        // comes with it.
+        s.invalidate_embedding_space().unwrap();
+        s.pq_cache.borrow_mut().take();
+        s.pq_verified.set(false);
+        s.search("routine filler", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            2,
+            "a re-quantization must advance the generation, not reset it"
+        );
+        assert_eq!(
+            s.stats().unwrap().codebooks,
+            vec![
+                (CODEBOOK_PQ.to_string(), 2),
+                (CODEBOOK_PQ_IVF.to_string(), 0),
+                (CODEBOOK_FDE.to_string(), 0),
+                (CODEBOOK_FDE_IVF.to_string(), 0),
+                (CODEBOOK_TOK.to_string(), 0),
+            ],
+            "and it must be visible from the stats surface, not only internally"
+        );
+    }
+
+    /// Build the starvation corpus: 400 drawers in wing "pacific" that share
+    /// every query term, and a small wing "arctic" whose one relevant drawer
+    /// shares only one — so the corpus-wide candidate top-k is filled
+    /// entirely by the loud wing and the scoped answer never enters it.
+    fn starved_wing_store() -> (TempDir, PalaceStore, String) {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..400u32 {
+            s.upsert(&drawer(
+                "pacific",
+                "r",
+                &format!("kelp harvest quota memo number {i}"),
+                i,
+            ))
+            .unwrap();
+        }
+        for i in 0..9u32 {
+            s.upsert(&drawer(
+                "arctic",
+                "r",
+                &format!("arctic station maintenance note {i}"),
+                400 + i,
+            ))
+            .unwrap();
+        }
+        let target = drawer(
+            "arctic",
+            "r",
+            "kelp beds mapped near the arctic station",
+            500,
+        );
+        s.upsert(&target).unwrap();
+        s.set_pq(true);
+        (dir, s, target.id)
+    }
+
+    /// The defect the wing tier closes, pinned from both sides: corpus-wide
+    /// candidates intersected with a wing can starve it entirely, and a
+    /// wing-scoped query must instead be answered from the wing itself.
+    #[test]
+    fn a_scoped_query_is_answered_by_its_wing_not_by_the_corpus_top() {
+        let (_d, mut s, target) = starved_wing_store();
+        let arctic = || SearchOptions {
+            wing: Some("arctic".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        // Pre-tier behavior (`off`): the global prefilter's top-k is all
+        // pacific, the wing filter then leaves nothing. This is the measured
+        // defect, asserted so its disappearance would be noticed too.
+        s.set_wing_pq_min(usize::MAX);
+        let starved = s.search("kelp harvest quota", &arctic()).unwrap();
+        assert!(
+            starved.iter().all(|h| h.drawer.id != target),
+            "if the corpus-wide candidates now include the scoped answer, the \
+             starvation premise of this test is gone — investigate, don't delete"
+        );
+        // The wing's own index (floor forced below the wing's size).
+        s.set_wing_pq_min(8);
+        let hits = s.search("kelp harvest quota", &arctic()).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "a wing-scoped query must find the wing's own evidence"
+        );
+        // And the index really is per-wing: rows exist for the scoped wing,
+        // under its own codebook key and its own generation artifact.
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq_wing WHERE wing = 'arctic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 10, "one code row per arctic drawer");
+        assert_eq!(
+            s.codebook_generation(&format!("arctic/{CODEBOOK_PQ}")),
+            1,
+            "the wing's codebook claims its own generation"
+        );
+        assert!(
+            s.stats()
+                .unwrap()
+                .codebooks
+                .contains(&(format!("arctic/{CODEBOOK_PQ}"), 1)),
+            "and the stats surface lists the dynamic artifact"
+        );
+    }
+
+    /// Below the floor a wing earns no codebook — and must still be immune
+    /// to starvation, because the fallback is a full scan of the wing (the
+    /// `WHERE wing` clause bounds it), not the corpus-wide candidate set.
+    #[test]
+    fn below_the_floor_a_scoped_query_full_scans_its_wing() {
+        let (_d, mut s, target) = starved_wing_store();
+        s.set_wing_pq_min(50); // arctic holds 10 — below the floor
+        let hits = s
+            .search(
+                "kelp harvest quota",
+                &SearchOptions {
+                    wing: Some("arctic".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "a below-floor wing full-scans itself and cannot be starved"
+        );
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq_wing", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "below the floor no per-wing rows exist");
+        assert_eq!(
+            s.codebook_generation(&format!("arctic/{CODEBOOK_PQ}")),
+            0,
+            "and no codebook was trained for it"
+        );
+    }
+
+    /// The floor is two-sided: a wing that crossed it sheds its artifacts on
+    /// the next check, because a stale codebook silently kept is the exact
+    /// invisible-change class the generation counters exist to expose.
+    #[test]
+    fn a_wing_that_shrinks_below_the_floor_sheds_its_artifacts() {
+        let (_d, mut s, _target) = starved_wing_store();
+        s.set_wing_pq_min(8);
+        let q = s.embedder.embed("kelp");
+        s.wing_pq_candidates("arctic", &q, 5)
+            .unwrap()
+            .expect("arctic earns an index at floor 8");
+        let ids: Vec<String> = s
+            .conn
+            .prepare("SELECT id FROM drawers WHERE wing = 'arctic' LIMIT 5")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for id in ids {
+            s.delete_drawer(&id).unwrap();
+        }
+        // Force the per-session verdict to be re-derived, as a fresh open
+        // would.
+        s.wing_pq.borrow_mut().clear();
+        assert!(
+            s.wing_pq_candidates("arctic", &q, 5).unwrap().is_none(),
+            "5 drawers is below floor 8 — no index"
+        );
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq_wing WHERE wing = 'arctic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "the shrunk wing's rows are gone");
+        let meta: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pq_meta WHERE key IN ('codebook/arctic', 'ivf/arctic')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(meta, 0, "and so is its codebook");
+    }
+
+    /// A write to an indexed wing lands in that wing's index immediately
+    /// (incremental encode), and a scoped query sees it without a rebuild.
+    #[test]
+    fn a_write_to_an_indexed_wing_is_immediately_findable_scoped() {
+        let (_d, mut s, _target) = starved_wing_store();
+        s.set_wing_pq_min(8);
+        let opts = SearchOptions {
+            wing: Some("arctic".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        s.search("kelp", &opts).unwrap(); // builds the arctic index
+        let fresh = drawer("arctic", "r", "walrus haul-out survey completed", 600);
+        s.upsert(&fresh).unwrap();
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawer_pq_wing WHERE wing = 'arctic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 11, "the write was encoded into the wing index");
+        let hits = s.search("walrus haul-out", &opts).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == fresh.id),
+            "and the scoped query finds it with no rebuild"
+        );
+    }
+
+    /// Key rotation reseals the per-wing rows and the per-wing codebook —
+    /// dynamic keys a fixed enumeration cannot cover — and a scoped search
+    /// answers identically afterwards.
+    #[test]
+    fn rotation_carries_the_per_wing_index() {
+        let (dir, mut s, target) = starved_wing_store();
+        s.set_wing_pq_min(8);
+        let opts = SearchOptions {
+            wing: Some("arctic".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        s.search("kelp harvest quota", &opts).unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let candidate = mgr.rotation_candidate("test").unwrap();
+        let report = s.rotate_keys(candidate).unwrap();
+        assert_eq!(
+            report.wing_pq_rows, 10,
+            "every arctic code row was resealed"
+        );
+        let hits = s.search("kelp harvest quota", &opts).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "the rotated wing index still answers"
+        );
+    }
+
+    /// The two rescore budgets resolve independently, and a deployment that
+    /// pinned the old single knob keeps what it pinned — **including when the
+    /// value it pinned is unparseable.**
+    ///
+    /// That last case is the whole reason this test exists.
+    /// `UNDERCROFT_RERANK_TOP_N=0` has always resolved to 50, because the
+    /// `n > 0` filter fails and the default applies. A fallback that only
+    /// honoured *valid* values would newly resolve the same setting to 200 —
+    /// quadrupling rescore depth for someone who changed nothing. Serial,
+    /// because environment variables are process-global.
+    #[test]
+    fn the_two_rescore_depths_resolve_independently() {
+        assert_ne!(
+            DEFAULT_RERANK_TOP_N, DEFAULT_LATE_TOP_N,
+            "the split is pointless if the two defaults agree"
+        );
+        // Nothing set: the late stage gets its own default.
+        assert_eq!(resolve_late_top_n(None, None), DEFAULT_LATE_TOP_N);
+
+        // Only the old knob: the late stage tracks it — the compatibility
+        // promise a deployment that pinned 37 is owed.
+        assert_eq!(resolve_late_top_n(None, Some("37")), 37);
+
+        // Only the old knob, set to something that does not parse. It has
+        // always meant 50 to the reranker, so it must still mean 50 here —
+        // honouring only valid values would quadruple the depth for someone
+        // who changed nothing.
+        for pinned in ["0", "-1", "abc", "", "99999999999999999999"] {
+            assert_eq!(
+                resolve_late_top_n(None, Some(pinned)),
+                DEFAULT_RERANK_TOP_N,
+                "UNDERCROFT_RERANK_TOP_N={pinned:?} must not silently deepen \
+                 the late stage to {DEFAULT_LATE_TOP_N}"
+            );
+        }
+
+        // The new knob wins when both are set.
+        assert_eq!(resolve_late_top_n(Some("512"), Some("37")), 512);
+        // A junk late value falls through to the old knob, not to the new
+        // default, for the same compatibility reason.
+        assert_eq!(resolve_late_top_n(Some("0"), Some("37")), 37);
+        assert_eq!(resolve_late_top_n(Some("abc"), None), DEFAULT_LATE_TOP_N);
+    }
+
+    /// A late-interaction mock with exactly one synonym: `backlog` encodes as
+    /// `queue`. That is the whole point — it lets MaxSim prefer a drawer the
+    /// lexical channels cannot see, so a test can tell the rescore apart from
+    /// the fusion ranking that feeds it.
+    struct SynonymLate;
+    impl undercroft_core::late::LateInteraction for SynonymLate {
+        fn model_name(&self) -> &str {
+            "synonym-mock"
+        }
+        fn dim(&self) -> usize {
+            3
+        }
+        /// Three explicit buckets, so nothing can collide by accident: the
+        /// query's first term, the synonym pair, and everything else. A hashed
+        /// mock put a filler level with the target on a bucket collision, which
+        /// is a fine way to spend an afternoon disbelieving a real result.
+        fn encode_doc(&self, text: &str) -> Vec<f32> {
+            let mut m = Vec::new();
+            for w in text.split_whitespace() {
+                let bucket = match w {
+                    "kafka" => 0,
+                    "queue" | "backlog" => 1,
+                    _ => 2,
+                };
+                let mut row = vec![0f32; 3];
+                row[bucket] = 1.0;
+                m.extend(row);
+            }
+            m
+        }
+        fn encode_query(&self, text: &str) -> Vec<f32> {
+            self.encode_doc(text)
+        }
+    }
+
+    /// The late stage must rescore to its OWN depth, not the reranker's cap.
+    ///
+    /// Getting this test to mean anything took two attempts, and the first
+    /// failure is the instructive one: a target that covers every query term
+    /// is ranked first by *fusion*, so it sits inside any cap and the
+    /// assertion passes whichever constant the code reads — vacuous in exactly
+    /// the way every other late-interaction test here is, because they all
+    /// write fewer drawers than the smaller cap.
+    ///
+    /// So the target has to be reachable only by the deeper rescore: 60
+    /// fillers repeat the query's one lexical term until fusion ranks them all
+    /// above it, putting it past the cross-encoder's 50, while MaxSim sees
+    /// through the synonym and lifts it from there. Depth 50 leaves it
+    /// unrescored and buried; depth 80 finds it.
+    #[test]
+    fn the_late_stage_rescores_to_its_own_depth_not_the_reranker_cap() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        s.set_late(Some(Box::new(SynonymLate)));
+        // Via the setter, not the environment: `set_var` is process-global and
+        // the suite runs in parallel, so an env-driven test here would be a
+        // flake aimed at whatever test happens to run beside it.
+        s.set_late_top_n(80);
+        for i in 0..60u32 {
+            s.upsert(&drawer("w", "r", &format!("kafka kafka kafka note {i}"), i))
+                .unwrap();
+        }
+        // Covers both query tokens once the synonym is applied (kafka + queue),
+        // where every filler covers only one — but it says "kafka" once, so
+        // BM25 and the cosine both rank it below all sixty.
+        let target = drawer("w", "r", "kafka backlog rework", 100);
+        s.upsert(&target).unwrap();
+        let hits = s
+            .search(
+                "kafka queue",
+                &SearchOptions {
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let at = hits.iter().position(|h| h.drawer.id == target.id);
+        assert_eq!(
+            at,
+            Some(0),
+            "the target is fusion-ranked past 50 and only MaxSim can lift it, \
+             so it leads at depth 80 and is invisible at the reranker's 50 — \
+             it came back at {at:?}"
+        );
+    }
+
+    /// A gauge set under a name `undercroft_obs` does not register is dropped
+    /// without a trace — it looks live at the call site and is absent from
+    /// `/metrics` and OTLP. The first version of the codebook counter emitted
+    /// five such names and shipped a battery-green claim that the value was
+    /// "surfaced as a telemetry gauge". This makes that unrepeatable, and it
+    /// works in a build without the `telemetry` feature because the name list
+    /// is a plain const.
+    #[test]
+    fn every_codebook_gauge_name_is_registered_in_obs() {
+        for artifact in CODEBOOK_ARTIFACTS {
+            let name = PalaceStore::codebook_gauge_name(artifact);
+            assert!(
+                undercroft_obs::GAUGE_NAMES.contains(&name.as_str()),
+                "gauge {name:?} (for artifact {artifact:?}) is not in \
+                 undercroft_obs::GAUGE_NAMES, so setting it is a no-op. Add it \
+                 there or stop claiming this artifact is observable"
+            );
+        }
+    }
+
     #[test]
     fn hmac_only_content_is_plaintext_but_tagged() {
         let (dir, mut s) = store(SecurityLevel::HmacOnly);
@@ -5473,6 +6875,7 @@ mod tests {
                     room: None,
                     limit: 10,
                     room_cap: None,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -5786,6 +7189,19 @@ mod tests {
             })
             .unwrap();
         assert_eq!(stored_ivf, 1, "IVF centroids must persist");
+        // The centroid set is a trained artifact, so its training is counted —
+        // as re-PARTITIONING (the code bytes do not change; which candidates a
+        // probe offers does). The PQ codebook trained once, in the flat pass.
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ_IVF),
+            1,
+            "training IVF centroids must advance their generation"
+        );
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            1,
+            "enabling IVF must not re-train the codebook"
+        );
 
         // Incremental write gets a list id and stays findable through the
         // probed path.

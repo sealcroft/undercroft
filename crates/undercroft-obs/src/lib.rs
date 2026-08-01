@@ -123,6 +123,17 @@ pub fn search_completed(
     imp::search_completed(duration, hits, fusion, prefiltered);
 }
 
+/// Record how many per-wing indexes served one query's candidate set — the
+/// honest cost metric for anything fan-out shaped. The dual-index tier
+/// probes exactly one (the scoped wing); a future cross-wing fan-out must
+/// report its real count here rather than let an unbounded fan-out hide
+/// inside one query. Content-free: a count, never a wing name.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn search_wings_probed(wings: u64) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add("undercroft_search_wings_probed_total", wings, &[]);
+}
+
 /// Record a drawer write (created or deduplicated).
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn drawer_write(outcome: WriteOutcome) {
@@ -235,10 +246,37 @@ pub fn scope_request(route: &str, vault: Option<&str>) -> Scope {
 // Gauges (metadata sampled from stats)
 // ---------------------------------------------------------------------------
 
+/// Base names of the gauges this build exports, each as
+/// `undercroft_<name>{vault="…"}`.
+///
+/// **A gauge set under a name that is not in this list is silently dropped.**
+/// One observable gauge is registered per name and its callback only reports
+/// map entries matching that name, so an unlisted name accumulates values
+/// nothing ever reads — write-only telemetry that looks live at the call site
+/// and is absent from `/metrics`. Public so a producer can pin the names it
+/// emits against the names that are actually registered, in a build without
+/// the `telemetry` feature.
+pub const GAUGE_NAMES: &[&str] = &[
+    "drawers",
+    "kg_triples",
+    "kg_entities",
+    "audit_chain_height",
+    "store_bytes",
+    // Trained index artifacts: how many times each codebook or centroid set
+    // has been trained in this vault (see
+    // `PalaceStore::codebook_generation_bump`). A step means every row coded
+    // against the previous generation was re-coded.
+    "codebook_generation_pq_codebook",
+    "codebook_generation_pq_ivf",
+    "codebook_generation_fde_codebook",
+    "codebook_generation_fde_ivf",
+    "codebook_generation_tok_codebook",
+];
+
 /// Set a gauge value for a vault. Atomic-backed and Send-safe; read on
 /// scrape by both the Prometheus renderer and the OTLP observable gauges.
-/// `name` is a bare metric name (e.g. `drawers`, `kg_triples`,
-/// `audit_chain_height`, `store_bytes`).
+/// `name` must be one of [`GAUGE_NAMES`] — anything else is dropped without
+/// a trace.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn set_gauge(name: &str, vault: &str, value: f64) {
     #[cfg(feature = "telemetry")]

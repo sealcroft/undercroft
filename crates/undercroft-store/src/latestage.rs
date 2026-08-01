@@ -27,7 +27,7 @@ use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInte
 use rusqlite::{params, OptionalExtension};
 
 use crate::pq::ProductQuantizer;
-use crate::{rerank_top_n, PalaceStore, SearchHit, StoreError};
+use crate::{PalaceStore, SearchHit, StoreError, CODEBOOK_TOK};
 
 /// Stored-matrix count at which the token codebook trains (v2 packing).
 /// Below it, int8 (v1) is already small and PQ would train on too few
@@ -70,6 +70,18 @@ impl PalaceStore {
     /// (it is the more accurate, more expensive option).
     pub fn set_late(&mut self, late: Option<Box<dyn LateInteraction + Send + Sync>>) {
         self.late = late;
+    }
+
+    /// How many fusion-ranked candidates this stage re-scores.
+    ///
+    /// **Not the cross-encoder's `UNDERCROFT_RERANK_TOP_N`**, which is a
+    /// latency cap of one transformer forward per candidate; MaxSim is
+    /// arithmetic over matrices built at ingest, so this stage can afford to
+    /// look much deeper. Defaults from `UNDERCROFT_LATE_TOP_N` at open — see
+    /// [`crate::DEFAULT_LATE_TOP_N`] for what the default rests on, and what
+    /// it does not.
+    pub fn set_late_top_n(&mut self, n: usize) {
+        self.late_top_n = n.max(1);
     }
 
     pub(crate) fn late_schema(&self) -> Result<(), StoreError> {
@@ -160,8 +172,7 @@ impl PalaceStore {
             .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
         drop(stmt);
-        // Gather an even sample of token rows across the v1 matrices.
-        let mut sample: Vec<Vec<f32>> = Vec::new();
+        // Gather a keyed sample of token rows across the v1 matrices.
         let mut v1: Vec<(String, Vec<f32>, usize)> = Vec::new();
         for (id, blob) in &blobs {
             let Ok(packed) = self.vault.tokens_from_rest(id, blob) else {
@@ -176,12 +187,43 @@ impl PalaceStore {
         if total_rows == 0 {
             return Ok(false);
         }
-        let stride = total_rows.div_ceil(TOK_PQ_SAMPLE).max(1);
+        // Rank every token row under the vault's sample key and keep the
+        // lowest — the same draw the PQ codebooks use, per (drawer, row), so a
+        // bulk writer cannot predict which of their tokens shape the codebook
+        // every other drawer's tokens are then coded against.
+        // Rank every token row twice in one walk: once for the training draw,
+        // once for an independent probe used to check the trained codebook.
+        // The flattened walk order is the stratification axis, so row `i`
+        // keeps its position in both. Below the cap neither is needed — the
+        // whole corpus trains and a probe would sit inside the sample.
+        let (chosen, ranks_probe): (Vec<usize>, Vec<u64>) = if TOK_PQ_SAMPLE >= total_rows {
+            ((0..total_rows).collect(), Vec::new())
+        } else {
+            let mut ranks: Vec<u64> = Vec::with_capacity(total_rows);
+            let mut probe: Vec<u64> = Vec::with_capacity(total_rows);
+            for (id, matrix, dim) in &v1 {
+                let mut ident = Vec::with_capacity(id.len() + 4);
+                for r in 0..matrix.len() / (*dim).max(1) {
+                    ident.clear();
+                    ident.extend_from_slice(id.as_bytes());
+                    ident.extend((r as u32).to_le_bytes());
+                    ranks.push(self.vault.sample_rank(CODEBOOK_TOK, &ident));
+                    probe.push(self.vault.sample_rank("tok-fit-probe", &ident));
+                }
+            }
+            (
+                crate::pqidx::stratified_keyed(total_rows, TOK_PQ_SAMPLE, |i| ranks[i]),
+                probe,
+            )
+        };
+        let mut sample: Vec<Vec<f32>> = Vec::with_capacity(chosen.len());
+        let mut next = chosen.iter().peekable();
         let mut i = 0usize;
         for (_, matrix, dim) in &v1 {
             for row in matrix.chunks_exact(*dim) {
-                if i.is_multiple_of(stride) {
+                if next.peek() == Some(&&i) {
                     sample.push(row.to_vec());
+                    next.next();
                 }
                 i += 1;
             }
@@ -197,6 +239,28 @@ impl PalaceStore {
         let Some(pq) = ProductQuantizer::train(&sample, m, TOK_PQ_ITERS) else {
             return Ok(false);
         };
+        // Check the fresh codebook against rows it did not train on — a second
+        // keyed draw over the same walk, so it is not the training sample.
+        // Only meaningful above the cap, where a sample was actually drawn.
+        if total_rows > TOK_PQ_SAMPLE {
+            let probe_at =
+                crate::pqidx::stratified_keyed(total_rows, crate::pqidx::PQ_FIT_PROBE, |i| {
+                    ranks_probe[i]
+                });
+            let mut probe: Vec<Vec<f32>> = Vec::with_capacity(probe_at.len());
+            let mut next = probe_at.iter().peekable();
+            let mut i = 0usize;
+            for (_, matrix, dim) in &v1 {
+                for row in matrix.chunks_exact(*dim) {
+                    if next.peek() == Some(&&i) {
+                        probe.push(row.to_vec());
+                        next.next();
+                    }
+                    i += 1;
+                }
+            }
+            self.warn_unrepresentative(CODEBOOK_TOK, &pq, &sample, &probe);
+        }
         // Persist (sealed on sealed vaults), then repack every v1 row.
         let blob = self.vault.tokens_at_rest("tok/codebook", &pq.to_bytes());
         self.conn.execute(
@@ -207,6 +271,7 @@ impl PalaceStore {
             "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook_model', ?1)",
             params![model.as_bytes()],
         )?;
+        self.codebook_generation_bump(CODEBOOK_TOK);
         for (id, matrix, dim) in &v1 {
             let rows = matrix.len() / dim;
             let mut codes = Vec::with_capacity(rows * pq.code_len());
@@ -425,7 +490,13 @@ impl PalaceStore {
         if qmatrix.is_empty() {
             return;
         }
-        let pool = hits.len().min(rerank_top_n());
+        // Rescore depth, NOT the cross-encoder's latency cap: MaxSim costs
+        // arithmetic per candidate, not a forward pass, so this stage can look
+        // far deeper than a reranker can afford to. Note `hits` is the
+        // un-truncated candidate list — on a sealed vault with no prefilter
+        // that is the whole corpus, so this depth is what decides how much of
+        // it gets a second opinion.
+        let pool = hits.len().min(self.late_top_n);
         let mut stmt = match self
             .conn
             .prepare("SELECT tok FROM drawer_tok WHERE id = ?1 AND model = ?2")

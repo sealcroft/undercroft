@@ -241,7 +241,49 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   pqidx.rs index; both levels scan a load-once RAM code cache, slab-grouped
   by IVF list since v0.41.0; opt-in sealed page tier since v0.42.0 —
   `UNDERCROFT_PQ_PAGE_MIN`, one AEAD page per list + lazy per-probe
-  decrypt + tail fold per batch, default off), MUVERA FDE
+  decrypt + tail fold per batch, default off; **per-wing tier** — the wing
+  is the retrieval unit a caller scopes to, and the global prefilter was
+  wing-blind: its top-k can starve a wing entirely (candidates ∩
+  `WHERE wing` = ∅ while the wing holds the answer — pinned by test) and
+  its BUILD cost is corpus-shaped. What the tier provably buys is the
+  build economics (wing-shaped vs corpus-shaped — though the headline
+  build figures once quoted here, 17/73 min global retrains and 3.9/15.5 s
+  wing builds, were ~95% a per-row-autocommit fsync BUG in the rebuild
+  loops, since fixed with one transaction: smoke warm-up 36.2→2.3 s;
+  post-fix builds are CPU-bound, full-scale numbers pending) and the
+  starvation fix; its QUERY-LATENCY benefit is **dead,
+  settled at 10⁶** (`pqscale`: unscoped PQ holds 24.3 → 31.0 ms/q from
+  131k to 1M, no break — the 913 s/query figure was the *full-scan*
+  path, which the global PQ tier answers alone). `pqscale` also filed a
+  recall-leak defect (unscoped R@5 100.0 → 96.8 to 1M; fixed 256 pool vs
+  growing competitors), **CLOSED by a two-stage pool + a freshness
+  rule**: stage 1 fetches `live/64` ADC candidates (`UNDERCROFT_POOL_DIV`,
+  `off` = the measured-leaky fixed floor), stage 2 cuts by exact cosine
+  over just those candidates' embeddings to `stage1/8` = `live/512` —
+  NEVER below, because a sealed vault has no lexical prefilter, so
+  **hydration is the only door through which BM25 evidence reaches
+  fusion**, and cutting to the fixed floor by pure cosine measurably
+  regressed 1M to 98.9% — stage 3 hydrates as before; IVF partitions
+  retrain at 1.5× training size (`ivf_fresh`, every site incl. FDE — the
+  strictly-\>2× rule let a corpus sit at exactly 2.0× stale, and
+  retrains cost seconds post-fsync-fix). **Shipped default measures R@5
+  100.0% at every checkpoint 131k→1M (34.4/69.6/138.4/280.6 ms/q)** —
+  the linear price of not losing answers; parallel hydration and dim/4
+  codes are the named shrink levers. A fixed-size wing showed no leak —
+  any scoped-recall claim still needs its own instrument.
+  Wings past `UNDERCROFT_WING_PQ_MIN` (4096, `off` = pre-tier behavior)
+  carry their own codebook/IVF/rows (`drawer_pq_wing`, sealed under
+  `pqrow/<wing>/<seq>`; meta keys `codebook/<wing>`/`ivf/<wing>`, resealed
+  dynamically at rotation since a fixed list cannot enumerate them);
+  below the floor a scoped query full-scans its wing — bounded by the
+  floor, exact, and still starvation-free. A wing's population is MORE
+  homogeneous than the vault's, so its codebook fits better, and
+  derived-structure scope matches the isolation unit (wing) rather than
+  the crypto unit (vault) — a writer in one wing no longer shapes the
+  codebook scoring another. Stated honestly: BM25's IDF stays global, so
+  the wing isolates candidates, not scores; per-wing generation counters
+  are dynamic artifacts `<wing>/pq-codebook` on the same stats surface,
+  deliberately NOT per-wing gauges — cardinality), MUVERA FDE
   token-aware candidates (fdeidx.rs; core fde.rs construction; sealed
   `drawer_fde` + `fde_meta`; opt-in inverted tier via
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
@@ -262,7 +304,16 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
-  `refine` → KG extraction; no external API by default
+  `refine` → KG extraction, **and `embed.rs`: `HttpEmbedder`**, an `Embedder`
+  backed by a served model (`UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`
+  /`_MODEL`/`_API`/`_KEY`/`_DIM`). Both API shapes, dimension **probed** from
+  the endpoint rather than assumed, identity `http:<model>` so the existing
+  swap-refusal covers it. Two hazards it states rather than hides: drawer text
+  is sent **in the clear** (warned at construction when the host is not
+  loopback — sealing protects a vault at rest, not content handed to another
+  host), and a failed embed cannot fail a write, so it degrades to a **counted**
+  zero vector (lexically findable, semantically invisible until re-embedded).
+  No external API by default: nothing is contacted unless a URL is set
 - `crates/undercroft-embed-onnx` — feature-gated ONNX embedder, cross-encoder
   reranker, **and** ColBERT late-interaction encoder (tract, pure Rust; two
   fixed-shape plans per ColBERT export — dynamic-axis exports carry ops tract
@@ -292,12 +343,17 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `/healthz` mode+last_write lag surface).
   Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
-  harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding)
+  harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding),
+  plus synthetic instruments: `synth`, `wingscale` (per-wing tier: scoped vs
+  unscoped R@5 + steady-state ms/q, ONE ingest per corpus with `--floors`
+  iterated in-process, per-pass warm-up reported separately — folding a
+  one-time index build into a per-query average manufactured a 15× "effect"
+  in this instrument's own first version)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 61
+  which inlines them and documents every layer plus all 63
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -360,7 +416,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (249)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (157 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (165 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
@@ -373,7 +429,43 @@ docker compose run --rm ort-build    # compile-check CLI with --features onnx,or
 docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5.4;
                                       # mermaid via vendored website/assets/mermaid.min.js)
 docker build -t undercroft .           # runtime image
+
+# A quantized text embedder on the compose network, CPU only — so a
+# measurement is reproducible instead of depending on a desktop app on the
+# host (which the bench container cannot reach anyway):
+docker compose up -d embeddings
+docker compose run --rm embed-pull    # one-time model fetch into a volume
+UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=http://embeddings:11434 \
+  UNDERCROFT_EMBED_MODEL=nomic-embed-text  # then run cli/bench with these
 ```
+
+**The `undercroft-target` volume can serve a STALE artifact.** `cargo` reused a
+release rlib of `undercroft-vault` that predated a new method, and the resulting
+"no method named …" error looked exactly like a source bug for three attempts
+while the same tree compiled clean elsewhere. `cargo clean --release -p <crate>`
+is the fix. Same family as the `--build` hazard above, one level down: **when an
+error contradicts the source you are reading, suspect a cached artifact before
+suspecting the code.**
+
+**Two more ways a run silently uses the wrong binary** (both fired in one
+session; together they put a pre-change binary under a measurement whose
+matching numbers then proved nothing):
+- **Git Bash mangles container paths in `-e` and `-w` values** (MSYS path
+  conversion): `-e CARGO_TARGET_DIR=/build` became a `C:\…` path inside the
+  container, cargo failed with "path segment contains separator", and the
+  failure hid behind a `| grep … ; echo` pipeline that exited 0 — so the
+  volume kept serving its old binary. Prefix every docker command that
+  carries `-v`/`-e`/`-w` container paths with `MSYS_NO_PATHCONV=1`, and
+  never let a pipeline's tail mask an exit code you depend on.
+- **`docker compose build` can serve a STALE BUILD CONTEXT** (Docker
+  Desktop file-share cache): the image's `/src` was hours older than the
+  host file and a rebuild did not refresh it, while a *mounted* build
+  (`docker run -v <repo>:/src`) saw the current bytes. When compose output
+  looks impossibly cached, verify `/src` content in-container
+  (`grep -c <new-symbol> …`) and fall back to a mounted build.
+**Before trusting any run of a freshly built binary, prove the binary is
+fresh**: probe it for a symbol only the new code has (`--help | grep -c
+<new-flag>`). A stale binary passes every old test by construction.
 
 **Always pass `--build`.** The battery images COPY the source, they do not
 mount it — `docker compose run --rm test` without `--build` silently
@@ -416,7 +508,26 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   and codebooks, and ColBERT token matrices are AEAD-sealed under distinct
   AAD domains (search uses decrypt-once RAM caches; the opt-in PQ page tier
   decrypts lazily per probed list). Tests assert the at-rest bytes; new
-  derived artifacts must follow the same pattern. **`meta_json` is stored
+  derived artifacts must follow the same pattern. **What a drawer costs is
+  pinned too** — `one_drawer_costs_exactly_this_many_bytes` asserts each
+  artifact's exact length against its formula (`40+6+dim` embedding = 430 B,
+  `40+4+dim/8` PQ row = 92 B, `40+9+rows·(4+dim)` v1 tokens,
+  `40+1+reps·2^ksim·dproj·4` raw FDE = 8,233 B; 40 = nonce+tag). **One
+  `priced` table drives both the formulas and the inventory**, so a new
+  artifact cannot be silenced by adding a name — the first version kept them
+  separate and one added string literal made it green with nothing measured.
+  The inventory is the **whole schema** (every table either priced
+  per-drawer or justified as not) plus `drawers`' **column list**, because a
+  name prefix is only a convention and a column is the cheapest unpriced
+  per-drawer byte. Measured: 804 B of prose → 515 B sealed content, so the
+  default vault's one derived artifact is **0.83×** the content and every
+  tier at once is **22×**. Sealed is the strictest level, **not** the
+  largest — hmac-only keeps plaintext and adds fts5 plus four shadow tables.
+  Note the prefilters are an `else if` chain, FDE first: with the FDE tier
+  on, `search` never builds the PQ index, and an FDE row is 8,233 B raw
+  below `fde_pq_min` (256) but **301 B PQ'd above it**, so "8 KB/drawer" is
+  a small-corpus figure.
+  **`meta_json` is stored
   UNSEALED**, so nothing that copies words out of the content may live in it
   — `Drawer::meta_at_rest()` empties `time_mentions[].text` and `entities`
   before a row is written, keeping only resolutions (offsets + ISO dates,
@@ -432,9 +543,18 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   bigrams + char trigrams, SHA-256 into 384 buckets), so texts match only on
   shared literal tokens/trigrams — measured, an EN/AR translation pair scores
   *below* an unrelated sentence, and `car`/`automobile` do not match either.
-  Needs a multilingual model via `onnx`/`ort`, or an external vault. Reading
-  dates *inside* the text is the **scanner's** job (`language` per request)
-  and is independent of which embedder found the drawer.
+  Needs a multilingual model via `onnx`/`ort`/**`http`**, or an external
+  vault. Reading dates *inside* the text is the **scanner's** job (`language`
+  per request) and is independent of which embedder found the drawer.
+  **A served embedder is worth far more than the repo used to think.** The
+  standing conclusion was "a semantic embedder is NOT the biggest lever",
+  resting on MiniLM measuring **+0.3pp** of turn all-gold on LoCoMo. That was
+  a fact about MiniLM. Four served models measured on the same corpus give
+  **+3.2 to +4.2pp** (hash 74.2% → nomic-embed-text 77.4, Qwen3-Embedding-0.6B
+  78.1, bge-m3 77.9, mxbai-embed-large 78.4), i.e. the jump from hash to *any*
+  modern embedder is the lever, and the spread *between* modern embedders is
+  ≤1.0pp — public leaderboard order does not transfer here. Cost is 11–29×
+  ingest (one HTTP call per drawer) and +20–57% search.
 - Every write must update the audit chain **atomically with its data**: the
   committed head lives in `chain_meta` and advances via `chain_append` inside
   the same SQLite transaction (the manifest holds a lagging rollback anchor,
@@ -470,6 +590,72 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   decisive Greek pair as already-related because the filler literally contained
   the query, so it measured the padding — flatteringly, and in the one place
   it mattered most.
+- **No compression unit may ever span two drawers' plaintext.** Content is
+  zstd-3 framed *then* sealed (`compress_frame` → `content_at_rest`), so
+  ciphertext length already reveals a drawer's compressibility on top of the
+  length AEAD leaks. That is bounded only because every drawer is compressed
+  in its **own independent frame with no shared dictionary** — an attacker
+  who writes a drawer never shares a compression unit with a secret one.
+  This was true by implementation rather than by policy until it was written
+  down here. The at-rest attack class has a name (DBREACH, IEEE S&P 2023:
+  plaintext extraction from engines that compress pages and encrypt at
+  rest). Two consequences: a **shared zstd dictionary is forbidden**, and
+  the **4096-row PQ pages must never be compressed** — sealed-but-uncompressed
+  is deliberate, and that page geometry is already InnoDB's, so compressing
+  it satisfies DBREACH's precondition in one commit. Prefer **fixed-rate**
+  compression (quantization, whose output length is content-independent —
+  embeddings are already int8 at `6 + dim` bytes) over entropy coding
+  anywhere new.
+- **Independent per-item scoring is a poison-resistance property, and
+  spending it is a decision.** A poisoned drawer can win its own slot and
+  nothing else: `HashEmbedder` is a function of one drawer's text, `maxsim`
+  maximises over one drawer's rows, the admission gate is a constant from
+  probe pairs, and the lexical channels are deliberately **pairwise** ("a
+  stemmer builds an equivalence class one false friend poisons"). The only
+  cross-drawer objects are BM25's IDF and the trained codebooks. So: anything
+  that couples drawers may **propose candidates**, never **decide score** —
+  the same rule `undercroft-index` applies to remote backends. Coupling in
+  candidate generation risks *availability* (a legitimate drawer is not
+  offered); coupling in scoring risks *integrity* and moves what decides the
+  answer outside HMAC coverage. Codebook k-means is bounded only because
+  vectors are L2-normalized before both training and encoding (`pq.rs`): on
+  the unit sphere an attacker cannot buy influence with **magnitude**, only
+  with **count**, which is what makes an unbounded breakdown point bounded at
+  all — so that normalization is a security property, not only a
+  distance-ordering one. It is **not** a small displacement bound (every
+  centroid is a mean of in-ball points, so "at most the diameter" bounds
+  nothing), and two channels stay open: **density** (owning fraction *f* buys
+  ≈*f* of any uniform sample — a per-source cap's job) and a **NaN/Inf**
+  vector from an `external:` embedder, which escapes it entirely.
+  **Which** rows train is a **stratified keyed** draw, never a stride:
+  `pqidx::stratified_keyed` takes one row per equal block of insertion order,
+  chosen by `Vault::sample_rank` (a fourth HKDF subkey, label `sample`,
+  deliberately not the MAC key, length-prefixed) — reproducible **per vault**
+  (not per corpus), unguessable to a bulk writer, exactly a no-op below the
+  sampling cap, and a different label per artifact so the PQ codebook and the
+  IVF centroids no longer train on the same rows. **An even stride was not
+  only predictable, it was a landmine**: a systematic sample of a periodic
+  corpus collapses when the interval shares a factor with the period —
+  measured on `synth --n 16384` (interval 4, `FACT_TEMPLATES[i % 4]`) at
+  **R@5 83.0%** against this draw's 99.7%, failing that harness's own gate,
+  while `--n 20000` (interval 5) makes the stride look *better* at 99.8% vs
+  99.4%. Never reintroduce position-only sampling; periodic insertion order
+  is ordinary (round-robin per source, alternating speakers, one file a day). Caps differ by unit: 4,096 **drawers** at four sites, 16,384
+  **token rows** for the token codebook. **Above a cap the sample's size and
+  membership both change**, so a measurement taken there does not reproduce
+  across builds or across vaults. The `kmeans` seed stride is *not* keyed and
+  the residual is documented in `pq.rs` — accepted because density grants the
+  same expected capture anyway. Every codebook write bumps a **generation
+  counter** in `meta` (not in the artifact's own table —
+  `invalidate_embedding_space` drops `pq_meta`, and that drop is the event
+  most worth counting), surfaced on `PalaceStats.codebooks`, `/v1/…/stats`
+  (a hand-projected handler: adding a struct field does not reach the wire),
+  and a gauge whose name must be in `undercroft_obs::GAUGE_NAMES` or it is
+  silently dropped. A step means **re-quantization** for the three codebooks
+  and **re-partitioning** for `pq-ivf`/`fde-ivf` (code bytes unchanged; the
+  candidate set moves). A rebuild that reuses the stored codebook is not a new
+  generation. The counter is outside HMAC coverage, so it is evidence about
+  ambiguity, never about tampering.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path

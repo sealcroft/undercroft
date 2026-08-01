@@ -1,5 +1,665 @@
 # Changelog
 
+## Unreleased — the wing becomes the retrieval unit it always claimed to be
+
+- **Per-wing PQ indexes (`UNDERCROFT_WING_PQ_MIN`, default 4096).** `wing` was
+  a SQL `WHERE` on one global table: every index was vault-wide, so a
+  wing-scoped query paid corpus-shaped costs and — worse — could lose its
+  answer to the corpus. The prefilter's top-k is drawn from the whole vault,
+  and intersecting it with a wing can leave *nothing*, while the wing holds
+  the evidence: pinned by test, 400 loud drawers in one wing empty a scoped
+  query against another under the pre-tier path. Wings past the floor now
+  carry their own codebook, their own IVF partitions and their own code rows
+  (`drawer_pq_wing`), and a wing-scoped search probes those; below the floor
+  a scoped query skips the prefilter and full-scans its wing — bounded by
+  the floor, exact, and equally starvation-free. Unscoped queries keep the
+  global index and today's behavior exactly (dual index, no fan-out, no API
+  change); `off` restores the pre-tier behavior for scoped ones too.
+- **The floor is earned, two-sided, and its artifacts shed.** k-means with
+  256 centroids per subspace on a few hundred vectors makes duplicate
+  centroids, and a codebook is ~hundreds of KB against 92 B/drawer of codes —
+  so a wing *earns* its codebook at 4096 drawers (the training-sample cap:
+  the smallest per-wing codebook trains on a full-size sample). A wing that
+  shrinks below the floor sheds rows and codebook on its next check rather
+  than keeping a stale quantizer silently.
+- **Per-wing codebooks are the blast-radius decision implemented.** A wing's
+  population is more homogeneous than the vault's, so its codebook fits it
+  better — and derived-structure scope now matches the isolation unit (the
+  wing) instead of the crypto unit (the vault): a bulk writer in one wing no
+  longer shapes the codebook that scores another. Each wing trains on its own
+  keyed draw (label = `<wing>/pq-codebook`, one string in two roles exactly
+  like the global five), gets its own `fit_report` representativeness check,
+  and bumps its own generation counter — dynamic artifacts on the same
+  `stats`/`/v1/…/stats` surface, deliberately *not* per-wing gauges (the
+  gauge allowlist stays static because per-wing cardinality is unbounded).
+  Stated honestly, both ways: BM25's IDF stays global — the wing is an
+  isolation unit for **candidates**, not for scores — and the hmac-level FTS
+  prefilter keeps the same starvation shape for scoped queries (recorded gap;
+  its fallback-on-empty softens but does not close it).
+- **Every coherence path knows the new artifacts.** Writes encode into the
+  wing's index in place (or arm its re-verify); deletes purge surgically;
+  `invalidate_embedding_space` drops the wing table with the rest; key
+  rotation reseals every wing row (`pqrow/<wing>/<seq>`) *and* the dynamic
+  meta keys (`codebook/<wing>`, `ivf/<wing>`) — enumerated by scan, because
+  a fixed key list cannot cover dynamic artifacts, and a rotation that
+  missed one would leave a wing's index sealed under retired keys. The
+  footprint test prices the second code row (92 B sealed at 384 dims, only
+  for drawers in indexed wings) in both directions, and `wingscale` joins
+  the bench harness to measure scoped-vs-unscoped recall and latency on
+  both sides of the floor.
+- **Measured** (`wingscale`, sealed, hash embedder, 16 wings, `k`=5,
+  candidate pool 256, `IVF_MIN` 8192, steady state with the per-pass
+  warm-up — the one-time index build — reported separately; the harness's
+  own first version folded those builds into per-query averages and
+  manufactured a 15× "effect". One run per cell; per-vault draw wobble
+  ~±0.5pp on the recall column, observed directly as 98.5%/99.0% for the
+  same cell across two fresh vaults:
+
+  | corpus | wing | config | scoped R@5 / ms/q | unscoped R@5 / ms/q | build |
+  |---|---|---|---|---|---|
+  | 16,384 | 1,024 | floor 4096 (below — full scan) | 100% / 104.6 | 100% / 23.2 | 0.2 s |
+  | 16,384 | 1,024 | floor 512 (indexed) | 100% / 24.1 | 100% / 24.0 | 3.9 s |
+  | 16,384 | 1,024 | tier off | 100% / 6.2 | 100% / 23.7 | — |
+  | 65,536 | 4,096 | floor 4096 (indexed) | 100% / 23.8 | 99.0% / 24.5 | 15.5 s |
+  | 65,536 | 4,096 | tier off | 99.0% / 7.2 | 99.0% / 23.7 | — |
+
+  **Read both latency columns before crediting either.** Scoped is flat
+  across 4× corpus growth (24.1 → 23.8 ms/q) — and so is unscoped
+  (24.0 → 24.5): at these sizes the *global* PQ tier already bounds the
+  candidate pool, so the per-wing tier buys **no query latency at all**
+  here, and against tier-off it is 3.5× slower (24 vs 6–7 ms/q — tier-off
+  is cheap because ~15/16 of its candidate budget lands outside the wing
+  and is discarded before hydration). **What is proven is the build
+  economics**: indexing the wing costs 3.9 s / 15.5 s where the global
+  index costs 59 s / 240 s at the same corpus sizes — wing-shaped versus
+  corpus-shaped, a maintenance property that compounds with every retrain.
+  (Later root-caused: both sides of that comparison were ~95% per-row
+  fsync — the autocommit rebuild bug, since fixed. The **shape** of the
+  claim survives, because post-fix cost is CPU per row and still scales
+  with what you index; the absolute seconds do not — see the pqscale
+  entry.)
+  **What is not proven**: the query-latency claim. The 913 s/query figure
+  that motivated wing-as-retrieval-unit was a *full-scan* figure; the PQ
+  tier addresses it, and 65,536 is 15× below the 10⁶ where the residual
+  claim lives — untested there. The starvation signal (tier-off scoped
+  99.0% vs 100.0%) is 2 queries in 196 against ±0.5pp draw wobble —
+  suggestive, not established, by this repo's own evidence bar; the
+  catastrophic shape (a wing emptied entirely by a louder one) is pinned
+  by unit test, which does not need scale. The below-floor 104.6 ms/q is
+  the floor working: bounded by wing size, exact, and the price of not
+  training codebooks on 1,024-row populations.
+- **The settling number, measured (`pqscale`): the query-latency claim is
+  dead, and the tier is reclassified accordingly.** One cumulative sealed
+  vault pushed to 10⁶ (hash embedder, `retrieval=pq`, pool 256, k 5,
+  ~200 queries per checkpoint, one run; warm-up — the event-driven
+  verify/train/retrain debt — reported separately):
+
+  | corpus | unscoped R@5 | ms/q | warm-up owed |
+  |---|---|---|---|
+  | 131,072 | 100.0% | 24.3 | 1,022 s (first build) |
+  | 262,144 | 98.2% | 25.9 | 0 |
+  | 524,288 | 97.7% | 27.0 | 4,355 s (IVF outgrown → retrain + full re-encode) |
+  | 1,048,576 | 96.8% | 31.0 | 0 (exactly 2× training size — not outgrown) |
+
+  **No break between 10⁵ and 10⁶**: 24.3 → 31.0 ms/q, +28% over 8× corpus,
+  linear-in-probed-codes creep, nothing resembling a cliff. The global PQ
+  tier answers the 913 s/query full-scan figure on its own; per-wing
+  indexes buy no unscoped latency at any size measured, and the per-wing
+  tier is therefore **a build-cost optimisation plus a scoped-recall fix,
+  and is documented as exactly that**. Two findings the probe surfaced on
+  the way: what looked like a **maintenance curve at scale** — 17 min
+  owed at 131k, 73 min at 524k — was root-caused as a *bug*, not a cost:
+  the rebuild loop wrote each code row as an autocommit INSERT, one fsync
+  per row under `synchronous=FULL` (7.8–8.3 ms/row, arithmetic exact at
+  both sizes; the wing build shared it at 3.8 ms/row). One transaction
+  around the rewrite — strictly better crash atomicity, since a partial
+  rebuild now rolls back instead of leaving a half-table for the
+  matched-count check to find — collapsed the smoke warm-up **36.2 s →
+  2.3 s** at 8k; the CPU residual (encode + IVF assign, pure math over
+  shared read-only codebooks) is now **parallel** in both rebuild loops
+  (rayon, bounded pool — sealing and SQLite writes stay serial on the one
+  connection, and durability semantics are untouched: `synchronous=FULL`
+  is a pinned invariant, not a tuning knob). Search-path candidate
+  hydration remains serial — parallelizing the hot correctness path
+  (per-candidate HMAC verify + decrypt, plus a `RefCell` embedding cache
+  that is not `Sync`) is deliberately its own future pass with its own
+  measurement, not a rider on this one. Full-scale post-fix build numbers
+  come from the corrected run; and **an OPEN
+  DEFECT: unscoped recall leaks monotonically with corpus size** (100.0 →
+  96.8 over four checkpoints). This is classified as a defect, not a
+  documented property, because it violates the prefilter's own charter —
+  narrow the candidate set, never lose the answer. Root cause: the
+  candidate pool is fixed at 256 while the corpus grows; ADC score error
+  per vector is constant, competitors grow linearly, so a fixed pool must
+  eventually crowd the true answer out — and everything downstream already
+  re-scores hydrated candidates with exact vectors, so the loss is
+  confined entirely to candidate selection. The fix is a measurement away
+  and its price is known in advance: pool size costs only hydration
+  (~0.09 ms/row — 512 ≈ 48 ms/q, 1024 ≈ 96 ms/q), so a `--pools` sweep on
+  the pqscale instrument yields the recall-vs-pool curve, and a
+  corpus-scaled pool policy (a declared formula, env-overridable) closes
+  the defect. **Acceptance gate: R@5 at 10⁶ restored to ~100%, with the
+  ms/q price recorded beside it.**
+
+  **The sweep ran and the gate is met.** Recall-vs-pool (sealed, hash,
+  one cumulative vault, scaling off — the raw curve; one run):
+
+  | corpus | 256 | 512 | 1024 | 2048 |
+  |---|---|---|---|---|
+  | 131,072 | 100.0 | 100.0 | 100.0 | 100.0 |
+  | 262,144 | 98.2 | 99.4 | 99.4 | 99.4 |
+  | 524,288 | 97.1 | 97.7 | **100.0** | 100.0 |
+  | 1,048,576 | 97.9 | 98.9 | **100.0** / 106.9 ms/q | 100.0 / 206.4 |
+
+  **Shipped fix, arrived at in three measured steps** (each intermediate
+  recorded because each taught something):
+  1. *A scaled single-stage pool* (`live/512`, hydrating everything it
+     fetched) recovered 524k and 1M to 100.0% — but a fresh-vault control
+     at 262k still read 98.8%, refuting "codebook staleness" as the sole
+     cause of that row and proving the divisor insufficient mid-size.
+  2. *A wider net cut to the fixed floor by exact cosine* regressed 1M
+     from 100.0% to 98.9% — the instructive failure: **a sealed vault has
+     no lexical prefilter, so hydration is the only door through which
+     BM25 evidence reaches fusion**, and a pure-cosine cut below the
+     proven hydration pool drops lexical-carried golds. A wide net is
+     worthless if the cut metric ignores why fusion would have ranked
+     its contents.
+  3. **The shipped design — a two-stage pool**: stage 1 fetches
+     `live/64` ADC candidates (`UNDERCROFT_POOL_DIV`, `off` = fixed
+     floor); stage 2 cuts by exact cosine over just those candidates'
+     embeddings (~µs each) down to `stage1/8` = `live/512` — the
+     hydration size the raw sweep proved — never below it; stage 3
+     hydrates as before. Combined with the freshness rule below, the
+     shipped default reads **R@5 100.0% at every checkpoint**: 131k
+     (34.4 ms/q), 262k (69.6), 524k (138.4), 1M (280.6). The price curve
+     is linear-in-corpus by design (hydration `live/512` × ~0.09 ms +
+     stage-2 `live/64` × ~5 µs) and is the recorded cost of not losing
+     answers; the named levers if it ever matters are parallel hydration
+     and dim/4 codes, both of which shrink it without touching recall.
+  Pinned by a mechanism test whose counterfactual is in the same test
+  (scaling on → live/div candidates; off → exactly the old floor).
+  **The freshness rule also changed** (`ivf_fresh`, all seven sites, FDE
+  included): retrain at 1.5× the training size instead of strictly-\>2× —
+  the doubling rule was priced when a retrain cost 73 minutes, a 524k
+  rebuild now costs ~14 s, and the strict boundary let a corpus sit at
+  exactly 2.0× untrained (measured at 262k, where staleness sank one
+  query's gold beyond a 2048 pool). The 262k row required all three at
+  once — fresh partitions, the wide net, and the full fusion pool — and
+  no single-lever configuration ever recovered it. Also: the
+  corrected instrument's whole 131k→1M run took **~14 minutes against the
+  original 10.5 hours** (warm-ups 1,022 s → 5.6 s and 4,355 s → 13.5 s
+  from the fsync fix + parallel encode; bulk ingest 7.2 min, though the
+  rate declines 16,187 → 1,693 docs/s over the growth — the B-tree/encode
+  slope, recorded for the next person who needs it). Second-order levers if the curve prices
+  pool scaling too high: wider codes (dim/4, footprint-priced) and
+  parallel candidate hydration. The hmac-level FTS prefilter shares the
+  fixed-`k` shape — same defect class, flagged. Separately, a fixed-size
+  wing did not exhibit the leak in wingscale (scoped R@5 100% at both
+  corpus sizes) — a scoped-recall-at-scale claim for the per-wing tier
+  remains unestablished and would need its own instrument.
+  Incidental, and then corrected: the probe's ~9 h of ingest was an
+  **instrument defect, not an engine property** — it ingested a bulk
+  corpus through the interactive single-write path, which pays its
+  durability fsyncs per drawer (`synchronous=FULL` + manifest anchor +
+  dir sync — 81 → 30 docs/s at 131k → 1M, ~96% fsync wait). The engine's
+  bulk path (`upsert_many`, one transaction + one manifest anchor per
+  batch) measures **17,958 docs/s at 8k / 8,555 docs/s at 16k** — a
+  million drawers in minutes, not hours — and pqscale now ingests through
+  it (`--batch`, default 4096; `--batch 1` measures the interactive
+  surface deliberately). Each figure describes a different product
+  surface: interactive writes buy per-write crash-safety, bulk loads buy
+  amortized anchoring; neither number may be quoted for the other. Also:
+  the `fit_report` detector fired at exactly 1.5× on every fresh global
+  codebook over this keyed corpus — the per-row-idiosyncrasy cause its
+  message now names.
+
+## Unreleased — a caller can iterate now, instead of re-asking
+
+- **`SearchOptions` pages: `offset` + `ranked_at`.** There was no way to see
+  rank 11: a second call could only re-ask the same question and get the same
+  top-10 back. Letta measured iteration as *the* differentiator (74.0% on
+  LoCoMo with plain grep plus tool rules), and iteration was the one thing the
+  interface could not do. A page is defined as ranks
+  `[offset, offset + limit)` of the very list one deeper call would produce —
+  an *offset*, not a keyset cursor, because the stages after fusion
+  (cross-encoder, MaxSim, room diversification) re-order candidates, so "score
+  of the last hit I saw" names no stable position in this pipeline while a
+  rank does.
+- **`ranked_at` is the clock the ranking is computed against.** Recency decay
+  read the host clock at every call, so two pages seconds apart sliced two
+  *different* rankings — near-ties could swap across the boundary and a hit
+  could appear twice or never. A paging caller repeats the first page's
+  instant and every page slices one identical ranking. Declared, never
+  inferred: absent, the host clock applies, exactly as before.
+- **The room cap's selection order is now depth-independent.** The soft cap's
+  refill engaged as a function of the *requested* depth, so page 2 diversified
+  at depth 4 could re-select a hit page 1 had already returned at depth 2 —
+  a duplicate across a page boundary, and a dropped hit to pay for it. The
+  selection stream is now computed once over the whole list (cap-eligible in
+  score order, then the cap's leftovers in score order) and pages slice that
+  stream. At offset 0 this reproduces the shipped selection exactly — the
+  pinned refill-order test did not move.
+- **The candidate over-fetch scales with the page's far edge.** Every
+  prefilter fetched `max(256, limit·32)` candidates; a page starting past
+  that floor sliced into ranks the prefilter never fetched and returned
+  nothing while shallower pages were full. All four (FDE, PQ, HNSW, FTS) now
+  fetch to `offset + limit`, pinned by a 400-drawer test that pages to rank
+  360.
+- **Every surface states the continuation instead of assuming the caller
+  knows it.** `POST /v1/…/search` accepts `offset`/`ranked_at` and returns
+  `next_offset` plus the `ranked_at` it ranked at (additive keys — existing
+  clients see the response they always saw; an unparseable `ranked_at` is a
+  400, never a silent fall-back to the host clock). `undercroft_search` gains
+  the same two parameters, numbers hits by absolute rank (on page 2, "1."
+  would claim a rank the hit does not hold), and a *full* page ends with the
+  exact call that continues it — a short page means the ranking is exhausted
+  and says nothing. The CLI gains `--offset`. The remote-index path
+  (`search_with_index`) applies the same page semantics, so a mirror-backed
+  search paginates identically to a local one.
+- **Measured: the largest delivered gain in the reach program.** LoCoMo,
+  default config (hash embedder, no reranker, `UNDERCROFT_RETRIEVAL` unset,
+  pool 400, k 10, deterministic — one run is exact), asserted per
+  turn-scored query by `locomo --paging-contract`: four pinned pages of ten
+  tile one call of forty with **0 mismatches in 1,977 queries** (ids and
+  order), and the all-gold evidence a paging reader actually receives goes
+  **74.2% → 85.9%** — identical, to the decimal, to the depth CDF's
+  within-top-40 row, which had been quoted as a ceiling since session 20 and
+  is now a result. Four calls instead of one is the price, and making that
+  trade available was the point. For comparison: ColBERT bought +4.9pp,
+  the served embedder +3.2–4.2pp, R2 +2.1pp in a configuration nobody runs.
+  Unpinned repeats (no `ranked_at`) differed on **4 of 1,977 queries
+  (0.2%)** — the documented host-clock recency drift, now with a measured
+  rate instead of a doc comment.
+
+## Unreleased — a served embedder, and a standing conclusion overturned
+
+- **`UNDERCROFT_EMBEDDER=http` — an `Embedder` backed by a served model.** The
+  engine could embed exactly three ways: the built-in hash, an ONNX file on
+  disk (`onnx`/`ort`), or not at all (`external:` is an *identity* for vaults
+  whose vectors the caller computes elsewhere — its `embed()` returns a zero
+  vector and is documented as unreachable). A model served over HTTP had no
+  route in, though the same runtimes have driven `refine` since v0.5.0.
+  `undercroft_llm::HttpEmbedder` closes that, reusing the LLM client's
+  conventions rather than inventing new ones: both API shapes (OpenAI
+  `/v1/embeddings` and Ollama native, both verified against a live server),
+  `UNDERCROFT_EMBED_URL`/`_MODEL`/`_API`/`_KEY`/`_DIM`, and the same default-off
+  posture — nothing is contacted unless a URL is set.
+  - **The dimension is probed, not assumed**: one embed at construction, whose
+    length is the dimension. Reading it is evidence; inferring 768 from a model
+    name would be inference.
+  - **Identity is `http:<model>`**, so the existing embedder-swap refusal
+    covers a silently changed served model exactly as it covers an ONNX swap.
+  - **Two hazards stated rather than hidden.** Drawer text is sent **in the
+    clear** — warned at construction when the host is not loopback, because
+    sealing protects a vault at rest, not content handed to another host. And
+    a failed embed cannot fail a write (`Embedder::embed` has no error
+    channel), so it degrades to a **counted** zero vector: the drawer stays
+    verbatim and lexically findable, but is semantically invisible until
+    re-embedded.
+- **`embeddings` + `embed-pull` compose services** run a quantized embedder on
+  the compose network, **CPU only**. A desktop runtime on the host is neither
+  reproducible nor reachable from the bench container; this is, and it keeps
+  the Docker-only rule intact.
+- **The standing conclusion "a semantic embedder is NOT the biggest lever" is
+  overturned.** It rested on MiniLM measuring **+0.3pp** of turn all-gold on
+  LoCoMo — a fact about MiniLM, generalised to model embedders as a class.
+  Four served models, full corpus, same k and pool:
+
+  | model | params | session `R@10` | turn all-gold | ingest | ms/q |
+  |---|---|---|---|---|---|
+  | hash (default) | — | 95.5% | 74.2% | 16 s | 110 |
+  | nomic-embed-text | 137M | 96.8% | 77.4% | 177 s | 132 |
+  | mxbai-embed-large | 335M | 96.9% | **78.4%** | 416 s | 149 |
+  | bge-m3 | 567M | 96.9% | 77.9% | 469 s | 172 |
+  | Qwen3-Embedding-0.6B (Q8) | 600M | **97.0%** | 78.1% | 413 s | 171 |
+
+  **+3.2 to +4.2pp** over hash — comparable to ColBERT's +4.9pp, at no storage
+  cost and with no ONNX export. And the second reading matters as much: the
+  four modern models span **1.0pp**, so the lever is *using a real embedder at
+  all*, not choosing the best one. Public leaderboard order does not transfer —
+  Qwen3-0.6B sits far above nomic on MTEB and lands within 0.7pp here at 2.3×
+  the ingest cost.
+  - **No winner is claimed.** One run per model, and the served path has not
+    been shown run-to-run deterministic; a 1.0pp spread deserves the same
+    suspicion that already cost this session two retracted findings.
+  - **Untested, and it is the part that would matter most:** LoCoMo is English,
+    so bge-m3's and Qwen3's multilingual training buys nothing visible here.
+    Cross-lingual is the one capability the hash embedder provably cannot do at
+    all, and none of the above measures it.
+  - Qwen3-Embedding is **not** in Ollama's library at 0.5.7–0.11.4; it was
+    pulled from `hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF`. Mistral's embedder is
+    API-only (no weights, so it cannot run in the container and would be real
+    external egress); the open Mistral-family embedders are all 7B, ~10× the
+    CPU cost of the 0.6B, and were not run.
+
+## Unreleased — the rescore depth was a latency cap in disguise
+
+- **Late interaction gets its own depth, `UNDERCROFT_LATE_TOP_N` (200).** It
+  shared `UNDERCROFT_RERANK_TOP_N` (50) with the cross-encoder, and the two
+  budgets buy different things: a cross-encoder spends one transformer forward
+  per candidate, so its depth *is* a latency cap, while MaxSim is arithmetic
+  over matrices built at ingest. Late interaction was therefore inheriting a
+  cap it never spent — the single largest measured constraint on how deep the
+  engine looks.
+- **Measured on the merged LoCoMo corpus with the token codebook disabled**, so
+  no codebook is trained, there is no keyed draw, and rescore depth is the only
+  variable (turn all-gold in the 10 slots, against search ms/query):
+
+  | depth | all-gold | ms/q |
+  |---|---|---|
+  | 50 (the old shared cap) | 77.7% | 342 |
+  | 100 | 78.7% | 352 |
+  | **200 (new default)** | **79.8%** | **374** |
+  | 400 | 79.6% | 417 |
+
+  **+2.1pp for +9% search time in that configuration** — and the qualifier is
+  load-bearing. Any corpus past `TOK_PQ_MIN` (256 matrices) runs v2 PQ-ADC
+  instead, and this one does; there the same 50 → 200 step measured **+1.7pp
+  in one run and +0.0pp in another**, both inside the per-vault draw's spread.
+  **The default-configuration value of the change is therefore unmeasured**,
+  bracketed by 0.0 and 1.7. Under v2 the same sweep moved 334 → 337 ms/q, so
+  the depth is nearly free there: a coded row costs `m` table lookups, not a
+  full-dimension dot.
+- **200 is a judgement, not a measured optimum.** An earlier draft of this
+  entry called it a peak because 400 scored 79.6% against 200's 79.8% — a
+  difference of **one question out of 495**, from one run per depth, while the
+  two other sweeps in the same record put 400 *above* 200 (80.6 vs 80.4; 80.2
+  vs 78.9). What the evidence supports is that depth beyond 50 helps and that
+  100–400 are not separable here. 200 takes the measured gain without paying
+  unbounded rescore on a large candidate set.
+- **This moves published ColBERT figures, and they have not been re-measured.**
+  `late_rescore` runs on the un-truncated candidate list, so on a sealed vault
+  with no prefilter the depth reaches the whole corpus: a 127-drawer LoCoMo
+  conversation goes from `min(127, 50)` to `min(127, 200)` — every drawer
+  rescored rather than 50. The full-corpus ColBERT numbers (79.1%, +4.9pp)
+  describe depth 50 and no longer describe the default.
+- **Deconfounding was necessary, and the first attempt at this measurement did
+  not do it.** A sweep with the codebook live reported +1.7pp and put depth 200
+  at exactly the 80.4% that a previous session had recorded — both of which
+  evaporated on a repeat run at the same settings (78.9%). Each fresh vault
+  draws its own training sample, so per-vault spread is ~1.5pp on this corpus,
+  the same size as the effect. Numbers here come from the configuration where
+  that variance does not exist.
+- Setting only `UNDERCROFT_RERANK_TOP_N` still drives both stages, so a
+  deployment that pinned the old knob keeps exactly the behaviour it pinned.
+
+## Unreleased — what a drawer costs, and who gets to shape a codebook
+
+The guardrails the measurement work needed before anything built on it:
+footprint is now asserted rather than computed, and the two cross-drawer
+objects in the engine are no longer either guessable or silent.
+
+- **A drawer's on-disk cost is pinned, per artifact, in both directions.**
+  "Never grow large" is a first-class constraint of this project and was the
+  only load-bearing property with no test — the byte formulas lived in
+  comments and the totals in arithmetic over them, so a change that doubled
+  the per-drawer footprint would have shipped green.
+  `one_drawer_costs_exactly_this_many_bytes` measures a real 804-byte prose
+  chunk on a **sealed** vault and asserts every artifact against its formula:
+  sealed embedding `40+6+dim` = **430 B** at 384 dims, sealed PQ row
+  `40+4+dim/8` = **92 B**, v1 token matrix `40+9+rows·(4+dim)`, raw FDE
+  `40+1+reps·2^ksim·dproj·4` = **8,233 B** — the 40 being XChaCha20's 24-byte
+  nonce plus Poly1305's 16-byte tag. Equality, not an upper bound, so a
+  *shrink* fails too and good news has to be recorded instead of quietly
+  absorbed. Measured at rest for that chunk: content **515 B**, so the default
+  configuration's only derived artifact — the embedding — is **0.83×** the
+  content it indexes, and every tier at once is **11,304 B, 22×**.
+  - **The mechanism is one table driving both halves.** `priced` names each
+    artifact with the query that measures it *and* the formula it must equal,
+    and the inventory assertion is built from that same array — so a new
+    artifact cannot be silenced by adding a name, because a name with no
+    formula beside it does not compile. The first version of this test kept the
+    halves separate and was refuted for exactly that: **one string literal made
+    it green with zero bytes measured.**
+  - The inventory is now the **whole schema**, not a `drawer%` prefix: every
+    table is either priced per-drawer or listed as not-per-drawer with its
+    reason. A prefix is a naming convention, and a future store called
+    `sparse_terms` would have passed it silently. `drawers`' **column list** is
+    pinned too, because a column is the cheapest way to add per-drawer bytes
+    and no table-level check can see one.
+  - Sealed is the level with the strictest *guarantees*, **not** the larger
+    footprint: hmac-only keeps content as plaintext and adds an fts5 index plus
+    four shadow tables over it. The earlier claim that sealed is "the worst
+    case" was wrong.
+  - Found while writing it: **with the FDE tier enabled, `search` never builds
+    the PQ index** — the prefilters are an `else if` chain with FDE first. The
+    per-drawer FDE cost depends on which side of `fde_pq_min` (256 rows) the
+    corpus is: **8,233 B raw below it, 301 B PQ'd above it**. Any statement
+    about "8 KB per drawer" is about a small corpus, not the steady state.
+
+- **The training sample of every trained index artifact is now a stratified
+  keyed draw, not an even stride — and the stride turned out to be a latent
+  recall landmine, not only a predictable one.** It was `div_ceil` + `step_by`
+  at all five sites: four capped at 4,096 **drawers** (PQ codebook, IVF
+  centroids, FDE codebook, FDE IVF centroids), the token codebook at 16,384
+  **token rows** — a different unit and 4× the figure.
+  - **The security reason it changed.** The stride is reproducible, and equally
+    reproducible to a writer who never held the vault key: `seq ≡ 0 mod stride`
+    told them exactly which of their rows would train the quantizer every
+    *other* row is then encoded against. k-means has an unbounded breakdown
+    point, so that is a lever on unrelated drawers' recall, invisible to every
+    HMAC because nothing was tampered with.
+  - **The correctness reason it had to change, measured.** A fixed interval
+    over a corpus whose insertion order is *periodic* samples one residue
+    class. `synth` builds facts from `FACT_TEMPLATES[i % 4]`, and at
+    `--n 16384` the interval is exactly `⌈16384/4096⌉ = 4`: every sampled fact
+    shares one template and one key prefix. Within-run, one host,
+    `UNDERCROFT_RETRIEVAL=pq`, hmac-only, 2,000 queries:
+
+    | n | interval | draw | R@1 | R@5 |
+    |---|---|---|---|---|
+    | 20,000 | 5 (coprime with 4) | stride | 99.2% | 99.8% |
+    | 20,000 | — | stratified keyed | 97.9% | 99.4% |
+    | **16,384** | **4 (aligned)** | **stride** | **82.5%** | **83.0%** |
+    | 16,384 | — | stratified keyed | **98.9%** | **99.7%** |
+
+    The stride's edge at 20,000 is alignment luck between two measured points;
+    its collapse sits between them, and at 16,384 it **fails `synth`'s own
+    ≥95% regression gate** — a shipped default that a benchmark already in this
+    repo would have caught at a corpus size nobody happened to run. Periodic
+    insertion order is not exotic: round-robin ingest per source, alternating
+    speakers, one session per day all produce it.
+  - **Stratified, not simply lowest-ranked.** Blocks keep the coverage the
+    stride had; the keyed choice *inside* each block breaks the residue
+    alignment that made it fragile. The two keyed variants are within noise of
+    each other (uniform 97.8/99.4 against stratified 97.9/99.4 at n=20,000), so
+    the strata are kept for the reasoning they support, not for a recall win.
+  - **And the failure class now announces itself.** Fixing the draw does not
+    help a vault trained by an older build, and an unrepresentative corpus can
+    arrive by other routes (one enormous near-duplicate cluster, an `external:`
+    embedder with a degenerate space). So every codebook is checked at train
+    time against a **second keyed draw it did not train on**
+    (`ProductQuantizer::fit_report`): reconstruct its own sample more than 1.5×
+    better than unseen vectors and it warns, with both errors and the ratio.
+    Pinned in both directions by a test built to the exact shape of the real
+    failure — a four-cluster corpus sampled at stride 4 must fire, the same
+    corpus at stride 5 must not, because a detector that cries wolf on healthy
+    corpora gets muted. Advisory: it never fails a training pass, and it is
+    silent until a codebook is actually trained, so an already-degenerate vault
+    stays quiet until its next retrain.
+  - `sample_rank` is keyed by a **fourth HKDF-derived subkey** (label
+    `sample`), deliberately not the MAC key: these ranks are published by
+    their effects — which rows shaped a codebook — and must not share a key
+    with record integrity. The label is **length-prefixed, not delimited**, so
+    no two (label, ident) pairs can re-cut into one rank.
+  - **Below a cap it is exactly a no-op** — the whole corpus trains, as it did
+    at `stride == 1`. **Above a cap both the membership and the size of the
+    sample change**: the old stride took `n/⌈n/cap⌉` rows, so a 50,000-row
+    corpus trained on 3,847 where this trains on 4,096. A measurement taken
+    above a cap is therefore **not reproduced by this build**.
+  - **Which published numbers that touches, exactly** — because the answer is
+    narrower than it first looks. `locomo_eval` builds a **fresh vault per
+    conversation** (~127 drawers), which is below `TOK_PQ_MIN` (256) and below
+    every drawer-level cap, so **no codebook of any kind trains there**: the
+    headline LoCoMo figures (session `R@10` 95.5%, turn all-gold 74.2%, and
+    ColBERT's 79.1% / +4.9pp) are untouched, and ColBERT runs there as exact
+    int8 MaxSim. Affected: the **`synth` PQ/IVF recall** figures — measured
+    above, 99.8% → **99.4%** R@5 at n=20,000 — and the **`TOK_PQ_MIN` boundary
+    run**, re-measured below. Unaffected for a third reason: the 10⁷ page-tier
+    spike and the FDE-synth containment numbers train on their harnesses' own
+    synthetic samples, not the store's.
+  - **The token-codebook site, re-measured** (`locomo3_merged`, ~380 drawers,
+    ~47,500 token rows against a 16,384 cap — the one place a LoCoMo run
+    trains a codebook). Turn all-gold in the 10 slots: hash baseline **73.9%**,
+    ColBERT with the stride **78.1%**, ColBERT with the stratified keyed draw
+    **78.9%** and **78.1%** on two runs with different vault keys. The keyed
+    spread brackets the stride, so **at this site the draw makes no measurable
+    difference**.
+  - **A recorded figure, and what it took to account for it.** That same
+    corpus previously reported ColBERT at **80.4% (+6.5pp)**. The hash
+    baseline reproduces to the decimal (73.9%), fixing corpus, chunking, `k`,
+    pool and fusion, so the difference had to be in the ColBERT path. Tested
+    and eliminated there: the training draw (stride 78.1%, keyed 78.9%/78.1%),
+    the packing boundary (exact int8, 77.7%), the backend (**ort**, 78.7%),
+    and the export pair (only one exists). Two things were then found that
+    together account for it, and **neither was recorded with the number**:
+    - **Rescore depth.** It was governed by `UNDERCROFT_RERANK_TOP_N`, an
+      environment variable, and raising it moves this exact figure — see the
+      R2 entry below, where depth 200 measures 79.8% against 77.7% at 50.
+    - **Per-vault variance of ~1.5pp.** With the token codebook live, two runs
+      at identical settings scored 80.4% and 78.9%, because each fresh vault
+      draws a different training sample. Any single ColBERT number on this
+      corpus carries that spread.
+
+    So 80.4% is reachable — it is not an error in the record — but it is not
+    attributable to any one setting, and a lone run cannot distinguish a real
+    +1.5pp from the draw. **Both facts are instrument defects that this
+    session's own first sweep walked straight into**, reading a single run and
+    concluding depth was worth +1.7pp. The deconfounded sweep (codebook
+    disabled, so the draw is out of the picture) is what the R2 numbers rest
+    on. A figure without its backend, export, thresholds and repeat count is
+    not defensible later.
+  - **`benchmarks/RESULTS.md`'s "Recall is identical across every version
+    (deterministic pipeline)" is now false** and is corrected there: the draw
+    is keyed on a per-vault subkey, so two fresh vaults over identical content
+    above a cap train different codebooks. The observed spread across three
+    keyed runs at n=20,000 was R@1 97.4–97.9%, R@5 99.4–99.6%.
+  - Reproducibility is now **per vault**, not per corpus. Two fresh vaults
+    ingesting identical content above a cap train different codebooks, so a
+    bench harness that builds a new vault per run no longer reproduces itself
+    exactly at that scale.
+  - The PQ codebook and the IVF centroids draw under **different labels** —
+    two independent samples where one stride gave both the same rows.
+  - Pinned by unit tests on both halves (keying, selection). Stated as a
+    gap: not end-to-end, which would need a corpus above a cap.
+
+- **Every codebook write bumps a visible generation counter.** Nothing in a
+  row's bytes says which generation of a trained artifact produced it, so "the
+  index was rebuilt from the artifact it already had" and "the artifact was
+  replaced and every row re-derived" look identical from outside — the same
+  class of invisible change to a vector space that `KNOWN_EMBEDDER_UPGRADES`
+  exists to make explicit, one level down.
+  - **What a step means differs by artifact**: for the three codebooks it is
+    **re-quantization** (every code byte recomputed); for `pq-ivf` and
+    `fde-ivf` it is **re-partitioning** — the code bytes are byte-identical and
+    what changes is which candidates a probe *offers*. Availability, not score.
+  - Counters live in `meta` rather than in each artifact's own table because
+    `invalidate_embedding_space` drops `pq_meta` wholesale and **that drop is
+    the event most worth counting**; the test asserts the generation survives it
+    and reads 2, not 1. A rebuild that reuses the stored codebook is **not** a
+    new generation — pinned by forcing a real drift-driven rebuild, because an
+    assertion that merely clears the caches cannot fail whatever the code does.
+  - Visible on `PalaceStats.codebooks`, `GET /v1/vaults/{id}/stats` (the
+    handler projects fields by hand and had to be taught the new one — adding
+    it to the struct was not enough), the MCP `undercroft_status` tool,
+    `undercroft stats`, and as a **registered** telemetry gauge:
+    `undercroft_obs::GAUGE_NAMES` is an allowlist and a gauge set under any
+    other name is silently dropped, so all five names are listed there and
+    `every_codebook_gauge_name_is_registered_in_obs` pins the mapping.
+  - **It is not integrity evidence.** The row is outside HMAC coverage, so
+    anyone who can write the database file can reset or forge it; it
+    distinguishes honest ambiguity, not tampering. Two stated gaps:
+    export/import copies no `meta` rows, so a migrated vault reports 0 — which
+    reads as "never trained" rather than "unknown"; and a bump lost to a busy
+    database is warned about, not retried.
+
+- **L2 normalisation is documented as the poison mitigation it already was**
+  (`pq.rs` module docs) — and the bound is stated correctly this time. With
+  every point on the unit sphere an attacker cannot buy influence with
+  *magnitude*, only with **count**, which is what makes the breakdown bounded
+  at all. What it does **not** give is a small displacement bound: with all
+  points in the unit ball every centroid is already in that ball, so "at most
+  the diameter" bounds nothing. Two residual channels are named rather than
+  implied: **density** (owning a fraction *f* of the corpus buys ≈*f* of any
+  uniform sample — a per-source cap's job, not a sampling scheme's) and
+  **non-finite input** (a NaN from an `external:` embedder escapes the bound
+  entirely). The seeding stride inside `kmeans` is likewise **not** keyed, and
+  the residual is written down where it lives.
+
+## Unreleased — gold evidence, and a data-destroying append index
+
+- **`remember` no longer derives a drawer id from `count()`.**
+  `crates/undercroft-cli/src/main.rs` now uses `next_append_index()`, matching
+  the `/v1` and MCP save paths. `COUNT(*)` goes *down* after a delete, so the
+  next save was handed an index still in use, the derived id collided, and
+  `ON CONFLICT(id) DO UPDATE` overwrote the unrelated drawer holding it — a
+  record destroyed by writing a different one, which is exactly the failure
+  the store documents and `CLAUDE.md` pins as an invariant. Regression test
+  drives the real binary through remember → remember → `drawer delete` →
+  remember and asserts the survivor is intact; reintroducing `count()` makes
+  it fail, so it is not vacuous. Vaults that have never deleted are
+  unaffected — `next_append_index()` equals `count()` there, so no existing
+  id moves.
+
+- **`undercroft-bench locomo` reports gold-evidence recall at turn
+  granularity**, alongside the session-level row it has always printed, and
+  still without a single model call — the evidence ids ship with the dataset.
+  The historical row asks whether a gold *session* appears among the top-k
+  rooms; the new one asks whether the gold *turn* is inside the k drawers a
+  reader is handed. Full corpus at `k=10`: session **any 95.5% / all 87.9%**
+  at pool depth and **94.3% / 85.8%** within the 10 slots, turn **any 84.1% /
+  all 74.2%**.
+- **Session rows are reported at two depths, because the two granularities are
+  only comparable at equal depth.** The session row collects distinct rooms by
+  scanning the whole `k*6` candidate pool; the turn row sees only the `k`
+  returned slots, so a room first appearing at hit 47 counts for the former and
+  cannot count for the latter. Measured against each other at equal depth, the
+  granularity difference is **11.6pp** and the depth difference **2.1pp** —
+  reported separately so neither is mistaken for the other.
+- Coverage is an interval test over byte ranges in the ingested body, not a
+  substring search. Ingest windows 800-byte chunks with 100 bytes of overlap
+  over a session that is one long paragraph, so turns land across boundaries
+  routinely; testing each chunk alone would book a miss the reader never
+  suffered, while the union of the returned chunks is exactly what the prompt
+  contains. Gold turns that cannot be located (9 of roughly 2,800) are
+  excluded **and printed**, so the denominator cannot quietly shrink.
+- **LoCoMo image captions now reach the vault.** The corpus is multimodal:
+  `blip_caption` appears on 1,226 of 5,882 turns, including 1,064 of the 2,806
+  gold-evidence turn references — **37.9%**. The harness formatted `speaker`
+  and `text` only, so those turns were stored incomplete. Now ingested;
+  `img_url` and `query` stay out, being the dataset's own sourcing scaffolding
+  rather than anything a participant said. Retrieval moves ±0.2pp: a
+  corpus-fidelity fix, not a quality one.
+- **Deduplicating retrieval candidates by source document: a per-document cap
+  is refused, byte-level redundancy removal is a small win.** The cap costs
+  **−17.5pp** of turn all-gold at ≤1 slot and **−1.8pp** at ≤2, and split by
+  population it loses at *every* evidence count — evidence averages 1.17 turns
+  per session, so a cap blocks the second turn of the *right* session as often
+  as it admits a new one. Removing only *duplicated bytes* — byte-budget
+  selection with overlapping text charged once — **gains +0.3pp** and fits 11.3
+  chunks where 10 fit before, the only selection-policy change measured that
+  loses nowhere. Its ceiling is now known: duplicated bytes are **2.1%** of what
+  the reader receives. Both counterfactuals stay in the harness (`DOC_CAPS`,
+  `select_within_budget`) so they are re-measured rather than re-proposed.
+- **LoCoMo's category integers are `1 = multi-hop, 2 = temporal,
+  3 = open-domain, 4 = single-hop, 5 = adversarial`.** The counts and the
+  evidence statistics both fix this: category 1 carries a mean 3.13 evidence
+  turns over 2.68 distinct sessions, category 4 carries 1.07 over 1.00, and 841
+  questions are category 4. Per-category figures elsewhere in this file and in
+  ROADMAP are labelled to this mapping. It matters for prioritisation: the
+  43.4% all-gold figure belongs to **multi-hop**, where 3.13 turns across 2.68
+  sessions makes it unremarkable, while **single-hop measures 97.1%**.
+- **Late interaction is the only retrieval change measured to help.** ColBERT
+  rescoring: **+4.9pp** turn all-gold on the full corpus (74.2 → 79.1) and
+  session `R@10` 95.5 → **96.9%**, at 2.0× search and 43× ingest; **+6.5pp**
+  above the `TOK_PQ_MIN=256` boundary where MaxSim runs PQ-ADC instead of
+  exact int8. A cross-encoder reaches +6.7pp at **58× search**. Against them:
+  a MiniLM bi-encoder is +0.3pp, `Fusion::Rrf` −7.3pp, `Fusion::Legacy`
+  −8.2pp, per-query channel rescaling −9.4pp, finer chunks −10 to −28pp,
+  writer-declared turn boundaries −6.8pp, and the semantic gate off is
+  byte-identical. ROADMAP records the full list so none of it is
+  re-proposed.
+
 ## Unreleased — AMB, run against ourselves without an external API
 
 - **`docs/AMB_REPLICATION.md`** — a procedure for running the Agent Memory
@@ -34,8 +694,8 @@
   own input file, and a judge that padded to 20 verdicts by duplicating an id —
   a grade for a question nobody answered, which passed every aggregate check and
   was caught only by reconciling verdict ids against answer ids.
-- ROADMAP gains the five measured retrieval gaps in cost order, and the list of
-  changes explicitly refused as benchmark-fitting.
+- ROADMAP gains the measured retrieval gaps and the list of changes explicitly
+  refused as benchmark-fitting.
 
 ## Unreleased — the security model, drawn
 

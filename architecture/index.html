@@ -839,7 +839,7 @@
 </div>
 
 <h3 id="retrieval-stage-5-second-stage-opt-in">Stage 5 — second stage <span class="pill off">opt-in</span></h3>
-<p>A cross-encoder rescores the top-N candidates on the full (query, content) pair — the interaction a bi-encoder cannot capture — then results are re-sorted. Alternatively ColBERT late interaction computes MaxSim over token matrices built at ingest. Bounded to <code>UNDERCROFT_RERANK_TOP_N</code> forward passes, default 50.</p>
+<p>A cross-encoder rescores the top-N candidates on the full (query, content) pair — the interaction a bi-encoder cannot capture — then results are re-sorted. Alternatively ColBERT late interaction computes MaxSim over token matrices built at ingest. Bounded to <code>UNDERCROFT_RERANK_TOP_N</code> forward passes, default 50. Late interaction has its own depth, <code>UNDERCROFT_LATE_TOP_N</code> (default 200): MaxSim costs arithmetic per candidate rather than a forward pass, so it can look far deeper than a cross-encoder can afford to. Measured worth +2.1pp of turn-level evidence delivery on LoCoMo <em>with the token codebook disabled</em> — the one configuration where two runs are comparable; in the shipped v2 packing the same step measured +1.7pp and +0.0pp, so its default-configuration value is not established.</p>
 
 <h3 id="retrieval-stage-6-select-top-k">Stage 6 — select top-k</h3>
 <p>Results are truncated to the requested limit. An optional <code>room_cap</code> takes at most <em>N</em> hits per room and then refills any remaining slots in score order — a soft cap, so a genuinely single-room question still receives the full limit and recall is never traded for spread.</p>
@@ -1682,6 +1682,8 @@
     <tr><td><code>UNDERCROFT_FTS_PREFILTER_MIN</code></td><td>2048</td><td>Row count above which the lexical prefilter engages (hmac-only vaults)</td></tr>
     <tr><td><code>UNDERCROFT_SEMANTIC_GATE</code></td><td>the embedder's own</td><td>The <code>semantic</code> score above which a drawer is admitted on cosine alone; <code>off</code> refuses semantic-only admission. Normally calibrated per embedder — set this only if you have measured your own corpus</td></tr>
     <tr><td><code>UNDERCROFT_IVF_MIN</code> · <code>UNDERCROFT_IVF_NPROBE</code></td><td>size-gated</td><td>When the IVF tier activates, and how many lists each query probes</td></tr>
+    <tr><td><code>UNDERCROFT_WING_PQ_MIN</code></td><td>4096</td><td>Wing size at which a wing earns its own PQ codebook and code rows — a wing-scoped search then probes the wing's index instead of intersecting corpus-wide candidates; below the floor it full-scans the wing (bounded, exact). <code>off</code> disables the per-wing tier</td></tr>
+    <tr><td><code>UNDERCROFT_POOL_DIV</code></td><td>64</td><td>Corpus-scaled stage-1 candidate pool: semantic prefilters fetch at least <code>live_rows/div</code> ADC candidates, then an exact-cosine second stage over just those candidates' embeddings cuts back to hydration size. Measured: a fixed 256 pool leaked R@5 100→96.8% by 1M drawers. <code>off</code> = fixed floor (the measured-leaky behavior)</td></tr>
     <tr><td><code>UNDERCROFT_PQ_PAGE_MIN</code></td><td>off</td><td>Sealed PQ page tier: one AEAD page per IVF list, decrypted lazily per probe</td></tr>
     <tr><td><code>UNDERCROFT_TOK_PQ_MIN</code> · <code>UNDERCROFT_FDE_PQ_MIN</code> · <code>UNDERCROFT_FDE_IVF_MIN</code></td><td>off</td><td>Compression and inverted tiers for token matrices and FDE rows</td></tr>
     <tr><td><code>UNDERCROFT_FDE_REPS</code> · <code>_KSIM</code> · <code>_DPROJ</code> · <code>_NPROBE</code> · <code>_SEED</code></td><td>tuned</td><td>FDE construction and probe parameters</td></tr>
@@ -1695,7 +1697,13 @@
     <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds). <strong>Required for cross-lingual retrieval</strong> — see below</td></tr>
     <tr><td><code>UNDERCROFT_ONNX_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>User-supplied embedding model files</td></tr>
     <tr><td><code>UNDERCROFT_RERANKER</code></td><td>unset — no second stage</td><td><code>onnx</code> · <code>ort</code> · <code>colbert</code> · <code>colbert-ort</code></td></tr>
-    <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores</td></tr>
+    <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores — a latency cap (one forward pass each)</td></tr>
+<tr><td><code>UNDERCROFT_LATE_TOP_N</code></td><td>200</td><td>Candidates late interaction rescores — a depth, not a latency cap (MaxSim is arithmetic). Falls back to <code>UNDERCROFT_RERANK_TOP_N</code></td></tr>
+<tr><td><code>UNDERCROFT_EMBED_URL</code></td><td>unset</td><td>Embeddings endpoint for <code>UNDERCROFT_EMBEDDER=http</code>. Unset ⇒ nothing is contacted. Drawer text is sent there in the clear</td></tr>
+<tr><td><code>UNDERCROFT_EMBED_MODEL</code></td><td><code>nomic-embed-text</code></td><td>Model name asked of that endpoint; recorded as the vault identity <code>http:&lt;model&gt;</code></td></tr>
+<tr><td><code>UNDERCROFT_EMBED_API</code></td><td>guessed</td><td><code>openai</code> | <code>ollama</code>; guessed from whether the URL contains <code>/v1</code></td></tr>
+<tr><td><code>UNDERCROFT_EMBED_KEY</code></td><td>unset</td><td>Bearer credential, for a gateway that demands one. Local runtimes need none</td></tr>
+<tr><td><code>UNDERCROFT_EMBED_DIM</code></td><td>probed</td><td>Declare the dimension to skip the probe embed at construction</td></tr>
     <tr><td><code>UNDERCROFT_RERANK_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Reranker model files</td></tr>
     <tr><td><code>UNDERCROFT_COLBERT_MODEL</code> · <code>_QUERY_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Late-interaction encoder exports</td></tr>
     <tr><td><code>UNDERCROFT_ORT_POOL</code></td><td>1</td><td>ONNX Runtime session-pool size</td></tr>

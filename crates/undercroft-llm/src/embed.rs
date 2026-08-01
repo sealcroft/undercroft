@@ -1,0 +1,361 @@
+//! An [`Embedder`] backed by a local embeddings endpoint.
+//!
+//! The engine could previously embed in exactly three ways: the built-in
+//! [`HashEmbedder`](undercroft_core::HashEmbedder), an ONNX file loaded from
+//! disk (`onnx`/`ort`), or not at all —
+//! [`ExternalEmbedder`](undercroft_core::ExternalEmbedder) is an *identity* for
+//! vaults whose vectors the caller computes elsewhere, and its `embed()` is
+//! documented as unreachable. A model served over HTTP — Ollama, llama.cpp
+//! server, LM Studio, vLLM, text-embeddings-inference — had no route in, even
+//! though the same runtimes have been usable for `refine` since v0.5.0.
+//!
+//! This closes that, reusing the conventions of [`LlmClient`](crate::LlmClient)
+//! rather than inventing new ones: the same two API shapes, the same
+//! `*_URL` / `*_MODEL` / `*_API` / `*_KEY` variables, the same default-off
+//! posture. Nothing is contacted unless `UNDERCROFT_EMBED_URL` is set.
+//!
+//! # Two hazards, both deliberate and both stated
+//!
+//! **Drawer text leaves the process in the clear.** Every embed sends the
+//! content to the endpoint. On loopback or a private container network that is
+//! your own machine; pointed at a hosted gateway it is an egress path out of a
+//! sealed vault, and sealing protects data *at rest*, not data you hand to
+//! someone. Construction logs where the text is going, at warning level when
+//! the host is not loopback.
+//!
+//! **A failed embed cannot fail the write.** [`Embedder::embed`] returns a
+//! vector with no error channel, so a network blip yields a zero vector — a
+//! drawer that is stored verbatim and remains findable by every lexical
+//! channel, but is invisible to the semantic one until re-embedded. Each
+//! failure is logged at error level and counted
+//! ([`HttpEmbedder::failures`]); an ingest run that reports a non-zero count
+//! has holes in its vector space and should be re-embedded
+//! (`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`).
+
+use std::cell::Cell;
+
+use undercroft_core::embed::Embedder;
+use serde_json::{json, Value};
+
+use crate::{ApiKind, LlmError};
+
+/// Retries per embed before a zero vector is returned. One retry, because the
+/// target is a local runtime: the failure worth surviving is a model still
+/// warming up, not a flaky WAN.
+const ATTEMPTS: usize = 2;
+
+/// The text sent once at construction to learn the endpoint's dimension.
+const PROBE: &str = "dimension probe";
+
+pub struct HttpEmbedder {
+    base: String,
+    model: String,
+    kind: ApiKind,
+    key: String,
+    dim: usize,
+    /// `http:<model>` — recorded as the vault's embedder identity, so a
+    /// silent swap of the served model is refused by the existing check
+    /// exactly as an ONNX swap is.
+    identity: String,
+    agent: ureq::Agent,
+    failures: Cell<u64>,
+}
+
+impl HttpEmbedder {
+    /// Build from `UNDERCROFT_EMBED_URL`, `UNDERCROFT_EMBED_MODEL`, optional
+    /// `UNDERCROFT_EMBED_API` (`openai` | `ollama`; guessed from the URL like
+    /// the LLM client does), optional `UNDERCROFT_EMBED_KEY`, and optional
+    /// `UNDERCROFT_EMBED_DIM`.
+    ///
+    /// Without a declared dimension the endpoint is **asked** — one probe
+    /// embed at construction, whose length is the dimension. Reading it is
+    /// evidence; assuming 768 because the model name contains `base` would be
+    /// inference, and this project does not infer.
+    pub fn from_env() -> Result<Self, LlmError> {
+        let base = std::env::var("UNDERCROFT_EMBED_URL").map_err(|_| LlmError::NotConfigured)?;
+        let model = std::env::var("UNDERCROFT_EMBED_MODEL")
+            .unwrap_or_else(|_| "nomic-embed-text".to_string());
+        let kind = match std::env::var("UNDERCROFT_EMBED_API").ok().as_deref() {
+            Some("openai") => ApiKind::OpenAi,
+            Some("ollama") => ApiKind::Ollama,
+            _ if base.contains("/v1") => ApiKind::OpenAi,
+            _ => ApiKind::Ollama,
+        };
+        let key = std::env::var("UNDERCROFT_EMBED_KEY").unwrap_or_default();
+        let declared = std::env::var("UNDERCROFT_EMBED_DIM")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&d| d > 0);
+        Self::connect(&base, &model, kind, &key, declared)
+    }
+
+    /// As [`Self::from_env`], with everything supplied. `dim` of `None` probes
+    /// the endpoint.
+    pub fn connect(
+        base_url: &str,
+        model: &str,
+        kind: ApiKind,
+        key: &str,
+        dim: Option<usize>,
+    ) -> Result<Self, LlmError> {
+        let base = base_url.trim_end_matches('/').to_string();
+        // Say where the content is going. Loopback is the user's own machine;
+        // anything else means drawer text crosses a network, which is a
+        // decision and not a detail.
+        if is_loopback(&base) {
+            undercroft_obs::diag_info!("embedder: {model} via {base} (loopback)");
+        } else {
+            undercroft_obs::diag_warn!(
+                "embedder: {model} via {base} — drawer text is sent there in the \
+                 clear on every write and every search. Sealing protects a vault \
+                 at rest, not content handed to another host."
+            );
+        }
+        let mut me = Self {
+            base,
+            model: model.to_string(),
+            kind,
+            key: key.to_string(),
+            dim: dim.unwrap_or(0),
+            identity: format!("http:{model}"),
+            agent: ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(120))
+                .build(),
+            failures: Cell::new(0),
+        };
+        if me.dim == 0 {
+            let probe = me.request(PROBE)?;
+            if probe.is_empty() {
+                return Err(LlmError::BadOutput(
+                    "embeddings endpoint returned an empty vector for the dimension probe".into(),
+                ));
+            }
+            me.dim = probe.len();
+        }
+        Ok(me)
+    }
+
+    /// How many embeds have failed and returned a zero vector. Non-zero means
+    /// the vector space has holes — the drawers are intact and lexically
+    /// findable, but their semantic leg is dead until a re-embed.
+    pub fn failures(&self) -> u64 {
+        self.failures.get()
+    }
+
+    /// One embedding, or the transport/shape error that prevented it.
+    fn request(&self, text: &str) -> Result<Vec<f32>, LlmError> {
+        let (url, body) = match self.kind {
+            // Ollama native. `/api/embed` (newer, batch-shaped) and
+            // `/api/embeddings` (older, single) differ in both request and
+            // response; ask the older one and read either response.
+            ApiKind::Ollama => (
+                format!("{}/api/embeddings", self.base),
+                json!({ "model": self.model, "prompt": text }),
+            ),
+            ApiKind::OpenAi => (
+                format!("{}/embeddings", self.base),
+                json!({ "model": self.model, "input": text }),
+            ),
+        };
+        let mut req = self.agent.post(&url);
+        if !self.key.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {}", self.key));
+        }
+        let resp: Value = req
+            .send_json(body)
+            .map_err(|e| LlmError::Http(e.to_string()))?
+            .into_json()
+            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        parse_embedding(&resp)
+            .ok_or_else(|| LlmError::BadOutput(format!("no embedding in response: {resp}")))
+    }
+}
+
+/// Pull a vector out of any of the four shapes these runtimes answer with:
+/// OpenAI `{data:[{embedding:[..]}]}`, Ollama `/api/embeddings`
+/// `{embedding:[..]}`, Ollama `/api/embed` `{embeddings:[[..]]}`, and a bare
+/// `[..]`. Defensive on purpose — the same reason the refinement parser is.
+fn parse_embedding(resp: &Value) -> Option<Vec<f32>> {
+    // Each arm takes an `Option<&Value>`: a `?` on the pointer would return
+    // from the whole function on the first shape that does not match, so only
+    // the first candidate would ever be tried.
+    let floats = |v: Option<&Value>| -> Option<Vec<f32>> {
+        let arr = v?.as_array()?;
+        if arr.is_empty() {
+            return None;
+        }
+        arr.iter()
+            .map(|x| x.as_f64().map(|f| f as f32))
+            .collect::<Option<Vec<f32>>>()
+    };
+    floats(resp.pointer("/data/0/embedding"))
+        .or_else(|| floats(resp.pointer("/embedding")))
+        .or_else(|| floats(resp.pointer("/embeddings/0")))
+        .or_else(|| floats(Some(resp)))
+}
+
+/// Whether a base URL points at this machine. Deliberately conservative: an
+/// unparseable or unusual host counts as NOT loopback, so the warning errs
+/// toward telling the operator their text is leaving.
+fn is_loopback(base: &str) -> bool {
+    // scheme → host:port/path → host
+    let after_scheme = match base.find("://") {
+        Some(i) => &base[i + 3..],
+        None => base,
+    };
+    let host_port = after_scheme.split('/').next().unwrap_or("");
+    let host = match host_port.strip_prefix('[') {
+        // IPv6 literal, `[::1]:8080`
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => host_port.split(':').next().unwrap_or(""),
+    };
+    host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+impl Embedder for HttpEmbedder {
+    fn model_name(&self) -> &str {
+        &self.identity
+    }
+
+    fn dimension(&self) -> usize {
+        self.dim
+    }
+
+    fn embed(&self, text: &str) -> Vec<f32> {
+        let mut last = String::new();
+        for _ in 0..ATTEMPTS {
+            match self.request(text) {
+                Ok(v) if v.len() == self.dim => return v,
+                Ok(v) => {
+                    last = format!("expected {} dimensions, got {}", self.dim, v.len());
+                    break; // A shape change is not worth retrying.
+                }
+                Err(e) => last = e.to_string(),
+            }
+        }
+        self.failures.set(self.failures.get() + 1);
+        undercroft_obs::diag_error!(
+            "embed failed ({last}); storing a zero vector — this drawer is \
+             lexically findable but semantically invisible until re-embedded. \
+             Failures so far: {}",
+            self.failures.get()
+        );
+        vec![0.0; self.dim.max(1)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A one-shot embeddings server that answers `body` to every POST, and
+    /// counts the requests it saw.
+    fn serve(body: &'static str) -> (String, Arc<AtomicUsize>, std::thread::JoinHandle<()>) {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let handle = std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let req = request;
+                let resp = tiny_http::Response::from_string(body).with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .unwrap(),
+                );
+                let _ = req.respond(resp);
+            }
+        });
+        (url, hits, handle)
+    }
+
+    #[test]
+    fn every_runtime_response_shape_parses() {
+        let openai = json!({"data": [{"embedding": [0.5, -0.25, 0.125]}]});
+        let ollama_single = json!({"embedding": [0.5, -0.25, 0.125]});
+        let ollama_batch = json!({"embeddings": [[0.5, -0.25, 0.125]]});
+        let bare = json!([0.5, -0.25, 0.125]);
+        for (name, shape) in [
+            ("openai", openai),
+            ("ollama /api/embeddings", ollama_single),
+            ("ollama /api/embed", ollama_batch),
+            ("bare array", bare),
+        ] {
+            assert_eq!(
+                parse_embedding(&shape),
+                Some(vec![0.5, -0.25, 0.125]),
+                "{name} response must parse"
+            );
+        }
+        // Shapes that carry no vector must be refused, not coerced to empty.
+        assert_eq!(parse_embedding(&json!({"error": "no such model"})), None);
+        assert_eq!(parse_embedding(&json!({"data": []})), None);
+        assert_eq!(parse_embedding(&json!({"embedding": []})), None);
+    }
+
+    /// The dimension is read off the endpoint, and the identity records the
+    /// served model so the store's existing swap check covers it.
+    #[test]
+    fn dimension_is_probed_and_identity_is_recorded() {
+        let (url, hits, _h) = serve(r#"{"data":[{"embedding":[1.0,2.0,3.0,4.0]}]}"#);
+        let e = HttpEmbedder::connect(&url, "some-model", ApiKind::OpenAi, "", None).unwrap();
+        assert_eq!(e.dimension(), 4, "dimension comes from the endpoint");
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "exactly one probe");
+        assert_eq!(e.model_name(), "http:some-model");
+        assert_eq!(e.embed("anything"), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(e.failures(), 0);
+
+        // A declared dimension skips the probe entirely.
+        let (url2, hits2, _h2) = serve(r#"{"data":[{"embedding":[1.0,2.0]}]}"#);
+        let e2 = HttpEmbedder::connect(&url2, "m", ApiKind::OpenAi, "", Some(2)).unwrap();
+        assert_eq!(e2.dimension(), 2);
+        assert_eq!(hits2.load(Ordering::SeqCst), 0, "declared ⇒ no probe");
+    }
+
+    /// A failing endpoint must degrade to a zero vector — never a panic, never
+    /// a wrong-length vector that would corrupt the index — and must say so.
+    #[test]
+    fn a_failed_embed_degrades_loudly_to_zero() {
+        let (url, _hits, _h) = serve(r#"{"data":[{"embedding":[1.0,2.0,3.0]}]}"#);
+        let e = HttpEmbedder::connect(&url, "m", ApiKind::OpenAi, "", None).unwrap();
+        assert_eq!(e.dimension(), 3);
+
+        // Point it at a dead port: every attempt fails.
+        let dead = HttpEmbedder::connect("http://127.0.0.1:1", "m", ApiKind::OpenAi, "", Some(3))
+            .expect("a declared dimension means construction does not contact anything");
+        let v = dead.embed("text");
+        assert_eq!(v, vec![0.0, 0.0, 0.0], "zero vector of the right shape");
+        assert_eq!(dead.failures(), 1, "and the failure is counted, not hidden");
+    }
+
+    /// The wrong-length case is the dangerous one: a served model swapped
+    /// under a running vault would write vectors the store cannot compare.
+    #[test]
+    fn a_dimension_change_mid_flight_is_refused_not_stored() {
+        let (url, _hits, _h) = serve(r#"{"data":[{"embedding":[1.0,2.0]}]}"#);
+        let e = HttpEmbedder::connect(&url, "m", ApiKind::OpenAi, "", Some(5)).unwrap();
+        assert_eq!(e.embed("text"), vec![0.0; 5], "never a short vector");
+        assert_eq!(e.failures(), 1);
+    }
+
+    #[test]
+    fn loopback_is_recognised_and_anything_else_is_not() {
+        for local in [
+            "http://localhost:1234/v1",
+            "http://127.0.0.1:11434",
+            "http://[::1]:8080/v1",
+            "https://localhost",
+        ] {
+            assert!(is_loopback(local), "{local} is this machine");
+        }
+        for remote in [
+            "http://embeddings:8080/v1", // a container on the compose network
+            "https://api.example.com/v1",
+            "http://192.168.1.10:1234",
+        ] {
+            assert!(!is_loopback(remote), "{remote} is not this machine");
+        }
+    }
+}

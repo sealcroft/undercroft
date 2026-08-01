@@ -400,3 +400,68 @@ fn content_date_is_recorded_and_anchors_relative_dates_in_the_text() {
         "the text itself stays verbatim: {text}"
     );
 }
+
+/// `remember` derives its drawer id from a unique append slot, never from
+/// `count()`.
+///
+/// `COUNT(*)` goes *down* after a delete, so a `count()`-derived index is
+/// handed back out while it is still in use: the id collides and
+/// `ON CONFLICT(id) DO UPDATE` overwrites the unrelated drawer holding it,
+/// destroying a record by writing a different one. The `/v1` and MCP save
+/// paths were already safe; this pins the CLI path end-to-end through the
+/// real binary, which is where the regression would actually reach a user.
+#[test]
+fn remember_after_a_delete_must_not_overwrite_an_unrelated_drawer() {
+    fn filed_id(out: Vec<u8>) -> String {
+        let text = String::from_utf8(out).unwrap();
+        // "Filed drawer {id} in {wing}/{room} (vault '{vault}')"
+        text.split("Filed drawer ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or_else(|| panic!("no drawer id in output: {text}"))
+            .to_string()
+    }
+    fn remember(home: &TempDir, content: &str) -> String {
+        filed_id(
+            cmd(home)
+                .args(["remember", content, "--wing", "w", "--room", "r"])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone(),
+        )
+    }
+
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+
+    let a = remember(&home, "first note about harbours");
+    let b = remember(&home, "second note about lighthouses");
+    assert_ne!(a, b, "two saves must not share an id");
+
+    cmd(&home)
+        .args(["drawer", "delete", &a])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Deleted drawer"));
+
+    let c = remember(&home, "third note about tides");
+    assert_ne!(
+        c, b,
+        "a save after a delete must not land on a surviving drawer's id"
+    );
+
+    // The unrelated drawer is intact, verbatim, and still readable.
+    cmd(&home)
+        .args(["drawer", "get", &b])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("second note about lighthouses"));
+    // And the new content really was stored, not silently folded into b.
+    cmd(&home)
+        .args(["drawer", "get", &c])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("third note about tides"));
+}
