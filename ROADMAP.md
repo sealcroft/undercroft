@@ -859,6 +859,30 @@ candidates nor shape its codebook — which the C3.3 defense cluster builds
 on. New confirmed gaps filed there: read-path/export auditing, entity
 resolution, artifact references (image bytes), region-as-policy.
 
+**Open discussion (2026-07-31) — labeling as a reachability feature. A
+discussion in progress, deliberately not yet a decision; continue it before
+building anything.** The question on the table: do memory labels enhance
+reachability, and at what cost? The evidence assembled so far, to be
+challenged rather than assumed: labeling cost separates into three tiers —
+declared-by-caller (~zero: a metadata field), rule-derived (µs, or free
+when read live like dates/entities today), and model-derived (0.5–5 s per
+drawer ⇒ ×10³–10⁴ on bulk ingest — a million drawers goes from ~7 minutes
+to days, so if it ever exists it must be asynchronous enrichment after
+verbatim ingest, never a write-path gate; mem0's gating rubric measured
+−27.7pp here). The measured pattern on value: labels used as **scopes,
+filters and exact keys** all won here (wing scoping, content_date,
+declared language, the poison-positive date-filter design — and exact
+label paths are immune to the entire candidate-pool leak class just
+closed); labels used as **score modifiers** all lost (RRF −7.3, room_cap
+−5.6, rescaling −9.4). Constraints any label must clear: unsealed
+`meta_json` exposure (each label is a deliberate, inventoried leak — or a
+blind index), the never-guess contract (a model-assigned label is an
+extractor's claim needing receipts + extractor identity), and
+prefer-read-time for anything recomputable. Candidate convergence, if the
+discussion lands there: fold a declared `kind` + a label filter on
+`SearchOptions` into the golden-values work unit — labels and the
+exact-authority door are one feature seen from two sides.
+
 **Phase 2 — representation, gated.** *Operators as much as users.*
 
 - **Export v2 before any ColBERT default.** Portable artifacts travel as v1
