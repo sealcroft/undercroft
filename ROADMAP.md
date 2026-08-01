@@ -1001,7 +1001,7 @@ noted, against turn all-gold:
 | change | result |
 |---|---|
 | per-document cap, ≤1 / ≤2 slots | **−17.5 / −1.8pp**, and it loses at *every* evidence count — evidence averages 1.17 turns per session, so the cap blocks the second turn of the *right* session as often as it admits a new one |
-| `Fusion::Rrf` | −7.3pp (session `R@10` 93.2%) |
+| `Fusion::Rrf` | −7.3pp (session `R@10` 93.2%). **Configuration removed** (2026-08-02): the arm was deleted rather than left as a shipping footgun — `UNDERCROFT_FUSION=rrf` now warns and falls back to `bm25`; reproduce the measurement from git history. Same verdict as Bruch et al. (TOIS 2023, convex combination > RRF) and the vendor migrations away from rank fusion; the industry's *replacement* (per-query min-max/DBSF normalization) is the rescaling row below and stays rejected — result-set coupling is a poison channel |
 | `Fusion::Legacy` | −8.2pp (session `R@10` 92.2%) |
 | per-query channel rescaling to [0,1] | **−9.4pp**. The nominal 0.55/0.35 split realises as ≈21.5/78.5 because the channels have different spreads — but that compression was correctly *down-weighting* a weak signal, and forcing the hash cosine up to its declared share destroys ranking |
 | chunk 400 B / 200 B, fixed 8 KB budget | −10 / −28pp; also worse under ColBERT (72.4 / 37.9 vs 81.1) |

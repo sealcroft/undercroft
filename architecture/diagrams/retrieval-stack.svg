@@ -52,7 +52,7 @@
 <text x="72" y="297" class="f b dim">is fused with cosine semantic similarity</text>
 <rect x="676" y="236" width="200" height="66" rx="8" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="690" y="260" class="f mono" fill="var(--d-blue-ink,#33527d)">UNDERCROFT_FUSION</text>
-<text x="690" y="277" class="f s dim">bm25 (default) · rrf · legacy</text>
+<text x="690" y="277" class="f s dim">bm25 (default) · legacy</text>
 <text x="690" y="294" class="f s dim">integrity is not optional</text>
 <path d="M344 302 L344 320" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 

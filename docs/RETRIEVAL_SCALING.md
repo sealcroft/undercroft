@@ -54,8 +54,9 @@ The reranker buys **+3 pts** but costs **~2,700×** the fusion-only search: it
 runs ~60 full cross-encoder forward passes per query (one per candidate,
 ~277 ms each). The embedder choice is noise next to it (hash+reranker and
 MiniLM+reranker are within 1%). BM25 fusion, by contrast, is a **free** +1.9 pts
-over legacy/rrf. On LoCoMo, MiniLM over hash is a wash under BM25 — the model
-earns its keep only with weaker fusion.
+over legacy/rrf (the rrf arm has since been removed; the measurement stands —
+reproduce from git history). On LoCoMo, MiniLM over hash is a wash under BM25 —
+the model earns its keep only with weaker fusion.
 
 ### Cost 2 — candidate generation at scale (synthetic, hash embedder)
 

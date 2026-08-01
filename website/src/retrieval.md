@@ -47,16 +47,18 @@ synthetic corpora for the pure scaling curves.
 
 ### Fusion is a free accuracy win
 
-Hash embedder, no reranker, all three fusion modes:
+Hash embedder, no reranker, all fusion modes measured:
 
 | Fusion | R@10 | Latency/query |
 |---|---|---|
 | **BM25 (default)** | **94.6%** | ~6 ms |
 | legacy | 92.7% | ~5 ms |
-| rrf | 92.5% | ~6 ms |
+| rrf (removed) | 92.5% | ~6 ms |
 
 BM25 buys **+1.9 pts at zero latency cost** — it re-ranks already-verified
-candidates and is embedder-independent.
+candidates and is embedder-independent. The rrf mode measured below both
+score blends (rank fusion discards score magnitude) and has been removed;
+its row stays as the record of why.
 
 ### The embedder is a wash under BM25
 

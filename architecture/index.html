@@ -763,7 +763,7 @@
 <text x="72" y="297" class="f b dim">is fused with cosine semantic similarity</text>
 <rect x="676" y="236" width="200" height="66" rx="8" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="690" y="260" class="f mono" fill="var(--d-blue-ink,#33527d)">UNDERCROFT_FUSION</text>
-<text x="690" y="277" class="f s dim">bm25 (default) · rrf · legacy</text>
+<text x="690" y="277" class="f s dim">bm25 (default) · legacy</text>
 <text x="690" y="294" class="f s dim">integrity is not optional</text>
 <path d="M344 302 L344 320" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -828,7 +828,7 @@
 </div>
 
 <h3 id="retrieval-stage-3-verify-decrypt-score">Stage 3 — verify, decrypt, score</h3>
-<p>Every candidate row's HMAC is verified before its content is used; integrity is not an optional tier. Scoring then fuses a lexical BM25 signal with cosine semantic similarity. <code>UNDERCROFT_FUSION</code> selects <code>bm25</code> (the default), <code>rrf</code> for reciprocal-rank fusion, or <code>legacy</code>.</p>
+<p>Every candidate row's HMAC is verified before its content is used; integrity is not an optional tier. Scoring then fuses a lexical BM25 signal with cosine semantic similarity — each channel calibrated to a fixed scale, never normalized against the result set. <code>UNDERCROFT_FUSION</code> selects <code>bm25</code> (the default) or <code>legacy</code>; the former <code>rrf</code> mode measured below both and was removed (setting it warns and falls back to <code>bm25</code>).</p>
 
 <h3 id="retrieval-stage-4-the-relevance-gate">Stage 4 — the relevance gate</h3>
 <p>An unrelated record still scores around 0.35 from the neutral cosine midpoint alone, so the gate demands actual evidence: <code>lexical &gt; 0 || semantic &gt; <em>gate</em></code>. Failing rows are removed, not merely down-ranked.</p>
@@ -1678,7 +1678,7 @@
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
     <tr><td><code>UNDERCROFT_RETRIEVAL</code></td><td>unset — flat scan</td><td><code>pq</code> · <code>fde</code> · <code>hnsw</code> (feature-gated). Approximate; verify recall before relying on it</td></tr>
-    <tr><td><code>UNDERCROFT_FUSION</code></td><td><code>bm25</code></td><td><code>bm25</code> · <code>rrf</code> · <code>legacy</code></td></tr>
+    <tr><td><code>UNDERCROFT_FUSION</code></td><td><code>bm25</code></td><td><code>bm25</code> · <code>legacy</code> (<code>rrf</code> removed; warns, falls back)</td></tr>
     <tr><td><code>UNDERCROFT_FTS_PREFILTER_MIN</code></td><td>2048</td><td>Row count above which the lexical prefilter engages (hmac-only vaults)</td></tr>
     <tr><td><code>UNDERCROFT_SEMANTIC_GATE</code></td><td>the embedder's own</td><td>The <code>semantic</code> score above which a drawer is admitted on cosine alone; <code>off</code> refuses semantic-only admission. Normally calibrated per embedder — set this only if you have measured your own corpus</td></tr>
     <tr><td><code>UNDERCROFT_IVF_MIN</code> · <code>UNDERCROFT_IVF_NPROBE</code></td><td>size-gated</td><td>When the IVF tier activates, and how many lists each query probes</td></tr>
