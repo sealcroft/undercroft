@@ -1682,6 +1682,7 @@ dependencies = [
  "undercroft-index",
  "undercroft-obs",
  "undercroft-vault",
+ "rayon",
  "rusqlite",
  "serde",
  "serde_json",

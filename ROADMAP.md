@@ -699,7 +699,7 @@ was the whole point of this plan, and only part of it has moved:
 
 | sense | item | state |
 |---|---|---|
-| **candidate** — who is considered | R1 wing as retrieval unit | **built, phase 1.** Build cost proven wing-shaped; query-latency claim unproven at tested sizes (≤65k; it lives at 10⁶) |
+| **candidate** — who is considered | R1 wing as retrieval unit | **built, phase 1; settled at 10⁶.** Build cost proven wing-shaped; query-latency claim dead (unscoped PQ holds 24→31 ms/q to 1M, no break); **open defect filed: fixed-pool recall leak at scale (100→96.8) — fix = corpus-scaled pool, gated on R@5 ~100% at 10⁶** |
 | | R4 FDE as generator | untouched |
 | **delivery** — how deep the set goes | R2 rescore depth | **built** (value in the shipped config unestablished) |
 | | R3 pagination | **built + delivered: 74.2% → 85.9% all-gold via 4×10 pages, 0/1977 tiling mismatches — the largest measured gain in the program** |
@@ -790,10 +790,36 @@ this is where the measured headroom is.*
   starvation delta (99.0 vs 100.0 scoped R@5, 2 queries in 196 against
   ±0.5pp draw wobble) is suggestive, not established; the catastrophic
   empty-wing shape is pinned by unit test, which needs no scale.
-  **The one number that settles the query claim: unscoped PQ latency vs
-  corpus size, pushed until it degrades.** Flat to 10⁶ ⇒ the tier is a
-  build-cost optimisation and gets documented as exactly that; a break
-  between 10⁵ and 10⁶ ⇒ that is where scoped wins. The defect it closes is recall as much
+  **The settling number was run (`pqscale`, one cumulative vault to 10⁶):
+  24.3 → 31.0 ms/q unscoped from 131k to 1M — no break, the query-latency
+  claim is dead, and the tier is documented as a build-cost optimisation
+  plus the scoped-starvation fix.** The probe also surfaced **an open
+  defect and an open cost, both with named fixes — neither is accepted as
+  a property**:
+  - **Defect: unscoped recall leaks with corpus size** (100.0 → 96.8 R@5
+    over the checkpoints). Violates the prefilter charter (narrow, never
+    lose). Root cause: candidate pool fixed at 256 while competitors grow;
+    exact re-scoring downstream confines the loss to candidate selection.
+    Fix program: `pqscale --pools` sweep → corpus-scaled pool policy
+    (declared formula; pool costs only hydration at ~0.09 ms/row).
+    **Gate: R@5 at 10⁶ back to ~100%, price recorded.** Fallback levers:
+    dim/4 codes, parallel hydration. FTS prefilter shares the fixed-k
+    shape — same class.
+  - **Cost: corpus-shaped maintenance debt — ROOT-CAUSED AND FIXED.** The
+    17 min at 131k / 73 min at 524k per retrain were **not computation**:
+    the rebuild loop wrote every code row as an autocommit INSERT — one
+    fsync per row under `synchronous=FULL` (7.8–8.3 ms/row, arithmetic
+    exact at both sizes). One transaction around the rewrite (an
+    improvement to crash atomicity, not a trade) collapsed the smoke
+    warm-up 36.2 s → 2.3 s at 8k; the wing build had the same disease
+    (3.8 ms/row). Residual rebuild cost is CPU (train + encode + assign,
+    single-threaded) — full-scale post-fix numbers come from the next
+    pqscale run; rayon on the encode loop and assignment-only retrain
+    remain second-order levers if that measurement asks for them.
+  A fixed-size wing did not exhibit the leak (wingscale scoped R@5 100%
+  at both sizes) — any scoped-recall-at-scale claim for the tier still
+  needs its own instrument; it must not ride on the defect staying
+  unfixed. The defect it closes is recall as much
   as cost: the global prefilter's top-k intersected with a wing can starve
   it entirely (pinned by test). Honest limits, recorded: BM25 IDF stays
   global (the wing isolates candidates, not scores; per-wing IDF was
@@ -804,6 +830,29 @@ this is where the measured headroom is.*
   11–29× ingest and per-wing indexes do not help writes. Phase 2 (fan-out
   for unscoped queries) waits on scoped queries proving the model; its
   three requirements are recorded beside the Reach table.
+
+**The consultation-filtered track (2026-07-31).** An external architecture
+consultation proposed a governance layer (typed memory objects, provenance
+graph, authority tier, retrieval profiles, Postgres engine mode, signed
+bundles). Every claim was checked against the code and this repo's
+measurements — the full evidence, including what was refuted with numbers
+(write gating −27.7pp, context packing +0.3pp vs paging's +11.7pp, weight
+cleverness −5.6/−7.3/−9.4pp) and the two posture decisions (no RLS-tier
+Postgres by default: cryptographic isolation is an invariant; no pruning:
+expiry is metadata, not deletion), lives in
+**docs/CONSULTATION_REVIEW.md**. Four items were adopted, in dependency
+order: (1) an **authority tier on KG facts** (`authority_class`,
+`review_state`, `canonical_key`, exact-authority lookup before semantic
+recall on high-risk asks); (2) **extractor identity + generalized
+supersession** (receipted `supersedes_id` on drawers); (3) **bundle
+manifests** (Ed25519 sender attestation + scope/trust/expiry metadata,
+closing the meta-rows export gap); (4) **typed `kind` on promoted
+records**, last. The review also recorded a new property worth knowing:
+since the per-wing tier, a wing is an *enforceable trust zone* for scoped
+retrieval — poison in another wing can neither crowd a scoped query's
+candidates nor shape its codebook — which the C3.3 defense cluster builds
+on. New confirmed gaps filed there: read-path/export auditing, entity
+resolution, artifact references (image bytes), region-as-policy.
 
 **Phase 2 — representation, gated.** *Operators as much as users.*
 

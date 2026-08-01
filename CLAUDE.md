@@ -246,11 +246,24 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   wing-blind: its top-k can starve a wing entirely (candidates ∩
   `WHERE wing` = ∅ while the wing holds the answer — pinned by test) and
   its BUILD cost is corpus-shaped. What the tier provably buys is the
-  build economics (wing 3.9/15.5 s vs global 59/240 s at 16k/65k) and the
-  starvation fix; its QUERY-latency benefit is unproven at tested sizes —
-  both scoped and unscoped run ~24 ms/q flat to 65k because the global PQ
-  tier already bounds the pool there, and the 913 s/query motivator was a
-  full-scan figure whose residual claim lives at 10⁶, untested.
+  build economics (wing-shaped vs corpus-shaped — though the headline
+  build figures once quoted here, 17/73 min global retrains and 3.9/15.5 s
+  wing builds, were ~95% a per-row-autocommit fsync BUG in the rebuild
+  loops, since fixed with one transaction: smoke warm-up 36.2→2.3 s;
+  post-fix builds are CPU-bound, full-scale numbers pending) and the
+  starvation fix; its QUERY-LATENCY benefit is **dead,
+  settled at 10⁶** (`pqscale`: unscoped PQ holds 24.3 → 31.0 ms/q from
+  131k to 1M, no break — the 913 s/query figure was the *full-scan*
+  path, which the global PQ tier answers alone). `pqscale` also filed an
+  **OPEN DEFECT, not an accepted property**: unscoped R@5 leaks with
+  corpus size (100.0 → 96.8 to 1M) because the candidate pool is FIXED at
+  256 while competitors grow — a violation of the prefilter charter
+  (narrow, never lose). Exact re-scoring downstream confines the loss to
+  candidate selection, so the fix is a corpus-scaled pool policy priced
+  by hydration (~0.09 ms/row), gated on R@5 ~100% at 10⁶ (see ROADMAP;
+  FTS prefilter shares the fixed-k shape). A fixed-size wing showed no
+  leak — any scoped-recall claim still needs its own instrument and must
+  not ride on the defect staying unfixed.
   Wings past `UNDERCROFT_WING_PQ_MIN` (4096, `off` = pre-tier behavior)
   carry their own codebook/IVF/rows (`drawer_pq_wing`, sealed under
   `pqrow/<wing>/<seq>`; meta keys `codebook/<wing>`/`ivf/<wing>`, resealed

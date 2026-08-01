@@ -73,6 +73,11 @@
   economics**: indexing the wing costs 3.9 s / 15.5 s where the global
   index costs 59 s / 240 s at the same corpus sizes — wing-shaped versus
   corpus-shaped, a maintenance property that compounds with every retrain.
+  (Later root-caused: both sides of that comparison were ~95% per-row
+  fsync — the autocommit rebuild bug, since fixed. The **shape** of the
+  claim survives, because post-fix cost is CPU per row and still scales
+  with what you index; the absolute seconds do not — see the pqscale
+  entry.)
   **What is not proven**: the query-latency claim. The 913 s/query figure
   that motivated wing-as-retrieval-unit was a *full-scan* figure; the PQ
   tier addresses it, and 65,536 is 15× below the 10⁶ where the residual
@@ -82,10 +87,80 @@
   catastrophic shape (a wing emptied entirely by a louder one) is pinned
   by unit test, which does not need scale. The below-floor 104.6 ms/q is
   the floor working: bounded by wing size, exact, and the price of not
-  training codebooks on 1,024-row populations. **Next single number**:
-  unscoped PQ latency versus corpus size, pushed until it degrades — flat
-  to 10⁶ kills the query claim and reclassifies the tier as a build-cost
-  optimisation; a break between 10⁵ and 10⁶ is where scoped wins.
+  training codebooks on 1,024-row populations.
+- **The settling number, measured (`pqscale`): the query-latency claim is
+  dead, and the tier is reclassified accordingly.** One cumulative sealed
+  vault pushed to 10⁶ (hash embedder, `retrieval=pq`, pool 256, k 5,
+  ~200 queries per checkpoint, one run; warm-up — the event-driven
+  verify/train/retrain debt — reported separately):
+
+  | corpus | unscoped R@5 | ms/q | warm-up owed |
+  |---|---|---|---|
+  | 131,072 | 100.0% | 24.3 | 1,022 s (first build) |
+  | 262,144 | 98.2% | 25.9 | 0 |
+  | 524,288 | 97.7% | 27.0 | 4,355 s (IVF outgrown → retrain + full re-encode) |
+  | 1,048,576 | 96.8% | 31.0 | 0 (exactly 2× training size — not outgrown) |
+
+  **No break between 10⁵ and 10⁶**: 24.3 → 31.0 ms/q, +28% over 8× corpus,
+  linear-in-probed-codes creep, nothing resembling a cliff. The global PQ
+  tier answers the 913 s/query full-scan figure on its own; per-wing
+  indexes buy no unscoped latency at any size measured, and the per-wing
+  tier is therefore **a build-cost optimisation plus a scoped-recall fix,
+  and is documented as exactly that**. Two findings the probe surfaced on
+  the way: what looked like a **maintenance curve at scale** — 17 min
+  owed at 131k, 73 min at 524k — was root-caused as a *bug*, not a cost:
+  the rebuild loop wrote each code row as an autocommit INSERT, one fsync
+  per row under `synchronous=FULL` (7.8–8.3 ms/row, arithmetic exact at
+  both sizes; the wing build shared it at 3.8 ms/row). One transaction
+  around the rewrite — strictly better crash atomicity, since a partial
+  rebuild now rolls back instead of leaving a half-table for the
+  matched-count check to find — collapsed the smoke warm-up **36.2 s →
+  2.3 s** at 8k; the CPU residual (encode + IVF assign, pure math over
+  shared read-only codebooks) is now **parallel** in both rebuild loops
+  (rayon, bounded pool — sealing and SQLite writes stay serial on the one
+  connection, and durability semantics are untouched: `synchronous=FULL`
+  is a pinned invariant, not a tuning knob). Search-path candidate
+  hydration remains serial — parallelizing the hot correctness path
+  (per-candidate HMAC verify + decrypt, plus a `RefCell` embedding cache
+  that is not `Sync`) is deliberately its own future pass with its own
+  measurement, not a rider on this one. Full-scale post-fix build numbers
+  come from the corrected run; and **an OPEN
+  DEFECT: unscoped recall leaks monotonically with corpus size** (100.0 →
+  96.8 over four checkpoints). This is classified as a defect, not a
+  documented property, because it violates the prefilter's own charter —
+  narrow the candidate set, never lose the answer. Root cause: the
+  candidate pool is fixed at 256 while the corpus grows; ADC score error
+  per vector is constant, competitors grow linearly, so a fixed pool must
+  eventually crowd the true answer out — and everything downstream already
+  re-scores hydrated candidates with exact vectors, so the loss is
+  confined entirely to candidate selection. The fix is a measurement away
+  and its price is known in advance: pool size costs only hydration
+  (~0.09 ms/row — 512 ≈ 48 ms/q, 1024 ≈ 96 ms/q), so a `--pools` sweep on
+  the pqscale instrument yields the recall-vs-pool curve, and a
+  corpus-scaled pool policy (a declared formula, env-overridable) closes
+  the defect. **Acceptance gate: R@5 at 10⁶ restored to ~100%, with the
+  ms/q price recorded beside it.** Second-order levers if the curve prices
+  pool scaling too high: wider codes (dim/4, footprint-priced) and
+  parallel candidate hydration. The hmac-level FTS prefilter shares the
+  fixed-`k` shape — same defect class, flagged. Separately, a fixed-size
+  wing did not exhibit the leak in wingscale (scoped R@5 100% at both
+  corpus sizes) — a scoped-recall-at-scale claim for the per-wing tier
+  remains unestablished and would need its own instrument.
+  Incidental, and then corrected: the probe's ~9 h of ingest was an
+  **instrument defect, not an engine property** — it ingested a bulk
+  corpus through the interactive single-write path, which pays its
+  durability fsyncs per drawer (`synchronous=FULL` + manifest anchor +
+  dir sync — 81 → 30 docs/s at 131k → 1M, ~96% fsync wait). The engine's
+  bulk path (`upsert_many`, one transaction + one manifest anchor per
+  batch) measures **17,958 docs/s at 8k / 8,555 docs/s at 16k** — a
+  million drawers in minutes, not hours — and pqscale now ingests through
+  it (`--batch`, default 4096; `--batch 1` measures the interactive
+  surface deliberately). Each figure describes a different product
+  surface: interactive writes buy per-write crash-safety, bulk loads buy
+  amortized anchoring; neither number may be quoted for the other. Also:
+  the `fit_report` detector fired at exactly 1.5× on every fresh global
+  codebook over this keyed corpus — the per-row-idiosyncrasy cause its
+  message now names.
 
 ## Unreleased — a caller can iterate now, instead of re-asking
 

@@ -124,6 +124,31 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// Unscoped PQ latency versus corpus size, one cumulative vault,
+    /// pushed until it degrades. The single number that settles the R1
+    /// query claim: flat to 10^6 means the per-wing tier is a build-cost
+    /// optimisation; a break between 10^5 and 10^6 is where scoped wins.
+    Pqscale {
+        /// Cumulative corpus checkpoints, comma-separated ascending
+        #[arg(long, default_value = "131072,262144,524288,1048576")]
+        sizes: String,
+        /// Timed queries per checkpoint (evenly sampled over the corpus so far)
+        #[arg(long, default_value_t = 200)]
+        queries: usize,
+        /// Candidate-pool sweep per checkpoint, comma-separated (the
+        /// recall-leak fix instrument: recall-vs-pool with hydration cost
+        /// beside it). Pools are rounded up to the engine's limit*32 grid.
+        #[arg(long, default_value = "256,512,1024,2048")]
+        pools: String,
+        /// Ingest batch size (`upsert_many` — one transaction + one
+        /// manifest anchor per batch, the engine's bulk path). 1 = the
+        /// interactive single-write path, which pays its durability fsyncs
+        /// per drawer and measures a different product surface.
+        #[arg(long, default_value_t = 4096)]
+        batch: usize,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -831,6 +856,152 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
         anyhow::bail!("regression: synthetic Recall@5 {r5_pct:.1}% (expected >= 95%)");
     }
     println!("SYNTH OK");
+    Ok(())
+}
+
+/// Unscoped-PQ scaling probe: ONE cumulative vault, ingested to each
+/// checkpoint in turn, an untimed warm-up at each (which pays whatever the
+/// event-driven machinery owes at that size — verify pass, codebook train,
+/// IVF retrain when the corpus doubled — and is reported as the maintenance
+/// cost curve), then a timed unscoped pass sampled evenly over everything
+/// ingested so far. No gate: whatever the recall and latency curves do IS
+/// the result, and a probe that bails on the interesting region would be
+/// the stride landmine again.
+fn run_pqscale(
+    sizes: &str,
+    queries: usize,
+    pools: &str,
+    batch: usize,
+    level: SecurityLevel,
+) -> Result<()> {
+    let checkpoints: Vec<usize> = sizes
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse()
+                .map_err(|_| anyhow::anyhow!("--sizes entries are numbers, got {s:?}"))
+        })
+        .collect::<Result<_>>()?;
+    if checkpoints.is_empty() {
+        anyhow::bail!("--sizes is empty");
+    }
+    // Candidate pools map through `limit`: the prefilter fetches
+    // max(256, limit*32) candidates, so a requested pool rounds up to that
+    // grid. R@5 is always scored over the first five hits.
+    let pool_limits: Vec<(usize, usize)> = pools
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| -> Result<(usize, usize)> {
+            let p: usize = s
+                .parse()
+                .map_err(|_| anyhow::anyhow!("--pools entries are numbers, got {s:?}"))?;
+            let limit = p.div_ceil(32).max(8);
+            Ok((limit.saturating_mul(32).max(256), limit))
+        })
+        .collect::<Result<_>>()?;
+    if pool_limits.is_empty() {
+        anyhow::bail!("--pools is empty");
+    }
+    let batch = batch.max(1);
+    let (_tmp, mut store) = fresh_store(level)?;
+    store.set_pq(true);
+
+    // Every 512th fact is a query candidate — bounded memory at 10^6.
+    const KEY_STRIDE: usize = 512;
+    let mut keys: Vec<(String, String, String)> = Vec::new();
+    let mut ingested = 0usize;
+    println!(
+        "Pqscale — level={level:?} retrieval=pq checkpoints={checkpoints:?} \
+         pools={pool_limits:?} batch={batch}"
+    );
+    for &target in &checkpoints {
+        let seg_start = ingested;
+        let ingest_started = Instant::now();
+        let mut pending: Vec<Drawer> = Vec::with_capacity(batch.min(target));
+        while ingested < target {
+            let i = ingested;
+            let topic = TOPICS[i % TOPICS.len()];
+            let key = format!(
+                "{}-{:07}",
+                ["budget", "deadline", "vendor", "owner"][i % 4],
+                i
+            );
+            let detail = format!("the {key} is finalized as option {}", (i * 7) % 100);
+            let fact = FACT_TEMPLATES[i % FACT_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{detail}", &detail);
+            let drawer = Drawer::new("bench", topic, fact, None, i as u32, "bench");
+            if i.is_multiple_of(KEY_STRIDE) {
+                keys.push((key, topic.to_string(), drawer.id.clone()));
+            }
+            pending.push(drawer);
+            if pending.len() >= batch {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+            ingested += 1;
+        }
+        if !pending.is_empty() {
+            store.upsert_many(&pending)?;
+        }
+        let ingest_secs = ingest_started.elapsed().as_secs_f32();
+        let db_gb = store.stats().map(|s| s.db_bytes).unwrap_or(0) as f64 / 1e9;
+
+        let stride = keys.len().div_ceil(queries.max(1)).max(1);
+        let sampled: Vec<&(String, String, String)> = keys.iter().step_by(stride).collect();
+        let q_total = sampled.len();
+        let query_for = |qi: usize, key: &str, topic: &str| {
+            let q = QUERY_TEMPLATES[qi % QUERY_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
+            format!("{q} {key}")
+        };
+
+        // Warm-up: one query that pays the size's event-driven debts
+        // (verify pass, codebook train, IVF retrain) outside every timed
+        // column below.
+        let (wk, wt, _) = sampled[0];
+        let warm_started = Instant::now();
+        store.search(
+            &query_for(0, wk, wt),
+            &SearchOptions {
+                limit: 5,
+                ..Default::default()
+            },
+        )?;
+        let warmup_s = warm_started.elapsed().as_secs_f32();
+        println!(
+            "  n={ingested:>8}  db {db_gb:.2} GB  ingest {ingest_secs:.1}s \
+             ({:.0} docs/s)  warmup {warmup_s:.1}s  ({q_total} queries/pool)",
+            ((target - seg_start) as f32 / ingest_secs.max(f32::EPSILON))
+        );
+
+        for &(pool, limit) in &pool_limits {
+            let mut r5 = 0u32;
+            let timed = Instant::now();
+            for (qi, (key, topic, id)) in sampled.iter().copied().enumerate() {
+                let hits = store.search(
+                    &query_for(qi, key, topic),
+                    &SearchOptions {
+                        limit,
+                        ..Default::default()
+                    },
+                )?;
+                if hits.iter().take(5).any(|h| &h.drawer.id == id) {
+                    r5 += 1;
+                }
+            }
+            let secs = timed.elapsed().as_secs_f32();
+            println!(
+                "    pool={pool:>5}  unscoped R@5 {:.1}%  {:.1} ms/q",
+                100.0 * r5 as f32 / q_total.max(1) as f32,
+                1000.0 * secs / q_total.max(1) as f32,
+            );
+        }
+    }
+    println!("PQSCALE DONE");
     Ok(())
 }
 
@@ -3101,6 +3272,13 @@ fn main() -> Result<()> {
             skip,
         } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
         Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
+        Command::Pqscale {
+            sizes,
+            queries,
+            pools,
+            batch,
+            level,
+        } => run_pqscale(&sizes, queries, &pools, batch, level_of(&level)),
         Command::Wingscale {
             n,
             wings,

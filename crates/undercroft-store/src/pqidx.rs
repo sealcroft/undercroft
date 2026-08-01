@@ -1085,6 +1085,18 @@ impl PalaceStore {
 
         // A rebuild always writes the target format from scratch — it is
         // also the migration path of last resort (any drift lands here).
+        //
+        // ONE transaction for the whole rewrite. This loop used to run each
+        // row as an autocommit INSERT, which under `synchronous=FULL` is one
+        // fsync per row — measured at 7.8–8.3 ms/row, i.e. 17 minutes at
+        // 131k and 73 minutes at 524k of a "build cost" that was ~95% disk
+        // syncs, not computation. `unchecked_transaction` because this runs
+        // behind `&self` on the search path; it never nests inside a write
+        // transaction (build is only ever entered from the verify pass).
+        // A crash mid-rebuild rolls back to the pre-rebuild state, which the
+        // matched-count self-heal already handles — strictly better than
+        // the partial table an interrupted per-row loop left behind.
+        let tx = self.conn.unchecked_transaction()?;
         self.conn.execute("DELETE FROM drawer_pq", [])?;
         self.conn.execute("DELETE FROM pq_page", [])?;
         self.conn.execute(
@@ -1100,18 +1112,33 @@ impl PalaceStore {
         let mut cache = PqCache::new(pq.code_len());
         let mut by_list: std::collections::HashMap<i64, Vec<(i64, Vec<u8>)>> =
             std::collections::HashMap::new();
-        for (seq, vec) in &items {
-            let list: i64 = ivf_ref.as_ref().map_or(-1, |cq| cq.assign(vec) as i64);
-            let code = pq.encode(vec);
+        // Encode + IVF-assign are pure math over shared read-only
+        // codebooks — the CPU residual left after the transaction fix, and
+        // it parallelizes cleanly (bounded by rayon's pool). Sealing and
+        // the SQLite writes stay serial below: one connection, and the
+        // AEAD seal is microseconds per 52-byte row.
+        let coded: Vec<(i64, i64, Vec<u8>)> = {
+            use rayon::prelude::*;
+            let cq = ivf_ref.as_ref();
+            items
+                .par_iter()
+                .map(|(seq, vec)| {
+                    let list: i64 = cq.map_or(-1, |c| c.assign(vec) as i64);
+                    (*seq, list, pq.encode(vec))
+                })
+                .collect()
+        };
+        for (seq, list, code) in &coded {
+            let (seq, list) = (*seq, *list);
             if paged {
-                by_list.entry(list).or_default().push((*seq, code.clone()));
+                by_list.entry(list).or_default().push((seq, code.clone()));
             } else if sealed {
                 // Sealed row: list id + code AEAD-sealed together, bound to
                 // this seq; the plaintext list column stays -1 (a clear list
                 // id would leak semantic clustering).
                 let blob = self
                     .vault
-                    .index_at_rest(&format!("pqrow/{seq}"), &Self::pq_row_pack(list, &code));
+                    .index_at_rest(&format!("pqrow/{seq}"), &Self::pq_row_pack(list, code));
                 ins.execute(params![-1i64, seq, blob])?;
             } else {
                 ins.execute(params![list, seq, code])?;
@@ -1119,13 +1146,14 @@ impl PalaceStore {
             // Either level's RAM cache is populated from the plaintext
             // already in hand — no re-read, no re-decrypt. After a paged
             // build the cache is fully resident (`loaded = None`).
-            cache.push(*seq, list, &code);
+            cache.push(seq, list, code);
         }
         drop(ivf_ref);
         drop(ins);
         if paged {
             self.pq_page_append(by_list)?;
         }
+        tx.commit()?;
         *self.pq_cache.borrow_mut() = Some(cache);
         *self.pq.borrow_mut() = Some(pq);
         Ok(true)
@@ -1524,7 +1552,11 @@ impl PalaceStore {
         };
 
         // Rebuild always writes from scratch — also the migration path of
-        // last resort for this wing, exactly like the global rebuild.
+        // last resort for this wing, exactly like the global rebuild. One
+        // transaction for the same reason as there: per-row autocommit was
+        // one fsync per row (measured 3.8 ms/row — the wing "build cost"
+        // was disk syncs, not encoding).
+        let tx = self.conn.unchecked_transaction()?;
         self.conn
             .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
         let mut ins = self.conn.prepare(
@@ -1533,21 +1565,34 @@ impl PalaceStore {
         )?;
         let sealed = self.pq_sealed();
         let mut cache = PqCache::new(pq.code_len());
-        for (seq, vec) in &items {
-            let list: i64 = ivf.as_ref().map_or(-1, |cq| cq.assign(vec) as i64);
-            let code = pq.encode(vec);
+        // Same split as the global rebuild: parallel encode+assign (pure
+        // math, shared read-only codebooks), serial seal+write.
+        let coded: Vec<(i64, i64, Vec<u8>)> = {
+            use rayon::prelude::*;
+            let cq = ivf.as_ref();
+            items
+                .par_iter()
+                .map(|(seq, vec)| {
+                    let list: i64 = cq.map_or(-1, |c| c.assign(vec) as i64);
+                    (*seq, list, pq.encode(vec))
+                })
+                .collect()
+        };
+        for (seq, list, code) in &coded {
+            let (seq, list) = (*seq, *list);
             if sealed {
                 let blob = self.vault.index_at_rest(
                     &format!("pqrow/{wing}/{seq}"),
-                    &Self::pq_row_pack(list, &code),
+                    &Self::pq_row_pack(list, code),
                 );
                 ins.execute(params![wing, -1i64, seq, blob])?;
             } else {
                 ins.execute(params![wing, list, seq, code])?;
             }
-            cache.push(*seq, list, &code);
+            cache.push(seq, list, code);
         }
         drop(ins);
+        tx.commit()?;
         Ok(Some(WingPq {
             pq,
             ivf,
