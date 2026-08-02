@@ -506,6 +506,8 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_get_closet_index` | | compact LLM-scannable index |
 | `undercroft_kg_add` / `_kg_invalidate` / `_kg_supersede` | W | temporal facts: assert/close/replace |
 | `undercroft_kg_query` / `_kg_timeline` / `_kg_stats` | | query facts (incl. `--as-of`) |
+| `undercroft_lookup_canonical` | | the exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks; an empty answer means no declared truth exists — never guess on the key's behalf |
+| `undercroft_kg_set_authority` | W | place a fact on the authority tier (closed vocabulary: `stated`\|`canonical` × `unreviewed`\|`approved`\|`rejected`; `canonical_key` required for canonical). Audited; the state is inside the fact's HMAC, so a column flip without the vault key fails verification |
 | `undercroft_diary_write` | W | per-agent diary entry |
 | `undercroft_diary_read` / `_list_agents` | | read diaries |
 | `undercroft_dedup` | W | report/remove exact duplicates. Collapses the *text* only — the days each copy was recorded on are folded onto the survivor's `occurrences` before its row goes, and the report's `dates_kept` counts them. The same words on two different days are two things that happened |
@@ -534,6 +536,8 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/kg/entities` | paged entity summaries (`limit`, `offset`) |
 | GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`, `grounding`) |
 | GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`, `grounding`) |
+| GET | `/v1/vaults/{id}/kg/canonical/{key}` | the exact-authority door: the one active, approved, canonical fact for the key, or 404 — consult before semantic recall for exact/high-risk asks |
+| POST | `/v1/vaults/{id}/kg/authority` | place a fact on the authority tier (`triple_id`, `authority_class`, `review_state`, opt `canonical_key`); audited, HMAC-covered |
 
 Every fact returned by `kg/query` and `kg/timeline` carries `grounding`:
 `stated` (the source note's own words support it — `support.spans` gives the

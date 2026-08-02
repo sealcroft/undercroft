@@ -382,6 +382,23 @@ enum KgAction {
         #[arg(long)]
         problems_only: bool,
     },
+    /// Place a fact on the authority tier (or take it off): a declared,
+    /// audited, HMAC-covered state — never an inference
+    Authority {
+        triple_id: String,
+        /// stated | canonical
+        #[arg(long)]
+        class: String,
+        /// unreviewed | approved | rejected
+        #[arg(long)]
+        review: String,
+        /// Exact-lookup key (required for canonical, forbidden for stated)
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// The exact-authority door: the one active, approved, canonical fact
+    /// for a key — or nothing, never a guess
+    Canonical { key: String },
 }
 
 #[derive(Subcommand)]
@@ -1550,6 +1567,32 @@ fn main() -> Result<()> {
                         );
                     }
                 }
+                KgAction::Authority {
+                    triple_id,
+                    class,
+                    review,
+                    key,
+                } => {
+                    store.kg_set_authority(triple_id, class, review, key.as_deref())?;
+                    println!(
+                        "Fact {triple_id}: authority_class={class} review_state={review}{}",
+                        key.as_deref()
+                            .map(|k| format!(" canonical_key={k}"))
+                            .unwrap_or_default()
+                    );
+                }
+                KgAction::Canonical { key } => match store.lookup_canonical(key)? {
+                    Some(t) => {
+                        println!("{} --{}--> {}", t.subject, t.predicate, t.object);
+                        println!(
+                            "id: {}  key: {}  since: {}",
+                            t.id,
+                            t.canonical_key.as_deref().unwrap_or("-"),
+                            t.valid_from.as_deref().unwrap_or("-")
+                        );
+                    }
+                    None => println!("No approved canonical fact holds key {key:?}."),
+                },
             }
         }
         Command::Drawer { action, vault } => {

@@ -855,7 +855,14 @@ expiry is metadata, not deletion), lives in
 **docs/CONSULTATION_REVIEW.md**. Four items were adopted, in dependency
 order: (1) an **authority tier on KG facts** (`authority_class`,
 `review_state`, `canonical_key`, exact-authority lookup before semantic
-recall on high-risk asks); (2) **extractor identity + generalized
+recall on high-risk asks) — **BUILT 2026-08-02**: declared closed
+vocabulary, HMAC-covered (a column flip without the vault key fails
+verification), audited promotion with per-key supersession, indexed
+`lookup_canonical` on store + `/v1` (`GET …/kg/canonical/{key}`,
+`POST …/kg/authority`) + MCP (`undercroft_lookup_canonical`,
+`undercroft_kg_set_authority`) + CLI (`kg authority`, `kg canonical`),
+rotation carries the tier, five pinned tests incl. the
+poison-cannot-self-approve tamper case; (2) **extractor identity + generalized
 supersession** (receipted `supersedes_id` on drawers); (3) **bundle
 manifests** (Ed25519 sender attestation + scope/trust/expiry metadata,
 closing the meta-rows export gap); (4) **typed `kind` on promoted
@@ -866,29 +873,23 @@ candidates nor shape its codebook — which the C3.3 defense cluster builds
 on. New confirmed gaps filed there: read-path/export auditing, entity
 resolution, artifact references (image bytes), region-as-policy.
 
-**Open discussion (2026-07-31) — labeling as a reachability feature. A
-discussion in progress, deliberately not yet a decision; continue it before
-building anything.** The question on the table: do memory labels enhance
-reachability, and at what cost? The evidence assembled so far, to be
-challenged rather than assumed: labeling cost separates into three tiers —
-declared-by-caller (~zero: a metadata field), rule-derived (µs, or free
-when read live like dates/entities today), and model-derived (0.5–5 s per
-drawer ⇒ ×10³–10⁴ on bulk ingest — a million drawers goes from ~7 minutes
-to days, so if it ever exists it must be asynchronous enrichment after
-verbatim ingest, never a write-path gate; mem0's gating rubric measured
-−27.7pp here). The measured pattern on value: labels used as **scopes,
-filters and exact keys** all won here (wing scoping, content_date,
-declared language, the poison-positive date-filter design — and exact
-label paths are immune to the entire candidate-pool leak class just
-closed); labels used as **score modifiers** all lost (RRF −7.3, room_cap
-−5.6, rescaling −9.4). Constraints any label must clear: unsealed
-`meta_json` exposure (each label is a deliberate, inventoried leak — or a
-blind index), the never-guess contract (a model-assigned label is an
-extractor's claim needing receipts + extractor identity), and
-prefer-read-time for anything recomputable. Candidate convergence, if the
-discussion lands there: fold a declared `kind` + a label filter on
-`SearchOptions` into the golden-values work unit — labels and the
-exact-authority door are one feature seen from two sides.
+**Labeling discussion — RESOLVED (2026-08-02), doctrine written down.**
+The 2026-07-31 open discussion ("labeling as a reachability feature")
+closed with a code-verification pass and three user-ratified outcomes:
+(1) **converge the doctrine, not the work unit** — the golden-values tier
+shipped first and narrow, `kind` waits for its instrument; the shared
+doctrine lives in **docs/LABELS.md** (filter-then-weight strictly, labels
+never in scoring; cost ≠ trust; closed-vocab-or-blind-index on sealed
+vaults; every filterable label owes the starvation machinery an index and
+a scope-resolution entry). (2) The discussion's "exact label paths are
+immune to the candidate-pool leak class" claim was **half-true**: true
+for exact-key doors, false for filters-on-search — and `room` was found
+carrying the wing-starvation shape live, with no tier and no fallback.
+Fixed as its own defect unit (scope-aware candidate generation; see the
+honest-limits block above). (3) Tagging cost tiers confirmed (declared ≈
+zero; rule-derived ≈ free; model-derived ×10³–10⁴ ⇒ async enrichment
+only, never a write gate — mem0's gate measured −27.7pp here); the
+rule-vs-LLM tagging cost instrument is designed and queued.
 
 **Phase 2 — representation, gated.** *Operators as much as users.*
 

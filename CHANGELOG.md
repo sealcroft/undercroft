@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased — declared truth gets a door: the golden-values tier
+
+- **The authority tier on KG facts** (consultation adopted item 1):
+  `authority_class` (`stated`|`canonical`), `review_state`
+  (`unreviewed`|`approved`|`rejected`) and `canonical_key` on `kg_triples`
+  — all three DECLARED (closed vocabulary, validated, rejected when
+  unknown, never coerced), audited through the chain, and **inside the
+  fact's HMAC** via a canonical extension that follows the `support`
+  precedent exactly: facts never placed on the tier keep their canonical
+  bytes unchanged to the byte, so nothing written before the tier existed
+  is re-tagged, and an offline attacker cannot promote poison by flipping
+  a column — a flipped row fails verification on read, pinned by test.
+- **`lookup_canonical` — the exact-authority door.** An INDEXED SQL
+  equality (`idx_kg_triples_canonical`) returning the one active,
+  approved, canonical fact for a key, or nothing — declared, reviewed
+  truth outranking learned similarity, and never a guess. Deliberately not
+  a rider on `all_triples` (whose full decode is O(graph)), and no
+  candidate pool of any kind is involved — which is what makes the door
+  immune to every crowding and starvation shape retrieval defends
+  against. Promoting an approved canonical fact onto an occupied key
+  closes the previous holder's validity window in the same operation
+  (audited); history keeps the superseded fact, and the door answers with
+  at most one current value per key.
+- **Surfaces**: store (`kg_set_authority`, `lookup_canonical`), `/v1`
+  (`GET /v1/vaults/{id}/kg/canonical/{key}` → the fact or 404,
+  `POST /v1/vaults/{id}/kg/authority`), MCP (`undercroft_lookup_canonical`
+  — its empty answer is explicit prose, so a caller can tell "no declared
+  truth" from a failure and must not guess on the key's behalf;
+  `undercroft_kg_set_authority`, registered as a write tool), CLI
+  (`undercroft kg authority`, `undercroft kg canonical`). Key rotation
+  carries the tier (the authority extension rides the re-tag, pinned —
+  dropping it would mark every promoted fact tampered after the first
+  rotation).
+- **`canonical_key` is queryable structure in the clear** — the same
+  sealed-vault trade as subject/predicate, recorded in kg.rs's header:
+  name it like an identifier, never with content words that should stay
+  sealed. It passes `validate_name` (no path separators, no control
+  characters).
+- **The labeling doctrine is written down** (`docs/LABELS.md`), resolving
+  the ROADMAP open discussion: filter-then-weight strictly (labels decide
+  who competes, never how they score — the measured won/lost pattern);
+  cost tiers are not trust tiers (self-scoping needs no trust, authority
+  needs review, a self-declared label is never a trust boundary);
+  closed-vocabulary-or-blind-index is the only exposure shape on sealed
+  vaults; every filterable label owes the scope-starvation machinery an
+  index and a resolution entry. The authority tier is the doctrine's
+  first instance; `kind` waits for its instrument by that same doctrine.
+
 ## Unreleased — no declared scope can be starved by the corpus again
 
 - **Scope-aware candidate generation closes the room-starvation defect.**

@@ -305,7 +305,15 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
   HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`),
-  verify, knowledge graph (kg.rs), management surface (manage.rs),
+  verify, knowledge graph (kg.rs — incl. the golden-values authority
+  tier: `authority_class`/`review_state`/`canonical_key` DECLARED on
+  closed vocabulary, HMAC-covered via a canonical extension on the
+  `support` precedent so untouched facts keep byte-identical canonicals;
+  `lookup_canonical` = indexed exact door, at most one active approved
+  fact per key, promotion supersedes the previous holder audited; a
+  column flip without the vault key fails verification — see
+  docs/LABELS.md for the label doctrine it instantiates),
+  management surface (manage.rs),
   remote-index integration (remote.rs — a mirror records the embedder it was
   pushed with; `search_with_index` refuses a mismatch rather than ranking a
   v2 query against v1 vectors, which returned an empty result with no error),

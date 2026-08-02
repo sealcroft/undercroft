@@ -346,6 +346,12 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "kg", "query"]) => self.kg_query(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "timeline"]) => self.kg_timeline(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "receipts"]) => self.kg_receipts(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "canonical", key]) => {
+                self.kg_canonical(id, key, req, now)
+            }
+            ("POST", &["v1", "vaults", id, "kg", "authority"]) => {
+                self.kg_authority(id, req, body, now)
+            }
             ("POST", &["v1", "vaults", id, "refine"]) => self.refine(id, req, body, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
@@ -1001,6 +1007,56 @@ impl Tenancy {
             Body::Json(json!({
                 "triples": triples_json(triples, grounding.as_deref())
             })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/kg/canonical/{key}` — the exact-authority door:
+    /// an indexed equality on `canonical_key`, answering with the one
+    /// active, approved, canonical fact for the key, or 404. Meant to be
+    /// consulted before semantic recall for exact or high-risk asks —
+    /// declared, reviewed truth outranking learned similarity.
+    fn kg_canonical(&mut self, id: &str, key: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let key = pct_decode(key);
+        let store = self.store_for(id)?;
+        match store.lookup_canonical(&key).map_err(store_err)? {
+            Some(t) => Ok((200, Body::Json(json!({ "fact": t })))),
+            None => Err(RestError::new(
+                404,
+                "no approved canonical fact holds this key",
+            )),
+        }
+    }
+
+    /// `POST /v1/vaults/{id}/kg/authority` — place a fact on the authority
+    /// tier or take it off: body `{triple_id, authority_class,
+    /// review_state, canonical_key?}`. Closed vocabulary, audited through
+    /// the chain, and the resulting state lands inside the fact's HMAC —
+    /// a column flip without the vault key fails verification on read.
+    fn kg_authority(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let v: Value =
+            serde_json::from_str(body).map_err(|_| RestError::new(400, "body must be JSON"))?;
+        let triple_id = v
+            .get("triple_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RestError::new(400, "triple_id required"))?;
+        let class = v
+            .get("authority_class")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RestError::new(400, "authority_class required"))?;
+        let review = v
+            .get("review_state")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RestError::new(400, "review_state required"))?;
+        let key = v.get("canonical_key").and_then(Value::as_str);
+        let store = self.store_for(id)?;
+        store
+            .kg_set_authority(triple_id, class, review, key)
+            .map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({ "ok": true, "triple_id": triple_id })),
         ))
     }
 
