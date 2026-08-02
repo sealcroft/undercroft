@@ -156,6 +156,56 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// Scoped-recall-at-scale: does a FIXED wing (and a fixed room inside
+    /// it) keep 100% recall while the corpus grows around it? One
+    /// cumulative vault; a probe wing ingested first and never grown; four
+    /// query passes per checkpoint (unscoped control, wing-scoped,
+    /// room-scoped, wing+room). This is the instrument the per-wing tier's
+    /// recall claim was waiting for — and the scope filter's first
+    /// at-scale measurement. No gate mid-run: the curves are the result.
+    Scopescale {
+        /// Cumulative TOTAL corpus checkpoints (probe included), ascending
+        #[arg(long, default_value = "131072,262144,524288,1048576")]
+        sizes: String,
+        /// Fixed probe-wing size (default above UNDERCROFT_WING_PQ_MIN so
+        /// the wing earns its own index)
+        #[arg(long, default_value_t = 8192)]
+        wing_size: usize,
+        /// Fixed probe-room size inside the probe wing (default above the
+        /// 256-candidate hydration floor at limit 5, so the scoped
+        /// membership-filter path is on trial, not the exact-scan escape)
+        #[arg(long, default_value_t = 512)]
+        room_size: usize,
+        /// Timed queries per pass per checkpoint
+        #[arg(long, default_value_t = 100)]
+        queries: usize,
+        /// Ingest batch size (`upsert_many`)
+        #[arg(long, default_value_t = 4096)]
+        batch: usize,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
+    /// Cross-lingual retrieval instrument: ingest the TARGET sentence of
+    /// every pair, query with the SOURCE sentence, report R@1/R@5 per
+    /// language pair — plus a verbatim-recovery sanity column (querying
+    /// with the target itself must find it, or the harness is broken).
+    /// The embedder is taken from the environment and printed as
+    /// configuration: the default hash embedder is the measured-zero
+    /// baseline (it matches surface forms only), a served multilingual
+    /// model (`UNDERCROFT_EMBEDDER=http`) is the capability under test.
+    /// Pairs are operator-supplied (TSV: src_lang, tgt_lang, src_text,
+    /// tgt_text) — parallel corpora carry their own licenses and are not
+    /// shipped in this repo.
+    Xlingual {
+        /// TSV file: src_lang \t tgt_lang \t src_text \t tgt_text
+        #[arg(long)]
+        pairs: String,
+        /// Cap pairs read per language pair (0 = all)
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -1024,6 +1074,307 @@ fn run_pqscale(
         }
     }
     println!("PQSCALE DONE");
+    Ok(())
+}
+
+/// Scoped-recall-at-scale. The design, stated before anything runs:
+/// a FIXED probe wing (default 8192 — the wing tier engages) holding a
+/// FIXED probe room (default 512 — past the exact-scan floor, so the
+/// scoped membership-filter path carries the recall), ingested FIRST into
+/// one cumulative vault; the corpus then grows around them in another
+/// wing to each checkpoint. Four passes per checkpoint — unscoped
+/// (control: the shipped-default gate), wing-scoped, room-scoped (the
+/// pure room filter over the global index), wing+room (the room filter
+/// inside the wing tier's index). Per-pass warm-up is reported
+/// separately (the wing tier builds its index on the first scoped query —
+/// folding a one-time build into a per-query average manufactured a 15×
+/// "effect" in wingscale's first version). The scoped columns are what a
+/// recall claim for the tier and the scope filter must cite; a leak in
+/// any of them at any checkpoint is a defect, not a property.
+fn run_scopescale(
+    sizes: &str,
+    wing_size: usize,
+    room_size: usize,
+    queries: usize,
+    batch: usize,
+    level: SecurityLevel,
+) -> Result<()> {
+    let checkpoints: Vec<usize> = sizes
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse()
+                .map_err(|_| anyhow::anyhow!("--sizes entries are numbers, got {s:?}"))
+        })
+        .collect::<Result<_>>()?;
+    if checkpoints.is_empty() {
+        anyhow::bail!("--sizes is empty");
+    }
+    let wing_size = wing_size.max(16);
+    let room_size = room_size.min(wing_size).max(8);
+    if checkpoints[0] <= wing_size {
+        anyhow::bail!("first checkpoint must exceed --wing-size (the probe is ingested first)");
+    }
+    let batch = batch.max(1);
+    let (_tmp, mut store) = fresh_store(level)?;
+    store.set_pq(true);
+    println!(
+        "Scopescale — level={level:?} retrieval=pq checkpoints={checkpoints:?} \
+         probe wing={wing_size} room={room_size} batch={batch}"
+    );
+
+    // The probe: fixed for the whole run. Keys are collected for the room
+    // (all of it) and the wing (strided to the query budget), each with
+    // the drawer's OWN topic — querying with a rotated topic pollutes the
+    // query with wrong-topic tokens and measures the pollution, not the
+    // scope (this harness's own first smoke run demonstrated it).
+    let mut room_keys: Vec<(String, String, String)> = Vec::new(); // (key, topic, id)
+    let mut wing_keys: Vec<(String, String, String)> = Vec::new();
+    {
+        let mut pending: Vec<Drawer> = Vec::with_capacity(batch.min(wing_size));
+        for j in 0..wing_size {
+            let topic = TOPICS[j % TOPICS.len()];
+            let key = format!("probe-{:05}", j);
+            let detail = format!("the {key} is finalized as option {}", (j * 7) % 100);
+            let fact = FACT_TEMPLATES[j % FACT_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{detail}", &detail);
+            let room = if j < room_size {
+                "proberoom".to_string()
+            } else {
+                format!("room-{}", j % 8)
+            };
+            let drawer = Drawer::new("probe", &room, fact, None, j as u32, "bench");
+            if j < room_size {
+                room_keys.push((key.clone(), topic.to_string(), drawer.id.clone()));
+            } else if j.is_multiple_of(16) {
+                wing_keys.push((key.clone(), topic.to_string(), drawer.id.clone()));
+            }
+            pending.push(drawer);
+            if pending.len() >= batch {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+        }
+        if !pending.is_empty() {
+            store.upsert_many(&pending)?;
+        }
+    }
+
+    // Growth corpus: the pqscale generator, in its own wing, with keys for
+    // the unscoped control column.
+    const KEY_STRIDE: usize = 512;
+    let mut global_keys: Vec<(String, String, String)> = Vec::new();
+    let mut ingested = wing_size;
+    type Keys = [(String, String, String)];
+    let sample = |keys: &Keys, want: usize| -> Vec<(String, String, String)> {
+        let stride = keys.len().div_ceil(want.max(1)).max(1);
+        keys.iter().step_by(stride).cloned().collect()
+    };
+    let query_for = |qi: usize, key: &str, topic: &str| {
+        let q = QUERY_TEMPLATES[qi % QUERY_TEMPLATES.len()]
+            .replace("{topic}", topic)
+            .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
+        format!("{q} {key}")
+    };
+    for &target in &checkpoints {
+        let seg_start = ingested;
+        let ingest_started = Instant::now();
+        let mut pending: Vec<Drawer> = Vec::with_capacity(batch);
+        while ingested < target {
+            let i = ingested;
+            let topic = TOPICS[i % TOPICS.len()];
+            let key = format!(
+                "{}-{:07}",
+                ["budget", "deadline", "vendor", "owner"][i % 4],
+                i
+            );
+            let detail = format!("the {key} is finalized as option {}", (i * 7) % 100);
+            let fact = FACT_TEMPLATES[i % FACT_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{detail}", &detail);
+            let drawer = Drawer::new("bench", topic, fact, None, i as u32, "bench");
+            if i.is_multiple_of(KEY_STRIDE) {
+                global_keys.push((key, topic.to_string(), drawer.id.clone()));
+            }
+            pending.push(drawer);
+            if pending.len() >= batch {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+            ingested += 1;
+        }
+        if !pending.is_empty() {
+            store.upsert_many(&pending)?;
+        }
+        let ingest_secs = ingest_started.elapsed().as_secs_f32();
+        let db_gb = store.stats().map(|s| s.db_bytes).unwrap_or(0) as f64 / 1e9;
+        println!(
+            "  n={ingested:>8}  db {db_gb:.2} GB  ingest {ingest_secs:.1}s \
+             ({:.0} docs/s)",
+            ((target - seg_start) as f32 / ingest_secs.max(f32::EPSILON))
+        );
+
+        // (label, wing filter, room filter, key set)
+        #[allow(clippy::type_complexity)]
+        let passes: [(
+            &str,
+            Option<&str>,
+            Option<&str>,
+            Vec<(String, String, String)>,
+        ); 4] = [
+            ("unscoped ", None, None, sample(&global_keys, queries)),
+            (
+                "wing     ",
+                Some("probe"),
+                None,
+                sample(&wing_keys, queries),
+            ),
+            (
+                "room     ",
+                None,
+                Some("proberoom"),
+                sample(&room_keys, queries),
+            ),
+            (
+                "wing+room",
+                Some("probe"),
+                Some("proberoom"),
+                sample(&room_keys, queries),
+            ),
+        ];
+        for (label, wing, room, keys) in &passes {
+            let opts = || SearchOptions {
+                wing: wing.map(str::to_string),
+                room: room.map(str::to_string),
+                limit: 5,
+                ..Default::default()
+            };
+            let (wk, wt, _) = &keys[0];
+            let warm_started = Instant::now();
+            store.search(&query_for(0, wk, wt), &opts())?;
+            let warmup_s = warm_started.elapsed().as_secs_f32();
+            let mut r5 = 0u32;
+            let timed = Instant::now();
+            for (qi, (key, topic, id)) in keys.iter().enumerate() {
+                let hits = store.search(&query_for(qi, key, topic), &opts())?;
+                if hits.iter().take(5).any(|h| &h.drawer.id == id) {
+                    r5 += 1;
+                }
+            }
+            let secs = timed.elapsed().as_secs_f32();
+            println!(
+                "    {label}  R@5 {:>5.1}%  {:>7.1} ms/q  (warmup {warmup_s:.1}s, {} queries)",
+                100.0 * r5 as f32 / keys.len().max(1) as f32,
+                1000.0 * secs / keys.len().max(1) as f32,
+                keys.len(),
+            );
+        }
+    }
+    println!("SCOPESCALE DONE");
+    Ok(())
+}
+
+/// Cross-lingual retrieval instrument. See the subcommand doc for the
+/// design; the metric is fixed here BEFORE any run: per language pair,
+/// R@1 and R@5 of querying with the source sentence for the drawer
+/// holding its target-language translation, over a corpus of every
+/// pair's target sentence (each pair's competitors are all the others).
+/// The `verbatim` column queries with the target sentence itself — a
+/// harness sanity floor, not a capability claim.
+fn run_xlingual(pairs_path: &str, limit: usize, level: SecurityLevel) -> Result<()> {
+    let raw = std::fs::read_to_string(pairs_path)
+        .map_err(|e| anyhow::anyhow!("cannot read --pairs {pairs_path:?}: {e}"))?;
+    // (src_lang, tgt_lang, src_text, tgt_text)
+    let mut by_pair: std::collections::BTreeMap<String, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for (ln, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut f = line.splitn(4, '\t');
+        let (Some(sl), Some(tl), Some(st), Some(tt)) = (f.next(), f.next(), f.next(), f.next())
+        else {
+            anyhow::bail!("--pairs line {} is not 4 tab-separated fields", ln + 1);
+        };
+        let bucket = by_pair.entry(format!("{sl}->{tl}")).or_default();
+        if limit == 0 || bucket.len() < limit {
+            bucket.push((st.to_string(), tt.to_string()));
+        }
+    }
+    if by_pair.is_empty() {
+        anyhow::bail!("--pairs {pairs_path:?} holds no usable rows");
+    }
+    let embedder = std::env::var("UNDERCROFT_EMBEDDER").unwrap_or_else(|_| "hash".into());
+    let (_tmp, mut store) = fresh_store(level)?;
+    let total: usize = by_pair.values().map(Vec::len).sum();
+    println!(
+        "Xlingual — level={level:?} embedder={embedder} pairs={} ({} language pairs) \
+         [config is the variable: hash = the measured-zero baseline]",
+        total,
+        by_pair.len()
+    );
+
+    // Ingest every pair's TARGET sentence; the drawer id is the gold.
+    let mut gold: Vec<(String, String, String, String)> = Vec::new(); // (pair, src, tgt, id)
+    let mut pending: Vec<Drawer> = Vec::with_capacity(256);
+    for (pair, rows) in &by_pair {
+        for (i, (src, tgt)) in rows.iter().enumerate() {
+            let d = Drawer::new("xling", pair, tgt.clone(), None, i as u32, "bench");
+            gold.push((pair.clone(), src.clone(), tgt.clone(), d.id.clone()));
+            pending.push(d);
+            if pending.len() >= 256 {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+        }
+    }
+    if !pending.is_empty() {
+        store.upsert_many(&pending)?;
+    }
+
+    let opts = || SearchOptions {
+        limit: 5,
+        ..Default::default()
+    };
+    let mut rows: Vec<(String, usize, u32, u32, u32)> = Vec::new();
+    for pair in by_pair.keys() {
+        let (mut r1, mut r5, mut verbatim) = (0u32, 0u32, 0u32);
+        let mine: Vec<_> = gold.iter().filter(|(p, ..)| p == pair).collect();
+        for (_, src, tgt, id) in &mine {
+            let hits = store.search(src, &opts())?;
+            if hits.first().is_some_and(|h| &h.drawer.id == id) {
+                r1 += 1;
+            }
+            if hits.iter().take(5).any(|h| &h.drawer.id == id) {
+                r5 += 1;
+            }
+            let vh = store.search(tgt, &opts())?;
+            if vh.first().is_some_and(|h| &h.drawer.id == id) {
+                verbatim += 1;
+            }
+        }
+        rows.push((pair.clone(), mine.len(), r1, r5, verbatim));
+    }
+    println!("  pair          n     R@1     R@5   verbatim-R@1");
+    for (pair, n, r1, r5, v) in &rows {
+        let pct = |x: &u32| 100.0 * *x as f32 / (*n).max(1) as f32;
+        println!(
+            "  {pair:<12} {n:>4}  {:>5.1}%  {:>5.1}%  {:>5.1}%",
+            pct(r1),
+            pct(r5),
+            pct(v)
+        );
+        if pct(v) < 90.0 {
+            println!(
+                "    WARNING: verbatim recovery under 90% — suspect the harness \
+                 or the corpus before reading the cross-lingual columns"
+            );
+        }
+    }
+    println!("XLINGUAL DONE");
     Ok(())
 }
 
@@ -3309,6 +3660,26 @@ fn main() -> Result<()> {
             pool_div.as_deref(),
             level_of(&level),
         ),
+        Command::Scopescale {
+            sizes,
+            wing_size,
+            room_size,
+            queries,
+            batch,
+            level,
+        } => run_scopescale(
+            &sizes,
+            wing_size,
+            room_size,
+            queries,
+            batch,
+            level_of(&level),
+        ),
+        Command::Xlingual {
+            pairs,
+            limit,
+            level,
+        } => run_xlingual(&pairs, limit, level_of(&level)),
         Command::Wingscale {
             n,
             wings,

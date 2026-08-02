@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — the two waiting instruments exist: scoped recall at scale, and cross-lingual
+
+- **`undercroft-bench scopescale`** — the instrument the per-wing tier's
+  recall claim has been waiting for since pqscale filed "a scoped-recall
+  claim needs its own instrument", now also the scope filter's first
+  at-scale measurement. Design fixed before any run: ONE cumulative vault;
+  a **fixed** probe wing (8192 — the tier engages) holding a **fixed**
+  probe room (512 — past the exact-scan floor, so the scoped
+  membership-filter path carries the recall, not the escape hatch),
+  ingested first and never grown; the corpus then grows around them
+  through the pqscale checkpoints (131k → 1M). Four passes per
+  checkpoint: unscoped (the shipped-default control), wing-scoped,
+  room-scoped (the pure room filter over the global index), wing+room
+  (the room filter inside the wing tier's index) — R@5 and steady-state
+  ms/q each, per-pass warm-up reported separately (the wingscale lesson).
+  No mid-run gate: the curves are the result; a leak in any scoped column
+  at any checkpoint is a defect to file, never a property to document.
+- **`undercroft-bench xlingual`** — the metric for the one capability the
+  hash embedder provably lacks, designed before anything runs: per
+  language pair, R@1/R@5 of querying with a source-language sentence for
+  the drawer holding its target-language translation, every pair's
+  competitors being all the others; plus a verbatim-recovery sanity
+  column that guards the harness (querying with the target itself must
+  find it). The embedder configuration is the experiment's variable and
+  is printed in the header — hash is the measured-zero baseline, a
+  served multilingual model (`UNDERCROFT_EMBEDDER=http`) is the
+  capability under test. Pairs are operator-supplied TSV
+  (`src_lang \t tgt_lang \t src_text \t tgt_text`): parallel corpora
+  carry their own licenses and are not shipped in this repo.
+
 ## Unreleased — declared truth gets a door: the golden-values tier
 
 - **The authority tier on KG facts** (consultation adopted item 1):

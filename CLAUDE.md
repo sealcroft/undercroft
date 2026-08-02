@@ -372,7 +372,15 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   unscoped R@5 + steady-state ms/q, ONE ingest per corpus with `--floors`
   iterated in-process, per-pass warm-up reported separately — folding a
   one-time index build into a per-query average manufactured a 15× "effect"
-  in this instrument's own first version)
+  in this instrument's own first version), `scopescale` (scoped recall AT
+  SCALE: a fixed 8192-drawer probe wing holding a fixed 512-row probe room,
+  corpus grown around them to each checkpoint, four passes — unscoped
+  control / wing / room / wing+room — the instrument any scoped-recall
+  claim must cite), and `xlingual` (cross-lingual R@1/R@5 per language pair
+  over operator-supplied TSV pairs — parallel corpora carry their own
+  licenses and never enter the repo; the embedder env is the printed
+  variable, hash being the measured-zero baseline; a verbatim-recovery
+  sanity column guards the harness itself)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
