@@ -823,15 +823,18 @@ this is where the measured headroom is.*
     remain second-order levers if that measurement asks for them.
   The instrument now exists (`scopescale`, 2026-08-02) and settled it in
   both directions: room-scoped and wing+room-scoped R@5 hold **100.0% at
-  every checkpoint to 10⁶** (the scope filter's at-scale claim, earned),
-  while **wing-scoped through the wing's own index reads 89.6% flat —
-  corpus-independent, an OPEN DEFECT inside the tier** on a highly
-  self-similar wing population: the wing pool floors at 256
-  (`wing_live/64` loses to the floor) and the cosine-only stage-2 cut
-  drops lexically-carried golds — the global recall-leak class one level
-  down. Pool sweep moves it 89.6→96.9 (`div=8`) then plateaus; fix = a
-  designed wing-level pool policy (deeper proportional hydration is
-  affordable in a small population), its own unit with its own gate. The defect it closes is recall as much
+  every checkpoint to 10⁶** (the scope filter's at-scale claim, earned).
+  It also filed and then CLOSED a defect the same day: wing-scoped
+  through the wing's own index read 89.6% flat, corpus-independent —
+  wings live exactly in the size band where the corpus pool divisors
+  collapse to the fixed 256 floor (the measured-leaky configuration),
+  and the cosine-only stage-2 cut then starved the lexical door (pool
+  sweep: 89.6→96.9 plateau). **Fixed by scope-sized pools**
+  (`scoped_pool_k`/`scoped_keep`: stage 1 ≥ `min(scope, 2048)`,
+  hydration ≥ `min(scope, 1024)`, small scopes exact, converging to the
+  corpus divisors at scale). **Gate met: 100.0% in every scoped column
+  at every checkpoint 131k→1M**, wing ~85 ms/q flat (1024-row hydration,
+  the recorded price), unscoped untouched. The defect it closes is recall as much
   as cost: the global prefilter's top-k intersected with a wing can starve
   it entirely (pinned by test). Honest limits, recorded: BM25 IDF stays
   global (the wing isolates candidates, not scores; per-wing IDF was

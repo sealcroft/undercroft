@@ -288,6 +288,39 @@ const DEFAULT_FUSION_WEIGHT: f32 = 0.55;
 const FUSION_WEIGHT_MIN: f32 = 0.20;
 const FUSION_WEIGHT_MAX: f32 = 0.70;
 
+/// Scoped-search pool floors, measured by `scopescale` (2026-08-02). A
+/// scope lives exactly in the size band (10³–10⁵) where the corpus
+/// divisors (`live/64` stage 1, `live/512` hydration) collapse to the
+/// fixed 256 floor — the configuration the global recall leak was
+/// measured in. On a self-similar 8192-row wing that read R@5 89.6%,
+/// corpus-independent; widening stage 1 alone plateaued at 96.9% because
+/// the cosine-only stage-2 cut still held hydration at 256 and slammed
+/// the lexical door (hydration is BM25's only route into fusion on a
+/// sealed vault). So a scoped search fetches at least
+/// `min(scope, SCOPE_POOL_FLOOR)` ADC candidates and hydrates at least
+/// `min(scope, SCOPE_HYDRATE_FLOOR)` of them: scopes at or below the
+/// hydrate floor are answered EXACTLY, and large scopes converge to the
+/// proven corpus divisors. The worst-case price is
+/// `SCOPE_HYDRATE_FLOOR × ~0.09 ms ≈ 92 ms` for a scoped query — the
+/// recorded cost of not losing answers, still several times cheaper than
+/// the below-floor full scan of the same population.
+const SCOPE_POOL_FLOOR: usize = 2048;
+const SCOPE_HYDRATE_FLOOR: usize = 1024;
+
+/// Stage-1 candidate pool for a scoped search over `scope_live` rows.
+fn scoped_pool_k(hydrate_k: usize, scope_live: usize) -> usize {
+    hydrate_k
+        .max(scope_live / 64)
+        .max(scope_live.min(SCOPE_POOL_FLOOR))
+}
+
+/// Hydration keep for a scoped search — the width of the lexical door.
+fn scoped_keep(hydrate_k: usize, scope_live: usize) -> usize {
+    hydrate_k
+        .max(scope_live / 512)
+        .max(scope_live.min(SCOPE_HYDRATE_FLOOR))
+}
+
 /// Pure for the same reason as [`resolve_late_top_n`].
 fn resolve_fusion_weight(env: Option<&str>) -> f32 {
     match env {
@@ -2247,11 +2280,20 @@ impl PalaceStore {
         // all: the SQL WHERE below bounds a full scan by the scope, which
         // is exact and cannot starve — the below-floor-wing pattern, one
         // level up. Larger scopes keep the prefilter but draw candidates
-        // INSIDE the scope, pool scaled to the scope's own population: the
-        // same recall policy the corpus-scaled pool gives unscoped queries.
-        let scope_scan = scope.as_ref().is_some_and(|s| s.len() <= hydrate_k);
-        let pool_k = match &scope {
-            Some(s) if !scope_scan => hydrate_k.max(s.len() / self.pool_div.max(1)),
+        // INSIDE the scope, pools sized by the SCOPE's population
+        // ([`scoped_pool_k`]/[`scoped_keep`] — the corpus divisors
+        // collapse to the fixed floor at wing sizes, which scopescale
+        // measured as an 89.6% wing-recall leak).
+        let scope_scan = scope
+            .as_ref()
+            .is_some_and(|s| s.len() <= hydrate_k.max(SCOPE_HYDRATE_FLOOR));
+        // The population any scoped pool is sized against — the membership
+        // set's size when one was fetched, or the wing's live count on the
+        // wing-tier path (which needs no membership set, its index already
+        // generates inside the wing).
+        let mut scope_live: Option<usize> = scope.as_ref().map(std::collections::HashSet::len);
+        let pool_k = match scope_live {
+            Some(l) if !scope_scan => scoped_pool_k(hydrate_k, l),
             _ => hydrate_k,
         };
         let candidates = if scope_scan {
@@ -2274,7 +2316,23 @@ impl PalaceStore {
             refine_semantic = true;
             match &opts.wing {
                 Some(w) if self.wing_pq_min != usize::MAX => {
-                    self.wing_pq_candidates_in(w, &qvec, pool_k, scope.as_ref())?
+                    // Size the wing path's pools by the wing itself when no
+                    // narrower scope was resolved: the wing IS the searched
+                    // population, and sizing it by the corpus is how the
+                    // floor came to dominate.
+                    let k = match scope_live {
+                        Some(_) => pool_k,
+                        None => {
+                            let n: i64 = self.conn.query_row(
+                                "SELECT COUNT(*) FROM drawers WHERE wing = ?1",
+                                [w],
+                                |r| r.get(0),
+                            )?;
+                            scope_live = Some(n as usize);
+                            scoped_pool_k(hydrate_k, n as usize)
+                        }
+                    };
+                    self.wing_pq_candidates_in(w, &qvec, k, scope.as_ref())?
                 }
                 _ => self.pq_candidates_in(&qvec, pool_k, scope.as_ref())?,
             }
@@ -2350,7 +2408,14 @@ impl PalaceStore {
         // MaxSim) and FTS keeps every lexical candidate.
         let candidates = match candidates {
             Some(seqs) if refine_semantic && seqs.len() > hydrate_k => {
-                let keep = hydrate_k.max(seqs.len() / 8);
+                let keep = match scope_live {
+                    // A scoped keep is a fraction of the SCOPE, never of
+                    // the pool: widening the net while the cosine-only cut
+                    // held hydration at the floor is exactly the 96.9%
+                    // plateau scopescale measured.
+                    Some(l) => scoped_keep(hydrate_k, l),
+                    None => hydrate_k.max(seqs.len() / 8),
+                };
                 Some(self.refine_by_exact_cosine(&qvec, seqs, keep)?)
             }
             other => other,
@@ -6752,16 +6817,16 @@ mod tests {
     }
 
     /// A room too large to scan outright keeps the prefilter but draws its
-    /// candidates INSIDE the room, pool scaled to the room's population —
-    /// the same recall policy the corpus-scaled pool gives unscoped
-    /// queries, applied to the scope's own live count.
+    /// candidates INSIDE the room, pools sized by the room's population
+    /// (`scoped_pool_k`/`scoped_keep`) — the scope-sized policy scopescale
+    /// measured its way to.
     #[test]
     fn a_large_room_gets_scope_filtered_candidates_not_a_scan() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        // 700 loud rows against a 300-row room: the room is past the
-        // hydration floor (256 at limit 5), so the exact-scan escape is
+        // 2000 loud rows against a 1500-row room: the room is past the
+        // exact-scan floor (`SCOPE_HYDRATE_FLOOR`), so the escape hatch is
         // closed and the membership filter must carry recall by itself.
-        let mut batch: Vec<Drawer> = (0..700u32)
+        let mut batch: Vec<Drawer> = (0..2000u32)
             .map(|i| {
                 drawer(
                     "w",
@@ -6771,12 +6836,12 @@ mod tests {
                 )
             })
             .collect();
-        batch.extend((0..299u32).map(|i| {
+        batch.extend((0..1499u32).map(|i| {
             drawer(
                 "w",
                 "survey",
                 &format!("survey station maintenance note {i}"),
-                1000 + i,
+                10000 + i,
             )
         }));
         s.upsert_many(&batch).unwrap();
@@ -6784,7 +6849,7 @@ mod tests {
             "w",
             "survey",
             "kelp beds mapped near the survey station",
-            2000,
+            20000,
         );
         s.upsert(&target).unwrap();
         s.set_pq(true);
@@ -6983,6 +7048,26 @@ mod tests {
     /// honoured *valid* values would newly resolve the same setting to 200 —
     /// quadrupling rescore depth for someone who changed nothing. Serial,
     /// because environment variables are process-global.
+    /// The scope-sized pool policy, pinned at its three regimes: small
+    /// scopes are taken whole (exact), mid scopes ride the floors the
+    /// scopescale sweep priced, large scopes converge to the proven
+    /// corpus divisors.
+    #[test]
+    fn scoped_pools_are_sized_by_the_scope() {
+        let hk = 256;
+        // Small scope: everything fetched, everything hydrated — exact.
+        assert_eq!(scoped_pool_k(hk, 512), 512);
+        assert_eq!(scoped_keep(hk, 512), 512);
+        // The measured wing band: floors, not corpus divisors.
+        assert_eq!(scoped_pool_k(hk, 8192), 2048);
+        assert_eq!(scoped_keep(hk, 8192), 1024);
+        // Large scope: the corpus divisors take over.
+        assert_eq!(scoped_pool_k(hk, 1_048_576), 16_384);
+        assert_eq!(scoped_keep(hk, 1_048_576), 2048);
+        // The page edge still wins when it is the larger demand.
+        assert_eq!(scoped_pool_k(4096, 512), 4096);
+    }
+
     #[test]
     fn the_fusion_weight_is_declared_bounded_and_survives_garbage() {
         // The default is the shipped blend, written longhand so editing the

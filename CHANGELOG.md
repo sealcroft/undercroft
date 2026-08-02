@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — the wing leak closes: scoped pools are sized by the scope
+
+- **The scopescale-filed defect (wing-scoped R@5 89.6%, corpus-independent)
+  is CLOSED, gate met at every checkpoint.** Root cause, measured in three
+  steps: wings live exactly in the size band (10³–10⁵) where the corpus
+  pool divisors (`live/64` stage 1, `live/512` hydration) collapse to the
+  fixed 256 floor — so per-wing search ran the very configuration the
+  global recall leak was measured in; widening stage 1 alone plateaued at
+  96.9% because the cosine-only stage-2 cut still held hydration at 256
+  and slammed the lexical door (hydration is BM25's only route into
+  fusion on a sealed vault — the same instructive failure as the global
+  fix's step 2).
+- **The fix: scope-sized pools** (`scoped_pool_k` / `scoped_keep`). A
+  scoped search fetches at least `min(scope, 2048)` ADC candidates and
+  hydrates at least `min(scope, 1024)` of them, both floored at the page
+  edge and converging to the proven corpus divisors as the scope grows.
+  Scopes at or below the hydrate floor are answered EXACTLY (the
+  exact-scan escape widens to 1024 accordingly). Applies uniformly:
+  the wing tier sizes by the wing's live count, room scopes by the
+  membership set, wing+room by the conjunction. Declared constants with
+  the measurement in their doc comment — not env knobs, because a pool
+  floor below these values is a measured-leaky configuration, not a
+  preference.
+- **Gate run** (scopescale, shipped defaults, one cumulative vault):
+  **R@5 100.0% in every column at every checkpoint** — wing
+  85.4/85.6/84.9/86.7 ms/q (was ~20–23 at 89.6%: the ~65 ms delta is
+  1024-row hydration, the recorded price of not losing answers, flat
+  across 8× corpus growth), room ~40 ms/q exact, wing+room ~41 ms/q,
+  unscoped 39.4/66.1/132.8/269.3 ms/q — unchanged within noise, as the
+  scope-only wiring predicts. Pinned by the three-regime
+  `scoped_pools_are_sized_by_the_scope` test and the enlarged
+  2000-vs-1500 large-room starvation test.
+
 ## Unreleased — the fusion weight becomes a declaration, and tagging gets its price tag
 
 - **`UNDERCROFT_FUSION_WEIGHT` (default 0.55)** — the convex blend's
@@ -21,6 +54,27 @@
   fusion class Bruch, Gai & Ingber (TOIS 2023) find superior to rank
   fusion and *sample-efficient to tune* — this knob is the sanctioned
   way to tune it, and any tuned value must cite a LoCoMo run beside it.
+- **The first weight sweep ran** (LoCoMo merged corpus, hash embedder,
+  no reranker, `UNDERCROFT_RETRIEVAL` unset, harness-default 60-hit pool,
+  k 10, one deterministic run per weight — NOT the published pool-400
+  configuration, so these rows compare only with each other):
+
+  | `w` | session `R@10` | turn all-gold @10 | top-40 CDF |
+  |---|---|---|---|
+  | 0.35 | **93.9%** | **72.1%** | **83.3%** |
+  | 0.45 | 93.8% | 71.2% | 82.9% |
+  | 0.55 (default) | 93.0% | 69.4% | 81.8% |
+  | 0.65 | 91.3% | 66.1% | 80.9% |
+
+  Monotone on every metric: with the hash embedder, LOWER semantic
+  weight wins, and the curve is still rising at the sweep's low end
+  (0.20–0.30 untested). **The default does not move on this evidence**:
+  the curve is one benchmark at one pool configuration, the optimum is
+  embedder-dependent (a served model's calibrated cosine should shift it
+  up), and tuning the shipped default onto LoCoMo would be
+  benchmark-fitting — the standing refusal. What this establishes is
+  that the knob finds real signal, and that a deployment pinning its
+  embedder can profitably measure its own weight.
 - **`undercroft-bench tagcost`** — the measurement behind the labeling
   doctrine's cost tiers (docs/LABELS.md). Rule arm: a deterministic
   closed-vocabulary classifier over EVERY dialog turn of a
@@ -31,6 +85,12 @@
   first quality signal, not a verdict. COST ONLY, stated in the help
   text: whether tags improve retrieval is a separate instrument that
   does not exist yet, and this one must never be quoted for it.
+  **Measured** (LoCoMo merged corpus, 5,882 turns; `llama3.2:1b` served
+  CPU-only on the compose Ollama, 197-turn even-stride sample, 0
+  errors): rule tagging **0.38 µs/drawer — 0.4 s per 10⁶**; LLM tagging
+  **0.19 s/drawer — 2.2 days per 10⁶, ~5·10⁵× the rule arm**; agreement
+  63.5%. The doctrine's estimate (×10³–10⁴) understated the ratio —
+  the async-enrichment-only rule is now a measurement, not an estimate.
 
 ## Unreleased — the two waiting instruments exist: scoped recall at scale, and cross-lingual
 

@@ -45,10 +45,12 @@ absence is meaningful (as with `wing`/`room`, which every drawer carries).
 
 ## Cost is not trust: the two axes
 
-- **Cost tiers**: declared-by-caller ≈ zero (a field on the write);
-  rule-derived ≈ free (microseconds, or read live like dates and entities —
-  which is also what makes scanner fixes retroactive); model-derived =
-  0.5–5 s per drawer, ×10³–10⁴ on bulk ingest — if it ever exists it is
+- **Cost tiers, now measured** (`undercroft-bench tagcost`, LoCoMo corpus,
+  2026-08-02): declared-by-caller ≈ zero (a field on the write);
+  rule-derived = **0.38 µs/drawer — 0.4 s per million** (and read-live
+  variants are free at write, which is also what makes scanner fixes
+  retroactive); model-derived = **0.19 s/drawer on a served 1B CPU model —
+  2.2 days per million, ~5·10⁵× the rule arm** — if it ever exists it is
   **asynchronous enrichment after the verbatim write, never a write gate**
   (write gating measured −27.7pp here, mem0's rubric).
 - **Trust tiers are orthogonal.** A declared label is cheap but is still

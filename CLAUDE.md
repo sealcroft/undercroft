@@ -288,8 +288,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   gets membership-filtered candidates (PQ/wing-PQ/FDE filter during
   selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
   filter their top-k and surrender to the bounded exact scan when the
-  scope's share cannot fill the page), pool scaled to the SCOPE's
-  population — never the corpus's. Rejected deliberately: retry-on-empty
+  scope's share cannot fill the page), pools SIZED BY THE SCOPE
+  (`scoped_pool_k`/`scoped_keep`: stage 1 ≥ `min(scope, 2048)`,
+  hydration ≥ `min(scope, 1024)`, floors measured by scopescale — the
+  corpus divisors collapse to the fixed 256 floor exactly at wing sizes,
+  which read R@5 89.6% until the scope-sized policy closed it at 100.0%
+  gate-verified 131k→1M; scoped queries pay ~85 ms/q for it, flat). Rejected deliberately: retry-on-empty
   (masks legitimate empties) and post-ranking filters (spend the pool on
   excluded rows — the defect restated). `idx_drawers_room` serves
   room-only resolution; the composite index is leftmost-prefix. A wing's population is MORE
