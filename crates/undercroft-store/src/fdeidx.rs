@@ -685,10 +685,27 @@ impl PalaceStore {
     /// Top-`k` candidate seqs by FDE similarity, or `None` when FDE
     /// retrieval can't serve this query (no late encoder, no FDE rows, or
     /// an empty query encode) — the caller falls back to the fusion scan.
+    /// Test surface: the production path always resolves a scope first and
+    /// calls [`Self::fde_candidates_in`].
+    #[cfg(test)]
     pub(crate) fn fde_candidates(
         &self,
         query: &str,
         k: usize,
+    ) -> Result<Option<Vec<i64>>, StoreError> {
+        self.fde_candidates_in(query, k, None)
+    }
+
+    /// [`Self::fde_candidates`] restricted to a declared scope's seq set:
+    /// the FDE index is scope-blind (wing and room alike), so every
+    /// candidate is membership-filtered before the cut, and the inverted
+    /// tier's probe must find `k` rows INSIDE the scope before it is
+    /// trusted over the full scan.
+    pub(crate) fn fde_candidates_in(
+        &self,
+        query: &str,
+        k: usize,
+        scope: Option<&std::collections::HashSet<i64>>,
     ) -> Result<Option<Vec<i64>>, StoreError> {
         let Some(late) = &self.late else {
             return Ok(None);
@@ -775,7 +792,11 @@ impl PalaceStore {
                             cq.probe(&qfde, nprobe).into_iter().map(i64::from).collect();
                         lists.push(-1);
                         let probed = scan(Some(&lists));
-                        if probed.len() >= k {
+                        let enough = match scope {
+                            Some(s) => probed.iter().filter(|(_, q)| s.contains(q)).count() >= k,
+                            None => probed.len() >= k,
+                        };
+                        if enough {
                             probed
                         } else {
                             scan(None)
@@ -786,6 +807,9 @@ impl PalaceStore {
             }
             _ => return Ok(None),
         };
+        if let Some(s) = scope {
+            scored.retain(|(_, seq)| s.contains(seq));
+        }
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {
                 b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)

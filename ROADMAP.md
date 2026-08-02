@@ -830,7 +830,14 @@ this is where the measured headroom is.*
   global (the wing isolates candidates, not scores; per-wing IDF was
   rejected — RRF-style rank fusion measured −7.3pp here and per-query
   channel rescaling −9.4pp, so no per-wing score normalisation either);
-  the hmac FTS prefilter keeps the same scoped-starvation shape (gap);
+  the hmac FTS prefilter's scoped-starvation shape — and `room`'s, which
+  had the same defect with no tier and no fallback at all — is **CLOSED**
+  (2026-08-02) by scope-aware candidate generation: every declared filter
+  a prefilter cannot see resolves to a seq set first; small scopes drop
+  the prefilter for a bounded exact scan, large ones get
+  membership-filtered candidates with the pool scaled to the scope's own
+  population (pinned by room/FTS/wing-tier-off starvation tests with raw
+  premises);
   ingest is now the un-addressed scaling axis — a served embedder costs
   11–29× ingest and per-wing indexes do not help writes. Phase 2 (fan-out
   for unscoped queries) waits on scoped queries proving the model; its

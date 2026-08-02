@@ -618,8 +618,10 @@ pub struct PalaceStore {
     /// unquantizable) — the scoped query full-scans its wing instead.
     wing_pq: std::cell::RefCell<std::collections::HashMap<String, Option<pqidx::WingPq>>>,
     /// Wing size at which a wing earns its own PQ index (`usize::MAX` ⇒
-    /// tier off — scoped queries intersect global candidates, the pre-tier
-    /// behavior). See `pqidx::WING_PQ_MIN_DEFAULT`.
+    /// tier off — no per-wing indexes are built; scoped queries then ride
+    /// the scope filter over global candidates, which is starvation-free
+    /// but pays corpus-shaped candidate generation). See
+    /// `pqidx::WING_PQ_MIN_DEFAULT`.
     wing_pq_min: usize,
     /// Corpus-scaled stage-1 candidate pool: the semantic prefilters fetch
     /// at least `live_rows / pool_div` ADC candidates (on top of the 256
@@ -1106,6 +1108,11 @@ impl PalaceStore {
                  updated_at TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_drawers_wing_room ON drawers(wing, room);
+             -- A room-only scope resolves through its own index: the
+             -- composite above serves wing-led lookups only (leftmost
+             -- prefix), and scope resolution counts rooms on every scoped
+             -- search.
+             CREATE INDEX IF NOT EXISTS idx_drawers_room ON drawers(room);
              CREATE TABLE IF NOT EXISTS audit (
                  seq       INTEGER PRIMARY KEY AUTOINCREMENT,
                  record_id TEXT NOT NULL,
@@ -2162,35 +2169,87 @@ impl PalaceStore {
         let qterms: Vec<String> = tokenize(query);
 
         let mut refine_semantic = false;
-        let candidates = if self.fde_enabled {
+        let hydrate_k = std::cmp::max(256, depth.saturating_mul(32));
+        // The declared filters the ACTIVE prefilter cannot see, resolved
+        // into a seq set BEFORE candidates are drawn. A prefilter ranks the
+        // population it scans; intersecting its top-k with a scope it never
+        // saw can leave nothing while the scope holds the answer — pinned
+        // by test for wings (which earned their own tier), and the same
+        // shape existed for rooms, which had no tier and no fallback.
+        // The per-wing PQ tier honors `wing`; every other generator is
+        // blind to both filters. Rejected deliberately: retry-on-empty (an
+        // empty result can be legitimate, and a retry hides which one this
+        // was) and post-ranking filters (they spend the pool on rows the
+        // caller excluded — the defect restated).
+        let scope: Option<std::collections::HashSet<i64>> = if self.fde_enabled
+            || self.pq_enabled
+            || self.hnsw_enabled
+            || (self.fts && self.fts_min.is_some())
+        {
+            let wing_tier_covers_it =
+                self.pq_enabled && !self.fde_enabled && self.wing_pq_min != usize::MAX;
+            match (opts.wing.as_deref(), opts.room.as_deref()) {
+                (_, Some(_)) => self.scope_seqs(opts.wing.as_deref(), opts.room.as_deref())?,
+                (Some(w), None) if !wing_tier_covers_it => self.scope_seqs(Some(w), None)?,
+                _ => None,
+            }
+        } else {
+            None
+        };
+        // A scope small enough to hydrate outright needs no prefilter at
+        // all: the SQL WHERE below bounds a full scan by the scope, which
+        // is exact and cannot starve — the below-floor-wing pattern, one
+        // level up. Larger scopes keep the prefilter but draw candidates
+        // INSIDE the scope, pool scaled to the scope's own population: the
+        // same recall policy the corpus-scaled pool gives unscoped queries.
+        let scope_scan = scope.as_ref().is_some_and(|s| s.len() <= hydrate_k);
+        let pool_k = match &scope {
+            Some(s) if !scope_scan => hydrate_k.max(s.len() / self.pool_div.max(1)),
+            _ => hydrate_k,
+        };
+        let candidates = if scope_scan {
+            None
+        } else if self.fde_enabled {
             // MUVERA FDE candidates: token-aware single-vector ranking over
             // the load-once FDE cache (falls back to the fusion scan when no
             // late encoder / no FDE rows exist). Over-fetch generously so
             // BM25 fusion still has material.
-            self.fde_candidates(query, std::cmp::max(256, depth.saturating_mul(32)))?
+            self.fde_candidates_in(query, pool_k, scope.as_ref())?
         } else if self.pq_enabled {
             // On-disk PQ prefilter: ADC over the RAM code cache, bounded at
             // any corpus size. Over-fetch generously so BM25 fusion still
             // has material. A wing-scoped query probes the wing's own index
-            // when it has one: corpus-wide candidates intersected with a
-            // wing can starve it entirely, and their cost is corpus-sized
-            // when the question was wing-sized. `None` from the wing tier
-            // means "full-scan instead" — the `WHERE wing` clause below
-            // bounds that scan by the wing, which is the floor working as
-            // designed, not a missing index.
+            // when it has one; a declared room rides in as the scope filter
+            // either way. `None` from the wing tier means "full-scan
+            // instead" — the `WHERE wing` clause below bounds that scan by
+            // the wing, which is the floor working as designed, not a
+            // missing index.
             refine_semantic = true;
             match &opts.wing {
                 Some(w) if self.wing_pq_min != usize::MAX => {
-                    self.wing_pq_candidates(w, &qvec, std::cmp::max(256, depth.saturating_mul(32)))?
+                    self.wing_pq_candidates_in(w, &qvec, pool_k, scope.as_ref())?
                 }
-                _ => self.pq_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?,
+                _ => self.pq_candidates_in(&qvec, pool_k, scope.as_ref())?,
             }
         } else if self.hnsw_enabled {
             // Semantic ANN prefilter: cut to the vector top-K before verify +
-            // fusion. Over-fetch generously so BM25 fusion still has material.
+            // fusion. The graph cannot be asked "within this scope": filter
+            // its answer, and surrender to the bounded exact scan when the
+            // scope's share of the top-k cannot fill the page.
             #[cfg(feature = "hnsw")]
             {
-                self.hnsw_candidates(&qvec, std::cmp::max(256, depth.saturating_mul(32)))?
+                match (self.hnsw_candidates(&qvec, pool_k)?, &scope) {
+                    (Some(seqs), Some(s)) => {
+                        let inscope: Vec<i64> =
+                            seqs.into_iter().filter(|q| s.contains(q)).collect();
+                        if inscope.len() >= depth {
+                            Some(inscope)
+                        } else {
+                            None
+                        }
+                    }
+                    (other, _) => other,
+                }
             }
             #[cfg(not(feature = "hnsw"))]
             {
@@ -2206,7 +2265,24 @@ impl PalaceStore {
                         // so it gets the same cure from the same count.
                         let k = std::cmp::max(256, depth.saturating_mul(32))
                             .max(n as usize / self.pool_div.max(1));
-                        self.fts_candidates(&qterms, k)
+                        // FTS cannot be asked "within this room" (the fts5
+                        // table indexes content alone), so a declared scope
+                        // filters its answer — and when the scope's share
+                        // of the lexical top-k cannot fill the page, deeper
+                        // in-scope matches may exist below the cut, and the
+                        // bounded exact scan takes over rather than starve.
+                        match (self.fts_candidates(&qterms, k), &scope) {
+                            (Some(seqs), Some(s)) => {
+                                let inscope: Vec<i64> =
+                                    seqs.into_iter().filter(|q| s.contains(q)).collect();
+                                if inscope.len() >= depth {
+                                    Some(inscope)
+                                } else {
+                                    None
+                                }
+                            }
+                            (other, _) => other,
+                        }
                     } else {
                         None
                     }
@@ -2225,7 +2301,6 @@ impl PalaceStore {
         // proven hydration pool slams it on lexical-carried golds. FDE
         // keeps its token-aware ordering (a single-vector cut would fight
         // MaxSim) and FTS keeps every lexical candidate.
-        let hydrate_k = std::cmp::max(256, depth.saturating_mul(32));
         let candidates = match candidates {
             Some(seqs) if refine_semantic && seqs.len() > hydrate_k => {
                 let keep = hydrate_k.max(seqs.len() / 8);
@@ -2508,6 +2583,34 @@ impl PalaceStore {
             scored.truncate(keep);
         }
         Ok(scored.into_iter().map(|(_, s)| s).collect())
+    }
+
+    /// The seq set of a declared scope — the `wing`/`room` conjunction —
+    /// fetched through its index (`idx_drawers_wing_room` for wing-led
+    /// lookups, `idx_drawers_room` for room-only). `None` when nothing was
+    /// declared. The set is the ground truth a scope-blind prefilter's
+    /// candidates are filtered against, and its SIZE decides whether a
+    /// prefilter runs at all: a scope that fits the hydration budget is
+    /// scanned exactly instead.
+    fn scope_seqs(
+        &self,
+        wing: Option<&str>,
+        room: Option<&str>,
+    ) -> Result<Option<std::collections::HashSet<i64>>, StoreError> {
+        let (sql, binds): (&str, Vec<&str>) = match (wing, room) {
+            (None, None) => return Ok(None),
+            (Some(w), None) => ("SELECT seq FROM drawers WHERE wing = ?1", vec![w]),
+            (None, Some(r)) => ("SELECT seq FROM drawers WHERE room = ?1", vec![r]),
+            (Some(w), Some(r)) => (
+                "SELECT seq FROM drawers WHERE wing = ?1 AND room = ?2",
+                vec![w, r],
+            ),
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let seqs = stmt
+            .query_map(rusqlite::params_from_iter(binds.iter()), |row| row.get(0))?
+            .collect::<Result<std::collections::HashSet<i64>, _>>()?;
+        Ok(Some(seqs))
     }
 
     /// BM25 top-`k` candidate seqs from the FTS5 index. `None` means "no
@@ -6426,15 +6529,37 @@ mod tests {
             limit: 5,
             ..Default::default()
         };
-        // Pre-tier behavior (`off`): the global prefilter's top-k is all
-        // pacific, the wing filter then leaves nothing. This is the measured
-        // defect, asserted so its disappearance would be noticed too.
-        s.set_wing_pq_min(usize::MAX);
-        let starved = s.search("kelp harvest quota", &arctic()).unwrap();
+        // The starvation premise, asserted RAW so its disappearance would
+        // be noticed: the corpus-wide candidate top-k contains nothing from
+        // the scoped wing. (It used to be asserted end-to-end — a scoped
+        // search returning nothing — until scope-aware candidate generation
+        // closed that shape for every declared filter, tier or no tier.)
+        let qvec = s.embedder.embed("kelp harvest quota");
+        let global = s
+            .pq_candidates(&qvec, 256)
+            .unwrap()
+            .expect("the global index must serve");
+        let arctic_seqs: std::collections::HashSet<i64> = s
+            .conn
+            .prepare("SELECT seq FROM drawers WHERE wing = 'arctic'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
         assert!(
-            starved.iter().all(|h| h.drawer.id != target),
-            "if the corpus-wide candidates now include the scoped answer, the \
+            global.iter().all(|q| !arctic_seqs.contains(q)),
+            "if the corpus-wide candidates now include the scoped wing, the \
              starvation premise of this test is gone — investigate, don't delete"
+        );
+        // Tier off: no per-wing index exists, and the scope filter must
+        // carry the query anyway — `off` opts out of build cost, never of
+        // correctness.
+        s.set_wing_pq_min(usize::MAX);
+        let hits = s.search("kelp harvest quota", &arctic()).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "with the tier off, the scope filter must still answer from the wing"
         );
         // The wing's own index (floor forced below the wing's size).
         s.set_wing_pq_min(8);
@@ -6498,6 +6623,194 @@ mod tests {
             s.codebook_generation(&format!("arctic/{CODEBOOK_PQ}")),
             0,
             "and no codebook was trained for it"
+        );
+    }
+
+    /// The ROOM analog of the wing defect, closed one level up: `room` was
+    /// a plain WHERE over globally generated candidates, with no tier of
+    /// its own and no fallback — the corpus-wide top-k could be all
+    /// loud-room rows while the scoped room held the answer. A room that
+    /// fits the hydration budget now drops the prefilter and is scanned
+    /// exactly, bounded by the room.
+    #[test]
+    fn a_room_scoped_query_is_answered_by_its_room_not_by_the_corpus_top() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let mut batch: Vec<Drawer> = (0..400u32)
+            .map(|i| {
+                drawer(
+                    "w",
+                    "briefing",
+                    &format!("kelp harvest quota memo number {i}"),
+                    i,
+                )
+            })
+            .collect();
+        batch.extend((0..9u32).map(|i| {
+            drawer(
+                "w",
+                "survey",
+                &format!("survey station maintenance note {i}"),
+                400 + i,
+            )
+        }));
+        s.upsert_many(&batch).unwrap();
+        let target = drawer(
+            "w",
+            "survey",
+            "kelp beds mapped near the survey station",
+            500,
+        );
+        s.upsert(&target).unwrap();
+        s.set_pq(true);
+        // The premise, asserted raw so its disappearance would be noticed:
+        // the corpus-wide candidate top-k contains nothing from the room.
+        let qvec = s.embedder.embed("kelp harvest quota");
+        let global = s
+            .pq_candidates(&qvec, 256)
+            .unwrap()
+            .expect("the global index must serve");
+        let room_seqs: std::collections::HashSet<i64> = s
+            .conn
+            .prepare("SELECT seq FROM drawers WHERE room = 'survey'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            global.iter().all(|q| !room_seqs.contains(q)),
+            "if the corpus-wide candidates now include the scoped room, the \
+             starvation premise of this test is gone — investigate, don't delete"
+        );
+        let hits = s
+            .search(
+                "kelp harvest quota",
+                &SearchOptions {
+                    room: Some("survey".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target.id),
+            "a room-scoped query must find the room's own evidence"
+        );
+    }
+
+    /// A room too large to scan outright keeps the prefilter but draws its
+    /// candidates INSIDE the room, pool scaled to the room's population —
+    /// the same recall policy the corpus-scaled pool gives unscoped
+    /// queries, applied to the scope's own live count.
+    #[test]
+    fn a_large_room_gets_scope_filtered_candidates_not_a_scan() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        // 700 loud rows against a 300-row room: the room is past the
+        // hydration floor (256 at limit 5), so the exact-scan escape is
+        // closed and the membership filter must carry recall by itself.
+        let mut batch: Vec<Drawer> = (0..700u32)
+            .map(|i| {
+                drawer(
+                    "w",
+                    "briefing",
+                    &format!("kelp harvest quota memo number {i}"),
+                    i,
+                )
+            })
+            .collect();
+        batch.extend((0..299u32).map(|i| {
+            drawer(
+                "w",
+                "survey",
+                &format!("survey station maintenance note {i}"),
+                1000 + i,
+            )
+        }));
+        s.upsert_many(&batch).unwrap();
+        let target = drawer(
+            "w",
+            "survey",
+            "kelp beds mapped near the survey station",
+            2000,
+        );
+        s.upsert(&target).unwrap();
+        s.set_pq(true);
+        let hits = s
+            .search(
+                "kelp harvest quota",
+                &SearchOptions {
+                    room: Some("survey".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target.id),
+            "a room past the scan floor must still get its own candidates"
+        );
+    }
+
+    /// The hmac-level FTS prefilter had the same scoped-starvation shape —
+    /// recorded as a gap since the wing tier shipped, closed by the same
+    /// scope filter: a lexical top-k that cannot fill the page inside the
+    /// scope surrenders to the bounded exact scan instead of starving it.
+    #[test]
+    fn the_fts_prefilter_cannot_starve_a_scoped_room() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        s.set_fts_prefilter_min(Some(1));
+        // Loud room: short rows saying the term three times outrank the
+        // gold in fts5's BM25, so the global lexical top-256 is loud-room
+        // only. Scoped room: 300 fillers push it past the exact-scan
+        // floor, so the FTS intersection path itself is on trial.
+        let mut batch: Vec<Drawer> = (0..400u32)
+            .map(|i| drawer("w", "briefing", &format!("kelp kelp kelp memo {i}"), i))
+            .collect();
+        batch.extend((0..299u32).map(|i| {
+            drawer(
+                "w",
+                "survey",
+                &format!("survey station maintenance note {i}"),
+                1000 + i,
+            )
+        }));
+        s.upsert_many(&batch).unwrap();
+        let target = drawer(
+            "w",
+            "survey",
+            "the kelp beds were mapped near the survey station this spring",
+            2000,
+        );
+        s.upsert(&target).unwrap();
+        // The premise, raw: the lexical top-k holds nothing from the room.
+        let qterms = vec!["kelp".to_string()];
+        let lexical = s.fts_candidates(&qterms, 256).expect("fts must match");
+        let room_seqs: std::collections::HashSet<i64> = s
+            .conn
+            .prepare("SELECT seq FROM drawers WHERE room = 'survey'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            lexical.iter().all(|q| !room_seqs.contains(q)),
+            "if the lexical top-k now includes the scoped room, the \
+             starvation premise of this test is gone — investigate, don't delete"
+        );
+        let hits = s
+            .search(
+                "kelp",
+                &SearchOptions {
+                    room: Some("survey".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target.id),
+            "the FTS prefilter must not starve a scoped room"
         );
     }
 

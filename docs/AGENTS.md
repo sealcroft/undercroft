@@ -588,7 +588,9 @@ from the embedder in hand, and an external vault refuses until you declare) ·
 `UNDERCROFT_WING_PQ_MIN` (4096 — wings at least this large carry their own
 PQ codebook and code rows, so a wing-scoped search probes the wing's index
 instead of intersecting corpus-wide candidates; smaller wings full-scan
-themselves, bounded and exact; `off` disables the per-wing tier) ·
+themselves, bounded and exact; `off` disables the per-wing tier only —
+every declared scope, wing or room, is resolved before candidates are
+drawn, so no scoped query can be starved by the corpus top-k) ·
 `UNDERCROFT_POOL_DIV` (64 — semantic prefilters fetch at least `live/div`
 stage-1 ADC candidates, and an exact-cosine second stage over just those
 candidates' embeddings cuts back to hydration size, so recall follows the
