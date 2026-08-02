@@ -583,11 +583,19 @@ impl Tenancy {
             .get("content_date")
             .and_then(Value::as_str)
             .map(String::from);
+        // The declared record kind — closed vocabulary, validated here so a
+        // typo is a 400 with the vocabulary in it, never a silently
+        // unreachable label. Absent is always valid.
+        let kind = body.get("kind").and_then(Value::as_str).map(String::from);
+        if let Some(k) = kind.as_deref() {
+            undercroft_core::validate_kind(k).map_err(|e| RestError::new(400, e.to_string()))?;
+        }
 
         let store = self.store_for(id)?;
         let idx = store.next_append_index().map_err(err500)? as u32;
-        let drawer =
-            Drawer::new(wing, room, normalized, None, idx, "rest").with_content_date(content_date);
+        let drawer = Drawer::new(wing, room, normalized, None, idx, "rest")
+            .with_content_date(content_date)
+            .with_kind(kind);
 
         let out = if store.is_external() {
             let v =
@@ -649,6 +657,9 @@ impl Tenancy {
             morph_lang: morph_lang_from(&body),
             wing: body.get("wing").and_then(Value::as_str).map(String::from),
             room: body.get("room").and_then(Value::as_str).map(String::from),
+            // Declared-kind filter (closed vocabulary; the store rejects an
+            // unknown value as an error, surfaced as a 400 below).
+            kind: body.get("kind").and_then(Value::as_str).map(String::from),
             limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
             // Rank-space page start: pass the previous response's
             // `next_offset` (with its `ranked_at`) to continue deeper instead
@@ -764,14 +775,31 @@ impl Tenancy {
         let ranked_at_echo = ranked_at
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
-        Ok((
-            200,
-            Body::Json(json!({
-                "hits": hits,
-                "next_offset": next_offset,
-                "ranked_at": ranked_at_echo,
-            })),
-        ))
+        // The unlabeled-rows policy (docs/LABELS.md): while a kind filter
+        // is set, say how many in-scope drawers it passed over for carrying
+        // no declared kind at all — so a thin result over a thinly-labeled
+        // corpus is distinguishable from a genuinely thin corpus. Additive
+        // key, present only when the filter is.
+        let unlabeled_excluded = match opts.kind.as_deref() {
+            Some(_) => {
+                let store = self.store_for(id)?;
+                Some(
+                    store
+                        .unkinded_in_scope(opts.wing.as_deref(), opts.room.as_deref())
+                        .map_err(store_err)?,
+                )
+            }
+            None => None,
+        };
+        let mut resp = json!({
+            "hits": hits,
+            "next_offset": next_offset,
+            "ranked_at": ranked_at_echo,
+        });
+        if let Some(n) = unlabeled_excluded {
+            resp["unlabeled_excluded"] = json!(n);
+        }
+        Ok((200, Body::Json(resp)))
     }
 
     fn delete_drawer(&mut self, id: &str, drawer_id: &str, req: &Request, now: i64) -> RestResult {

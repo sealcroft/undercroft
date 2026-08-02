@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased — the kind label ships as the doctrine wrote it, value instrument first
+
+- **`kind` on drawers** (consultation adopted item 4, pulled forward on
+  user decision once its prerequisites existed): a DECLARED record kind
+  from the closed vocabulary `undercroft_core::KIND_VOCAB`
+  (`question`|`preference`|`decision`|`event`|`procedure`|`statement`),
+  validated at the single write choke point — rejected, never coerced —
+  and absent by default (absence is data; every pre-existing drawer
+  simply has no kind, forever valid). Lives inside `meta_json`, so it is
+  covered by the drawer's HMAC and serializes only when present
+  (existing rows stay byte-identical and keep verifying); mirrored to an
+  indexed `kind` column for the filter, with the exposure and footprint
+  inventories updated in both governing tests. The kind never enters the
+  drawer id: re-declaring it does not move the record.
+- **`SearchOptions.kind`** filters by declared kind and rides the
+  gate-verified scope machinery — resolved into the scope conjunction
+  before candidates are drawn, so a kind filter cannot be starved by the
+  corpus top-k (pinned by a raw-premise starvation test, the room test's
+  shape one label over). An unknown filter value is an **error naming
+  the vocabulary**, never a silently empty result. The remote-index path
+  filters on the verified meta (the HMAC-covered copy). Surfaces: `/v1`
+  save + search (unknown kind = 400), MCP (`undercroft_save`,
+  `undercroft_add_drawer`, `undercroft_search`), CLI `search --kind`.
+- **The unlabeled-rows policy, implemented**: while a kind filter is
+  set, `/v1` returns `unlabeled_excluded` (additive key), and MCP/CLI
+  append the count in prose — a thin result over a thinly-labeled
+  corpus must be distinguishable from a thin corpus.
+- **`undercroft-bench tagvalue` — the value instrument, run before any
+  claim.** A corpus where every key's words live in two kinds (decision
+  + question twin), queries seeking the decision. First run (500 keys,
+  2000 filler, sealed, defaults): **unfiltered already reads R@1 100.0%
+  — the filter buys NO recall lift on this corpus — and the measured
+  value is latency (90.6 → 13.7 ms/q, the filter scanning its 500
+  declared rows instead of the whole corpus) plus the guarantee class
+  (starvation-free scoping, honest empties, the unlabeled count).**
+  This CONFIRMS the labeling discussion's prediction: kind is scoping
+  ergonomics and precision guarantees, not a recall lever — recorded as
+  the measurement it now is instead of the assumption it was. A lift
+  claim would need a corpus where fusion genuinely confuses kinds, and
+  building one to make the filter look good would be instrument-fitting.
+
 ## Unreleased — the wing leak closes: scoped pools are sized by the scope
 
 - **The scopescale-filed defect (wing-scoped R@5 89.6%, corpus-independent)

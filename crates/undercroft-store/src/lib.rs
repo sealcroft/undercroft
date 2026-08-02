@@ -558,6 +558,15 @@ pub struct SearchOptions {
     pub morph_lang: MorphLang,
     pub wing: Option<String>,
     pub room: Option<String>,
+    /// Filter to drawers whose DECLARED kind equals this value (one of
+    /// [`undercroft_core::KIND_VOCAB`]; an unknown value is an error, never
+    /// an empty result — the closed vocabulary catching a typo). Drawers
+    /// with no declared kind are excluded while the filter is set; the
+    /// `/v1` surface reports how many, so a caller can tell a thin result
+    /// from a thinly-labeled corpus. Rides the same scope-resolved
+    /// candidate machinery as `wing`/`room` — a kind filter cannot be
+    /// starved by the corpus top-k.
+    pub kind: Option<String>,
     pub limit: usize,
     /// Soft cap on how many of the returned hits may come from any single
     /// room. `None` (the default) keeps pure score order.
@@ -1774,6 +1783,15 @@ impl PalaceStore {
         drawer: &Drawer,
         embedding: &[f32],
     ) -> Result<(bool, String, u64), StoreError> {
+        // A declared kind must come from the closed vocabulary — rejected,
+        // never coerced, at the single write choke point so no surface can
+        // forget. Absence is always valid.
+        if let Some(k) = drawer.meta.kind.as_deref() {
+            undercroft_core::validate_kind(k).map_err(|e| StoreError::CorruptRow {
+                id: drawer.id.clone(),
+                reason: e.to_string(),
+            })?;
+        }
         // meta_json is stored unsealed, so it must not carry words copied out
         // of the content — the date expressions and names that derivation
         // lifts verbatim. `meta_at_rest` empties exactly those and keeps the
@@ -1805,12 +1823,19 @@ impl PalaceStore {
                 |r| r.get(0),
             )
             .optional()?;
+        // The kind column mirrors meta_json's declared kind for the indexed
+        // filter; the copy inside meta_json is the one the HMAC covers, so
+        // a mirror edited out from under it is caught the moment the row's
+        // meta is compared against the filter's promise (and the filter
+        // itself only ever narrows — a forged mirror can hide a row from a
+        // kind filter, never smuggle one in past verification).
         self.conn.execute(
-            "INSERT INTO drawers (id, wing, room, meta_json, content, embedding, tag, fp, filed_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+            "INSERT INTO drawers (id, wing, room, kind, meta_json, content, embedding, tag, fp, filed_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
              ON CONFLICT(id) DO UPDATE SET
                  wing = excluded.wing,
                  room = excluded.room,
+                 kind = excluded.kind,
                  meta_json = excluded.meta_json,
                  content = excluded.content,
                  embedding = excluded.embedding,
@@ -1821,6 +1846,7 @@ impl PalaceStore {
                 drawer.id,
                 drawer.meta.wing,
                 drawer.meta.room,
+                drawer.meta.kind,
                 meta_json,
                 content_rest,
                 emb_rest,
@@ -2248,6 +2274,13 @@ impl PalaceStore {
         let lang = opts.morph_lang;
         let qterms: Vec<String> = tokenize(query);
 
+        // A declared kind filter is validated against the closed
+        // vocabulary before anything runs: an unknown value is a typo to
+        // report, and silently returning nothing for it is the silence the
+        // never-guess contract forbids.
+        if let Some(k) = opts.kind.as_deref() {
+            undercroft_core::validate_kind(k).map_err(|e| StoreError::Invalid(e.to_string()))?;
+        }
         let mut refine_semantic = false;
         let hydrate_k = std::cmp::max(256, depth.saturating_mul(32));
         // The declared filters the ACTIVE prefilter cannot see, resolved
@@ -2268,9 +2301,19 @@ impl PalaceStore {
         {
             let wing_tier_covers_it =
                 self.pq_enabled && !self.fde_enabled && self.wing_pq_min != usize::MAX;
-            match (opts.wing.as_deref(), opts.room.as_deref()) {
-                (_, Some(_)) => self.scope_seqs(opts.wing.as_deref(), opts.room.as_deref())?,
-                (Some(w), None) if !wing_tier_covers_it => self.scope_seqs(Some(w), None)?,
+            match (
+                opts.wing.as_deref(),
+                opts.room.as_deref(),
+                opts.kind.as_deref(),
+            ) {
+                (_, Some(_), _) | (_, _, Some(_)) => self.scope_seqs(
+                    opts.wing.as_deref(),
+                    opts.room.as_deref(),
+                    opts.kind.as_deref(),
+                )?,
+                (Some(w), None, None) if !wing_tier_covers_it => {
+                    self.scope_seqs(Some(w), None, None)?
+                }
                 _ => None,
             }
         } else {
@@ -2436,6 +2479,10 @@ impl PalaceStore {
         if let Some(r) = &opts.room {
             binds.push(r.clone());
             clauses.push(format!("room = ?{}", binds.len()));
+        }
+        if let Some(k) = &opts.kind {
+            binds.push(k.clone());
+            clauses.push(format!("kind = ?{}", binds.len()));
         }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
@@ -2713,21 +2760,61 @@ impl PalaceStore {
         &self,
         wing: Option<&str>,
         room: Option<&str>,
+        kind: Option<&str>,
     ) -> Result<Option<std::collections::HashSet<i64>>, StoreError> {
-        let (sql, binds): (&str, Vec<&str>) = match (wing, room) {
-            (None, None) => return Ok(None),
-            (Some(w), None) => ("SELECT seq FROM drawers WHERE wing = ?1", vec![w]),
-            (None, Some(r)) => ("SELECT seq FROM drawers WHERE room = ?1", vec![r]),
-            (Some(w), Some(r)) => (
-                "SELECT seq FROM drawers WHERE wing = ?1 AND room = ?2",
-                vec![w, r],
-            ),
-        };
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut clauses: Vec<&str> = Vec::new();
+        let mut binds: Vec<&str> = Vec::new();
+        if let Some(w) = wing {
+            clauses.push("wing = ?");
+            binds.push(w);
+        }
+        if let Some(r) = room {
+            clauses.push("room = ?");
+            binds.push(r);
+        }
+        if let Some(k) = kind {
+            clauses.push("kind = ?");
+            binds.push(k);
+        }
+        if clauses.is_empty() {
+            return Ok(None);
+        }
+        let sql = format!("SELECT seq FROM drawers WHERE {}", clauses.join(" AND "));
+        let mut stmt = self.conn.prepare(&sql)?;
         let seqs = stmt
             .query_map(rusqlite::params_from_iter(binds.iter()), |row| row.get(0))?
             .collect::<Result<std::collections::HashSet<i64>, _>>()?;
         Ok(Some(seqs))
+    }
+
+    /// How many drawers a kind filter excludes for carrying **no declared
+    /// kind at all**, within the same wing/room scope — the unlabeled-rows
+    /// policy from docs/LABELS.md: a filter over a thinly-labeled corpus
+    /// must say what it silently passed over, or an honest empty result is
+    /// indistinguishable from a label-coverage gap.
+    pub fn unkinded_in_scope(
+        &self,
+        wing: Option<&str>,
+        room: Option<&str>,
+    ) -> Result<u64, StoreError> {
+        let mut clauses: Vec<&str> = vec!["kind IS NULL"];
+        let mut binds: Vec<&str> = Vec::new();
+        if let Some(w) = wing {
+            clauses.push("wing = ?");
+            binds.push(w);
+        }
+        if let Some(r) = room {
+            clauses.push("room = ?");
+            binds.push(r);
+        }
+        let sql = format!(
+            "SELECT COUNT(*) FROM drawers WHERE {}",
+            clauses.join(" AND ")
+        );
+        let n: i64 = self
+            .conn
+            .query_row(&sql, rusqlite::params_from_iter(binds.iter()), |r| r.get(0))?;
+        Ok(n as u64)
     }
 
     /// BM25 top-`k` candidate seqs from the FTS5 index. `None` means "no
@@ -6196,6 +6283,7 @@ mod tests {
         )
         .with_content_date(Some("2023-05-08".into()));
         d.meta.hall = Some("hallsecretlabel".into());
+        d.meta.kind = Some("decision".into());
         s.upsert(&d).unwrap();
         drop(s);
         let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
@@ -6216,6 +6304,10 @@ mod tests {
             ("hall label", "hallsecretlabel"),
             ("content_date", "2023-05-08"),
             ("a date resolved out of the content", "2023-04-17"),
+            // The declared kind is a deliberate closed-vocabulary leak —
+            // the docs/LABELS.md exposure rule — readable both in the
+            // mirror column and inside meta_json.
+            ("declared kind", "decision"),
         ] {
             assert!(
                 has(needle),
@@ -6442,13 +6534,15 @@ mod tests {
             .unwrap();
         assert_eq!(
             cols.join(","),
-            "content,embedding,filed_at,fp,id,meta_json,room,seq,tag,updated_at,wing",
+            "content,embedding,filed_at,fp,id,kind,meta_json,room,seq,tag,updated_at,wing",
             "a column on `drawers` is per-drawer bytes: price it in `priced` or say \
              here why it is free. Unpriced today and known: `fp` (a truncated-HMAC \
              blind index), `meta_json` (unsealed metadata, whose exposure is pinned \
              by a_sealed_vault_exposes_metadata_but_never_content), `tag` (the \
-             record HMAC) — all fixed-size or metadata-sized, none scaling with \
-             content"
+             record HMAC), `kind` (a closed-vocabulary declared label, NULL for \
+             every undeclared drawer, ≤10 bytes when set, mirrored out of \
+             meta_json for the indexed filter) — all fixed-size or \
+             metadata-sized, none scaling with content"
         );
 
         // 3. The bytes, artifact by artifact — equalities.
@@ -6929,6 +7023,125 @@ mod tests {
         assert!(
             hits.iter().any(|h| h.drawer.id == target.id),
             "the FTS prefilter must not starve a scoped room"
+        );
+    }
+
+    /// The declared kind: closed vocabulary at every write, an error (not
+    /// an empty result) for an unknown filter value, a filter that only
+    /// returns matching declarations, and the unlabeled count the
+    /// docs/LABELS.md policy requires.
+    #[test]
+    fn the_kind_label_is_declared_closed_and_honest() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        // Unknown kinds never reach the table — rejected, not coerced.
+        let bad = drawer("w", "r", "a stray note", 0).with_kind(Some("musing".into()));
+        assert!(s.upsert(&bad).is_err(), "the vocabulary is closed at write");
+        s.upsert(
+            &drawer("w", "r", "the team decided kelp option four", 1)
+                .with_kind(Some("decision".into())),
+        )
+        .unwrap();
+        s.upsert(
+            &drawer("w", "r", "was kelp maybe option five", 2).with_kind(Some("question".into())),
+        )
+        .unwrap();
+        s.upsert(&drawer("w", "r", "kelp unlabeled note", 3))
+            .unwrap();
+        let hits = s
+            .search(
+                "kelp option",
+                &SearchOptions {
+                    kind: Some("decision".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 1, "only the declared kind matches");
+        assert_eq!(hits[0].drawer.meta.kind.as_deref(), Some("decision"));
+        // An unknown filter value is an error, never a silent empty.
+        assert!(s
+            .search(
+                "kelp",
+                &SearchOptions {
+                    kind: Some("musing".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err());
+        // The unlabeled-rows count the policy requires.
+        assert_eq!(s.unkinded_in_scope(None, None).unwrap(), 1);
+    }
+
+    /// The kind filter cannot be starved by the corpus top-k — the same
+    /// raw-premise shape as the room test, one label over: a declared
+    /// filter resolves its scope before candidates are drawn.
+    #[test]
+    fn a_kind_scoped_query_is_answered_by_its_kind_not_by_the_corpus_top() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let mut batch: Vec<Drawer> = (0..400u32)
+            .map(|i| {
+                drawer(
+                    "w",
+                    "briefing",
+                    &format!("kelp harvest quota memo number {i}"),
+                    i,
+                )
+                .with_kind(Some("statement".into()))
+            })
+            .collect();
+        batch.extend((0..9u32).map(|i| {
+            drawer(
+                "w",
+                "survey",
+                &format!("survey station maintenance note {i}"),
+                400 + i,
+            )
+            .with_kind(Some("decision".into()))
+        }));
+        s.upsert_many(&batch).unwrap();
+        let target = drawer(
+            "w",
+            "survey",
+            "kelp beds mapped near the survey station",
+            500,
+        )
+        .with_kind(Some("decision".into()));
+        s.upsert(&target).unwrap();
+        s.set_pq(true);
+        // The premise, raw: the corpus-wide candidate top-k holds nothing
+        // of the filtered kind.
+        let qvec = s.embedder.embed("kelp harvest quota");
+        let global = s
+            .pq_candidates(&qvec, 256)
+            .unwrap()
+            .expect("the global index must serve");
+        let kind_seqs: std::collections::HashSet<i64> = s
+            .conn
+            .prepare("SELECT seq FROM drawers WHERE kind = 'decision'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            global.iter().all(|q| !kind_seqs.contains(q)),
+            "if the corpus-wide candidates now include the filtered kind, the \
+             starvation premise of this test is gone — investigate, don't delete"
+        );
+        let hits = s
+            .search(
+                "kelp harvest quota",
+                &SearchOptions {
+                    kind: Some("decision".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target.id),
+            "a kind-filtered query must find the kind's own evidence"
         );
     }
 

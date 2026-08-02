@@ -206,6 +206,27 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// Tag-VALUE instrument — the measurement docs/LABELS.md required
+    /// before `kind` could claim more than ergonomics. The metric, fixed
+    /// before any run: a corpus where every key's words live in TWO kinds
+    /// (a decision drawer and a question twin sharing the key tokens);
+    /// queries seek the decision. Reported: R@1 / R@5 of the gold decision
+    /// drawer and the wrong-kind-at-rank-1 rate, unfiltered vs
+    /// kind-filtered, with ms/q beside each — the filter's value is the
+    /// R@1 lift on a corpus built to confuse it, and the filtered pass
+    /// must also hold R@5 = 100% (a filter that loses answers failed its
+    /// own starvation machinery). Synthetic and labeled as such: this
+    /// bounds the mechanism's value, it is not a benchmark claim.
+    Tagvalue {
+        /// Number of keys (each = one decision drawer + one question twin)
+        #[arg(long, default_value_t = 500)]
+        keys: usize,
+        /// Filler statements around them
+        #[arg(long, default_value_t = 2000)]
+        filler: usize,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
     /// Tagging cost instrument: rule-derived vs model-derived label
     /// assignment over real corpus texts, with a fixed closed vocabulary.
     /// Reports µs/drawer (rule, whole corpus), s/drawer (LLM, keyed
@@ -1400,17 +1421,105 @@ fn run_xlingual(pairs_path: &str, limit: usize, level: SecurityLevel) -> Result<
     Ok(())
 }
 
-/// The tag vocabulary the cost instrument classifies into — closed and
-/// fixed here, per the labeling doctrine (docs/LABELS.md): a filterable
-/// label is a closed vocabulary or a blind index, never free text.
-const TAG_VOCAB: [&str; 6] = [
-    "question",
-    "preference",
-    "decision",
-    "event",
-    "procedure",
-    "statement",
-];
+/// The tag vocabulary both tagging instruments classify into — the
+/// engine's own closed vocabulary, so the instruments and the `kind`
+/// label can never drift apart.
+const TAG_VOCAB: &[&str] = undercroft_core::KIND_VOCAB;
+
+/// Tag value: build the confusable corpus, run both passes, report the
+/// lift. See the subcommand doc for the metric, fixed before any run.
+fn run_tagvalue(keys: usize, filler: usize, level: SecurityLevel) -> Result<()> {
+    let keys = keys.max(1);
+    let (_tmp, mut store) = fresh_store(level)?;
+    let mut batch: Vec<Drawer> = Vec::with_capacity(keys * 2 + filler);
+    let mut gold: Vec<(String, String)> = Vec::with_capacity(keys); // (key, decision id)
+    let mut idx = 0u32;
+    for i in 0..keys {
+        let key = format!("matter-{i:04}");
+        let d = Drawer::new(
+            "bench",
+            "log",
+            format!(
+                "after review the team decided the {key} should use option {}",
+                i % 7
+            ),
+            None,
+            idx,
+            "bench",
+        )
+        .with_kind(Some("decision".into()));
+        gold.push((key.clone(), d.id.clone()));
+        batch.push(d);
+        idx += 1;
+        batch.push(
+            Drawer::new(
+                "bench",
+                "log",
+                format!(
+                    "someone asked whether the {key} might use option {} instead",
+                    (i + 3) % 7
+                ),
+                None,
+                idx,
+                "bench",
+            )
+            .with_kind(Some("question".into())),
+        );
+        idx += 1;
+    }
+    for j in 0..filler {
+        batch.push(
+            Drawer::new(
+                "bench",
+                "log",
+                format!("routine filler statement number {j} about ordinary matters"),
+                None,
+                idx + j as u32,
+                "bench",
+            )
+            .with_kind(Some("statement".into())),
+        );
+    }
+    store.upsert_many(&batch)?;
+    println!(
+        "Tagvalue — level={level:?} keys={keys} (decision + question twin each) filler={filler}"
+    );
+    for (label, kind) in [("unfiltered   ", None), ("kind=decision", Some("decision"))] {
+        let (mut r1, mut r5, mut wrong_kind_at_1) = (0u32, 0u32, 0u32);
+        let timed = Instant::now();
+        for (key, gold_id) in &gold {
+            let hits = store.search(
+                &format!("what did the team decide for the {key}"),
+                &SearchOptions {
+                    kind: kind.map(str::to_string),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )?;
+            match hits.first() {
+                Some(h) if &h.drawer.id == gold_id => r1 += 1,
+                Some(h) if h.drawer.meta.kind.as_deref() != Some("decision") => {
+                    wrong_kind_at_1 += 1
+                }
+                _ => {}
+            }
+            if hits.iter().take(5).any(|h| &h.drawer.id == gold_id) {
+                r5 += 1;
+            }
+        }
+        let secs = timed.elapsed().as_secs_f32();
+        let pct = |x: u32| 100.0 * x as f32 / keys as f32;
+        println!(
+            "  {label}  R@1 {:>5.1}%  R@5 {:>5.1}%  wrong-kind@1 {:>5.1}%  {:>6.1} ms/q",
+            pct(r1),
+            pct(r5),
+            pct(wrong_kind_at_1),
+            1000.0 * secs / keys as f32,
+        );
+    }
+    println!("TAGVALUE DONE");
+    Ok(())
+}
 
 /// The rule arm: a deterministic keyword/shape classifier. Deliberately
 /// simple — the instrument measures the COST CLASS of rule tagging, and a
@@ -3869,6 +3978,11 @@ fn main() -> Result<()> {
             llm_model,
             llm_api,
         } => run_tagcost(&dataset, sample, llm_url.as_deref(), &llm_model, &llm_api),
+        Command::Tagvalue {
+            keys,
+            filler,
+            level,
+        } => run_tagvalue(keys, filler, level_of(&level)),
         Command::Wingscale {
             n,
             wings,

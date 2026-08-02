@@ -62,6 +62,35 @@ pub fn validate_name(value: &str, what: &'static str) -> Result<(), CoreError> {
 
 pub const MAX_CONTENT_BYTES: usize = 100_000;
 
+/// The closed vocabulary a declared drawer `kind` must come from — the
+/// exposure rule in docs/LABELS.md: a filterable label on a sealed vault
+/// is a small closed vocabulary in the clear (a deliberate, low-entropy,
+/// inventoried leak) or a blind index; free text is not offerable there.
+/// Extending this list is a deliberate schema-level decision, not a
+/// call-site convenience.
+pub const KIND_VOCAB: &[&str] = &[
+    "question",
+    "preference",
+    "decision",
+    "event",
+    "procedure",
+    "statement",
+];
+
+/// Validate a declared kind against [`KIND_VOCAB`]. Unknown values are
+/// rejected, never coerced — a typo silently becoming an unreachable
+/// label is the silence the never-guess contract forbids.
+pub fn validate_kind(value: &str) -> Result<(), CoreError> {
+    if KIND_VOCAB.contains(&value) {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidName(
+            value.into(),
+            "not in the closed kind vocabulary (question|preference|decision|event|procedure|statement)",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -121,6 +121,10 @@ enum Command {
         wing: Option<String>,
         #[arg(long)]
         room: Option<String>,
+        /// Filter to a declared record kind
+        /// (question|preference|decision|event|procedure|statement)
+        #[arg(long)]
+        kind: Option<String>,
         /// Max results
         #[arg(short = 'n', long, default_value_t = 5)]
         limit: usize,
@@ -1173,6 +1177,7 @@ fn main() -> Result<()> {
             vault,
             wing,
             room,
+            kind,
             limit,
             offset,
             backend,
@@ -1182,6 +1187,7 @@ fn main() -> Result<()> {
                 morph_lang: Default::default(),
                 wing: wing.clone(),
                 room: room.clone(),
+                kind: kind.clone(),
                 limit: *limit,
                 offset: *offset,
                 ..Default::default()
@@ -1194,6 +1200,16 @@ fn main() -> Result<()> {
             };
             if hits.is_empty() {
                 println!("{}", tr("no-matches"));
+            }
+            // The unlabeled-rows policy: a kind filter says what it passed
+            // over, so thin labeling is never mistaken for a thin corpus.
+            if kind.is_some() {
+                let n = store.unkinded_in_scope(wing.as_deref(), room.as_deref())?;
+                if n > 0 {
+                    println!(
+                        "({n} in-scope drawers carry no declared kind and were not considered)"
+                    );
+                }
             }
             for (i, hit) in hits.iter().enumerate() {
                 println!(

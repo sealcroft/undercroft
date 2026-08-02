@@ -170,10 +170,10 @@ fn tool_definitions() -> Value {
     json!([
         // --- palace core ---
         tool("undercroft_save", "Save one memory verbatim (encrypted + integrity-tagged at rest).",
-            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
+            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — a closed vocabulary, rejected if unknown; omit rather than guess"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
-            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "limit": i("max results"), "offset": i("rank to continue from — pass the offset a previous page's footer gave you to go deeper instead of re-asking the same question"), "ranked_at": s("RFC 3339 instant from a previous page's footer; repeat it so every page slices one identical ranking instead of one that drifts between calls"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year across this corpus: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali, reiwa, heisei, showa, taisho, meiji. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar. An era marker in a memory's own words (พ.ศ. ค.ศ. هـ 民國 令和) outranks this, being the writer's statement about one date rather than yours about the whole corpus") }),
+            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "kind": s("filter to a declared record kind: question|preference|decision|event|procedure|statement. Drawers with no declared kind are excluded while set, and the reply says how many"), "limit": i("max results"), "offset": i("rank to continue from — pass the offset a previous page's footer gave you to go deeper instead of re-asking the same question"), "ranked_at": s("RFC 3339 instant from a previous page's footer; repeat it so every page slices one identical ranking instead of one that drifts between calls"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year across this corpus: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali, reiwa, heisei, showa, taisho, meiji. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar. An era marker in a memory's own words (พ.ศ. ค.ศ. هـ 民國 令和) outranks this, being the writer's statement about one date rather than yours about the whole corpus") }),
             &["query"]),
         tool("undercroft_wake_up", "Load session context: recent essential memories.",
             json!({ "wing": s("scope to wing") }), &[]),
@@ -185,7 +185,7 @@ fn tool_definitions() -> Value {
         tool("undercroft_get_drawer", "Fetch one drawer verbatim by id.",
             json!({ "id": s("drawer id") }), &["id"]),
         tool("undercroft_add_drawer", "File a drawer with explicit wing/room/source.",
-            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "source_file": s("origin"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
+            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — closed vocabulary, rejected if unknown; omit rather than guess"), "source_file": s("origin"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
             &["content"]),
         tool("undercroft_update_drawer", "Replace a drawer's content in place (re-sealed, re-tagged).",
             json!({ "id": s("drawer id"), "content": s("new content") }), &["id", "content"]),
@@ -272,8 +272,13 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 anyhow::bail!("content is empty after normalization");
             }
             let idx = store.next_append_index()? as u32;
+            let kind = opt_str(args, "kind").map(str::to_string);
+            if let Some(k) = kind.as_deref() {
+                undercroft_core::validate_kind(k)?;
+            }
             let drawer = Drawer::new(wing, room, normalized, None, idx, "mcp")
-                .with_content_date(opt_str(args, "content_date").map(str::to_string));
+                .with_content_date(opt_str(args, "content_date").map(str::to_string))
+                .with_kind(kind);
             store.upsert(&drawer)?;
             Ok(format!("saved drawer {} in {}/{}", drawer.id, wing, room))
         }
@@ -284,6 +289,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?;
             let wing = opt_str(args, "wing").map(str::to_string);
             let room = opt_str(args, "room").map(str::to_string);
+            // Declared-kind filter: closed vocabulary, validated by the
+            // store — an unknown value errors with the vocabulary in the
+            // message rather than returning a silently empty result.
+            let kind = opt_str(args, "kind").map(str::to_string);
             let limit = opt_u64(args, "limit").unwrap_or(5) as usize;
             // Rank to continue from — the previous page's footer names it.
             let offset = opt_u64(args, "offset").unwrap_or(0) as usize;
@@ -319,20 +328,37 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                         Some("ko") | Some("korean") => undercroft_store::MorphLang::Korean,
                         _ => undercroft_store::MorphLang::Undeclared,
                     },
-                    wing,
-                    room,
+                    wing: wing.clone(),
+                    room: room.clone(),
+                    kind: kind.clone(),
                     limit,
                     room_cap: None,
                     offset,
                     ranked_at: Some(ranked_at),
                 },
             )?;
+            // The unlabeled-rows policy (docs/LABELS.md): while a kind
+            // filter is set, say what it passed over, so a thin answer over
+            // a thinly-labeled corpus is not read as a thin corpus.
+            let unlabeled_note = match kind.as_deref() {
+                Some(_) => {
+                    let n = store.unkinded_in_scope(wing.as_deref(), room.as_deref())?;
+                    (n > 0).then(|| {
+                        format!("\n({n} in-scope drawers carry no declared kind and were not considered)")
+                    })
+                }
+                None => None,
+            };
             if hits.is_empty() {
-                return Ok(if offset > 0 {
+                let mut msg = if offset > 0 {
                     format!("no more memories past rank {offset}")
                 } else {
-                    "no memories matched".into()
-                });
+                    "no memories matched".to_string()
+                };
+                if let Some(note) = unlabeled_note {
+                    msg.push_str(&note);
+                }
+                return Ok(msg);
             }
             // Reference date for elapsed time. The engine holds the dates, so
             // it does the calendar arithmetic — month lengths and leap years
@@ -457,6 +483,9 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     offset + hits.len(),
                 ));
             }
+            if let Some(note) = unlabeled_note {
+                out.push_str(&note);
+            }
             Ok(out.trim_end().to_string())
         }
         "undercroft_wake_up" => {
@@ -508,6 +537,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 anyhow::bail!("content is empty after normalization");
             }
             let idx = store.next_append_index()? as u32;
+            let kind = opt_str(args, "kind").map(str::to_string);
+            if let Some(k) = kind.as_deref() {
+                undercroft_core::validate_kind(k)?;
+            }
             let drawer = Drawer::new(
                 wing,
                 room,
@@ -516,7 +549,8 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 idx,
                 "mcp",
             )
-            .with_content_date(opt_str(args, "content_date").map(str::to_string));
+            .with_content_date(opt_str(args, "content_date").map(str::to_string))
+            .with_kind(kind);
             store.upsert(&drawer)?;
             Ok(format!("added drawer {} in {}/{}", drawer.id, wing, room))
         }

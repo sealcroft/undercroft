@@ -102,15 +102,22 @@ an identifier, never with content words that should stay sealed.
 - The tier changes no score anywhere: it is a door beside retrieval, not a
   weight inside it.
 
-## What waits, and on what
+## What shipped, and what still waits
 
-- **`kind` on drawers** (consultation item 4) waits for its instrument —
-  no current benchmark carries kind annotations, and the queue's own rule
-  is that the metric is designed before anything runs. Its design is
-  already fixed by this document: declared, closed vocabulary, clear-text
-  inventoried column, scope-aware filter, unlabeled-rows count in the
-  response.
+- **`kind` on drawers** (consultation item 4) SHIPPED 2026-08-02, exactly
+  as this document fixed it: declared closed vocabulary
+  (`undercroft_core::KIND_VOCAB`, validated at the single write choke
+  point, rejected never coerced), a clear-text inventoried column
+  (exposure + footprint tests updated, both directions), the filter
+  riding the gate-verified scope machinery (kind-starvation test with a
+  raw premise), an unknown filter value erroring instead of silently
+  emptying, and the unlabeled-rows count on `/v1`
+  (`unlabeled_excluded`), MCP and CLI. Its **value instrument**
+  (`undercroft-bench tagvalue`) shipped with it: R@1/R@5 + wrong-kind@1,
+  unfiltered vs filtered, on a corpus built so every key's words live in
+  two kinds — the number beside any claim the filter makes.
 - **Free-form tags** wait for a product case, and ship blind-indexed if
   ever.
 - **Trust labels** (ingest-time, deployment-assigned) belong to the C3.3
-  defense cluster and build on wing-as-trust-zone.
+  defense cluster and build on wing-as-trust-zone. A self-declared
+  `kind` remains ergonomics, never a trust boundary.
