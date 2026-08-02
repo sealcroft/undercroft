@@ -206,6 +206,28 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// Tagging cost instrument: rule-derived vs model-derived label
+    /// assignment over real corpus texts, with a fixed closed vocabulary.
+    /// Reports µs/drawer (rule, whole corpus), s/drawer (LLM, keyed
+    /// sample), corpus-scale extrapolations, and rule-vs-LLM agreement.
+    /// COST ONLY — whether tags improve retrieval is a separate instrument
+    /// that does not exist yet, and this one must never be quoted for it.
+    Tagcost {
+        /// Dataset with dialog turns (LoCoMo-shaped json)
+        #[arg(long)]
+        dataset: String,
+        /// Sample size for the LLM arm + agreement (even stride)
+        #[arg(long, default_value_t = 200)]
+        sample: usize,
+        /// LLM base URL (unset = rule arm only)
+        #[arg(long)]
+        llm_url: Option<String>,
+        #[arg(long, default_value = "llama3.2:1b")]
+        llm_model: String,
+        /// ollama | openai
+        #[arg(long, default_value = "ollama")]
+        llm_api: String,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -1375,6 +1397,166 @@ fn run_xlingual(pairs_path: &str, limit: usize, level: SecurityLevel) -> Result<
         }
     }
     println!("XLINGUAL DONE");
+    Ok(())
+}
+
+/// The tag vocabulary the cost instrument classifies into — closed and
+/// fixed here, per the labeling doctrine (docs/LABELS.md): a filterable
+/// label is a closed vocabulary or a blind index, never free text.
+const TAG_VOCAB: [&str; 6] = [
+    "question",
+    "preference",
+    "decision",
+    "event",
+    "procedure",
+    "statement",
+];
+
+/// The rule arm: a deterministic keyword/shape classifier. Deliberately
+/// simple — the instrument measures the COST CLASS of rule tagging, and a
+/// smarter rule set changes the constant, not the class.
+fn rule_tag(text: &str) -> &'static str {
+    let t = text.trim();
+    let lower = t.to_lowercase();
+    let any = |pats: &[&str]| pats.iter().any(|p| lower.contains(p));
+    if t.ends_with('?') || any(&["what ", "how ", "why ", "when ", "where ", "who "]) {
+        "question"
+    } else if any(&[
+        "i love",
+        "i like",
+        "i prefer",
+        "i hate",
+        "my favorite",
+        "i enjoy",
+    ]) {
+        "preference"
+    } else if any(&[
+        "decided", "we will", "i will", "going to", "plan to", "let's",
+    ]) {
+        "decision"
+    } else if any(&["first,", "then ", "step ", "afterwards", "finally"]) {
+        "procedure"
+    } else if any(&[
+        "yesterday",
+        "today",
+        "last week",
+        "went to",
+        "happened",
+        "attended",
+    ]) {
+        "event"
+    } else {
+        "statement"
+    }
+}
+
+/// Every dialog turn in a LoCoMo-shaped json, wherever it nests.
+fn collect_turns(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Object(m) => {
+            if m.contains_key("speaker") && m.get("text").is_some_and(Value::is_string) {
+                if let Some(t) = locomo_turn_text(v) {
+                    out.push(t);
+                }
+            }
+            for x in m.values() {
+                collect_turns(x, out);
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                collect_turns(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Tagging cost: the measurement behind the labeling doctrine's cost
+/// tiers. Rule arm runs over EVERY turn; the LLM arm over an even-stride
+/// sample (each call is one network round-trip + one forward pass, and
+/// the extrapolation column is labeled as an extrapolation).
+fn run_tagcost(
+    dataset: &str,
+    sample: usize,
+    llm_url: Option<&str>,
+    llm_model: &str,
+    llm_api: &str,
+) -> Result<()> {
+    let raw = std::fs::read_to_string(dataset)
+        .map_err(|e| anyhow::anyhow!("cannot read --dataset {dataset:?}: {e}"))?;
+    let v: Value = serde_json::from_str(&raw)?;
+    let mut texts = Vec::new();
+    collect_turns(&v, &mut texts);
+    if texts.is_empty() {
+        anyhow::bail!("no dialog turns found in {dataset:?}");
+    }
+    println!(
+        "Tagcost — {} turns, vocabulary {:?}",
+        texts.len(),
+        TAG_VOCAB
+    );
+
+    // Rule arm: everything.
+    let started = Instant::now();
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for t in &texts {
+        *counts.entry(rule_tag(t)).or_default() += 1;
+    }
+    let rule_us = started.elapsed().as_secs_f64() * 1e6 / texts.len() as f64;
+    println!(
+        "  rule: {rule_us:.2} µs/drawer — extrapolated {:.1} s per 10^6 drawers",
+        rule_us * 1e6 / 1e6
+    );
+    println!("  rule label distribution: {counts:?}");
+
+    // LLM arm: keyed sample.
+    let Some(url) = llm_url else {
+        println!("  llm: not run (no --llm-url) — rule column only");
+        println!("TAGCOST DONE");
+        return Ok(());
+    };
+    let kind = match llm_api {
+        "openai" => undercroft_llm::ApiKind::OpenAi,
+        _ => undercroft_llm::ApiKind::Ollama,
+    };
+    let client = undercroft_llm::LlmClient::new(url, llm_model, kind);
+    let labels: Vec<String> = TAG_VOCAB.iter().map(|s| s.to_string()).collect();
+    let stride = texts.len().div_ceil(sample.max(1)).max(1);
+    let sampled: Vec<&String> = texts.iter().step_by(stride).take(sample.max(1)).collect();
+    let (mut agree, mut done, mut errors) = (0usize, 0usize, 0usize);
+    let started = Instant::now();
+    for t in &sampled {
+        match client.classify(t, &labels) {
+            Ok(l) => {
+                done += 1;
+                if l == rule_tag(t) {
+                    agree += 1;
+                }
+            }
+            Err(_) => errors += 1,
+        }
+    }
+    let secs = started.elapsed().as_secs_f64();
+    if done == 0 {
+        anyhow::bail!(
+            "LLM arm failed on every call ({errors} errors) — is {url} serving {llm_model}?"
+        );
+    }
+    let per = secs / done as f64;
+    println!(
+        "  llm ({llm_model} @ {url}): {per:.2} s/drawer over {done} sampled \
+         ({errors} errors) — extrapolated {:.1} days per 10^6 drawers, \
+         {:.0}× the rule arm",
+        per * 1e6 / 86_400.0,
+        (per * 1e6) / rule_us.max(f64::EPSILON)
+    );
+    println!(
+        "  rule-vs-llm agreement: {:.1}% ({agree}/{done}) — a first quality \
+         signal, not a verdict",
+        100.0 * agree as f64 / done as f64
+    );
+    println!("TAGCOST DONE");
     Ok(())
 }
 
@@ -3680,6 +3862,13 @@ fn main() -> Result<()> {
             limit,
             level,
         } => run_xlingual(&pairs, limit, level_of(&level)),
+        Command::Tagcost {
+            dataset,
+            sample,
+            llm_url,
+            llm_model,
+            llm_api,
+        } => run_tagcost(&dataset, sample, llm_url.as_deref(), &llm_model, &llm_api),
         Command::Wingscale {
             n,
             wings,

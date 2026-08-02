@@ -1679,6 +1679,7 @@
   <tbody>
     <tr><td><code>UNDERCROFT_RETRIEVAL</code></td><td>unset — flat scan</td><td><code>pq</code> · <code>fde</code> · <code>hnsw</code> (feature-gated). Approximate; verify recall before relying on it</td></tr>
     <tr><td><code>UNDERCROFT_FUSION</code></td><td><code>bm25</code></td><td><code>bm25</code> · <code>legacy</code> (<code>rrf</code> removed; warns, falls back)</td></tr>
+    <tr><td><code>UNDERCROFT_FUSION_WEIGHT</code></td><td>0.55</td><td>The blend's semantic weight <em>w</em> in <em>w</em>·semantic + (0.90−<em>w</em>)·lexical + 0.10·recency. Declared and clamped to 0.20–0.70 — no configuration can retire a channel; one global value, never per-query</td></tr>
     <tr><td><code>UNDERCROFT_FTS_PREFILTER_MIN</code></td><td>2048</td><td>Row count above which the lexical prefilter engages (hmac-only vaults)</td></tr>
     <tr><td><code>UNDERCROFT_SEMANTIC_GATE</code></td><td>the embedder's own</td><td>The <code>semantic</code> score above which a drawer is admitted on cosine alone; <code>off</code> refuses semantic-only admission. Normally calibrated per embedder — set this only if you have measured your own corpus</td></tr>
     <tr><td><code>UNDERCROFT_IVF_MIN</code> · <code>UNDERCROFT_IVF_NPROBE</code></td><td>size-gated</td><td>When the IVF tier activates, and how many lists each query probes</td></tr>

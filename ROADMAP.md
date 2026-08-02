@@ -821,10 +821,17 @@ this is where the measured headroom is.*
     single-threaded) — full-scale post-fix numbers come from the next
     pqscale run; rayon on the encode loop and assignment-only retrain
     remain second-order levers if that measurement asks for them.
-  A fixed-size wing did not exhibit the leak (wingscale scoped R@5 100%
-  at both sizes) — any scoped-recall-at-scale claim for the tier still
-  needs its own instrument; it must not ride on the defect staying
-  unfixed. The defect it closes is recall as much
+  The instrument now exists (`scopescale`, 2026-08-02) and settled it in
+  both directions: room-scoped and wing+room-scoped R@5 hold **100.0% at
+  every checkpoint to 10⁶** (the scope filter's at-scale claim, earned),
+  while **wing-scoped through the wing's own index reads 89.6% flat —
+  corpus-independent, an OPEN DEFECT inside the tier** on a highly
+  self-similar wing population: the wing pool floors at 256
+  (`wing_live/64` loses to the floor) and the cosine-only stage-2 cut
+  drops lexically-carried golds — the global recall-leak class one level
+  down. Pool sweep moves it 89.6→96.9 (`div=8`) then plateaus; fix = a
+  designed wing-level pool policy (deeper proportional hydration is
+  affordable in a small population), its own unit with its own gate. The defect it closes is recall as much
   as cost: the global prefilter's top-k intersected with a wing can starve
   it entirely (pinned by test). Honest limits, recorded: BM25 IDF stays
   global (the wing isolates candidates, not scores; per-wing IDF was

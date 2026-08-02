@@ -275,6 +275,36 @@ pub(crate) fn late_top_n() -> usize {
 /// `std::env::set_var` is process-global and the suite runs tests in parallel,
 /// so an env-driven test of this is a flake generator aimed at every other
 /// test that happens to run beside it.
+/// The convex blend's semantic weight (`UNDERCROFT_FUSION_WEIGHT`):
+/// `score = w·semantic + (0.90 − w)·lexical + 0.10·recency`. Recency's
+/// share is fixed — it was never the contested split. DECLARED and
+/// BOUNDED to `[0.20, 0.70]` so no configuration can retire a channel;
+/// one global declaration, never per-query (per-query channel rescaling
+/// measured −9.4pp and stays refused). Applies to the `Bm25` blend and
+/// the remote-index path; `Legacy` keeps its frozen historical weights.
+/// Unparseable values warn and fall back — a typo must not brick an open
+/// or silently reweight retrieval.
+const DEFAULT_FUSION_WEIGHT: f32 = 0.55;
+const FUSION_WEIGHT_MIN: f32 = 0.20;
+const FUSION_WEIGHT_MAX: f32 = 0.70;
+
+/// Pure for the same reason as [`resolve_late_top_n`].
+fn resolve_fusion_weight(env: Option<&str>) -> f32 {
+    match env {
+        None => DEFAULT_FUSION_WEIGHT,
+        Some(v) => match v.trim().parse::<f32>() {
+            Ok(w) if w.is_finite() => w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX),
+            _ => {
+                undercroft_obs::diag_warn!(
+                    "UNDERCROFT_FUSION_WEIGHT={v:?} is not a number; \
+                     using {DEFAULT_FUSION_WEIGHT}"
+                );
+                DEFAULT_FUSION_WEIGHT
+            }
+        },
+    }
+}
+
 fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
     if let Some(n) = late.and_then(|v| v.parse().ok()).filter(|&n| n > 0) {
         return n;
@@ -573,6 +603,9 @@ pub struct PalaceStore {
     fts_min: Option<usize>,
     /// How semantic and lexical signals are combined at rank time.
     fusion: Fusion,
+    /// The convex blend's semantic weight — declared, bounded, one global
+    /// value. See [`DEFAULT_FUSION_WEIGHT`].
+    fusion_weight: f32,
     /// `Some(dim)` when this vault's embeddings are supplied by the caller
     /// (embedder identity `external:<name>@<dim>`): writes must carry a
     /// vector of exactly `dim`, and the store never computes an embedding.
@@ -1144,6 +1177,9 @@ impl PalaceStore {
             fts: false,
             fts_min,
             fusion: Fusion::from_env(),
+            fusion_weight: resolve_fusion_weight(
+                std::env::var("UNDERCROFT_FUSION_WEIGHT").ok().as_deref(),
+            ),
             external_dim,
             hnsw_enabled: false,
             #[cfg(feature = "hnsw")]
@@ -1458,6 +1494,17 @@ impl PalaceStore {
     /// See [`Fusion`].
     pub fn set_fusion(&mut self, fusion: Fusion) {
         self.fusion = fusion;
+    }
+
+    /// Declare the convex blend's semantic weight, clamped to
+    /// `[0.20, 0.70]` — no configuration can retire a channel. See
+    /// [`DEFAULT_FUSION_WEIGHT`] / `UNDERCROFT_FUSION_WEIGHT`.
+    pub fn set_fusion_weight(&mut self, w: f32) {
+        self.fusion_weight = if w.is_finite() {
+            w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX)
+        } else {
+            DEFAULT_FUSION_WEIGHT
+        };
     }
 
     /// Attach (or clear) a second-stage cross-encoder reranker. With one set,
@@ -2420,11 +2467,16 @@ impl PalaceStore {
                 .collect::<Vec<_>>(),
             Fusion::Bm25 => {
                 let bm25 = bm25_scores(&qterms, &cands, lang);
+                // The declared blend: w·semantic + (0.90 − w)·lexical +
+                // 0.10·recency. The admission gate below is untouched by
+                // the weight — evidence decides membership, the weight
+                // only orders it.
+                let w = self.fusion_weight;
                 cands
                     .into_iter()
                     .zip(bm25)
                     .map(|(c, (lexical, lexical_exact, lexical_morph))| {
-                        let score = 0.55 * c.semantic + 0.35 * lexical + 0.10 * c.recency;
+                        let score = w * c.semantic + (0.90 - w) * lexical + 0.10 * c.recency;
                         SearchHit {
                             drawer: c.drawer,
                             score,
@@ -2665,7 +2717,8 @@ impl PalaceStore {
         let semantic = ((cosine(qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
         let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
         let recency = recency_boost(&drawer.meta.filed_at, now);
-        let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
+        let w = self.fusion_weight;
+        let score = w * semantic + (0.90 - w) * lexical + 0.10 * recency;
         SearchHit {
             drawer,
             score,
@@ -6930,6 +6983,59 @@ mod tests {
     /// honoured *valid* values would newly resolve the same setting to 200 —
     /// quadrupling rescore depth for someone who changed nothing. Serial,
     /// because environment variables are process-global.
+    #[test]
+    fn the_fusion_weight_is_declared_bounded_and_survives_garbage() {
+        // The default is the shipped blend, written longhand so editing the
+        // const cannot silently agree with itself.
+        assert_eq!(resolve_fusion_weight(None), 0.55);
+        assert_eq!(resolve_fusion_weight(Some("0.65")), 0.65);
+        assert_eq!(
+            resolve_fusion_weight(Some("0.9")),
+            0.70,
+            "bounded above: no configuration can retire the lexical channel"
+        );
+        assert_eq!(
+            resolve_fusion_weight(Some("0.05")),
+            0.20,
+            "bounded below: nor the semantic one"
+        );
+        assert_eq!(
+            resolve_fusion_weight(Some("all-in")),
+            0.55,
+            "garbage warns and falls back, never bricks the open"
+        );
+        assert_eq!(resolve_fusion_weight(Some("NaN")), 0.55);
+    }
+
+    /// The knob must actually reach the blend: at every declared weight the
+    /// returned score decomposes as w·semantic + (0.90−w)·lexical + residual,
+    /// with the residual inside recency's fixed 0.10 share.
+    #[test]
+    fn the_blend_actually_uses_the_declared_weight() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the kubernetes cluster upgrade finished",
+            0,
+        ))
+        .unwrap();
+        s.upsert(&drawer("w", "r", "unrelated note about the weather", 1))
+            .unwrap();
+        for w in [0.20f32, 0.55, 0.70] {
+            s.set_fusion_weight(w);
+            let hits = s
+                .search("kubernetes upgrade", &SearchOptions::default())
+                .unwrap();
+            let h = &hits[0];
+            let residual = h.score - w * h.semantic - (0.90 - w) * h.lexical;
+            assert!(
+                (-0.0001..=0.1001).contains(&residual),
+                "score must decompose under w={w}: residual {residual}"
+            );
+        }
+    }
+
     #[test]
     fn the_two_rescore_depths_resolve_independently() {
         assert_ne!(

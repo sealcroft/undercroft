@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — the fusion weight becomes a declaration, and tagging gets its price tag
+
+- **`UNDERCROFT_FUSION_WEIGHT` (default 0.55)** — the convex blend's
+  semantic weight `w` in `w·semantic + (0.90 − w)·lexical +
+  0.10·recency`, completing the roadmap's "tunable, bounded, logged
+  fusion weight". Declared, never detected; **bounded** to `[0.20, 0.70]`
+  so no configuration can retire a channel; **one global value, never
+  per-query** (per-query channel rescaling measured −9.4pp and stays
+  refused). Recency's 0.10 share is fixed — it was never the contested
+  split. Applies to the `Bm25` blend and the remote-index path; `Legacy`
+  keeps its frozen historical weights. Unparseable values warn and fall
+  back to the default — a typo must not brick an open or silently
+  reweight retrieval. The admission gate is untouched by the weight:
+  evidence decides membership, the weight only orders it. Pinned by a
+  pure resolver test (bounds, garbage, NaN) and a decomposition test
+  (the returned score actually factors as `w·sem + (0.90−w)·lex +
+  recency-share` at every declared `w`). The default is byte-identical
+  to the shipped blend. Literature note: convex combination is the
+  fusion class Bruch, Gai & Ingber (TOIS 2023) find superior to rank
+  fusion and *sample-efficient to tune* — this knob is the sanctioned
+  way to tune it, and any tuned value must cite a LoCoMo run beside it.
+- **`undercroft-bench tagcost`** — the measurement behind the labeling
+  doctrine's cost tiers (docs/LABELS.md). Rule arm: a deterministic
+  closed-vocabulary classifier over EVERY dialog turn of a
+  LoCoMo-shaped dataset, reported in µs/drawer with the 10⁶
+  extrapolation. LLM arm (opt-in via `--llm-url`, e.g. the compose
+  Ollama service): `LlmClient::classify` over an even-stride sample,
+  s/drawer + the 10⁶ extrapolation in days + rule-vs-LLM agreement — a
+  first quality signal, not a verdict. COST ONLY, stated in the help
+  text: whether tags improve retrieval is a separate instrument that
+  does not exist yet, and this one must never be quoted for it.
+
 ## Unreleased — the two waiting instruments exist: scoped recall at scale, and cross-lingual
 
 - **`undercroft-bench scopescale`** — the instrument the per-wing tier's
@@ -17,6 +49,28 @@
   ms/q each, per-pass warm-up reported separately (the wingscale lesson).
   No mid-run gate: the curves are the result; a leak in any scoped column
   at any checkpoint is a defect to file, never a property to document.
+- **The first full scopescale run (sealed, hash, `retrieval=pq`, shipped
+  defaults, one run), and its first finding.** Unscoped, room-scoped and
+  wing+room-scoped R@5 all read **100.0% at every checkpoint**
+  131k/262k/524k/1M (unscoped 35.2/73.9/150.6/276.6 ms/q — the pqscale
+  curve reproduced; room 26.7→43.7 ms/q; wing+room ~21–25 ms/q flat) —
+  **the scope filter earns its at-scale claim**, and the room numbers are
+  the starvation fix measured at a million drawers. **OPEN DEFECT FILED:
+  wing-scoped R@5 reads 89.6% at every checkpoint — the same 10 of 96
+  queries, deterministically, corpus-independent** — a leak inside the
+  per-wing tier on a highly self-similar population (the probe wing's
+  8192 near-identical keyed facts; wingscale's distinctive-key corpora
+  never showed it). Diagnosed by sweep: forcing IVF probes wide changes
+  nothing (91.7% — not the probe subset); `UNDERCROFT_POOL_DIV=8` lifts
+  it to 96.9% and `=4` plateaus there — the wing's stage-1 pool floors
+  at 256 (`wing_live/64 = 128` loses to the floor) and the stage-2
+  cosine-only cut then drops lexically-carried golds: **the exact defect
+  class the global two-stage pool closed at corpus level, recurring one
+  level down where the floor, not the divisor, dominates.** The fix is a
+  wing-level pool policy (deeper proportional hydration is affordable in
+  a small population — 8192/8 rows ≈ 92 ms/q worst case) and gets its
+  own designed unit; not patched here, because a pool policy chosen
+  under one instrument's corpus is how the last leak got mis-sized.
 - **`undercroft-bench xlingual`** — the metric for the one capability the
   hash embedder provably lacks, designed before anything runs: per
   language pair, R@1/R@5 of querying with a source-language sentence for
