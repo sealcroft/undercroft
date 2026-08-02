@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — rank fusion is removed, and the fusion doctrine written down
+
+- **`Fusion::Rrf` is deleted** (`rrf_fuse`, its two rank helpers, `RRF_K`,
+  the enum arm and the obs label). It was never the default and measured
+  **−7.3pp** turn all-gold against the BM25 blend (ROADMAP's failed table,
+  where the row stays as the record); rank fusion discards exactly the score
+  magnitudes the admission gate and the calibrated blend are built on.
+  `UNDERCROFT_FUSION=rrf` now **warns and falls back to `bm25`** — a removed
+  configuration must say so, never silently reinterpret. Reproducing the
+  −7.3 run means checking out a pre-removal commit, which is the honest
+  price of not shipping a measured-worse mode as live configuration.
+- **The doctrine the removal leaves behind, now stated on `Fusion` itself:**
+  every channel is calibrated to `[0, 1]` **absolutely** (cosine affine map,
+  BM25 saturation `r/(r+k_sat)`, recency decay) and blended convexly —
+  never normalized against the result set. This is the fusion class the
+  literature finds superior to RRF in and out of domain (Bruch, Gai &
+  Ingber, TOIS 2023), and the *absolute* calibration is the part the
+  industry's own RRF replacements (per-query min-max, mean±σ DBSF) get
+  wrong: result-set normalization makes every hit's score a function of the
+  other hits' — coupling in scoring, a poison channel, and the class this
+  repo already measured at **−9.4pp** (per-query channel rescaling). Where
+  vendors moved from rank fusion to result-set-normalized score fusion,
+  this engine keeps per-item absolute calibration and stays ahead of both.
+- Surfaces updated together, as the sync rule requires: AGENTS.md env
+  reference, the architecture page (prose + env table + `retrieval-stack`
+  diagram, derived copies rebuilt via `build.sh`), website retrieval docs
+  (the rrf measurement row stays, marked removed), RETRIEVAL_SCALING.md.
+
 ## Unreleased — the wing becomes the retrieval unit it always claimed to be
 
 - **Per-wing PQ indexes (`UNDERCROFT_WING_PQ_MIN`, default 4096).** `wing` was

@@ -302,24 +302,37 @@ fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
 /// flat term-overlap fraction that weights every matched query term equally
 /// — measurably worse (see benchmarks/RESULTS.md; BM25 lifts LongMemEval-S
 /// R@5 from 90.4% to 95.0% with the hash embedder, almost entirely on
-/// paraphrase-heavy preference questions). `Rrf` fuses the cosine and BM25
-/// rankings with reciprocal-rank fusion — scale-free, but it discards score
-/// magnitude and benchmarked below `Bm25`. All three verify HMACs
-/// identically; fusion only reorders already-trusted candidates.
+/// paraphrase-heavy preference questions). Both verify HMACs identically;
+/// fusion only reorders already-trusted candidates.
 ///
-/// Override at open with `UNDERCROFT_FUSION` (`bm25` / `legacy` / `rrf`).
+/// Every channel is calibrated to `[0, 1]` **absolutely** — cosine by affine
+/// map, BM25 by saturation, recency by decay — never normalized against the
+/// result set. Per-query normalization (min-max, mean±σ) makes every hit's
+/// score a function of the other hits', which is coupling in scoring: one
+/// outlier drawer rescales scores it does not own, and the class measured
+/// −9.4pp here. A reciprocal-rank arm (`rrf`) existed until it measured
+/// −7.3pp on LoCoMo (rank fusion discards the score magnitudes the
+/// admission gate needs); the configuration was removed — the measurement
+/// stands in ROADMAP's failed table, reproducible from git history.
+///
+/// Override at open with `UNDERCROFT_FUSION` (`bm25` / `legacy`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fusion {
     Legacy,
     Bm25,
-    Rrf,
 }
 
 impl Fusion {
     fn from_env() -> Self {
         match std::env::var("UNDERCROFT_FUSION").ok().as_deref() {
             Some(v) if v.eq_ignore_ascii_case("legacy") => Fusion::Legacy,
-            Some(v) if v.eq_ignore_ascii_case("rrf") => Fusion::Rrf,
+            Some(v) if v.eq_ignore_ascii_case("rrf") => {
+                undercroft_obs::diag_warn!(
+                    "UNDERCROFT_FUSION=rrf was removed (measured −7.3pp vs bm25); \
+                     falling back to bm25"
+                );
+                Fusion::Bm25
+            }
             _ => Fusion::Bm25,
         }
     }
@@ -328,9 +341,6 @@ impl Fusion {
 // Okapi BM25 constants (the standard defaults).
 const BM25_K1: f32 = 1.2;
 const BM25_B: f32 = 0.75;
-// Reciprocal-rank-fusion damping — the canonical value from the original
-// RRF paper; larger flattens the contribution of top ranks.
-const RRF_K: f32 = 60.0;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -1437,8 +1447,8 @@ impl PalaceStore {
     }
 
     /// Select the rank-time fusion strategy. Defaults to the value of
-    /// `UNDERCROFT_FUSION` at open (`legacy` / `bm25` / `rrf`, legacy
-    /// otherwise). See [`Fusion`].
+    /// `UNDERCROFT_FUSION` at open (`legacy` / `bm25`, bm25 otherwise).
+    /// See [`Fusion`].
     pub fn set_fusion(&mut self, fusion: Fusion) {
         self.fusion = fusion;
     }
@@ -2351,7 +2361,6 @@ impl PalaceStore {
                     })
                     .collect::<Vec<_>>()
             }
-            Fusion::Rrf => rrf_fuse(&qterms, cands, lang),
         };
 
         // Relevance gate: an unrelated record still scores ~0.35 from the
@@ -2434,7 +2443,6 @@ impl PalaceStore {
         let fusion_label = match self.fusion {
             Fusion::Legacy => "legacy",
             Fusion::Bm25 => "bm25",
-            Fusion::Rrf => "rrf",
         };
         undercroft_obs::search_completed(
             obs_start.elapsed(),
@@ -4396,81 +4404,6 @@ fn bm25_scores(qterms: &[String], cands: &[Candidate], lang: MorphLang) -> Vec<(
     let squash = |r: f32| if r > 0.0 { r / (r + b.k_sat) } else { 0.0 };
     (0..cands.len())
         .map(|i| (squash(b.raw[i]), squash(b.exact[i]), squash(b.morph[i])))
-        .collect()
-}
-
-/// 1-based ranks by descending value, ties broken by original index.
-fn ranks_desc(vals: &[f32]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..vals.len()).collect();
-    idx.sort_by(|&a, &b| {
-        vals[b]
-            .partial_cmp(&vals[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.cmp(&b))
-    });
-    let mut rank = vec![0usize; vals.len()];
-    for (r, &i) in idx.iter().enumerate() {
-        rank[i] = r + 1;
-    }
-    rank
-}
-
-/// Like [`ranks_desc`] but only entries with a positive value are ranked;
-/// the rest get `None` so they contribute nothing to the RRF sum (a zero
-/// BM25 must not earn rank credit just for existing).
-fn ranks_desc_positive(vals: &[f32]) -> Vec<Option<usize>> {
-    let mut idx: Vec<usize> = (0..vals.len()).filter(|&i| vals[i] > 0.0).collect();
-    idx.sort_by(|&a, &b| {
-        vals[b]
-            .partial_cmp(&vals[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.cmp(&b))
-    });
-    let mut rank = vec![None; vals.len()];
-    for (r, &i) in idx.iter().enumerate() {
-        rank[i] = Some(r + 1);
-    }
-    rank
-}
-
-/// Reciprocal-rank fusion of the cosine ranking and the BM25 ranking, with
-/// recency as a lightly-weighted third ranker (0.10, matching the linear
-/// blend's recency weight). Scale-free: no semantic/lexical weight to tune,
-/// only rank positions. `lexical` is reported as the squashed BM25 so the
-/// caller's relevance gate treats it exactly like the BM25 blend.
-fn rrf_fuse(qterms: &[String], cands: Vec<Candidate>, lang: MorphLang) -> Vec<SearchHit> {
-    let b = bm25_raw(qterms, &cands, lang);
-    let (raw, k_sat) = (b.raw, b.k_sat);
-    let sem: Vec<f32> = cands.iter().map(|c| c.semantic).collect();
-    let rec: Vec<f32> = cands.iter().map(|c| c.recency).collect();
-    let sem_rank = ranks_desc(&sem);
-    let rec_rank = ranks_desc(&rec);
-    let bm_rank = ranks_desc_positive(&raw);
-    cands
-        .into_iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let mut score = 1.0 / (RRF_K + sem_rank[i] as f32);
-            if let Some(r) = bm_rank[i] {
-                score += 1.0 / (RRF_K + r as f32);
-            }
-            score += 0.10 * (1.0 / (RRF_K + rec_rank[i] as f32));
-            let squash = |r: f32| {
-                if k_sat > 0.0 && r > 0.0 {
-                    r / (r + k_sat)
-                } else {
-                    0.0
-                }
-            };
-            SearchHit {
-                drawer: c.drawer,
-                score,
-                semantic: c.semantic,
-                lexical: squash(raw[i]),
-                lexical_exact: squash(b.exact[i]),
-                lexical_morph: squash(b.morph[i]),
-            }
-        })
         .collect()
 }
 
@@ -7709,9 +7642,9 @@ mod tests {
     }
 
     #[test]
-    fn bm25_and_rrf_still_find_relevant_first() {
-        // Both fusion modes must preserve the basic ranking contract.
-        for mode in [Fusion::Bm25, Fusion::Rrf] {
+    fn both_fusion_modes_still_find_relevant_first() {
+        // Every fusion mode must preserve the basic ranking contract.
+        for mode in [Fusion::Bm25, Fusion::Legacy] {
             let (_d, mut s) = store(SecurityLevel::Sealed);
             s.upsert(&drawer(
                 "work",
@@ -7861,7 +7794,7 @@ mod tests {
         .unwrap();
         s.upsert(&drawer("w", "r", "unrelated note about the weather", 1))
             .unwrap();
-        for mode in [Fusion::Bm25, Fusion::Rrf, Fusion::Legacy] {
+        for mode in [Fusion::Bm25, Fusion::Legacy] {
             s.set_fusion(mode);
             let hits = s
                 .search("kubernetes upgrade", &SearchOptions::default())
