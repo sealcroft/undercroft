@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — the search path's real hotspot found by instrument, then parallelized
+
+- **The user-visible price of a scoped query drops ~2.7× (wing 85 → ~32
+  ms/q) and the 1M unscoped price 2.4× (270 → 113 ms/q) — and the fix
+  was NOT where everyone thought.** The queued lever said "parallel
+  candidate hydration"; built first, it changed **nothing** (scopescale
+  before/after identical, and a 1-vs-24-thread probe read the same
+  numbers — the instrument that refutes a belief is cheaper than the
+  optimization that encodes it). The new opt-in phase trace
+  (`UNDERCROFT_SEARCH_TRACE=1`, stderr, per-phase ms) then found the real
+  cost in **`fuse`**: `bm25_raw`'s per-candidate scan — every token
+  against every query term through equality, morphology and the fuzzy
+  channel — at ~70 µs per candidate serial, i.e. ~70 ms/q at a
+  scope-sized 1024-candidate pool and the dominant term everywhere.
+- **Both stages now fan out with rayon, order-preserved and
+  byte-identical**: pass-1 hydration (HMAC verify + AEAD decrypt +
+  embedding decode + segmentation over `&Vault`, which is plain owned
+  data and `Sync`; the RefCell embedding-cache reads stay serial and
+  first), the stage-2 exact-cosine decrypts, and `bm25_raw`'s tf rows
+  (each candidate's row independent; df/idf and scores unchanged to the
+  byte — indexed collects preserve order, pinned by the whole suite).
+  SQLite stays serial on its one connection; durability is untouched.
+- **Measured** (scopescale, shipped defaults, one cumulative vault,
+  R@5 100.0% in every column at every checkpoint before AND after):
+  wing 32.7/31.8/35.3/32.0 ms/q flat 131k→1M (was ~85–87), room
+  ~13–17 (was ~40), wing+room ~13–15 (was ~41), unscoped
+  20.4/32.6/59.1/112.7 (was 39.4/66.1/132.8/269.3). The LoCoMo
+  harness is fuse-bound too, so instrument runs shrink with it —
+  **measured: one full LoCoMo pass 308 s (~5 min), down from ~40 min
+  (7.8×), reproducing the `w=0.55` sweep row digit for digit** (R@10
+  93.0%, turn all-gold 69.4%, top-40 CDF 81.8%) — the equivalence proof
+  and the speedup in one run. A four-weight sweep now costs ~20 minutes.
+
 ## Unreleased — the kind label ships as the doctrine wrote it, value instrument first
 
 - **`kind` on drawers** (consultation adopted item 4, pulled forward on

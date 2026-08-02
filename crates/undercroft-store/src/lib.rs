@@ -2163,18 +2163,30 @@ impl PalaceStore {
     }
 
     fn decode(&self, id: &str, meta_json: &str, content_rest: &[u8]) -> Result<Drawer, StoreError> {
+        Self::decode_with(&self.vault, id, meta_json, content_rest)
+    }
+
+    /// [`Self::decode`] against an explicit vault — the form the parallel
+    /// hydration path calls, because `&self` is not `Sync` (RefCell caches)
+    /// while `&Vault` is plain owned data and is.
+    fn decode_with(
+        vault: &Vault,
+        id: &str,
+        meta_json: &str,
+        content_rest: &[u8],
+    ) -> Result<Drawer, StoreError> {
         let meta: DrawerMeta =
             serde_json::from_str(meta_json).map_err(|e| StoreError::CorruptRow {
                 id: id.into(),
                 reason: e.to_string(),
             })?;
-        let plain = self
-            .vault
-            .content_from_rest(id, content_rest)
-            .map_err(|e| StoreError::CorruptRow {
-                id: id.into(),
-                reason: e.to_string(),
-            })?;
+        let plain =
+            vault
+                .content_from_rest(id, content_rest)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.into(),
+                    reason: e.to_string(),
+                })?;
         let content = String::from_utf8(plain).map_err(|e| StoreError::CorruptRow {
             id: id.into(),
             reason: e.to_string(),
@@ -2281,6 +2293,23 @@ impl PalaceStore {
         if let Some(k) = opts.kind.as_deref() {
             undercroft_core::validate_kind(k).map_err(|e| StoreError::Invalid(e.to_string()))?;
         }
+        // Opt-in phase trace (`UNDERCROFT_SEARCH_TRACE=1`): where one search
+        // actually spends its time, on stderr. Built after the parallel-
+        // hydration pass measured ZERO change and a 1-vs-24-thread probe
+        // read identical — the serial cost lived somewhere nobody had
+        // measured, and this is the instrument that finds it instead of
+        // the next guess.
+        let trace = std::env::var("UNDERCROFT_SEARCH_TRACE").is_ok();
+        let mut t_phase = std::time::Instant::now();
+        let phase_ms = |label: &str, t: &mut std::time::Instant| {
+            if trace {
+                eprintln!(
+                    "search-trace {label}: {:.2} ms",
+                    t.elapsed().as_secs_f64() * 1e3
+                );
+            }
+            *t = std::time::Instant::now();
+        };
         let mut refine_semantic = false;
         let hydrate_k = std::cmp::max(256, depth.saturating_mul(32));
         // The declared filters the ACTIVE prefilter cannot see, resolved
@@ -2327,6 +2356,7 @@ impl PalaceStore {
         // ([`scoped_pool_k`]/[`scoped_keep`] — the corpus divisors
         // collapse to the fixed floor at wing sizes, which scopescale
         // measured as an 89.6% wing-recall leak).
+        phase_ms("scope-resolve", &mut t_phase);
         let scope_scan = scope
             .as_ref()
             .is_some_and(|s| s.len() <= hydrate_k.max(SCOPE_HYDRATE_FLOOR));
@@ -2438,6 +2468,7 @@ impl PalaceStore {
                 _ => None,
             }
         };
+        phase_ms("candidates", &mut t_phase);
         // Second stage on the semantic pools (PQ, per-wing PQ): the
         // corpus-scaled stage-1 pool is cut by exact cosine over the
         // candidates' embeddings alone — but only down to `stage1/8`
@@ -2463,6 +2494,7 @@ impl PalaceStore {
             }
             other => other,
         };
+        phase_ms("refine", &mut t_phase);
         let obs_prefiltered = candidates.is_some();
 
         let mut sql = String::from("SELECT id, meta_json, content, embedding, tag FROM drawers");
@@ -2494,6 +2526,7 @@ impl PalaceStore {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
             .collect::<Result<_, _>>()?;
+        phase_ms("sql-fetch", &mut t_phase);
 
         // Pass 1: verify + decrypt every candidate, and gather the signals
         // that don't need corpus statistics (cosine, recency). Content
@@ -2501,60 +2534,82 @@ impl PalaceStore {
         // Recency decays against the caller's declared instant when one was
         // given: pages of one iteration must rank against one clock, not
         // against however many seconds separated the calls.
+        //
+        // Hydration is the search path's linear term (~0.09 ms/row run
+        // serially — the whole price of a scoped query and most of an
+        // unscoped one at 10⁶), and every per-row step here — HMAC verify,
+        // AEAD decrypt, embedding decode, segmentation — is pure CPU over
+        // `&Vault`, which is plain owned data and `Sync`. So the rows fan
+        // out across cores: no SQLite on this path, no RefCell (the
+        // embedding-cache reads happen serially first — a read is
+        // microseconds and the RefCell is the one non-`Sync` piece), and
+        // the indexed collect preserves row order EXACTLY, so scores,
+        // ordering and every downstream stage are byte-identical to the
+        // serial loop. A failure on any row still fails the whole search:
+        // an integrity error is a verdict, not a row to skip.
         let now = opts.ranked_at.unwrap_or_else(OffsetDateTime::now_utc);
-        let mut cands: Vec<Candidate> = Vec::with_capacity(rows.len());
-        for (id, meta_json, content_rest, emb_rest, tag) in rows {
-            self.vault
-                .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| {
-                    undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
-                    StoreError::Integrity(id.clone())
-                })?;
-            let drawer = self.decode(&id, &meta_json, &content_rest)?;
-            let cached = self
-                .emb_cache
-                .borrow()
-                .as_ref()
-                .and_then(|c| c.get(&id).cloned());
-            let emb = match cached {
-                Some(e) => e,
-                None => self
-                    .vault
-                    .embedding_from_rest(&id, &emb_rest)
-                    .map_err(|e| StoreError::CorruptRow {
-                        id: id.clone(),
-                        reason: e.to_string(),
+        let cached_embs: Vec<Option<Vec<f32>>> = {
+            let cache = self.emb_cache.borrow();
+            rows.iter()
+                .map(|(id, ..)| cache.as_ref().and_then(|c| c.get(id).cloned()))
+                .collect()
+        };
+        use rayon::prelude::*;
+        let vault = &self.vault;
+        let legacy = self.fusion == Fusion::Legacy;
+        let qv = &qvec;
+        let cands: Vec<Candidate> = rows
+            .into_par_iter()
+            .zip(cached_embs.into_par_iter())
+            .map(|((id, meta_json, content_rest, emb_rest, tag), cached)| {
+                vault
+                    .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
+                    .map_err(|_| {
+                        undercroft_obs::hmac_verify_failed("drawer");
+                        undercroft_obs::event_hmac_fail(vault.id(), "drawer");
+                        StoreError::Integrity(id.clone())
+                    })?;
+                let drawer = Self::decode_with(vault, &id, &meta_json, &content_rest)?;
+                let emb = match cached {
+                    Some(e) => e,
+                    None => vault.embedding_from_rest(&id, &emb_rest).map_err(|e| {
+                        StoreError::CorruptRow {
+                            id: id.clone(),
+                            reason: e.to_string(),
+                        }
                     })?,
-            };
-            let semantic = ((cosine(&qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
-            let recency = recency_boost(&drawer.meta.filed_at, now);
-            let (tokens, ngram, units) = if self.fusion == Fusion::Legacy {
-                (Vec::new(), Vec::new(), 0.0)
-            } else {
-                let s = segment(&drawer.content);
-                let units = s.len as f32;
-                // Same minimum-length rule the query side applies, so term
-                // matching stays symmetric rather than relying on a one-byte
-                // token happening never to match anything. The n-gram flags
-                // are filtered in step with the tokens they describe.
-                let (tokens, ngram): (Vec<String>, Vec<bool>) = s
-                    .tokens
-                    .into_iter()
-                    .zip(s.ngram)
-                    .filter(|(t, _)| t.len() > 1)
-                    .unzip();
-                (tokens, ngram, units)
-            };
-            cands.push(Candidate {
-                drawer,
-                semantic,
-                recency,
-                tokens,
-                ngram,
-                units,
-            });
-        }
+                };
+                let semantic = ((cosine(qv, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
+                let recency = recency_boost(&drawer.meta.filed_at, now);
+                let (tokens, ngram, units) = if legacy {
+                    (Vec::new(), Vec::new(), 0.0)
+                } else {
+                    let s = segment(&drawer.content);
+                    let units = s.len as f32;
+                    // Same minimum-length rule the query side applies, so
+                    // term matching stays symmetric rather than relying on
+                    // a one-byte token happening never to match anything.
+                    // The n-gram flags are filtered in step with the
+                    // tokens they describe.
+                    let (tokens, ngram): (Vec<String>, Vec<bool>) = s
+                        .tokens
+                        .into_iter()
+                        .zip(s.ngram)
+                        .filter(|(t, _)| t.len() > 1)
+                        .unzip();
+                    (tokens, ngram, units)
+                };
+                Ok(Candidate {
+                    drawer,
+                    semantic,
+                    recency,
+                    tokens,
+                    ngram,
+                    units,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        phase_ms("hydrate", &mut t_phase);
 
         // Pass 2: derive the lexical signal (per fusion mode) and combine.
         let mut hits = match self.fusion {
@@ -2627,6 +2682,7 @@ impl PalaceStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        phase_ms("fuse", &mut t_phase);
 
         // Optional second stage: a cross-encoder re-scores the top-N
         // fusion-ranked candidates using the full (query, content) pair — the
@@ -2734,12 +2790,21 @@ impl PalaceStore {
         let rows: Vec<(i64, String, Vec<u8>)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
-        let mut scored: Vec<(f32, i64)> = Vec::with_capacity(rows.len());
-        for (seq, id, rest) in rows {
-            if let Ok(emb) = self.vault.embedding_from_rest(&id, &rest) {
-                scored.push((cosine(qvec, &emb), seq));
-            }
-        }
+        // Same parallel shape as pass-1 hydration: decrypt + cosine are
+        // pure CPU over `&Vault`, and at 10⁶ the stage-1 pool is ~16k rows
+        // — a serial walk here was its own linear term. Order preserved by
+        // the indexed collect; the select below re-orders anyway.
+        use rayon::prelude::*;
+        let vault = &self.vault;
+        let mut scored: Vec<(f32, i64)> = rows
+            .into_par_iter()
+            .filter_map(|(seq, id, rest)| {
+                vault
+                    .embedding_from_rest(&id, &rest)
+                    .ok()
+                    .map(|emb| (cosine(qvec, &emb), seq))
+            })
+            .collect();
         if scored.len() > keep {
             scored.select_nth_unstable_by(keep - 1, |a, b| {
                 b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
@@ -4580,69 +4645,98 @@ fn bm25_raw(qterms: &[String], cands: &[Candidate], lang: MorphLang) -> Bm25 {
         };
     }
     // tf[doc][term] = occurrences of qterms[term] in the doc's tokens.
-    let mut tf = vec![vec![0u32; qterms.len()]; n];
-    let mut tf_approx = vec![vec![0u32; qterms.len()]; n];
-    let mut tf_morph = vec![vec![0u32; qterms.len()]; n];
-    let mut lengths = vec![0f32; n];
-    for (i, c) in cands.iter().enumerate() {
-        // What the caller declared, else what THIS drawer's own function words
-        // say it is. Per candidate, because a vault may hold several languages
-        // and the drawer is the unit that has one.
-        let lang = if lang == MorphLang::Undeclared {
-            language_of_drawer(&c.tokens)
-        } else {
-            lang
-        };
-        // Content units, not emitted tokens: a segmented run expands into
-        // unigrams plus bigrams, and charging that to document length would
-        // penalise precisely the drawers segmentation exists to reach.
-        lengths[i] = c.units;
-        for (ti, tok) in c.tokens.iter().enumerate() {
-            // An n-gram is a fragment, not a word. Letting one fill the exact
-            // slot by literal equality is what let a single shared
-            // two-character substring admit a drawer: measured, 74.3% of a
-            // real Arabic corpus on one query, against 6.9% for Greek through
-            // the same code. Han is not flagged, because there a character is
-            // a morpheme.
-            let is_ngram = c.ngram.get(ti).copied().unwrap_or(false);
-            // A token fills at most one query-term slot, and an *exact* match
-            // outranks a fuzzy one wherever the two compete. Taking the first
-            // match of either kind let an earlier fuzzy term steal a token
-            // that exactly equals a later one: for query `دفتر دفاتر`, a
-            // document saying `دفاتر` scored as evidence for `دفتر` while
-            // `دفاتر` — literally present — kept df = 0 and therefore maximal
-            // IDF for a term that occurs. The document was scored as if it
-            // contained a different word.
-            if !is_ngram {
-                if let Some(j) = qterms.iter().position(|q| q == tok) {
-                    tf[i][j] += 1;
+    //
+    // Each candidate's row is computed independently and IN PARALLEL: this
+    // scan — every token against every query term through equality,
+    // morphology and the fuzzy channel — is where a search actually spends
+    // its time. The phase trace (`UNDERCROFT_SEARCH_TRACE`) measured it at
+    // ~70 µs per candidate serial, which at a scope-sized 1024-candidate
+    // pool was ~70 ms/q — the cost the parallel-hydration pass went
+    // looking for and found HERE instead. The indexed collect preserves
+    // candidate order, so df/idf and every score below are byte-identical
+    // to the serial loop.
+    use rayon::prelude::*;
+    type TfRow = (Vec<u32>, Vec<u32>, Vec<u32>, f32);
+    let per_doc: Vec<TfRow> = cands
+        .par_iter()
+        .map(|c| {
+            // What the caller declared, else what THIS drawer's own
+            // function words say it is. Per candidate, because a vault may
+            // hold several languages and the drawer is the unit that has
+            // one.
+            let lang = if lang == MorphLang::Undeclared {
+                language_of_drawer(&c.tokens)
+            } else {
+                lang
+            };
+            let mut tf_i = vec![0u32; qterms.len()];
+            let mut approx_i = vec![0u32; qterms.len()];
+            let mut morph_i = vec![0u32; qterms.len()];
+            for (ti, tok) in c.tokens.iter().enumerate() {
+                // An n-gram is a fragment, not a word. Letting one fill the
+                // exact slot by literal equality is what let a single shared
+                // two-character substring admit a drawer: measured, 74.3% of
+                // a real Arabic corpus on one query, against 6.9% for Greek
+                // through the same code. Han is not flagged, because there a
+                // character is a morpheme.
+                let is_ngram = c.ngram.get(ti).copied().unwrap_or(false);
+                // A token fills at most one query-term slot, and an *exact*
+                // match outranks a fuzzy one wherever the two compete.
+                // Taking the first match of either kind let an earlier fuzzy
+                // term steal a token that exactly equals a later one: for
+                // query `دفتر دفاتر`, a document saying `دفاتر` scored as
+                // evidence for `دفتر` while `دفاتر` — literally present —
+                // kept df = 0 and therefore maximal IDF for a term that
+                // occurs. The document was scored as if it contained a
+                // different word.
+                if !is_ngram {
+                    if let Some(j) = qterms.iter().position(|q| q == tok) {
+                        tf_i[j] += 1;
+                        continue;
+                    }
+                }
+                // Checked before the general fuzzy scan so containment lands
+                // in its own channel rather than being absorbed as
+                // approximate.
+                if let Some(j) = qterms.iter().position(|q| morph_relation(q, tok, lang)) {
+                    morph_i[j] = 1;
                     continue;
                 }
-            }
-            // Checked before the general fuzzy scan so containment lands in
-            // its own channel rather than being absorbed as approximate.
-            if let Some(j) = qterms.iter().position(|q| morph_relation(q, tok, lang)) {
-                tf_morph[i][j] = 1;
-                continue;
-            }
-            // A bigram meeting the same bigram is the weakest evidence there
-            // is — real, but the same grade that makes كريم (a name) surface
-            // كرم (generosity) at rank 1. It ranks; it does not admit.
-            if is_ngram {
-                if let Some(j) = qterms.iter().position(|q| q == tok) {
-                    tf_approx[i][j] = 1;
-                    continue;
+                // A bigram meeting the same bigram is the weakest evidence
+                // there is — real, but the same grade that makes كريم (a
+                // name) surface كرم (generosity) at rank 1. It ranks; it
+                // does not admit.
+                if is_ngram {
+                    if let Some(j) = qterms.iter().position(|q| q == tok) {
+                        approx_i[j] = 1;
+                        continue;
+                    }
+                }
+                if let Some(j) = qterms.iter().position(|q| fuzzy_eq(q, tok)) {
+                    // Capped at one per slot. Uncapped, a drawer saying
+                    // `document documents documented documenting` reaches
+                    // tf = 4 on a query for `documentation` while a drawer
+                    // that says `documentation` once reaches tf = 1 — the
+                    // approximate channel would outscore the exact one.
+                    approx_i[j] = 1;
                 }
             }
-            if let Some(j) = qterms.iter().position(|q| fuzzy_eq(q, tok)) {
-                // Capped at one per slot. Uncapped, a drawer saying
-                // `document documents documented documenting` reaches tf = 4
-                // on a query for `documentation` while a drawer that says
-                // `documentation` once reaches tf = 1 — the approximate
-                // channel would outscore the exact one.
-                tf_approx[i][j] = 1;
-            }
-        }
+            // Content units, not emitted tokens: a segmented run expands
+            // into unigrams plus bigrams, and charging that to document
+            // length would penalise precisely the drawers segmentation
+            // exists to reach.
+            (tf_i, approx_i, morph_i, c.units)
+        })
+        .collect();
+    let mut tf = Vec::with_capacity(n);
+    let mut tf_approx = Vec::with_capacity(n);
+    let mut tf_morph = Vec::with_capacity(n);
+    let mut lengths = Vec::with_capacity(n);
+    for (tf_i, approx_i, morph_i, units) in per_doc {
+        tf.push(tf_i);
+        tf_approx.push(approx_i);
+        tf_morph.push(morph_i);
+        lengths.push(units);
     }
     let avgdl = (lengths.iter().sum::<f32>() / n as f32).max(1.0);
     let mut idf = vec![0f32; qterms.len()];
