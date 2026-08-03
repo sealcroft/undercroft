@@ -759,7 +759,12 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   global training sample — within-quota corpora byte-identical, soft
   refill never shrinks the sample, deliberately inert below the sampling
   threshold where the per-wing codebook tier is the isolation instead;
-  per-WING only, per-writer caps await admission-phase provenance.
+  per-WING (adversarial bound) plus per-AGENT-CLAIM (accident bound,
+  2026-08-03): a runaway agent flooding across several wings is capped
+  by its `meta.agent` claim on the same quota; claim-less rows are
+  deliberately exempt (no claims must not mean one giant pseudo-agent),
+  and since a claim is the writer's own statement the wing grouping
+  remains the security claim.
   **Which** rows train is a **stratified keyed** draw, never a stride:
   `pqidx::stratified_keyed` takes one row per equal block of insertion order,
   chosen by `Vault::sample_rank` (a fourth HKDF subkey, label `sample`,

@@ -485,16 +485,17 @@ impl PalaceStore {
             return Ok(());
         }
         // Keyed draw, not an even stride over insertion order — see
-        // `pqidx::stratified_keyed` — and per-wing-capped like the PQ
-        // codebook's: the density channel is the same on this tier.
-        let wing_of = self.wing_by_drawer_id()?;
+        // `pqidx::stratified_keyed` — and capped per wing + per agent
+        // claim like the PQ codebook's: the density channel is the same
+        // on this tier.
+        let source_of = self.source_by_drawer_id()?;
         let sample: Vec<Vec<f32>> = self
             .keyed_sample_capped(
                 CODEBOOK_FDE,
                 &raw,
                 FDE_PQ_SAMPLE,
                 |(id, _)| id.as_bytes().to_vec(),
-                |(id, _)| wing_of.get(id.as_str()).cloned().unwrap_or_default(),
+                |(id, _)| source_of.get(id.as_str()).cloned().unwrap_or_default(),
             )
             .into_iter()
             .map(|i| raw[i].1.clone())
@@ -642,14 +643,14 @@ impl PalaceStore {
                 }
             }
         }
-        let wing_of_seq = self.wing_by_seq()?;
+        let source_of_seq = self.source_by_seq()?;
         let sample: Vec<Vec<f32>> = self
             .keyed_sample_capped(
                 CODEBOOK_FDE_IVF,
                 &rows,
                 FDE_PQ_SAMPLE,
                 |(seq, _, _)| seq.to_le_bytes().to_vec(),
-                |(seq, _, _)| wing_of_seq.get(seq).cloned().unwrap_or_default(),
+                |(seq, _, _)| source_of_seq.get(seq).cloned().unwrap_or_default(),
             )
             .into_iter()
             .map(|i| rows[i].2.clone())

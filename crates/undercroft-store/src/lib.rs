@@ -7603,7 +7603,7 @@ mod tests {
                 items,
                 want,
                 |(seq, _)| seq.to_le_bytes().to_vec(),
-                |(_, w)| w.clone(),
+                |(_, w)| (w.clone(), None),
             )
         };
         let uncapped = |s: &PalaceStore, items: &[(i64, String)]| {
@@ -7655,6 +7655,94 @@ mod tests {
         // `off` restores the uncapped draw exactly.
         s.train_source_cap = usize::MAX;
         assert_eq!(draw(&s, &flood), uncapped(&s, &flood));
+    }
+
+    /// The ACCIDENT bound on the same draw: one runaway agent flooding
+    /// across several wings — each wing individually within its quota —
+    /// is capped by its agent CLAIM; a claim-less corpus keeps the
+    /// wing-only draw index for index (no claims must never mean "one
+    /// giant pseudo-agent"); and within-quota claims are a no-op. The
+    /// claim is the writer's own statement, so this bounds accidents,
+    /// never adversaries — the wing grouping stays the security claim.
+    #[test]
+    fn the_training_draw_caps_a_runaway_agents_claimed_share() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        type Row = (i64, String, Option<String>);
+        let want = 100usize;
+        let draw = |s: &PalaceStore, items: &[Row]| {
+            s.keyed_sample_capped(
+                "test-agent-cap",
+                items,
+                want,
+                |(seq, _, _)| seq.to_le_bytes().to_vec(),
+                |(_, w, a)| (w.clone(), a.clone()),
+            )
+        };
+
+        // A runaway agent spread evenly over eight wings: every WING sits
+        // inside its quota (12.5 expected vs 25), so the wing grouping
+        // alone would admit the flood — the agent grouping is what cuts
+        // its combined share to the quota.
+        let runaway: Vec<Row> = (0..400)
+            .map(|i| {
+                let agent = if i % 10 < 8 {
+                    Some("runaway".to_string())
+                } else {
+                    Some(format!("calm-{}", i % 4))
+                };
+                (i as i64, format!("wing-{}", i % 8), agent)
+            })
+            .collect();
+        let picked = draw(&s, &runaway);
+        assert_eq!(picked.len(), want, "the sample never shrinks");
+        let runaway_share = picked
+            .iter()
+            .filter(|&&i| runaway[i].2.as_deref() == Some("runaway"))
+            .count();
+        assert!(
+            runaway_share < want / 2,
+            "the runaway agent still owns {runaway_share} of {want}"
+        );
+        assert_eq!(picked, draw(&s, &runaway), "deterministic");
+
+        // The same rows with NO claims: byte-identical to the wing-only
+        // draw — absence of provenance is not a group.
+        let unclaimed: Vec<Row> = runaway
+            .iter()
+            .map(|(seq, w, _)| (*seq, w.clone(), None))
+            .collect();
+        let wing_only = s.keyed_sample_capped(
+            "test-agent-cap",
+            &unclaimed,
+            want,
+            |(seq, _, _)| seq.to_le_bytes().to_vec(),
+            |(_, w, _)| (w.clone(), None),
+        );
+        assert_eq!(draw(&s, &unclaimed), wing_only);
+
+        // Balanced claims within quota: exactly the uncapped draw.
+        let balanced: Vec<Row> = (0..400)
+            .map(|i| {
+                (
+                    i as i64,
+                    format!("wing-{}", i % 8),
+                    Some(format!("agent-{}", i % 8)),
+                )
+            })
+            .collect();
+        let uncapped = s.keyed_sample("test-agent-cap", &balanced, want, |(seq, _, _)| {
+            seq.to_le_bytes().to_vec()
+        });
+        assert_eq!(draw(&s, &balanced), uncapped);
+
+        // `off` restores the uncapped draw under any skew.
+        s.train_source_cap = usize::MAX;
+        assert_eq!(
+            draw(&s, &runaway),
+            s.keyed_sample("test-agent-cap", &runaway, want, |(seq, _, _)| {
+                seq.to_le_bytes().to_vec()
+            })
+        );
     }
 
     /// C3.3: a deployment-assigned trust floor is a candidate-set decision
