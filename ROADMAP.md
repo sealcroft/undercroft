@@ -1383,13 +1383,15 @@ release with the usual battery + measured gates.
   pinned starvation-free by a raw-premise test: a quarantined wing
   owning the corpus top-k cannot crowd out a standard wing's answer.
   This is the enforcement substrate the quarantine wing below plugs
-  into. **The per-source cap (the density channel on codebook
-  training) is designed and deliberately gated**: capping any wing's
-  share of the global training draw changes which rows train, and the
-  even-stride lesson (R@5 83.0% from a sampling pattern interaction)
-  is the standing warning — it ships only in its own unit behind a
-  `synth`/`pqscale` gate (R@5 held at every checkpoint, `fit_report`
-  clean) plus negative controls, never as a rider.
+  into. **The per-source cap SHIPPED (2026-08-03) behind its gate**:
+  `keyed_sample_capped` bounds any wing at `1/UNDERCROFT_TRAIN_SOURCE_CAP`
+  (default 4) of every global training draw (PQ codebook/IVF, FDE
+  codebook/IVF), within-quota corpora byte-identical, soft refill never
+  shrinks the sample, below-sampling-threshold deliberately inert
+  (per-wing codebooks are that regime's isolation). Gates met before
+  default-on: synth 16384 periodic shape 100.0/100.0, wingscale 16-wing
+  scoped+unscoped 100.0% both floors. Per-writer caps still need
+  admission-phase provenance.
   Remaining phases below. First-mover answer to the documented
   memory-poisoning attack class
   (MINJA, AgentPoison, forged-reasoning): screen memory **at ingest**,

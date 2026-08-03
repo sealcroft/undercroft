@@ -758,6 +758,12 @@ pub struct PalaceStore {
     /// the fixed map compressed (the xlingual mixed-corpus finding). See
     /// [`Embedder::semantic_floor`].
     sem_floor: f32,
+    /// Per-source (wing) cap divisor on global codebook training draws
+    /// (`UNDERCROFT_TRAIN_SOURCE_CAP`, default 4 = no wing supplies more
+    /// than a quarter of a training sample while others can fill it;
+    /// `off` = the uncapped draw). The density channel of the coupling
+    /// rule, closed at the draw — see `pqidx::keyed_sample_capped`.
+    train_source_cap: usize,
     /// `Some(dim)` when this vault's embeddings are supplied by the caller
     /// (embedder identity `external:<name>@<dim>`): writes must carry a
     /// vector of exactly `dim`, and the store never computes an embedding.
@@ -1337,6 +1343,17 @@ impl PalaceStore {
                 std::env::var("UNDERCROFT_TRUST_FLOOR").ok().as_deref(),
             ),
             sem_floor,
+            train_source_cap: match std::env::var("UNDERCROFT_TRAIN_SOURCE_CAP") {
+                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
+                Ok(v) => v.parse().ok().filter(|&d| d >= 2).unwrap_or_else(|| {
+                    undercroft_obs::diag_warn!(
+                        "UNDERCROFT_TRAIN_SOURCE_CAP={v:?} is not an integer >= 2 or 'off'; \
+                         using 4"
+                    );
+                    4
+                }),
+                Err(_) => 4,
+            },
             external_dim,
             hnsw_enabled: false,
             #[cfg(feature = "hnsw")]
@@ -7105,6 +7122,79 @@ mod tests {
         s.upsert(&target).unwrap();
         s.set_pq(true);
         (dir, s, target.id)
+    }
+
+    /// C3.3's density channel, closed at the training draw and pinned from
+    /// three sides: a balanced corpus draws EXACTLY the uncapped sample
+    /// (byte-identical codebooks for every honest vault); a flooding wing
+    /// is truncated to its quota with the freed slots refilled from the
+    /// quiet wings; and when the quiet wings run dry the cap softens
+    /// rather than shrink the sample. `off` restores the uncapped draw.
+    #[test]
+    fn the_training_draw_caps_a_flooding_wings_share() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let synth = |n: usize, wing_of: &dyn Fn(usize) -> String| -> Vec<(i64, String)> {
+            (0..n).map(|i| (i as i64, wing_of(i))).collect()
+        };
+        let want = 100usize;
+        let draw = |s: &PalaceStore, items: &[(i64, String)]| {
+            s.keyed_sample_capped(
+                "test-cap",
+                items,
+                want,
+                |(seq, _)| seq.to_le_bytes().to_vec(),
+                |(_, w)| w.clone(),
+            )
+        };
+        let uncapped = |s: &PalaceStore, items: &[(i64, String)]| {
+            s.keyed_sample("test-cap", items, want, |(seq, _)| {
+                seq.to_le_bytes().to_vec()
+            })
+        };
+
+        // Balanced: eight wings, every wing comfortably inside its quota
+        // (expected share 12.5 against a 25 quota) — the capped draw IS
+        // the uncapped draw, index for index. (With wings == divisor the
+        // quota sits exactly at the expected share and keyed variation
+        // crosses it — the no-op claim is "within quota", not "equal
+        // wings", and the doc on `keyed_sample_capped` says so.)
+        let balanced = synth(400, &|i| format!("wing-{}", i % 8));
+        assert_eq!(draw(&s, &balanced), uncapped(&s, &balanced));
+
+        // Flood: one wing owns 85% of the corpus. Its share of the sample
+        // is cut to the quota (want/4 = 25) and the quiet wings fill the
+        // rest — up to everything they have.
+        let flood = synth(400, &|i| {
+            if i % 10 < 2 {
+                format!("quiet-{}", i % 3)
+            } else {
+                "flood".to_string()
+            }
+        });
+        let picked = draw(&s, &flood);
+        assert_eq!(picked.len(), want, "the sample never shrinks");
+        let flood_share = picked.iter().filter(|&&i| flood[i].1 == "flood").count();
+        // 80 quiet rows exist in total; they fill 75 of the freed slots,
+        // and the cap then SOFTENS for the remainder rather than starve
+        // the sample: 25 (quota) is the hard part of the bound.
+        assert!(
+            flood_share < want / 2,
+            "the flooding wing still owns {flood_share} of {want}"
+        );
+        let quiet_share = picked.len() - flood_share;
+        assert_eq!(
+            quiet_share,
+            picked
+                .iter()
+                .filter(|&&i| flood[i].1.starts_with("quiet"))
+                .count()
+        );
+        // Deterministic: the same draw twice.
+        assert_eq!(picked, draw(&s, &flood));
+
+        // `off` restores the uncapped draw exactly.
+        s.train_source_cap = usize::MAX;
+        assert_eq!(draw(&s, &flood), uncapped(&s, &flood));
     }
 
     /// C3.3: a deployment-assigned trust floor is a candidate-set decision
