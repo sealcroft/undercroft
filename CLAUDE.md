@@ -416,7 +416,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 66
+  which inlines them and documents every layer plus all 67
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -700,9 +700,15 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   all — so that normalization is a security property, not only a
   distance-ordering one. It is **not** a small displacement bound (every
   centroid is a mean of in-ball points, so "at most the diameter" bounds
-  nothing), and two channels stay open: **density** (owning fraction *f* buys
-  ≈*f* of any uniform sample — a per-source cap's job) and a **NaN/Inf**
-  vector from an `external:` embedder, which escapes it entirely.
+  nothing), and one channel stays open: a **NaN/Inf**
+  vector from an `external:` embedder, which escapes it entirely. The
+  **density** channel (owning fraction *f* bought ≈*f* of any uniform
+  sample) is CLOSED at the draw (2026-08-03): `keyed_sample_capped`
+  bounds any wing at `1/UNDERCROFT_TRAIN_SOURCE_CAP` (default 4) of every
+  global training sample — within-quota corpora byte-identical, soft
+  refill never shrinks the sample, deliberately inert below the sampling
+  threshold where the per-wing codebook tier is the isolation instead;
+  per-WING only, per-writer caps await admission-phase provenance.
   **Which** rows train is a **stratified keyed** draw, never a stride:
   `pqidx::stratified_keyed` takes one row per equal block of insertion order,
   chosen by `Vault::sample_rank` (a fourth HKDF subkey, label `sample`,

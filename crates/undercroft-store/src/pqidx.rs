@@ -1066,6 +1066,123 @@ impl PalaceStore {
         })
     }
 
+    /// Wing attribution maps for the capped draws whose row sets don't
+    /// carry the wing themselves (the FDE tier's).
+    pub(crate) fn wing_by_drawer_id(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT id, wing FROM drawers")?;
+        let map = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(map)
+    }
+
+    pub(crate) fn wing_by_seq(&self) -> Result<std::collections::HashMap<i64, String>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT seq, wing FROM drawers")?;
+        let map = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(map)
+    }
+
+    /// [`Self::keyed_sample`] with a SOFT per-source cap — C3.3's density
+    /// channel closed at the training draw: owning fraction *f* of a
+    /// corpus used to buy ≈*f* of any uniform sample, so a bulk writer
+    /// could shape the codebook that scores every other wing. Now no
+    /// single source (wing — the isolation unit) supplies more than
+    /// `want / cap_div` of the sample while other sources can fill the
+    /// remainder.
+    ///
+    /// Mechanics, chosen for two properties that are pinned by test:
+    /// - **Every wing within quota ⇒ EXACTLY the uncapped draw.** The
+    ///   base draw is [`stratified_keyed`] unchanged; the cap only
+    ///   truncates a wing that exceeded its quota (dropping its
+    ///   highest-ranked picks) and refills from unpicked rows of
+    ///   uncapped wings in keyed-rank order. A single-wing vault is
+    ///   always a no-op (quota = the whole sample), and a corpus whose
+    ///   wings sit inside their quotas keeps byte-identical codebooks.
+    /// - **Soft, never starving.** When honest wings cannot fill the
+    ///   freed slots (a two-wing 95/5 vault), the capped wing's own next
+    ///   rows refill last — the sample never shrinks, because a smaller
+    ///   training sample is a quality cost every wing pays.
+    ///
+    /// The cap bounds per-WING density only. A writer who can spread
+    /// across many wings is bounded by wing assignment (the deployment's
+    /// trust zones), not by this — and per-writer caps need the drawer
+    /// provenance C3.3's admission phase records. Stated, not hidden.
+    pub(crate) fn keyed_sample_capped<T>(
+        &self,
+        label: &str,
+        items: &[T],
+        want: usize,
+        ident: impl Fn(&T) -> Vec<u8>,
+        source: impl Fn(&T) -> String,
+    ) -> Vec<usize> {
+        let base = self.keyed_sample(label, items, want, &ident);
+        let cap_div = self.train_source_cap;
+        if cap_div == usize::MAX || base.len() < 2 {
+            return base;
+        }
+        // The whole corpus fits the sample: there is no DRAW to bias, and
+        // truncating would shrink the training set with nothing left to
+        // refill from. The cap bounds the sampling channel; below the
+        // sampling threshold a flooding wing's k-means mass is bounded by
+        // the per-wing codebook isolation instead (its own tier), not
+        // here — recorded, not hidden.
+        if base.len() >= items.len() {
+            return base;
+        }
+        let sources: std::collections::HashSet<String> = items.iter().map(&source).collect();
+        // Fewer sources than the divisor: quota is an even split — with
+        // one source the quota is the whole sample and the cap is a no-op.
+        let cap = want.div_ceil(cap_div.min(sources.len().max(1)));
+        let mut per: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for &i in &base {
+            *per.entry(source(&items[i])).or_default() += 1;
+        }
+        if per.values().all(|&n| n <= cap) {
+            return base;
+        }
+        let rank = |i: usize| self.vault.sample_rank(label, &ident(&items[i]));
+        // Keep each wing's cap lowest-ranked picks; drop the excess.
+        let mut by_rank: Vec<usize> = base.clone();
+        by_rank.sort_by_key(|&i| rank(i));
+        let mut kept: Vec<usize> = Vec::with_capacity(base.len());
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for &i in &by_rank {
+            let c = counts.entry(source(&items[i])).or_default();
+            if *c < cap {
+                *c += 1;
+                kept.push(i);
+            }
+        }
+        // Refill the freed slots from unpicked rows, keyed-rank order,
+        // respecting the cap first and softening it only when nothing
+        // else remains.
+        let picked: std::collections::HashSet<usize> = base.iter().copied().collect();
+        let mut rest: Vec<usize> = (0..items.len()).filter(|i| !picked.contains(i)).collect();
+        rest.sort_by_key(|&i| rank(i));
+        let mut in_kept: std::collections::HashSet<usize> = kept.iter().copied().collect();
+        for pass_soft in [false, true] {
+            for &i in &rest {
+                if kept.len() >= base.len() {
+                    break;
+                }
+                if in_kept.contains(&i) {
+                    continue;
+                }
+                let c = counts.entry(source(&items[i])).or_default();
+                if *c < cap || pass_soft {
+                    *c += 1;
+                    in_kept.insert(i);
+                    kept.push(i);
+                }
+            }
+        }
+        kept
+    }
+
     /// Fill the RAM cache from the persisted IVF centroids, if any.
     fn ivf_load(&self) -> Result<(), StoreError> {
         let stored = self.pq_meta_get("ivf")?;
@@ -1081,15 +1198,15 @@ impl PalaceStore {
     fn pq_build(&self) -> Result<bool, StoreError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT seq, id, embedding FROM drawers")?;
-        let rows: Vec<(i64, String, Vec<u8>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .prepare("SELECT seq, id, embedding, wing FROM drawers")?;
+        let rows: Vec<(i64, String, Vec<u8>, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<_, _>>()?;
         if rows.is_empty() {
             return Ok(false);
         }
         let mut items = Vec::with_capacity(rows.len());
-        for (seq, id, rest) in rows {
+        for (seq, id, rest, wing) in rows {
             let emb =
                 self.vault
                     .embedding_from_rest(&id, &rest)
@@ -1097,7 +1214,7 @@ impl PalaceStore {
                         id: id.clone(),
                         reason: e.to_string(),
                     })?;
-            items.push((seq, emb));
+            items.push((seq, emb, wing));
         }
 
         let stored = self.pq_meta_get("codebook")?;
@@ -1114,11 +1231,17 @@ impl PalaceStore {
                 else {
                     return Ok(false);
                 };
-                // Train on a keyed sample; codebooks tolerate sampling well.
+                // Train on a keyed sample — per-wing-capped, so a bulk
+                // writer's density buys at most a bounded share of the
+                // codebook. Codebooks tolerate sampling well.
                 let sample: Vec<Vec<f32>> = self
-                    .keyed_sample(CODEBOOK_PQ, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
-                        seq.to_le_bytes().to_vec()
-                    })
+                    .keyed_sample_capped(
+                        CODEBOOK_PQ,
+                        &items,
+                        PQ_TRAIN_SAMPLE,
+                        |(seq, _, _)| seq.to_le_bytes().to_vec(),
+                        |(_, _, wing)| wing.clone(),
+                    )
                     .into_iter()
                     .map(|i| items[i].1.clone())
                     .collect();
@@ -1130,8 +1253,12 @@ impl PalaceStore {
                 // Only meaningful when a sample was actually drawn: below the
                 // cap the sample *is* the corpus and the probe is inside it.
                 if items.len() > PQ_TRAIN_SAMPLE {
+                    // The probe stays UNCAPPED on purpose: it represents
+                    // the corpus as it is, so a capped sample facing a
+                    // heavily skewed corpus can legitimately warn — that
+                    // skew being visible is information, not noise.
                     let probe: Vec<Vec<f32>> = self
-                        .keyed_sample("pq-fit-probe", &items, PQ_FIT_PROBE, |(seq, _)| {
+                        .keyed_sample("pq-fit-probe", &items, PQ_FIT_PROBE, |(seq, _, _)| {
                             seq.to_le_bytes().to_vec()
                         })
                         .into_iter()
@@ -1163,9 +1290,13 @@ impl PalaceStore {
                 // A separate label from the codebook's: two independent draws
                 // rather than the identical stride both used to take.
                 let sample: Vec<Vec<f32>> = self
-                    .keyed_sample(CODEBOOK_PQ_IVF, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
-                        seq.to_le_bytes().to_vec()
-                    })
+                    .keyed_sample_capped(
+                        CODEBOOK_PQ_IVF,
+                        &items,
+                        PQ_TRAIN_SAMPLE,
+                        |(seq, _, _)| seq.to_le_bytes().to_vec(),
+                        |(_, _, wing)| wing.clone(),
+                    )
                     .into_iter()
                     .map(|i| items[i].1.clone())
                     .collect();
@@ -1227,7 +1358,7 @@ impl PalaceStore {
             let cq = ivf_ref.as_ref();
             items
                 .par_iter()
-                .map(|(seq, vec)| {
+                .map(|(seq, vec, _)| {
                     let list: i64 = cq.map_or(-1, |c| c.assign(vec) as i64);
                     (*seq, list, pq.encode(vec))
                 })

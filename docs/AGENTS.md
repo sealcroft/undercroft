@@ -607,6 +607,10 @@ minimum wing trust, `quarantined`|`standard`|`trusted`: unscoped searches
 exclude wings the operator assigned below it, resolved before candidates
 are drawn; an explicitly named wing scope bypasses the vault floor,
 a request's own `min_trust` never is; garbage warns and stays off) ·
+`UNDERCROFT_TRAIN_SOURCE_CAP` (4 — per-wing cap divisor on global
+codebook training draws: no single wing supplies more than 1/N of a
+training sample while others can fill it; within-quota corpora draw
+byte-identical samples; `off` = uncapped) ·
 `UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
 `UNDERCROFT_SEMANTIC_GATE` (the embedder's own calibration; a number in
 `0.0..=1.0` declares the `semantic` score above which a drawer is admitted

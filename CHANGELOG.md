@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — the density channel closes at the training draw: a per-source cap, gated and measured
+
+- **`keyed_sample_capped` — C3.3's density channel bounded where it
+  lives.** Owning fraction *f* of a corpus bought ≈*f* of any uniform
+  training sample, so a bulk writer could shape the global codebook that
+  scores every other wing (the invariant's own open channel, recorded
+  since the coupling rule was written). The global PQ codebook, PQ IVF,
+  FDE codebook and FDE IVF draws now cap any single wing's share at
+  `1/UNDERCROFT_TRAIN_SOURCE_CAP` of the sample (default 4; `off` =
+  uncapped; 67th env var), with three properties pinned by test:
+  - **Within-quota corpora draw EXACTLY the uncapped sample** — the base
+    draw is the keyed stratified draw unchanged, so a single-wing vault
+    and every balanced vault keep byte-identical codebooks;
+  - **over-quota wings are truncated by keyed rank and the freed slots
+    refill from unpicked rows of quieter wings**, softening (never
+    shrinking the sample) when the quiet wings run dry;
+  - **below the sampling threshold the cap deliberately does nothing** —
+    there is no draw to bias when the whole corpus trains, and a
+    flooding wing's k-means mass there is the per-wing codebook tier's
+    problem (its own isolation unit), stated rather than hidden. The
+    fit-report probe stays uncapped on purpose: a capped sample facing a
+    heavily skewed corpus SHOULD warn, and that skew being visible is
+    information.
+- **Honest boundary**: the cap bounds per-WING density. A writer who can
+  spread across many wings is bounded by wing assignment (the
+  deployment's trust zones, phase 1) — per-writer caps need the drawer
+  provenance C3.3's admission phase will record.
+- **Gates run before shipping default-on** (the even-stride lesson — a
+  sampling change once cost R@5 83.0% silently — is why this unit
+  existed separately at all): `synth --n 16384` (the periodic
+  stride-lesson shape) R@1/R@5 **100.0/100.0%**; `wingscale` (16 wings ×
+  1024, sealed, floors default and `off`) scoped AND unscoped R@5
+  **100.0%** at every arm — the multi-wing no-op path exercised
+  end-to-end through a real codebook build. Draw-level engagement
+  (flood truncation, soft refill, `off`, determinism) is pinned by unit
+  test rather than by instrument: no shipped instrument builds a skewed
+  corpus yet, and building one to flatter the cap would be
+  instrument-fitting — recorded as the next instrument if the cap's
+  effect ever needs a recall number beside it.
+
 ## Unreleased — the semantic map is calibrated to the embedder, and the crowding defect closes
 
 - **The xlingual-filed defect (mixed-corpus cross-lingual collapse) is
