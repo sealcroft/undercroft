@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — time gets a policy and denial gets a receipt (C3.2 phase 2)
+
+- **Retention policies per wing/room** (`retention.rs`): the operator
+  declares how long a wing — or one room in it — keeps drawers
+  (`undercroft retention set|clear|list`, `/v1` GET/POST `…/retention`),
+  on the wing-trust pattern exactly: operator surfaces only (never MCP —
+  an agent must not shorten the life of the memory it writes or reads),
+  validated, HMAC-tagged, chain-audited; **a flipped `max_age_days` is an
+  integrity failure for the list AND the sweep** — a tampered lifespan
+  never quietly drives a destruction. The quarantine wing is refused: its
+  residents are pending review, and the doors out are the admission
+  rulings, not an age.
+- **Enforcement is an explicit act, never a side effect**: nothing is
+  destroyed at open, on a timer, or during a write. `undercroft retention
+  sweep [--dry-run] [--out] [--sign]` / `POST …/retention/sweep`
+  destroys what aged out **through `forget_with_proof`**, so every
+  retention destruction carries the same chain-attested receipt as a
+  GDPR erasure; overlapping policies destroy a drawer once; dry runs and
+  empty sweeps refuse to mint an attestation for no destruction.
+- **The retention clock is the HMAC-covered `meta.filed_at`, never the
+  clear-text column**: the sweep hydrates and tag-verifies every drawer
+  in scope before dating it (an operator-command price, paid on purpose),
+  so an offline flip of the unprotected `filed_at` column can neither
+  launder a deletion through a legitimate keyed sweep nor hide a drawer
+  from its declared retention. An unparseable covered date is a corrupt
+  row and fails the sweep loudly — never destroyed undated, never
+  skipped silently.
+- **`admission deny` now hands back the receipt** (the C3.2 phase-1
+  remainder): the ruling is recorded, then the content is destroyed
+  through the attested-forgetting path — the attested interval holds
+  exactly the denied drawer's tombstone. CLI `admission deny` gains
+  `--out`/`--sign`; the `/v1` deny response carries the attestation
+  (unsigned, like `/forget` — signing identities are operator files).
+- Pinned end to end: the retention lifecycle test (declare → dry-run →
+  sweep-with-verified-receipt → overlap-once → empty-sweep-refuses →
+  clear → flipped-row-fails-both-doors) and the strengthened admission
+  test (the deny receipt verifies and names the denied drawer). e2e
+  grows 181 → **194** (deny receipt + retention CLI + `/v1` retention
+  routes). Schema gains `retention_policy` (inventoried not-per-drawer).
+
 ## Unreleased — the cross-lingual claim gets a citable corpus, and an honest one: FLORES-200
 
 - **The session-24 xlingual result replicates on a public corpus** —

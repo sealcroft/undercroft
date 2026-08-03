@@ -344,11 +344,21 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   saves sealed into the reserved `quarantine-pending` wing, hard-excluded
   from retrieval except the reviewer's own scope; allow/deny chain-audited
   with the verdict inside the ruling tag; operator surfaces only, never
-  MCP; default off = byte-identical write contract),
+  MCP; default off = byte-identical write contract; **deny is receipted**
+  — it destroys through `forget_with_proof` and hands back the
+  attestation),
   provable forgetting (forget.rs — C3.2 phase 1: `forget`/
   `verify-forgetting`, chain-attested destruction with heads + tombstone
   interval + unkeyed content fps; vault-verifiable by keyed replay, third
   parties verify the operator's Ed25519 signature),
+  retention policies (retention.rs — C3.2 phase 2: per wing/room on the
+  wing-trust pattern, operator-only + HMAC-tagged + audited, flip fails
+  list AND sweep; enforcement is an **explicit sweep** through
+  `forget_with_proof` — receipt per sweep, nothing automatic, quarantine
+  wing refused; the clock is the HMAC-covered `meta.filed_at`,
+  tag-verified per drawer, never the clear column — a flipped column can
+  neither launder a deletion through a keyed sweep nor hide a drawer
+  from its declared retention),
   management surface (manage.rs — incl. **deployment-assigned wing trust**:
   `TRUST_VOCAB` closed vocabulary assigned by the operator only, never over
   MCP; HMAC-tagged + audited, flip = integrity failure; consumed as a
@@ -499,7 +509,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (499)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (181 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (194 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

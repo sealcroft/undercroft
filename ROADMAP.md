@@ -1380,18 +1380,26 @@ release with the usual battery + measured gates.
   drawer. Their pitch (smart memory) becomes our subset; our pitch
   (provable memory) stays exclusive. *Gate*: LoCoMo/LongMemEval with
   the distillation tier on must beat our retrieval-only baseline.
-- **C3.2 Provable forgetting — phase 1 BUILT (2026-08-03).**
-  `undercroft forget` destroys named drawers through the chain and
-  emits a `ForgetAttestation` (ids + unkeyed content fps, heads
+- **C3.2 Provable forgetting — phases 1 AND 2 BUILT (2026-08-03).**
+  Phase 1: `undercroft forget` destroys named drawers through the chain
+  and emits a `ForgetAttestation` (ids + unkeyed content fps, heads
   before/after, the exact tombstone interval; optional Ed25519
   signature); `verify-forgetting` replays with the key in hand and
   refuses every forgery shape (pinned five ways). Honest boundary:
   third parties verify the operator's SIGNATURE, not the replay — the
   chain step is keyed, and an unkeyed public chain is its own design
-  decision, not a rider. Remaining: retention policies per wing/room;
-  admission-deny riding this path for a receipted deny. GDPR/RTBF
-  with a receipt. Extraction-based systems cannot know what their
-  LLM absorbed where — this feature is unreachable for them.
+  decision, not a rider. **Phase 2 (same day): retention policies per
+  wing/room** — declared on the wing-trust pattern (operator-only,
+  HMAC-tagged, chain-audited, flip fails list AND sweep), enforced only
+  by an explicit sweep that destroys through `forget_with_proof` (a
+  receipt per sweep; nothing automatic at open or on a timer; the
+  quarantine wing refused; the clock is the HMAC-covered
+  `meta.filed_at`, tag-verified per drawer before any destruction) —
+  **and the receipted deny**: `admission deny` rides the same path and
+  hands back the attestation. GDPR/RTBF with a receipt, now including
+  retention-driven and review-driven destruction. Extraction-based
+  systems cannot know what their LLM absorbed where — this feature is
+  unreachable for them.
 - **C3.3 Memory-poisoning defense — write-path admission control.**
   **Phase 1 BUILT (2026-08-03): deployment-assigned wing trust classes**
   — `quarantined|standard|trusted` assigned by the operator (CLI +
@@ -1419,8 +1427,9 @@ release with the usual battery + measured gates.
   wing refuses forged residents, retrieval hard-excludes it except for
   the reviewer's own scope), CLI/`/v1` allow/deny with the verdict
   inside the ruling tag's canonical — never an MCP tool. Recorded
-  gaps: update-path screening, deny-with-receipt (C3.2), the advisory
-  LLM tier. The provenance foundation + posture are BUILT (2026-08-03):
+  gaps: update-path screening and the advisory LLM tier
+  (deny-with-receipt CLOSED 2026-08-03 — deny rides C3.2's
+  `forget_with_proof` and hands back the attestation). The provenance foundation + posture are BUILT (2026-08-03):
   `agent`/`channel`/`session` claims on every save surface
   (HMAC-covered, never trusted) and `UNDERCROFT_ADMIT_TRUSTED_SOURCES`
   keyed on the surface-stamped `added_by` only — a channel CLAIM never

@@ -577,7 +577,10 @@ background facts breaks exactly the multi-hop questions the graph is for.
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
 | POST | `/v1/vaults/{id}/forget` | destroy the named drawers through the audit chain and return the attestation (`{ids}` in; heads + tombstone interval + content fingerprints out, unsigned — sign via CLI `forget --sign`). Verify with CLI `verify-forgetting` |
 | GET | `/v1/vaults/{id}/admission` | drawers awaiting an admission ruling (signal codes + offsets, intended destination) plus whether screening is on |
-| POST | `/v1/vaults/{id}/admission` | rule on a quarantined drawer (`drawer_id`, `verdict` ∈ `allow`\|`deny`; chain-audited). Operator surface, never MCP — an agent whose write was quarantined must not rule on it |
+| POST | `/v1/vaults/{id}/admission` | rule on a quarantined drawer (`drawer_id`, `verdict` ∈ `allow`\|`deny`; chain-audited — a deny destroys through the attested-forgetting path and the response carries the receipt). Operator surface, never MCP — an agent whose write was quarantined must not rule on it |
+| GET | `/v1/vaults/{id}/retention` | every declared retention policy, tag-verified |
+| POST | `/v1/vaults/{id}/retention` | declare (`{wing, room?, days}`) or clear (`{wing, room?, clear: true}`) a retention policy; audited. Operator surface, never MCP — an agent must not shorten the life of the memory it writes or reads |
+| POST | `/v1/vaults/{id}/retention/sweep` | destroy what aged out through the attested-forgetting path (`{dry_run: true}` previews); the response carries the sweep report + receipt. Nothing runs automatically — a sweep happens when the operator asks |
 | POST | `/v1/vaults/{id}/trust` | assign a wing's trust class (`wing`, `trust` ∈ `quarantined`\|`standard`\|`trusted`; 400 if unknown). The receiving principal's declaration — an OPERATOR surface, deliberately absent from MCP; audited, tamper-evident |
 | GET | `/v1/vaults/{id}/trust` | every assigned wing trust class (absent wings read as `standard`) |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
