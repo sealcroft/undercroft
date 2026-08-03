@@ -1942,6 +1942,21 @@ impl PalaceStore {
                 expected: dim,
                 got: vector.len(),
             }),
+            // The one channel that escaped the codebook-poisoning bound:
+            // L2 normalization bounds a training vector's influence only
+            // when the arithmetic is finite — a NaN/Inf component rides
+            // through normalization (NaN/x = NaN, Inf/Inf = NaN) straight
+            // into k-means means and cosine sums, where one poisoned
+            // vector corrupts every centroid it touches. Every internal
+            // embedder produces finite floats by construction; the
+            // caller-supplied path is the only door, and it closes here.
+            Some(_) if vector.iter().any(|x| !x.is_finite()) => Err(StoreError::Invalid(format!(
+                "external vector for {:?} contains a non-finite component \
+                     (NaN or infinity) — refused: non-finite arithmetic escapes \
+                     the normalization bound that keeps one vector from \
+                     corrupting shared index structures",
+                drawer.id
+            ))),
             Some(_) => {
                 let created = self.write_drawer(drawer, vector)?;
                 undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
@@ -6494,6 +6509,35 @@ mod tests {
                 got: 2
             })
         ));
+    }
+
+    /// The last open channel of the codebook-poisoning invariant: L2
+    /// normalization bounds a training vector's influence only when the
+    /// arithmetic is finite — NaN and Inf ride through it into k-means
+    /// means and cosine sums. Every internal embedder is finite by
+    /// construction; the caller-supplied external path was the one door,
+    /// and it refuses at the write.
+    #[test]
+    fn an_external_vector_with_nan_or_inf_is_refused_at_the_door() {
+        let (_d, mut s) = external_store(SecurityLevel::Sealed, 4);
+        let dr = drawer("w", "r", "a note with a hostile vector", 0);
+        for bad in [
+            vec![f32::NAN, 0.0, 0.0, 0.0],
+            vec![0.0, f32::INFINITY, 0.0, 0.0],
+            vec![0.0, 0.0, f32::NEG_INFINITY, 0.0],
+        ] {
+            assert!(
+                matches!(s.upsert_external(&dr, bad), Err(StoreError::Invalid(_))),
+                "a non-finite component must refuse the write"
+            );
+        }
+        assert!(
+            s.get(&dr.id).unwrap().is_none(),
+            "nothing may land behind a refusal"
+        );
+        // Finite vectors are untouched by the gate.
+        s.upsert_external(&dr, vec![0.5, 0.5, 0.5, 0.5]).unwrap();
+        assert!(s.get(&dr.id).unwrap().is_some());
     }
 
     #[test]
