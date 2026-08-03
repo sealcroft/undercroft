@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased — forgetting gets a receipt: chain-attested destruction (C3.2 phase 1)
+## 0.44.0 — Screened at the door, bounded at the draw, forgotten with a receipt
+
+The post-0.43.0 defense-and-calibration program, five merged units, each
+with its full record below. The arcs: the semantic map is calibrated to
+the embedder in hand and the xlingual-filed mixed-corpus crowding defect
+closes at both gates (LoCoMo hash digit-for-digit, R@5 100.0% every pair
+under a declared weight); the density channel closes at the training draw
+behind its own synth/wingscale gates; write-path admission control lands
+with the deterministic tier-1 detector and the quarantine wing (C3.3
+phase 2); provenance claims ride every save surface and key the
+trusted-surface posture on the surface stamp, never the claim; and
+forgetting becomes chain-attested destruction with a verifiable receipt
+(C3.2 phase 1). e2e grows 173 → 181, env vars 66 → 69; the default write
+and search contracts stay byte-identical throughout.
+
+### forgetting gets a receipt: chain-attested destruction (C3.2 phase 1)
 
 - **`undercroft forget <ids> [--out att.json] [--sign key]`** destroys
   the named drawers through the audit chain (the shipped
@@ -33,7 +48,7 @@
   → **181**. GDPR/RTBF with a receipt; retention policies and
   admission-deny-with-receipt build on this in their own units.
 
-## Unreleased — provenance on every drawer, and the posture it makes honest
+### provenance on every drawer, and the posture it makes honest
 
 - **Provenance claims on `DrawerMeta`**: `agent`, `channel`, `session` —
   who wrote it, over what class of origin, in which session — on every
@@ -59,7 +74,7 @@
   identity exists to cap on — still a claim, so a per-AGENT cap bounds
   accidents, not adversaries; the adversarial bound stays per-wing.
 
-## Unreleased — memory is screened at the door: admission control and the quarantine wing (C3.3 phase 2)
+### memory is screened at the door: admission control and the quarantine wing (C3.3 phase 2)
 
 - **The deterministic tier-1 detector** (`undercroft_core::admission`):
   pure functions over candidate bytes screening for the marker classes
@@ -104,7 +119,7 @@
   forged-resident refusal) and the detector's fixture suite; e2e grows
   173 → 179.
 
-## Unreleased — the density channel closes at the training draw: a per-source cap, gated and measured
+### the density channel closes at the training draw: a per-source cap, gated and measured
 
 - **`keyed_sample_capped` — C3.3's density channel bounded where it
   lives.** Owning fraction *f* of a corpus bought ≈*f* of any uniform
@@ -144,7 +159,7 @@
   instrument-fitting — recorded as the next instrument if the cap's
   effect ever needs a recall number beside it.
 
-## Unreleased — the semantic map is calibrated to the embedder, and the crowding defect closes
+### the semantic map is calibrated to the embedder, and the crowding defect closes
 
 - **The xlingual-filed defect (mixed-corpus cross-lingual collapse) is
   CLOSED, both gates met.** Root cause, recorded when filed: the
