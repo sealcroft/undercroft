@@ -1088,19 +1088,20 @@ default because *this* corpus is temporal; conversational heuristics;
   most have never been engaged by any benchmark here — the FTS
   prefilter not at 127 drawers nor at 1271. Both sides ship, so both
   sides are production and both must be measured.
-- **The cosine affine map is calibrated to the hash space** (`(cos+1)/2`
-  in `fuse`): correct where unrelated text sits at cosine ≈ 0, it
-  compresses a served embedder's semantic channel into the top quarter
-  of [0,1] (bge-m3 unrelated ≈ 0.48 raw → 0.74 mapped) while lexical
-  spans the full range — so same-language function-word overlap
-  out-scores cross-lingual translation golds. Measured 2026-08-03 by
-  xlingual: mixed corpus ~0% R@5, foreign-only corpus 88–100% R@1, gate
-  exonerated at 0.05, weight ceiling a partial mitigation only. The
-  same one-constant-for-every-embedder class the per-embedder admission
-  gate closed. Fix = feed the measured per-embedder unrelated floor into
-  the map; a scoring change, gated on a LoCoMo regression run plus the
-  xlingual mixed-corpus recovery. Inert for the default hash vault,
-  whose floor the current map already matches.
+- **The cosine affine map is calibrated to the hash space — CLOSED
+  (2026-08-03, same day filed), both gates met.** Was: `(cos+1)/2`
+  compressed a served embedder's semantic channel into the top quarter
+  of [0,1] and same-language function-word overlap crowded out
+  cross-lingual golds (mixed corpus ~0% R@5). Fixed by
+  `Embedder::semantic_floor` + `calibrated_semantic`: the measured
+  unrelated floor becomes the map's neutral point, hash DECLARES floor 0
+  and takes the shipped expression verbatim (bit-identical default,
+  pinned), the admission gate rides the same calibration. Gates:
+  LoCoMo hash digit-for-digit (69.4 / 81.8); xlingual mixed R@5 0–4% →
+  53–88% at the default weight, and 100.0% every pair (R@1 60–100%)
+  under a deployment-declared `UNDERCROFT_FUSION_WEIGHT=0.70` — the map
+  and the weight compose, and the default weight stays put. Full
+  narrative in CHANGELOG.
 
 ### 1. Inverted FDE tier (BUILT v0.39.0 — measured, shipped OPT-IN)
 

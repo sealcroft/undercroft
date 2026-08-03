@@ -48,6 +48,32 @@ pub trait Embedder {
     fn semantic_admission_gate(&self) -> Option<f32> {
         calibrate_admission_gate(self)
     }
+
+    /// The raw cosine this vector space gives known-unrelated text — the
+    /// zero point the store's cosine→`semantic` map is calibrated against —
+    /// or `None` for a space whose floor is not knowable here (the store
+    /// then keeps the floor-0 map, which is the shipped hash map).
+    ///
+    /// **Why the map needs this and a gate alone is not enough** (found by
+    /// the first real xlingual run): the shipped map `(cos+1)/2` sends
+    /// cosine 0 to `semantic` 0.5 — correct for [`HashEmbedder`], whose
+    /// unrelated floor IS ~0. A served model puts unrelated text near
+    /// cosine 0.5, so its whole semantic range compresses into the top
+    /// quarter of the scale while BM25's lexical channel spans all of it —
+    /// and same-language function-word overlap out-scores a cross-lingual
+    /// translation gold at every fusion weight. The same
+    /// one-constant-for-every-embedder defect class as the gate, one
+    /// channel over. Calibrated, the map sends the measured floor to 0.5
+    /// and 1.0 to 1.0, restoring the channel's dynamic range without
+    /// moving the hash vault by a byte (floor 0 reproduces the shipped map
+    /// exactly).
+    ///
+    /// The default implementation measures the same probe pairs the gate
+    /// uses; a zero-vector probe is an inference failure and refuses, for
+    /// the reasons documented on [`calibrate_admission_gate`].
+    fn semantic_floor(&self) -> Option<f32> {
+        calibrate_semantic_floor(self)
+    }
 }
 
 /// Pairs of texts that share no subject, used to find where a vector space
@@ -138,21 +164,35 @@ const NEUTRAL: f32 = 0.5;
 /// who has measured their own corpus should declare the result rather than
 /// trust this (`UNDERCROFT_SEMANTIC_GATE`).
 pub fn calibrate_admission_gate<E: Embedder + ?Sized>(e: &E) -> Option<f32> {
-    let mut floor = NEUTRAL;
+    // The store's cosine→semantic map is calibrated to this same measured
+    // floor (`semantic_floor`), which by construction lands every measured
+    // embedder's unrelated worst case at NEUTRAL in `semantic` space — so
+    // the gate is simply the margin above neutral, the exact headroom the
+    // hand-derived hash gate always had. Measuring the floor is still what
+    // decides whether a gate exists at all: a zero-vector probe refuses.
+    calibrate_semantic_floor(e).map(|_| (NEUTRAL + ADMISSION_MARGIN).clamp(NEUTRAL, 1.0))
+}
+
+/// Measure the raw cosine an embedder gives its worst known-unrelated
+/// probe pair — the calibration zero for the cosine→`semantic` map.
+/// `None` when any probe embeds to the zero vector (inference failure;
+/// see [`calibrate_admission_gate`]). Clamped short of 1.0 so the map's
+/// denominator can never vanish: a space that puts unrelated text at
+/// cosine ~1 has no usable semantic channel and the clamp keeps the
+/// arithmetic honest while the gate (unclearable at 1.0) says so.
+pub fn calibrate_semantic_floor<E: Embedder + ?Sized>(e: &E) -> Option<f32> {
+    let mut floor = 0.0f32;
     for (a, b) in UNRELATED_PROBES {
         let (va, vb) = (e.embed(a), e.embed(b));
         if va.iter().all(|x| *x == 0.0) || vb.iter().all(|x| *x == 0.0) {
             return None;
         }
-        let semantic = (cosine(&va, &vb) + 1.0) / 2.0;
-        if semantic > floor {
-            floor = semantic;
+        let c = cosine(&va, &vb);
+        if c > floor {
+            floor = c;
         }
     }
-    // Clamped at 1.0, where nothing can ever clear it: a model that puts
-    // unrelated text as close as related text has no usable semantic-only
-    // admission, and saying so is honest.
-    Some((floor + ADMISSION_MARGIN).clamp(NEUTRAL, 1.0))
+    Some(floor.clamp(0.0, 0.98))
 }
 
 #[derive(Debug, Default, Clone)]
@@ -284,6 +324,14 @@ impl Embedder for HashEmbedder {
         Some(HASH_ADMISSION_GATE)
     }
 
+    /// DECLARED zero, not measured: feature hashing over surface forms
+    /// puts texts sharing no token at cosine ~0, and the shipped
+    /// `(cos+1)/2` map IS the floor-0 calibration — declaring it keeps
+    /// the default vault byte-identical and pays no probe embeds at open.
+    fn semantic_floor(&self) -> Option<f32> {
+        Some(0.0)
+    }
+
     fn embed(&self, text: &str) -> Vec<f32> {
         let mut v = vec![0f32; EMBED_DIM];
         for tok in Self::tokens(text) {
@@ -360,6 +408,14 @@ impl Embedder for ExternalEmbedder {
     /// it can narrow admission, never widen it. The remedy is a declaration —
     /// `UNDERCROFT_SEMANTIC_GATE=<measured value>` — not a guess made here.
     fn semantic_admission_gate(&self) -> Option<f32> {
+        None
+    }
+
+    /// `None` for the same reason as the gate: the vectors come from a
+    /// model this process has never seen, so there is no floor to measure
+    /// — the store keeps the floor-0 map and the caller may declare one
+    /// (`UNDERCROFT_SEMANTIC_FLOOR`) from their own measurement.
+    fn semantic_floor(&self) -> Option<f32> {
         None
     }
 }

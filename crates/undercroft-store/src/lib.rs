@@ -321,6 +321,29 @@ fn scoped_keep(hydrate_k: usize, scope_live: usize) -> usize {
         .max(scope_live.min(SCOPE_HYDRATE_FLOOR))
 }
 
+/// Resolve the cosine→`semantic` calibration zero for a store at open:
+/// `UNDERCROFT_SEMANTIC_FLOOR` declares it (a raw cosine in `[0.0, 0.98]`;
+/// `off` = 0, the shipped hash map), else the embedder's own measured or
+/// declared floor ([`Embedder::semantic_floor`]), else 0. Resolved ONCE —
+/// a measuring embedder pays probe forwards for this, and the map runs in
+/// the per-candidate hot path.
+fn resolve_semantic_floor<E: Embedder + ?Sized>(embedder: &E) -> f32 {
+    match std::env::var("UNDERCROFT_SEMANTIC_FLOOR") {
+        Ok(v) if v.eq_ignore_ascii_case("off") => 0.0,
+        Ok(v) => match v.trim().parse::<f32>() {
+            Ok(f) if f.is_finite() && (0.0..=0.98).contains(&f) => f,
+            _ => {
+                undercroft_obs::diag_warn!(
+                    "UNDERCROFT_SEMANTIC_FLOOR={v:?} is not a cosine in [0.0, 0.98]; \
+                     using the embedder's own floor"
+                );
+                embedder.semantic_floor().unwrap_or(0.0)
+            }
+        },
+        Err(_) => embedder.semantic_floor().unwrap_or(0.0),
+    }
+}
+
 /// Pure for the same reason as [`resolve_late_top_n`]: the vault-level
 /// trust floor, validated against the closed vocabulary. Garbage warns
 /// and resolves to no floor — a typo must not silently reshape what a
@@ -516,6 +539,28 @@ fn diversify_by_room(
         .collect()
 }
 
+/// The calibrated cosine→`semantic` map: the embedder's measured
+/// unrelated floor lands at 0.5 (NEUTRAL — exactly where the shipped map
+/// put hash's ~0 floor) and 1.0 stays 1.0, so the semantic channel keeps
+/// its full dynamic range in fusion regardless of where a vector space
+/// parks unrelated text. Floor 0 reproduces `(cos+1)/2` EXACTLY — the
+/// shipped hash map is the floor-0 special case, which is what keeps the
+/// default vault byte-identical (pinned by test). Found by the first real
+/// xlingual run: under the fixed map a served model's semantic range
+/// compressed into the top quarter of the scale and same-language
+/// function-word BM25 noise crowded out cross-lingual golds.
+#[inline]
+pub(crate) fn calibrated_semantic(floor: f32, cos: f32) -> f32 {
+    if floor == 0.0 {
+        // The shipped expression verbatim, not the general formula's
+        // algebraic equal: `0.5 + 0.5*c` and `(c + 1.0)/2.0` can round
+        // differently at the last bit, and "the default vault does not
+        // move" is a byte-identity claim, not an approximation.
+        return ((cos + 1.0) / 2.0).clamp(0.0, 1.0);
+    }
+    (0.5 + 0.5 * (cos - floor) / (1.0 - floor)).clamp(0.0, 1.0)
+}
+
 pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
     out.extend_from_slice(id.as_bytes());
@@ -705,6 +750,14 @@ pub struct PalaceStore {
     /// never detected; garbage warns and stays off — a typo must not
     /// silently reshape retrieval.
     trust_floor: Option<String>,
+    /// The cosine→`semantic` calibration zero — the raw cosine this
+    /// embedder gives its worst known-unrelated probe pair, resolved once
+    /// at open ([`resolve_semantic_floor`]). 0 (the hash declaration)
+    /// reproduces the shipped `(cos+1)/2` map exactly; a served model's
+    /// measured floor restores the semantic channel's dynamic range that
+    /// the fixed map compressed (the xlingual mixed-corpus finding). See
+    /// [`Embedder::semantic_floor`].
+    sem_floor: f32,
     /// `Some(dim)` when this vault's embeddings are supplied by the caller
     /// (embedder identity `external:<name>@<dim>`): writes must carry a
     /// vector of exactly `dim`, and the store never computes an embedding.
@@ -1263,8 +1316,9 @@ impl PalaceStore {
             .starts_with("external:")
             .then(|| embedder.dimension());
         // Once, here, and never again for the life of the store: a calibrating
-        // embedder pays forward passes for this.
+        // embedder pays forward passes for this (gate and map floor both).
         let semantic_gate = resolve_semantic_gate(embedder.as_ref());
+        let sem_floor = resolve_semantic_floor(embedder.as_ref());
         let mut store = Self {
             conn,
             vault,
@@ -1282,6 +1336,7 @@ impl PalaceStore {
             trust_floor: resolve_trust_floor(
                 std::env::var("UNDERCROFT_TRUST_FLOOR").ok().as_deref(),
             ),
+            sem_floor,
             external_dim,
             hnsw_enabled: false,
             #[cfg(feature = "hnsw")]
@@ -2734,6 +2789,7 @@ impl PalaceStore {
         use rayon::prelude::*;
         let vault = &self.vault;
         let legacy = self.fusion == Fusion::Legacy;
+        let sem_floor = self.sem_floor;
         let qv = &qvec;
         let cands: Vec<Candidate> = rows
             .into_par_iter()
@@ -2756,7 +2812,7 @@ impl PalaceStore {
                         }
                     })?,
                 };
-                let semantic = ((cosine(qv, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
+                let semantic = calibrated_semantic(sem_floor, cosine(qv, &emb));
                 let recency = recency_boost(&drawer.meta.filed_at, now);
                 let (tokens, ngram, units) = if legacy {
                     (Vec::new(), Vec::new(), 0.0)
@@ -3119,6 +3175,15 @@ impl PalaceStore {
         }
     }
 
+    /// The calibrated cosine→`semantic` map for this store — see
+    /// [`calibrated_semantic`]; a free function underneath because the
+    /// hydration pass applies it inside a rayon closure that must not
+    /// capture `&self`.
+    #[inline]
+    fn semantic_of(&self, cos: f32) -> f32 {
+        calibrated_semantic(self.sem_floor, cos)
+    }
+
     /// Score one already-decrypted drawer against a query (used by the
     /// remote-index path, where the embedding is recomputed locally from
     /// the verified plaintext rather than trusted from the server).
@@ -3131,7 +3196,7 @@ impl PalaceStore {
     ) -> SearchHit {
         let qterms: Vec<String> = tokenize(query);
         let emb = self.embedder.embed(&drawer.content);
-        let semantic = ((cosine(qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
+        let semantic = self.semantic_of(cosine(qvec, &emb));
         let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
         let recency = recency_boost(&drawer.meta.filed_at, now);
         let w = self.fusion_weight;
@@ -9596,44 +9661,178 @@ mod tests {
         }
     }
 
-    fn semantic_between<E: Embedder>(e: &E, a: &str, b: &str) -> f32 {
-        (undercroft_core::embed::cosine(&e.embed(a), &e.embed(b)) + 1.0) / 2.0
-    }
-
-    /// The gate must clear the floor of the space it was calibrated against,
-    /// and must not still be the hash embedder's number.
+    /// A high-floor space is RECALIBRATED, not out-gated: the measured raw
+    /// floor becomes the map's zero (landing at `semantic` 0.5), and the
+    /// gate is then the same 0.06 headroom above neutral the hash gate
+    /// always was. What the old contract asserted with a *higher gate*,
+    /// the new one asserts with a *recentred map* — same protection,
+    /// full dynamic range restored (the xlingual mixed-corpus finding).
     #[test]
-    fn a_high_floor_space_gets_a_higher_gate() {
+    fn a_high_floor_space_is_recalibrated_not_out_gated() {
         let e = HighFloorEmbedder;
-        let floor = semantic_between(
-            &e,
-            "kubernetes cluster autoscaling",
-            "she planted tulips along the fence",
-        );
+        let floor = undercroft_core::embed::calibrate_semantic_floor(&e)
+            .expect("the stand-in embeds nothing to zero");
         assert!(
-            floor > 0.70,
-            "the stand-in does not actually have a high floor: {floor}"
+            floor > 0.40,
+            "the stand-in does not actually have a high raw floor: {floor}"
         );
         let gate = e.semantic_admission_gate().expect("a gate was calibrated");
-        assert!(
-            gate > floor,
-            "gate {gate} sits at or below this space's unrelated floor {floor}"
+        assert_eq!(
+            gate,
+            undercroft_core::embed::HASH_ADMISSION_GATE,
+            "in the recalibrated space the gate is the margin above neutral"
+        );
+        // Unrelated text maps to ~neutral, BELOW the gate...
+        let unrelated = calibrated_semantic(
+            floor,
+            undercroft_core::embed::cosine(
+                &e.embed("kubernetes cluster autoscaling"),
+                &e.embed("she planted tulips along the fence"),
+            ),
         );
         assert!(
-            gate > undercroft_core::embed::HASH_ADMISSION_GATE,
-            "gate {gate} is still the hash embedder's 0.56"
+            unrelated < gate,
+            "unrelated pair maps to {unrelated}, at or above the {gate} gate"
         );
-        // The other direction, and the one a too-clever calibration fails:
-        // raising the gate must not disable the leg outright. A pair this
-        // space genuinely rates close still has to be able to clear it.
-        let close = semantic_between(
-            &e,
-            "the printer jammed again this morning",
-            "the printer jammed again this afternoon",
+        // ...and a pair this space genuinely rates close still clears it —
+        // the direction a too-clever calibration fails.
+        let close = calibrated_semantic(
+            floor,
+            undercroft_core::embed::cosine(
+                &e.embed("the printer jammed again this morning"),
+                &e.embed("the printer jammed again this afternoon"),
+            ),
         );
         assert!(
             close > gate,
             "gate {gate} is so high nothing can clear it (close pair: {close})"
+        );
+    }
+
+    /// The shipped hash map is the floor-0 special case of the calibrated
+    /// map, to the BIT — asserted against the original expression written
+    /// longhand, so editing the helper cannot quietly make this vacuous.
+    /// Plus: a default (hash) store resolves floor 0, so the default vault
+    /// does not move.
+    #[test]
+    fn the_hash_map_is_the_floor_zero_case_and_the_default_vault_does_not_move() {
+        for cos in [-1.0f32, -0.37, 0.0, 1.19e-7, 0.12, 0.56, 0.9999, 1.0] {
+            assert_eq!(
+                calibrated_semantic(0.0, cos).to_bits(),
+                ((cos + 1.0) / 2.0).clamp(0.0, 1.0).to_bits(),
+                "floor-0 map diverged from the shipped expression at cos={cos}"
+            );
+        }
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let s = PalaceStore::open(vault).unwrap();
+        assert_eq!(s.sem_floor, 0.0, "hash DECLARES floor 0; nothing measures");
+    }
+
+    /// A stand-in for a multilingual model: texts about the same topic land
+    /// close regardless of surface language (the embedder is the
+    /// translator), everything else sits at the constant-component floor of
+    /// raw cosine ~0.5 — the E5/BGE-family shape. Deterministic, no
+    /// weights.
+    struct TopicEmbedder;
+
+    impl Embedder for TopicEmbedder {
+        fn model_name(&self) -> &str {
+            "test-topic"
+        }
+        fn dimension(&self) -> usize {
+            undercroft_core::embed::EMBED_DIM
+        }
+        fn embed(&self, text: &str) -> Vec<f32> {
+            let d = undercroft_core::embed::EMBED_DIM;
+            // "alpha"/"alfa" are one topic to this model, whatever the
+            // language; any other text gets a hash-derived topic of its
+            // own (so unrelated probe pairs do NOT share a direction).
+            let topic = if text.contains("alpha") || text.contains("alfa") {
+                5usize
+            } else if text.contains("beta") {
+                6usize
+            } else {
+                8 + (text.len() * 31 + text.bytes().map(usize::from).sum::<usize>()) % (d - 8)
+            };
+            let c = 1.0 / (d as f32).sqrt();
+            let mut v = vec![c; d];
+            v[topic] += 1.0;
+            let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            for x in &mut v {
+                *x /= norm;
+            }
+            v
+        }
+    }
+
+    /// The xlingual mixed-corpus defect, end to end, with its
+    /// counterfactual: under the fixed floor-0 map a cross-"lingual" gold
+    /// (topic match, zero shared words) is crowded out by same-language
+    /// drawers that merely share a query word; under the measured floor it
+    /// wins. Both directions asserted — if the premise arm stops failing,
+    /// the corpus no longer reproduces the defect: investigate, don't
+    /// delete.
+    #[test]
+    fn the_calibrated_map_closes_the_mixed_corpus_crowding_defect() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let mut s = PalaceStore::open_with_embedder(vault, Box::new(TopicEmbedder)).unwrap();
+        let measured = s.sem_floor;
+        assert!(
+            (0.40..0.60).contains(&measured),
+            "open did not resolve the stand-in's measured floor: {measured}"
+        );
+        // The gold: same topic as the query, not one shared word.
+        let gold = drawer(
+            "w",
+            "r",
+            "reunión del tema alfa a las diez en la sala grande",
+            0,
+        );
+        s.upsert(&gold).unwrap();
+        // The crowd: a different topic, but each shares the query's rarer
+        // words — the same-language function/content-word noise that owns
+        // a mixed corpus.
+        for i in 0..6u32 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("notes from the beta project meeting on thursday number {i}"),
+                1 + i,
+            ))
+            .unwrap();
+        }
+        // Two shared words with the crowd ("the", "meeting") — enough
+        // lexical noise to own the top slot under the fixed map, not so
+        // much that no semantic channel could ever recover it.
+        let query = "where was the alpha meeting";
+        // Counterfactual — the shipped fixed map: the gold loses its slot.
+        s.set_sem_floor(0.0).unwrap();
+        let hits = s.search(query, &SearchOptions::default()).unwrap();
+        assert!(
+            hits.first().map(|h| h.drawer.id != gold.id).unwrap_or(true),
+            "under the fixed map the gold already wins — the crowding \
+             premise of this test is gone; investigate, don't delete"
+        );
+        // The fix — the measured floor: the gold wins the top slot.
+        s.set_sem_floor(measured).unwrap();
+        let hits = s.search(query, &SearchOptions::default()).unwrap();
+        assert_eq!(
+            hits.first().map(|h| h.drawer.id.clone()),
+            Some(gold.id.clone()),
+            "the calibrated map must put the topic-matched gold first; got {:?}",
+            hits.iter()
+                .take(3)
+                .map(|h| (
+                    h.drawer.content.chars().take(24).collect::<String>(),
+                    h.score,
+                    h.semantic,
+                    h.lexical
+                ))
+                .collect::<Vec<_>>()
         );
     }
 

@@ -416,7 +416,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 65
+  which inlines them and documents every layer plus all 66
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -608,12 +608,18 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   *below* an unrelated sentence, and `car`/`automobile` do not match either.
   Needs a multilingual model via `onnx`/`ort`/**`http`**, or an external
   vault. Measured 2026-08-03 (first real xlingual run, bge-m3 served):
-  the capability is real — R@1 88–100% per pair on a foreign-target
-  corpus — but a **mixed-language corpus collapses it to ~0%**, an OPEN
-  DEFECT: the `(cos+1)/2` map is hash-calibrated, so a served model's
-  compressed semantic channel loses to same-language function-word BM25
-  noise (root cause, three controls and the named per-embedder-floor fix
-  in CHANGELOG/ROADMAP). Reading dates *inside* the text is the
+  R@1 88–100% per pair on a foreign-target corpus; the mixed-corpus
+  collapse that run filed (~0% — the hash-calibrated `(cos+1)/2` map
+  compressed a served model's semantic channel under same-language BM25
+  noise) is **CLOSED the same day** by `Embedder::semantic_floor` +
+  `calibrated_semantic`: the measured unrelated floor becomes the map's
+  neutral, hash declares floor 0 and keeps the shipped expression
+  verbatim (bit-identical default, pinned), the admission gate rides the
+  same calibration, `UNDERCROFT_SEMANTIC_FLOOR` declares it for external
+  vaults. Gates: LoCoMo hash digit-for-digit; mixed R@5 0–4%→53–88% at
+  the default weight, 100.0% every pair under a declared
+  `UNDERCROFT_FUSION_WEIGHT=0.70` — map and weight compose, the default
+  weight stays put. Reading dates *inside* the text is the
   **scanner's** job (`language`
   per request) and is independent of which embedder found the drawer.
   **A served embedder is worth far more than the repo used to think.** The
