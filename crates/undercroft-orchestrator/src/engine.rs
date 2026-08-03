@@ -136,7 +136,21 @@ pub fn export_vault(creds: &InstanceCreds, vault: &str) -> Result<String, String
 }
 
 /// Import NDJSON into a vault; returns the engine's imported count.
-pub fn import_vault(creds: &InstanceCreds, vault: &str, ndjson: &str) -> Result<u64, String> {
+/// What one engine import reported: drawers plus (since the manifest-era
+/// export format) the knowledge-graph records that rode the same stream.
+/// The additive keys default to zero against an older engine.
+pub struct ImportCounts {
+    pub drawers: u64,
+    pub kg_triples: u64,
+    pub kg_entities: u64,
+    pub tunnels: u64,
+}
+
+pub fn import_vault(
+    creds: &InstanceCreds,
+    vault: &str,
+    ndjson: &str,
+) -> Result<ImportCounts, String> {
     let r = vault_request(
         creds,
         vault,
@@ -152,10 +166,21 @@ pub fn import_vault(creds: &InstanceCreds, vault: &str, ndjson: &str) -> Result<
             String::from_utf8_lossy(&r.body)
         ));
     }
-    serde_json::from_slice::<serde_json::Value>(&r.body)
-        .ok()
-        .and_then(|v| v.get("imported").and_then(serde_json::Value::as_u64))
-        .ok_or_else(|| "engine import response did not parse".into())
+    let v = serde_json::from_slice::<serde_json::Value>(&r.body)
+        .map_err(|_| "engine import response did not parse".to_string())?;
+    let n = |k: &str| v.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+    if v.get("imported")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+    {
+        return Err("engine import response did not parse".into());
+    }
+    Ok(ImportCounts {
+        drawers: n("imported"),
+        kg_triples: n("kg_triples"),
+        kg_entities: n("kg_entities"),
+        tunnels: n("tunnels"),
+    })
 }
 
 /// Probe an instance's unauthenticated `/healthz`.

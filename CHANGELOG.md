@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased — trust becomes the principal's declaration: wing trust classes, floored retrieval, C3.3 phase 1
+## 0.43.0 — Provenance, trust, and the instruments that earned them
+
+The whole sessions-19 through 24 program ships in this release; each
+subsection below was one merged unit and keeps its full record. The
+headline arcs: gold-evidence measurement and the served-embedder
+correction; pagination as the delivered-recall lever (+11.7pp); the wing
+as retrieval unit and the scoped-starvation family closed end to end
+(room/FTS/kind/trust all scope-resolved, R@5 100.0% at every checkpoint
+131k→1M); the fusion doctrine written down and RRF removed; the labeling
+doctrine (docs/LABELS.md) with the golden-values authority tier and the
+declared kind label as its instances; the search hotspot found by
+instrument and parallelized (unscoped 1M 270→113 ms/q, LoCoMo pass 308 s);
+the cross-lingual instrument's first real run and the mixed-corpus
+crowding defect it filed; extractor identity, receipted supersession and
+signed bundle manifests (the meta-rows export gap closed); and C3.3
+phase 1 — deployment-assigned wing trust as a floored candidate-set
+decision.
+
+### trust becomes the principal's declaration: wing trust classes, floored retrieval, C3.3 phase 1
 
 - **Deployment-assigned wing trust classes** (C3.3, building on
   wing-as-trust-zone): `quarantined | standard | trusted`
@@ -41,7 +59,7 @@
   checkpoints + `fit_report` clean) in its own unit — ROADMAP carries
   the design and the gate.
 
-## Unreleased — provenance grows two rungs: who claimed a fact, what a record replaced, who wrote a bundle
+### provenance grows two rungs: who claimed a fact, what a record replaced, who wrote a bundle
 
 Consultation adopted items 2 and 3 (docs/CONSULTATION_REVIEW.md §7), built
 on the receipt and canonical-extension precedents they were designed
@@ -108,8 +126,16 @@ against.
   operational state (embedder identity — the destination keeps its own;
   it travels as manifest provenance), and the audit chain (keyed
   per-vault; its head travels as provenance). e2e 165 → **169** checks.
+- **Orchestrator migration count-verify upgraded with the format** (found
+  by the orchestrator-e2e suite at the release tree — the extended
+  batteries doing exactly their job): `migrate` compared a raw export
+  line count against the drawer import count, which the manifest line
+  and typed KG/tunnel records would inflate into a false mismatch. It
+  now verifies against the manifest's DECLARED counts — drawers AND
+  kg_triples/kg_entities/tunnels, a strictly stronger check — and keeps
+  the raw line-count contract against a legacy engine with no manifest.
 
-## Unreleased — the cross-lingual instrument runs for real, and files the defect it was built to find
+### the cross-lingual instrument runs for real, and files the defect it was built to find
 
 - **First real `xlingual` run** (2026-08-03): bge-m3 (F16 GGUF) served
   CPU-only on the compose Ollama via `UNDERCROFT_EMBEDDER=http`, sealed
@@ -155,7 +181,7 @@ against.
   not depend on the corpus — any mixed-language vault holds
   same-language-as-query drawers with function-word overlap.
 
-## Unreleased — the search path's real hotspot found by instrument, then parallelized
+### the search path's real hotspot found by instrument, then parallelized
 
 - **The user-visible price of a scoped query drops ~2.7× (wing 85 → ~32
   ms/q) and the 1M unscoped price 2.4× (270 → 113 ms/q) — and the fix
@@ -188,7 +214,7 @@ against.
   93.0%, turn all-gold 69.4%, top-40 CDF 81.8%) — the equivalence proof
   and the speedup in one run. A four-weight sweep now costs ~20 minutes.
 
-## Unreleased — the kind label ships as the doctrine wrote it, value instrument first
+### the kind label ships as the doctrine wrote it, value instrument first
 
 - **`kind` on drawers** (consultation adopted item 4, pulled forward on
   user decision once its prerequisites existed): a DECLARED record kind
@@ -229,7 +255,7 @@ against.
   claim would need a corpus where fusion genuinely confuses kinds, and
   building one to make the filter look good would be instrument-fitting.
 
-## Unreleased — the wing leak closes: scoped pools are sized by the scope
+### the wing leak closes: scoped pools are sized by the scope
 
 - **The scopescale-filed defect (wing-scoped R@5 89.6%, corpus-independent)
   is CLOSED, gate met at every checkpoint.** Root cause, measured in three
@@ -262,7 +288,7 @@ against.
   `scoped_pools_are_sized_by_the_scope` test and the enlarged
   2000-vs-1500 large-room starvation test.
 
-## Unreleased — the fusion weight becomes a declaration, and tagging gets its price tag
+### the fusion weight becomes a declaration, and tagging gets its price tag
 
 - **`UNDERCROFT_FUSION_WEIGHT` (default 0.55)** — the convex blend's
   semantic weight `w` in `w·semantic + (0.90 − w)·lexical +
@@ -321,7 +347,7 @@ against.
   63.5%. The doctrine's estimate (×10³–10⁴) understated the ratio —
   the async-enrichment-only rule is now a measurement, not an estimate.
 
-## Unreleased — the two waiting instruments exist: scoped recall at scale, and cross-lingual
+### the two waiting instruments exist: scoped recall at scale, and cross-lingual
 
 - **`undercroft-bench scopescale`** — the instrument the per-wing tier's
   recall claim has been waiting for since pqscale filed "a scoped-recall
@@ -373,7 +399,7 @@ against.
   (`src_lang \t tgt_lang \t src_text \t tgt_text`): parallel corpora
   carry their own licenses and are not shipped in this repo.
 
-## Unreleased — declared truth gets a door: the golden-values tier
+### declared truth gets a door: the golden-values tier
 
 - **The authority tier on KG facts** (consultation adopted item 1):
   `authority_class` (`stated`|`canonical`), `review_state`
@@ -421,7 +447,7 @@ against.
   index and a resolution entry. The authority tier is the doctrine's
   first instance; `kind` waits for its instrument by that same doctrine.
 
-## Unreleased — no declared scope can be starved by the corpus again
+### no declared scope can be starved by the corpus again
 
 - **Scope-aware candidate generation closes the room-starvation defect.**
   `room` was a plain SQL `WHERE` applied to candidates a *global* prefilter
@@ -467,7 +493,7 @@ against.
   when a filter is declared and a prefilter is active, and the default
   sealed configuration (no prefilter) was already exact.
 
-## Unreleased — rank fusion is removed, and the fusion doctrine written down
+### rank fusion is removed, and the fusion doctrine written down
 
 - **`Fusion::Rrf` is deleted** (`rrf_fuse`, its two rank helpers, `RRF_K`,
   the enum arm and the obs label). It was never the default and measured
@@ -495,7 +521,7 @@ against.
   diagram, derived copies rebuilt via `build.sh`), website retrieval docs
   (the rrf measurement row stays, marked removed), RETRIEVAL_SCALING.md.
 
-## Unreleased — the wing becomes the retrieval unit it always claimed to be
+### the wing becomes the retrieval unit it always claimed to be
 
 - **Per-wing PQ indexes (`UNDERCROFT_WING_PQ_MIN`, default 4096).** `wing` was
   a SQL `WHERE` on one global table: every index was vault-wide, so a
@@ -708,7 +734,7 @@ against.
   codebook over this keyed corpus — the per-row-idiosyncrasy cause its
   message now names.
 
-## Unreleased — a caller can iterate now, instead of re-asking
+### a caller can iterate now, instead of re-asking
 
 - **`SearchOptions` pages: `offset` + `ranked_at`.** There was no way to see
   rank 11: a second call could only re-ask the same question and get the same
@@ -766,7 +792,7 @@ against.
   (0.2%)** — the documented host-clock recency drift, now with a measured
   rate instead of a doc comment.
 
-## Unreleased — a served embedder, and a standing conclusion overturned
+### a served embedder, and a standing conclusion overturned
 
 - **`UNDERCROFT_EMBEDDER=http` — an `Embedder` backed by a served model.** The
   engine could embed exactly three ways: the built-in hash, an ONNX file on
@@ -827,7 +853,7 @@ against.
     external egress); the open Mistral-family embedders are all 7B, ~10× the
     CPU cost of the 0.6B, and were not run.
 
-## Unreleased — the rescore depth was a latency cap in disguise
+### the rescore depth was a latency cap in disguise
 
 - **Late interaction gets its own depth, `UNDERCROFT_LATE_TOP_N` (200).** It
   shared `UNDERCROFT_RERANK_TOP_N` (50) with the cross-encoder, and the two
@@ -878,7 +904,7 @@ against.
 - Setting only `UNDERCROFT_RERANK_TOP_N` still drives both stages, so a
   deployment that pinned the old knob keeps exactly the behaviour it pinned.
 
-## Unreleased — what a drawer costs, and who gets to shape a codebook
+### what a drawer costs, and who gets to shape a codebook
 
 The guardrails the measurement work needed before anything built on it:
 footprint is now asserted rather than computed, and the two cross-drawer
@@ -1081,7 +1107,7 @@ objects in the engine are no longer either guessable or silent.
   entirely). The seeding stride inside `kmeans` is likewise **not** keyed, and
   the residual is written down where it lives.
 
-## Unreleased — gold evidence, and a data-destroying append index
+### gold evidence, and a data-destroying append index
 
 - **`remember` no longer derives a drawer id from `count()`.**
   `crates/undercroft-cli/src/main.rs` now uses `next_append_index()`, matching
@@ -1155,7 +1181,7 @@ objects in the engine are no longer either guessable or silent.
   byte-identical. ROADMAP records the full list so none of it is
   re-proposed.
 
-## Unreleased — AMB, run against ourselves without an external API
+### AMB, run against ourselves without an external API
 
 - **`docs/AMB_REPLICATION.md`** — a procedure for running the Agent Memory
   Benchmark's own protocol (its datasets, document model, prompts and judging
@@ -1192,7 +1218,7 @@ objects in the engine are no longer either guessable or silent.
 - ROADMAP gains the measured retrieval gaps and the list of changes explicitly
   refused as benchmark-fitting.
 
-## Unreleased — the security model, drawn
+### the security model, drawn
 
 - **Three diagrams for the security section**, which was a wall of prose about
   the one part of the system readers most need to be precise about.
@@ -1217,7 +1243,7 @@ objects in the engine are no longer either guessable or silent.
   grows a heading nobody can link to. That happened while writing this change,
   which is why it is now generated rather than maintained.
 
-## Unreleased — the architecture reference gets a language chapter and a sidebar
+### the architecture reference gets a language chapter and a sidebar
 
 - **Three new diagrams covering how the engine handles languages**, which was
   the largest undocumented area of the reference: `language-tokens` (the
@@ -1256,7 +1282,7 @@ objects in the engine are no longer either guessable or silent.
   principled refusal, and it is now recorded as one. What would still not be
   legitimate is a range check on the number — magnitude is not evidence of kind.
 
-## Unreleased — the relevance gate belongs to the vector space, not to a constant
+### the relevance gate belongs to the vector space, not to a constant
 
 - **A model embedder used to retire the relevance gate by being installed.**
   `SEMANTIC_ADMISSION_GATE` was one `const`, 0.56, calibrated against
@@ -1322,7 +1348,7 @@ objects in the engine are no longer either guessable or silent.
   and a model whose true floor is higher than anything probed will still admit
   too much.
 
-## Unreleased — morphology gets the other half of its evidence
+### morphology gets the other half of its evidence
 
 - **A corpus that declares nothing now reaches 100% too — the drawer says what
   language it is.** Undeclared recall goes **62.8% → 100.0%** across all
@@ -1598,7 +1624,7 @@ objects in the engine are no longer either guessable or silent.
     contained `πολύ` and the query matched its own padding. A contaminated
     control fails flatteringly, which is the dangerous direction.
 
-## Unreleased — the comparison layer, and dates that are declared rather than guessed
+### the comparison layer, and dates that are declared rather than guessed
 
 - **An era the writer typed outranks the calendar the caller declared.** `พ.ศ.`,
   `ค.ศ.`, `هـ`, `هجري`, `ميلادي`, `民國`, `公元`, `西暦`, `令和`, `平成`, `昭和`,
