@@ -354,6 +354,11 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "admission"]) => self.admission_list(id, req, now),
             ("POST", &["v1", "vaults", id, "forget"]) => self.forget(id, req, body, now),
             ("POST", &["v1", "vaults", id, "admission"]) => self.admission_rule(id, req, body, now),
+            ("GET", &["v1", "vaults", id, "retention"]) => self.retention_list(id, req, now),
+            ("POST", &["v1", "vaults", id, "retention"]) => self.retention_set(id, req, body, now),
+            ("POST", &["v1", "vaults", id, "retention", "sweep"]) => {
+                self.retention_sweep(id, req, body, now)
+            }
             ("GET", &["v1", "vaults", id, "kg", "canonical", key]) => {
                 self.kg_canonical(id, key, req, now)
             }
@@ -1264,14 +1269,88 @@ impl Tenancy {
                 ))
             }
             "deny" => {
-                store.admission_deny(&drawer_id).map_err(store_err)?;
+                // The deny destroys through the attested-forgetting path
+                // (C3.2), so the response carries the receipt — unsigned,
+                // like /forget: the signing identity is an operator file.
+                let att = store.admission_deny(&drawer_id).map_err(store_err)?;
                 Ok((
                     200,
-                    Body::Json(json!({ "drawer_id": drawer_id, "verdict": "denied" })),
+                    Body::Json(json!({ "drawer_id": drawer_id, "verdict": "denied",
+                                        "attestation": serde_json::to_value(&att)
+                                            .unwrap_or_else(|_| json!({})) })),
                 ))
             }
             _ => Err(RestError::new(400, "verdict must be 'allow' or 'deny'")),
         }
+    }
+
+    /// `GET /v1/vaults/{id}/retention` — every declared retention policy,
+    /// tag-verified.
+    fn retention_list(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let rows = store.retention_policies().map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "policies": serde_json::to_value(&rows).unwrap_or_else(|_| json!([])),
+            })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/retention` — declare or clear a policy:
+    /// `{wing, room?, days}` declares; `{wing, room?, clear: true}`
+    /// clears. An operator surface, deliberately absent from MCP — an
+    /// agent must not shorten the life of the memory it writes or reads.
+    fn retention_set(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let wing = body_str(&body, "wing")?;
+        let room = body.get("room").and_then(Value::as_str).map(str::to_string);
+        let store = self.store_for(id)?;
+        if body.get("clear").and_then(Value::as_bool) == Some(true) {
+            store
+                .clear_retention(&wing, room.as_deref())
+                .map_err(store_err)?;
+            return Ok((
+                200,
+                Body::Json(json!({ "wing": wing, "room": room, "cleared": true })),
+            ));
+        }
+        let days = body
+            .get("days")
+            .and_then(Value::as_u64)
+            .and_then(|d| u32::try_from(d).ok())
+            .ok_or_else(|| RestError::new(400, "days must be a positive integer"))?;
+        store
+            .set_retention(&wing, room.as_deref(), days)
+            .map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({ "wing": wing, "room": room, "days": days, "declared": true })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/retention/sweep` — destroy what has aged
+    /// out, through the attested forgetting path (`{dry_run: true}` to
+    /// preview). Nothing runs automatically: a sweep happens when the
+    /// operator asks for one. The attestation in the response is the
+    /// receipt (unsigned — the signing identity is an operator file).
+    fn retention_sweep(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let dry_run = (!body.trim().is_empty())
+            .then(|| parse_json(body))
+            .transpose()?
+            .and_then(|b| b.get("dry_run").and_then(Value::as_bool))
+            == Some(true);
+        let store = self.store_for(id)?;
+        let sweep = store.retention_sweep(dry_run).map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(serde_json::to_value(&sweep).unwrap_or_else(|_| json!({}))),
+        ))
     }
 
     /// `POST /v1/vaults/{id}/trust` — assign a wing's trust class

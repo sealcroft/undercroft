@@ -178,16 +178,21 @@ impl PalaceStore {
         Ok(restored_id)
     }
 
-    /// Deny a quarantined drawer: the content is deleted (keyed tombstone
-    /// in the chain, like every deletion) and the ruling recorded. What
-    /// remains afterwards is the audit trail — signals, ruling, tombstone
-    /// — and no content.
-    pub fn admission_deny(&mut self, id: &str) -> Result<(), StoreError> {
+    /// Deny a quarantined drawer: the ruling is recorded, then the content
+    /// is destroyed **through the attested-forgetting path** (C3.2), so a
+    /// deny hands back the same chain-attested receipt as a `forget` —
+    /// the ruling record sits just before the attested interval, and the
+    /// interval holds exactly this drawer's tombstone. What remains
+    /// afterwards is the audit trail — signals, ruling, tombstone, and a
+    /// verifiable attestation — and no content.
+    pub fn admission_deny(
+        &mut self,
+        id: &str,
+    ) -> Result<crate::forget::ForgetAttestation, StoreError> {
         // Verifies it exists and is actually quarantined before ruling.
         self.quarantined(id)?;
         self.admission_ruling(id, "denied", None)?;
-        self.delete_drawer(id)?;
-        Ok(())
+        self.forget_with_proof(&[id.to_string()])
     }
 
     /// Fetch + verify a drawer and require it to be quarantine-resident.

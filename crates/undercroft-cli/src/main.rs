@@ -211,6 +211,15 @@ enum Command {
         #[arg(long, global = true, default_value = "default")]
         vault: String,
     },
+    /// Retention policies per wing/room — declared, audited, and enforced
+    /// only by an explicit sweep that destroys through the attested
+    /// forgetting path (an operator surface, never MCP)
+    Retention {
+        #[command(subcommand)]
+        action: RetentionAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
+    },
     /// Deployment-assigned wing trust classes — the receiving principal's
     /// declaration (an operator surface: agents cannot assign trust over
     /// MCP, only read with a floor)
@@ -645,9 +654,55 @@ enum AdmissionAction {
     List,
     /// Re-file a quarantined drawer where it was headed (chain-audited)
     Allow { id: String },
-    /// Destroy a quarantined drawer's content (keyed tombstone + audited
-    /// ruling; the trail remains, the content does not)
-    Deny { id: String },
+    /// Destroy a quarantined drawer's content through the attested
+    /// forgetting path: audited ruling + keyed tombstone + a verifiable
+    /// receipt (the trail remains, the content does not)
+    Deny {
+        id: String,
+        /// Write the attestation JSON here (default: stdout)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Signing identity file (`bundle sign-keygen`) — attests the
+        /// operator as sender on the deny receipt
+        #[arg(long)]
+        sign: Option<PathBuf>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum RetentionAction {
+    /// Declare how long a wing (or one room) keeps drawers. Audited;
+    /// a flipped policy fails verification. The quarantine wing is
+    /// refused — its doors are `admission allow`/`deny`.
+    Set {
+        wing: String,
+        #[arg(long)]
+        room: Option<String>,
+        #[arg(long)]
+        days: u32,
+    },
+    /// Remove a declared policy (an explicit, audited act)
+    Clear {
+        wing: String,
+        #[arg(long)]
+        room: Option<String>,
+    },
+    /// Every declared policy, tag-verified
+    List,
+    /// Destroy what has aged out, through the attested forgetting path.
+    /// Nothing runs automatically — a sweep happens when you run it.
+    Sweep {
+        /// Report what would be destroyed without destroying anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Write the sweep report (with attestation) here (default: stdout)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Signing identity file — attests the operator on the sweep's
+        /// destruction receipt
+        #[arg(long)]
+        sign: Option<PathBuf>,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -1576,9 +1631,101 @@ fn main() -> Result<()> {
                     let restored = store.admission_allow(id)?;
                     println!("Allowed: re-filed as {restored} (ruling audited).");
                 }
-                AdmissionAction::Deny { id } => {
-                    store.admission_deny(id)?;
-                    println!("Denied: content destroyed, ruling and tombstone audited.");
+                AdmissionAction::Deny { id, out, sign } => {
+                    let mut att = store.admission_deny(id)?;
+                    if let Some(path) = sign {
+                        let secret = std::fs::read_to_string(path).with_context(|| {
+                            format!("reading signing identity {}", path.display())
+                        })?;
+                        att.sign(&secret)?;
+                    }
+                    let json = serde_json::to_string_pretty(&att)?;
+                    match out {
+                        Some(path) => {
+                            std::fs::write(path, &json)?;
+                            println!(
+                                "Denied: content destroyed, ruling audited; attestation \
+                                 written to {} (verify with: undercroft verify-forgetting {})",
+                                path.display(),
+                                path.display()
+                            );
+                        }
+                        None => {
+                            println!("Denied: content destroyed, ruling audited.");
+                            println!("{json}");
+                        }
+                    }
+                }
+            }
+        }
+        Command::Retention { action, vault } => {
+            let mut store = open_store(&cli, vault)?;
+            match action {
+                RetentionAction::Set { wing, room, days } => {
+                    store.set_retention(wing, room.as_deref(), *days)?;
+                    match room {
+                        Some(r) => println!(
+                            "Retention declared: {wing}/{r} keeps drawers {days} day(s) (audited)."
+                        ),
+                        None => println!(
+                            "Retention declared: {wing} keeps drawers {days} day(s) (audited)."
+                        ),
+                    }
+                }
+                RetentionAction::Clear { wing, room } => {
+                    store.clear_retention(wing, room.as_deref())?;
+                    println!("Retention policy cleared (audited).");
+                }
+                RetentionAction::List => {
+                    let rows = store.retention_policies()?;
+                    if rows.is_empty() {
+                        println!("No retention policies declared.");
+                    }
+                    for p in rows {
+                        let scope = if p.room.is_empty() {
+                            p.wing.clone()
+                        } else {
+                            format!("{}/{}", p.wing, p.room)
+                        };
+                        println!(
+                            "  {scope}: {} day(s), declared {}",
+                            p.max_age_days, p.assigned_at
+                        );
+                    }
+                }
+                RetentionAction::Sweep { dry_run, out, sign } => {
+                    let mut sweep = store.retention_sweep(*dry_run)?;
+                    if let (Some(path), Some(att)) = (sign, sweep.attestation.as_mut()) {
+                        let secret = std::fs::read_to_string(path).with_context(|| {
+                            format!("reading signing identity {}", path.display())
+                        })?;
+                        att.sign(&secret)?;
+                    }
+                    if sweep.dry_run {
+                        println!("DRY RUN — nothing destroyed.");
+                    }
+                    for e in &sweep.policies {
+                        let scope = if e.room.is_empty() {
+                            e.wing.clone()
+                        } else {
+                            format!("{}/{}", e.wing, e.room)
+                        };
+                        println!(
+                            "  {scope} (> {} day(s)): {} expired",
+                            e.max_age_days,
+                            e.expired.len()
+                        );
+                    }
+                    println!("Destroyed: {} drawer(s).", sweep.destroyed);
+                    let json = serde_json::to_string_pretty(&sweep)?;
+                    match out {
+                        Some(path) => {
+                            std::fs::write(path, &json)?;
+                            println!("Sweep report written to {}", path.display());
+                        }
+                        None if sweep.attestation.is_some() => println!("{json}"),
+                        None => {}
+                    }
                 }
             }
         }

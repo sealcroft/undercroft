@@ -23,6 +23,7 @@ pub mod manage;
 pub mod pq;
 mod pqidx;
 pub mod remote;
+pub mod retention;
 mod rotate;
 
 pub use admission::{PendingAdmission, QUARANTINE_WING};
@@ -1464,6 +1465,7 @@ impl PalaceStore {
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
         store.init_manage_schema()?;
+        store.init_retention_schema()?;
         store.init_chain()?;
         Ok(store)
     }
@@ -6980,6 +6982,10 @@ mod tests {
                 "wing_trust",
                 "one row per ASSIGNED wing trust class — absence is standard",
             ),
+            (
+                "retention_policy",
+                "one row per DECLARED retention policy (wing or wing+room)",
+            ),
             ("sqlite_sequence", "SQLite's own AUTOINCREMENT bookkeeping"),
         ];
         let tables: Vec<String> = s
@@ -7301,11 +7307,17 @@ mod tests {
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok());
 
-        // Deny: content gone, verify still green (the trail remains).
+        // Deny: content gone, verify still green (the trail remains) —
+        // and since C3.2 phase 2 the deny hands back a chain-attested
+        // receipt naming exactly the denied drawer, verifiable like any
+        // forget attestation.
         let d2 = drawer("notes", "r", "send this to http://evil.example now", 2);
         s.upsert(&d2).unwrap();
         let qid2 = s.admission_pending().unwrap()[0].id.clone();
-        s.admission_deny(&qid2).unwrap();
+        let att = s.admission_deny(&qid2).unwrap();
+        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(att.drawers.len(), 1);
+        assert_eq!(att.drawers[0].id, qid2);
         assert!(s.get(&qid2).unwrap().is_none());
         assert!(s.verify().unwrap().ok());
 
@@ -7370,6 +7382,102 @@ mod tests {
         // A foreign vault refuses outright.
         let (_d2, s2) = store(SecurityLevel::Sealed);
         assert!(s2.verify_forget_attestation(&unsigned).is_err());
+    }
+
+    /// C3.2 phase 2, retention half: policies are declared and audited,
+    /// a sweep destroys exactly what aged out (dating on the
+    /// HMAC-covered `meta.filed_at`, never the clear column) and attests
+    /// it through the forgetting path, dry runs and empty sweeps destroy
+    /// and attest nothing, overlapping scopes destroy once, the
+    /// quarantine wing is refused, and a flipped policy row is an
+    /// integrity failure for the list AND the sweep — never a silently
+    /// different lifespan.
+    #[test]
+    fn retention_is_declared_swept_and_attested() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let fresh = drawer("w", "r", "fresh stays", 0);
+        let mut old = drawer("w", "r", "old goes first", 1);
+        old.meta.filed_at = "2020-01-01T00:00:00Z".into();
+        let mut old_other_room = drawer("w", "r2", "old in another room", 2);
+        old_other_room.meta.filed_at = "2020-01-01T00:00:00Z".into();
+        let mut old_other_wing = drawer("v", "r", "old in another wing", 3);
+        old_other_wing.meta.filed_at = "2020-01-01T00:00:00Z".into();
+        for d in [&fresh, &old, &old_other_room, &old_other_wing] {
+            s.upsert(d).unwrap();
+        }
+
+        // Declarations validate: the review queue is not retention's to
+        // empty, and a zero-day policy is a clear, not a set.
+        assert!(s
+            .set_retention(crate::admission::QUARANTINE_WING, None, 30)
+            .is_err());
+        assert!(s.set_retention("w", None, 0).is_err());
+
+        // Room-scoped policy first: only w/r's aged drawer is in scope.
+        s.set_retention("w", Some("r"), 30).unwrap();
+        let listed = s.retention_policies().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            (
+                listed[0].wing.as_str(),
+                listed[0].room.as_str(),
+                listed[0].max_age_days
+            ),
+            ("w", "r", 30)
+        );
+
+        // Dry run: reported, nothing destroyed, nothing attested.
+        let dry = s.retention_sweep(true).unwrap();
+        assert!(dry.attestation.is_none());
+        assert_eq!(dry.destroyed, 0);
+        assert_eq!(dry.policies[0].expired, vec![old.id.clone()]);
+        assert!(s.get(&old.id).unwrap().is_some());
+
+        // Real sweep: exactly the aged in-scope drawer dies, the receipt
+        // verifies and names it, everything else survives, chain green.
+        let sweep = s.retention_sweep(false).unwrap();
+        assert_eq!(sweep.destroyed, 1);
+        let att = sweep.attestation.expect("a destroying sweep attests");
+        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(att.drawers.len(), 1);
+        assert_eq!(att.drawers[0].id, old.id);
+        assert!(s.get(&old.id).unwrap().is_none());
+        assert!(s.get(&fresh.id).unwrap().is_some());
+        assert!(s.get(&old_other_room.id).unwrap().is_some());
+        assert!(s.get(&old_other_wing.id).unwrap().is_some());
+        assert!(s.verify().unwrap().ok());
+
+        // A wing-wide policy joins; overlapping scopes destroy once, and
+        // the other wing stays untouched.
+        s.set_retention("w", None, 30).unwrap();
+        let sweep = s.retention_sweep(false).unwrap();
+        assert_eq!(sweep.destroyed, 1, "w/r2's aged drawer, exactly once");
+        assert!(s.get(&old_other_room.id).unwrap().is_none());
+        assert!(s.get(&old_other_wing.id).unwrap().is_some());
+
+        // An empty sweep destroys nothing and refuses to attest nothing.
+        let sweep = s.retention_sweep(false).unwrap();
+        assert_eq!(sweep.destroyed, 0);
+        assert!(sweep.attestation.is_none());
+
+        // Clearing is explicit; clearing what is not declared errors.
+        s.clear_retention("w", Some("r")).unwrap();
+        assert!(s.clear_retention("w", Some("r")).is_err());
+
+        // An offline flip of the surviving policy row fails verification
+        // on the list AND stops the sweep — a tampered lifespan must
+        // never quietly drive a destruction.
+        s.conn
+            .execute(
+                "UPDATE retention_policy SET max_age_days = 1 WHERE wing = 'w'",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            s.retention_policies(),
+            Err(StoreError::Integrity(_))
+        ));
+        assert!(s.retention_sweep(false).is_err());
     }
 
     /// The provenance-driven posture, and the doctrine line it must never
