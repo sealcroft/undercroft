@@ -599,10 +599,15 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
         }
         "undercroft_update_drawer" => {
             let id = req_str(args, "id")?;
-            if store.update_drawer(id, req_str(args, "content")?)? {
-                Ok(format!("updated drawer {id}"))
-            } else {
-                anyhow::bail!("no drawer with id {id}")
+            match store.update_drawer(id, req_str(args, "content")?, "mcp")? {
+                undercroft_store::UpdateOutcome::Updated => Ok(format!("updated drawer {id}")),
+                undercroft_store::UpdateOutcome::Quarantined => Ok(format!(
+                    "update to {id} was quarantined pending review — the drawer \
+                     keeps its previous content until an operator rules"
+                )),
+                undercroft_store::UpdateOutcome::NotFound => {
+                    anyhow::bail!("no drawer with id {id}")
+                }
             }
         }
         "undercroft_delete_drawer" => {

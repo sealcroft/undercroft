@@ -930,13 +930,19 @@ impl Tenancy {
             return Err(RestError::new(400, "text is empty after normalization"));
         }
         let store = self.store_for(id)?;
-        let updated = store
-            .update_drawer(drawer_id, &normalized)
-            .map_err(store_err)?;
-        if updated {
-            Ok((200, Body::Json(json!({ "id": drawer_id, "updated": true }))))
-        } else {
-            Err(RestError::new(404, "no such drawer"))
+        match store
+            .update_drawer(drawer_id, &normalized, "rest")
+            .map_err(store_err)?
+        {
+            undercroft_store::UpdateOutcome::Updated => {
+                Ok((200, Body::Json(json!({ "id": drawer_id, "updated": true }))))
+            }
+            undercroft_store::UpdateOutcome::Quarantined => Ok((
+                202,
+                Body::Json(json!({ "id": drawer_id, "updated": false,
+                                    "quarantined": true })),
+            )),
+            undercroft_store::UpdateOutcome::NotFound => Err(RestError::new(404, "no such drawer")),
         }
     }
 

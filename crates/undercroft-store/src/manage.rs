@@ -77,6 +77,20 @@ type TunnelRow = (String, String, String, String, Vec<u8>, String);
 /// One wing's rooms with drawer counts.
 pub type WingRooms = (String, Vec<(String, u64)>);
 
+/// What an in-place update did. A diverted update that reported
+/// "updated" would be exactly the silent path the admission screen
+/// exists to prevent, so the outcome is a type, not a bool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateOutcome {
+    /// The drawer now holds the new content.
+    Updated,
+    /// The screen diverted the new content to the quarantine wing; the
+    /// drawer keeps its previous content until a reviewer rules.
+    Quarantined,
+    /// No drawer with that id.
+    NotFound,
+}
+
 fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -485,14 +499,48 @@ impl PalaceStore {
     }
 
     /// Replace a drawer's content in place (same id/slot), re-sealed,
-    /// re-embedded, re-tagged, chained.
-    pub fn update_drawer(&mut self, id: &str, new_content: &str) -> Result<bool, StoreError> {
+    /// re-embedded, re-tagged, chained. `via` is the UPDATING surface —
+    /// stamped by handler code exactly like a save's `added_by`, never by
+    /// the caller.
+    ///
+    /// Three admission postures close the update-path gap (C3.3):
+    ///
+    /// * the drawer's `added_by` is re-stamped with the updating surface
+    ///   before the screen runs — the trusted-surface posture keys on who
+    ///   is writing NOW, and reusing the stored stamp would let an
+    ///   untrusted surface ride the original writer's standing (it is
+    ///   also the truthful provenance: the updater wrote the content the
+    ///   drawer now holds);
+    /// * a flagged update DIVERTS like a flagged save — the drawer keeps
+    ///   its previous content until a reviewer rules, and the outcome
+    ///   says so instead of reporting "updated";
+    /// * a quarantine-pending drawer is not editable: the reviewer must
+    ///   rule on exactly what the screen saw
+    ///   (`admission allow`/`deny` are the only doors).
+    pub fn update_drawer(
+        &mut self,
+        id: &str,
+        new_content: &str,
+        via: &str,
+    ) -> Result<UpdateOutcome, StoreError> {
         let Some(mut drawer) = self.get(id)? else {
-            return Ok(false);
+            return Ok(UpdateOutcome::NotFound);
         };
+        if drawer.meta.wing == crate::admission::QUARANTINE_WING {
+            return Err(StoreError::Invalid(format!(
+                "{id} is quarantine-pending — rule on it with `admission \
+                 allow`/`deny`; pending review evidence is not editable"
+            )));
+        }
         drawer.content = undercroft_core::normalize_content(new_content);
+        drawer.meta.added_by = via.to_string();
+        let quarantined = self.admission_divert(&drawer).is_some();
         self.upsert(&drawer)?;
-        Ok(true)
+        Ok(if quarantined {
+            UpdateOutcome::Quarantined
+        } else {
+            UpdateOutcome::Updated
+        })
     }
 
     /// Rooms and drawer counts within one wing.
@@ -1030,7 +1078,8 @@ mod tests {
         );
 
         // The superseded drawer's content moves under the link.
-        s.update_drawer(&old.id, "the retro is cancelled").unwrap();
+        s.update_drawer(&old.id, "the retro is cancelled", "test")
+            .unwrap();
         assert_eq!(
             s.verify_supersessions().unwrap()[0].verdict,
             ReceiptVerdict::SourceChanged
@@ -1088,7 +1137,10 @@ mod tests {
         let dr = drawer("w", "r", "original text", 0);
         s.upsert(&dr).unwrap();
         assert_eq!(s.list_drawers(Some("w"), None, 10, 0).unwrap().len(), 1);
-        assert!(s.update_drawer(&dr.id, "updated text").unwrap());
+        assert_eq!(
+            s.update_drawer(&dr.id, "updated text", "test").unwrap(),
+            UpdateOutcome::Updated
+        );
         assert_eq!(s.get(&dr.id).unwrap().unwrap().content, "updated text");
         assert!(s.delete_drawer(&dr.id).unwrap());
         assert!(s.get(&dr.id).unwrap().is_none());

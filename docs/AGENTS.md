@@ -515,7 +515,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_status` | | palace statistics |
 | `undercroft_get_drawer` | | fetch one drawer verbatim |
 | `undercroft_add_drawer` | W | file a drawer with explicit wing/room |
-| `undercroft_update_drawer` | W | replace content in place (re-sealed, audited) |
+| `undercroft_update_drawer` | W | replace content in place (re-sealed, audited; screened like a save when admission is on — a flagged update quarantines and the reply says so, the drawer keeps its previous content) |
 | `undercroft_delete_drawer` | W | delete + tamper-evident tombstone |
 | `undercroft_list_drawers` | | page drawer summaries |
 | `undercroft_delete_by_source` | W | delete everything mined from a source |
@@ -552,7 +552,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `kind` — closed vocabulary, 400 if unknown — opt `supersedes` — a receipted update link to the drawer this save replaces; the old drawer stays — opt `vector`, `dedup_threshold`) |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
-| PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`) |
+| PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`); screened like a save when admission is on — a flagged update answers 202 `{quarantined: true}` and the drawer keeps its previous content |
 | POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |

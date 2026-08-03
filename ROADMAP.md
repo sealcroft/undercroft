@@ -1427,9 +1427,15 @@ release with the usual battery + measured gates.
   wing refuses forged residents, retrieval hard-excludes it except for
   the reviewer's own scope), CLI/`/v1` allow/deny with the verdict
   inside the ruling tag's canonical — never an MCP tool. Recorded
-  gaps: update-path screening and the advisory LLM tier
+  gaps: the advisory LLM tier
   (deny-with-receipt CLOSED 2026-08-03 — deny rides C3.2's
-  `forget_with_proof` and hands back the attestation). The provenance foundation + posture are BUILT (2026-08-03):
+  `forget_with_proof` and hands back the attestation;
+  update-path screening CLOSED 2026-08-03 — `update_drawer` re-stamps
+  `added_by` with the UPDATING surface before the screen, so an
+  untrusted surface cannot ride the original writer's standing; a
+  flagged update diverts with the drawer keeping its previous content
+  and the outcome typed, never a bool; quarantine-pending drawers are
+  not editable — the reviewer rules on exactly what the screen saw). The provenance foundation + posture are BUILT (2026-08-03):
   `agent`/`channel`/`session` claims on every save surface
   (HMAC-covered, never trusted) and `UNDERCROFT_ADMIT_TRUSTED_SOURCES`
   keyed on the surface-stamped `added_by` only — a channel CLAIM never
