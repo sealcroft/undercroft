@@ -5,6 +5,7 @@
 //! chunks of original text. Nothing is summarized or paraphrased on the way
 //! in; retrieval returns the exact bytes that were stored.
 
+pub mod admission;
 pub mod chunk;
 pub mod convo;
 pub mod drawer;

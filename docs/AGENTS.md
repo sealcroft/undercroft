@@ -565,6 +565,8 @@ background facts breaks exactly the multi-hop questions the graph is for.
 | POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
+| GET | `/v1/vaults/{id}/admission` | drawers awaiting an admission ruling (signal codes + offsets, intended destination) plus whether screening is on |
+| POST | `/v1/vaults/{id}/admission` | rule on a quarantined drawer (`drawer_id`, `verdict` ∈ `allow`\|`deny`; chain-audited). Operator surface, never MCP — an agent whose write was quarantined must not rule on it |
 | POST | `/v1/vaults/{id}/trust` | assign a wing's trust class (`wing`, `trust` ∈ `quarantined`\|`standard`\|`trusted`; 400 if unknown). The receiving principal's declaration — an OPERATOR surface, deliberately absent from MCP; audited, tamper-evident |
 | GET | `/v1/vaults/{id}/trust` | every assigned wing trust class (absent wings read as `standard`) |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
@@ -607,6 +609,14 @@ minimum wing trust, `quarantined`|`standard`|`trusted`: unscoped searches
 exclude wings the operator assigned below it, resolved before candidates
 are drawn; an explicitly named wing scope bypasses the vault floor,
 a request's own `min_trust` never is; garbage warns and stays off) ·
+`UNDERCROFT_ADMISSION` (off — `quarantine` screens every save with the
+deterministic tier-1 detector and diverts flagged writes, sealed with
+their signal codes and intended destination, into the reserved
+`quarantine-pending` wing: hard-excluded from retrieval except a
+reviewer's explicit wing scope, and reviewed via CLI
+`admission list|allow|deny` or `/v1` GET/POST `…/admission` — operator
+surfaces, deliberately never MCP. Heuristic, quarantine-not-reject; the
+default leaves the write contract byte-identical) ·
 `UNDERCROFT_TRAIN_SOURCE_CAP` (4 — per-wing cap divisor on global
 codebook training draws: no single wing supplies more than 1/N of a
 training sample while others can fill it; within-quota corpora draw
