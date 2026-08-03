@@ -1367,10 +1367,16 @@ release with the usual battery + measured gates.
   drawer. Their pitch (smart memory) becomes our subset; our pitch
   (provable memory) stays exclusive. *Gate*: LoCoMo/LongMemEval with
   the distillation tier on must beat our retrieval-only baseline.
-- **C3.2 Provable forgetting.** Retention policies per wing/room +
-  `forget --prove`: deletion executes through the audit chain
-  (tombstones already exist), emitting a verifiable attestation that
-  named content was destroyed and nothing else changed. GDPR/RTBF
+- **C3.2 Provable forgetting — phase 1 BUILT (2026-08-03).**
+  `undercroft forget` destroys named drawers through the chain and
+  emits a `ForgetAttestation` (ids + unkeyed content fps, heads
+  before/after, the exact tombstone interval; optional Ed25519
+  signature); `verify-forgetting` replays with the key in hand and
+  refuses every forgery shape (pinned five ways). Honest boundary:
+  third parties verify the operator's SIGNATURE, not the replay — the
+  chain step is keyed, and an unkeyed public chain is its own design
+  decision, not a rider. Remaining: retention policies per wing/room;
+  admission-deny riding this path for a receipted deny. GDPR/RTBF
   with a receipt. Extraction-based systems cannot know what their
   LLM absorbed where — this feature is unreachable for them.
 - **C3.3 Memory-poisoning defense — write-path admission control.**

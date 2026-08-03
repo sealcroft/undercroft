@@ -352,6 +352,7 @@ impl Tenancy {
             ("POST", &["v1", "vaults", id, "trust"]) => self.set_trust(id, req, body, now),
             ("GET", &["v1", "vaults", id, "trust"]) => self.list_trust(id, req, now),
             ("GET", &["v1", "vaults", id, "admission"]) => self.admission_list(id, req, now),
+            ("POST", &["v1", "vaults", id, "forget"]) => self.forget(id, req, body, now),
             ("POST", &["v1", "vaults", id, "admission"]) => self.admission_rule(id, req, body, now),
             ("GET", &["v1", "vaults", id, "kg", "canonical", key]) => {
                 self.kg_canonical(id, key, req, now)
@@ -1193,6 +1194,35 @@ impl Tenancy {
                 "supersessions": serde_json::to_value(&links).unwrap_or_else(|_| json!([])),
                 "summary": summary,
             })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/forget` — destroy the named drawers through
+    /// the audit chain and return the attestation (`{ids: [...]}` in;
+    /// unsigned out — the signing identity is an operator file, so
+    /// signing happens via the CLI). C3.2: GDPR/RTBF with a receipt.
+    fn forget(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let ids: Vec<String> = body
+            .get("ids")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            return Err(RestError::new(400, "ids must be a non-empty array"));
+        }
+        let store = self.store_for(id)?;
+        let att = store.forget_with_proof(&ids).map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(serde_json::to_value(&att).unwrap_or_else(|_| json!({}))),
         ))
     }
 
