@@ -1373,7 +1373,24 @@ release with the usual battery + measured gates.
   with a receipt. Extraction-based systems cannot know what their
   LLM absorbed where — this feature is unreachable for them.
 - **C3.3 Memory-poisoning defense — write-path admission control.**
-  First-mover answer to the documented memory-poisoning attack class
+  **Phase 1 BUILT (2026-08-03): deployment-assigned wing trust classes**
+  — `quarantined|standard|trusted` assigned by the operator (CLI +
+  `/v1`, deliberately never MCP), HMAC-tagged and chain-audited (a
+  flipped row fails verification and a floored search refuses),
+  consumed as a candidate-set floor (`SearchOptions.min_trust`,
+  `UNDERCROFT_TRUST_FLOOR`) riding the scope-resolved machinery —
+  pinned starvation-free by a raw-premise test: a quarantined wing
+  owning the corpus top-k cannot crowd out a standard wing's answer.
+  This is the enforcement substrate the quarantine wing below plugs
+  into. **The per-source cap (the density channel on codebook
+  training) is designed and deliberately gated**: capping any wing's
+  share of the global training draw changes which rows train, and the
+  even-stride lesson (R@5 83.0% from a sampling pattern interaction)
+  is the standing warning — it ships only in its own unit behind a
+  `synth`/`pqscale` gate (R@5 held at every checkpoint, `fit_report`
+  clean) plus negative controls, never as a rider.
+  Remaining phases below. First-mover answer to the documented
+  memory-poisoning attack class
   (MINJA, AgentPoison, forged-reasoning): screen memory **at ingest**,
   not just at retrieval, so poison never becomes retrievable while a
   human gate is pending. Full design in

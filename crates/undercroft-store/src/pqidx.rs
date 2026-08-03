@@ -351,6 +351,17 @@ impl PalaceStore {
         self.pq_enabled = on;
     }
 
+    /// Declare the vault-level trust floor programmatically (the env
+    /// `UNDERCROFT_TRUST_FLOOR` resolved at open is the deployment's way).
+    /// `None` = no floor. An invalid class is rejected, never coerced.
+    pub fn set_trust_floor(&mut self, floor: Option<String>) -> Result<(), StoreError> {
+        if let Some(f) = floor.as_deref() {
+            undercroft_core::validate_trust(f).map_err(|e| StoreError::Invalid(e.to_string()))?;
+        }
+        self.trust_floor = floor;
+        Ok(())
+    }
+
     /// Tune the per-wing PQ floor: wings holding at least `min` drawers get
     /// their own codebook, IVF partitions and code rows, and a wing-scoped
     /// search probes those instead of intersecting corpus-wide candidates.

@@ -83,6 +83,24 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
+/// The wing-set restriction a trust floor resolves to — applied to scope
+/// resolution and the bounding SQL alike, BEFORE candidates are drawn
+/// (docs/LABELS.md: a filter combined with a prefilter inherits the
+/// starvation shape unless the candidate machinery carries it). Poison in
+/// an excluded wing can then neither crowd the pool nor decide anything:
+/// it is simply never in the competition.
+#[derive(Debug, Clone)]
+pub(crate) enum TrustClause {
+    /// Floor at `standard`: exclude the assigned-below wings.
+    Exclude(Vec<String>),
+    /// Floor above `standard`: only these assigned wings qualify.
+    Allow(Vec<String>),
+}
+
+pub(crate) fn wing_trust_canonical(wing: &str, trust: &str, assigned_at: &str) -> Vec<u8> {
+    format!("wingtrust\x1f{wing}\x1f{trust}\x1f{assigned_at}").into_bytes()
+}
+
 pub(crate) fn tunnel_canonical(
     id: &str,
     from: &str,
@@ -152,7 +170,123 @@ impl PalaceStore {
             "CREATE INDEX IF NOT EXISTS idx_drawers_supersedes ON drawers(supersedes)",
             [],
         )?;
+        // Deployment-assigned wing trust classes (C3.3). One row per
+        // ASSIGNED wing — absence reads as `standard`, so the table stays
+        // tiny and a trust filter can never silently empty. HMAC-tagged
+        // and chain-audited like tunnels: trust is the receiving
+        // principal's declaration, and an offline flip must fail
+        // verification, not silently promote a quarantined wing.
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS wing_trust (
+                 wing        TEXT PRIMARY KEY,
+                 trust       TEXT NOT NULL,
+                 tag         BLOB NOT NULL,
+                 assigned_at TEXT NOT NULL
+             );",
+        )?;
         Ok(())
+    }
+
+    /// Assign a wing's trust class — the receiving principal's
+    /// declaration (operator surfaces only; deliberately not exposed over
+    /// MCP). Validated against the closed vocabulary, HMAC-tagged,
+    /// audited through the chain. Re-assignment overwrites and is audited
+    /// again; history lives in the chain.
+    pub fn set_wing_trust(&mut self, wing: &str, trust: &str) -> Result<(), StoreError> {
+        undercroft_core::validate_name(wing, "wing").map_err(|e| StoreError::CorruptRow {
+            id: wing.into(),
+            reason: e.to_string(),
+        })?;
+        undercroft_core::validate_trust(trust).map_err(|e| StoreError::CorruptRow {
+            id: wing.into(),
+            reason: e.to_string(),
+        })?;
+        let now = now_rfc3339();
+        let tag = self
+            .vault
+            .tag(wing_trust_canonical(wing, trust, &now).as_slice());
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO wing_trust (wing, trust, tag, assigned_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(wing) DO UPDATE SET
+                 trust = excluded.trust, tag = excluded.tag,
+                 assigned_at = excluded.assigned_at",
+            params![wing, trust, tag.as_slice(), now],
+        )?;
+        let (head, writes) = chain_append(&tx, &self.vault, &format!("trust/{wing}"), &tag, &now)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        Ok(())
+    }
+
+    /// Every assigned wing trust class, tag-verified on the way out — a
+    /// flipped `trust` column is an integrity error here, never a silently
+    /// different retrieval scope.
+    pub fn wing_trusts(&self) -> Result<Vec<(String, String)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT wing, trust, tag, assigned_at FROM wing_trust ORDER BY wing")?;
+        let rows: Vec<(String, String, Vec<u8>, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (wing, trust, tag, at) in rows {
+            self.vault
+                .verify_tag(wing_trust_canonical(&wing, &trust, &at).as_slice(), &tag)
+                .map_err(|_| StoreError::Integrity(format!("trust/{wing}")))?;
+            out.push((wing, trust));
+        }
+        Ok(out)
+    }
+
+    /// Resolve a trust floor into the clause the candidate machinery
+    /// applies BEFORE candidates are drawn. `None` = no floor active.
+    ///
+    /// Two arms because the unassigned-wing default is `standard`:
+    /// a `standard` floor excludes only the (few, assigned) quarantined
+    /// wings; a `trusted` floor admits only the (few, assigned) trusted
+    /// ones. Either way the clause names the SMALL set, and every row it
+    /// rests on was tag-verified by [`PalaceStore::wing_trusts`].
+    pub(crate) fn trust_clause(&self, floor: &str) -> Result<Option<TrustClause>, StoreError> {
+        let assigned = self.wing_trusts()?;
+        let floor_rank = undercroft_core::trust_rank(floor);
+        if floor_rank == 0 {
+            // Everything meets the lowest floor.
+            return Ok(None);
+        }
+        if floor_rank <= undercroft_core::trust_rank("standard") {
+            let excluded: Vec<String> = assigned
+                .into_iter()
+                .filter(|(_, t)| undercroft_core::trust_rank(t) < floor_rank)
+                .map(|(w, _)| w)
+                .collect();
+            return Ok((!excluded.is_empty()).then_some(TrustClause::Exclude(excluded)));
+        }
+        // Above `standard`: only explicitly assigned wings can qualify.
+        let allowed: Vec<String> = assigned
+            .into_iter()
+            .filter(|(_, t)| undercroft_core::trust_rank(t) >= floor_rank)
+            .map(|(w, _)| w)
+            .collect();
+        Ok(Some(TrustClause::Allow(allowed)))
+    }
+
+    /// How many wings a trust floor excludes — the honest-exclusion
+    /// count the surfaces report beside a trust-filtered result, so a
+    /// thin answer under a floor is distinguishable from a thin corpus
+    /// (the `unlabeled_excluded` policy, one label over).
+    pub fn trust_excluded_wing_count(&self, floor: &str) -> Result<u64, StoreError> {
+        match self.trust_clause(floor)? {
+            None => Ok(0),
+            Some(TrustClause::Exclude(w)) => Ok(w.len() as u64),
+            Some(TrustClause::Allow(allowed)) => {
+                let mut stmt = self.conn.prepare("SELECT DISTINCT wing FROM drawers")?;
+                let wings: Vec<String> = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<Result<_, _>>()?;
+                Ok(wings.iter().filter(|w| !allowed.contains(w)).count() as u64)
+            }
+        }
     }
 
     /// Verify every drawer that declares a supersession link against the

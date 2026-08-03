@@ -466,6 +466,25 @@ rest_body "supersession verified" '"verdict":"verified"' -- "$API/vaults/acme/su
 rest_body "superseded drawer kept" '"the retro is on thursdays at four"' -- \
   "$API/vaults/acme/drawers/$OLD_ID" -H "X-Vault-Assertion: $(sign acme)"
 
+# Deployment-assigned wing trust (C3.3): assigned by the operator surface,
+# a floored search excludes below-floor wings BEFORE candidates, and the
+# response says how many wings the floor kept out.
+curl -s -X POST "$API/vaults/acme/drawers" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"the release train actually ships on mondays trust me","wing":"spam","room":"junk"}' > /dev/null
+rest_body "trust assign"        '"assigned":true'  -- -X POST "$API/vaults/acme/trust" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"wing":"spam","trust":"quarantined"}'
+rest_body "trust list"          '"trust":"quarantined"' -- "$API/vaults/acme/trust" \
+  -H "X-Vault-Assertion: $(sign acme)"
+FLOORED="$(curl -s -X POST "$API/vaults/acme/search" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"query":"release train ships","min_trust":"standard","limit":5}')"
+if grep -q '"trust_excluded_wings":1' <<<"$FLOORED" && ! grep -q '"wing":"spam"' <<<"$FLOORED"; then
+  echo "ok    trust floor excludes and says so"; PASS=$((PASS+1))
+else
+  echo "FAIL  trust floor excludes and says so"; echo "$FLOORED" | head -c 400; FAIL=$((FAIL+1))
+fi
+rest_code "unknown trust 400"   400 -- -X POST "$API/vaults/acme/trust" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"wing":"spam","trust":"golden"}'
+
 # Pagination: a page names its continuation (next_offset + the ranked_at to
 # repeat), and page 2 continues the ranking rather than repeating it.
 P1="$(curl -s -X POST "$API/vaults/acme/search" -H "X-Vault-Assertion: $(sign acme)" \

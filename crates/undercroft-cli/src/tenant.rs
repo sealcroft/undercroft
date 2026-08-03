@@ -349,6 +349,8 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "supersessions"]) => {
                 self.drawer_supersessions(id, req, now)
             }
+            ("POST", &["v1", "vaults", id, "trust"]) => self.set_trust(id, req, body, now),
+            ("GET", &["v1", "vaults", id, "trust"]) => self.list_trust(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "canonical", key]) => {
                 self.kg_canonical(id, key, req, now)
             }
@@ -671,6 +673,14 @@ impl Tenancy {
             // Declared-kind filter (closed vocabulary; the store rejects an
             // unknown value as an error, surfaced as a 400 below).
             kind: body.get("kind").and_then(Value::as_str).map(String::from),
+            // Trust floor for this query (closed vocabulary, 400 if
+            // unknown): wings assigned below it never enter the
+            // competition. Assignment itself is an operator action —
+            // POST /trust — never part of a search.
+            min_trust: body
+                .get("min_trust")
+                .and_then(Value::as_str)
+                .map(String::from),
             limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
             // Rank-space page start: pass the previous response's
             // `next_offset` (with its `ranked_at`) to continue deeper instead
@@ -809,6 +819,14 @@ impl Tenancy {
         });
         if let Some(n) = unlabeled_excluded {
             resp["unlabeled_excluded"] = json!(n);
+        }
+        // The honest-exclusion count, one label over: while a trust floor
+        // is declared on the request, say how many wings it kept out of
+        // the competition. Additive key, present only with the filter.
+        if let Some(floor) = opts.min_trust.clone() {
+            let store = self.store_for(id)?;
+            let n = store.trust_excluded_wing_count(&floor).map_err(store_err)?;
+            resp["trust_excluded_wings"] = json!(n);
         }
         Ok((200, Body::Json(resp)))
     }
@@ -1166,6 +1184,42 @@ impl Tenancy {
                 "supersessions": serde_json::to_value(&links).unwrap_or_else(|_| json!([])),
                 "summary": summary,
             })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/trust` — assign a wing's trust class
+    /// (`{wing, trust}`; closed vocabulary, 400 if unknown). The receiving
+    /// principal's declaration: an OPERATOR surface, deliberately absent
+    /// from MCP — an agent that writes content must not be able to raise
+    /// its own standing (docs/LABELS.md). Audited through the chain.
+    fn set_trust(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let wing = body_str(&body, "wing")?;
+        let trust = body_str(&body, "trust")?;
+        undercroft_core::validate_trust(&trust).map_err(|e| RestError::new(400, e.to_string()))?;
+        let store = self.store_for(id)?;
+        store.set_wing_trust(&wing, &trust).map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({ "wing": wing, "trust": trust, "assigned": true })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/trust` — every assigned wing trust class,
+    /// tag-verified. Wings absent here read as `standard`.
+    fn list_trust(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let rows = store.wing_trusts().map_err(store_err)?;
+        let assignments: Vec<Value> = rows
+            .into_iter()
+            .map(|(wing, trust)| json!({ "wing": wing, "trust": trust }))
+            .collect();
+        Ok((
+            200,
+            Body::Json(json!({ "assignments": assignments, "default": "standard" })),
         ))
     }
 

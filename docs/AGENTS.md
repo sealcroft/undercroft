@@ -517,6 +517,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_get_closet_index` | | compact LLM-scannable index |
 | `undercroft_save` / `_add_drawer` also take `kind` | W | declared record kind (closed vocabulary: `question`\|`preference`\|`decision`\|`event`\|`procedure`\|`statement`; rejected if unknown — omit rather than guess). `undercroft_search` filters by it; while filtering, the reply says how many in-scope drawers carry no declared kind |
 | `undercroft_save` / `_add_drawer` also take `supersedes` | W | id of the drawer the new record replaces: a receipted update link (the KG receipt pattern one level up — bound to the superseded content's fingerprint under a keyed tag, re-keyed on rotation). The old drawer is **never** deleted or hidden; `undercroft_verify` reports every link's verdict (`verified`\|`source-changed`\|`dangling`\|`unreceipted`\|`tampered`, the last failing the verify) |
+| `undercroft_search` also takes `min_trust` | | minimum deployment-assigned wing trust for the query (`quarantined`\|`standard`\|`trusted`): wings the operator assigned below it never enter the candidate competition; unassigned wings count as `standard`. Reading with a floor is self-protection and always allowed — ASSIGNING trust is an operator action (`/v1` + CLI) and deliberately not an MCP tool: an agent that writes content must not be able to raise its own standing |
 | `undercroft_kg_add` / `_kg_invalidate` / `_kg_supersede` | W | temporal facts: assert/close/replace |
 | `undercroft_kg_query` / `_kg_timeline` / `_kg_stats` | | query facts (incl. `--as-of`) |
 | `undercroft_lookup_canonical` | | the exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks; an empty answer means no declared truth exists — never guess on the key's behalf |
@@ -564,6 +565,8 @@ background facts breaks exactly the multi-hop questions the graph is for.
 | POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
+| POST | `/v1/vaults/{id}/trust` | assign a wing's trust class (`wing`, `trust` ∈ `quarantined`\|`standard`\|`trusted`; 400 if unknown). The receiving principal's declaration — an OPERATOR surface, deliberately absent from MCP; audited, tamper-evident |
+| GET | `/v1/vaults/{id}/trust` | every assigned wing trust class (absent wings read as `standard`) |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON: a manifest first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (receipts travel and re-key at import) and tunnels — the whole palace |
 | POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present |
@@ -599,7 +602,12 @@ Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw`) · `UNDERCROFT_FUSION`
 back to `bm25`) · `UNDERCROFT_FUSION_WEIGHT` (0.55 — the blend's semantic
 weight `w` in `w·semantic + (0.90−w)·lexical + 0.10·recency`; declared,
 clamped to 0.20–0.70 so no configuration can retire a channel, one global
-value never per-query) · `UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
+value never per-query) · `UNDERCROFT_TRUST_FLOOR` (unset — vault-level
+minimum wing trust, `quarantined`|`standard`|`trusted`: unscoped searches
+exclude wings the operator assigned below it, resolved before candidates
+are drawn; an explicitly named wing scope bypasses the vault floor,
+a request's own `min_trust` never is; garbage warns and stays off) ·
+`UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
 `UNDERCROFT_SEMANTIC_GATE` (the embedder's own calibration; a number in
 `0.0..=1.0` declares the `semantic` score above which a drawer is admitted
 on cosine evidence alone, `off` refuses semantic-only admission entirely.

@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased — trust becomes the principal's declaration: wing trust classes, floored retrieval, C3.3 phase 1
+
+- **Deployment-assigned wing trust classes** (C3.3, building on
+  wing-as-trust-zone): `quarantined | standard | trusted`
+  (`undercroft_core::TRUST_VOCAB`), assigned per wing by the RECEIVING
+  PRINCIPAL — CLI `undercroft trust set|list` and `/v1` `POST/GET …/trust`
+  only, **deliberately not an MCP tool**: an agent that writes content
+  must not be able to raise its own standing (docs/LABELS.md, "a
+  self-declared label is never a trust boundary" — this is the label that
+  IS one, which is exactly why its writer is the operator). Assignments
+  are validated (rejected, never coerced), HMAC-tagged, chain-audited;
+  an offline column flip is an integrity failure on read — and a floored
+  search then REFUSES rather than silently searching a reshaped scope
+  (pinned). A wing with no assignment reads as `standard`, a total
+  default, so a trust filter can never silently empty over an unlabeled
+  palace.
+- **The floor is a candidate-set decision, never a score.**
+  `SearchOptions.min_trust` (per request; `/v1`, MCP `undercroft_search`,
+  CLI `--min-trust`) and `UNDERCROFT_TRUST_FLOOR` (vault-level, resolved
+  once at open, garbage warns and stays off) resolve into a wing-set
+  clause applied BEFORE candidates are drawn, riding the scope-resolved
+  machinery like every other declared filter — pinned by a raw-premise
+  starvation test on the wing-starvation corpus: a quarantined wing loud
+  enough to own the entire corpus-wide top-k can neither crowd a floored
+  query's pool nor starve the answer out of a standard wing. Two floor
+  arms because the default is total (`standard` excludes the assigned-
+  below set; `trusted` admits only the assigned-at-or-above set); an
+  explicitly named wing scope bypasses the VAULT floor (self-scoping
+  needs no trust) but never a request's own `min_trust`; the honest-
+  exclusion count (`trust_excluded_wings` on `/v1`, prose on CLI) says
+  how many wings a floor kept out. Unscoped, unfloored searches are
+  byte-identical to before.
+- **The per-source cap on codebook training — the density channel — is
+  DESIGNED AND FILED, deliberately not built here.** Capping any single
+  wing's share of the global training draw changes which rows train, and
+  the even-stride lesson stands as the warning: a sampling change this
+  deep measured a silent 17pp recall collapse in one configuration.
+  It ships only behind its own `synth`/`pqscale` gate (R@5 held at the
+  checkpoints + `fit_report` clean) in its own unit — ROADMAP carries
+  the design and the gate.
+
 ## Unreleased — provenance grows two rungs: who claimed a fact, what a record replaced, who wrote a bundle
 
 Consultation adopted items 2 and 3 (docs/CONSULTATION_REVIEW.md §7), built
