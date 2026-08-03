@@ -646,7 +646,17 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   vaults. Gates: LoCoMo hash digit-for-digit; mixed R@5 0–4%→53–88% at
   the default weight, 100.0% every pair under a declared
   `UNDERCROFT_FUSION_WEIGHT=0.70` — map and weight compose, the default
-  weight stays put. Reading dates *inside* the text is the
+  weight stays put. Replicated on a public corpus 2026-08-03 (FLORES-200
+  dev, 12 pairs en↔{ar,de,el,ru,zh,th} on disjoint blocks, sealed,
+  bge-m3 through the shipped TLS terminator, v0.44.0 + TLS unit;
+  digit-identical over both transports): defaults R@5 36.2–98.8% — a
+  lexical-evidence gradient, and at the default weight cross-SCRIPT
+  pairs (ar/th/zh↔en, 36–44%) are NOT served, so **the capability claim
+  is two-conditioned: multilingual embedder AND declared w=0.70**;
+  under that weight R@5 97.5–100.0% (10/12 pairs at 100.0) — full
+  table + recipe in CHANGELOG; the gated script-disjoint fusion design
+  (pairwise byte-readable script disjointness, never language-ID) is
+  the queued candidate for an honest default. Reading dates *inside* the text is the
   **scanner's** job (`language`
   per request) and is independent of which embedder found the drawer.
   **A served embedder is worth far more than the repo used to think.** The

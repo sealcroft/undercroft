@@ -1,5 +1,78 @@
 # Changelog
 
+## Unreleased — the cross-lingual claim gets a citable corpus, and an honest one: FLORES-200
+
+- **The session-24 xlingual result replicates on a public corpus** —
+  docs-only unit; the numbers, with their full configuration
+  (2026-08-03, engine = v0.44.0 + the TLS unit, tree `26622f2` = main
+  `78741b4`; the same tables also measured digit-for-digit at
+  `9e8e484` pre-TLS, which is the transport-transparency check):
+  - *Corpus*: FLORES-200 **dev** split (official Meta distribution,
+    `flores200_dataset.tar.gz`, CC-BY-SA 4.0 — per the license doctrine
+    the TSV lives outside the repo; the recipe here reproduces it
+    byte-for-byte). 12 directed pairs, en↔{ar, de, el, ru, zh, th}, 80
+    sentences per pair on **disjoint** 80-line blocks (dev lines 1–960
+    in pair order en→ar, en→de, en→el, en→ru, en→th, en→zh, ar→en,
+    de→en, el→en, ru→en, th→en, zh→en) — disjoint because FLORES is
+    line-aligned across all languages, and sharing content lines across
+    pairs would put a second valid translation of every query in the
+    vault, corrupting R@1 by construction.
+  - *Config*: sealed vault, bge-m3 served through the shipped
+    `embeddings-tls` terminator (`UNDERCROFT_EMBEDDER=http`,
+    `UNDERCROFT_EMBED_URL=https://embeddings-tls`, `UNDERCROFT_EMBED_CA`
+    pinning the terminator's root; Ollama `ollama/ollama:0.11.4`
+    behind it), one mixed vault (the harness's own shape — every
+    pair's targets compete), 960 drawers, verbatim-recovery sanity
+    **100.0% on every pair in both arms**.
+  - **The full per-pair record — the ranges alone are not the record**
+    (R@5 with R@1 in parentheses; arm A = defaults, arm B = declared
+    `UNDERCROFT_FUSION_WEIGHT=0.70`; the two arms differ in that one
+    variable only):
+
+    | pair | arm A — default | arm B — declared 0.70 |
+    |---|---|---|
+    | de→en | 98.8 (86.2) | 100.0 (100.0) |
+    | en→de | 95.0 (91.2) | 100.0 (100.0) |
+    | ru→en | 95.0 (78.8) | 100.0 (100.0) |
+    | en→ru | 81.2 (61.2) | 100.0 (100.0) |
+    | en→ar | 68.8 (43.8) | 100.0 (97.5) |
+    | el→en | 60.0 (32.5) | 100.0 (100.0) |
+    | en→el | 57.5 (36.2) | 100.0 (96.2) |
+    | en→zh | 43.8 (26.2) | 98.8 (96.2) |
+    | en→th | 42.5 (21.2) | 100.0 (88.8) |
+    | th→en | 37.5 (18.8) | 100.0 (100.0) |
+    | zh→en | 37.5 (16.2) | 97.5 (95.0) |
+    | ar→en | 36.2 (16.2) | 100.0 (98.8) |
+
+  - *Arm A verdict, stated plainly*: **at the default weight this is
+    NOT cross-script retrieval.** The gradient is lexical evidence, not
+    noise (the whole table reproduced digit-for-digit across two
+    independent ingests): same-script pairs ride BM25's shared tokens
+    (de/ru↔en 81–99), alphabet-different pairs keep a thin surface
+    (el, en→ar 57–69), and pairs sharing no script at all hold only the
+    semantic channel against same-language lexical noise (ar/th/zh
+    36–44). Workable for related scripts; not a capability across
+    script boundaries.
+  - *Arm B*: R@5 **97.5–100.0% — ten of twelve pairs at 100.0** (the
+    two Chinese arms at 98.8/97.5); R@1 **88.8–100.0%**. The gradient
+    vanishes, which is the evidence that the capability is uniform in
+    the embedder's space and only the default blend taxed the
+    cross-script pairs. The session-24 composition claim — the
+    calibrated map restores the semantic channel's range and a declared
+    weight then genuinely trades lexical against semantic — now stands
+    on a corpus anyone can download.
+  - **The honest capability claim is two-conditioned**: cross-lingual
+    retrieval requires (1) a multilingual embedder — hash measures ~0
+    and cannot do it — AND (2) for cross-script pairs, a declared
+    `UNDERCROFT_FUSION_WEIGHT=0.70`. The default weight still does not
+    move (hash's measured optimum is lower, and one benchmark must not
+    set a default); the queued script-disjoint fusion design — reweight
+    per (query, drawer) pair when the two share no script, a readable
+    byte-level signal, never language-ID inference — is the candidate
+    path to an honest default, and ships only behind gates (LoCoMo
+    digit-identical, arm A recovering without a declared weight,
+    false-friend controls untouched).
+
 ## Unreleased — the wire class closes: TLS or loopback, nothing else
 
 - **Cleartext http to a non-loopback embeddings host is REFUSED at

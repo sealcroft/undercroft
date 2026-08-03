@@ -264,11 +264,21 @@ unrelated sentence. The same limit applies within one language: `car` and
 (`run`/`running`), not meaning.
 
 So a vault holding several languages, or queried in a language other than
-the one it was written in, needs `onnx`/`ort` with a **multilingual** model
-(LaBSE, multilingual-e5, nomic-embed-text-v2-moe) — or an external vault,
-where you supply vectors yourself and the engine never embeds. Either way
-the vectors are sealed at rest exactly like the default ones, so this costs
-nothing in confidentiality.
+the one it was written in, needs `onnx`/`ort`/`http` with a **multilingual**
+model (bge-m3, LaBSE, multilingual-e5, nomic-embed-text-v2-moe) — or an
+external vault, where you supply vectors yourself and the engine never
+embeds. Either way the vectors are sealed at rest exactly like the default
+ones, so this costs nothing in confidentiality.
+
+**And the embedder alone is not the whole claim.** Measured on FLORES-200
+(bge-m3, sealed, 12 directed pairs — full table in CHANGELOG): pairs that
+share a script do fine at the default fusion weight (de/ru↔en 81–99% R@5),
+but pairs sharing **no script** (Arabic, Thai, Chinese ↔ English) measure
+**36–44% R@5 at the default weight** — the gold's lexical channel is
+structurally silent while same-language competitors collect BM25 noise. The
+honest configuration for cross-script retrieval is the multilingual
+embedder **plus a declared `UNDERCROFT_FUSION_WEIGHT=0.70`**, which measures
+97.5–100% R@5 on every pair. Declare both or expect the default's numbers.
 
 Note the two axes are independent. **Retrieval** across languages is the
 embedder's job. **Reading dates inside the text** is the scanner's, selected
