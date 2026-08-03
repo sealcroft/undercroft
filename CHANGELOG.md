@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — provenance on every drawer, and the posture it makes honest
+
+- **Provenance claims on `DrawerMeta`**: `agent`, `channel`, `session` —
+  who wrote it, over what class of origin, in which session — on every
+  save surface (`/v1`, MCP, CLI `remember --agent/--channel/--session`).
+  Recorded verbatim, inside the drawer HMAC like the rest of the meta,
+  absent-serializes-to-nothing (old rows byte-identical), and
+  **deliberately never a trust boundary**: they are the writer's CLAIMS.
+  The exposure inventory gains all three (metadata by design — the
+  `added_by` trade extended), pinned in both directions.
+- **The provenance-driven admission posture, doctrine-clean**
+  (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`, comma list, default empty — 69th
+  env var): writes from a deployment-trusted surface bypass the
+  admission screen. Keyed on `added_by`, which HANDLER CODE stamps
+  (`cli`/`mcp`/`rest`) and a caller cannot set — keying on the
+  writer-declared `channel` claim would let poison admit itself by
+  declaration, and the pinned test says exactly that: a trusted-surface
+  save auto-admits, an untrusted-surface save claiming
+  `channel: "user"` is still screened, and the claims travel with the
+  quarantined drawer verbatim for the reviewer to see.
+- This is the "provenance on every drawer" foundation item from the
+  C3.3 mechanism list, and it un-gates per-writer training caps (the
+  cap's recorded per-wing boundary) as a future unit now that an agent
+  identity exists to cap on — still a claim, so a per-AGENT cap bounds
+  accidents, not adversaries; the adversarial bound stays per-wing.
+
 ## Unreleased — memory is screened at the door: admission control and the quarantine wing (C3.3 phase 2)
 
 - **The deterministic tier-1 detector** (`undercroft_core::admission`):

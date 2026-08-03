@@ -1401,8 +1401,11 @@ release with the usual battery + measured gates.
   the reviewer's own scope), CLI/`/v1` allow/deny with the verdict
   inside the ruling tag's canonical — never an MCP tool. Recorded
   gaps: update-path screening, deny-with-receipt (C3.2), the advisory
-  LLM tier, and the provenance-driven default posture (auto-admit by
-  channel) which needs richer provenance fields first.
+  LLM tier. The provenance foundation + posture are BUILT (2026-08-03):
+  `agent`/`channel`/`session` claims on every save surface
+  (HMAC-covered, never trusted) and `UNDERCROFT_ADMIT_TRUSTED_SOURCES`
+  keyed on the surface-stamped `added_by` only — a channel CLAIM never
+  bypasses the screen (pinned).
   Remaining pieces below. First-mover answer to the documented
   memory-poisoning attack class
   (MINJA, AgentPoison, forged-reasoning): screen memory **at ingest**,

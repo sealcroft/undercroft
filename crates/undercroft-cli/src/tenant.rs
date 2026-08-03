@@ -605,12 +605,19 @@ impl Tenancy {
             .and_then(Value::as_str)
             .map(String::from);
 
+        // Provenance CLAIMS (recorded + HMAC-covered, never trusted):
+        // which agent, over which channel class, in which session. The
+        // surface identity itself is `added_by = "rest"`, stamped here.
+        let prov = |k: &str| body.get(k).and_then(Value::as_str).map(String::from);
+        let (agent, channel, session) = (prov("agent"), prov("channel"), prov("session"));
+
         let store = self.store_for(id)?;
         let idx = store.next_append_index().map_err(err500)? as u32;
         let drawer = Drawer::new(wing, room, normalized, None, idx, "rest")
             .with_content_date(content_date)
             .with_kind(kind)
-            .with_supersedes(supersedes);
+            .with_supersedes(supersedes)
+            .with_provenance(agent, channel, session);
 
         let out = if store.is_external() {
             let v =
