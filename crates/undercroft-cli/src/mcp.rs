@@ -170,7 +170,7 @@ fn tool_definitions() -> Value {
     json!([
         // --- palace core ---
         tool("undercroft_save", "Save one memory verbatim (encrypted + integrity-tagged at rest).",
-            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — a closed vocabulary, rejected if unknown; omit rather than guess"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
+            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — a closed vocabulary, rejected if unknown; omit rather than guess"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this memory replaces — records a receipted update link; the old drawer is never deleted or hidden") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
             json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "kind": s("filter to a declared record kind: question|preference|decision|event|procedure|statement. Drawers with no declared kind are excluded while set, and the reply says how many"), "limit": i("max results"), "offset": i("rank to continue from — pass the offset a previous page's footer gave you to go deeper instead of re-asking the same question"), "ranked_at": s("RFC 3339 instant from a previous page's footer; repeat it so every page slices one identical ranking instead of one that drifts between calls"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year across this corpus: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali, reiwa, heisei, showa, taisho, meiji. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar. An era marker in a memory's own words (พ.ศ. ค.ศ. هـ 民國 令和) outranks this, being the writer's statement about one date rather than yours about the whole corpus") }),
@@ -185,7 +185,7 @@ fn tool_definitions() -> Value {
         tool("undercroft_get_drawer", "Fetch one drawer verbatim by id.",
             json!({ "id": s("drawer id") }), &["id"]),
         tool("undercroft_add_drawer", "File a drawer with explicit wing/room/source.",
-            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — closed vocabulary, rejected if unknown; omit rather than guess"), "source_file": s("origin"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text") }),
+            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — closed vocabulary, rejected if unknown; omit rather than guess"), "source_file": s("origin"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this record replaces — records a receipted update link; the old drawer is never deleted or hidden") }),
             &["content"]),
         tool("undercroft_update_drawer", "Replace a drawer's content in place (re-sealed, re-tagged).",
             json!({ "id": s("drawer id"), "content": s("new content") }), &["id", "content"]),
@@ -276,11 +276,19 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             if let Some(k) = kind.as_deref() {
                 undercroft_core::validate_kind(k)?;
             }
+            let supersedes = opt_str(args, "supersedes").map(str::to_string);
             let drawer = Drawer::new(wing, room, normalized, None, idx, "mcp")
                 .with_content_date(opt_str(args, "content_date").map(str::to_string))
-                .with_kind(kind);
+                .with_kind(kind)
+                .with_supersedes(supersedes.clone());
             store.upsert(&drawer)?;
-            Ok(format!("saved drawer {} in {}/{}", drawer.id, wing, room))
+            match supersedes {
+                Some(old) => Ok(format!(
+                    "saved drawer {} in {}/{} superseding {} (the old drawer stays retrievable; the link is receipted)",
+                    drawer.id, wing, room, old
+                )),
+                None => Ok(format!("saved drawer {} in {}/{}", drawer.id, wing, room)),
+            }
         }
         "undercroft_search" => {
             let query = args
@@ -503,12 +511,32 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
         }
         "undercroft_verify" => {
             let report = store.verify()?;
+            // Supersession links carry keyed receipts; a link that fails
+            // its HMAC is tampering and fails the verify like a bad record.
+            let links = store.verify_supersessions()?;
+            use undercroft_store::ReceiptVerdict as V;
+            let sup_tampered = links.iter().filter(|l| l.verdict == V::Tampered).count();
+            let sup_line = if links.is_empty() {
+                String::new()
+            } else {
+                let count = |v: V| links.iter().filter(|l| l.verdict == v).count();
+                format!(
+                    "\nsupersessions: {} verified, {} source-changed, {} dangling, \
+                     {} unreceipted, {} tampered",
+                    count(V::Verified),
+                    count(V::SourceChanged),
+                    count(V::Dangling),
+                    count(V::Unreceipted),
+                    sup_tampered
+                )
+            };
             Ok(format!(
-                "records checked: {}\nhmac failures: {}\naudit chain: {}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\naudit chain: {}{}\nresult: {}",
                 report.records_checked,
                 report.bad_records.len(),
                 if report.chain_ok { "ok" } else { "BROKEN" },
-                if report.ok() {
+                sup_line,
+                if report.ok() && sup_tampered == 0 {
                     "VERIFY OK"
                 } else {
                     "VERIFY FAILED"
@@ -550,7 +578,8 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 "mcp",
             )
             .with_content_date(opt_str(args, "content_date").map(str::to_string))
-            .with_kind(kind);
+            .with_kind(kind)
+            .with_supersedes(opt_str(args, "supersedes").map(str::to_string));
             store.upsert(&drawer)?;
             Ok(format!("added drawer {} in {}/{}", drawer.id, wing, room))
         }

@@ -71,6 +71,17 @@ pub struct DrawerMeta {
     /// mirrored to an indexed column for the search filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The id of the drawer this record supersedes — an update/dedup chain
+    /// link, DECLARED by the writer and never inferred. The superseded
+    /// drawer is untouched: content is never deleted or hidden by a
+    /// supersession, the chain just becomes queryable instead of only
+    /// audited. Serialized only when present (old rows byte-identical);
+    /// inside `meta_json`, so the link itself is under the drawer's HMAC.
+    /// The store binds it further with a keyed receipt over the superseded
+    /// drawer's content fingerprint — the KG receipt pattern one level up —
+    /// stored beside the row and re-keyed on rotation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<String>,
     /// **Further** times this same content was recorded, beyond the drawer's
@@ -139,6 +150,7 @@ impl Drawer {
                 time_mentions,
                 hall: None,
                 kind: None,
+                supersedes: None,
                 entities,
                 occurrences: Vec::new(),
             },
@@ -152,6 +164,17 @@ impl Drawer {
     #[must_use]
     pub fn with_kind(mut self, kind: Option<String>) -> Self {
         self.meta.kind = kind;
+        self
+    }
+
+    /// Declare that this drawer supersedes an earlier one. The link is a
+    /// claim until the store's write path receipts it against the
+    /// superseded drawer's content; a link to a drawer that does not exist
+    /// is recorded and later reported as dangling, never silently dropped.
+    /// Superseding never deletes: the old drawer stays retrievable.
+    #[must_use]
+    pub fn with_supersedes(mut self, supersedes: Option<String>) -> Self {
+        self.meta.supersedes = supersedes;
         self
     }
 

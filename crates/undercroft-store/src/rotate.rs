@@ -88,11 +88,16 @@ impl PalaceStore {
             emb: Vec<u8>,
             tag: Vec<u8>,
             fp: Option<Vec<u8>>,
+            /// Re-keyed supersession receipt, `None` for the (near-total)
+            /// majority of drawers that supersede nothing.
+            sup_receipt: Option<Vec<u8>>,
         }
         let mut drawer_upds = Vec::new();
         {
             let mut stmt = self.conn.prepare(
-                "SELECT seq, id, meta_json, content, embedding, fp FROM drawers ORDER BY seq",
+                "SELECT seq, id, meta_json, content, embedding, fp, \
+                        supersedes, supersedes_fp, supersedes_receipt \
+                 FROM drawers ORDER BY seq",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok((
@@ -102,10 +107,15 @@ impl PalaceStore {
                     r.get::<_, Vec<u8>>(3)?,
                     r.get::<_, Vec<u8>>(4)?,
                     r.get::<_, Option<Vec<u8>>>(5)?,
+                    (
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<Vec<u8>>>(7)?,
+                        r.get::<_, Option<Vec<u8>>>(8)?,
+                    ),
                 ))
             })?;
             for row in rows {
-                let (seq, id, meta_json, content, emb, fp) = row?;
+                let (seq, id, meta_json, content, emb, fp, sup3) = row?;
                 let new_content = self.vault.reseal_at_rest(&next, &id, &content)?;
                 let new_emb = self
                     .vault
@@ -126,12 +136,24 @@ impl PalaceStore {
                     }
                     None => None,
                 };
+                // Re-key the supersession receipt when present — unchanged
+                // canonical (drawer id + superseded id + unkeyed
+                // fingerprint), new mac key: the kg receipt re-key one
+                // level up. An unreceipted link stays unreceipted.
+                let sup_receipt = match &sup3 {
+                    (Some(old_id), Some(sup_fp), Some(_)) => Some(
+                        next.tag(&crate::supersession_canonical(&id, old_id, sup_fp))
+                            .to_vec(),
+                    ),
+                    _ => None,
+                };
                 drawer_upds.push(DrawerUpd {
                     seq,
                     content: new_content,
                     emb: new_emb,
                     tag,
                     fp,
+                    sup_receipt,
                 });
             }
         }
@@ -176,7 +198,7 @@ impl PalaceStore {
             let mut stmt = self.conn.prepare(
                 "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, \
                         source_drawer_id, source_fp, receipt_tag, support, \
-                        authority_class, review_state, canonical_key \
+                        authority_class, review_state, canonical_key, extractor \
                  FROM kg_triples",
             )?;
             let rows = stmt.query_map([], |r| {
@@ -196,11 +218,12 @@ impl PalaceStore {
                         r.get::<_, Option<String>>(11)?,
                         r.get::<_, Option<String>>(12)?,
                         r.get::<_, Option<String>>(13)?,
+                        r.get::<_, Option<String>>(14)?,
                     ),
                 ))
             })?;
             for row in rows {
-                let (id, s, p, object, vf, vt, conf, src_id, src_fp, receipt_tag, support, auth3) =
+                let (id, s, p, object, vf, vt, conf, src_id, src_fp, receipt_tag, support, auth4) =
                     row?;
                 let new_object = self
                     .vault
@@ -219,12 +242,17 @@ impl PalaceStore {
                 // (like validity), so rotation carries them into the new tag
                 // unchanged — dropping them would mark every promoted fact
                 // tampered after the first rotation.
-                let (a_class, a_review, a_key) = auth3;
+                let (a_class, a_review, a_key, x_id) = auth4;
                 let auth = crate::kg::authority_ext(
                     a_class.as_deref(),
                     a_review.as_deref(),
                     a_key.as_deref(),
                 );
+                // Extractor identity is a plain column inside the canonical
+                // (via its extension), so rotation carries it into the new
+                // tag unchanged — dropping it would mark every attributed
+                // fact tampered after the first rotation.
+                let ext = crate::kg::extractor_ext(x_id.as_deref());
                 let tag = next
                     .tag(&crate::kg::triple_canonical(
                         &id,
@@ -236,6 +264,7 @@ impl PalaceStore {
                         conf,
                         new_support.as_deref(),
                         auth.as_deref(),
+                        ext.as_deref(),
                     ))
                     .to_vec();
                 // Re-key the receipt binding when present (unchanged
@@ -453,11 +482,13 @@ impl PalaceStore {
             let tx = self.conn.transaction()?;
             {
                 let mut up = tx.prepare(
-                    "UPDATE drawers SET content = ?2, embedding = ?3, tag = ?4, fp = ?5 \
+                    "UPDATE drawers SET content = ?2, embedding = ?3, tag = ?4, fp = ?5, \
+                                        supersedes_receipt = \
+                                            COALESCE(?6, supersedes_receipt) \
                      WHERE seq = ?1",
                 )?;
                 for d in &drawer_upds {
-                    up.execute(params![d.seq, d.content, d.emb, d.tag, d.fp])?;
+                    up.execute(params![d.seq, d.content, d.emb, d.tag, d.fp, d.sup_receipt])?;
                 }
                 let mut up = tx.prepare("UPDATE kg_entities SET tag = ?2 WHERE id = ?1")?;
                 for (id, tag) in &entity_upds {
@@ -785,6 +816,10 @@ mod tests {
                     0.8,
                     (&src_id, note),
                     Some(&stated),
+                    // Attributed to a named extractor so this test also pins
+                    // that rotation carries extractor identity into the new
+                    // tag (kg_verify below fails if it is dropped).
+                    Some("test-extractor-1b"),
                 )
                 .unwrap();
             // Checked, unsupported — must stay distinguishable from both the
@@ -799,6 +834,7 @@ mod tests {
                     0.8,
                     (&src_id, note),
                     Some(&Support::default()),
+                    None,
                 )
                 .unwrap();
             store
@@ -860,10 +896,20 @@ mod tests {
                     None,
                     0.8,
                     (&src_id, &src.content),
+                    None,
                 )
                 .unwrap();
             assert_eq!(
                 store.kg_verify_receipts().unwrap()[0].verdict,
+                ReceiptVerdict::Verified
+            );
+            // A drawer supersession rides the same rotation: its keyed
+            // receipt must re-key beside the KG one.
+            let newer = drawer("Ada moved auth back to JWT in July.", 1)
+                .with_supersedes(Some(src_id.clone()));
+            store.upsert(&newer).unwrap();
+            assert_eq!(
+                store.verify_supersessions().unwrap()[0].verdict,
                 ReceiptVerdict::Verified
             );
 
@@ -882,6 +928,13 @@ mod tests {
                 r[0].verdict,
                 ReceiptVerdict::Verified,
                 "receipt must re-key and still verify after rotation ({level:?})"
+            );
+            let sup = store.verify_supersessions().unwrap();
+            assert_eq!(sup.len(), 1);
+            assert_eq!(
+                sup[0].verdict,
+                ReceiptVerdict::Verified,
+                "supersession receipt must re-key and still verify after rotation ({level:?})"
             );
             assert!(store.verify().unwrap().ok());
         }

@@ -88,6 +88,11 @@ enum Command {
         /// now, when it is being filed. Anchors relative dates in the text.
         #[arg(long)]
         content_date: Option<String>,
+        /// Id of the drawer this memory replaces. Records a receipted
+        /// update link (check with `undercroft verify`); the old drawer is
+        /// never deleted or hidden.
+        #[arg(long)]
+        supersedes: Option<String>,
     },
     /// Mine a directory into the palace (text files, or agent transcripts)
     Mine {
@@ -157,9 +162,11 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
-    /// Export all memories as decrypted JSONL (backup / migration). With
-    /// --to, the export is sealed to a recipient's public key instead —
-    /// the file never exists in plaintext (see `bundle keygen`).
+    /// Export the palace as JSONL (backup / migration): a signed-able
+    /// manifest line, then every drawer, KG entity, fact (receipts and
+    /// authority tier included) and tunnel. With --to, the export is
+    /// sealed to a recipient's public key instead — the file never exists
+    /// in plaintext (see `bundle keygen`).
     Export {
         #[arg(long, default_value = "default")]
         vault: String,
@@ -170,6 +177,17 @@ enum Command {
         /// Output file for the encrypted bundle (required with --to)
         #[arg(long, requires = "to")]
         out: Option<PathBuf>,
+        /// Signing identity file (from `bundle sign-keygen`): attest the
+        /// manifest with Ed25519 so the importer can pin the sender
+        #[arg(long)]
+        sign: Option<PathBuf>,
+        /// Sender-declared trust class recorded in the manifest — a claim
+        /// for the receiving deployment's policy, never a trust boundary
+        #[arg(long)]
+        trust: Option<String>,
+        /// RFC 3339 instant after which importers must refuse the bundle
+        #[arg(long)]
+        expires: Option<String>,
     },
     /// Serve the MCP stdio server (full palace / KG / diary tool surface)
     ServeMcp {
@@ -221,6 +239,11 @@ enum Command {
         /// Identity key file (from `bundle keygen`) for encrypted bundles
         #[arg(long)]
         identity: Option<PathBuf>,
+        /// Require the manifest to be signed by exactly this sender (hex,
+        /// from `bundle sign-keygen`); refuse the import otherwise. Without
+        /// it, signature status is reported but not enforced.
+        #[arg(long)]
+        sender: Option<String>,
     },
     /// Recipient identities for encrypted export bundles
     Bundle {
@@ -572,6 +595,18 @@ enum BundleAction {
         /// Identity key file written by `bundle keygen`
         identity: PathBuf,
     },
+    /// Generate a SIGNING identity (Ed25519): attests who produced a
+    /// bundle, beside the recipient identity that says who may read it
+    SignKeygen {
+        /// Where to write the signing secret (default: <data-dir>/bundle-sign.key)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Print the public sender string for a signing identity file
+    Sender {
+        /// Signing key file written by `bundle sign-keygen`
+        identity: PathBuf,
+    },
 }
 
 /// Write a secret to `path` with owner-only permissions (like the palace
@@ -594,6 +629,68 @@ fn write_identity(path: &std::path::Path, secret_hex: &str) -> Result<()> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
+}
+
+/// Build the full export payload: a manifest line, then typed records —
+/// every drawer, KG entity, fact (receipts and authority tier included)
+/// and tunnel. This is what closed the meta-rows export gap: an export
+/// used to carry drawers alone, so a migrated palace silently lost its
+/// whole knowledge graph. The manifest carries what is NOT importable
+/// state as provenance instead (embedder identity, audit-chain head).
+fn build_export_payload(
+    store: &undercroft_store::PalaceStore,
+    signing_secret: Option<&str>,
+    trust: Option<&str>,
+    expires: Option<&str>,
+) -> Result<Vec<u8>> {
+    use undercroft_vault::bundle;
+    let mut records = Vec::new();
+    let mut counts = bundle::ManifestCounts::default();
+    for drawer in store.export_all()? {
+        serde_json::to_writer(&mut records, &serde_json::json!({ "drawer": drawer }))?;
+        records.push(b'\n');
+        counts.drawers += 1;
+    }
+    for (name, etype) in store.kg_export_entities()? {
+        serde_json::to_writer(
+            &mut records,
+            &serde_json::json!({ "entity": { "name": name, "etype": etype } }),
+        )?;
+        records.push(b'\n');
+        counts.kg_entities += 1;
+    }
+    for exp in store.kg_export()? {
+        serde_json::to_writer(&mut records, &serde_json::json!({ "triple": exp }))?;
+        records.push(b'\n');
+        counts.kg_triples += 1;
+    }
+    for t in store.list_tunnels(None)? {
+        serde_json::to_writer(&mut records, &serde_json::json!({ "tunnel": t }))?;
+        records.push(b'\n');
+        counts.tunnels += 1;
+    }
+    let (vault_id, level, embedder, chain_head) = store.manifest_facts()?;
+    let mut manifest = bundle::BundleManifest {
+        version: 1,
+        vault: vault_id,
+        level,
+        created_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)?,
+        counts,
+        embedder: Some(embedder),
+        chain_head: Some(chain_head),
+        trust: trust.map(str::to_string),
+        expires: expires.map(str::to_string),
+        sender: None,
+        payload_sha256: bundle::payload_digest(&records),
+        sig: None,
+    };
+    if let Some(secret) = signing_secret {
+        manifest
+            .sign(secret)
+            .map_err(|e| anyhow::anyhow!("signing manifest: {e}"))?;
+    }
+    Ok(bundle::frame_payload(&manifest, &records))
 }
 
 /// Bulk-ingest batch size: bounds RAM (embeddings in flight) and how long
@@ -1012,6 +1109,30 @@ fn main() -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 println!("{recipient}");
             }
+            BundleAction::SignKeygen { out } => {
+                let path = out
+                    .clone()
+                    .unwrap_or_else(|| data_dir(&cli).join("bundle-sign.key"));
+                let (secret_hex, sender_hex) = undercroft_vault::bundle::sign_keygen();
+                write_identity(&path, &secret_hex)?;
+                println!(
+                    "Signing key written to {} (keep it private).",
+                    path.display()
+                );
+                println!("Sender (importers pin this): {sender_hex}");
+                println!(
+                    "Sign an export with: undercroft export --sign {} …; \
+                     verify with: undercroft import --sender {sender_hex} …",
+                    path.display()
+                );
+            }
+            BundleAction::Sender { identity } => {
+                let secret = std::fs::read_to_string(identity)
+                    .with_context(|| format!("reading signing identity {}", identity.display()))?;
+                let sender = undercroft_vault::bundle::signer_of(&secret)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                println!("{sender}");
+            }
         },
         Command::Vault { action } => match action {
             VaultAction::Create { name, level } => {
@@ -1092,6 +1213,7 @@ fn main() -> Result<()> {
             wing,
             room,
             content_date,
+            supersedes,
         } => {
             if content.len() > MAX_CONTENT_BYTES {
                 bail!(
@@ -1115,7 +1237,8 @@ fn main() -> Result<()> {
             // use this; the CLI was the last one that did not.
             let idx = store.next_append_index()? as u32;
             let drawer = Drawer::new(wing, room, normalized, None, idx, "cli")
-                .with_content_date(content_date.clone());
+                .with_content_date(content_date.clone())
+                .with_supersedes(supersedes.clone());
             store.upsert(&drawer)?;
             println!(
                 "{}",
@@ -1260,43 +1383,82 @@ fn main() -> Result<()> {
                 "audit chain:     {}",
                 if report.chain_ok { "ok" } else { "BROKEN" }
             );
-            if report.ok() {
+            // Drawer supersession links are part of the vault's integrity
+            // story: a receipted link that fails its HMAC is tampering,
+            // reported with the same severity as a bad record.
+            let links = store.verify_supersessions()?;
+            let mut sup_tampered = 0usize;
+            if !links.is_empty() {
+                use undercroft_store::ReceiptVerdict as V;
+                let count = |v: V| links.iter().filter(|l| l.verdict == v).count();
+                sup_tampered = count(V::Tampered);
+                println!(
+                    "supersessions:   {} verified · {} source-changed · {} dangling · \
+                     {} unreceipted · {} tampered",
+                    count(V::Verified),
+                    count(V::SourceChanged),
+                    count(V::Dangling),
+                    count(V::Unreceipted),
+                    sup_tampered
+                );
+                for l in links.iter().filter(|l| l.verdict == V::Tampered) {
+                    println!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
+                }
+            }
+            if report.ok() && sup_tampered == 0 {
                 println!("{}", tr("verify-ok"));
             } else {
                 println!("{}", tr("verify-failed"));
                 std::process::exit(2);
             }
         }
-        Command::Export { vault, to, out } => {
+        Command::Export {
+            vault,
+            to,
+            out,
+            sign,
+            trust,
+            expires,
+        } => {
             let store = open_store(&cli, vault)?;
+            let signing = sign
+                .as_ref()
+                .map(|p| {
+                    std::fs::read_to_string(p)
+                        .with_context(|| format!("reading signing identity {}", p.display()))
+                })
+                .transpose()?;
+            let payload = build_export_payload(
+                &store,
+                signing.as_deref(),
+                trust.as_deref(),
+                expires.as_deref(),
+            )?;
             match to {
                 Some(recipient) => {
                     let path = out
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("--to requires --out <file>"))?;
-                    let mut plain = Vec::new();
-                    for drawer in store.export_all()? {
-                        serde_json::to_writer(&mut plain, &drawer)?;
-                        plain.push(b'\n');
-                    }
-                    let sealed = undercroft_vault::bundle::encrypt_for(recipient, &plain)
+                    let sealed = undercroft_vault::bundle::encrypt_for(recipient, &payload)
                         .map_err(|e| anyhow::anyhow!("sealing bundle: {e}"))?;
                     std::fs::write(path, &sealed)?;
                     println!(
-                        "Sealed bundle written to {} ({} drawers, {} bytes) — only the \
+                        "Sealed bundle written to {} ({} drawers, {} bytes{}) — only the \
                          matching identity key can open it.",
                         path.display(),
                         store.count()?,
-                        sealed.len()
+                        sealed.len(),
+                        if signing.is_some() {
+                            ", sender-signed"
+                        } else {
+                            ", unsigned"
+                        }
                     );
                 }
                 None => {
                     let stdout = std::io::stdout();
                     let mut out = stdout.lock();
-                    for drawer in store.export_all()? {
-                        serde_json::to_writer(&mut out, &drawer)?;
-                        out.write_all(b"\n")?;
-                    }
+                    out.write_all(&payload)?;
                 }
             }
         }
@@ -1391,6 +1553,7 @@ fn main() -> Result<()> {
             vault,
             wing,
             identity,
+            sender,
         } => {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
@@ -1411,9 +1574,72 @@ fn main() -> Result<()> {
                 String::from_utf8(raw)
                     .with_context(|| format!("{} is not UTF-8 text", file.display()))?
             };
+            // The manifest, when the payload carries one: verified digest
+            // always (split_payload refuses a mismatch), signature and
+            // expiry per the flags. Absence is a recorded fact — a legacy
+            // export imports as before, unattested and said so.
+            let (manifest, record_bytes) = undercroft_vault::bundle::split_payload(text.as_bytes())
+                .map_err(|e| anyhow::anyhow!("bundle manifest: {e}"))?;
+            let text = String::from_utf8(record_bytes.to_vec())
+                .context("bundle records are not UTF-8 JSONL")?;
+            match &manifest {
+                Some(m) => {
+                    let now = time::OffsetDateTime::now_utc()
+                        .format(&time::format_description::well_known::Rfc3339)?;
+                    if m.expired_at(&now) {
+                        bail!(
+                            "bundle expired at {} — the sender bounded its validity, refusing",
+                            m.expires.as_deref().unwrap_or("(unparseable expiry)")
+                        );
+                    }
+                    if let Some(expected) = sender.as_deref() {
+                        m.verify_against(expected).map_err(|e| {
+                            anyhow::anyhow!(
+                                "manifest attestation failed against the pinned sender: {e}"
+                            )
+                        })?;
+                    }
+                    println!(
+                        "manifest: vault={} level={} created={}{}{}{}",
+                        m.vault,
+                        m.level,
+                        m.created_at,
+                        m.trust
+                            .as_deref()
+                            .map(|t| format!(" trust={t} (sender's claim, not a boundary)"))
+                            .unwrap_or_default(),
+                        match (&m.sender, &m.sig) {
+                            (Some(s), Some(_)) => format!(
+                                " signed-by={}{}",
+                                &s[..16.min(s.len())],
+                                if sender.is_some() {
+                                    " (verified)"
+                                } else {
+                                    " (unverified — pass --sender to enforce)"
+                                }
+                            ),
+                            _ => " unsigned".to_string(),
+                        },
+                        m.embedder
+                            .as_deref()
+                            .map(|e| format!(" embedder={e}"))
+                            .unwrap_or_default(),
+                    );
+                }
+                None if sender.is_some() => {
+                    bail!("--sender was pinned but the payload carries no manifest to verify")
+                }
+                None => {}
+            }
             let mut skipped = 0usize;
+            let mut kg_facts = 0usize;
+            let mut kg_entities = 0usize;
+            let mut tunnels = 0usize;
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             let mut batch: Vec<Drawer> = Vec::new();
+            let mut kg_batch: Vec<undercroft_store::TripleExport> = Vec::new();
+            let mut entity_batch: Vec<(String, String)> = Vec::new();
+            let mut tunnel_batch: Vec<(String, String, String)> = Vec::new();
             for (lineno, line) in text.lines().enumerate() {
                 let line = line.trim();
                 if line.is_empty() {
@@ -1421,6 +1647,43 @@ fn main() -> Result<()> {
                 }
                 let v: serde_json::Value = serde_json::from_str(line)
                     .with_context(|| format!("line {} is not valid JSON", lineno + 1))?;
+                // Typed records (the manifest-era format). KG and tunnel
+                // rows import through their own re-seal/re-key paths.
+                if let Some(t) = v.get("triple") {
+                    kg_batch.push(
+                        serde_json::from_value(t.clone())
+                            .with_context(|| format!("line {}: bad triple record", lineno + 1))?,
+                    );
+                    continue;
+                }
+                if let Some(e) = v.get("entity") {
+                    let name = e.get("name").and_then(serde_json::Value::as_str);
+                    let etype = e
+                        .get("etype")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    if let Some(name) = name {
+                        entity_batch.push((name.to_string(), etype.to_string()));
+                    }
+                    continue;
+                }
+                if let Some(t) = v.get("tunnel") {
+                    let g = |k: &str| {
+                        t.get(k)
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    };
+                    if let (Some(f), Some(to_w), Some(l)) =
+                        (g("from_wing"), g("to_wing"), g("label"))
+                    {
+                        tunnel_batch.push((f, to_w, l));
+                    }
+                    continue;
+                }
+                let v = match v.get("drawer") {
+                    Some(d) => d.clone(),
+                    None => v,
+                };
                 let drawer = if v.get("meta").is_some() {
                     // Native undercroft export: full Drawer JSON.
                     serde_json::from_value::<Drawer>(v)
@@ -1466,6 +1729,20 @@ fn main() -> Result<()> {
             }
             let imported = batch.len();
             upsert_batched(&mut store, &batch)?;
+            // KG and tunnel records go after drawers so receipts can bind
+            // against drawers arriving in the same payload.
+            for (name, etype) in &entity_batch {
+                store.kg_import_entity(name, etype)?;
+                kg_entities += 1;
+            }
+            for exp in &kg_batch {
+                store.kg_import(exp)?;
+                kg_facts += 1;
+            }
+            for (f, t, l) in &tunnel_batch {
+                store.create_tunnel(f, t, l)?;
+                tunnels += 1;
+            }
             println!(
                 "{}",
                 fill(
@@ -1477,6 +1754,12 @@ fn main() -> Result<()> {
                     ]
                 )
             );
+            if kg_facts + kg_entities + tunnels > 0 {
+                println!(
+                    "knowledge graph: {kg_facts} fact(s) (receipts re-keyed), \
+                     {kg_entities} entit(y/ies), {tunnels} tunnel(s)"
+                );
+            }
         }
         Command::Kg { action, vault } => {
             let mut store = open_store(&cli, vault)?;
@@ -1552,7 +1835,7 @@ fn main() -> Result<()> {
                     if receipts.is_empty() {
                         println!("No facts carry a receipt yet (run `refine` to distill some).");
                     }
-                    let mut counts = [0usize; 4];
+                    let mut counts = [0usize; 5];
                     let mut shown = 0usize;
                     for r in &receipts {
                         let (label, idx) = match r.verdict {
@@ -1560,6 +1843,10 @@ fn main() -> Result<()> {
                             ReceiptVerdict::SourceChanged => ("source-changed", 1),
                             ReceiptVerdict::Dangling => ("dangling", 2),
                             ReceiptVerdict::Tampered => ("TAMPERED", 3),
+                            // Drawer supersessions only; a KG receipt is
+                            // always written with its fact. Covered so the
+                            // match stays exhaustive.
+                            ReceiptVerdict::Unreceipted => ("unreceipted", 4),
                         };
                         counts[idx] += 1;
                         let ok = matches!(r.verdict, ReceiptVerdict::Verified);
@@ -1798,6 +2085,7 @@ fn main() -> Result<()> {
                                     None,
                                     0.8, // model-extracted: below human-asserted confidence
                                     (&d.id, &d.content),
+                                    Some(llm.model()),
                                 )?;
                             }
                             facts_added += 1;

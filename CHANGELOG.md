@@ -1,5 +1,73 @@
 # Changelog
 
+## Unreleased — provenance grows two rungs: who claimed a fact, what a record replaced, who wrote a bundle
+
+Consultation adopted items 2 and 3 (docs/CONSULTATION_REVIEW.md §7), built
+on the receipt and canonical-extension precedents they were designed
+against.
+
+- **Extractor identity on KG facts** (item 2, first half): which model
+  claimed a fact is now DECLARED at the write (`kg_add_receipted`/
+  `kg_add_grounded` take it; both refine paths pass `llm.model()`, which
+  the REST handler already printed and then dropped) and stored inside
+  the fact's HMAC via a third canonical extension — separator `0x1d`,
+  under the `support`/authority rule: a fact that never recorded one
+  keeps byte-identical canonical bytes, so nothing written before the
+  field existed is re-tagged. A flipped `extractor` column fails
+  verification exactly like a flipped `review_state` (pinned). Rotation
+  and every re-tag site (`kg_set_authority`, `kg_invalidate`) carry it;
+  manual adds record none, honestly. Surfaced on `Triple` everywhere
+  facts are read.
+- **Receipted `supersedes` on drawers** (item 2, second half): a save may
+  declare the drawer it replaces. The link lives in `meta_json` (drawer-
+  HMAC-covered) with an indexed mirror column, and is **bound at the
+  single write choke point** by a keyed receipt over the superseded
+  drawer's unkeyed content fingerprint — `receipt_canonical` one level
+  up, in separate columns exactly like `kg_triples.source_fp`/
+  `receipt_tag`, which is what lets rotation re-key it without touching
+  drawer bytes (pinned beside the KG receipt in the rotation test).
+  **Superseding never deletes**: the old drawer stays retrievable;
+  update/dedup chains become queryable instead of only audited.
+  `verify_supersessions` reports every link (`Verified`/`SourceChanged`/
+  `Dangling`/`Unreceipted` — a link written before its target existed,
+  the out-of-order-import state — /`Tampered`, which fails `verify` like
+  a bad record). A drawer cannot supersede itself. Surfaces: `/v1` save
+  (`supersedes`) + `GET /v1/…/supersessions`, MCP save/add_drawer +
+  verify summary, CLI `remember --supersedes` + `verify`. Exposure and
+  footprint inventories updated in both governing tests: the link is a
+  deliberate leak of chain topology (ids and an unkeyed fp — the kg
+  source_fp precedent), never content.
+- **Bundle manifests** (item 3): an export now leads with a signed-able
+  manifest — sender (Ed25519, hex), scope (source vault + level), a
+  sender-declared **trust claim** (never a trust boundary by itself:
+  docs/LABELS.md), expiry (enforced at import; malformed expiry refuses),
+  record counts, provenance summary (embedder identity + audit-chain
+  head — stated, not imported), and a payload SHA-256 that is checked
+  unconditionally, signed or not. Ed25519 sits beside the existing
+  X25519 recipient flow (`ed25519-dalek` 2.x, same curve25519-dalek 4.x
+  underneath): encryption says who may READ a bundle, the signature says
+  who WROTE it. `bundle sign-keygen`/`bundle sender`; `export --sign
+  --trust --expires`; `import --sender <hex>` pins and enforces
+  attestation (refused if unsigned or signed by anyone else). Legacy
+  payloads (no manifest line) import unchanged and are reported as
+  unattested.
+- **The meta-rows export gap is CLOSED** (item 3's rider): an export was
+  drawers-only, so a migrated palace silently lost its whole knowledge
+  graph, tunnels and receipts. Both export surfaces (CLI incl. `--to`
+  bundles, `GET /v1/…/export`) now carry typed records — drawers, KG
+  entities, facts, tunnels — and both imports consume them: facts
+  re-seal under the destination's keys with grounding, validity windows,
+  authority tier and extractor identity intact, and **receipts re-key
+  from the traveling unkeyed fingerprint** (the rotation precedent,
+  across vaults) so `kg_verify_receipts` answers `Verified` at the
+  destination against the co-imported drawer (pinned end to end: the
+  store roundtrip test and a new CLI test that migrates a palace through
+  a sealed, signed bundle and then refuses the same bundle under a
+  wrong pinned sender). What is deliberately NOT exported: `meta`
+  operational state (embedder identity — the destination keeps its own;
+  it travels as manifest provenance), and the audit chain (keyed
+  per-vault; its head travels as provenance). e2e 165 → **169** checks.
+
 ## Unreleased — the cross-lingual instrument runs for real, and files the defect it was built to find
 
 - **First real `xlingual` run** (2026-08-03): bge-m3 (F16 GGUF) served

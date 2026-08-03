@@ -416,8 +416,15 @@ ACME_ASSERT="$(sign acme)"
 rest_code "acme assertion on globex 401" 401 -- -X POST "$API/vaults/globex/search" \
   -H "X-Vault-Assertion: $ACME_ASSERT" -d '{"query":"x"}'
 
-# Export → verified import → drop, with an exact record count.
+# Export → verified import → drop, with an exact record count. The export
+# now leads with a manifest line (unsigned on this surface) and types every
+# record — the meta-rows gap closed.
 curl -s "$API/vaults/acme/export" -H "X-Vault-Assertion: $(sign acme)" > /tmp/acme.jsonl
+if head -1 /tmp/acme.jsonl | grep -q '"undercroft_manifest"'; then
+  echo "ok    export leads with a manifest"; PASS=$((PASS+1))
+else
+  echo "FAIL  export leads with a manifest"; FAIL=$((FAIL+1))
+fi
 rest_body "create acme2"        '"created":true'  -- -X POST "$API/vaults" \
   -H "X-Vault-Assertion: $(sign acme2)" -d '{"id":"acme2"}'
 rest_body "import count"        '"imported":1'    -- -X POST "$API/vaults/acme2/import" \
@@ -427,11 +434,13 @@ rest_body "import verified"     '"drawers":1'     -- "$API/vaults/acme2/stats" \
 
 # Portable derived artifacts: an import line may carry the drawer's
 # late-interaction token matrix (tok = model + base64 packed) — accepted and
-# stored without re-encoding; garbage artifacts are a clean 400.
-TOK_LINE="$(head -1 /tmp/acme.jsonl | sed 's/}$/,"tok":{"model":"m","b64":"AQEAAAABAAAAAACAP38="}}/')"
+# stored without re-encoding; garbage artifacts are a clean 400. (The first
+# line of an export is the manifest, so the drawer line is grepped, not
+# head-ed.)
+TOK_LINE="$(grep -m1 '"drawer"' /tmp/acme.jsonl | sed 's/}$/,"tok":{"model":"m","b64":"AQEAAAABAAAAAACAP38="}}/')"
 rest_body "import with artifact" '"imported":1'   -- -X POST "$API/vaults/acme2/import" \
   -H "X-Vault-Assertion: $(sign acme2)" --data-binary "$TOK_LINE"
-BAD_LINE="$(head -1 /tmp/acme.jsonl | sed 's/}$/,"tok":{"model":"m","b64":"AAAA"}}/')"
+BAD_LINE="$(grep -m1 '"drawer"' /tmp/acme.jsonl | sed 's/}$/,"tok":{"model":"m","b64":"AAAA"}}/')"
 rest_code "garbage artifact 400" 400 -- -X POST "$API/vaults/acme2/import" \
   -H "X-Vault-Assertion: $(sign acme2)" --data-binary "$BAD_LINE"
 
@@ -442,6 +451,20 @@ rest_body "dedup first insert"  '"deduped":false' -- -X POST "$API/vaults/acme/d
 rest_body "dedup refresh"       '"deduped":true'  -- -X POST "$API/vaults/acme/drawers" \
   -H "X-Vault-Assertion: $(sign acme)" \
   -d '{"text":"the release train ships on thursday","wing":"eng","room":"process","dedup_threshold":0.9}'
+
+# Receipted supersession: a save may declare the drawer it replaces; the
+# link is receipted at the write choke point and verifiable, and the old
+# drawer is never deleted.
+OLD_ID="$(curl -s -X POST "$API/vaults/acme/drawers" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"the retro is on thursdays at four","wing":"eng","room":"process"}' \
+  | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+rest_body "supersede on save"   '"created":true'  -- -X POST "$API/vaults/acme/drawers" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d "{\"text\":\"the retro moved to tuesdays at ten\",\"wing\":\"eng\",\"room\":\"process\",\"supersedes\":\"$OLD_ID\"}"
+rest_body "supersession verified" '"verdict":"verified"' -- "$API/vaults/acme/supersessions" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "superseded drawer kept" '"the retro is on thursdays at four"' -- \
+  "$API/vaults/acme/drawers/$OLD_ID" -H "X-Vault-Assertion: $(sign acme)"
 
 # Pagination: a page names its continuation (next_offset + the ranked_at to
 # repeat), and page 2 continues the ranking rather than repeating it.

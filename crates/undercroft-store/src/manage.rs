@@ -55,7 +55,7 @@ pub struct DedupReport {
     pub dates_kept: u64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Tunnel {
     pub id: String,
     pub from_wing: String,
@@ -130,7 +130,83 @@ impl PalaceStore {
             "CREATE INDEX IF NOT EXISTS idx_drawers_kind ON drawers(kind)",
             [],
         )?;
+        // The supersession link (nullable — almost every drawer supersedes
+        // nothing). `supersedes` mirrors meta_json's declared link for the
+        // indexed chain query; the authoritative copy stays inside
+        // meta_json under the drawer's HMAC. The fingerprint (unkeyed, so
+        // it survives rotation) and the keyed receipt binding follow the
+        // kg_triples source_fp/receipt_tag pattern exactly, one level up.
+        if !cols.iter().any(|c| c == "supersedes") {
+            self.conn
+                .execute("ALTER TABLE drawers ADD COLUMN supersedes TEXT", [])?;
+        }
+        if !cols.iter().any(|c| c == "supersedes_fp") {
+            self.conn
+                .execute("ALTER TABLE drawers ADD COLUMN supersedes_fp BLOB", [])?;
+        }
+        if !cols.iter().any(|c| c == "supersedes_receipt") {
+            self.conn
+                .execute("ALTER TABLE drawers ADD COLUMN supersedes_receipt BLOB", [])?;
+        }
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_drawers_supersedes ON drawers(supersedes)",
+            [],
+        )?;
         Ok(())
+    }
+
+    /// Verify every drawer that declares a supersession link against the
+    /// drawer it claims to replace — [`PalaceStore::kg_verify_receipts`]
+    /// one level up, same verdicts: `Verified` (link bound, superseded
+    /// content unchanged), `SourceChanged` (the superseded drawer's content
+    /// moved since the link was receipted), `Dangling` (the superseded
+    /// drawer no longer exists), `Tampered` (the receipt binding failed its
+    /// HMAC — offline tampering), or `Unreceipted` (the link was written
+    /// while its target was absent, so nothing was ever bound). Drawers
+    /// with no link are skipped.
+    pub fn verify_supersessions(&self) -> Result<Vec<crate::kg::SupersessionStatus>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, supersedes, supersedes_fp, supersedes_receipt
+             FROM drawers WHERE supersedes IS NOT NULL ORDER BY seq",
+        )?;
+        // (drawer id, superseded id, fingerprint, receipt)
+        type LinkRow = (String, String, Option<Vec<u8>>, Option<Vec<u8>>);
+        let rows: Vec<LinkRow> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (id, old_id, fp, receipt) in rows {
+            let verdict = match (fp, receipt) {
+                (Some(fp), Some(receipt)) => {
+                    if self
+                        .vault
+                        .verify_tag(&crate::supersession_canonical(&id, &old_id, &fp), &receipt)
+                        .is_err()
+                    {
+                        crate::kg::ReceiptVerdict::Tampered
+                    } else {
+                        match self.get(&old_id)? {
+                            None => crate::kg::ReceiptVerdict::Dangling,
+                            Some(d) if crate::kg::content_fp(&d.content) == fp => {
+                                crate::kg::ReceiptVerdict::Verified
+                            }
+                            Some(_) => crate::kg::ReceiptVerdict::SourceChanged,
+                        }
+                    }
+                }
+                // A receipt is only ever written with its fingerprint; one
+                // without the other is tampering, both absent is the
+                // recorded out-of-order-import state.
+                (None, None) => crate::kg::ReceiptVerdict::Unreceipted,
+                _ => crate::kg::ReceiptVerdict::Tampered,
+            };
+            out.push(crate::kg::SupersessionStatus {
+                drawer_id: id,
+                supersedes: old_id,
+                verdict,
+            });
+        }
+        Ok(out)
     }
 
     /// Keyed content fingerprint: HMAC(mac_key, "fp" || content), truncated.
@@ -788,6 +864,88 @@ mod tests {
 
     fn drawer(wing: &str, room: &str, content: &str, idx: u32) -> Drawer {
         Drawer::new(wing, room, content.into(), Some("s.md".into()), idx, "test")
+    }
+
+    /// The receipted supersession chain, end to end through every verdict:
+    /// bound and verified; source edited under the link; source deleted;
+    /// link written before its target existed; and the offline column flip.
+    /// Superseding never deletes — the old drawer stays retrievable.
+    #[test]
+    fn supersession_links_are_receipted_and_every_verdict_is_reachable() {
+        use crate::kg::ReceiptVerdict;
+        let (_d, mut s) = store();
+        let old = drawer("w", "r", "the retro is on Thursdays", 0);
+        s.upsert(&old).unwrap();
+        let new = drawer("w", "r", "the retro moved to Tuesdays", 1)
+            .with_supersedes(Some(old.id.clone()));
+        s.upsert(&new).unwrap();
+
+        // Bound at the choke point, readable back, superseded row untouched.
+        let statuses = s.verify_supersessions().unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].drawer_id, new.id);
+        assert_eq!(statuses[0].supersedes, old.id);
+        assert_eq!(statuses[0].verdict, ReceiptVerdict::Verified);
+        assert_eq!(
+            s.get(&new.id).unwrap().unwrap().meta.supersedes.as_deref(),
+            Some(old.id.as_str())
+        );
+        assert!(
+            s.get(&old.id).unwrap().is_some(),
+            "superseding must never delete"
+        );
+
+        // The superseded drawer's content moves under the link.
+        s.update_drawer(&old.id, "the retro is cancelled").unwrap();
+        assert_eq!(
+            s.verify_supersessions().unwrap()[0].verdict,
+            ReceiptVerdict::SourceChanged
+        );
+
+        // ...and then disappears entirely.
+        s.delete_drawer(&old.id).unwrap();
+        assert_eq!(
+            s.verify_supersessions().unwrap()[0].verdict,
+            ReceiptVerdict::Dangling
+        );
+
+        // A link written while its target is absent is recorded, not
+        // dropped — and reported as exactly that.
+        let orphan = drawer("w", "r", "supersedes what is not here yet", 2)
+            .with_supersedes(Some("0000feedbeef0000".into()));
+        s.upsert(&orphan).unwrap();
+        let statuses = s.verify_supersessions().unwrap();
+        let o = statuses
+            .iter()
+            .find(|st| st.drawer_id == orphan.id)
+            .unwrap();
+        assert_eq!(o.verdict, ReceiptVerdict::Unreceipted);
+
+        // Offline attacker redirects the link mirror: the receipt was
+        // bound over the original target, so the flip fails verification.
+        s.conn
+            .execute(
+                "UPDATE drawers SET supersedes = '1111beadfeed1111' WHERE id = ?1",
+                params![new.id],
+            )
+            .unwrap();
+        assert_eq!(
+            s.verify_supersessions()
+                .unwrap()
+                .iter()
+                .find(|st| st.drawer_id == new.id)
+                .unwrap()
+                .verdict,
+            ReceiptVerdict::Tampered
+        );
+    }
+
+    #[test]
+    fn a_drawer_cannot_supersede_itself() {
+        let (_d, mut s) = store();
+        let mut d = drawer("w", "r", "self-referential update", 0);
+        d.meta.supersedes = Some(d.id.clone());
+        assert!(s.upsert(&d).is_err());
     }
 
     #[test]
