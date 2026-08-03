@@ -130,6 +130,11 @@ enum Command {
         /// (question|preference|decision|event|procedure|statement)
         #[arg(long)]
         kind: Option<String>,
+        /// Minimum deployment-assigned wing trust for this query
+        /// (quarantined|standard|trusted). Wings below it never enter the
+        /// candidate competition; unassigned wings count as standard.
+        #[arg(long)]
+        min_trust: Option<String>,
         /// Max results
         #[arg(short = 'n', long, default_value_t = 5)]
         limit: usize,
@@ -160,6 +165,15 @@ enum Command {
     /// Verify every record's HMAC and the vault's audit chain
     Verify {
         #[arg(long, default_value = "default")]
+        vault: String,
+    },
+    /// Deployment-assigned wing trust classes — the receiving principal's
+    /// declaration (an operator surface: agents cannot assign trust over
+    /// MCP, only read with a floor)
+    Trust {
+        #[command(subcommand)]
+        action: TrustAction,
+        #[arg(long, global = true, default_value = "default")]
         vault: String,
     },
     /// Export the palace as JSONL (backup / migration): a signed-able
@@ -579,6 +593,15 @@ enum VaultAction {
     /// vault was pushed to a remote index (remote copies hold old-key
     /// ciphertext). Do not rotate a vault another process is serving.
     Rotate { name: String },
+}
+
+#[derive(clap::Subcommand)]
+enum TrustAction {
+    /// Assign a wing's trust class (quarantined|standard|trusted).
+    /// Audited through the chain; a flipped row fails verification.
+    Set { wing: String, class: String },
+    /// Every assigned wing trust class (absent wings read as standard)
+    List,
 }
 
 #[derive(clap::Subcommand)]
@@ -1301,6 +1324,7 @@ fn main() -> Result<()> {
             wing,
             room,
             kind,
+            min_trust,
             limit,
             offset,
             backend,
@@ -1311,6 +1335,7 @@ fn main() -> Result<()> {
                 wing: wing.clone(),
                 room: room.clone(),
                 kind: kind.clone(),
+                min_trust: min_trust.clone(),
                 limit: *limit,
                 offset: *offset,
                 ..Default::default()
@@ -1332,6 +1357,14 @@ fn main() -> Result<()> {
                     println!(
                         "({n} in-scope drawers carry no declared kind and were not considered)"
                     );
+                }
+            }
+            // The same honesty for a trust floor: say how many wings it
+            // kept out of the competition.
+            if let Some(floor) = min_trust.as_deref() {
+                let n = store.trust_excluded_wing_count(floor)?;
+                if n > 0 {
+                    println!("({n} wing(s) below the trust floor were not considered)");
                 }
             }
             for (i, hit) in hits.iter().enumerate() {
@@ -1410,6 +1443,24 @@ fn main() -> Result<()> {
             } else {
                 println!("{}", tr("verify-failed"));
                 std::process::exit(2);
+            }
+        }
+        Command::Trust { action, vault } => {
+            let mut store = open_store(&cli, vault)?;
+            match action {
+                TrustAction::Set { wing, class } => {
+                    store.set_wing_trust(wing, class)?;
+                    println!("Wing '{wing}' assigned trust class '{class}' (audited).");
+                }
+                TrustAction::List => {
+                    let rows = store.wing_trusts()?;
+                    if rows.is_empty() {
+                        println!("No wing carries an assignment — every wing reads as 'standard'.");
+                    }
+                    for (wing, class) in rows {
+                        println!("  {wing:<24} {class}");
+                    }
+                }
             }
         }
         Command::Export {

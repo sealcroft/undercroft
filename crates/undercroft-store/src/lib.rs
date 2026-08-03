@@ -321,6 +321,27 @@ fn scoped_keep(hydrate_k: usize, scope_live: usize) -> usize {
         .max(scope_live.min(SCOPE_HYDRATE_FLOOR))
 }
 
+/// Pure for the same reason as [`resolve_late_top_n`]: the vault-level
+/// trust floor, validated against the closed vocabulary. Garbage warns
+/// and resolves to no floor — a typo must not silently reshape what a
+/// deployment's searches can reach.
+fn resolve_trust_floor(env: Option<&str>) -> Option<String> {
+    let v = env?.trim().to_string();
+    if v.is_empty() || v.eq_ignore_ascii_case("off") {
+        return None;
+    }
+    match undercroft_core::validate_trust(&v) {
+        Ok(()) => Some(v),
+        Err(_) => {
+            undercroft_obs::diag_warn!(
+                "UNDERCROFT_TRUST_FLOOR={v:?} is not in the trust vocabulary \
+                 (quarantined|standard|trusted); no floor applied"
+            );
+            None
+        }
+    }
+}
+
 /// Pure for the same reason as [`resolve_late_top_n`].
 fn resolve_fusion_weight(env: Option<&str>) -> f32 {
     match env {
@@ -588,6 +609,15 @@ pub struct SearchOptions {
     /// candidate machinery as `wing`/`room` — a kind filter cannot be
     /// starved by the corpus top-k.
     pub kind: Option<String>,
+    /// Minimum deployment-assigned wing trust class for this query (one of
+    /// [`undercroft_core::TRUST_VOCAB`]; unknown = an error, never an empty
+    /// result). Wings below the floor are excluded BEFORE candidates are
+    /// drawn — poison in a quarantined wing can neither crowd the pool nor
+    /// starve the answer out of it. Unassigned wings read as `standard`.
+    /// Composes with the vault-level `UNDERCROFT_TRUST_FLOOR`; an explicit
+    /// `wing` scope bypasses the vault floor (naming a wing is
+    /// self-scoping) but never an explicit `min_trust` in the same request.
+    pub min_trust: Option<String>,
     pub limit: usize,
     /// Soft cap on how many of the returned hits may come from any single
     /// room. `None` (the default) keeps pure score order.
@@ -669,6 +699,12 @@ pub struct PalaceStore {
     /// The convex blend's semantic weight — declared, bounded, one global
     /// value. See [`DEFAULT_FUSION_WEIGHT`].
     fusion_weight: f32,
+    /// The vault-level trust floor (`UNDERCROFT_TRUST_FLOOR`), resolved once
+    /// at open: unscoped searches exclude wings assigned below it.
+    /// `None` (the default) is byte-identical pre-floor behavior. Declared,
+    /// never detected; garbage warns and stays off — a typo must not
+    /// silently reshape retrieval.
+    trust_floor: Option<String>,
     /// `Some(dim)` when this vault's embeddings are supplied by the caller
     /// (embedder identity `external:<name>@<dim>`): writes must carry a
     /// vector of exactly `dim`, and the store never computes an embedding.
@@ -1242,6 +1278,9 @@ impl PalaceStore {
             fusion: Fusion::from_env(),
             fusion_weight: resolve_fusion_weight(
                 std::env::var("UNDERCROFT_FUSION_WEIGHT").ok().as_deref(),
+            ),
+            trust_floor: resolve_trust_floor(
+                std::env::var("UNDERCROFT_TRUST_FLOOR").ok().as_deref(),
             ),
             external_dim,
             hnsw_enabled: false,
@@ -2386,6 +2425,27 @@ impl PalaceStore {
         if let Some(k) = opts.kind.as_deref() {
             undercroft_core::validate_kind(k).map_err(|e| StoreError::Invalid(e.to_string()))?;
         }
+        // The trust floor: the request's declared minimum, else the vault's
+        // — except that an explicit wing scope bypasses the VAULT floor
+        // (naming a wing is self-scoping, which needs no trust), never an
+        // explicit `min_trust`. Resolved into a wing-set clause BEFORE any
+        // candidate is drawn: a filter combined with a prefilter inherits
+        // the starvation shape otherwise, and poison crowding the corpus
+        // top-k out of a quarantined wing is exactly the attack this
+        // exists for.
+        if let Some(t) = opts.min_trust.as_deref() {
+            undercroft_core::validate_trust(t).map_err(|e| StoreError::Invalid(e.to_string()))?;
+        }
+        let effective_floor: Option<&str> = match (opts.min_trust.as_deref(), opts.wing.as_deref())
+        {
+            (Some(t), _) => Some(t),
+            (None, Some(_)) => None,
+            (None, None) => self.trust_floor.as_deref(),
+        };
+        let trust = match effective_floor {
+            Some(f) => self.trust_clause(f)?,
+            None => None,
+        };
         // Opt-in phase trace (`UNDERCROFT_SEARCH_TRACE=1`): where one search
         // actually spends its time, on stderr. Built after the parallel-
         // hydration pass measured ZERO change and a 1-vs-24-thread probe
@@ -2427,14 +2487,16 @@ impl PalaceStore {
                 opts.wing.as_deref(),
                 opts.room.as_deref(),
                 opts.kind.as_deref(),
+                trust.as_ref(),
             ) {
-                (_, Some(_), _) | (_, _, Some(_)) => self.scope_seqs(
+                (_, Some(_), _, _) | (_, _, Some(_), _) | (_, _, _, Some(_)) => self.scope_seqs(
                     opts.wing.as_deref(),
                     opts.room.as_deref(),
                     opts.kind.as_deref(),
+                    trust.as_ref(),
                 )?,
-                (Some(w), None, None) if !wing_tier_covers_it => {
-                    self.scope_seqs(Some(w), None, None)?
+                (Some(w), None, None, None) if !wing_tier_covers_it => {
+                    self.scope_seqs(Some(w), None, None, None)?
                 }
                 _ => None,
             }
@@ -2608,6 +2670,28 @@ impl PalaceStore {
         if let Some(k) = &opts.kind {
             binds.push(k.clone());
             clauses.push(format!("kind = ?{}", binds.len()));
+        }
+        // The trust clause bounds the exact-scan arm the same way it
+        // bounded candidate generation — the two must agree or the scan
+        // path would readmit what the scope resolution excluded.
+        if let Some(t) = &trust {
+            let (op, wings) = match t {
+                crate::manage::TrustClause::Exclude(w) => ("NOT IN", w),
+                crate::manage::TrustClause::Allow(w) => ("IN", w),
+            };
+            if wings.is_empty() {
+                if matches!(t, crate::manage::TrustClause::Allow(_)) {
+                    // Allow-nothing: no wing qualifies; an honest empty.
+                    clauses.push("1 = 0".to_string());
+                }
+            } else {
+                let mut marks = Vec::with_capacity(wings.len());
+                for w in wings {
+                    binds.push(w.clone());
+                    marks.push(format!("?{}", binds.len()));
+                }
+                clauses.push(format!("wing {op} ({})", marks.join(",")));
+            }
         }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
@@ -2919,20 +3003,43 @@ impl PalaceStore {
         wing: Option<&str>,
         room: Option<&str>,
         kind: Option<&str>,
+        trust: Option<&crate::manage::TrustClause>,
     ) -> Result<Option<std::collections::HashSet<i64>>, StoreError> {
-        let mut clauses: Vec<&str> = Vec::new();
+        let mut clauses: Vec<String> = Vec::new();
         let mut binds: Vec<&str> = Vec::new();
         if let Some(w) = wing {
-            clauses.push("wing = ?");
+            clauses.push("wing = ?".into());
             binds.push(w);
         }
         if let Some(r) = room {
-            clauses.push("room = ?");
+            clauses.push("room = ?".into());
             binds.push(r);
         }
         if let Some(k) = kind {
-            clauses.push("kind = ?");
+            clauses.push("kind = ?".into());
             binds.push(k);
+        }
+        // Trust restricts by wing SET. The wing names were validated at
+        // assignment (`validate_name`) and the rows tag-verified when the
+        // clause was resolved; they bind as parameters regardless.
+        if let Some(t) = trust {
+            let (op, wings) = match t {
+                crate::manage::TrustClause::Exclude(w) => ("NOT IN", w),
+                crate::manage::TrustClause::Allow(w) => ("IN", w),
+            };
+            if wings.is_empty() {
+                // Allow-nothing: the floor admits no wing at all. An empty
+                // IN () is a SQL syntax error, so say it directly.
+                if matches!(t, crate::manage::TrustClause::Allow(_)) {
+                    return Ok(Some(std::collections::HashSet::new()));
+                }
+            } else {
+                let marks = vec!["?"; wings.len()].join(",");
+                clauses.push(format!("wing {op} ({marks})"));
+                for w in wings {
+                    binds.push(w.as_str());
+                }
+            }
         }
         if clauses.is_empty() {
             return Ok(None);
@@ -6673,6 +6780,10 @@ mod tests {
                 "knowledge graph: one row per entity, not per drawer",
             ),
             ("kg_triples", "knowledge graph: one row per fact"),
+            (
+                "wing_trust",
+                "one row per ASSIGNED wing trust class — absence is standard",
+            ),
             ("sqlite_sequence", "SQLite's own AUTOINCREMENT bookkeeping"),
         ];
         let tables: Vec<String> = s
@@ -6929,6 +7040,180 @@ mod tests {
         s.upsert(&target).unwrap();
         s.set_pq(true);
         (dir, s, target.id)
+    }
+
+    /// C3.3: a deployment-assigned trust floor is a candidate-set decision
+    /// (who competes), resolved BEFORE candidates are drawn — so a
+    /// quarantined wing loud enough to own the corpus-wide top-k can
+    /// neither crowd a floored query's pool nor starve the answer out of a
+    /// standard wing. The premise is asserted raw, exactly like the wing
+    /// starvation test whose corpus this borrows.
+    #[test]
+    fn a_trust_floor_cannot_be_starved_by_a_quarantined_wing() {
+        let (_d, mut s, target) = starved_wing_store();
+        s.set_wing_trust("pacific", "quarantined").unwrap();
+        // Raw premise: the corpus-wide candidate top-k holds nothing from
+        // the wing that carries the answer.
+        let qvec = s.embedder.embed("kelp harvest quota");
+        let global = s
+            .pq_candidates(&qvec, 256)
+            .unwrap()
+            .expect("the global index must serve");
+        let arctic_seqs: std::collections::HashSet<i64> = s
+            .conn
+            .prepare("SELECT seq FROM drawers WHERE wing = 'arctic'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            global.iter().all(|q| !arctic_seqs.contains(q)),
+            "if the corpus-wide candidates now include the quiet wing, the \
+             starvation premise of this test is gone — investigate, don't delete"
+        );
+        let floored = SearchOptions {
+            min_trust: Some("standard".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        let hits = s.search("kelp harvest quota", &floored).unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target),
+            "the floored query must be answered from the admitted wings, \
+             not starved by the quarantined one that owns the corpus top-k"
+        );
+        assert!(
+            hits.iter().all(|h| h.drawer.meta.wing != "pacific"),
+            "nothing from below the floor may compete"
+        );
+        // The count the surfaces report beside a floored result.
+        assert_eq!(s.trust_excluded_wing_count("standard").unwrap(), 1);
+    }
+
+    /// Trust assignment is DECLARED (closed vocabulary), audited, and
+    /// tamper-evident: an offline flip fails verification instead of
+    /// silently promoting a quarantined wing into the competition.
+    #[test]
+    fn trust_assignment_is_closed_audited_and_tamper_evident() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        assert!(
+            s.set_wing_trust("w", "golden").is_err(),
+            "unknown class: rejected, never coerced"
+        );
+        s.set_wing_trust("w", "quarantined").unwrap();
+        s.set_wing_trust("w", "standard").unwrap();
+        assert_eq!(
+            s.wing_trusts().unwrap(),
+            vec![("w".to_string(), "standard".to_string())]
+        );
+        // Offline attacker promotes the wing by editing the column.
+        s.conn
+            .execute(
+                "UPDATE wing_trust SET trust = 'trusted' WHERE wing = 'w'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            matches!(s.wing_trusts(), Err(StoreError::Integrity(_))),
+            "a flipped trust row is an integrity failure, not a promotion"
+        );
+        // ...and a floored search refuses rather than silently searching a
+        // reshaped scope.
+        let floored = SearchOptions {
+            min_trust: Some("trusted".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        assert!(s.search("anything", &floored).is_err());
+    }
+
+    /// The two floor arms and the self-scoping rule: `trusted` admits only
+    /// assigned wings (unassigned = standard, below it); the VAULT floor
+    /// is bypassed by an explicitly named wing scope, but a request's own
+    /// `min_trust` never is.
+    #[test]
+    fn trust_floor_arms_and_the_self_scoping_bypass() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("safe", "r", "quarterly totals in the ledger", 0))
+            .unwrap();
+        s.upsert(&drawer(
+            "risky",
+            "r",
+            "quarterly totals scribbled on a napkin",
+            1,
+        ))
+        .unwrap();
+        s.set_wing_trust("safe", "trusted").unwrap();
+        s.set_wing_trust("risky", "quarantined").unwrap();
+
+        // min_trust=trusted: only the assigned-trusted wing answers.
+        let hits = s
+            .search(
+                "quarterly totals",
+                &SearchOptions {
+                    min_trust: Some("trusted".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|h| h.drawer.meta.wing == "safe"));
+
+        // The vault floor excludes the quarantined wing from unscoped
+        // searches...
+        s.set_trust_floor(Some("standard".into())).unwrap();
+        let hits = s
+            .search(
+                "quarterly totals",
+                &SearchOptions {
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(hits.iter().all(|h| h.drawer.meta.wing != "risky"));
+        // ...but naming the wing is self-scoping and still answers.
+        let hits = s
+            .search(
+                "quarterly totals",
+                &SearchOptions {
+                    wing: Some("risky".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(hits.iter().any(|h| h.drawer.meta.wing == "risky"));
+        // An explicit min_trust is never bypassed, wing scope or not.
+        let hits = s
+            .search(
+                "quarterly totals",
+                &SearchOptions {
+                    wing: Some("risky".into()),
+                    min_trust: Some("standard".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "an explicit floor holds inside a wing scope"
+        );
+        // Unknown floor on a request: an error naming the vocabulary,
+        // never a silently empty result.
+        assert!(s
+            .search(
+                "quarterly totals",
+                &SearchOptions {
+                    min_trust: Some("golden".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .is_err());
     }
 
     /// The defect the wing tier closes, pinned from both sides: corpus-wide

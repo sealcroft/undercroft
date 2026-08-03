@@ -91,6 +91,36 @@ pub fn validate_kind(value: &str) -> Result<(), CoreError> {
     }
 }
 
+/// The closed vocabulary of deployment-assigned wing trust classes,
+/// ordered lowest to highest. Trust is assigned by the RECEIVING
+/// PRINCIPAL (operator surfaces only — CLI and `/v1`, deliberately never
+/// MCP: an agent that writes content must not be able to raise its own
+/// standing; docs/LABELS.md, "a self-declared label is never a trust
+/// boundary"). A wing with no assignment reads as `standard` — a total
+/// default, so a trust filter can never silently empty against an
+/// unlabeled palace.
+pub const TRUST_VOCAB: &[&str] = &["quarantined", "standard", "trusted"];
+
+/// Validate a trust class against [`TRUST_VOCAB`] — rejected, never
+/// coerced.
+pub fn validate_trust(value: &str) -> Result<(), CoreError> {
+    if TRUST_VOCAB.contains(&value) {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidName(
+            value.into(),
+            "not in the closed trust vocabulary (quarantined|standard|trusted)",
+        ))
+    }
+}
+
+/// Rank of a trust class within [`TRUST_VOCAB`] (0 = lowest). Callers
+/// must have validated first; an unknown class ranks lowest rather than
+/// panicking.
+pub fn trust_rank(value: &str) -> usize {
+    TRUST_VOCAB.iter().position(|t| *t == value).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
