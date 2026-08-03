@@ -1,0 +1,19 @@
+# The shipped TLS terminator for the served-embedder path.
+#
+# The engine refuses cleartext http to any non-loopback host — no
+# override exists (crates/undercroft-llm/src/embed.rs, operator decision
+# 2026-08-03) — so the compose-network path runs through this
+# terminator. Caddy's internal CA issues the certificate; the CA root
+# lands on the `undercroft-embed-tls` volume at
+# /data/caddy/pki/authorities/local/root.crt, which clients mount
+# read-only and pin via UNDERCROFT_EMBED_CA. The same shape works for
+# production: any TLS front (Caddy, nginx, HAProxy) plus a declared
+# root — the declaration is a PIN, the bundled public roots are out.
+{
+	auto_https disable_redirects
+}
+
+https://embeddings-tls {
+	tls internal
+	reverse_proxy embeddings:11434
+}

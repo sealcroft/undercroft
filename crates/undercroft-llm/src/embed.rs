@@ -14,14 +14,36 @@
 //! `*_URL` / `*_MODEL` / `*_API` / `*_KEY` variables, the same default-off
 //! posture. Nothing is contacted unless `UNDERCROFT_EMBED_URL` is set.
 //!
-//! # Two hazards, both deliberate and both stated
+//! # Transport policy: TLS or loopback, nothing else
 //!
-//! **Drawer text leaves the process in the clear.** Every embed sends the
-//! content to the endpoint. On loopback or a private container network that is
-//! your own machine; pointed at a hosted gateway it is an egress path out of a
-//! sealed vault, and sealing protects data *at rest*, not data you hand to
-//! someone. Construction logs where the text is going, at warning level when
-//! the host is not loopback.
+//! **Cleartext HTTP to a non-loopback host is refused at construction** —
+//! not warned about, refused, with no override of any kind (operator
+//! decision, 2026-08-03). Drawer text on a network wire readable by anyone
+//! on the path is not a configuration this store will run. The error names
+//! the fix: serve the endpoint over TLS (the compose `embeddings-tls`
+//! terminator ships ready) and, for self-signed infrastructure, declare its
+//! root with `UNDERCROFT_EMBED_CA=<pem>`. Loopback HTTP stays allowed — the
+//! wire never leaves the machine, local runtimes serve plain HTTP by
+//! default, and the in-process test harness rides it.
+//!
+//! **A declared CA is a pin, not an addition.** When `UNDERCROFT_EMBED_CA`
+//! is set, the file's certificates become the ONLY roots this client
+//! trusts — the bundled public roots are out. A declared root that fails to
+//! parse refuses construction rather than falling back, because a silent
+//! fallback would un-pin exactly when the operator believes they pinned.
+//! Certificate verification itself has no bypass: an unknown issuer is a
+//! construction error (`invalid peer certificate: UnknownIssuer`), and no
+//! skip-verify knob exists or will.
+//!
+//! # The hazard that remains, stated
+//!
+//! **The endpoint reads drawer text in plaintext.** TLS protects the wire,
+//! not the destination: every embed hands the content to the serving
+//! process, which holds it in memory outside the vault's crypto boundary
+//! with none of this store's guarantees. Sealing protects data *at rest*,
+//! not data you hand to someone. Construction says so at warning level for
+//! any non-loopback endpoint; if that trade is unacceptable, the
+//! in-process `onnx`/`ort` embedders keep the text in this process.
 //!
 //! **A failed embed cannot fail the write.** [`Embedder::embed`] returns a
 //! vector with no error channel, so a network blip yields a zero vector — a
@@ -99,17 +121,55 @@ impl HttpEmbedder {
         dim: Option<usize>,
     ) -> Result<Self, LlmError> {
         let base = base_url.trim_end_matches('/').to_string();
-        // Say where the content is going. Loopback is the user's own machine;
-        // anything else means drawer text crosses a network, which is a
-        // decision and not a detail.
-        if is_loopback(&base) {
+        let loopback = is_loopback(&base);
+        let tls = base.starts_with("https://");
+        // Transport policy (module header): TLS or loopback, nothing else,
+        // no override. The wire class is closed by refusal, the endpoint
+        // class is stated by warning — and the two must not be conflated.
+        if !tls && !loopback {
+            return Err(LlmError::Refused(format!(
+                "cleartext http to non-loopback {base} — drawer text would cross \
+                 the network readable by anyone on the path, and no override \
+                 exists. Serve the endpoint over TLS (the compose \
+                 `embeddings-tls` terminator ships ready) and declare a \
+                 self-signed root with UNDERCROFT_EMBED_CA=<pem>."
+            )));
+        }
+        if loopback {
             undercroft_obs::diag_info!("embedder: {model} via {base} (loopback)");
         } else {
             undercroft_obs::diag_warn!(
-                "embedder: {model} via {base} — drawer text is sent there in the \
-                 clear on every write and every search. Sealing protects a vault \
-                 at rest, not content handed to another host."
+                "embedder: {model} via {base} — TLS protects the wire, but the \
+                 ENDPOINT still reads drawer text in plaintext on every write \
+                 and every search. Sealing protects a vault at rest, not \
+                 content handed to another process; if that trade is \
+                 unacceptable, use the in-process onnx/ort embedders."
             );
+        }
+        let mut builder = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(120));
+        match std::env::var("UNDERCROFT_EMBED_CA") {
+            Ok(path) if !path.trim().is_empty() => {
+                if tls {
+                    let pem = std::fs::read(&path).map_err(|e| {
+                        LlmError::Refused(format!(
+                            "UNDERCROFT_EMBED_CA {path:?} cannot be read: {e}"
+                        ))
+                    })?;
+                    builder = builder.tls_config(pinned_roots_from_pem(&pem).map_err(|e| {
+                        LlmError::Refused(format!("UNDERCROFT_EMBED_CA {path:?}: {e}"))
+                    })?);
+                } else {
+                    // Declared trust root, cleartext URL: the declaration
+                    // cannot apply. Say so rather than silently ignoring a
+                    // security setting.
+                    undercroft_obs::diag_warn!(
+                        "UNDERCROFT_EMBED_CA is set but {base} is not https — \
+                         the declared root is ignored on a loopback cleartext \
+                         connection"
+                    );
+                }
+            }
+            _ => {}
         }
         let mut me = Self {
             base,
@@ -118,9 +178,7 @@ impl HttpEmbedder {
             key: key.to_string(),
             dim: dim.unwrap_or(0),
             identity: format!("http:{model}"),
-            agent: ureq::AgentBuilder::new()
-                .timeout(std::time::Duration::from_secs(120))
-                .build(),
+            agent: builder.build(),
             failures: Cell::new(0),
         };
         if me.dim == 0 {
@@ -192,6 +250,31 @@ fn parse_embedding(resp: &Value) -> Option<Vec<f32>> {
         .or_else(|| floats(resp.pointer("/embedding")))
         .or_else(|| floats(resp.pointer("/embeddings/0")))
         .or_else(|| floats(Some(resp)))
+}
+
+/// Build the pinned TLS configuration a declared `UNDERCROFT_EMBED_CA`
+/// resolves to: the PEM's certificates become the ONLY trust roots — the
+/// bundled public roots are deliberately absent, because a declaration is a
+/// pin. Errors (empty file, no parseable certificate, a root rustls
+/// rejects) are construction refusals at the caller, never fallbacks.
+fn pinned_roots_from_pem(pem: &[u8]) -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
+    let certs: Vec<_> = rustls_pemfile::certs(&mut &pem[..])
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("not parseable as PEM certificates: {e}"))?;
+    if certs.is_empty() {
+        return Err("holds no certificate — a declared trust root that pins nothing".into());
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    for c in certs {
+        roots
+            .add(c)
+            .map_err(|e| format!("certificate rejected as a trust root: {e}"))?;
+    }
+    Ok(std::sync::Arc::new(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
 }
 
 /// Whether a base URL points at this machine. Deliberately conservative: an
@@ -338,6 +421,72 @@ mod tests {
         let e = HttpEmbedder::connect(&url, "m", ApiKind::OpenAi, "", Some(5)).unwrap();
         assert_eq!(e.embed("text"), vec![0.0; 5], "never a short vector");
         assert_eq!(e.failures(), 1);
+    }
+
+    /// The transport policy, both arms: cleartext to a non-loopback host is
+    /// refused at construction with the fix in the message and no override;
+    /// loopback cleartext still constructs (the wire never leaves the
+    /// machine — and every `serve()`-based test above is the standing proof).
+    #[test]
+    fn cleartext_to_a_non_loopback_host_is_refused_with_the_fix_named() {
+        let err = match HttpEmbedder::connect(
+            "http://embeddings:11434",
+            "m",
+            ApiKind::Ollama,
+            "",
+            Some(3),
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("a non-loopback http URL must refuse at construction"),
+        };
+        let msg = err.to_string();
+        for needle in ["cleartext", "TLS", "UNDERCROFT_EMBED_CA", "no override"] {
+            assert!(msg.contains(needle), "refusal must carry {needle:?}: {msg}");
+        }
+    }
+
+    /// A declared CA is a pin: parseable roots build a config, and every
+    /// failure shape (garbage, empty, PEM with no certificate) errors
+    /// instead of falling back to the bundled public roots.
+    #[test]
+    fn a_declared_ca_pins_or_refuses_never_falls_back() {
+        // A real self-signed certificate (openssl, CN=undercroft-test-ca).
+        const TEST_CA: &str = "-----BEGIN CERTIFICATE-----\n\
+MIIDGTCCAgGgAwIBAgIUVYA93KWe4kvNz4JrEO6hP57PlRMwDQYJKoZIhvcNAQEL\n\
+BQAwHDEaMBgGA1UEAwwRbW5lbW9zeW5lLXRlc3QtY2EwHhcNMjYwODAzMTgyMjMy\n\
+WhcNMzYwNzMxMTgyMjMyWjAcMRowGAYDVQQDDBFtbmVtb3N5bmUtdGVzdC1jYTCC\n\
+ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAPIS9oXYnCGixypG57idzBA0\n\
+PcLKKcEhtf/c/kToszh28AEvRbgXJFgj2H1aHIxU2izB76BS1NtqIwXS0X1OhlTH\n\
+4nMEPxxDbf0+tpyMi9oqt0wozaUGT0OaXsfLRta5OX3U1tJM1aX0ATrj/0UxtqLS\n\
+xpZojZku4S0wxuwK6oNQ+kBq6TisBJSCMockQf6Ox+AHz4UlY6hGWjbi4JKoAHAF\n\
+sfQNWPKtS6Ta1YOVPnc1D1jZ+df9lh9gWhoMuxEROkxjbUyrYTBhO5uw3fcuEAFt\n\
+AB4zz9aC2AR/5eoAuHbEYzgzYJIq8o0486QSwo3/ib0P9OvxmRAkGaAgJxLhkZsC\n\
+AwEAAaNTMFEwHQYDVR0OBBYEFI5PV8zSk9TYxt991QxyQRomW2aAMB8GA1UdIwQY\n\
+MBaAFI5PV8zSk9TYxt991QxyQRomW2aAMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI\n\
+hvcNAQELBQADggEBAM2nf5LMkPMjpjMkWu4Azyi4Yd5TaplYu8+UgP7novDudCi5\n\
+Kcp9ExNdu2Jefol9MzaATIlQssPfZVMWRvpRVJ/Nwcyi0GSUF0JVIlxVK19ErxH9\n\
+t+X23pH6DjCDtTw2KQ0FUv7zYo3gAfzkxO7JqRmetcVLMlabrocw/QAEraQEvgZK\n\
+dYfEwM2MVAJiXKaKUxyNiCeulU1YCHy1+vt/7tUnQ7ySpK9og0hTccOeE9WZ4qmi\n\
+9UJtQCS1wTXJLorRHamIMiEd8E3aSlEsuouKKEY0ADEIwFHtDrR70VFWWA9ftRgq\n\
+tYFnY6i2f/1ZwO5egz39EHpuFql2+6WqpB9saUk=\n\
+-----END CERTIFICATE-----\n";
+        assert!(
+            pinned_roots_from_pem(TEST_CA.as_bytes()).is_ok(),
+            "a real certificate must pin"
+        );
+        for (name, bad) in [
+            ("empty", &b""[..]),
+            ("garbage", &b"not a pem at all"[..]),
+            (
+                "pem with no certificate",
+                &b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"[..],
+            ),
+        ] {
+            assert!(
+                pinned_roots_from_pem(bad).is_err(),
+                "{name} must refuse, never fall back to public roots"
+            );
+        }
     }
 
     #[test]
