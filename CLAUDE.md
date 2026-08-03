@@ -374,11 +374,20 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   backed by a served model (`UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`
   /`_MODEL`/`_API`/`_KEY`/`_DIM`). Both API shapes, dimension **probed** from
   the endpoint rather than assumed, identity `http:<model>` so the existing
-  swap-refusal covers it. Two hazards it states rather than hides: drawer text
-  is sent **in the clear** (warned at construction when the host is not
-  loopback — sealing protects a vault at rest, not content handed to another
-  host), and a failed embed cannot fail a write, so it degrades to a **counted**
-  zero vector (lexically findable, semantically invisible until re-embedded).
+  swap-refusal covers it. **Transport: TLS or loopback, nothing else** —
+  cleartext http to a non-loopback host is REFUSED at construction with no
+  override (operator decision 2026-08-03; the error names the fix), and
+  `UNDERCROFT_EMBED_CA` declares a self-signed root as a **pin** (replaces
+  the public roots; a garbage file refuses rather than falling back —
+  un-pinning silently is the failure mode). The compose `embeddings-tls`
+  Caddy terminator ships the required infra (deploy/embeddings-tls/) with
+  its CA on the `undercroft-embed-tls` volume. Two hazards it still states
+  rather than hides: the ENDPOINT reads drawer text in plaintext (warned
+  at construction when the host is not loopback — TLS protects the wire,
+  not the destination; sealing protects a vault at rest, not content
+  handed to another process; in-process onnx/ort close it), and a failed
+  embed cannot fail a write, so it degrades to a **counted** zero vector
+  (lexically findable, semantically invisible until re-embedded).
   No external API by default: nothing is contacted unless a URL is set
 - `crates/undercroft-embed-onnx` — feature-gated ONNX embedder, cross-encoder
   reranker, **and** ColBERT late-interaction encoder (tract, pure Rust; two
@@ -427,7 +436,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 69
+  which inlines them and documents every layer plus all 70
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -506,11 +515,18 @@ docker build -t undercroft .           # runtime image
 
 # A quantized text embedder on the compose network, CPU only — so a
 # measurement is reproducible instead of depending on a desktop app on the
-# host (which the bench container cannot reach anyway):
-docker compose up -d embeddings
+# host (which the bench container cannot reach anyway). Reached through
+# the embeddings-tls terminator ONLY: the engine refuses cleartext http
+# to any non-loopback host, no override. The client container mounts the
+# terminator's CA volume and PINS the root:
+docker compose up -d embeddings embeddings-tls
 docker compose run --rm embed-pull    # one-time model fetch into a volume
-UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=http://embeddings:11434 \
-  UNDERCROFT_EMBED_MODEL=nomic-embed-text  # then run cli/bench with these
+#   then run cli/bench with (project-prefixed volume name — a bare
+#   undercroft-embed-tls mounts a fresh empty volume silently):
+#     -v undercroft_undercroft-embed-tls:/tls:ro
+#     UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=https://embeddings-tls
+#     UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt
+#     UNDERCROFT_EMBED_MODEL=nomic-embed-text
 ```
 
 **The `undercroft-target` volume can serve a STALE artifact.** `cargo` reused a

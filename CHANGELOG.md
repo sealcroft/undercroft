@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased — the wire class closes: TLS or loopback, nothing else
+
+- **Cleartext http to a non-loopback embeddings host is REFUSED at
+  construction — no override exists, deliberately** (operator decision
+  2026-08-03; a knob would reopen the hole a refusal closes). The error
+  names the fix. This is a **deliberate breaking change** on the served-
+  embedder path: a deployment pointing `UNDERCROFT_EMBED_URL` at plain
+  http beyond loopback stops opening and says exactly why. Loopback
+  cleartext stays allowed and silent — the wire never leaves the
+  machine, local runtimes serve plain http, and the in-process test
+  harness rides it.
+- **`UNDERCROFT_EMBED_CA` (70th env var) declares a self-signed root as a
+  PIN**: the PEM's certificates become the ONLY roots the embeddings
+  client trusts — bundled public roots are out, because a declaration
+  is a pin, not an addition. Every failure shape refuses construction
+  instead of falling back (unreadable file, no certificate, rejected
+  root) — a silent fallback would un-pin exactly when the operator
+  believes they pinned. Certificate verification itself has no bypass
+  and never will (live-probed before the unit was built: an unknown
+  issuer already failed closed at the construction probe).
+- **The required TLS infra ships containerized**: compose service
+  `embeddings-tls` (Caddy, `deploy/embeddings-tls/Caddyfile`) fronts
+  the Ollama service with its internal CA; the CA root lands on the
+  `undercroft-embed-tls` volume, clients mount it read-only and pin via
+  `UNDERCROFT_EMBED_CA`. The refusal is paired with a one-command way to
+  comply — the secure path is the path of least resistance. The bench
+  path moves to https permanently, so every served-embedder measurement
+  from here on exercises the TLS stack (the benchmark config IS the
+  live test). The `embed-pull` service keeps plain http on the compose
+  network deliberately: it moves public model weights over Ollama's own
+  management port, never drawer content.
+- **The warning stops conflating the two hazard classes**: https to a
+  non-loopback host now warns about the ENDPOINT only ("TLS protects
+  the wire, but the endpoint still reads drawer text in plaintext" —
+  in-process `onnx`/`ort` close that class); the old text claimed "in
+  the clear" on connections that no longer are. Pinned by unit tests in
+  both directions: the refusal carries the fix by name, the pin refuses
+  every bad-root shape, loopback constructs as before.
+
 ## 0.44.0 — Screened at the door, bounded at the draw, forgotten with a receipt
 
 The post-0.43.0 defense-and-calibration program, five merged units, each

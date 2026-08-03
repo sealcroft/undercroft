@@ -249,7 +249,7 @@ per vault on first write, and a model swap is refused unless you set
 | Value | What | When |
 |---|---|---|
 | `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo R@10 92.7% with hybrid search. **Single-language only** — see below |
-| `http` | a model served over HTTP — Ollama, llama.cpp server, LM Studio, vLLM, TEI. `UNDERCROFT_EMBED_URL` + `_MODEL` (+ optional `_API`, `_KEY`, `_DIM`); dimension is probed from the endpoint | **the recommended configuration when the endpoint is loopback or a private container network** — the largest measured lever on retrieval quality (**+3.2 to +4.2pp** turn all-gold over `hash` across four models, which span only 1.0pp between them; each figure is n=1, so no specific model is recommended until repeat runs separate them), and no ONNX export needed. Stays opt-in rather than default because **drawer text leaves the process in the clear** — the default must remain zero-egress, and that posture is the product's, not a tuning knob. Costs one request per drawer at ingest (11–29×) and +20–57% search |
+| `http` | a model served over HTTPS (or loopback) — Ollama, llama.cpp server, LM Studio, vLLM, TEI. `UNDERCROFT_EMBED_URL` + `_MODEL` (+ optional `_API`, `_KEY`, `_DIM`, `_CA`); dimension is probed from the endpoint. **Cleartext http to a non-loopback host is refused at construction, no override** — front the endpoint with TLS (the compose `embeddings-tls` terminator ships ready) and pin a self-signed root with `UNDERCROFT_EMBED_CA` | **the recommended configuration when the endpoint is loopback or a TLS-fronted private service** — the largest measured lever on retrieval quality (**+3.2 to +4.2pp** turn all-gold over `hash` across four models, which span only 1.0pp between them; each figure is n=1, so no specific model is recommended until repeat runs separate them), and no ONNX export needed. Stays opt-in rather than default because **the endpoint reads drawer text in plaintext** (TLS protects the wire, not the destination) — the default must remain zero-egress, and that posture is the product's, not a tuning knob. Costs one request per drawer at ingest (11–29×) and +20–57% search |
 | `onnx` | user-supplied MiniLM-class ONNX via tract (pure Rust); needs `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`, build `--features onnx` | best recall, pure-Rust constraint |
 | `ort` | same models via ONNX Runtime (C++ dep, build `--features ort`); ~2.5× faster/forward, int8 support, ~4–5× faster ingest | throughput matters; same env vars, switching is one env change |
 
@@ -592,7 +592,9 @@ Core: `UNDERCROFT_HOME` (palace dir, default `~/.undercroft`) ·
 `UNDERCROFT_PASSPHRASE` (Argon2id master key instead of key file) ·
 `UNDERCROFT_LANG` (CLI language, 9 supported).
 
-Models: `UNDERCROFT_EMBEDDER` (`hash`|`onnx`|`ort`) ·
+Models: `UNDERCROFT_EMBEDDER` (`hash`|`onnx`|`ort`|`http`) ·
+`UNDERCROFT_EMBED_URL`/`_MODEL`/`_API`/`_KEY`/`_DIM`/`_CA` (served
+embedder; TLS or loopback only, `_CA` pins a self-signed root) ·
 `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`/`_NAME` ·
 `UNDERCROFT_RERANKER` (`onnx`|`ort`|`colbert`|`colbert-ort`) ·
 `UNDERCROFT_RERANK_MODEL`/`_TOKENIZER`/`_NAME`/`_TOP_N` (50) ·

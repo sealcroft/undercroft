@@ -103,12 +103,19 @@ services:
       target: builder
     command: ["/src/target/release/undercroft-bench", "synth", "--n", "200"]
 
-  # A quantized text embedder served on the compose network, CPU only.
+  # A quantized text embedder served on the compose network, CPU only —
+  # reached through the `embeddings-tls` terminator, never directly: the
+  # engine refuses cleartext http to any non-loopback host, no override
+  # (crates/undercroft-llm/src/embed.rs).
   #
-  #   docker compose up -d embeddings
+  #   docker compose up -d embeddings embeddings-tls
   #   docker compose run --rm embed-pull            # once: fetch the model
-  #   docker compose run --rm -e UNDERCROFT_EMBEDDER=http \
-  #     -e UNDERCROFT_EMBED_URL=http://embeddings:11434 \
+  #   # NB the volume must be named with the project prefix — a bare
+  #   # `undercroft-embed-tls` mounts a fresh empty volume silently:
+  #   docker compose run --rm -v undercroft_undercroft-embed-tls:/tls:ro \
+  #     -e UNDERCROFT_EMBEDDER=http \
+  #     -e UNDERCROFT_EMBED_URL=https://embeddings-tls \
+  #     -e UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt \
   #     -e UNDERCROFT_EMBED_MODEL=nomic-embed-text bench
   #
   # Why a container rather than a desktop runtime on the host: everything this
@@ -130,6 +137,21 @@ services:
       OLLAMA_KEEP_ALIVE: "30m"
     volumes:
       - undercroft-models:/root/.ollama
+
+  # The shipped TLS terminator (deploy/embeddings-tls/Caddyfile): Caddy's
+  # internal CA signs a cert for `embeddings-tls`; the CA root lands on
+  # the `undercroft-embed-tls` volume at
+  # /data/caddy/pki/authorities/local/root.crt, which clients mount
+  # read-only and PIN via UNDERCROFT_EMBED_CA (the declaration replaces
+  # the public roots — a pin, not an addition). This container is the
+  # only holder of the private key; the engine never needs one.
+  embeddings-tls:
+    image: caddy:2.8
+    depends_on:
+      - embeddings
+    volumes:
+      - ./deploy/embeddings-tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - undercroft-embed-tls:/data
 
   # One-time model fetch into the shared volume. Separate from `embeddings` so
   # the download is an explicit act, not a side effect of starting a service.
@@ -221,3 +243,6 @@ volumes:
   undercroft-data:
   # Embedding model weights, so `embed-pull` is a one-time download.
   undercroft-models:
+  # The embeddings-tls terminator's CA material — clients mount this
+  # read-only and pin the root via UNDERCROFT_EMBED_CA.
+  undercroft-embed-tls:

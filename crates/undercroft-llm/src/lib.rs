@@ -29,6 +29,8 @@ pub enum LlmError {
     Http(String),
     #[error("llm returned unusable output: {0}")]
     BadOutput(String),
+    #[error("refused: {0}")]
+    Refused(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
