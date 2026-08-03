@@ -757,8 +757,12 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   all — so that normalization is a security property, not only a
   distance-ordering one. It is **not** a small displacement bound (every
   centroid is a mean of in-ball points, so "at most the diameter" bounds
-  nothing), and one channel stays open: a **NaN/Inf**
-  vector from an `external:` embedder, which escapes it entirely. The
+  nothing). The **NaN/Inf** channel (a non-finite vector from an
+  `external:` embedder escaped normalization entirely — NaN/x = NaN)
+  is CLOSED at the door (2026-08-04): `upsert_external` refuses any
+  vector with a non-finite component; every internal embedder is
+  finite by construction, so the caller-supplied path was the one
+  door. The
   **density** channel (owning fraction *f* bought ≈*f* of any uniform
   sample) is CLOSED at the draw (2026-08-03): `keyed_sample_capped`
   bounds any wing at `1/UNDERCROFT_TRAIN_SOURCE_CAP` (default 4) of every

@@ -617,9 +617,11 @@ cheap, and without them the later work is unmeasurable.*
   which is what makes the breakdown bounded at all. It is **not** a small
   displacement bound; with every point in the unit ball each centroid is
   already in that ball, so "at most the diameter" bounds nothing. Residuals
-  named: **density** (owning fraction *f* buys ≈*f* of any uniform sample — a
-  per-source cap's job) and **non-finite input** (a NaN from an `external:`
-  embedder escapes it entirely).
+  named: **density** (owning fraction *f* buys ≈*f* of any uniform sample —
+  CLOSED at the draw 2026-08-03, per-wing + per-agent-claim caps) and
+  **non-finite input** (a NaN from an `external:` embedder escaped it
+  entirely — CLOSED at the door 2026-08-04: `upsert_external` refuses any
+  vector with a non-finite component). Both residuals are now closed.
 
 *Named as gaps, not decisions:*
 

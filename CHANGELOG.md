@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — the last open poisoning channel closes: non-finite external vectors are refused
+
+- **`upsert_external` refuses any vector with a NaN or infinite
+  component.** The codebook-poisoning invariant rested on L2
+  normalization bounding a training vector's influence — and that bound
+  only holds for finite arithmetic: NaN rides through normalization
+  (NaN/x = NaN, Inf/Inf = NaN) straight into k-means means and cosine
+  sums, where one hostile vector corrupts every centroid it touches.
+  Every internal embedder (hash, onnx, ort, http) produces finite
+  floats by construction, so the caller-supplied `external:` path was
+  the one open door — recorded as such in the invariant since the
+  coupling rule was written, closed here with a refusal at the write
+  (`StoreError::Invalid`, naming the reason). Pinned: NaN, +Inf and
+  −Inf all refuse with nothing landing behind the refusal; finite
+  vectors are untouched. Measured nothing, on purpose — a refusal of
+  arithmetic that corrupts is not a tunable.
+
 ## Unreleased — the advisory tier: a model may say "suspicious", never "admitted" (C3.3 complete)
 
 - **The optional tier-2 classifier ships, advisory-only by
