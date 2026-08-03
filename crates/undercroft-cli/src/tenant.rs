@@ -351,6 +351,8 @@ impl Tenancy {
             }
             ("POST", &["v1", "vaults", id, "trust"]) => self.set_trust(id, req, body, now),
             ("GET", &["v1", "vaults", id, "trust"]) => self.list_trust(id, req, now),
+            ("GET", &["v1", "vaults", id, "admission"]) => self.admission_list(id, req, now),
+            ("POST", &["v1", "vaults", id, "admission"]) => self.admission_rule(id, req, body, now),
             ("GET", &["v1", "vaults", id, "kg", "canonical", key]) => {
                 self.kg_canonical(id, key, req, now)
             }
@@ -1185,6 +1187,54 @@ impl Tenancy {
                 "summary": summary,
             })),
         ))
+    }
+
+    /// `GET /v1/vaults/{id}/admission` — every drawer awaiting an
+    /// admission ruling: signal codes + offsets (structure, never
+    /// content), intended destination, age. Enable the screen itself with
+    /// `UNDERCROFT_ADMISSION=quarantine` on the engine.
+    fn admission_list(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let pending = store.admission_pending().map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "pending": serde_json::to_value(&pending).unwrap_or_else(|_| json!([])),
+                "screening": store.admission_on(),
+            })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/admission` — rule on a quarantined drawer:
+    /// `{drawer_id, verdict: "allow"|"deny"}`. An operator surface,
+    /// deliberately absent from MCP (an agent whose write was quarantined
+    /// must not be able to rule on it). Both verdicts are chain-audited.
+    fn admission_rule(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.deny_read_only()?;
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let drawer_id = body_str(&body, "drawer_id")?;
+        let verdict = body_str(&body, "verdict")?;
+        let store = self.store_for(id)?;
+        match verdict.as_str() {
+            "allow" => {
+                let restored = store.admission_allow(&drawer_id).map_err(store_err)?;
+                Ok((
+                    200,
+                    Body::Json(json!({ "drawer_id": drawer_id, "verdict": "allowed",
+                                        "restored_id": restored })),
+                ))
+            }
+            "deny" => {
+                store.admission_deny(&drawer_id).map_err(store_err)?;
+                Ok((
+                    200,
+                    Body::Json(json!({ "drawer_id": drawer_id, "verdict": "denied" })),
+                ))
+            }
+            _ => Err(RestError::new(400, "verdict must be 'allow' or 'deny'")),
+        }
     }
 
     /// `POST /v1/vaults/{id}/trust` — assign a wing's trust class

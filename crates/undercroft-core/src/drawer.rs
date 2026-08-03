@@ -82,6 +82,19 @@ pub struct DrawerMeta {
     /// stored beside the row and re-keyed on rotation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<String>,
+    /// Tier-1 admission signals tripped at ingest (C3.3): signal CODES
+    /// and byte offsets only — structure, never content, so they may sit
+    /// in unsealed metadata beside the sealed text. Present only on
+    /// quarantined drawers; empty for everything admitted normally.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub admission_signals: Vec<crate::admission::AdmissionSignal>,
+    /// Where a quarantined drawer was HEADED when the screen diverted it
+    /// — what `admission allow` re-files it into. Present only while
+    /// quarantined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intended_wing: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intended_room: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<String>,
     /// **Further** times this same content was recorded, beyond the drawer's
@@ -151,6 +164,9 @@ impl Drawer {
                 hall: None,
                 kind: None,
                 supersedes: None,
+                admission_signals: Vec::new(),
+                intended_wing: None,
+                intended_room: None,
                 entities,
                 occurrences: Vec::new(),
             },

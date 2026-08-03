@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased — memory is screened at the door: admission control and the quarantine wing (C3.3 phase 2)
+
+- **The deterministic tier-1 detector** (`undercroft_core::admission`):
+  pure functions over candidate bytes screening for the marker classes
+  the documented poisoning attacks ride in on — imperative instructions
+  aimed at a future reader, embedded tool-call/model-control syntax,
+  exfiltration framing, ≥120-char encoded blobs. A closed signal
+  vocabulary with byte offsets (structure, never content). Honest
+  boundaries in the module header: heuristic — unmarked poison passes,
+  a security engineer's own notes about injection can trip — which is
+  exactly why a signal never REJECTS. Negative fixtures pinned (notes
+  about prompt injection, URLs, hashes, JSON do not trip).
+- **Quarantine, not rejection** (`UNDERCROFT_ADMISSION=quarantine`,
+  default off — 68th env var: admission changes what a save DOES, so it
+  ships as the deployment's declaration and the default write contract
+  is byte-identical). Flagged saves DIVERT to the reserved
+  `quarantine-pending` wing — sealed like everything else, signal codes
+  + intended destination in metadata, deterministic id so a crashed
+  save converges — on both the interactive and bulk paths (bulk is
+  where a poisoned corpus arrives; zero cost while off). The wing is
+  reserved at the choke point: a signal-less save aimed there is
+  refused, so residence always means "the screen put it here".
+- **Quarantined drawers answer no one but their reviewer**: excluded
+  from every search that does not explicitly name the wing, through the
+  same pre-candidate machinery as the trust floor — a quarantined
+  drawer can neither answer nor crowd. One indexed EXISTS decides, so a
+  vault with nothing quarantined keeps its exact path.
+- **Chain-audited rulings**: `admission allow` re-files the drawer
+  where it was headed (bypassing the screen — the human ruling IS the
+  override; metadata comes off, the ruling lives in the chain) and
+  removes the quarantined copy; `admission deny` destroys content
+  (keyed tombstone) and keeps the trail. Verdict + re-filed id sit
+  inside the ruling tag's canonical, so the review trail is as
+  tamper-evident as the data. Surfaces: CLI `admission list|allow|deny`,
+  `/v1` GET/POST `…/admission` — operator only, deliberately absent
+  from MCP (an agent whose write was quarantined must not rule on it);
+  MCP saves are screened like any other when the deployment opts in.
+- **Recorded gaps, plainly**: `update_drawer` content changes are not
+  yet screened; deny is a plain audited delete (C3.2's attested
+  forgetting will give it a receipt); the optional advisory LLM
+  classifier tier is unbuilt. Pinned end to end by the lifecycle test
+  (divert → invisible → pending → allow/deny → verify green, plus the
+  forged-resident refusal) and the detector's fixture suite; e2e grows
+  173 → 179.
+
 ## Unreleased — the density channel closes at the training draw: a per-source cap, gated and measured
 
 - **`keyed_sample_capped` — C3.3's density channel bounded where it

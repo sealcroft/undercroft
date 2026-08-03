@@ -338,6 +338,13 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   entities/facts/tunnels; receipts re-key from the traveling fp at the
   destination; the manifest carries embedder identity and chain head as
   provenance, never as state),
+  write-path admission control (admission.rs + core admission.rs — C3.3
+  phase 2: deterministic tier-1 detector, closed signal vocabulary,
+  offsets never content; `UNDERCROFT_ADMISSION=quarantine` diverts flagged
+  saves sealed into the reserved `quarantine-pending` wing, hard-excluded
+  from retrieval except the reviewer's own scope; allow/deny chain-audited
+  with the verdict inside the ruling tag; operator surfaces only, never
+  MCP; default off = byte-identical write contract),
   management surface (manage.rs — incl. **deployment-assigned wing trust**:
   `TRUST_VOCAB` closed vocabulary assigned by the operator only, never over
   MCP; HMAC-tagged + audited, flip = integrity failure; consumed as a
@@ -416,7 +423,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 67
+  which inlines them and documents every layer plus all 68
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -479,7 +486,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (249)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (173 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (179 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

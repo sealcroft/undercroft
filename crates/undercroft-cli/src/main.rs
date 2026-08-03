@@ -167,6 +167,14 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
+    /// Review writes the admission screen quarantined (an operator
+    /// surface; enable screening with UNDERCROFT_ADMISSION=quarantine)
+    Admission {
+        #[command(subcommand)]
+        action: AdmissionAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
+    },
     /// Deployment-assigned wing trust classes — the receiving principal's
     /// declaration (an operator surface: agents cannot assign trust over
     /// MCP, only read with a floor)
@@ -593,6 +601,17 @@ enum VaultAction {
     /// vault was pushed to a remote index (remote copies hold old-key
     /// ciphertext). Do not rotate a vault another process is serving.
     Rotate { name: String },
+}
+
+#[derive(clap::Subcommand)]
+enum AdmissionAction {
+    /// Drawers awaiting a ruling: signals, intended destination, age
+    List,
+    /// Re-file a quarantined drawer where it was headed (chain-audited)
+    Allow { id: String },
+    /// Destroy a quarantined drawer's content (keyed tombstone + audited
+    /// ruling; the trail remains, the content does not)
+    Deny { id: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -1443,6 +1462,36 @@ fn main() -> Result<()> {
             } else {
                 println!("{}", tr("verify-failed"));
                 std::process::exit(2);
+            }
+        }
+        Command::Admission { action, vault } => {
+            let mut store = open_store(&cli, vault)?;
+            match action {
+                AdmissionAction::List => {
+                    let pending = store.admission_pending()?;
+                    if pending.is_empty() {
+                        println!("Nothing awaits review.");
+                    }
+                    for p in pending {
+                        let codes: Vec<&str> = p.signals.iter().map(|s| s.code.as_str()).collect();
+                        println!(
+                            "  {}  → {}/{}  [{}]  filed {}",
+                            p.id,
+                            p.intended_wing,
+                            p.intended_room,
+                            codes.join(", "),
+                            p.filed_at
+                        );
+                    }
+                }
+                AdmissionAction::Allow { id } => {
+                    let restored = store.admission_allow(id)?;
+                    println!("Allowed: re-filed as {restored} (ruling audited).");
+                }
+                AdmissionAction::Deny { id } => {
+                    store.admission_deny(id)?;
+                    println!("Denied: content destroyed, ruling and tombstone audited.");
+                }
             }
         }
         Command::Trust { action, vault } => {

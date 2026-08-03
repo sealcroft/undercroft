@@ -1392,7 +1392,18 @@ release with the usual battery + measured gates.
   default-on: synth 16384 periodic shape 100.0/100.0, wingscale 16-wing
   scoped+unscoped 100.0% both floors. Per-writer caps still need
   admission-phase provenance.
-  Remaining phases below. First-mover answer to the documented
+  **Phase 2 BUILT (2026-08-03): the deterministic tier-1 detector +
+  quarantine wing + audited rulings** — `undercroft_core::admission`
+  (closed signal vocabulary, offsets not content, negative fixtures
+  pinned), `UNDERCROFT_ADMISSION=quarantine` (default off; flagged
+  saves divert sealed to the reserved wing on both save paths, the
+  wing refuses forged residents, retrieval hard-excludes it except for
+  the reviewer's own scope), CLI/`/v1` allow/deny with the verdict
+  inside the ruling tag's canonical — never an MCP tool. Recorded
+  gaps: update-path screening, deny-with-receipt (C3.2), the advisory
+  LLM tier, and the provenance-driven default posture (auto-admit by
+  channel) which needs richer provenance fields first.
+  Remaining pieces below. First-mover answer to the documented
   memory-poisoning attack class
   (MINJA, AgentPoison, forged-reasoning): screen memory **at ingest**,
   not just at retrieval, so poison never becomes retrievable while a
