@@ -351,6 +351,20 @@ impl PalaceStore {
         self.pq_enabled = on;
     }
 
+    /// Declare the cosine→`semantic` calibration zero programmatically
+    /// (the env `UNDERCROFT_SEMANTIC_FLOOR` resolved at open is the
+    /// deployment's way; the embedder's own measurement is the default).
+    /// 0 is the shipped hash map. Out-of-range values are rejected.
+    pub fn set_sem_floor(&mut self, floor: f32) -> Result<(), StoreError> {
+        if !floor.is_finite() || !(0.0..=0.98).contains(&floor) {
+            return Err(StoreError::Invalid(format!(
+                "semantic floor {floor} is not a cosine in [0.0, 0.98]"
+            )));
+        }
+        self.sem_floor = floor;
+        Ok(())
+    }
+
     /// Declare the vault-level trust floor programmatically (the env
     /// `UNDERCROFT_TRUST_FLOOR` resolved at open is the deployment's way).
     /// `None` = no floor. An invalid class is rejected, never coerced.

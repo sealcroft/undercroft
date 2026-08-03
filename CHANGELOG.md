@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased — the semantic map is calibrated to the embedder, and the crowding defect closes
+
+- **The xlingual-filed defect (mixed-corpus cross-lingual collapse) is
+  CLOSED, both gates met.** Root cause, recorded when filed: the
+  cosine→`semantic` map `(cos+1)/2` was one expression calibrated to the
+  hash space, where unrelated text sits at cosine ~0 — a served model
+  parks unrelated text near 0.5, its semantic range compressed into the
+  top quarter of the scale, and same-language function-word BM25 noise
+  crowded translation golds out of a mixed corpus entirely. The same
+  one-constant-for-every-embedder class as the admission gate (fixed
+  2026-07-28), one channel over.
+- **The fix: `Embedder::semantic_floor`** — the raw cosine the embedder
+  in hand gives its worst known-unrelated probe pair (the gate's own 14
+  pairs), resolved ONCE at open, feeding a calibrated map that lands the
+  measured floor at `semantic` 0.5 and keeps 1.0 at 1.0
+  (`calibrated_semantic`). `HashEmbedder` DECLARES floor 0 — and floor 0
+  takes the shipped expression verbatim, not its algebraic equal, because
+  "the default vault does not move" is a byte-identity claim (pinned to
+  the BIT by test). `ExternalEmbedder` declares `None` (vectors from a
+  model this process never saw) and keeps the floor-0 map;
+  `UNDERCROFT_SEMANTIC_FLOOR` (66th env var) declares a measured floor for
+  exactly that case, garbage warns and defers to the embedder. The
+  admission gate rides the same calibration: in the recalibrated space
+  every measured embedder's unrelated worst lands at neutral, so the
+  measured gate becomes the hash gate's own 0.06 headroom above 0.5 —
+  the per-embedder gate and the per-embedder map are one mechanism now.
+- **Both gates, measured**:
+  - *LoCoMo hash regression*: turn all-gold @10 **69.4%**, top-40 CDF
+    **81.8%** — digit-for-digit the published `w=0.55` row, as the
+    bit-identity predicts (defaults, k 10, merged corpus, one run).
+  - *xlingual mixed-corpus recovery* (bge-m3 served, 155 pairs, sealed,
+    defaults): R@5 **0–4% → 53–88%** at the default weight — already
+    better than the old map ever managed even at the weight ceiling —
+    and with a deployment-declared `UNDERCROFT_FUSION_WEIGHT=0.70`,
+    **R@5 100.0% on every pair, R@1 60–100%**, near the foreign-only
+    ceiling. The two levers compose: the map restores the semantic
+    channel's range, the declared weight then genuinely trades lexical
+    against semantic instead of scaling a dead channel. The default
+    weight does not move (hash's measured optimum is LOWER, and one
+    benchmark must not set a default).
+  - Pinned by unit tests in both directions: a stand-in multilingual
+    embedder reproduces the crowding under a forced floor-0 map (the
+    premise arm fails loudly if the corpus stops reproducing the defect)
+    and recovers the gold under the measured floor; the high-floor gate
+    test now asserts recalibration (floor→0.5, gate 0.56) instead of a
+    raised gate — same protection, full dynamic range.
+
 ## 0.43.0 — Provenance, trust, and the instruments that earned them
 
 The whole sessions-19 through 24 program ships in this release; each
