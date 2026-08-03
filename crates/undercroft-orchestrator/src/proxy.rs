@@ -477,16 +477,49 @@ pub(crate) fn migrate_tenant(
     let dst = orch.instance_creds(to).map_err(|e| e.to_string())?;
 
     let ndjson = engine::export_vault(&src, &tenant.vault)?;
-    let exported = ndjson.lines().filter(|l| !l.trim().is_empty()).count() as u64;
+    // The export leads with a manifest line since 0.43.0, and it DECLARES
+    // the record counts — the count-verify below checks against that
+    // declaration rather than a raw line count, which the manifest line
+    // and the typed KG/tunnel records would inflate. A legacy engine (no
+    // manifest) keeps the old contract: every non-empty line is a drawer.
+    let manifest = ndjson
+        .lines()
+        .next()
+        .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .and_then(|v| v.get("undercroft_manifest").cloned());
+    let expected: (u64, u64, u64, u64) = match &manifest {
+        Some(m) => {
+            let n = |k: &str| m["counts"][k].as_u64().unwrap_or(0);
+            (
+                n("drawers"),
+                n("kg_triples"),
+                n("kg_entities"),
+                n("tunnels"),
+            )
+        }
+        None => (
+            ndjson.lines().filter(|l| !l.trim().is_empty()).count() as u64,
+            0,
+            0,
+            0,
+        ),
+    };
     engine::create_vault(&dst, &tenant.vault, "sealed")?;
-    let imported = engine::import_vault(&dst, &tenant.vault, &ndjson)?;
-    if imported != exported {
+    let got = engine::import_vault(&dst, &tenant.vault, &ndjson)?;
+    let counts_match = got.drawers == expected.0
+        && (manifest.is_none()
+            || (got.kg_triples == expected.1
+                && got.kg_entities == expected.2
+                && got.tunnels == expected.3));
+    if !counts_match {
         // Leave the source authoritative; remove the partial copy.
         let _ = engine::delete_vault(&dst, &tenant.vault);
         return Err(format!(
-            "import count mismatch ({imported} of {exported}) — source left authoritative"
+            "import count mismatch (drawers {} of {}, kg {} of {}) — source left authoritative",
+            got.drawers, expected.0, got.kg_triples, expected.1
         ));
     }
+    let imported = got.drawers;
     orch.tenant_set_instance(id, to)
         .map_err(|e| e.to_string())?;
     let source_deleted = if keep_source {
