@@ -73,6 +73,17 @@ impl PalaceStore {
         self.admit_trusted_sources = sources;
     }
 
+    /// Wire the optional tier-2 advisor (the binary's job, like the
+    /// reranker — `UNDERCROFT_ADMISSION_LLM=advisory` resolves to this).
+    /// Consulted only when screening is on, only for candidates the
+    /// deterministic tier passed, only toward quarantine.
+    pub fn set_admission_advisor(
+        &mut self,
+        advisor: Option<Box<dyn undercroft_core::admission::AdmissionAdvisor + Send + Sync>>,
+    ) {
+        self.admission_advisor = advisor;
+    }
+
     /// Screen one candidate drawer; `Some(diverted)` when it must land in
     /// quarantine instead of where it was headed. The diverted drawer
     /// keeps the verbatim content (sealed like any other), records the
@@ -100,9 +111,21 @@ impl PalaceStore {
         {
             return None;
         }
-        let signals = undercroft_core::admission::screen(&drawer.content);
+        let mut signals = undercroft_core::admission::screen(&drawer.content);
         if signals.is_empty() {
-            return None;
+            // Tier 2, advisory-only (C3.3): a wired model may push a
+            // candidate the deterministic tier passed toward quarantine —
+            // never the other way around (a tier-1-flagged candidate is
+            // never shown to the model, so talking the classifier into
+            // "clean" bypasses nothing), and a failed or unparseable
+            // answer is a non-event, never a blocked write.
+            match self.admission_advisor.as_ref()?.assess(&drawer.content) {
+                Some(true) => signals.push(undercroft_core::admission::AdmissionSignal {
+                    code: undercroft_core::admission::LLM_ADVISORY_CODE.to_string(),
+                    offset: 0,
+                }),
+                Some(false) | None => return None,
+            }
         }
         let mut d = drawer.clone();
         d.meta.intended_wing = Some(d.meta.wing.clone());

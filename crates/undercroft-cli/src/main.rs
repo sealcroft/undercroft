@@ -907,7 +907,21 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
     };
     attach_reranker(&mut store)?;
     attach_retrieval(&mut store)?;
+    attach_admission_advisor(&mut store)?;
     Ok(store)
+}
+
+/// Wire the optional tier-2 admission advisor
+/// (`UNDERCROFT_ADMISSION_LLM=advisory` + the `UNDERCROFT_LLM_*` family).
+/// Declared-but-unusable refuses to open — a screen that silently isn't
+/// running is worse than a refusal to start.
+pub(crate) fn attach_admission_advisor(store: &mut PalaceStore) -> Result<()> {
+    if let Some(advisor) = undercroft_llm::advisor::LlmAdmissionAdvisor::from_env()
+        .map_err(|e| anyhow::anyhow!("admission advisor: {e}"))?
+    {
+        store.set_admission_advisor(Some(Box::new(advisor)));
+    }
+    Ok(())
 }
 
 /// Select the candidate-generation strategy via `UNDERCROFT_RETRIEVAL`

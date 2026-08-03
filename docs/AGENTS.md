@@ -637,6 +637,13 @@ reviewer's explicit wing scope, and reviewed via CLI
 `admission list|allow|deny` or `/v1` GET/POST `…/admission` — operator
 surfaces, deliberately never MCP. Heuristic, quarantine-not-reject; the
 default leaves the write contract byte-identical) ·
+`UNDERCROFT_ADMISSION_LLM` (unset — `advisory` wires the
+`UNDERCROFT_LLM_*` runtime as the screen's tier-2 classifier: consulted
+only for candidates the deterministic tier passed, only toward
+quarantine (the `llm-advisory` signal code) — never auto-admit, because
+the model is itself an injection target; a failed or unparseable answer
+is a non-event, and a declared-but-unusable advisor refuses to open.
+TLS or loopback only) ·
 `UNDERCROFT_TRAIN_SOURCE_CAP` (4 — per-wing cap divisor on global
 codebook training draws: no single wing supplies more than 1/N of a
 training sample while others can fill it; within-quota corpora draw

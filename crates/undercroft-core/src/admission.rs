@@ -28,13 +28,39 @@ pub struct AdmissionSignal {
     pub offset: u32,
 }
 
-/// The closed vocabulary of signal classes.
+/// The closed vocabulary of signal classes. The first four are the
+/// deterministic tier's; `llm-advisory` is emitted only by the optional
+/// tier-2 advisor (never by [`screen`]) and carries offset 0 — a model's
+/// opinion has no byte position, and a model's REASONING never enters
+/// the signal (it could carry content, and it could carry the injection).
 pub const SIGNAL_CODES: &[&str] = &[
     "imperative-instruction",
     "tool-call-syntax",
     "exfil-marker",
     "encoded-blob",
+    "llm-advisory",
 ];
+
+/// The signal code the tier-2 advisor emits.
+pub const LLM_ADVISORY_CODE: &str = "llm-advisory";
+
+/// The optional tier-2 admission advisor (C3.3): a local model's opinion
+/// on a candidate the deterministic tier passed. **Advisory-only by
+/// construction**, in both directions that matter:
+///
+/// * consulted ONLY for candidates with no tier-1 signals — it can push
+///   a write toward quarantine, never clear one the deterministic tier
+///   flagged (a model is itself an injection target; content that talks
+///   a classifier into "clean" must not thereby bypass the screen);
+/// * a failure to answer is a non-event — the advisory tier degrades to
+///   tier-1-only and must never block or fail a write.
+pub trait AdmissionAdvisor {
+    /// `Some(true)` = suspicious (divert toward quarantine);
+    /// `Some(false)` = no objection; `None` = could not answer
+    /// (transport or model failure — logged by the implementation,
+    /// never surfaced as a write error).
+    fn assess(&self, content: &str) -> Option<bool>;
+}
 
 /// Phrases that address a future READER of the memory rather than
 /// recording anything — the shape every stored-prompt-injection attack

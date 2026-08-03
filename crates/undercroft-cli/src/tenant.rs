@@ -1813,6 +1813,10 @@ impl Tenancy {
             if let Some(make_reranker) = &self.reranker {
                 store.set_reranker(Some(make_reranker()));
             }
+            // Same admission contract as the CLI: the optional tier-2
+            // advisor attaches per vault when the deployment declared it.
+            crate::attach_admission_advisor(&mut store)
+                .map_err(|e| RestError::new(500, e.to_string()))?;
             // Same retrieval contract as the CLI: UNDERCROFT_RETRIEVAL=pq
             // enables the on-disk PQ/IVF prefilter per tenant vault (plain
             // on hmac-only; AEAD-sealed rows + RAM cache on sealed).

@@ -350,7 +350,13 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `update_drawer` re-stamps `added_by` before the screen so an untrusted
   surface cannot ride the original writer's standing, a flagged update
   diverts with a typed `UpdateOutcome` and the drawer keeps its previous
-  content, and quarantine-pending drawers are not editable),
+  content, and quarantine-pending drawers are not editable; **the
+  optional tier-2 advisor** (`UNDERCROFT_ADMISSION_LLM=advisory` on the
+  `UNDERCROFT_LLM_*` runtime, `AdmissionAdvisor` trait wired like the
+  reranker) is consulted only for tier-1-clean candidates and only
+  toward quarantine — never auto-admit, the model being itself an
+  injection target; failure degrades to tier-1-only, never a blocked
+  write),
   provable forgetting (forget.rs — C3.2 phase 1: `forget`/
   `verify-forgetting`, chain-attested destruction with heads + tombstone
   interval + unkeyed content fps; vault-verifiable by keyed replay, third
@@ -450,7 +456,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 70
+  which inlines them and documents every layer plus all 71
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
