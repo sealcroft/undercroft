@@ -267,10 +267,14 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   retrain at 1.5× training size (`ivf_fresh`, every site incl. FDE — the
   strictly-\>2× rule let a corpus sit at exactly 2.0× stale, and
   retrains cost seconds post-fsync-fix). **Shipped default measures R@5
-  100.0% at every checkpoint 131k→1M (34.4/69.6/138.4/280.6 ms/q)** —
-  the linear price of not losing answers; parallel hydration and dim/4
-  codes are the named shrink levers. A fixed-size wing showed no leak —
-  any scoped-recall claim still needs its own instrument.
+  100.0% at every checkpoint 131k→1M — 20.4/32.6/59.1/112.7 ms/q since
+  the parallel-fuse pass** (was 34.4/69.6/138.4/280.6; the search
+  hotspot was `bm25_raw`'s serial per-candidate scan, found by the
+  opt-in `UNDERCROFT_SEARCH_TRACE=1` phase trace AFTER parallel
+  hydration measured zero — hydration, stage-2 decrypts and the BM25 tf
+  rows now all fan out with rayon, order-preserving and byte-identical;
+  dim/4 codes remain the unused shrink lever). Scoped queries:
+  wing ~32 ms/q flat, room ~14, wing+room ~13 (scopescale).
   Wings past `UNDERCROFT_WING_PQ_MIN` (4096, `off` = no per-wing indexes;
   scoped queries then ride the scope filter over global candidates —
   starvation-free, but corpus-shaped generation)
