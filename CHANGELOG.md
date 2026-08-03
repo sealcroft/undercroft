@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased — the cross-lingual instrument runs for real, and files the defect it was built to find
+
+- **First real `xlingual` run** (2026-08-03): bge-m3 (F16 GGUF) served
+  CPU-only on the compose Ollama via `UNDERCROFT_EMBEDDER=http`, sealed
+  level, shipped defaults; 155 operator-supplied parallel pairs across 7
+  directions (en→{ar,de,el,ru,zh} 25 each + ar→en/zh→en 15 each,
+  self-authored for this run — license-clean by construction and kept out
+  of the repo, as the instrument's design requires). The hash baseline
+  confirmed itself as the measured zero: 0% cross-lingual in every column
+  with verbatim-R@1 100%, except en→de reading 4.0/16.0% off shared
+  literal cognates — exactly the surface-form matching feature hashing is
+  documented to do, and nothing more.
+- **The capability is real, and the engine can lose it — both measured in
+  one session.** On a foreign-target-only corpus (125 pairs), the served
+  model through the whole sealed path reads **R@1 88–100%, R@5 92–100%**
+  per pair — cross-lingual retrieval works end to end. On the mixed
+  corpus — the same 125 plus 30 English-target drawers, i.e. the shape of
+  any real bilingual vault — every cross-lingual column collapses to
+  **0–4% R@5**.
+- **OPEN DEFECT FILED: same-language lexical noise crowds out
+  cross-lingual golds under a served embedder.** Root cause isolated by
+  three controls, none of which is the model and none the gate:
+  - the raw endpoint separates cleanly (translation pairs cosine
+    0.90–0.92 vs 0.48 unrelated same-language), so the model is fine;
+  - `UNDERCROFT_SEMANTIC_GATE=0.05` changes nothing — golds are admitted,
+    then out-ranked, so the admission gate is not the mechanism;
+  - the cause is the **absolute cosine map `(cos+1)/2`**, calibrated to
+    the hash space where unrelated text sits at cosine ≈ 0 (mapped 0.5).
+    bge-m3 puts unrelated pairs at ≈ 0.48 raw (mapped ≈ 0.74), so the
+    semantic channel compresses into ≈ [0.74, 0.96] while BM25's lexical
+    channel spans [0, 1] at weight 0.35 — a translation gold has lexical
+    0 by construction, and any same-language drawer sharing function
+    words with the query out-scores it. `UNDERCROFT_FUSION_WEIGHT=0.70`
+    (the ceiling) recovers R@5 to 53–88% but R@1 only to 7–40% —
+    a mitigation that names the arithmetic, not a fix.
+  **Named fix, deliberately not built in this unit**: per-embedder
+  calibration of the map's floor, reusing the measured unrelated floor
+  the admission-gate machinery already computes per embedder — the same
+  one-constant-for-every-embedder defect class the per-embedder gate
+  closed, one channel over. It is a scoring change, so it owes a LoCoMo
+  regression run and the xlingual mixed-corpus gate in its own unit.
+- Caveats recorded with the numbers: one run per configuration, 25/15
+  pairs per direction, a self-authored corpus. The defect's shape does
+  not depend on the corpus — any mixed-language vault holds
+  same-language-as-query drawers with function-word overlap.
+
 ## Unreleased — the search path's real hotspot found by instrument, then parallelized
 
 - **The user-visible price of a scoped query drops ~2.7× (wing 85 → ~32

@@ -1025,7 +1025,12 @@ measured headroom, zero footprint and zero invariant cost coincide.
    transfer (Qwen3-0.6B is far above nomic publicly, +0.7pp here at 2.3×
    the ingest). **No winner is claimed** — one run each, and the served
    path is not shown run-to-run deterministic. Cross-lingual, the one
-   thing hash provably cannot do, is still unmeasured: LoCoMo is English.
+   thing hash provably cannot do, is now MEASURED (xlingual, 2026-08-03,
+   bge-m3 served): **R@1 88–100% on a foreign-target corpus — the
+   capability is real — and ~0% on a mixed corpus**, because the
+   hash-calibrated cosine map lets same-language lexical noise crowd out
+   translation golds. The defect entry below carries the root cause and
+   the named fix; full controls in CHANGELOG.
 
 #### Measured and failed — do not re-propose without new evidence
 
@@ -1069,6 +1074,19 @@ default because *this* corpus is temporal; conversational heuristics;
   most have never been engaged by any benchmark here — the FTS
   prefilter not at 127 drawers nor at 1271. Both sides ship, so both
   sides are production and both must be measured.
+- **The cosine affine map is calibrated to the hash space** (`(cos+1)/2`
+  in `fuse`): correct where unrelated text sits at cosine ≈ 0, it
+  compresses a served embedder's semantic channel into the top quarter
+  of [0,1] (bge-m3 unrelated ≈ 0.48 raw → 0.74 mapped) while lexical
+  spans the full range — so same-language function-word overlap
+  out-scores cross-lingual translation golds. Measured 2026-08-03 by
+  xlingual: mixed corpus ~0% R@5, foreign-only corpus 88–100% R@1, gate
+  exonerated at 0.05, weight ceiling a partial mitigation only. The
+  same one-constant-for-every-embedder class the per-embedder admission
+  gate closed. Fix = feed the measured per-embedder unrelated floor into
+  the map; a scoring change, gated on a LoCoMo regression run plus the
+  xlingual mixed-corpus recovery. Inert for the default hash vault,
+  whose floor the current map already matches.
 
 ### 1. Inverted FDE tier (BUILT v0.39.0 — measured, shipped OPT-IN)
 
