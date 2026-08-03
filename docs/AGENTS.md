@@ -609,6 +609,10 @@ minimum wing trust, `quarantined`|`standard`|`trusted`: unscoped searches
 exclude wings the operator assigned below it, resolved before candidates
 are drawn; an explicitly named wing scope bypasses the vault floor,
 a request's own `min_trust` never is; garbage warns and stays off) ·
+`UNDERCROFT_ADMIT_TRUSTED_SOURCES` (empty — comma list of surfaces whose
+writes bypass the admission screen, matched against the handler-stamped
+`added_by`, never against writer-declared provenance claims: a claim
+must not admit itself) ·
 `UNDERCROFT_ADMISSION` (off — `quarantine` screens every save with the
 deterministic tier-1 detector and diverts flagged writes, sealed with
 their signal codes and intended destination, into the reserved

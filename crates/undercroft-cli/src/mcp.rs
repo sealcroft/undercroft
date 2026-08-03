@@ -170,7 +170,7 @@ fn tool_definitions() -> Value {
     json!([
         // --- palace core ---
         tool("undercroft_save", "Save one memory verbatim (encrypted + integrity-tagged at rest).",
-            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — a closed vocabulary, rejected if unknown; omit rather than guess"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this memory replaces — records a receipted update link; the old drawer is never deleted or hidden") }),
+            json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — a closed vocabulary, rejected if unknown; omit rather than guess"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this memory replaces — records a receipted update link; the old drawer is never deleted or hidden"), "agent": s("provenance claim: which agent wrote this (recorded + tamper-covered, never a trust boundary)"), "channel": s("provenance claim: origin class of the content, e.g. user|tool-output|scrape|agent"), "session": s("provenance claim: the session this was written in") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
             json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "kind": s("filter to a declared record kind: question|preference|decision|event|procedure|statement. Drawers with no declared kind are excluded while set, and the reply says how many"), "limit": i("max results"), "offset": i("rank to continue from — pass the offset a previous page's footer gave you to go deeper instead of re-asking the same question"), "ranked_at": s("RFC 3339 instant from a previous page's footer; repeat it so every page slices one identical ranking instead of one that drifts between calls"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"), "language": s("language of the stored text: en (default) or ar. Arabic is a different grammar, not a word list — the past marker precedes the count and the dual is one word — and it reads Saturday-first weeks"), "date_order": s("which field a bare numeric date puts first: day_first or month_first. Omit and the engine uses any unambiguous date in the same drawer as evidence, then day-first. Cannot be guessed from the language — US English is month-first, Commonwealth day-first"), "calendar": s("which calendar counted the year across this corpus: gregorian (default), buddhist, minguo, hijri (Umm al-Qura), jalali, reiwa, heisei, showa, taisho, meiji. NEVER inferred — Thai script writes Gregorian dates and Thai numerals are a numeral system, not a calendar. An era marker in a memory's own words (พ.ศ. ค.ศ. هـ 民國 令和) outranks this, being the writer's statement about one date rather than yours about the whole corpus"), "min_trust": s("minimum deployment-assigned wing trust for this query: quarantined|standard|trusted. Wings below it never enter the candidate competition; unassigned wings count as standard. Trust is ASSIGNED by the operator (CLI//v1), never through MCP") }),
@@ -185,7 +185,7 @@ fn tool_definitions() -> Value {
         tool("undercroft_get_drawer", "Fetch one drawer verbatim by id.",
             json!({ "id": s("drawer id") }), &["id"]),
         tool("undercroft_add_drawer", "File a drawer with explicit wing/room/source.",
-            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — closed vocabulary, rejected if unknown; omit rather than guess"), "source_file": s("origin"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this record replaces — records a receipted update link; the old drawer is never deleted or hidden") }),
+            json!({ "content": s("verbatim text"), "wing": s("wing"), "room": s("room"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — closed vocabulary, rejected if unknown; omit rather than guess"), "source_file": s("origin"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this record replaces — records a receipted update link; the old drawer is never deleted or hidden"), "agent": s("provenance claim: which agent wrote this"), "channel": s("provenance claim: origin class, e.g. user|tool-output|scrape|agent"), "session": s("provenance claim: the session this was written in") }),
             &["content"]),
         tool("undercroft_update_drawer", "Replace a drawer's content in place (re-sealed, re-tagged).",
             json!({ "id": s("drawer id"), "content": s("new content") }), &["id", "content"]),
@@ -280,7 +280,12 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let drawer = Drawer::new(wing, room, normalized, None, idx, "mcp")
                 .with_content_date(opt_str(args, "content_date").map(str::to_string))
                 .with_kind(kind)
-                .with_supersedes(supersedes.clone());
+                .with_supersedes(supersedes.clone())
+                .with_provenance(
+                    opt_str(args, "agent").map(str::to_string),
+                    opt_str(args, "channel").map(str::to_string),
+                    opt_str(args, "session").map(str::to_string),
+                );
             store.upsert(&drawer)?;
             match supersedes {
                 Some(old) => Ok(format!(
@@ -583,7 +588,12 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             )
             .with_content_date(opt_str(args, "content_date").map(str::to_string))
             .with_kind(kind)
-            .with_supersedes(opt_str(args, "supersedes").map(str::to_string));
+            .with_supersedes(opt_str(args, "supersedes").map(str::to_string))
+            .with_provenance(
+                opt_str(args, "agent").map(str::to_string),
+                opt_str(args, "channel").map(str::to_string),
+                opt_str(args, "session").map(str::to_string),
+            );
             store.upsert(&drawer)?;
             Ok(format!("added drawer {} in {}/{}", drawer.id, wing, room))
         }

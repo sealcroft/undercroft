@@ -93,6 +93,16 @@ enum Command {
         /// never deleted or hidden.
         #[arg(long)]
         supersedes: Option<String>,
+        /// Provenance claim: which agent wrote this (recorded and
+        /// tamper-covered, never a trust boundary)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Provenance claim: origin class (e.g. user|tool-output|scrape)
+        #[arg(long)]
+        channel: Option<String>,
+        /// Provenance claim: the session this was written in
+        #[arg(long)]
+        session: Option<String>,
     },
     /// Mine a directory into the palace (text files, or agent transcripts)
     Mine {
@@ -1256,6 +1266,9 @@ fn main() -> Result<()> {
             room,
             content_date,
             supersedes,
+            agent,
+            channel,
+            session,
         } => {
             if content.len() > MAX_CONTENT_BYTES {
                 bail!(
@@ -1280,7 +1293,8 @@ fn main() -> Result<()> {
             let idx = store.next_append_index()? as u32;
             let drawer = Drawer::new(wing, room, normalized, None, idx, "cli")
                 .with_content_date(content_date.clone())
-                .with_supersedes(supersedes.clone());
+                .with_supersedes(supersedes.clone())
+                .with_provenance(agent.clone(), channel.clone(), session.clone());
             store.upsert(&drawer)?;
             println!(
                 "{}",

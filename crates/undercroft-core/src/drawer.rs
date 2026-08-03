@@ -82,6 +82,20 @@ pub struct DrawerMeta {
     /// stored beside the row and re-keyed on rotation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<String>,
+    /// Provenance CLAIMS (C3.3): which agent wrote this, over which
+    /// channel class, in which session. All three are DECLARED by the
+    /// writer — recorded verbatim, HMAC-covered like the rest of the
+    /// meta, and deliberately **never a trust boundary** (docs/LABELS.md:
+    /// a self-declared label is never one). What the deployment may key
+    /// policy on is `added_by`, which the SURFACE stamps and a caller
+    /// cannot set. Absent fields serialize to nothing, so every drawer
+    /// written before provenance existed stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     /// Tier-1 admission signals tripped at ingest (C3.3): signal CODES
     /// and byte offsets only — structure, never content, so they may sit
     /// in unsealed metadata beside the sealed text. Present only on
@@ -164,6 +178,9 @@ impl Drawer {
                 hall: None,
                 kind: None,
                 supersedes: None,
+                agent: None,
+                channel: None,
+                session: None,
                 admission_signals: Vec::new(),
                 intended_wing: None,
                 intended_room: None,
@@ -180,6 +197,21 @@ impl Drawer {
     #[must_use]
     pub fn with_kind(mut self, kind: Option<String>) -> Self {
         self.meta.kind = kind;
+        self
+    }
+
+    /// Declare the writer's provenance claims: agent identity, channel
+    /// class, session id. Claims, not boundaries — see the field docs.
+    #[must_use]
+    pub fn with_provenance(
+        mut self,
+        agent: Option<String>,
+        channel: Option<String>,
+        session: Option<String>,
+    ) -> Self {
+        self.meta.agent = agent;
+        self.meta.channel = channel;
+        self.meta.session = session;
         self
     }
 

@@ -66,6 +66,13 @@ impl PalaceStore {
         self.admission_quarantine = on;
     }
 
+    /// Declare the trusted-surface posture programmatically (the env
+    /// `UNDERCROFT_ADMIT_TRUSTED_SOURCES` resolved at open is the
+    /// deployment's way).
+    pub fn set_admit_trusted_sources(&mut self, sources: Vec<String>) {
+        self.admit_trusted_sources = sources;
+    }
+
     /// Screen one candidate drawer; `Some(diverted)` when it must land in
     /// quarantine instead of where it was headed. The diverted drawer
     /// keeps the verbatim content (sealed like any other), records the
@@ -80,6 +87,17 @@ impl PalaceStore {
         // re-files through the normal save, and screening the reviewer's
         // own decision would trap drawers forever).
         if drawer.meta.wing == QUARANTINE_WING {
+            return None;
+        }
+        // The provenance-driven posture: writes from a deployment-trusted
+        // SURFACE auto-admit. Keyed on `added_by`, which handlers stamp
+        // and a caller cannot set — keying on the writer-declared
+        // `channel` claim would let poison admit itself by declaration.
+        if self
+            .admit_trusted_sources
+            .iter()
+            .any(|s| s == &drawer.meta.added_by)
+        {
             return None;
         }
         let signals = undercroft_core::admission::screen(&drawer.content);
