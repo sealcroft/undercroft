@@ -750,8 +750,15 @@ this is where the measured headroom is.*
   on this corpus (estimated from one pair of repeats, so treat it as an order
   of magnitude, not a figure), which is why any ColBERT comparison here needs
   the codebook disabled or repeated runs.
-- **A tunable, bounded, logged fusion weight** — next, because it makes the
-  above interpretable instead of a comparison at a weight tuned for nothing.
+- **A tunable, bounded, logged fusion weight — BUILT** (2026-08-02,
+  `UNDERCROFT_FUSION_WEIGHT`, clamped [0.20, 0.70], one global declaration
+  never per-query). First sweep (harness-default 60-hit pool — NOT the
+  published pool-400 config, rows compare only within): monotone toward
+  low `w` on hash (0.35 → 72.1% turn all-gold vs 0.55 → 69.4%), curve
+  still rising at the low end. **The default did not move**: one
+  benchmark at one pool config, embedder-dependent optimum, and tuning
+  the shipped default onto LoCoMo is benchmark-fitting. Full numbers in
+  CHANGELOG.
 - **Pagination on `SearchOptions` — BUILT.** `offset` (a page is ranks
   `[offset, offset + limit)` of the list one deeper call would produce) plus
   `ranked_at` (the clock recency decays against, repeated by every page so
@@ -806,10 +813,15 @@ this is where the measured headroom is.*
     Plus the 1.5× IVF freshness rule (`ivf_fresh`, retiring strictly-\>2×
     which let a corpus sit at exactly double its training size stale).
     **Measured in the shipped default: R@5 100.0% at 131k/262k/524k/1M —
-    34.4/69.6/138.4/280.6 ms/q.** The linear price is the recorded cost
-    of not losing answers; parallel hydration and dim/4 codes are the
-    named levers that shrink it without touching recall. Full narrative
-    incl. the two instructive intermediate configurations in CHANGELOG.
+    20.4/32.6/59.1/112.7 ms/q since the parallel-fuse pass (2026-08-02;
+    was 34.4/69.6/138.4/280.6).** The linear price is the recorded cost
+    of not losing answers, now paid across cores: the hotspot was
+    `bm25_raw`'s serial per-candidate scan, found by the
+    `UNDERCROFT_SEARCH_TRACE` phase trace after "parallel hydration"
+    measured zero change — the queued lever was refuted, the instrument
+    found the real one. dim/4 codes remain the unused shrink lever.
+    Full narrative incl. the two instructive intermediate
+    configurations in CHANGELOG.
   - **Cost: corpus-shaped maintenance debt — ROOT-CAUSED AND FIXED.** The
     17 min at 131k / 73 min at 524k per retrain were **not computation**:
     the rebuild loop wrote every code row as an autocommit INSERT — one
@@ -876,7 +888,11 @@ poison-cannot-self-approve tamper case; (2) **extractor identity + generalized
 supersession** (receipted `supersedes_id` on drawers); (3) **bundle
 manifests** (Ed25519 sender attestation + scope/trust/expiry metadata,
 closing the meta-rows export gap); (4) **typed `kind` on promoted
-records**, last. The review also recorded a new property worth knowing:
+records** — **BUILT 2026-08-02 for drawers** (pulled forward on user
+decision once the doctrine and the scope machinery existed): declared
+closed vocabulary, HMAC-covered, scope-safe filter, unlabeled-rows
+count, value instrument (`tagvalue`) run first — no recall lift, a
+latency win, exactly as the doctrine predicted (docs/LABELS.md). The review also recorded a new property worth knowing:
 since the per-wing tier, a wing is an *enforceable trust zone* for scoped
 retrieval — poison in another wing can neither crowd a scoped query's
 candidates nor shape its codebook — which the C3.3 defense cluster builds
