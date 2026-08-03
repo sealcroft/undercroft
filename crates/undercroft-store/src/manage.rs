@@ -117,6 +117,19 @@ impl PalaceStore {
             self.conn
                 .execute("ALTER TABLE drawers ADD COLUMN fp BLOB", [])?;
         }
+        // The declared kind label (nullable — absence is how every drawer
+        // written before the label existed reads, and a valid permanent
+        // state). Mirrored out of meta_json so the filter is an indexed
+        // scope like room; the authoritative copy stays inside meta_json,
+        // under the drawer's HMAC.
+        if !cols.iter().any(|c| c == "kind") {
+            self.conn
+                .execute("ALTER TABLE drawers ADD COLUMN kind TEXT", [])?;
+        }
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_drawers_kind ON drawers(kind)",
+            [],
+        )?;
         Ok(())
     }
 

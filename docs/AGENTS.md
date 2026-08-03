@@ -504,8 +504,11 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_list_tunnels` / `_follow_tunnel` / `_traverse` | | navigate tunnels |
 | `undercroft_list_hallways` | | entity co-occurrence within a wing |
 | `undercroft_get_closet_index` | | compact LLM-scannable index |
+| `undercroft_save` / `_add_drawer` also take `kind` | W | declared record kind (closed vocabulary: `question`\|`preference`\|`decision`\|`event`\|`procedure`\|`statement`; rejected if unknown — omit rather than guess). `undercroft_search` filters by it; while filtering, the reply says how many in-scope drawers carry no declared kind |
 | `undercroft_kg_add` / `_kg_invalidate` / `_kg_supersede` | W | temporal facts: assert/close/replace |
 | `undercroft_kg_query` / `_kg_timeline` / `_kg_stats` | | query facts (incl. `--as-of`) |
+| `undercroft_lookup_canonical` | | the exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks; an empty answer means no declared truth exists — never guess on the key's behalf |
+| `undercroft_kg_set_authority` | W | place a fact on the authority tier (closed vocabulary: `stated`\|`canonical` × `unreviewed`\|`approved`\|`rejected`; `canonical_key` required for canonical). Audited; the state is inside the fact's HMAC, so a column flip without the vault key fails verification |
 | `undercroft_diary_write` | W | per-agent diary entry |
 | `undercroft_diary_read` / `_list_agents` | | read diaries |
 | `undercroft_dedup` | W | report/remove exact duplicates. Collapses the *text* only — the days each copy was recorded on are folded onto the survivor's `occurrences` before its row goes, and the report's `dates_kept` counts them. The same words on two different days are two things that happened |
@@ -523,17 +526,19 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
 | GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
-| POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `vector`, `dedup_threshold`) |
+| POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `kind` — closed vocabulary, 400 if unknown — opt `vector`, `dedup_threshold`) |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`) |
-| POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
+| POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |
 | GET | `/v1/vaults/{id}/kg/entities` | paged entity summaries (`limit`, `offset`) |
 | GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`, `grounding`) |
 | GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`, `grounding`) |
+| GET | `/v1/vaults/{id}/kg/canonical/{key}` | the exact-authority door: the one active, approved, canonical fact for the key, or 404 — consult before semantic recall for exact/high-risk asks |
+| POST | `/v1/vaults/{id}/kg/authority` | place a fact on the authority tier (`triple_id`, `authority_class`, `review_state`, opt `canonical_key`); audited, HMAC-covered |
 
 Every fact returned by `kg/query` and `kg/timeline` carries `grounding`:
 `stated` (the source note's own words support it — `support.spans` gives the
@@ -578,7 +583,10 @@ Models: `UNDERCROFT_EMBEDDER` (`hash`|`onnx`|`ort`) ·
 
 Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw`) · `UNDERCROFT_FUSION`
 (`bm25` default |`legacy`; `rrf` removed — measured −7.3pp, warns and falls
-back to `bm25`) · `UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
+back to `bm25`) · `UNDERCROFT_FUSION_WEIGHT` (0.55 — the blend's semantic
+weight `w` in `w·semantic + (0.90−w)·lexical + 0.10·recency`; declared,
+clamped to 0.20–0.70 so no configuration can retire a channel, one global
+value never per-query) · `UNDERCROFT_FTS_PREFILTER_MIN` (2048) ·
 `UNDERCROFT_SEMANTIC_GATE` (the embedder's own calibration; a number in
 `0.0..=1.0` declares the `semantic` score above which a drawer is admitted
 on cosine evidence alone, `off` refuses semantic-only admission entirely.

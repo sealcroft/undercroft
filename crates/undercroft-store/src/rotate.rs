@@ -175,7 +175,8 @@ impl PalaceStore {
         {
             let mut stmt = self.conn.prepare(
                 "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, \
-                        source_drawer_id, source_fp, receipt_tag, support \
+                        source_drawer_id, source_fp, receipt_tag, support, \
+                        authority_class, review_state, canonical_key \
                  FROM kg_triples",
             )?;
             let rows = stmt.query_map([], |r| {
@@ -191,10 +192,16 @@ impl PalaceStore {
                     r.get::<_, Option<Vec<u8>>>(8)?,
                     r.get::<_, Option<Vec<u8>>>(9)?,
                     r.get::<_, Option<Vec<u8>>>(10)?,
+                    (
+                        r.get::<_, Option<String>>(11)?,
+                        r.get::<_, Option<String>>(12)?,
+                        r.get::<_, Option<String>>(13)?,
+                    ),
                 ))
             })?;
             for row in rows {
-                let (id, s, p, object, vf, vt, conf, src_id, src_fp, receipt_tag, support) = row?;
+                let (id, s, p, object, vf, vt, conf, src_id, src_fp, receipt_tag, support, auth3) =
+                    row?;
                 let new_object = self
                     .vault
                     .reseal_at_rest(&next, &format!("kg/{id}"), &object)?;
@@ -208,6 +215,16 @@ impl PalaceStore {
                             .reseal_at_rest(&next, &format!("kg/{id}/support"), &sealed)
                     })
                     .transpose()?;
+                // Authority fields are plain columns inside the canonical
+                // (like validity), so rotation carries them into the new tag
+                // unchanged — dropping them would mark every promoted fact
+                // tampered after the first rotation.
+                let (a_class, a_review, a_key) = auth3;
+                let auth = crate::kg::authority_ext(
+                    a_class.as_deref(),
+                    a_review.as_deref(),
+                    a_key.as_deref(),
+                );
                 let tag = next
                     .tag(&crate::kg::triple_canonical(
                         &id,
@@ -218,6 +235,7 @@ impl PalaceStore {
                         &vt,
                         conf,
                         new_support.as_deref(),
+                        auth.as_deref(),
                     ))
                     .to_vec();
                 // Re-key the receipt binding when present (unchanged

@@ -1,5 +1,271 @@
 # Changelog
 
+## Unreleased — the search path's real hotspot found by instrument, then parallelized
+
+- **The user-visible price of a scoped query drops ~2.7× (wing 85 → ~32
+  ms/q) and the 1M unscoped price 2.4× (270 → 113 ms/q) — and the fix
+  was NOT where everyone thought.** The queued lever said "parallel
+  candidate hydration"; built first, it changed **nothing** (scopescale
+  before/after identical, and a 1-vs-24-thread probe read the same
+  numbers — the instrument that refutes a belief is cheaper than the
+  optimization that encodes it). The new opt-in phase trace
+  (`UNDERCROFT_SEARCH_TRACE=1`, stderr, per-phase ms) then found the real
+  cost in **`fuse`**: `bm25_raw`'s per-candidate scan — every token
+  against every query term through equality, morphology and the fuzzy
+  channel — at ~70 µs per candidate serial, i.e. ~70 ms/q at a
+  scope-sized 1024-candidate pool and the dominant term everywhere.
+- **Both stages now fan out with rayon, order-preserved and
+  byte-identical**: pass-1 hydration (HMAC verify + AEAD decrypt +
+  embedding decode + segmentation over `&Vault`, which is plain owned
+  data and `Sync`; the RefCell embedding-cache reads stay serial and
+  first), the stage-2 exact-cosine decrypts, and `bm25_raw`'s tf rows
+  (each candidate's row independent; df/idf and scores unchanged to the
+  byte — indexed collects preserve order, pinned by the whole suite).
+  SQLite stays serial on its one connection; durability is untouched.
+- **Measured** (scopescale, shipped defaults, one cumulative vault,
+  R@5 100.0% in every column at every checkpoint before AND after):
+  wing 32.7/31.8/35.3/32.0 ms/q flat 131k→1M (was ~85–87), room
+  ~13–17 (was ~40), wing+room ~13–15 (was ~41), unscoped
+  20.4/32.6/59.1/112.7 (was 39.4/66.1/132.8/269.3). The LoCoMo
+  harness is fuse-bound too, so instrument runs shrink with it —
+  **measured: one full LoCoMo pass 308 s (~5 min), down from ~40 min
+  (7.8×), reproducing the `w=0.55` sweep row digit for digit** (R@10
+  93.0%, turn all-gold 69.4%, top-40 CDF 81.8%) — the equivalence proof
+  and the speedup in one run. A four-weight sweep now costs ~20 minutes.
+
+## Unreleased — the kind label ships as the doctrine wrote it, value instrument first
+
+- **`kind` on drawers** (consultation adopted item 4, pulled forward on
+  user decision once its prerequisites existed): a DECLARED record kind
+  from the closed vocabulary `undercroft_core::KIND_VOCAB`
+  (`question`|`preference`|`decision`|`event`|`procedure`|`statement`),
+  validated at the single write choke point — rejected, never coerced —
+  and absent by default (absence is data; every pre-existing drawer
+  simply has no kind, forever valid). Lives inside `meta_json`, so it is
+  covered by the drawer's HMAC and serializes only when present
+  (existing rows stay byte-identical and keep verifying); mirrored to an
+  indexed `kind` column for the filter, with the exposure and footprint
+  inventories updated in both governing tests. The kind never enters the
+  drawer id: re-declaring it does not move the record.
+- **`SearchOptions.kind`** filters by declared kind and rides the
+  gate-verified scope machinery — resolved into the scope conjunction
+  before candidates are drawn, so a kind filter cannot be starved by the
+  corpus top-k (pinned by a raw-premise starvation test, the room test's
+  shape one label over). An unknown filter value is an **error naming
+  the vocabulary**, never a silently empty result. The remote-index path
+  filters on the verified meta (the HMAC-covered copy). Surfaces: `/v1`
+  save + search (unknown kind = 400), MCP (`undercroft_save`,
+  `undercroft_add_drawer`, `undercroft_search`), CLI `search --kind`.
+- **The unlabeled-rows policy, implemented**: while a kind filter is
+  set, `/v1` returns `unlabeled_excluded` (additive key), and MCP/CLI
+  append the count in prose — a thin result over a thinly-labeled
+  corpus must be distinguishable from a thin corpus.
+- **`undercroft-bench tagvalue` — the value instrument, run before any
+  claim.** A corpus where every key's words live in two kinds (decision
+  + question twin), queries seeking the decision. First run (500 keys,
+  2000 filler, sealed, defaults): **unfiltered already reads R@1 100.0%
+  — the filter buys NO recall lift on this corpus — and the measured
+  value is latency (90.6 → 13.7 ms/q, the filter scanning its 500
+  declared rows instead of the whole corpus) plus the guarantee class
+  (starvation-free scoping, honest empties, the unlabeled count).**
+  This CONFIRMS the labeling discussion's prediction: kind is scoping
+  ergonomics and precision guarantees, not a recall lever — recorded as
+  the measurement it now is instead of the assumption it was. A lift
+  claim would need a corpus where fusion genuinely confuses kinds, and
+  building one to make the filter look good would be instrument-fitting.
+
+## Unreleased — the wing leak closes: scoped pools are sized by the scope
+
+- **The scopescale-filed defect (wing-scoped R@5 89.6%, corpus-independent)
+  is CLOSED, gate met at every checkpoint.** Root cause, measured in three
+  steps: wings live exactly in the size band (10³–10⁵) where the corpus
+  pool divisors (`live/64` stage 1, `live/512` hydration) collapse to the
+  fixed 256 floor — so per-wing search ran the very configuration the
+  global recall leak was measured in; widening stage 1 alone plateaued at
+  96.9% because the cosine-only stage-2 cut still held hydration at 256
+  and slammed the lexical door (hydration is BM25's only route into
+  fusion on a sealed vault — the same instructive failure as the global
+  fix's step 2).
+- **The fix: scope-sized pools** (`scoped_pool_k` / `scoped_keep`). A
+  scoped search fetches at least `min(scope, 2048)` ADC candidates and
+  hydrates at least `min(scope, 1024)` of them, both floored at the page
+  edge and converging to the proven corpus divisors as the scope grows.
+  Scopes at or below the hydrate floor are answered EXACTLY (the
+  exact-scan escape widens to 1024 accordingly). Applies uniformly:
+  the wing tier sizes by the wing's live count, room scopes by the
+  membership set, wing+room by the conjunction. Declared constants with
+  the measurement in their doc comment — not env knobs, because a pool
+  floor below these values is a measured-leaky configuration, not a
+  preference.
+- **Gate run** (scopescale, shipped defaults, one cumulative vault):
+  **R@5 100.0% in every column at every checkpoint** — wing
+  85.4/85.6/84.9/86.7 ms/q (was ~20–23 at 89.6%: the ~65 ms delta is
+  1024-row hydration, the recorded price of not losing answers, flat
+  across 8× corpus growth), room ~40 ms/q exact, wing+room ~41 ms/q,
+  unscoped 39.4/66.1/132.8/269.3 ms/q — unchanged within noise, as the
+  scope-only wiring predicts. Pinned by the three-regime
+  `scoped_pools_are_sized_by_the_scope` test and the enlarged
+  2000-vs-1500 large-room starvation test.
+
+## Unreleased — the fusion weight becomes a declaration, and tagging gets its price tag
+
+- **`UNDERCROFT_FUSION_WEIGHT` (default 0.55)** — the convex blend's
+  semantic weight `w` in `w·semantic + (0.90 − w)·lexical +
+  0.10·recency`, completing the roadmap's "tunable, bounded, logged
+  fusion weight". Declared, never detected; **bounded** to `[0.20, 0.70]`
+  so no configuration can retire a channel; **one global value, never
+  per-query** (per-query channel rescaling measured −9.4pp and stays
+  refused). Recency's 0.10 share is fixed — it was never the contested
+  split. Applies to the `Bm25` blend and the remote-index path; `Legacy`
+  keeps its frozen historical weights. Unparseable values warn and fall
+  back to the default — a typo must not brick an open or silently
+  reweight retrieval. The admission gate is untouched by the weight:
+  evidence decides membership, the weight only orders it. Pinned by a
+  pure resolver test (bounds, garbage, NaN) and a decomposition test
+  (the returned score actually factors as `w·sem + (0.90−w)·lex +
+  recency-share` at every declared `w`). The default is byte-identical
+  to the shipped blend. Literature note: convex combination is the
+  fusion class Bruch, Gai & Ingber (TOIS 2023) find superior to rank
+  fusion and *sample-efficient to tune* — this knob is the sanctioned
+  way to tune it, and any tuned value must cite a LoCoMo run beside it.
+- **The first weight sweep ran** (LoCoMo merged corpus, hash embedder,
+  no reranker, `UNDERCROFT_RETRIEVAL` unset, harness-default 60-hit pool,
+  k 10, one deterministic run per weight — NOT the published pool-400
+  configuration, so these rows compare only with each other):
+
+  | `w` | session `R@10` | turn all-gold @10 | top-40 CDF |
+  |---|---|---|---|
+  | 0.35 | **93.9%** | **72.1%** | **83.3%** |
+  | 0.45 | 93.8% | 71.2% | 82.9% |
+  | 0.55 (default) | 93.0% | 69.4% | 81.8% |
+  | 0.65 | 91.3% | 66.1% | 80.9% |
+
+  Monotone on every metric: with the hash embedder, LOWER semantic
+  weight wins, and the curve is still rising at the sweep's low end
+  (0.20–0.30 untested). **The default does not move on this evidence**:
+  the curve is one benchmark at one pool configuration, the optimum is
+  embedder-dependent (a served model's calibrated cosine should shift it
+  up), and tuning the shipped default onto LoCoMo would be
+  benchmark-fitting — the standing refusal. What this establishes is
+  that the knob finds real signal, and that a deployment pinning its
+  embedder can profitably measure its own weight.
+- **`undercroft-bench tagcost`** — the measurement behind the labeling
+  doctrine's cost tiers (docs/LABELS.md). Rule arm: a deterministic
+  closed-vocabulary classifier over EVERY dialog turn of a
+  LoCoMo-shaped dataset, reported in µs/drawer with the 10⁶
+  extrapolation. LLM arm (opt-in via `--llm-url`, e.g. the compose
+  Ollama service): `LlmClient::classify` over an even-stride sample,
+  s/drawer + the 10⁶ extrapolation in days + rule-vs-LLM agreement — a
+  first quality signal, not a verdict. COST ONLY, stated in the help
+  text: whether tags improve retrieval is a separate instrument that
+  does not exist yet, and this one must never be quoted for it.
+  **Measured** (LoCoMo merged corpus, 5,882 turns; `llama3.2:1b` served
+  CPU-only on the compose Ollama, 197-turn even-stride sample, 0
+  errors): rule tagging **0.38 µs/drawer — 0.4 s per 10⁶**; LLM tagging
+  **0.19 s/drawer — 2.2 days per 10⁶, ~5·10⁵× the rule arm**; agreement
+  63.5%. The doctrine's estimate (×10³–10⁴) understated the ratio —
+  the async-enrichment-only rule is now a measurement, not an estimate.
+
+## Unreleased — the two waiting instruments exist: scoped recall at scale, and cross-lingual
+
+- **`undercroft-bench scopescale`** — the instrument the per-wing tier's
+  recall claim has been waiting for since pqscale filed "a scoped-recall
+  claim needs its own instrument", now also the scope filter's first
+  at-scale measurement. Design fixed before any run: ONE cumulative vault;
+  a **fixed** probe wing (8192 — the tier engages) holding a **fixed**
+  probe room (512 — past the exact-scan floor, so the scoped
+  membership-filter path carries the recall, not the escape hatch),
+  ingested first and never grown; the corpus then grows around them
+  through the pqscale checkpoints (131k → 1M). Four passes per
+  checkpoint: unscoped (the shipped-default control), wing-scoped,
+  room-scoped (the pure room filter over the global index), wing+room
+  (the room filter inside the wing tier's index) — R@5 and steady-state
+  ms/q each, per-pass warm-up reported separately (the wingscale lesson).
+  No mid-run gate: the curves are the result; a leak in any scoped column
+  at any checkpoint is a defect to file, never a property to document.
+- **The first full scopescale run (sealed, hash, `retrieval=pq`, shipped
+  defaults, one run), and its first finding.** Unscoped, room-scoped and
+  wing+room-scoped R@5 all read **100.0% at every checkpoint**
+  131k/262k/524k/1M (unscoped 35.2/73.9/150.6/276.6 ms/q — the pqscale
+  curve reproduced; room 26.7→43.7 ms/q; wing+room ~21–25 ms/q flat) —
+  **the scope filter earns its at-scale claim**, and the room numbers are
+  the starvation fix measured at a million drawers. **OPEN DEFECT FILED:
+  wing-scoped R@5 reads 89.6% at every checkpoint — the same 10 of 96
+  queries, deterministically, corpus-independent** — a leak inside the
+  per-wing tier on a highly self-similar population (the probe wing's
+  8192 near-identical keyed facts; wingscale's distinctive-key corpora
+  never showed it). Diagnosed by sweep: forcing IVF probes wide changes
+  nothing (91.7% — not the probe subset); `UNDERCROFT_POOL_DIV=8` lifts
+  it to 96.9% and `=4` plateaus there — the wing's stage-1 pool floors
+  at 256 (`wing_live/64 = 128` loses to the floor) and the stage-2
+  cosine-only cut then drops lexically-carried golds: **the exact defect
+  class the global two-stage pool closed at corpus level, recurring one
+  level down where the floor, not the divisor, dominates.** The fix is a
+  wing-level pool policy (deeper proportional hydration is affordable in
+  a small population — 8192/8 rows ≈ 92 ms/q worst case) and gets its
+  own designed unit; not patched here, because a pool policy chosen
+  under one instrument's corpus is how the last leak got mis-sized.
+- **`undercroft-bench xlingual`** — the metric for the one capability the
+  hash embedder provably lacks, designed before anything runs: per
+  language pair, R@1/R@5 of querying with a source-language sentence for
+  the drawer holding its target-language translation, every pair's
+  competitors being all the others; plus a verbatim-recovery sanity
+  column that guards the harness (querying with the target itself must
+  find it). The embedder configuration is the experiment's variable and
+  is printed in the header — hash is the measured-zero baseline, a
+  served multilingual model (`UNDERCROFT_EMBEDDER=http`) is the
+  capability under test. Pairs are operator-supplied TSV
+  (`src_lang \t tgt_lang \t src_text \t tgt_text`): parallel corpora
+  carry their own licenses and are not shipped in this repo.
+
+## Unreleased — declared truth gets a door: the golden-values tier
+
+- **The authority tier on KG facts** (consultation adopted item 1):
+  `authority_class` (`stated`|`canonical`), `review_state`
+  (`unreviewed`|`approved`|`rejected`) and `canonical_key` on `kg_triples`
+  — all three DECLARED (closed vocabulary, validated, rejected when
+  unknown, never coerced), audited through the chain, and **inside the
+  fact's HMAC** via a canonical extension that follows the `support`
+  precedent exactly: facts never placed on the tier keep their canonical
+  bytes unchanged to the byte, so nothing written before the tier existed
+  is re-tagged, and an offline attacker cannot promote poison by flipping
+  a column — a flipped row fails verification on read, pinned by test.
+- **`lookup_canonical` — the exact-authority door.** An INDEXED SQL
+  equality (`idx_kg_triples_canonical`) returning the one active,
+  approved, canonical fact for a key, or nothing — declared, reviewed
+  truth outranking learned similarity, and never a guess. Deliberately not
+  a rider on `all_triples` (whose full decode is O(graph)), and no
+  candidate pool of any kind is involved — which is what makes the door
+  immune to every crowding and starvation shape retrieval defends
+  against. Promoting an approved canonical fact onto an occupied key
+  closes the previous holder's validity window in the same operation
+  (audited); history keeps the superseded fact, and the door answers with
+  at most one current value per key.
+- **Surfaces**: store (`kg_set_authority`, `lookup_canonical`), `/v1`
+  (`GET /v1/vaults/{id}/kg/canonical/{key}` → the fact or 404,
+  `POST /v1/vaults/{id}/kg/authority`), MCP (`undercroft_lookup_canonical`
+  — its empty answer is explicit prose, so a caller can tell "no declared
+  truth" from a failure and must not guess on the key's behalf;
+  `undercroft_kg_set_authority`, registered as a write tool), CLI
+  (`undercroft kg authority`, `undercroft kg canonical`). Key rotation
+  carries the tier (the authority extension rides the re-tag, pinned —
+  dropping it would mark every promoted fact tampered after the first
+  rotation).
+- **`canonical_key` is queryable structure in the clear** — the same
+  sealed-vault trade as subject/predicate, recorded in kg.rs's header:
+  name it like an identifier, never with content words that should stay
+  sealed. It passes `validate_name` (no path separators, no control
+  characters).
+- **The labeling doctrine is written down** (`docs/LABELS.md`), resolving
+  the ROADMAP open discussion: filter-then-weight strictly (labels decide
+  who competes, never how they score — the measured won/lost pattern);
+  cost tiers are not trust tiers (self-scoping needs no trust, authority
+  needs review, a self-declared label is never a trust boundary);
+  closed-vocabulary-or-blind-index is the only exposure shape on sealed
+  vaults; every filterable label owes the scope-starvation machinery an
+  index and a resolution entry. The authority tier is the doctrine's
+  first instance; `kind` waits for its instrument by that same doctrine.
+
 ## Unreleased — no declared scope can be starved by the corpus again
 
 - **Scope-aware candidate generation closes the room-starvation defect.**

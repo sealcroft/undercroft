@@ -346,6 +346,12 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "kg", "query"]) => self.kg_query(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "timeline"]) => self.kg_timeline(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "receipts"]) => self.kg_receipts(id, req, now),
+            ("GET", &["v1", "vaults", id, "kg", "canonical", key]) => {
+                self.kg_canonical(id, key, req, now)
+            }
+            ("POST", &["v1", "vaults", id, "kg", "authority"]) => {
+                self.kg_authority(id, req, body, now)
+            }
             ("POST", &["v1", "vaults", id, "refine"]) => self.refine(id, req, body, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
@@ -577,11 +583,19 @@ impl Tenancy {
             .get("content_date")
             .and_then(Value::as_str)
             .map(String::from);
+        // The declared record kind — closed vocabulary, validated here so a
+        // typo is a 400 with the vocabulary in it, never a silently
+        // unreachable label. Absent is always valid.
+        let kind = body.get("kind").and_then(Value::as_str).map(String::from);
+        if let Some(k) = kind.as_deref() {
+            undercroft_core::validate_kind(k).map_err(|e| RestError::new(400, e.to_string()))?;
+        }
 
         let store = self.store_for(id)?;
         let idx = store.next_append_index().map_err(err500)? as u32;
-        let drawer =
-            Drawer::new(wing, room, normalized, None, idx, "rest").with_content_date(content_date);
+        let drawer = Drawer::new(wing, room, normalized, None, idx, "rest")
+            .with_content_date(content_date)
+            .with_kind(kind);
 
         let out = if store.is_external() {
             let v =
@@ -643,6 +657,9 @@ impl Tenancy {
             morph_lang: morph_lang_from(&body),
             wing: body.get("wing").and_then(Value::as_str).map(String::from),
             room: body.get("room").and_then(Value::as_str).map(String::from),
+            // Declared-kind filter (closed vocabulary; the store rejects an
+            // unknown value as an error, surfaced as a 400 below).
+            kind: body.get("kind").and_then(Value::as_str).map(String::from),
             limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
             // Rank-space page start: pass the previous response's
             // `next_offset` (with its `ranked_at`) to continue deeper instead
@@ -758,14 +775,31 @@ impl Tenancy {
         let ranked_at_echo = ranked_at
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
-        Ok((
-            200,
-            Body::Json(json!({
-                "hits": hits,
-                "next_offset": next_offset,
-                "ranked_at": ranked_at_echo,
-            })),
-        ))
+        // The unlabeled-rows policy (docs/LABELS.md): while a kind filter
+        // is set, say how many in-scope drawers it passed over for carrying
+        // no declared kind at all — so a thin result over a thinly-labeled
+        // corpus is distinguishable from a genuinely thin corpus. Additive
+        // key, present only when the filter is.
+        let unlabeled_excluded = match opts.kind.as_deref() {
+            Some(_) => {
+                let store = self.store_for(id)?;
+                Some(
+                    store
+                        .unkinded_in_scope(opts.wing.as_deref(), opts.room.as_deref())
+                        .map_err(store_err)?,
+                )
+            }
+            None => None,
+        };
+        let mut resp = json!({
+            "hits": hits,
+            "next_offset": next_offset,
+            "ranked_at": ranked_at_echo,
+        });
+        if let Some(n) = unlabeled_excluded {
+            resp["unlabeled_excluded"] = json!(n);
+        }
+        Ok((200, Body::Json(resp)))
     }
 
     fn delete_drawer(&mut self, id: &str, drawer_id: &str, req: &Request, now: i64) -> RestResult {
@@ -1001,6 +1035,56 @@ impl Tenancy {
             Body::Json(json!({
                 "triples": triples_json(triples, grounding.as_deref())
             })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/kg/canonical/{key}` — the exact-authority door:
+    /// an indexed equality on `canonical_key`, answering with the one
+    /// active, approved, canonical fact for the key, or 404. Meant to be
+    /// consulted before semantic recall for exact or high-risk asks —
+    /// declared, reviewed truth outranking learned similarity.
+    fn kg_canonical(&mut self, id: &str, key: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let key = pct_decode(key);
+        let store = self.store_for(id)?;
+        match store.lookup_canonical(&key).map_err(store_err)? {
+            Some(t) => Ok((200, Body::Json(json!({ "fact": t })))),
+            None => Err(RestError::new(
+                404,
+                "no approved canonical fact holds this key",
+            )),
+        }
+    }
+
+    /// `POST /v1/vaults/{id}/kg/authority` — place a fact on the authority
+    /// tier or take it off: body `{triple_id, authority_class,
+    /// review_state, canonical_key?}`. Closed vocabulary, audited through
+    /// the chain, and the resulting state lands inside the fact's HMAC —
+    /// a column flip without the vault key fails verification on read.
+    fn kg_authority(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let v: Value =
+            serde_json::from_str(body).map_err(|_| RestError::new(400, "body must be JSON"))?;
+        let triple_id = v
+            .get("triple_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RestError::new(400, "triple_id required"))?;
+        let class = v
+            .get("authority_class")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RestError::new(400, "authority_class required"))?;
+        let review = v
+            .get("review_state")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RestError::new(400, "review_state required"))?;
+        let key = v.get("canonical_key").and_then(Value::as_str);
+        let store = self.store_for(id)?;
+        store
+            .kg_set_authority(triple_id, class, review, key)
+            .map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({ "ok": true, "triple_id": triple_id })),
         ))
     }
 

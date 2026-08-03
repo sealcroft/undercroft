@@ -156,6 +156,99 @@ enum Command {
         #[arg(long, default_value = "sealed")]
         level: String,
     },
+    /// Scoped-recall-at-scale: does a FIXED wing (and a fixed room inside
+    /// it) keep 100% recall while the corpus grows around it? One
+    /// cumulative vault; a probe wing ingested first and never grown; four
+    /// query passes per checkpoint (unscoped control, wing-scoped,
+    /// room-scoped, wing+room). This is the instrument the per-wing tier's
+    /// recall claim was waiting for — and the scope filter's first
+    /// at-scale measurement. No gate mid-run: the curves are the result.
+    Scopescale {
+        /// Cumulative TOTAL corpus checkpoints (probe included), ascending
+        #[arg(long, default_value = "131072,262144,524288,1048576")]
+        sizes: String,
+        /// Fixed probe-wing size (default above UNDERCROFT_WING_PQ_MIN so
+        /// the wing earns its own index)
+        #[arg(long, default_value_t = 8192)]
+        wing_size: usize,
+        /// Fixed probe-room size inside the probe wing (default above the
+        /// 256-candidate hydration floor at limit 5, so the scoped
+        /// membership-filter path is on trial, not the exact-scan escape)
+        #[arg(long, default_value_t = 512)]
+        room_size: usize,
+        /// Timed queries per pass per checkpoint
+        #[arg(long, default_value_t = 100)]
+        queries: usize,
+        /// Ingest batch size (`upsert_many`)
+        #[arg(long, default_value_t = 4096)]
+        batch: usize,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
+    /// Cross-lingual retrieval instrument: ingest the TARGET sentence of
+    /// every pair, query with the SOURCE sentence, report R@1/R@5 per
+    /// language pair — plus a verbatim-recovery sanity column (querying
+    /// with the target itself must find it, or the harness is broken).
+    /// The embedder is taken from the environment and printed as
+    /// configuration: the default hash embedder is the measured-zero
+    /// baseline (it matches surface forms only), a served multilingual
+    /// model (`UNDERCROFT_EMBEDDER=http`) is the capability under test.
+    /// Pairs are operator-supplied (TSV: src_lang, tgt_lang, src_text,
+    /// tgt_text) — parallel corpora carry their own licenses and are not
+    /// shipped in this repo.
+    Xlingual {
+        /// TSV file: src_lang \t tgt_lang \t src_text \t tgt_text
+        #[arg(long)]
+        pairs: String,
+        /// Cap pairs read per language pair (0 = all)
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
+    /// Tag-VALUE instrument — the measurement docs/LABELS.md required
+    /// before `kind` could claim more than ergonomics. The metric, fixed
+    /// before any run: a corpus where every key's words live in TWO kinds
+    /// (a decision drawer and a question twin sharing the key tokens);
+    /// queries seek the decision. Reported: R@1 / R@5 of the gold decision
+    /// drawer and the wrong-kind-at-rank-1 rate, unfiltered vs
+    /// kind-filtered, with ms/q beside each — the filter's value is the
+    /// R@1 lift on a corpus built to confuse it, and the filtered pass
+    /// must also hold R@5 = 100% (a filter that loses answers failed its
+    /// own starvation machinery). Synthetic and labeled as such: this
+    /// bounds the mechanism's value, it is not a benchmark claim.
+    Tagvalue {
+        /// Number of keys (each = one decision drawer + one question twin)
+        #[arg(long, default_value_t = 500)]
+        keys: usize,
+        /// Filler statements around them
+        #[arg(long, default_value_t = 2000)]
+        filler: usize,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+    },
+    /// Tagging cost instrument: rule-derived vs model-derived label
+    /// assignment over real corpus texts, with a fixed closed vocabulary.
+    /// Reports µs/drawer (rule, whole corpus), s/drawer (LLM, keyed
+    /// sample), corpus-scale extrapolations, and rule-vs-LLM agreement.
+    /// COST ONLY — whether tags improve retrieval is a separate instrument
+    /// that does not exist yet, and this one must never be quoted for it.
+    Tagcost {
+        /// Dataset with dialog turns (LoCoMo-shaped json)
+        #[arg(long)]
+        dataset: String,
+        /// Sample size for the LLM arm + agreement (even stride)
+        #[arg(long, default_value_t = 200)]
+        sample: usize,
+        /// LLM base URL (unset = rule arm only)
+        #[arg(long)]
+        llm_url: Option<String>,
+        #[arg(long, default_value = "llama3.2:1b")]
+        llm_model: String,
+        /// ollama | openai
+        #[arg(long, default_value = "ollama")]
+        llm_api: String,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -1024,6 +1117,555 @@ fn run_pqscale(
         }
     }
     println!("PQSCALE DONE");
+    Ok(())
+}
+
+/// Scoped-recall-at-scale. The design, stated before anything runs:
+/// a FIXED probe wing (default 8192 — the wing tier engages) holding a
+/// FIXED probe room (default 512 — past the exact-scan floor, so the
+/// scoped membership-filter path carries the recall), ingested FIRST into
+/// one cumulative vault; the corpus then grows around them in another
+/// wing to each checkpoint. Four passes per checkpoint — unscoped
+/// (control: the shipped-default gate), wing-scoped, room-scoped (the
+/// pure room filter over the global index), wing+room (the room filter
+/// inside the wing tier's index). Per-pass warm-up is reported
+/// separately (the wing tier builds its index on the first scoped query —
+/// folding a one-time build into a per-query average manufactured a 15×
+/// "effect" in wingscale's first version). The scoped columns are what a
+/// recall claim for the tier and the scope filter must cite; a leak in
+/// any of them at any checkpoint is a defect, not a property.
+fn run_scopescale(
+    sizes: &str,
+    wing_size: usize,
+    room_size: usize,
+    queries: usize,
+    batch: usize,
+    level: SecurityLevel,
+) -> Result<()> {
+    let checkpoints: Vec<usize> = sizes
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse()
+                .map_err(|_| anyhow::anyhow!("--sizes entries are numbers, got {s:?}"))
+        })
+        .collect::<Result<_>>()?;
+    if checkpoints.is_empty() {
+        anyhow::bail!("--sizes is empty");
+    }
+    let wing_size = wing_size.max(16);
+    let room_size = room_size.min(wing_size).max(8);
+    if checkpoints[0] <= wing_size {
+        anyhow::bail!("first checkpoint must exceed --wing-size (the probe is ingested first)");
+    }
+    let batch = batch.max(1);
+    let (_tmp, mut store) = fresh_store(level)?;
+    store.set_pq(true);
+    println!(
+        "Scopescale — level={level:?} retrieval=pq checkpoints={checkpoints:?} \
+         probe wing={wing_size} room={room_size} batch={batch}"
+    );
+
+    // The probe: fixed for the whole run. Keys are collected for the room
+    // (all of it) and the wing (strided to the query budget), each with
+    // the drawer's OWN topic — querying with a rotated topic pollutes the
+    // query with wrong-topic tokens and measures the pollution, not the
+    // scope (this harness's own first smoke run demonstrated it).
+    let mut room_keys: Vec<(String, String, String)> = Vec::new(); // (key, topic, id)
+    let mut wing_keys: Vec<(String, String, String)> = Vec::new();
+    {
+        let mut pending: Vec<Drawer> = Vec::with_capacity(batch.min(wing_size));
+        for j in 0..wing_size {
+            let topic = TOPICS[j % TOPICS.len()];
+            let key = format!("probe-{:05}", j);
+            let detail = format!("the {key} is finalized as option {}", (j * 7) % 100);
+            let fact = FACT_TEMPLATES[j % FACT_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{detail}", &detail);
+            let room = if j < room_size {
+                "proberoom".to_string()
+            } else {
+                format!("room-{}", j % 8)
+            };
+            let drawer = Drawer::new("probe", &room, fact, None, j as u32, "bench");
+            if j < room_size {
+                room_keys.push((key.clone(), topic.to_string(), drawer.id.clone()));
+            } else if j.is_multiple_of(16) {
+                wing_keys.push((key.clone(), topic.to_string(), drawer.id.clone()));
+            }
+            pending.push(drawer);
+            if pending.len() >= batch {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+        }
+        if !pending.is_empty() {
+            store.upsert_many(&pending)?;
+        }
+    }
+
+    // Growth corpus: the pqscale generator, in its own wing, with keys for
+    // the unscoped control column.
+    const KEY_STRIDE: usize = 512;
+    let mut global_keys: Vec<(String, String, String)> = Vec::new();
+    let mut ingested = wing_size;
+    type Keys = [(String, String, String)];
+    let sample = |keys: &Keys, want: usize| -> Vec<(String, String, String)> {
+        let stride = keys.len().div_ceil(want.max(1)).max(1);
+        keys.iter().step_by(stride).cloned().collect()
+    };
+    let query_for = |qi: usize, key: &str, topic: &str| {
+        let q = QUERY_TEMPLATES[qi % QUERY_TEMPLATES.len()]
+            .replace("{topic}", topic)
+            .replace("{key}", &key[..key.find('-').unwrap_or(key.len())]);
+        format!("{q} {key}")
+    };
+    for &target in &checkpoints {
+        let seg_start = ingested;
+        let ingest_started = Instant::now();
+        let mut pending: Vec<Drawer> = Vec::with_capacity(batch);
+        while ingested < target {
+            let i = ingested;
+            let topic = TOPICS[i % TOPICS.len()];
+            let key = format!(
+                "{}-{:07}",
+                ["budget", "deadline", "vendor", "owner"][i % 4],
+                i
+            );
+            let detail = format!("the {key} is finalized as option {}", (i * 7) % 100);
+            let fact = FACT_TEMPLATES[i % FACT_TEMPLATES.len()]
+                .replace("{topic}", topic)
+                .replace("{detail}", &detail);
+            let drawer = Drawer::new("bench", topic, fact, None, i as u32, "bench");
+            if i.is_multiple_of(KEY_STRIDE) {
+                global_keys.push((key, topic.to_string(), drawer.id.clone()));
+            }
+            pending.push(drawer);
+            if pending.len() >= batch {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+            ingested += 1;
+        }
+        if !pending.is_empty() {
+            store.upsert_many(&pending)?;
+        }
+        let ingest_secs = ingest_started.elapsed().as_secs_f32();
+        let db_gb = store.stats().map(|s| s.db_bytes).unwrap_or(0) as f64 / 1e9;
+        println!(
+            "  n={ingested:>8}  db {db_gb:.2} GB  ingest {ingest_secs:.1}s \
+             ({:.0} docs/s)",
+            ((target - seg_start) as f32 / ingest_secs.max(f32::EPSILON))
+        );
+
+        // (label, wing filter, room filter, key set)
+        #[allow(clippy::type_complexity)]
+        let passes: [(
+            &str,
+            Option<&str>,
+            Option<&str>,
+            Vec<(String, String, String)>,
+        ); 4] = [
+            ("unscoped ", None, None, sample(&global_keys, queries)),
+            (
+                "wing     ",
+                Some("probe"),
+                None,
+                sample(&wing_keys, queries),
+            ),
+            (
+                "room     ",
+                None,
+                Some("proberoom"),
+                sample(&room_keys, queries),
+            ),
+            (
+                "wing+room",
+                Some("probe"),
+                Some("proberoom"),
+                sample(&room_keys, queries),
+            ),
+        ];
+        for (label, wing, room, keys) in &passes {
+            let opts = || SearchOptions {
+                wing: wing.map(str::to_string),
+                room: room.map(str::to_string),
+                limit: 5,
+                ..Default::default()
+            };
+            let (wk, wt, _) = &keys[0];
+            let warm_started = Instant::now();
+            store.search(&query_for(0, wk, wt), &opts())?;
+            let warmup_s = warm_started.elapsed().as_secs_f32();
+            let mut r5 = 0u32;
+            let timed = Instant::now();
+            for (qi, (key, topic, id)) in keys.iter().enumerate() {
+                let hits = store.search(&query_for(qi, key, topic), &opts())?;
+                if hits.iter().take(5).any(|h| &h.drawer.id == id) {
+                    r5 += 1;
+                }
+            }
+            let secs = timed.elapsed().as_secs_f32();
+            println!(
+                "    {label}  R@5 {:>5.1}%  {:>7.1} ms/q  (warmup {warmup_s:.1}s, {} queries)",
+                100.0 * r5 as f32 / keys.len().max(1) as f32,
+                1000.0 * secs / keys.len().max(1) as f32,
+                keys.len(),
+            );
+        }
+    }
+    println!("SCOPESCALE DONE");
+    Ok(())
+}
+
+/// Cross-lingual retrieval instrument. See the subcommand doc for the
+/// design; the metric is fixed here BEFORE any run: per language pair,
+/// R@1 and R@5 of querying with the source sentence for the drawer
+/// holding its target-language translation, over a corpus of every
+/// pair's target sentence (each pair's competitors are all the others).
+/// The `verbatim` column queries with the target sentence itself — a
+/// harness sanity floor, not a capability claim.
+fn run_xlingual(pairs_path: &str, limit: usize, level: SecurityLevel) -> Result<()> {
+    let raw = std::fs::read_to_string(pairs_path)
+        .map_err(|e| anyhow::anyhow!("cannot read --pairs {pairs_path:?}: {e}"))?;
+    // (src_lang, tgt_lang, src_text, tgt_text)
+    let mut by_pair: std::collections::BTreeMap<String, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for (ln, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut f = line.splitn(4, '\t');
+        let (Some(sl), Some(tl), Some(st), Some(tt)) = (f.next(), f.next(), f.next(), f.next())
+        else {
+            anyhow::bail!("--pairs line {} is not 4 tab-separated fields", ln + 1);
+        };
+        let bucket = by_pair.entry(format!("{sl}->{tl}")).or_default();
+        if limit == 0 || bucket.len() < limit {
+            bucket.push((st.to_string(), tt.to_string()));
+        }
+    }
+    if by_pair.is_empty() {
+        anyhow::bail!("--pairs {pairs_path:?} holds no usable rows");
+    }
+    let embedder = std::env::var("UNDERCROFT_EMBEDDER").unwrap_or_else(|_| "hash".into());
+    let (_tmp, mut store) = fresh_store(level)?;
+    let total: usize = by_pair.values().map(Vec::len).sum();
+    println!(
+        "Xlingual — level={level:?} embedder={embedder} pairs={} ({} language pairs) \
+         [config is the variable: hash = the measured-zero baseline]",
+        total,
+        by_pair.len()
+    );
+
+    // Ingest every pair's TARGET sentence; the drawer id is the gold.
+    let mut gold: Vec<(String, String, String, String)> = Vec::new(); // (pair, src, tgt, id)
+    let mut pending: Vec<Drawer> = Vec::with_capacity(256);
+    for (pair, rows) in &by_pair {
+        for (i, (src, tgt)) in rows.iter().enumerate() {
+            let d = Drawer::new("xling", pair, tgt.clone(), None, i as u32, "bench");
+            gold.push((pair.clone(), src.clone(), tgt.clone(), d.id.clone()));
+            pending.push(d);
+            if pending.len() >= 256 {
+                store.upsert_many(&pending)?;
+                pending.clear();
+            }
+        }
+    }
+    if !pending.is_empty() {
+        store.upsert_many(&pending)?;
+    }
+
+    let opts = || SearchOptions {
+        limit: 5,
+        ..Default::default()
+    };
+    let mut rows: Vec<(String, usize, u32, u32, u32)> = Vec::new();
+    for pair in by_pair.keys() {
+        let (mut r1, mut r5, mut verbatim) = (0u32, 0u32, 0u32);
+        let mine: Vec<_> = gold.iter().filter(|(p, ..)| p == pair).collect();
+        for (_, src, tgt, id) in &mine {
+            let hits = store.search(src, &opts())?;
+            if hits.first().is_some_and(|h| &h.drawer.id == id) {
+                r1 += 1;
+            }
+            if hits.iter().take(5).any(|h| &h.drawer.id == id) {
+                r5 += 1;
+            }
+            let vh = store.search(tgt, &opts())?;
+            if vh.first().is_some_and(|h| &h.drawer.id == id) {
+                verbatim += 1;
+            }
+        }
+        rows.push((pair.clone(), mine.len(), r1, r5, verbatim));
+    }
+    println!("  pair          n     R@1     R@5   verbatim-R@1");
+    for (pair, n, r1, r5, v) in &rows {
+        let pct = |x: &u32| 100.0 * *x as f32 / (*n).max(1) as f32;
+        println!(
+            "  {pair:<12} {n:>4}  {:>5.1}%  {:>5.1}%  {:>5.1}%",
+            pct(r1),
+            pct(r5),
+            pct(v)
+        );
+        if pct(v) < 90.0 {
+            println!(
+                "    WARNING: verbatim recovery under 90% — suspect the harness \
+                 or the corpus before reading the cross-lingual columns"
+            );
+        }
+    }
+    println!("XLINGUAL DONE");
+    Ok(())
+}
+
+/// The tag vocabulary both tagging instruments classify into — the
+/// engine's own closed vocabulary, so the instruments and the `kind`
+/// label can never drift apart.
+const TAG_VOCAB: &[&str] = undercroft_core::KIND_VOCAB;
+
+/// Tag value: build the confusable corpus, run both passes, report the
+/// lift. See the subcommand doc for the metric, fixed before any run.
+fn run_tagvalue(keys: usize, filler: usize, level: SecurityLevel) -> Result<()> {
+    let keys = keys.max(1);
+    let (_tmp, mut store) = fresh_store(level)?;
+    let mut batch: Vec<Drawer> = Vec::with_capacity(keys * 2 + filler);
+    let mut gold: Vec<(String, String)> = Vec::with_capacity(keys); // (key, decision id)
+    let mut idx = 0u32;
+    for i in 0..keys {
+        let key = format!("matter-{i:04}");
+        let d = Drawer::new(
+            "bench",
+            "log",
+            format!(
+                "after review the team decided the {key} should use option {}",
+                i % 7
+            ),
+            None,
+            idx,
+            "bench",
+        )
+        .with_kind(Some("decision".into()));
+        gold.push((key.clone(), d.id.clone()));
+        batch.push(d);
+        idx += 1;
+        batch.push(
+            Drawer::new(
+                "bench",
+                "log",
+                format!(
+                    "someone asked whether the {key} might use option {} instead",
+                    (i + 3) % 7
+                ),
+                None,
+                idx,
+                "bench",
+            )
+            .with_kind(Some("question".into())),
+        );
+        idx += 1;
+    }
+    for j in 0..filler {
+        batch.push(
+            Drawer::new(
+                "bench",
+                "log",
+                format!("routine filler statement number {j} about ordinary matters"),
+                None,
+                idx + j as u32,
+                "bench",
+            )
+            .with_kind(Some("statement".into())),
+        );
+    }
+    store.upsert_many(&batch)?;
+    println!(
+        "Tagvalue — level={level:?} keys={keys} (decision + question twin each) filler={filler}"
+    );
+    for (label, kind) in [("unfiltered   ", None), ("kind=decision", Some("decision"))] {
+        let (mut r1, mut r5, mut wrong_kind_at_1) = (0u32, 0u32, 0u32);
+        let timed = Instant::now();
+        for (key, gold_id) in &gold {
+            let hits = store.search(
+                &format!("what did the team decide for the {key}"),
+                &SearchOptions {
+                    kind: kind.map(str::to_string),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )?;
+            match hits.first() {
+                Some(h) if &h.drawer.id == gold_id => r1 += 1,
+                Some(h) if h.drawer.meta.kind.as_deref() != Some("decision") => {
+                    wrong_kind_at_1 += 1
+                }
+                _ => {}
+            }
+            if hits.iter().take(5).any(|h| &h.drawer.id == gold_id) {
+                r5 += 1;
+            }
+        }
+        let secs = timed.elapsed().as_secs_f32();
+        let pct = |x: u32| 100.0 * x as f32 / keys as f32;
+        println!(
+            "  {label}  R@1 {:>5.1}%  R@5 {:>5.1}%  wrong-kind@1 {:>5.1}%  {:>6.1} ms/q",
+            pct(r1),
+            pct(r5),
+            pct(wrong_kind_at_1),
+            1000.0 * secs / keys as f32,
+        );
+    }
+    println!("TAGVALUE DONE");
+    Ok(())
+}
+
+/// The rule arm: a deterministic keyword/shape classifier. Deliberately
+/// simple — the instrument measures the COST CLASS of rule tagging, and a
+/// smarter rule set changes the constant, not the class.
+fn rule_tag(text: &str) -> &'static str {
+    let t = text.trim();
+    let lower = t.to_lowercase();
+    let any = |pats: &[&str]| pats.iter().any(|p| lower.contains(p));
+    if t.ends_with('?') || any(&["what ", "how ", "why ", "when ", "where ", "who "]) {
+        "question"
+    } else if any(&[
+        "i love",
+        "i like",
+        "i prefer",
+        "i hate",
+        "my favorite",
+        "i enjoy",
+    ]) {
+        "preference"
+    } else if any(&[
+        "decided", "we will", "i will", "going to", "plan to", "let's",
+    ]) {
+        "decision"
+    } else if any(&["first,", "then ", "step ", "afterwards", "finally"]) {
+        "procedure"
+    } else if any(&[
+        "yesterday",
+        "today",
+        "last week",
+        "went to",
+        "happened",
+        "attended",
+    ]) {
+        "event"
+    } else {
+        "statement"
+    }
+}
+
+/// Every dialog turn in a LoCoMo-shaped json, wherever it nests.
+fn collect_turns(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Object(m) => {
+            if m.contains_key("speaker") && m.get("text").is_some_and(Value::is_string) {
+                if let Some(t) = locomo_turn_text(v) {
+                    out.push(t);
+                }
+            }
+            for x in m.values() {
+                collect_turns(x, out);
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                collect_turns(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Tagging cost: the measurement behind the labeling doctrine's cost
+/// tiers. Rule arm runs over EVERY turn; the LLM arm over an even-stride
+/// sample (each call is one network round-trip + one forward pass, and
+/// the extrapolation column is labeled as an extrapolation).
+fn run_tagcost(
+    dataset: &str,
+    sample: usize,
+    llm_url: Option<&str>,
+    llm_model: &str,
+    llm_api: &str,
+) -> Result<()> {
+    let raw = std::fs::read_to_string(dataset)
+        .map_err(|e| anyhow::anyhow!("cannot read --dataset {dataset:?}: {e}"))?;
+    let v: Value = serde_json::from_str(&raw)?;
+    let mut texts = Vec::new();
+    collect_turns(&v, &mut texts);
+    if texts.is_empty() {
+        anyhow::bail!("no dialog turns found in {dataset:?}");
+    }
+    println!(
+        "Tagcost — {} turns, vocabulary {:?}",
+        texts.len(),
+        TAG_VOCAB
+    );
+
+    // Rule arm: everything.
+    let started = Instant::now();
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for t in &texts {
+        *counts.entry(rule_tag(t)).or_default() += 1;
+    }
+    let rule_us = started.elapsed().as_secs_f64() * 1e6 / texts.len() as f64;
+    println!(
+        "  rule: {rule_us:.2} µs/drawer — extrapolated {:.1} s per 10^6 drawers",
+        rule_us * 1e6 / 1e6
+    );
+    println!("  rule label distribution: {counts:?}");
+
+    // LLM arm: keyed sample.
+    let Some(url) = llm_url else {
+        println!("  llm: not run (no --llm-url) — rule column only");
+        println!("TAGCOST DONE");
+        return Ok(());
+    };
+    let kind = match llm_api {
+        "openai" => undercroft_llm::ApiKind::OpenAi,
+        _ => undercroft_llm::ApiKind::Ollama,
+    };
+    let client = undercroft_llm::LlmClient::new(url, llm_model, kind);
+    let labels: Vec<String> = TAG_VOCAB.iter().map(|s| s.to_string()).collect();
+    let stride = texts.len().div_ceil(sample.max(1)).max(1);
+    let sampled: Vec<&String> = texts.iter().step_by(stride).take(sample.max(1)).collect();
+    let (mut agree, mut done, mut errors) = (0usize, 0usize, 0usize);
+    let started = Instant::now();
+    for t in &sampled {
+        match client.classify(t, &labels) {
+            Ok(l) => {
+                done += 1;
+                if l == rule_tag(t) {
+                    agree += 1;
+                }
+            }
+            Err(_) => errors += 1,
+        }
+    }
+    let secs = started.elapsed().as_secs_f64();
+    if done == 0 {
+        anyhow::bail!(
+            "LLM arm failed on every call ({errors} errors) — is {url} serving {llm_model}?"
+        );
+    }
+    let per = secs / done as f64;
+    println!(
+        "  llm ({llm_model} @ {url}): {per:.2} s/drawer over {done} sampled \
+         ({errors} errors) — extrapolated {:.1} days per 10^6 drawers, \
+         {:.0}× the rule arm",
+        per * 1e6 / 86_400.0,
+        (per * 1e6) / rule_us.max(f64::EPSILON)
+    );
+    println!(
+        "  rule-vs-llm agreement: {:.1}% ({agree}/{done}) — a first quality \
+         signal, not a verdict",
+        100.0 * agree as f64 / done as f64
+    );
+    println!("TAGCOST DONE");
     Ok(())
 }
 
@@ -3309,6 +3951,38 @@ fn main() -> Result<()> {
             pool_div.as_deref(),
             level_of(&level),
         ),
+        Command::Scopescale {
+            sizes,
+            wing_size,
+            room_size,
+            queries,
+            batch,
+            level,
+        } => run_scopescale(
+            &sizes,
+            wing_size,
+            room_size,
+            queries,
+            batch,
+            level_of(&level),
+        ),
+        Command::Xlingual {
+            pairs,
+            limit,
+            level,
+        } => run_xlingual(&pairs, limit, level_of(&level)),
+        Command::Tagcost {
+            dataset,
+            sample,
+            llm_url,
+            llm_model,
+            llm_api,
+        } => run_tagcost(&dataset, sample, llm_url.as_deref(), &llm_model, &llm_api),
+        Command::Tagvalue {
+            keys,
+            filler,
+            level,
+        } => run_tagvalue(keys, filler, level_of(&level)),
         Command::Wingscale {
             n,
             wings,

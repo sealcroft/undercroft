@@ -288,8 +288,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   gets membership-filtered candidates (PQ/wing-PQ/FDE filter during
   selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
   filter their top-k and surrender to the bounded exact scan when the
-  scope's share cannot fill the page), pool scaled to the SCOPE's
-  population — never the corpus's. Rejected deliberately: retry-on-empty
+  scope's share cannot fill the page), pools SIZED BY THE SCOPE
+  (`scoped_pool_k`/`scoped_keep`: stage 1 ≥ `min(scope, 2048)`,
+  hydration ≥ `min(scope, 1024)`, floors measured by scopescale — the
+  corpus divisors collapse to the fixed 256 floor exactly at wing sizes,
+  which read R@5 89.6% until the scope-sized policy closed it at 100.0%
+  gate-verified 131k→1M; scoped queries pay ~85 ms/q for it, flat). Rejected deliberately: retry-on-empty
   (masks legitimate empties) and post-ranking filters (spend the pool on
   excluded rows — the defect restated). `idx_drawers_room` serves
   room-only resolution; the composite index is leftmost-prefix. A wing's population is MORE
@@ -305,7 +309,15 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
   HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`),
-  verify, knowledge graph (kg.rs), management surface (manage.rs),
+  verify, knowledge graph (kg.rs — incl. the golden-values authority
+  tier: `authority_class`/`review_state`/`canonical_key` DECLARED on
+  closed vocabulary, HMAC-covered via a canonical extension on the
+  `support` precedent so untouched facts keep byte-identical canonicals;
+  `lookup_canonical` = indexed exact door, at most one active approved
+  fact per key, promotion supersedes the previous holder audited; a
+  column flip without the vault key fails verification — see
+  docs/LABELS.md for the label doctrine it instantiates),
+  management surface (manage.rs),
   remote-index integration (remote.rs — a mirror records the embedder it was
   pushed with; `search_with_index` refuses a mismatch rather than ranking a
   v2 query against v1 vectors, which returned an empty result with no error),
@@ -364,12 +376,20 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   unscoped R@5 + steady-state ms/q, ONE ingest per corpus with `--floors`
   iterated in-process, per-pass warm-up reported separately — folding a
   one-time index build into a per-query average manufactured a 15× "effect"
-  in this instrument's own first version)
+  in this instrument's own first version), `scopescale` (scoped recall AT
+  SCALE: a fixed 8192-drawer probe wing holding a fixed 512-row probe room,
+  corpus grown around them to each checkpoint, four passes — unscoped
+  control / wing / room / wing+room — the instrument any scoped-recall
+  claim must cite), and `xlingual` (cross-lingual R@1/R@5 per language pair
+  over operator-supplied TSV pairs — parallel corpora carry their own
+  licenses and never enter the repo; the embedder env is the printed
+  variable, hash being the measured-zero baseline; a verbatim-recovery
+  sanity column guards the harness itself)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 63
+  which inlines them and documents every layer plus all 64
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also

@@ -159,6 +159,14 @@ impl PalaceStore {
                     continue;
                 }
             }
+            // The kind filter reads the VERIFIED meta — the HMAC-covered
+            // copy, not the mirror column — because on this path every
+            // candidate is already decrypted and checked.
+            if let Some(kind) = &opts.kind {
+                if drawer.meta.kind.as_deref() != Some(kind.as_str()) {
+                    continue;
+                }
+            }
             hits.push(self.score_drawer(drawer, query, &qvec, now));
         }
         // The exact channel, for the same reason as the local gate: an

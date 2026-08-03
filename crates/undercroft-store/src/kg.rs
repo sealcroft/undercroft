@@ -34,6 +34,17 @@ pub struct Triple {
     /// `Grounding::Unevaluated` and is not the same as an empty evaluation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub support: Option<undercroft_core::support::Support>,
+    /// The authority tier, all three DECLARED and HMAC-covered — never
+    /// inferred. `None` throughout means the fact was never placed on the
+    /// tier (the default for every extracted or added fact, semantically
+    /// `stated`/`unreviewed`). See [`PalaceStore::kg_set_authority`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_state: Option<String>,
+    /// The exact-lookup slot [`PalaceStore::lookup_canonical`] answers by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_key: Option<String>,
 }
 
 impl Triple {
@@ -92,6 +103,7 @@ pub(crate) fn triple_canonical(
     valid_to: &Option<String>,
     confidence: f64,
     support_at_rest: Option<&[u8]>,
+    authority: Option<&[u8]>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
     for part in [
@@ -116,7 +128,42 @@ pub(crate) fn triple_canonical(
         out.push(0x1f);
         out.extend_from_slice(sup);
     }
+    // The authority tier rides the same precedent — and under a DIFFERENT
+    // separator (0x1e), so sealed support bytes and an authority extension
+    // can never alias each other's position in the canonical.
+    if let Some(auth) = authority {
+        out.push(0x1e);
+        out.extend_from_slice(auth);
+    }
     out
+}
+
+/// Canonical bytes of the authority tier, or `None` when no field was ever
+/// declared — a fact never placed on the tier keeps its canonical bytes
+/// unchanged to the byte (the `support` precedent), so nothing written
+/// before the tier existed is re-tagged.
+///
+/// The three fields are inside the fact's HMAC on purpose: an offline
+/// attacker must not be able to promote poison to `approved`/`canonical`
+/// by flipping a column — a flipped row fails `verify_tag` on read.
+pub(crate) fn authority_ext(
+    authority_class: Option<&str>,
+    review_state: Option<&str>,
+    canonical_key: Option<&str>,
+) -> Option<Vec<u8>> {
+    if authority_class.is_none() && review_state.is_none() && canonical_key.is_none() {
+        return None;
+    }
+    let mut out = Vec::new();
+    for part in [
+        authority_class.unwrap_or(""),
+        review_state.unwrap_or(""),
+        canonical_key.unwrap_or(""),
+    ] {
+        out.push(0x1f);
+        out.extend_from_slice(part.as_bytes());
+    }
+    Some(out)
 }
 
 /// Unkeyed fingerprint of a source drawer's verbatim content, captured
@@ -199,7 +246,16 @@ impl PalaceStore {
                  -- Sealed grounding evaluation. NULL means the check never
                  -- ran, which is NOT the same as running it and finding no
                  -- support; see core::support::Grounding.
-                 support     BLOB
+                 support     BLOB,
+                 -- The authority tier: DECLARED closed-vocabulary fields,
+                 -- HMAC-covered via the canonical's authority extension.
+                 -- NULL throughout = never placed on the tier (stated /
+                 -- unreviewed by default). canonical_key is queryable
+                 -- structure like subject/predicate — the same sealed-vault
+                 -- trade the file header records.
+                 authority_class TEXT,
+                 review_state    TEXT,
+                 canonical_key   TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject);
              CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate);",
@@ -207,11 +263,25 @@ impl PalaceStore {
         // Migrate palaces created before the receipt columns existed. SQLite
         // has no ADD COLUMN IF NOT EXISTS; a duplicate-column error just
         // means the migration already ran, so it is swallowed.
-        for col in ["source_fp BLOB", "receipt_tag BLOB", "support BLOB"] {
+        for col in [
+            "source_fp BLOB",
+            "receipt_tag BLOB",
+            "support BLOB",
+            "authority_class TEXT",
+            "review_state TEXT",
+            "canonical_key TEXT",
+        ] {
             let _ = self
                 .conn
                 .execute(&format!("ALTER TABLE kg_triples ADD COLUMN {col}"), []);
         }
+        // After the columns exist (fresh table or migration): the exact-
+        // authority door is an INDEXED equality — `lookup_canonical` must
+        // never ride an O(graph) `all_triples` decode.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kg_triples_canonical ON kg_triples(canonical_key)",
+            [],
+        )?;
         Ok(())
     }
 
@@ -372,6 +442,9 @@ impl PalaceStore {
             &vt,
             confidence,
             support_rest.as_deref(),
+            // A new fact is never born on the authority tier: placement is
+            // a separate, audited declaration (`kg_set_authority`).
+            None,
         ));
         // Receipt: a separate keyed tag over (triple id, citation, source
         // fingerprint). Kept distinct from the triple tag so it composes
@@ -470,6 +543,191 @@ impl PalaceStore {
         Ok(out)
     }
 
+    /// One triple's raw row by id, tag NOT yet verified.
+    fn triple_row(&self, triple_id: &str) -> Result<Option<TripleRow>, StoreError> {
+        let sql = format!("SELECT {TRIPLE_COLUMNS} FROM kg_triples WHERE id = ?1");
+        Ok(self
+            .conn
+            .prepare(&sql)?
+            .query_row(params![triple_id], TripleRow::from_row)
+            .optional()?)
+    }
+
+    /// Place a fact on the authority tier — or take it off. Everything here
+    /// is a DECLARATION: a closed vocabulary, validated, audited through
+    /// the chain, and covered by the fact's HMAC — never an inference.
+    ///
+    /// `authority_class` is `stated` or `canonical`; `review_state` is
+    /// `unreviewed`, `approved` or `rejected`. `canonical_key` names the
+    /// exact-lookup slot [`Self::lookup_canonical`] answers by — required
+    /// for `canonical`, forbidden for `stated`. The key is queryable
+    /// structure in the clear (the subject/predicate trade recorded in the
+    /// file header): name it like an identifier, never with content words
+    /// that should stay sealed.
+    ///
+    /// Promoting an approved canonical fact onto a key another active
+    /// approved canonical fact already holds CLOSES the older fact's
+    /// validity window in the same call — audited like any supersession —
+    /// so the door answers with at most one current value per key.
+    ///
+    /// The row's existing tag is verified before anything is rewritten:
+    /// this operation must never launder a tampered row into a freshly
+    /// tagged one.
+    pub fn kg_set_authority(
+        &mut self,
+        triple_id: &str,
+        authority_class: &str,
+        review_state: &str,
+        canonical_key: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let bad = |reason: String| StoreError::CorruptRow {
+            id: triple_id.to_string(),
+            reason,
+        };
+        if !matches!(authority_class, "stated" | "canonical") {
+            return Err(bad(format!(
+                "authority_class must be stated|canonical, got {authority_class:?}"
+            )));
+        }
+        if !matches!(review_state, "unreviewed" | "approved" | "rejected") {
+            return Err(bad(format!(
+                "review_state must be unreviewed|approved|rejected, got {review_state:?}"
+            )));
+        }
+        match (authority_class, canonical_key) {
+            ("canonical", None) => {
+                return Err(bad("canonical requires a canonical_key".into()));
+            }
+            ("stated", Some(_)) => {
+                return Err(bad("a stated fact carries no canonical_key".into()));
+            }
+            _ => {}
+        }
+        if let Some(k) = canonical_key {
+            undercroft_core::validate_name(k, "canonical_key").map_err(|e| bad(e.to_string()))?;
+        }
+        let row = self
+            .triple_row(triple_id)?
+            .ok_or_else(|| bad("no such fact".into()))?;
+        self.vault
+            .verify_tag(&row.canonical(), &row.tag)
+            .map_err(|_| StoreError::Integrity(format!("kg/{triple_id}")))?;
+
+        // The one-current-value-per-key guarantee: close every OTHER active
+        // approved canonical fact on this key first (per-row transactions,
+        // the kg_invalidate shape — promotions are rare and each close is
+        // its own audited event).
+        if authority_class == "canonical" && review_state == "approved" {
+            let key = canonical_key.expect("checked above");
+            let sql = format!(
+                "SELECT {TRIPLE_COLUMNS} FROM kg_triples \
+                 WHERE canonical_key = ?1 AND authority_class = 'canonical' \
+                   AND review_state = 'approved' AND valid_to IS NULL AND id != ?2"
+            );
+            let holders: Vec<TripleRow> = self
+                .conn
+                .prepare(&sql)?
+                .query_map(params![key, triple_id], TripleRow::from_row)?
+                .collect::<Result<_, _>>()?;
+            for held in holders {
+                self.vault
+                    .verify_tag(&held.canonical(), &held.tag)
+                    .map_err(|_| StoreError::Integrity(format!("kg/{}", held.id)))?;
+                let ended = now_rfc3339();
+                let vt = Some(ended.clone());
+                let auth = authority_ext(
+                    held.authority_class.as_deref(),
+                    held.review_state.as_deref(),
+                    held.canonical_key.as_deref(),
+                );
+                let tag = self.vault.tag(&triple_canonical(
+                    &held.id,
+                    &held.subject,
+                    &held.predicate,
+                    &held.object,
+                    &held.valid_from,
+                    &vt,
+                    held.confidence,
+                    held.support.as_deref(),
+                    auth.as_deref(),
+                ));
+                let tx = self.conn.transaction()?;
+                tx.execute(
+                    "UPDATE kg_triples SET valid_to = ?1, tag = ?2 WHERE id = ?3",
+                    params![ended, tag.as_slice(), held.id],
+                )?;
+                let (head, writes) =
+                    chain_append(&tx, &self.vault, &format!("kg/{}", held.id), &tag, &ended)?;
+                tx.commit()?;
+                self.vault.anchor_manifest(&head, writes)?;
+                undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);
+                undercroft_obs::event_kg_triple(self.vault.id());
+            }
+        }
+
+        let auth = authority_ext(Some(authority_class), Some(review_state), canonical_key);
+        let tag = self.vault.tag(&triple_canonical(
+            &row.id,
+            &row.subject,
+            &row.predicate,
+            &row.object,
+            &row.valid_from,
+            &row.valid_to,
+            row.confidence,
+            row.support.as_deref(),
+            auth.as_deref(),
+        ));
+        let now = now_rfc3339();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE kg_triples SET authority_class = ?1, review_state = ?2, \
+                                   canonical_key = ?3, tag = ?4 WHERE id = ?5",
+            params![
+                authority_class,
+                review_state,
+                canonical_key,
+                tag.as_slice(),
+                triple_id
+            ],
+        )?;
+        let (head, writes) = chain_append(
+            &tx,
+            &self.vault,
+            &format!("kg/{triple_id}/authority"),
+            &tag,
+            &now,
+        )?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        undercroft_obs::kg_write(undercroft_obs::KgKind::Triple);
+        undercroft_obs::event_kg_triple(self.vault.id());
+        Ok(())
+    }
+
+    /// The exact-authority door: an INDEXED SQL equality on
+    /// `canonical_key`, returning the one active, approved, canonical fact
+    /// for the key — or nothing, never a semantic guess. Consulted before
+    /// semantic recall for exact or high-risk asks. Deliberately not a
+    /// rider on `all_triples`, whose full decode is O(graph); this path
+    /// touches exactly the rows the index names, and no candidate pool of
+    /// any kind is involved — which is what makes it immune to every
+    /// crowding and starvation shape the retrieval side has to defend
+    /// against.
+    pub fn lookup_canonical(&self, key: &str) -> Result<Option<Triple>, StoreError> {
+        let sql = format!(
+            "SELECT {TRIPLE_COLUMNS} FROM kg_triples \
+             WHERE canonical_key = ?1 AND authority_class = 'canonical' \
+               AND review_state = 'approved' AND valid_to IS NULL \
+             ORDER BY extracted_at DESC, seq DESC LIMIT 1"
+        );
+        let row = self
+            .conn
+            .prepare(&sql)?
+            .query_row(params![key], TripleRow::from_row)
+            .optional()?;
+        row.map(|r| self.decode_triple(r)).transpose()
+    }
+
     fn decode_triple(&self, row: TripleRow) -> Result<Triple, StoreError> {
         self.vault
             .verify_tag(&row.canonical(), &row.tag)
@@ -514,6 +772,9 @@ impl PalaceStore {
             source_drawer_id: row.source_drawer_id,
             extracted_at: row.extracted_at,
             support,
+            authority_class: row.authority_class,
+            review_state: row.review_state,
+            canonical_key: row.canonical_key,
         })
     }
 
@@ -599,6 +860,14 @@ impl PalaceStore {
                     &serde_json::to_vec(s).unwrap_or_default(),
                 )
             });
+            // Authority fields ride through unchanged, exactly like support:
+            // closing a window is not a review, and dropping them from the
+            // tag would report tampering on every promoted fact superseded.
+            let auth = authority_ext(
+                t.authority_class.as_deref(),
+                t.review_state.as_deref(),
+                t.canonical_key.as_deref(),
+            );
             let tag = self.vault.tag(&triple_canonical(
                 &t.id,
                 &t.subject,
@@ -608,6 +877,7 @@ impl PalaceStore {
                 &vt,
                 t.confidence,
                 support_rest.as_deref(),
+                auth.as_deref(),
             ));
             let tx = self.conn.transaction()?;
             tx.execute(
@@ -762,13 +1032,21 @@ struct TripleRow {
     /// — it is inside the canonical bytes, so dropping it invalidates a
     /// grounded fact's tag and reports tampering where there was none.
     support: Option<Vec<u8>>,
+    /// Authority tier fields — inside the canonical (via the authority
+    /// extension) whenever any is set, so they carry the same warning as
+    /// `support`: drop them from a re-tag and every promoted fact reads as
+    /// tampered.
+    authority_class: Option<String>,
+    review_state: Option<String>,
+    canonical_key: Option<String>,
 }
 
 /// Columns every triple read needs, in the order `TripleRow::from_row`
 /// expects. Kept in one place so a new column cannot reach one query and
 /// miss another — the failure mode there is a false tamper alarm.
 const TRIPLE_COLUMNS: &str = "id, subject, predicate, object, valid_from, valid_to, confidence, \
-                              source_drawer_id, tag, extracted_at, support";
+                              source_drawer_id, tag, extracted_at, support, \
+                              authority_class, review_state, canonical_key";
 
 impl TripleRow {
     fn from_row(r: &rusqlite::Row<'_>) -> Result<Self, rusqlite::Error> {
@@ -784,11 +1062,20 @@ impl TripleRow {
             tag: r.get(8)?,
             extracted_at: r.get(9)?,
             support: r.get(10)?,
+            authority_class: r.get(11)?,
+            review_state: r.get(12)?,
+            canonical_key: r.get(13)?,
         })
     }
 
-    /// Canonical bytes for this row, support included when present.
+    /// Canonical bytes for this row, support and authority included when
+    /// present.
     fn canonical(&self) -> Vec<u8> {
+        let auth = authority_ext(
+            self.authority_class.as_deref(),
+            self.review_state.as_deref(),
+            self.canonical_key.as_deref(),
+        );
         triple_canonical(
             &self.id,
             &self.subject,
@@ -798,6 +1085,7 @@ impl TripleRow {
             &self.valid_to,
             self.confidence,
             self.support.as_deref(),
+            auth.as_deref(),
         )
     }
 }
@@ -1169,5 +1457,147 @@ mod tests {
         let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         let r = s2.kg_verify_receipts().unwrap();
         assert_eq!(r[0].verdict, ReceiptVerdict::Tampered);
+    }
+
+    #[test]
+    fn the_authority_door_answers_by_key_and_only_when_approved() {
+        for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+            let (_d, mut s) = store(level);
+            let id = s
+                .kg_add("user", "timezone", "Europe/Berlin", None, None, 1.0, None)
+                .unwrap();
+            // Not on the tier: the door answers nothing.
+            assert!(s.lookup_canonical("user-timezone").unwrap().is_none());
+            // Promoted but unreviewed: still nothing — approval is its own
+            // declaration, made by whoever reviews, not by whoever promotes.
+            s.kg_set_authority(&id, "canonical", "unreviewed", Some("user-timezone"))
+                .unwrap();
+            assert!(s.lookup_canonical("user-timezone").unwrap().is_none());
+            s.kg_set_authority(&id, "canonical", "approved", Some("user-timezone"))
+                .unwrap();
+            let hit = s
+                .lookup_canonical("user-timezone")
+                .unwrap()
+                .expect("the door answers an approved canonical fact");
+            assert_eq!(hit.object, "Europe/Berlin");
+            assert_eq!(hit.canonical_key.as_deref(), Some("user-timezone"));
+            // Rejected: the door closes again — and every row still
+            // verifies, because the state change was re-tagged, not flipped.
+            s.kg_set_authority(&id, "canonical", "rejected", Some("user-timezone"))
+                .unwrap();
+            assert!(s.lookup_canonical("user-timezone").unwrap().is_none());
+            assert!(s.kg_verify().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn promotion_supersedes_the_previous_holder_of_the_key() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let old = s
+            .kg_add("user", "editor", "vim", None, None, 1.0, None)
+            .unwrap();
+        s.kg_set_authority(&old, "canonical", "approved", Some("user-editor"))
+            .unwrap();
+        let new = s
+            .kg_add("user", "editor", "helix", None, None, 1.0, None)
+            .unwrap();
+        s.kg_set_authority(&new, "canonical", "approved", Some("user-editor"))
+            .unwrap();
+        let hit = s
+            .lookup_canonical("user-editor")
+            .unwrap()
+            .expect("the door answers");
+        assert_eq!(
+            hit.object, "helix",
+            "the door holds one current value per key"
+        );
+        // The superseded holder is closed, never deleted — history replays.
+        let old_fact = s
+            .kg_timeline(None)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == old)
+            .expect("history keeps the old holder");
+        assert!(old_fact.valid_to.is_some());
+        assert!(s.kg_verify().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_flipped_review_state_fails_verification_not_the_door() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let id = s
+            .kg_add(
+                "service",
+                "api-base",
+                "internal.example",
+                None,
+                None,
+                1.0,
+                None,
+            )
+            .unwrap();
+        s.kg_set_authority(&id, "canonical", "unreviewed", Some("service-api-base"))
+            .unwrap();
+        // An offline attacker without the mac key flips the column.
+        s.conn
+            .execute(
+                "UPDATE kg_triples SET review_state = 'approved' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        // The door refuses with an integrity error — poison cannot approve
+        // itself by editing a column, because the state is inside the HMAC.
+        assert!(matches!(
+            s.lookup_canonical("service-api-base"),
+            Err(crate::StoreError::Integrity(_))
+        ));
+        assert_eq!(s.kg_verify().unwrap(), vec![format!("kg/{id}")]);
+    }
+
+    #[test]
+    fn the_authority_vocabulary_is_closed() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let id = s
+            .kg_add("user", "locale", "de-DE", None, None, 1.0, None)
+            .unwrap();
+        // Unknown class or state: rejected, never coerced.
+        assert!(s
+            .kg_set_authority(&id, "golden", "approved", Some("user-locale"))
+            .is_err());
+        assert!(s
+            .kg_set_authority(&id, "canonical", "maybe", Some("user-locale"))
+            .is_err());
+        // canonical without a key, and stated with one: both refused.
+        assert!(s
+            .kg_set_authority(&id, "canonical", "approved", None)
+            .is_err());
+        assert!(s
+            .kg_set_authority(&id, "stated", "unreviewed", Some("user-locale"))
+            .is_err());
+        // A key with a path separator never reaches the table.
+        assert!(s
+            .kg_set_authority(&id, "canonical", "approved", Some("user/locale"))
+            .is_err());
+    }
+
+    #[test]
+    fn rotation_carries_the_authority_tier() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        let id = s
+            .kg_add("user", "timezone", "Europe/Berlin", None, None, 1.0, None)
+            .unwrap();
+        s.kg_set_authority(&id, "canonical", "approved", Some("user-timezone"))
+            .unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let candidate = mgr.rotation_candidate("kg-test").unwrap();
+        s.rotate_keys(candidate).unwrap();
+        // The promoted fact's tag was recomputed under the new key WITH the
+        // authority extension — dropping it there would read as tampering.
+        assert!(s.kg_verify().unwrap().is_empty());
+        let hit = s
+            .lookup_canonical("user-timezone")
+            .unwrap()
+            .expect("the door still answers after rotation");
+        assert_eq!(hit.object, "Europe/Berlin");
     }
 }

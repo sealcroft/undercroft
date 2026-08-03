@@ -275,6 +275,69 @@ pub(crate) fn late_top_n() -> usize {
 /// `std::env::set_var` is process-global and the suite runs tests in parallel,
 /// so an env-driven test of this is a flake generator aimed at every other
 /// test that happens to run beside it.
+/// The convex blend's semantic weight (`UNDERCROFT_FUSION_WEIGHT`):
+/// `score = w·semantic + (0.90 − w)·lexical + 0.10·recency`. Recency's
+/// share is fixed — it was never the contested split. DECLARED and
+/// BOUNDED to `[0.20, 0.70]` so no configuration can retire a channel;
+/// one global declaration, never per-query (per-query channel rescaling
+/// measured −9.4pp and stays refused). Applies to the `Bm25` blend and
+/// the remote-index path; `Legacy` keeps its frozen historical weights.
+/// Unparseable values warn and fall back — a typo must not brick an open
+/// or silently reweight retrieval.
+const DEFAULT_FUSION_WEIGHT: f32 = 0.55;
+const FUSION_WEIGHT_MIN: f32 = 0.20;
+const FUSION_WEIGHT_MAX: f32 = 0.70;
+
+/// Scoped-search pool floors, measured by `scopescale` (2026-08-02). A
+/// scope lives exactly in the size band (10³–10⁵) where the corpus
+/// divisors (`live/64` stage 1, `live/512` hydration) collapse to the
+/// fixed 256 floor — the configuration the global recall leak was
+/// measured in. On a self-similar 8192-row wing that read R@5 89.6%,
+/// corpus-independent; widening stage 1 alone plateaued at 96.9% because
+/// the cosine-only stage-2 cut still held hydration at 256 and slammed
+/// the lexical door (hydration is BM25's only route into fusion on a
+/// sealed vault). So a scoped search fetches at least
+/// `min(scope, SCOPE_POOL_FLOOR)` ADC candidates and hydrates at least
+/// `min(scope, SCOPE_HYDRATE_FLOOR)` of them: scopes at or below the
+/// hydrate floor are answered EXACTLY, and large scopes converge to the
+/// proven corpus divisors. The worst-case price is
+/// `SCOPE_HYDRATE_FLOOR × ~0.09 ms ≈ 92 ms` for a scoped query — the
+/// recorded cost of not losing answers, still several times cheaper than
+/// the below-floor full scan of the same population.
+const SCOPE_POOL_FLOOR: usize = 2048;
+const SCOPE_HYDRATE_FLOOR: usize = 1024;
+
+/// Stage-1 candidate pool for a scoped search over `scope_live` rows.
+fn scoped_pool_k(hydrate_k: usize, scope_live: usize) -> usize {
+    hydrate_k
+        .max(scope_live / 64)
+        .max(scope_live.min(SCOPE_POOL_FLOOR))
+}
+
+/// Hydration keep for a scoped search — the width of the lexical door.
+fn scoped_keep(hydrate_k: usize, scope_live: usize) -> usize {
+    hydrate_k
+        .max(scope_live / 512)
+        .max(scope_live.min(SCOPE_HYDRATE_FLOOR))
+}
+
+/// Pure for the same reason as [`resolve_late_top_n`].
+fn resolve_fusion_weight(env: Option<&str>) -> f32 {
+    match env {
+        None => DEFAULT_FUSION_WEIGHT,
+        Some(v) => match v.trim().parse::<f32>() {
+            Ok(w) if w.is_finite() => w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX),
+            _ => {
+                undercroft_obs::diag_warn!(
+                    "UNDERCROFT_FUSION_WEIGHT={v:?} is not a number; \
+                     using {DEFAULT_FUSION_WEIGHT}"
+                );
+                DEFAULT_FUSION_WEIGHT
+            }
+        },
+    }
+}
+
 fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
     if let Some(n) = late.and_then(|v| v.parse().ok()).filter(|&n| n > 0) {
         return n;
@@ -495,6 +558,15 @@ pub struct SearchOptions {
     pub morph_lang: MorphLang,
     pub wing: Option<String>,
     pub room: Option<String>,
+    /// Filter to drawers whose DECLARED kind equals this value (one of
+    /// [`undercroft_core::KIND_VOCAB`]; an unknown value is an error, never
+    /// an empty result — the closed vocabulary catching a typo). Drawers
+    /// with no declared kind are excluded while the filter is set; the
+    /// `/v1` surface reports how many, so a caller can tell a thin result
+    /// from a thinly-labeled corpus. Rides the same scope-resolved
+    /// candidate machinery as `wing`/`room` — a kind filter cannot be
+    /// starved by the corpus top-k.
+    pub kind: Option<String>,
     pub limit: usize,
     /// Soft cap on how many of the returned hits may come from any single
     /// room. `None` (the default) keeps pure score order.
@@ -573,6 +645,9 @@ pub struct PalaceStore {
     fts_min: Option<usize>,
     /// How semantic and lexical signals are combined at rank time.
     fusion: Fusion,
+    /// The convex blend's semantic weight — declared, bounded, one global
+    /// value. See [`DEFAULT_FUSION_WEIGHT`].
+    fusion_weight: f32,
     /// `Some(dim)` when this vault's embeddings are supplied by the caller
     /// (embedder identity `external:<name>@<dim>`): writes must carry a
     /// vector of exactly `dim`, and the store never computes an embedding.
@@ -1144,6 +1219,9 @@ impl PalaceStore {
             fts: false,
             fts_min,
             fusion: Fusion::from_env(),
+            fusion_weight: resolve_fusion_weight(
+                std::env::var("UNDERCROFT_FUSION_WEIGHT").ok().as_deref(),
+            ),
             external_dim,
             hnsw_enabled: false,
             #[cfg(feature = "hnsw")]
@@ -1460,6 +1538,17 @@ impl PalaceStore {
         self.fusion = fusion;
     }
 
+    /// Declare the convex blend's semantic weight, clamped to
+    /// `[0.20, 0.70]` — no configuration can retire a channel. See
+    /// [`DEFAULT_FUSION_WEIGHT`] / `UNDERCROFT_FUSION_WEIGHT`.
+    pub fn set_fusion_weight(&mut self, w: f32) {
+        self.fusion_weight = if w.is_finite() {
+            w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX)
+        } else {
+            DEFAULT_FUSION_WEIGHT
+        };
+    }
+
     /// Attach (or clear) a second-stage cross-encoder reranker. With one set,
     /// `search` re-scores the fusion-ranked top-N candidates by the full
     /// `(query, content)` pair before the final `limit` cut. Idempotent and
@@ -1694,6 +1783,15 @@ impl PalaceStore {
         drawer: &Drawer,
         embedding: &[f32],
     ) -> Result<(bool, String, u64), StoreError> {
+        // A declared kind must come from the closed vocabulary — rejected,
+        // never coerced, at the single write choke point so no surface can
+        // forget. Absence is always valid.
+        if let Some(k) = drawer.meta.kind.as_deref() {
+            undercroft_core::validate_kind(k).map_err(|e| StoreError::CorruptRow {
+                id: drawer.id.clone(),
+                reason: e.to_string(),
+            })?;
+        }
         // meta_json is stored unsealed, so it must not carry words copied out
         // of the content — the date expressions and names that derivation
         // lifts verbatim. `meta_at_rest` empties exactly those and keeps the
@@ -1725,12 +1823,19 @@ impl PalaceStore {
                 |r| r.get(0),
             )
             .optional()?;
+        // The kind column mirrors meta_json's declared kind for the indexed
+        // filter; the copy inside meta_json is the one the HMAC covers, so
+        // a mirror edited out from under it is caught the moment the row's
+        // meta is compared against the filter's promise (and the filter
+        // itself only ever narrows — a forged mirror can hide a row from a
+        // kind filter, never smuggle one in past verification).
         self.conn.execute(
-            "INSERT INTO drawers (id, wing, room, meta_json, content, embedding, tag, fp, filed_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+            "INSERT INTO drawers (id, wing, room, kind, meta_json, content, embedding, tag, fp, filed_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
              ON CONFLICT(id) DO UPDATE SET
                  wing = excluded.wing,
                  room = excluded.room,
+                 kind = excluded.kind,
                  meta_json = excluded.meta_json,
                  content = excluded.content,
                  embedding = excluded.embedding,
@@ -1741,6 +1846,7 @@ impl PalaceStore {
                 drawer.id,
                 drawer.meta.wing,
                 drawer.meta.room,
+                drawer.meta.kind,
                 meta_json,
                 content_rest,
                 emb_rest,
@@ -2057,18 +2163,30 @@ impl PalaceStore {
     }
 
     fn decode(&self, id: &str, meta_json: &str, content_rest: &[u8]) -> Result<Drawer, StoreError> {
+        Self::decode_with(&self.vault, id, meta_json, content_rest)
+    }
+
+    /// [`Self::decode`] against an explicit vault — the form the parallel
+    /// hydration path calls, because `&self` is not `Sync` (RefCell caches)
+    /// while `&Vault` is plain owned data and is.
+    fn decode_with(
+        vault: &Vault,
+        id: &str,
+        meta_json: &str,
+        content_rest: &[u8],
+    ) -> Result<Drawer, StoreError> {
         let meta: DrawerMeta =
             serde_json::from_str(meta_json).map_err(|e| StoreError::CorruptRow {
                 id: id.into(),
                 reason: e.to_string(),
             })?;
-        let plain = self
-            .vault
-            .content_from_rest(id, content_rest)
-            .map_err(|e| StoreError::CorruptRow {
-                id: id.into(),
-                reason: e.to_string(),
-            })?;
+        let plain =
+            vault
+                .content_from_rest(id, content_rest)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.into(),
+                    reason: e.to_string(),
+                })?;
         let content = String::from_utf8(plain).map_err(|e| StoreError::CorruptRow {
             id: id.into(),
             reason: e.to_string(),
@@ -2168,6 +2286,30 @@ impl PalaceStore {
         let lang = opts.morph_lang;
         let qterms: Vec<String> = tokenize(query);
 
+        // A declared kind filter is validated against the closed
+        // vocabulary before anything runs: an unknown value is a typo to
+        // report, and silently returning nothing for it is the silence the
+        // never-guess contract forbids.
+        if let Some(k) = opts.kind.as_deref() {
+            undercroft_core::validate_kind(k).map_err(|e| StoreError::Invalid(e.to_string()))?;
+        }
+        // Opt-in phase trace (`UNDERCROFT_SEARCH_TRACE=1`): where one search
+        // actually spends its time, on stderr. Built after the parallel-
+        // hydration pass measured ZERO change and a 1-vs-24-thread probe
+        // read identical — the serial cost lived somewhere nobody had
+        // measured, and this is the instrument that finds it instead of
+        // the next guess.
+        let trace = std::env::var("UNDERCROFT_SEARCH_TRACE").is_ok();
+        let mut t_phase = std::time::Instant::now();
+        let phase_ms = |label: &str, t: &mut std::time::Instant| {
+            if trace {
+                eprintln!(
+                    "search-trace {label}: {:.2} ms",
+                    t.elapsed().as_secs_f64() * 1e3
+                );
+            }
+            *t = std::time::Instant::now();
+        };
         let mut refine_semantic = false;
         let hydrate_k = std::cmp::max(256, depth.saturating_mul(32));
         // The declared filters the ACTIVE prefilter cannot see, resolved
@@ -2188,9 +2330,19 @@ impl PalaceStore {
         {
             let wing_tier_covers_it =
                 self.pq_enabled && !self.fde_enabled && self.wing_pq_min != usize::MAX;
-            match (opts.wing.as_deref(), opts.room.as_deref()) {
-                (_, Some(_)) => self.scope_seqs(opts.wing.as_deref(), opts.room.as_deref())?,
-                (Some(w), None) if !wing_tier_covers_it => self.scope_seqs(Some(w), None)?,
+            match (
+                opts.wing.as_deref(),
+                opts.room.as_deref(),
+                opts.kind.as_deref(),
+            ) {
+                (_, Some(_), _) | (_, _, Some(_)) => self.scope_seqs(
+                    opts.wing.as_deref(),
+                    opts.room.as_deref(),
+                    opts.kind.as_deref(),
+                )?,
+                (Some(w), None, None) if !wing_tier_covers_it => {
+                    self.scope_seqs(Some(w), None, None)?
+                }
                 _ => None,
             }
         } else {
@@ -2200,11 +2352,21 @@ impl PalaceStore {
         // all: the SQL WHERE below bounds a full scan by the scope, which
         // is exact and cannot starve — the below-floor-wing pattern, one
         // level up. Larger scopes keep the prefilter but draw candidates
-        // INSIDE the scope, pool scaled to the scope's own population: the
-        // same recall policy the corpus-scaled pool gives unscoped queries.
-        let scope_scan = scope.as_ref().is_some_and(|s| s.len() <= hydrate_k);
-        let pool_k = match &scope {
-            Some(s) if !scope_scan => hydrate_k.max(s.len() / self.pool_div.max(1)),
+        // INSIDE the scope, pools sized by the SCOPE's population
+        // ([`scoped_pool_k`]/[`scoped_keep`] — the corpus divisors
+        // collapse to the fixed floor at wing sizes, which scopescale
+        // measured as an 89.6% wing-recall leak).
+        phase_ms("scope-resolve", &mut t_phase);
+        let scope_scan = scope
+            .as_ref()
+            .is_some_and(|s| s.len() <= hydrate_k.max(SCOPE_HYDRATE_FLOOR));
+        // The population any scoped pool is sized against — the membership
+        // set's size when one was fetched, or the wing's live count on the
+        // wing-tier path (which needs no membership set, its index already
+        // generates inside the wing).
+        let mut scope_live: Option<usize> = scope.as_ref().map(std::collections::HashSet::len);
+        let pool_k = match scope_live {
+            Some(l) if !scope_scan => scoped_pool_k(hydrate_k, l),
             _ => hydrate_k,
         };
         let candidates = if scope_scan {
@@ -2227,7 +2389,23 @@ impl PalaceStore {
             refine_semantic = true;
             match &opts.wing {
                 Some(w) if self.wing_pq_min != usize::MAX => {
-                    self.wing_pq_candidates_in(w, &qvec, pool_k, scope.as_ref())?
+                    // Size the wing path's pools by the wing itself when no
+                    // narrower scope was resolved: the wing IS the searched
+                    // population, and sizing it by the corpus is how the
+                    // floor came to dominate.
+                    let k = match scope_live {
+                        Some(_) => pool_k,
+                        None => {
+                            let n: i64 = self.conn.query_row(
+                                "SELECT COUNT(*) FROM drawers WHERE wing = ?1",
+                                [w],
+                                |r| r.get(0),
+                            )?;
+                            scope_live = Some(n as usize);
+                            scoped_pool_k(hydrate_k, n as usize)
+                        }
+                    };
+                    self.wing_pq_candidates_in(w, &qvec, k, scope.as_ref())?
                 }
                 _ => self.pq_candidates_in(&qvec, pool_k, scope.as_ref())?,
             }
@@ -2290,6 +2468,7 @@ impl PalaceStore {
                 _ => None,
             }
         };
+        phase_ms("candidates", &mut t_phase);
         // Second stage on the semantic pools (PQ, per-wing PQ): the
         // corpus-scaled stage-1 pool is cut by exact cosine over the
         // candidates' embeddings alone — but only down to `stage1/8`
@@ -2303,11 +2482,19 @@ impl PalaceStore {
         // MaxSim) and FTS keeps every lexical candidate.
         let candidates = match candidates {
             Some(seqs) if refine_semantic && seqs.len() > hydrate_k => {
-                let keep = hydrate_k.max(seqs.len() / 8);
+                let keep = match scope_live {
+                    // A scoped keep is a fraction of the SCOPE, never of
+                    // the pool: widening the net while the cosine-only cut
+                    // held hydration at the floor is exactly the 96.9%
+                    // plateau scopescale measured.
+                    Some(l) => scoped_keep(hydrate_k, l),
+                    None => hydrate_k.max(seqs.len() / 8),
+                };
                 Some(self.refine_by_exact_cosine(&qvec, seqs, keep)?)
             }
             other => other,
         };
+        phase_ms("refine", &mut t_phase);
         let obs_prefiltered = candidates.is_some();
 
         let mut sql = String::from("SELECT id, meta_json, content, embedding, tag FROM drawers");
@@ -2325,6 +2512,10 @@ impl PalaceStore {
             binds.push(r.clone());
             clauses.push(format!("room = ?{}", binds.len()));
         }
+        if let Some(k) = &opts.kind {
+            binds.push(k.clone());
+            clauses.push(format!("kind = ?{}", binds.len()));
+        }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
@@ -2335,6 +2526,7 @@ impl PalaceStore {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
             .collect::<Result<_, _>>()?;
+        phase_ms("sql-fetch", &mut t_phase);
 
         // Pass 1: verify + decrypt every candidate, and gather the signals
         // that don't need corpus statistics (cosine, recency). Content
@@ -2342,60 +2534,82 @@ impl PalaceStore {
         // Recency decays against the caller's declared instant when one was
         // given: pages of one iteration must rank against one clock, not
         // against however many seconds separated the calls.
+        //
+        // Hydration is the search path's linear term (~0.09 ms/row run
+        // serially — the whole price of a scoped query and most of an
+        // unscoped one at 10⁶), and every per-row step here — HMAC verify,
+        // AEAD decrypt, embedding decode, segmentation — is pure CPU over
+        // `&Vault`, which is plain owned data and `Sync`. So the rows fan
+        // out across cores: no SQLite on this path, no RefCell (the
+        // embedding-cache reads happen serially first — a read is
+        // microseconds and the RefCell is the one non-`Sync` piece), and
+        // the indexed collect preserves row order EXACTLY, so scores,
+        // ordering and every downstream stage are byte-identical to the
+        // serial loop. A failure on any row still fails the whole search:
+        // an integrity error is a verdict, not a row to skip.
         let now = opts.ranked_at.unwrap_or_else(OffsetDateTime::now_utc);
-        let mut cands: Vec<Candidate> = Vec::with_capacity(rows.len());
-        for (id, meta_json, content_rest, emb_rest, tag) in rows {
-            self.vault
-                .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .map_err(|_| {
-                    undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
-                    StoreError::Integrity(id.clone())
-                })?;
-            let drawer = self.decode(&id, &meta_json, &content_rest)?;
-            let cached = self
-                .emb_cache
-                .borrow()
-                .as_ref()
-                .and_then(|c| c.get(&id).cloned());
-            let emb = match cached {
-                Some(e) => e,
-                None => self
-                    .vault
-                    .embedding_from_rest(&id, &emb_rest)
-                    .map_err(|e| StoreError::CorruptRow {
-                        id: id.clone(),
-                        reason: e.to_string(),
+        let cached_embs: Vec<Option<Vec<f32>>> = {
+            let cache = self.emb_cache.borrow();
+            rows.iter()
+                .map(|(id, ..)| cache.as_ref().and_then(|c| c.get(id).cloned()))
+                .collect()
+        };
+        use rayon::prelude::*;
+        let vault = &self.vault;
+        let legacy = self.fusion == Fusion::Legacy;
+        let qv = &qvec;
+        let cands: Vec<Candidate> = rows
+            .into_par_iter()
+            .zip(cached_embs.into_par_iter())
+            .map(|((id, meta_json, content_rest, emb_rest, tag), cached)| {
+                vault
+                    .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
+                    .map_err(|_| {
+                        undercroft_obs::hmac_verify_failed("drawer");
+                        undercroft_obs::event_hmac_fail(vault.id(), "drawer");
+                        StoreError::Integrity(id.clone())
+                    })?;
+                let drawer = Self::decode_with(vault, &id, &meta_json, &content_rest)?;
+                let emb = match cached {
+                    Some(e) => e,
+                    None => vault.embedding_from_rest(&id, &emb_rest).map_err(|e| {
+                        StoreError::CorruptRow {
+                            id: id.clone(),
+                            reason: e.to_string(),
+                        }
                     })?,
-            };
-            let semantic = ((cosine(&qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
-            let recency = recency_boost(&drawer.meta.filed_at, now);
-            let (tokens, ngram, units) = if self.fusion == Fusion::Legacy {
-                (Vec::new(), Vec::new(), 0.0)
-            } else {
-                let s = segment(&drawer.content);
-                let units = s.len as f32;
-                // Same minimum-length rule the query side applies, so term
-                // matching stays symmetric rather than relying on a one-byte
-                // token happening never to match anything. The n-gram flags
-                // are filtered in step with the tokens they describe.
-                let (tokens, ngram): (Vec<String>, Vec<bool>) = s
-                    .tokens
-                    .into_iter()
-                    .zip(s.ngram)
-                    .filter(|(t, _)| t.len() > 1)
-                    .unzip();
-                (tokens, ngram, units)
-            };
-            cands.push(Candidate {
-                drawer,
-                semantic,
-                recency,
-                tokens,
-                ngram,
-                units,
-            });
-        }
+                };
+                let semantic = ((cosine(qv, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
+                let recency = recency_boost(&drawer.meta.filed_at, now);
+                let (tokens, ngram, units) = if legacy {
+                    (Vec::new(), Vec::new(), 0.0)
+                } else {
+                    let s = segment(&drawer.content);
+                    let units = s.len as f32;
+                    // Same minimum-length rule the query side applies, so
+                    // term matching stays symmetric rather than relying on
+                    // a one-byte token happening never to match anything.
+                    // The n-gram flags are filtered in step with the
+                    // tokens they describe.
+                    let (tokens, ngram): (Vec<String>, Vec<bool>) = s
+                        .tokens
+                        .into_iter()
+                        .zip(s.ngram)
+                        .filter(|(t, _)| t.len() > 1)
+                        .unzip();
+                    (tokens, ngram, units)
+                };
+                Ok(Candidate {
+                    drawer,
+                    semantic,
+                    recency,
+                    tokens,
+                    ngram,
+                    units,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        phase_ms("hydrate", &mut t_phase);
 
         // Pass 2: derive the lexical signal (per fusion mode) and combine.
         let mut hits = match self.fusion {
@@ -2420,11 +2634,16 @@ impl PalaceStore {
                 .collect::<Vec<_>>(),
             Fusion::Bm25 => {
                 let bm25 = bm25_scores(&qterms, &cands, lang);
+                // The declared blend: w·semantic + (0.90 − w)·lexical +
+                // 0.10·recency. The admission gate below is untouched by
+                // the weight — evidence decides membership, the weight
+                // only orders it.
+                let w = self.fusion_weight;
                 cands
                     .into_iter()
                     .zip(bm25)
                     .map(|(c, (lexical, lexical_exact, lexical_morph))| {
-                        let score = 0.55 * c.semantic + 0.35 * lexical + 0.10 * c.recency;
+                        let score = w * c.semantic + (0.90 - w) * lexical + 0.10 * c.recency;
                         SearchHit {
                             drawer: c.drawer,
                             score,
@@ -2463,6 +2682,7 @@ impl PalaceStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        phase_ms("fuse", &mut t_phase);
 
         // Optional second stage: a cross-encoder re-scores the top-N
         // fusion-ranked candidates using the full (query, content) pair — the
@@ -2570,12 +2790,21 @@ impl PalaceStore {
         let rows: Vec<(i64, String, Vec<u8>)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
-        let mut scored: Vec<(f32, i64)> = Vec::with_capacity(rows.len());
-        for (seq, id, rest) in rows {
-            if let Ok(emb) = self.vault.embedding_from_rest(&id, &rest) {
-                scored.push((cosine(qvec, &emb), seq));
-            }
-        }
+        // Same parallel shape as pass-1 hydration: decrypt + cosine are
+        // pure CPU over `&Vault`, and at 10⁶ the stage-1 pool is ~16k rows
+        // — a serial walk here was its own linear term. Order preserved by
+        // the indexed collect; the select below re-orders anyway.
+        use rayon::prelude::*;
+        let vault = &self.vault;
+        let mut scored: Vec<(f32, i64)> = rows
+            .into_par_iter()
+            .filter_map(|(seq, id, rest)| {
+                vault
+                    .embedding_from_rest(&id, &rest)
+                    .ok()
+                    .map(|emb| (cosine(qvec, &emb), seq))
+            })
+            .collect();
         if scored.len() > keep {
             scored.select_nth_unstable_by(keep - 1, |a, b| {
                 b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
@@ -2596,21 +2825,61 @@ impl PalaceStore {
         &self,
         wing: Option<&str>,
         room: Option<&str>,
+        kind: Option<&str>,
     ) -> Result<Option<std::collections::HashSet<i64>>, StoreError> {
-        let (sql, binds): (&str, Vec<&str>) = match (wing, room) {
-            (None, None) => return Ok(None),
-            (Some(w), None) => ("SELECT seq FROM drawers WHERE wing = ?1", vec![w]),
-            (None, Some(r)) => ("SELECT seq FROM drawers WHERE room = ?1", vec![r]),
-            (Some(w), Some(r)) => (
-                "SELECT seq FROM drawers WHERE wing = ?1 AND room = ?2",
-                vec![w, r],
-            ),
-        };
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut clauses: Vec<&str> = Vec::new();
+        let mut binds: Vec<&str> = Vec::new();
+        if let Some(w) = wing {
+            clauses.push("wing = ?");
+            binds.push(w);
+        }
+        if let Some(r) = room {
+            clauses.push("room = ?");
+            binds.push(r);
+        }
+        if let Some(k) = kind {
+            clauses.push("kind = ?");
+            binds.push(k);
+        }
+        if clauses.is_empty() {
+            return Ok(None);
+        }
+        let sql = format!("SELECT seq FROM drawers WHERE {}", clauses.join(" AND "));
+        let mut stmt = self.conn.prepare(&sql)?;
         let seqs = stmt
             .query_map(rusqlite::params_from_iter(binds.iter()), |row| row.get(0))?
             .collect::<Result<std::collections::HashSet<i64>, _>>()?;
         Ok(Some(seqs))
+    }
+
+    /// How many drawers a kind filter excludes for carrying **no declared
+    /// kind at all**, within the same wing/room scope — the unlabeled-rows
+    /// policy from docs/LABELS.md: a filter over a thinly-labeled corpus
+    /// must say what it silently passed over, or an honest empty result is
+    /// indistinguishable from a label-coverage gap.
+    pub fn unkinded_in_scope(
+        &self,
+        wing: Option<&str>,
+        room: Option<&str>,
+    ) -> Result<u64, StoreError> {
+        let mut clauses: Vec<&str> = vec!["kind IS NULL"];
+        let mut binds: Vec<&str> = Vec::new();
+        if let Some(w) = wing {
+            clauses.push("wing = ?");
+            binds.push(w);
+        }
+        if let Some(r) = room {
+            clauses.push("room = ?");
+            binds.push(r);
+        }
+        let sql = format!(
+            "SELECT COUNT(*) FROM drawers WHERE {}",
+            clauses.join(" AND ")
+        );
+        let n: i64 = self
+            .conn
+            .query_row(&sql, rusqlite::params_from_iter(binds.iter()), |r| r.get(0))?;
+        Ok(n as u64)
     }
 
     /// BM25 top-`k` candidate seqs from the FTS5 index. `None` means "no
@@ -2665,7 +2934,8 @@ impl PalaceStore {
         let semantic = ((cosine(qvec, &emb) + 1.0) / 2.0).clamp(0.0, 1.0);
         let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
         let recency = recency_boost(&drawer.meta.filed_at, now);
-        let score = 0.55 * semantic + 0.35 * lexical + 0.10 * recency;
+        let w = self.fusion_weight;
+        let score = w * semantic + (0.90 - w) * lexical + 0.10 * recency;
         SearchHit {
             drawer,
             score,
@@ -4375,69 +4645,98 @@ fn bm25_raw(qterms: &[String], cands: &[Candidate], lang: MorphLang) -> Bm25 {
         };
     }
     // tf[doc][term] = occurrences of qterms[term] in the doc's tokens.
-    let mut tf = vec![vec![0u32; qterms.len()]; n];
-    let mut tf_approx = vec![vec![0u32; qterms.len()]; n];
-    let mut tf_morph = vec![vec![0u32; qterms.len()]; n];
-    let mut lengths = vec![0f32; n];
-    for (i, c) in cands.iter().enumerate() {
-        // What the caller declared, else what THIS drawer's own function words
-        // say it is. Per candidate, because a vault may hold several languages
-        // and the drawer is the unit that has one.
-        let lang = if lang == MorphLang::Undeclared {
-            language_of_drawer(&c.tokens)
-        } else {
-            lang
-        };
-        // Content units, not emitted tokens: a segmented run expands into
-        // unigrams plus bigrams, and charging that to document length would
-        // penalise precisely the drawers segmentation exists to reach.
-        lengths[i] = c.units;
-        for (ti, tok) in c.tokens.iter().enumerate() {
-            // An n-gram is a fragment, not a word. Letting one fill the exact
-            // slot by literal equality is what let a single shared
-            // two-character substring admit a drawer: measured, 74.3% of a
-            // real Arabic corpus on one query, against 6.9% for Greek through
-            // the same code. Han is not flagged, because there a character is
-            // a morpheme.
-            let is_ngram = c.ngram.get(ti).copied().unwrap_or(false);
-            // A token fills at most one query-term slot, and an *exact* match
-            // outranks a fuzzy one wherever the two compete. Taking the first
-            // match of either kind let an earlier fuzzy term steal a token
-            // that exactly equals a later one: for query `دفتر دفاتر`, a
-            // document saying `دفاتر` scored as evidence for `دفتر` while
-            // `دفاتر` — literally present — kept df = 0 and therefore maximal
-            // IDF for a term that occurs. The document was scored as if it
-            // contained a different word.
-            if !is_ngram {
-                if let Some(j) = qterms.iter().position(|q| q == tok) {
-                    tf[i][j] += 1;
+    //
+    // Each candidate's row is computed independently and IN PARALLEL: this
+    // scan — every token against every query term through equality,
+    // morphology and the fuzzy channel — is where a search actually spends
+    // its time. The phase trace (`UNDERCROFT_SEARCH_TRACE`) measured it at
+    // ~70 µs per candidate serial, which at a scope-sized 1024-candidate
+    // pool was ~70 ms/q — the cost the parallel-hydration pass went
+    // looking for and found HERE instead. The indexed collect preserves
+    // candidate order, so df/idf and every score below are byte-identical
+    // to the serial loop.
+    use rayon::prelude::*;
+    type TfRow = (Vec<u32>, Vec<u32>, Vec<u32>, f32);
+    let per_doc: Vec<TfRow> = cands
+        .par_iter()
+        .map(|c| {
+            // What the caller declared, else what THIS drawer's own
+            // function words say it is. Per candidate, because a vault may
+            // hold several languages and the drawer is the unit that has
+            // one.
+            let lang = if lang == MorphLang::Undeclared {
+                language_of_drawer(&c.tokens)
+            } else {
+                lang
+            };
+            let mut tf_i = vec![0u32; qterms.len()];
+            let mut approx_i = vec![0u32; qterms.len()];
+            let mut morph_i = vec![0u32; qterms.len()];
+            for (ti, tok) in c.tokens.iter().enumerate() {
+                // An n-gram is a fragment, not a word. Letting one fill the
+                // exact slot by literal equality is what let a single shared
+                // two-character substring admit a drawer: measured, 74.3% of
+                // a real Arabic corpus on one query, against 6.9% for Greek
+                // through the same code. Han is not flagged, because there a
+                // character is a morpheme.
+                let is_ngram = c.ngram.get(ti).copied().unwrap_or(false);
+                // A token fills at most one query-term slot, and an *exact*
+                // match outranks a fuzzy one wherever the two compete.
+                // Taking the first match of either kind let an earlier fuzzy
+                // term steal a token that exactly equals a later one: for
+                // query `دفتر دفاتر`, a document saying `دفاتر` scored as
+                // evidence for `دفتر` while `دفاتر` — literally present —
+                // kept df = 0 and therefore maximal IDF for a term that
+                // occurs. The document was scored as if it contained a
+                // different word.
+                if !is_ngram {
+                    if let Some(j) = qterms.iter().position(|q| q == tok) {
+                        tf_i[j] += 1;
+                        continue;
+                    }
+                }
+                // Checked before the general fuzzy scan so containment lands
+                // in its own channel rather than being absorbed as
+                // approximate.
+                if let Some(j) = qterms.iter().position(|q| morph_relation(q, tok, lang)) {
+                    morph_i[j] = 1;
                     continue;
                 }
-            }
-            // Checked before the general fuzzy scan so containment lands in
-            // its own channel rather than being absorbed as approximate.
-            if let Some(j) = qterms.iter().position(|q| morph_relation(q, tok, lang)) {
-                tf_morph[i][j] = 1;
-                continue;
-            }
-            // A bigram meeting the same bigram is the weakest evidence there
-            // is — real, but the same grade that makes كريم (a name) surface
-            // كرم (generosity) at rank 1. It ranks; it does not admit.
-            if is_ngram {
-                if let Some(j) = qterms.iter().position(|q| q == tok) {
-                    tf_approx[i][j] = 1;
-                    continue;
+                // A bigram meeting the same bigram is the weakest evidence
+                // there is — real, but the same grade that makes كريم (a
+                // name) surface كرم (generosity) at rank 1. It ranks; it
+                // does not admit.
+                if is_ngram {
+                    if let Some(j) = qterms.iter().position(|q| q == tok) {
+                        approx_i[j] = 1;
+                        continue;
+                    }
+                }
+                if let Some(j) = qterms.iter().position(|q| fuzzy_eq(q, tok)) {
+                    // Capped at one per slot. Uncapped, a drawer saying
+                    // `document documents documented documenting` reaches
+                    // tf = 4 on a query for `documentation` while a drawer
+                    // that says `documentation` once reaches tf = 1 — the
+                    // approximate channel would outscore the exact one.
+                    approx_i[j] = 1;
                 }
             }
-            if let Some(j) = qterms.iter().position(|q| fuzzy_eq(q, tok)) {
-                // Capped at one per slot. Uncapped, a drawer saying
-                // `document documents documented documenting` reaches tf = 4
-                // on a query for `documentation` while a drawer that says
-                // `documentation` once reaches tf = 1 — the approximate
-                // channel would outscore the exact one.
-                tf_approx[i][j] = 1;
-            }
-        }
+            // Content units, not emitted tokens: a segmented run expands
+            // into unigrams plus bigrams, and charging that to document
+            // length would penalise precisely the drawers segmentation
+            // exists to reach.
+            (tf_i, approx_i, morph_i, c.units)
+        })
+        .collect();
+    let mut tf = Vec::with_capacity(n);
+    let mut tf_approx = Vec::with_capacity(n);
+    let mut tf_morph = Vec::with_capacity(n);
+    let mut lengths = Vec::with_capacity(n);
+    for (tf_i, approx_i, morph_i, units) in per_doc {
+        tf.push(tf_i);
+        tf_approx.push(approx_i);
+        tf_morph.push(morph_i);
+        lengths.push(units);
     }
     let avgdl = (lengths.iter().sum::<f32>() / n as f32).max(1.0);
     let mut idf = vec![0f32; qterms.len()];
@@ -6078,6 +6377,7 @@ mod tests {
         )
         .with_content_date(Some("2023-05-08".into()));
         d.meta.hall = Some("hallsecretlabel".into());
+        d.meta.kind = Some("decision".into());
         s.upsert(&d).unwrap();
         drop(s);
         let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
@@ -6098,6 +6398,10 @@ mod tests {
             ("hall label", "hallsecretlabel"),
             ("content_date", "2023-05-08"),
             ("a date resolved out of the content", "2023-04-17"),
+            // The declared kind is a deliberate closed-vocabulary leak —
+            // the docs/LABELS.md exposure rule — readable both in the
+            // mirror column and inside meta_json.
+            ("declared kind", "decision"),
         ] {
             assert!(
                 has(needle),
@@ -6324,13 +6628,15 @@ mod tests {
             .unwrap();
         assert_eq!(
             cols.join(","),
-            "content,embedding,filed_at,fp,id,meta_json,room,seq,tag,updated_at,wing",
+            "content,embedding,filed_at,fp,id,kind,meta_json,room,seq,tag,updated_at,wing",
             "a column on `drawers` is per-drawer bytes: price it in `priced` or say \
              here why it is free. Unpriced today and known: `fp` (a truncated-HMAC \
              blind index), `meta_json` (unsealed metadata, whose exposure is pinned \
              by a_sealed_vault_exposes_metadata_but_never_content), `tag` (the \
-             record HMAC) — all fixed-size or metadata-sized, none scaling with \
-             content"
+             record HMAC), `kind` (a closed-vocabulary declared label, NULL for \
+             every undeclared drawer, ≤10 bytes when set, mirrored out of \
+             meta_json for the indexed filter) — all fixed-size or \
+             metadata-sized, none scaling with content"
         );
 
         // 3. The bytes, artifact by artifact — equalities.
@@ -6699,16 +7005,16 @@ mod tests {
     }
 
     /// A room too large to scan outright keeps the prefilter but draws its
-    /// candidates INSIDE the room, pool scaled to the room's population —
-    /// the same recall policy the corpus-scaled pool gives unscoped
-    /// queries, applied to the scope's own live count.
+    /// candidates INSIDE the room, pools sized by the room's population
+    /// (`scoped_pool_k`/`scoped_keep`) — the scope-sized policy scopescale
+    /// measured its way to.
     #[test]
     fn a_large_room_gets_scope_filtered_candidates_not_a_scan() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        // 700 loud rows against a 300-row room: the room is past the
-        // hydration floor (256 at limit 5), so the exact-scan escape is
+        // 2000 loud rows against a 1500-row room: the room is past the
+        // exact-scan floor (`SCOPE_HYDRATE_FLOOR`), so the escape hatch is
         // closed and the membership filter must carry recall by itself.
-        let mut batch: Vec<Drawer> = (0..700u32)
+        let mut batch: Vec<Drawer> = (0..2000u32)
             .map(|i| {
                 drawer(
                     "w",
@@ -6718,12 +7024,12 @@ mod tests {
                 )
             })
             .collect();
-        batch.extend((0..299u32).map(|i| {
+        batch.extend((0..1499u32).map(|i| {
             drawer(
                 "w",
                 "survey",
                 &format!("survey station maintenance note {i}"),
-                1000 + i,
+                10000 + i,
             )
         }));
         s.upsert_many(&batch).unwrap();
@@ -6731,7 +7037,7 @@ mod tests {
             "w",
             "survey",
             "kelp beds mapped near the survey station",
-            2000,
+            20000,
         );
         s.upsert(&target).unwrap();
         s.set_pq(true);
@@ -6811,6 +7117,125 @@ mod tests {
         assert!(
             hits.iter().any(|h| h.drawer.id == target.id),
             "the FTS prefilter must not starve a scoped room"
+        );
+    }
+
+    /// The declared kind: closed vocabulary at every write, an error (not
+    /// an empty result) for an unknown filter value, a filter that only
+    /// returns matching declarations, and the unlabeled count the
+    /// docs/LABELS.md policy requires.
+    #[test]
+    fn the_kind_label_is_declared_closed_and_honest() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        // Unknown kinds never reach the table — rejected, not coerced.
+        let bad = drawer("w", "r", "a stray note", 0).with_kind(Some("musing".into()));
+        assert!(s.upsert(&bad).is_err(), "the vocabulary is closed at write");
+        s.upsert(
+            &drawer("w", "r", "the team decided kelp option four", 1)
+                .with_kind(Some("decision".into())),
+        )
+        .unwrap();
+        s.upsert(
+            &drawer("w", "r", "was kelp maybe option five", 2).with_kind(Some("question".into())),
+        )
+        .unwrap();
+        s.upsert(&drawer("w", "r", "kelp unlabeled note", 3))
+            .unwrap();
+        let hits = s
+            .search(
+                "kelp option",
+                &SearchOptions {
+                    kind: Some("decision".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 1, "only the declared kind matches");
+        assert_eq!(hits[0].drawer.meta.kind.as_deref(), Some("decision"));
+        // An unknown filter value is an error, never a silent empty.
+        assert!(s
+            .search(
+                "kelp",
+                &SearchOptions {
+                    kind: Some("musing".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err());
+        // The unlabeled-rows count the policy requires.
+        assert_eq!(s.unkinded_in_scope(None, None).unwrap(), 1);
+    }
+
+    /// The kind filter cannot be starved by the corpus top-k — the same
+    /// raw-premise shape as the room test, one label over: a declared
+    /// filter resolves its scope before candidates are drawn.
+    #[test]
+    fn a_kind_scoped_query_is_answered_by_its_kind_not_by_the_corpus_top() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let mut batch: Vec<Drawer> = (0..400u32)
+            .map(|i| {
+                drawer(
+                    "w",
+                    "briefing",
+                    &format!("kelp harvest quota memo number {i}"),
+                    i,
+                )
+                .with_kind(Some("statement".into()))
+            })
+            .collect();
+        batch.extend((0..9u32).map(|i| {
+            drawer(
+                "w",
+                "survey",
+                &format!("survey station maintenance note {i}"),
+                400 + i,
+            )
+            .with_kind(Some("decision".into()))
+        }));
+        s.upsert_many(&batch).unwrap();
+        let target = drawer(
+            "w",
+            "survey",
+            "kelp beds mapped near the survey station",
+            500,
+        )
+        .with_kind(Some("decision".into()));
+        s.upsert(&target).unwrap();
+        s.set_pq(true);
+        // The premise, raw: the corpus-wide candidate top-k holds nothing
+        // of the filtered kind.
+        let qvec = s.embedder.embed("kelp harvest quota");
+        let global = s
+            .pq_candidates(&qvec, 256)
+            .unwrap()
+            .expect("the global index must serve");
+        let kind_seqs: std::collections::HashSet<i64> = s
+            .conn
+            .prepare("SELECT seq FROM drawers WHERE kind = 'decision'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            global.iter().all(|q| !kind_seqs.contains(q)),
+            "if the corpus-wide candidates now include the filtered kind, the \
+             starvation premise of this test is gone — investigate, don't delete"
+        );
+        let hits = s
+            .search(
+                "kelp harvest quota",
+                &SearchOptions {
+                    kind: Some("decision".into()),
+                    limit: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.drawer.id == target.id),
+            "a kind-filtered query must find the kind's own evidence"
         );
     }
 
@@ -6930,6 +7355,79 @@ mod tests {
     /// honoured *valid* values would newly resolve the same setting to 200 —
     /// quadrupling rescore depth for someone who changed nothing. Serial,
     /// because environment variables are process-global.
+    /// The scope-sized pool policy, pinned at its three regimes: small
+    /// scopes are taken whole (exact), mid scopes ride the floors the
+    /// scopescale sweep priced, large scopes converge to the proven
+    /// corpus divisors.
+    #[test]
+    fn scoped_pools_are_sized_by_the_scope() {
+        let hk = 256;
+        // Small scope: everything fetched, everything hydrated — exact.
+        assert_eq!(scoped_pool_k(hk, 512), 512);
+        assert_eq!(scoped_keep(hk, 512), 512);
+        // The measured wing band: floors, not corpus divisors.
+        assert_eq!(scoped_pool_k(hk, 8192), 2048);
+        assert_eq!(scoped_keep(hk, 8192), 1024);
+        // Large scope: the corpus divisors take over.
+        assert_eq!(scoped_pool_k(hk, 1_048_576), 16_384);
+        assert_eq!(scoped_keep(hk, 1_048_576), 2048);
+        // The page edge still wins when it is the larger demand.
+        assert_eq!(scoped_pool_k(4096, 512), 4096);
+    }
+
+    #[test]
+    fn the_fusion_weight_is_declared_bounded_and_survives_garbage() {
+        // The default is the shipped blend, written longhand so editing the
+        // const cannot silently agree with itself.
+        assert_eq!(resolve_fusion_weight(None), 0.55);
+        assert_eq!(resolve_fusion_weight(Some("0.65")), 0.65);
+        assert_eq!(
+            resolve_fusion_weight(Some("0.9")),
+            0.70,
+            "bounded above: no configuration can retire the lexical channel"
+        );
+        assert_eq!(
+            resolve_fusion_weight(Some("0.05")),
+            0.20,
+            "bounded below: nor the semantic one"
+        );
+        assert_eq!(
+            resolve_fusion_weight(Some("all-in")),
+            0.55,
+            "garbage warns and falls back, never bricks the open"
+        );
+        assert_eq!(resolve_fusion_weight(Some("NaN")), 0.55);
+    }
+
+    /// The knob must actually reach the blend: at every declared weight the
+    /// returned score decomposes as w·semantic + (0.90−w)·lexical + residual,
+    /// with the residual inside recency's fixed 0.10 share.
+    #[test]
+    fn the_blend_actually_uses_the_declared_weight() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "the kubernetes cluster upgrade finished",
+            0,
+        ))
+        .unwrap();
+        s.upsert(&drawer("w", "r", "unrelated note about the weather", 1))
+            .unwrap();
+        for w in [0.20f32, 0.55, 0.70] {
+            s.set_fusion_weight(w);
+            let hits = s
+                .search("kubernetes upgrade", &SearchOptions::default())
+                .unwrap();
+            let h = &hits[0];
+            let residual = h.score - w * h.semantic - (0.90 - w) * h.lexical;
+            assert!(
+                (-0.0001..=0.1001).contains(&residual),
+                "score must decompose under w={w}: residual {residual}"
+            );
+        }
+    }
+
     #[test]
     fn the_two_rescore_depths_resolve_independently() {
         assert_ne!(

@@ -60,6 +60,17 @@ pub struct DrawerMeta {
     pub time_mentions: Vec<crate::temporal::TimeMention>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hall: Option<String>,
+    /// The declared record kind — one of [`crate::KIND_VOCAB`], or absent
+    /// (which is how every drawer written before the label existed reads,
+    /// and a perfectly good permanent state: absence is data, never
+    /// guessed over). DECLARED by the writer, validated against the
+    /// closed vocabulary at every write surface, and never inferred from
+    /// content — the doctrine in docs/LABELS.md. Serialized only when
+    /// present, so existing rows stay byte-identical and keep verifying;
+    /// inside `meta_json`, so it is covered by the drawer's HMAC, and
+    /// mirrored to an indexed column for the search filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<String>,
     /// **Further** times this same content was recorded, beyond the drawer's
@@ -127,10 +138,21 @@ impl Drawer {
                 content_date: None,
                 time_mentions,
                 hall: None,
+                kind: None,
                 entities,
                 occurrences: Vec::new(),
             },
         }
+    }
+
+    /// Declare this drawer's kind (validated against the closed vocabulary
+    /// by the store's write path, not here — a `Drawer` is plain data).
+    /// The kind never enters the drawer id: re-declaring it must not move
+    /// the record.
+    #[must_use]
+    pub fn with_kind(mut self, kind: Option<String>) -> Self {
+        self.meta.kind = kind;
+        self
     }
 
     /// Every time this content is known to have been recorded, earliest
