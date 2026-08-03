@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — the training draw gains its accident bound: the per-agent cap (C3.3)
+
+- **`keyed_sample_capped` now bounds TWO groupings**, each at
+  `want / UNDERCROFT_TRAIN_SOURCE_CAP`: the wing (the adversarial bound
+  it shipped with — wing assignment belongs to the deployment) and, new,
+  the **`meta.agent` claim** — the accident bound the C3.3 provenance
+  phase un-gated. One runaway agent flooding across several wings, each
+  wing individually within its quota, used to buy the combined share of
+  every global codebook/IVF training draw; now its claimed share is
+  capped on the same quota arithmetic, all four sites (PQ codebook, PQ
+  IVF, FDE codebook, FDE IVF — the FDE tier's attribution maps carry
+  `(wing, agent)` now).
+- **Honest boundaries, unchanged in kind**: a claim is the writer's own
+  statement, so the agent grouping bounds ACCIDENTS, never adversaries
+  (omit or vary the claim and it does not see you) — the wing grouping
+  remains the security claim. **Claim-less rows are deliberately
+  exempt**: most corpora carry no agent claims, and treating "unclaimed"
+  as one giant pseudo-agent would cap every ordinary vault at a fraction
+  of its own sample — pinned: a claim-less corpus draws index-for-index
+  the wing-only draw, within-quota claims are a no-op, `off` restores
+  the uncapped draw under any skew.
+- Pinned by the runaway-agent test (flood spread over eight within-quota
+  wings is cut below half the sample by the claim grouping alone,
+  deterministic) beside the existing flooding-wing test; the
+  even-stride-lesson gates (synth 16384 periodic, wingscale 16-wing both
+  floors) re-run green at this tree as no-regression.
+
 ## Unreleased — the update path is screened on who is writing NOW (C3.3)
 
 - **The recorded update-path gap closes, and it was provenance-shaped**:

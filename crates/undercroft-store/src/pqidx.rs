@@ -1066,22 +1066,32 @@ impl PalaceStore {
         })
     }
 
-    /// Wing attribution maps for the capped draws whose row sets don't
-    /// carry the wing themselves (the FDE tier's).
-    pub(crate) fn wing_by_drawer_id(
+    /// Source attribution maps — (wing, agent claim) — for the capped
+    /// draws whose row sets don't carry them themselves (the FDE tier's).
+    /// The agent claim reads from the unsealed `meta_json` (it is
+    /// metadata by design, the `added_by` trade extended).
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn source_by_drawer_id(
         &self,
-    ) -> Result<std::collections::HashMap<String, String>, StoreError> {
-        let mut stmt = self.conn.prepare("SELECT id, wing FROM drawers")?;
+    ) -> Result<std::collections::HashMap<String, (String, Option<String>)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, wing, json_extract(meta_json, '$.agent') FROM drawers")?;
         let map = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
             .collect::<Result<_, _>>()?;
         Ok(map)
     }
 
-    pub(crate) fn wing_by_seq(&self) -> Result<std::collections::HashMap<i64, String>, StoreError> {
-        let mut stmt = self.conn.prepare("SELECT seq, wing FROM drawers")?;
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn source_by_seq(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, (String, Option<String>)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, wing, json_extract(meta_json, '$.agent') FROM drawers")?;
         let map = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
             .collect::<Result<_, _>>()?;
         Ok(map)
     }
@@ -1089,35 +1099,41 @@ impl PalaceStore {
     /// [`Self::keyed_sample`] with a SOFT per-source cap — C3.3's density
     /// channel closed at the training draw: owning fraction *f* of a
     /// corpus used to buy ≈*f* of any uniform sample, so a bulk writer
-    /// could shape the codebook that scores every other wing. Now no
-    /// single source (wing — the isolation unit) supplies more than
-    /// `want / cap_div` of the sample while other sources can fill the
-    /// remainder.
+    /// could shape the codebook that scores every other wing. Two
+    /// groupings bound the draw, each at `want / cap_div`:
+    ///
+    /// - **the wing** — the isolation unit, the adversarial bound: wing
+    ///   assignment belongs to the deployment, not the writer;
+    /// - **the agent CLAIM** (`meta.agent`, when present) — the
+    ///   **accident** bound: one runaway agent flooding across several
+    ///   wings no longer buys the combined share. A claim is the
+    ///   writer's own statement, so an adversary defeats this grouping
+    ///   by omitting or varying it — which is why it bounds accidents,
+    ///   never adversaries, and why the wing grouping stays the security
+    ///   claim. Rows with NO agent claim are deliberately exempt from
+    ///   the agent grouping: most corpora carry no claims, and treating
+    ///   "unclaimed" as one giant pseudo-agent would cap every ordinary
+    ///   vault at a fraction of its own sample.
     ///
     /// Mechanics, chosen for two properties that are pinned by test:
-    /// - **Every wing within quota ⇒ EXACTLY the uncapped draw.** The
+    /// - **Every group within quota ⇒ EXACTLY the uncapped draw.** The
     ///   base draw is [`stratified_keyed`] unchanged; the cap only
-    ///   truncates a wing that exceeded its quota (dropping its
-    ///   highest-ranked picks) and refills from unpicked rows of
-    ///   uncapped wings in keyed-rank order. A single-wing vault is
-    ///   always a no-op (quota = the whole sample), and a corpus whose
-    ///   wings sit inside their quotas keeps byte-identical codebooks.
-    /// - **Soft, never starving.** When honest wings cannot fill the
-    ///   freed slots (a two-wing 95/5 vault), the capped wing's own next
-    ///   rows refill last — the sample never shrinks, because a smaller
-    ///   training sample is a quality cost every wing pays.
-    ///
-    /// The cap bounds per-WING density only. A writer who can spread
-    /// across many wings is bounded by wing assignment (the deployment's
-    /// trust zones), not by this — and per-writer caps need the drawer
-    /// provenance C3.3's admission phase records. Stated, not hidden.
+    ///   truncates a group that exceeded its quota (dropping its
+    ///   highest-ranked picks) and refills from unpicked rows in
+    ///   keyed-rank order. A single-wing claim-less vault is always a
+    ///   no-op, and a corpus whose wings and agents sit inside their
+    ///   quotas keeps byte-identical codebooks.
+    /// - **Soft, never starving.** When honest rows cannot fill the
+    ///   freed slots, the capped groups' own next rows refill last — the
+    ///   sample never shrinks, because a smaller training sample is a
+    ///   quality cost every wing pays.
     pub(crate) fn keyed_sample_capped<T>(
         &self,
         label: &str,
         items: &[T],
         want: usize,
         ident: impl Fn(&T) -> Vec<u8>,
-        source: impl Fn(&T) -> String,
+        source: impl Fn(&T) -> (String, Option<String>),
     ) -> Vec<usize> {
         let base = self.keyed_sample(label, items, want, &ident);
         let cap_div = self.train_source_cap;
@@ -1133,32 +1149,67 @@ impl PalaceStore {
         if base.len() >= items.len() {
             return base;
         }
-        let sources: std::collections::HashSet<String> = items.iter().map(&source).collect();
-        // Fewer sources than the divisor: quota is an even split — with
-        // one source the quota is the whole sample and the cap is a no-op.
-        let cap = want.div_ceil(cap_div.min(sources.len().max(1)));
-        let mut per: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for &i in &base {
-            *per.entry(source(&items[i])).or_default() += 1;
+        let mut wings: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut agents: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for it in items {
+            let (w, a) = source(it);
+            wings.insert(w);
+            if let Some(a) = a {
+                agents.insert(a);
+            }
         }
-        if per.values().all(|&n| n <= cap) {
+        // Fewer groups than the divisor: quota is an even split — with
+        // one wing (or no claims at all) that grouping is a no-op.
+        let wing_cap = want.div_ceil(cap_div.min(wings.len().max(1)));
+        let agent_cap = (!agents.is_empty()).then(|| want.div_ceil(cap_div.min(agents.len())));
+        let mut per_w: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut per_a: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for &i in &base {
+            let (w, a) = source(&items[i]);
+            *per_w.entry(w).or_default() += 1;
+            if let Some(a) = a {
+                *per_a.entry(a).or_default() += 1;
+            }
+        }
+        let within = per_w.values().all(|&n| n <= wing_cap)
+            && agent_cap.is_none_or(|c| per_a.values().all(|&n| n <= c));
+        if within {
             return base;
         }
         let rank = |i: usize| self.vault.sample_rank(label, &ident(&items[i]));
-        // Keep each wing's cap lowest-ranked picks; drop the excess.
+        // Admission under both quotas at once; `soft` waives them on the
+        // final refill pass so the sample never shrinks.
+        let mut cw: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut ca: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut admit = |i: usize, soft: bool| -> bool {
+            let (w, a) = source(&items[i]);
+            let ok_w = soft || cw.get(&w).copied().unwrap_or(0) < wing_cap;
+            let ok_a = soft
+                || match (&a, agent_cap) {
+                    (Some(name), Some(cap)) => ca.get(name).copied().unwrap_or(0) < cap,
+                    _ => true,
+                };
+            if ok_w && ok_a {
+                *cw.entry(w).or_default() += 1;
+                if let Some(a) = a {
+                    *ca.entry(a).or_default() += 1;
+                }
+                true
+            } else {
+                false
+            }
+        };
+        // Keep each group's lowest-ranked picks; drop the excess.
         let mut by_rank: Vec<usize> = base.clone();
         by_rank.sort_by_key(|&i| rank(i));
         let mut kept: Vec<usize> = Vec::with_capacity(base.len());
-        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for &i in &by_rank {
-            let c = counts.entry(source(&items[i])).or_default();
-            if *c < cap {
-                *c += 1;
+            if admit(i, false) {
                 kept.push(i);
             }
         }
         // Refill the freed slots from unpicked rows, keyed-rank order,
-        // respecting the cap first and softening it only when nothing
+        // respecting the quotas first and softening only when nothing
         // else remains.
         let picked: std::collections::HashSet<usize> = base.iter().copied().collect();
         let mut rest: Vec<usize> = (0..items.len()).filter(|i| !picked.contains(i)).collect();
@@ -1172,9 +1223,7 @@ impl PalaceStore {
                 if in_kept.contains(&i) {
                     continue;
                 }
-                let c = counts.entry(source(&items[i])).or_default();
-                if *c < cap || pass_soft {
-                    *c += 1;
+                if admit(i, pass_soft) {
                     in_kept.insert(i);
                     kept.push(i);
                 }
@@ -1196,17 +1245,21 @@ impl PalaceStore {
     /// (empty, or dimension not divisible into subspaces) — the caller falls
     /// back to the full scan.
     fn pq_build(&self) -> Result<bool, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT seq, id, embedding, wing FROM drawers")?;
-        let rows: Vec<(i64, String, Vec<u8>, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        // (seq, id, sealed embedding, wing, agent claim)
+        type EmbeddingRow = (i64, String, Vec<u8>, String, Option<String>);
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, id, embedding, wing, json_extract(meta_json, '$.agent') FROM drawers",
+        )?;
+        let rows: Vec<EmbeddingRow> = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
             .collect::<Result<_, _>>()?;
         if rows.is_empty() {
             return Ok(false);
         }
         let mut items = Vec::with_capacity(rows.len());
-        for (seq, id, rest, wing) in rows {
+        for (seq, id, rest, wing, agent) in rows {
             let emb =
                 self.vault
                     .embedding_from_rest(&id, &rest)
@@ -1214,7 +1267,7 @@ impl PalaceStore {
                         id: id.clone(),
                         reason: e.to_string(),
                     })?;
-            items.push((seq, emb, wing));
+            items.push((seq, emb, wing, agent));
         }
 
         let stored = self.pq_meta_get("codebook")?;
@@ -1239,8 +1292,8 @@ impl PalaceStore {
                         CODEBOOK_PQ,
                         &items,
                         PQ_TRAIN_SAMPLE,
-                        |(seq, _, _)| seq.to_le_bytes().to_vec(),
-                        |(_, _, wing)| wing.clone(),
+                        |(seq, _, _, _)| seq.to_le_bytes().to_vec(),
+                        |(_, _, wing, agent)| (wing.clone(), agent.clone()),
                     )
                     .into_iter()
                     .map(|i| items[i].1.clone())
@@ -1258,7 +1311,7 @@ impl PalaceStore {
                     // heavily skewed corpus can legitimately warn — that
                     // skew being visible is information, not noise.
                     let probe: Vec<Vec<f32>> = self
-                        .keyed_sample("pq-fit-probe", &items, PQ_FIT_PROBE, |(seq, _, _)| {
+                        .keyed_sample("pq-fit-probe", &items, PQ_FIT_PROBE, |(seq, _, _, _)| {
                             seq.to_le_bytes().to_vec()
                         })
                         .into_iter()
@@ -1294,8 +1347,8 @@ impl PalaceStore {
                         CODEBOOK_PQ_IVF,
                         &items,
                         PQ_TRAIN_SAMPLE,
-                        |(seq, _, _)| seq.to_le_bytes().to_vec(),
-                        |(_, _, wing)| wing.clone(),
+                        |(seq, _, _, _)| seq.to_le_bytes().to_vec(),
+                        |(_, _, wing, agent)| (wing.clone(), agent.clone()),
                     )
                     .into_iter()
                     .map(|i| items[i].1.clone())
@@ -1358,7 +1411,7 @@ impl PalaceStore {
             let cq = ivf_ref.as_ref();
             items
                 .par_iter()
-                .map(|(seq, vec, _)| {
+                .map(|(seq, vec, _, _)| {
                     let list: i64 = cq.map_or(-1, |c| c.assign(vec) as i64);
                     (*seq, list, pq.encode(vec))
                 })

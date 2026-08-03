@@ -1417,8 +1417,14 @@ release with the usual battery + measured gates.
   shrinks the sample, below-sampling-threshold deliberately inert
   (per-wing codebooks are that regime's isolation). Gates met before
   default-on: synth 16384 periodic shape 100.0/100.0, wingscale 16-wing
-  scoped+unscoped 100.0% both floors. Per-writer caps still need
-  admission-phase provenance.
+  scoped+unscoped 100.0% both floors. **The per-AGENT accident cap is
+  BUILT (2026-08-03)** on the provenance the admission phase recorded:
+  the same draw also caps any `meta.agent` claim's share at the same
+  quota — a runaway agent flooding across several within-quota wings no
+  longer buys the combined share. Claim-less rows are exempt (absence
+  of provenance is not a group); a claim is the writer's own statement,
+  so this bounds ACCIDENTS, never adversaries — the wing grouping stays
+  the adversarial bound.
   **Phase 2 BUILT (2026-08-03): the deterministic tier-1 detector +
   quarantine wing + audited rulings** — `undercroft_core::admission`
   (closed signal vocabulary, offsets not content, negative fixtures
