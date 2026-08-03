@@ -345,6 +345,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   from retrieval except the reviewer's own scope; allow/deny chain-audited
   with the verdict inside the ruling tag; operator surfaces only, never
   MCP; default off = byte-identical write contract),
+  provable forgetting (forget.rs — C3.2 phase 1: `forget`/
+  `verify-forgetting`, chain-attested destruction with heads + tombstone
+  interval + unkeyed content fps; vault-verifiable by keyed replay, third
+  parties verify the operator's Ed25519 signature),
   management surface (manage.rs — incl. **deployment-assigned wing trust**:
   `TRUST_VOCAB` closed vocabulary assigned by the operator only, never over
   MCP; HMAC-tagged + audited, flip = integrity failure; consumed as a
@@ -486,7 +490,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (249)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (179 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (181 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

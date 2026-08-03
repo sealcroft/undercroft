@@ -506,6 +506,17 @@ fi
 rest_code "unknown trust 400"   400 -- -X POST "$API/vaults/acme/trust" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"wing":"spam","trust":"golden"}'
 
+# Provable forgetting (C3.2): destruction through the chain, with a
+# receipt — the attestation names the heads and tombstones, and the
+# drawer is gone.
+FORGET_ID="$(curl -s -X POST "$API/vaults/acme/drawers" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"temporary note that must be erasable with proof","wing":"eng","room":"tmp"}' \
+  | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+rest_body "forget attests"      '"head_after"'    -- -X POST "$API/vaults/acme/forget" \
+  -H "X-Vault-Assertion: $(sign acme)" -d "{\"ids\":[\"$FORGET_ID\"]}"
+rest_code "forgotten is gone"   404 -- "$API/vaults/acme/drawers/$FORGET_ID" \
+  -H "X-Vault-Assertion: $(sign acme)"
+
 # Pagination: a page names its continuation (next_offset + the ranked_at to
 # repeat), and page 2 continues the ranking rather than repeating it.
 P1="$(curl -s -X POST "$API/vaults/acme/search" -H "X-Vault-Assertion: $(sign acme)" \

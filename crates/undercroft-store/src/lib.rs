@@ -14,6 +14,7 @@
 
 pub mod admission;
 mod fdeidx;
+pub mod forget;
 #[cfg(feature = "hnsw")]
 mod hnsw;
 pub mod kg;
@@ -25,6 +26,7 @@ pub mod remote;
 mod rotate;
 
 pub use admission::{PendingAdmission, QUARANTINE_WING};
+pub use forget::ForgetAttestation;
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
 pub use pqidx::WING_PQ_MIN_DEFAULT;
@@ -7310,6 +7312,64 @@ mod tests {
         // The reserved wing cannot be forged into.
         let forged = drawer(crate::admission::QUARANTINE_WING, "r", "innocent", 3);
         assert!(s.upsert(&forged).is_err());
+    }
+
+    /// C3.2 phase 1: forgetting is proven — the attestation replays with
+    /// the key in hand, and every way of faking one is refused: a
+    /// tombstone for an unnamed drawer, a missing tombstone, heads that
+    /// don't chain, a surviving drawer, a foreign vault, a broken
+    /// signature.
+    #[test]
+    fn forgetting_is_proven_and_the_proof_is_falsifiable() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let keep = drawer("w", "r", "the survivor stays", 0);
+        let gone1 = drawer("w", "r", "erase me first", 1);
+        let gone2 = drawer("w", "r", "erase me second", 2);
+        for d in [&keep, &gone1, &gone2] {
+            s.upsert(d).unwrap();
+        }
+        // A bad id refuses before anything is destroyed.
+        assert!(s
+            .forget_with_proof(&[gone1.id.clone(), "nope".into()])
+            .is_err());
+        assert!(s.get(&gone1.id).unwrap().is_some());
+
+        let mut att = s
+            .forget_with_proof(&[gone1.id.clone(), gone2.id.clone()])
+            .unwrap();
+        s.verify_forget_attestation(&att).unwrap();
+        assert!(s.get(&gone1.id).unwrap().is_none());
+        assert!(s.get(&gone2.id).unwrap().is_none());
+        assert!(s.get(&keep.id).unwrap().is_some(), "nothing else changed");
+        assert!(s.verify().unwrap().ok(), "the chain stays green");
+
+        // Signed: verifies; a flipped field then fails on the signature.
+        let (secret, _) = undercroft_vault::bundle::sign_keygen();
+        att.sign(&secret).unwrap();
+        s.verify_forget_attestation(&att).unwrap();
+        let mut forged = att.clone();
+        forged.drawers[0].content_fp = "00".repeat(32);
+        assert!(s.verify_forget_attestation(&forged).is_err());
+
+        // Unsigned forgeries fail on the replay arithmetic instead.
+        let mut unsigned = att.clone();
+        unsigned.sig = None;
+        unsigned.sender = None;
+        let mut dropped = unsigned.clone();
+        dropped.records.pop();
+        assert!(
+            s.verify_forget_attestation(&dropped).is_err(),
+            "a dropped tombstone must break the head chain"
+        );
+        let mut renamed = unsigned.clone();
+        renamed.records[0].record_id = format!("del/{}", keep.id);
+        assert!(
+            s.verify_forget_attestation(&renamed).is_err(),
+            "a tombstone for an unnamed drawer must be refused"
+        );
+        // A foreign vault refuses outright.
+        let (_d2, s2) = store(SecurityLevel::Sealed);
+        assert!(s2.verify_forget_attestation(&unsigned).is_err());
     }
 
     /// The provenance-driven posture, and the doctrine line it must never

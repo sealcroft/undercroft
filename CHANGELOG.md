@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — forgetting gets a receipt: chain-attested destruction (C3.2 phase 1)
+
+- **`undercroft forget <ids> [--out att.json] [--sign key]`** destroys
+  the named drawers through the audit chain (the shipped
+  `delete_drawer` semantics: row + derived artifacts gone, keyed
+  tombstone chained atomically) and emits a **`ForgetAttestation`**:
+  vault id, each destroyed drawer's id + unkeyed content fingerprint (a
+  commitment to WHAT was destroyed that never reveals the words — the
+  kg `source_fp` precedent), the chain heads before and after, and the
+  exact tombstone records between them. Every id must exist before
+  anything is destroyed — this store refuses to mint an attestation for
+  content that was never there. Optional Ed25519 signature via the
+  bundle signing identity (`bundle sign-keygen`).
+- **Two verification postures, stated honestly.** The chain step is
+  keyed, so: `undercroft verify-forgetting att.json` replays the segment
+  **with the key in hand** — heads must chain exactly through the
+  recorded tombstones, every record must BE a `del` tombstone for a
+  named drawer bearing this vault's own tag (nothing else happened in
+  the interval), and the drawers must be gone now. A third party
+  verifies the **operator's signature**, not the replay — full external
+  replay would need an unkeyed public chain, a design change this unit
+  does not smuggle in; the signed heads still bind the operator, since
+  a conflicting history for the same interval is two conflicting signed
+  claims.
+- Surfaces: CLI `forget` / `verify-forgetting`; `/v1 POST …/forget`
+  (`{ids}` → the attestation, unsigned — the signing identity is an
+  operator file, so signing is the CLI's). Falsifiability pinned from
+  five directions: forged fingerprint fails the signature, dropped
+  tombstone breaks the head chain, renamed tombstone is refused as
+  unnamed, surviving drawer is refused, foreign vault refuses. e2e 179
+  → **181**. GDPR/RTBF with a receipt; retention policies and
+  admission-deny-with-receipt build on this in their own units.
+
 ## Unreleased — provenance on every drawer, and the posture it makes honest
 
 - **Provenance claims on `DrawerMeta`**: `agent`, `channel`, `session` —

@@ -322,6 +322,29 @@ pub fn payload_digest(records: &[u8]) -> String {
     hex::encode(Sha256::digest(records))
 }
 
+/// Detached Ed25519 signature over arbitrary canonical bytes (hex) — the
+/// forgetting attestation rides the same signing identity bundles use.
+pub fn sign_detached(signing_secret_hex: &str, bytes: &[u8]) -> Result<String, BundleError> {
+    let key = parse_signing(signing_secret_hex)?;
+    let sig: Signature = key.sign(bytes);
+    Ok(hex::encode(sig.to_bytes()))
+}
+
+/// Verify a detached signature against a sender string.
+pub fn verify_detached(sender_hex: &str, bytes: &[u8], sig_hex: &str) -> Result<(), BundleError> {
+    let key_bytes: [u8; 32] = hex::decode(sender_hex.trim())
+        .map_err(|_| BundleError::BadSignature)?
+        .try_into()
+        .map_err(|_| BundleError::BadSignature)?;
+    let key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| BundleError::BadSignature)?;
+    let sig_bytes: [u8; 64] = hex::decode(sig_hex.trim())
+        .map_err(|_| BundleError::BadSignature)?
+        .try_into()
+        .map_err(|_| BundleError::BadSignature)?;
+    key.verify(bytes, &Signature::from_bytes(&sig_bytes))
+        .map_err(|_| BundleError::BadSignature)
+}
+
 /// Frame a payload: the manifest line, then the record bytes verbatim.
 pub fn frame_payload(manifest: &BundleManifest, records: &[u8]) -> Vec<u8> {
     let line = serde_json::json!({ MANIFEST_LINE_KEY: manifest }).to_string();

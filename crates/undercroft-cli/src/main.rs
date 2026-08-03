@@ -177,6 +177,32 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
+    /// Destroy drawers through the audit chain and emit a verifiable
+    /// attestation that the named content was destroyed and nothing else
+    /// changed (C3.2 — GDPR/RTBF with a receipt)
+    Forget {
+        /// Drawer ids to destroy
+        #[arg(required = true)]
+        ids: Vec<String>,
+        #[arg(long, default_value = "default")]
+        vault: String,
+        /// Write the attestation JSON here (default: stdout)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Signing identity file (`bundle sign-keygen`) — attests the
+        /// operator as sender, which is what a third party verifies
+        #[arg(long)]
+        sign: Option<PathBuf>,
+    },
+    /// Verify a forgetting attestation against a vault (replays the
+    /// chain segment with the key in hand; also checks the signature
+    /// when the attestation carries one)
+    VerifyForgetting {
+        /// Attestation JSON written by `forget`
+        file: PathBuf,
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
     /// Review writes the admission screen quarantined (an operator
     /// surface; enable screening with UNDERCROFT_ADMISSION=quarantine)
     Admission {
@@ -1477,6 +1503,54 @@ fn main() -> Result<()> {
                 println!("{}", tr("verify-failed"));
                 std::process::exit(2);
             }
+        }
+        Command::Forget {
+            ids,
+            vault,
+            out,
+            sign,
+        } => {
+            let mut store = open_store(&cli, vault)?;
+            let mut att = store.forget_with_proof(ids)?;
+            if let Some(path) = sign {
+                let secret = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading signing identity {}", path.display()))?;
+                att.sign(&secret)?;
+            }
+            let json = serde_json::to_string_pretty(&att)?;
+            match out {
+                Some(path) => {
+                    std::fs::write(path, &json)?;
+                    println!(
+                        "{} drawer(s) destroyed; attestation written to {} \
+                         (verify with: undercroft verify-forgetting {})",
+                        att.drawers.len(),
+                        path.display(),
+                        path.display()
+                    );
+                }
+                None => println!("{json}"),
+            }
+        }
+        Command::VerifyForgetting { file, vault } => {
+            let store = open_store(&cli, vault)?;
+            let raw = std::fs::read_to_string(file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            let att: undercroft_store::ForgetAttestation = serde_json::from_str(&raw)
+                .with_context(|| format!("{} is not an attestation", file.display()))?;
+            store.verify_forget_attestation(&att)?;
+            println!(
+                "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
+                 {}… and {}…, nothing else changed{}",
+                att.drawers.len(),
+                &att.head_before[..12.min(att.head_before.len())],
+                &att.head_after[..12.min(att.head_after.len())],
+                if att.sig.is_some() {
+                    "; sender signature verified"
+                } else {
+                    "; unsigned"
+                }
+            );
         }
         Command::Admission { action, vault } => {
             let mut store = open_store(&cli, vault)?;
