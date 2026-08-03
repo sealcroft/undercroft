@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased — no declared scope can be starved by the corpus again
+
+- **Scope-aware candidate generation closes the room-starvation defect.**
+  `room` was a plain SQL `WHERE` applied to candidates a *global* prefilter
+  had already chosen — the exact shape the per-wing tier fixed for wings,
+  with no tier of its own and no fallback: the corpus-wide top-k could be
+  all loud-room rows while the scoped room held the answer, and the result
+  was empty, not badly ranked. The hmac FTS prefilter shared the shape
+  (recorded gap since the wing tier shipped), as did wing scoping with the
+  tier off. All three are closed by one mechanism: every declared filter
+  the active prefilter cannot see resolves to its seq set **before**
+  candidates are drawn (`scope_seqs`, through `idx_drawers_room` — new,
+  because the composite wing/room index is leftmost-prefix — or the
+  existing indexes).
+- **Two arms, by scope size.** A scope that fits the hydration budget
+  (`max(256, depth·32)`) needs no prefilter at all: the `WHERE` clause
+  bounds a full scan — exact, starvation-free, the below-floor-wing
+  pattern one level up, and the common case (a room is a session or a
+  ticket). A larger scope keeps the prefilter but draws candidates
+  **inside** the scope: PQ, per-wing PQ and FDE filter by membership
+  during selection and widen to the full scan when an IVF probe
+  under-delivers *in-scope* (the scope's rows may sit in unprobed lists —
+  starving a scoped query on partition luck is the same defect); FTS and
+  HNSW, which cannot be generated scoped, filter their top-k and surrender
+  to the bounded exact scan when the scope's share cannot fill the page.
+  The stage-1 pool scales to the **scope's** population
+  (`scope_live/pool_div`), giving scoped queries the same recall policy
+  the corpus-scaled pool gives unscoped ones.
+- **Rejected deliberately**: retry-on-empty (an empty result can be
+  legitimate — a retry hides which one this was) and post-ranking filters
+  (they spend the pool on rows the caller excluded, which is the defect
+  restated).
+- **Pinned by three new starvation tests with raw premises** — each
+  asserts on the *candidate sets* that the corpus-wide top-k excludes the
+  scoped room (so the premise's disappearance is noticed, not silently
+  absorbed), then that the scoped search finds the room's evidence
+  anyway: small room (exact-scan arm), 300-row room past the floor
+  (membership-filter arm), and the FTS shape at hmac level. The wing
+  starvation test's premise moved from end-to-end to raw candidates, and
+  its tier-off arm now asserts the scope filter carries the query —
+  `UNDERCROFT_WING_PQ_MIN=off` opts out of per-wing build cost, no longer
+  out of correctness.
+- Unscoped queries are byte-for-byte untouched: scope resolution runs only
+  when a filter is declared and a prefilter is active, and the default
+  sealed configuration (no prefilter) was already exact.
+
 ## Unreleased — rank fusion is removed, and the fusion doctrine written down
 
 - **`Fusion::Rrf` is deleted** (`rrf_fuse`, its two rank helpers, `RRF_K`,

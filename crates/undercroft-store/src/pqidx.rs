@@ -603,10 +603,27 @@ impl PalaceStore {
     /// codes — only the probed inverted lists when IVF is active, every code
     /// row otherwise. `None` ⇒ no usable index (empty corpus, or a dimension
     /// PQ can't split); the caller falls back to the full scan.
+    /// Test surface: the production path always resolves a scope first and
+    /// calls [`Self::pq_candidates_in`].
+    #[cfg(test)]
     pub(crate) fn pq_candidates(
         &self,
         qvec: &[f32],
         k: usize,
+    ) -> Result<Option<Vec<i64>>, StoreError> {
+        self.pq_candidates_in(qvec, k, None)
+    }
+
+    /// [`Self::pq_candidates`] restricted to a declared scope's seq set:
+    /// every returned candidate is a member, so a scoped query's pool can
+    /// never be crowded out by rows the caller excluded. The caller passes
+    /// `k` already scaled to the scope's population — the global live count
+    /// must not inflate it back.
+    pub(crate) fn pq_candidates_in(
+        &self,
+        qvec: &[f32],
+        k: usize,
+        scope: Option<&std::collections::HashSet<i64>>,
     ) -> Result<Option<Vec<i64>>, StoreError> {
         // Coherence is **event-driven**, not per-query: the O(corpus)
         // verification (schema + matched-count join) runs on the first
@@ -690,7 +707,12 @@ impl PalaceStore {
         // Corpus-scaled pool, applied against the verified live count: a
         // fixed floor is the measured recall-leak defect (R@5 100 → 96.8
         // over 131k → 1M at 256 candidates; 100.0% restored at live/512).
-        let k = k.max(live as usize / self.pool_div.max(1));
+        // A scoped call arrives already scaled to its scope's population.
+        let k = if scope.is_some() {
+            k
+        } else {
+            k.max(live as usize / self.pool_div.max(1))
+        };
         // Growth re-check on the fast path (cheap, cached counters): a
         // corpus that crossed the IVF threshold, or doubled past the
         // partitions' training size, re-verifies once so they (re)train
@@ -706,7 +728,7 @@ impl PalaceStore {
             };
             if outgrown {
                 self.pq_verified.set(false);
-                return self.pq_candidates(qvec, k);
+                return self.pq_candidates_in(qvec, k, scope);
             }
         }
         let pq_ref = self.pq.borrow();
@@ -769,14 +791,33 @@ impl PalaceStore {
         if widen {
             self.pq_cache_load_all()?;
         }
-        let cache_ref = self.pq_cache.borrow();
-        let Some(cache) = cache_ref.as_ref() else {
-            return Ok(None);
-        };
         let mut scored: Vec<(f32, i64)> = Vec::new();
-        match &probe {
-            Some(lists) if !widen => cache.scan(pq, &tables, Some(lists), &mut scored),
-            _ => cache.scan(pq, &tables, None, &mut scored),
+        {
+            let cache_ref = self.pq_cache.borrow();
+            let Some(cache) = cache_ref.as_ref() else {
+                return Ok(None);
+            };
+            match &probe {
+                Some(lists) if !widen => cache.scan(pq, &tables, Some(lists), &mut scored),
+                _ => cache.scan(pq, &tables, None, &mut scored),
+            }
+        }
+        if let Some(s) = scope {
+            scored.retain(|(_, seq)| s.contains(seq));
+            // A probe that under-delivers INSIDE the scope widens to the
+            // full scan: the scope's rows may sit in lists the probe
+            // skipped, and starving a scoped query on partition luck is
+            // the shape this parameter exists to close.
+            if scored.len() < k && probe.is_some() && !widen {
+                self.pq_cache_load_all()?;
+                let cache_ref = self.pq_cache.borrow();
+                let Some(cache) = cache_ref.as_ref() else {
+                    return Ok(None);
+                };
+                scored.clear();
+                cache.scan(pq, &tables, None, &mut scored);
+                scored.retain(|(_, seq)| s.contains(seq));
+            }
         }
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {
@@ -1343,11 +1384,27 @@ impl PalaceStore {
     /// tier: the first scoped query after open (or after a write this
     /// session couldn't index) runs the wing's matched-count check and
     /// rebuilds on drift; a verified wing stays on the fast path.
+    /// Test surface: the production path always resolves a scope first and
+    /// calls [`Self::wing_pq_candidates_in`].
+    #[cfg(test)]
     pub(crate) fn wing_pq_candidates(
         &self,
         wing: &str,
         qvec: &[f32],
         k: usize,
+    ) -> Result<Option<Vec<i64>>, StoreError> {
+        self.wing_pq_candidates_in(wing, qvec, k, None)
+    }
+
+    /// [`Self::wing_pq_candidates`] restricted to a declared scope's seq
+    /// set — a `room` inside the wing. The wing's own index honors the wing
+    /// filter by construction; the scope carries what it cannot see.
+    pub(crate) fn wing_pq_candidates_in(
+        &self,
+        wing: &str,
+        qvec: &[f32],
+        k: usize,
+        scope: Option<&std::collections::HashSet<i64>>,
     ) -> Result<Option<Vec<i64>>, StoreError> {
         if !self.wing_pq.borrow().contains_key(wing) {
             let built = self.wing_pq_build(wing)?;
@@ -1373,7 +1430,12 @@ impl PalaceStore {
         };
         // Same corpus-scaled pool as the global path, against the wing's
         // own live count — a wing large enough to leak gets the same cure.
-        let k = k.max(st.live as usize / self.pool_div.max(1));
+        // A scoped call arrives already scaled to its scope's population.
+        let k = if scope.is_some() {
+            k
+        } else {
+            k.max(st.live as usize / self.pool_div.max(1))
+        };
         let tables = st.pq.distance_tables(qvec);
         let probe: Option<Vec<i64>> = st.ivf.as_ref().and_then(|cq| {
             let nprobe = self.ivf_nprobe.unwrap_or_else(|| (cq.nlist() / 4).max(8));
@@ -1394,6 +1456,17 @@ impl PalaceStore {
         match &probe {
             Some(lists) if !widen => st.cache.scan(&st.pq, &tables, Some(lists), &mut scored),
             _ => st.cache.scan(&st.pq, &tables, None, &mut scored),
+        }
+        if let Some(s) = scope {
+            scored.retain(|(_, seq)| s.contains(seq));
+            // Under-delivery inside the scope widens to the whole wing —
+            // the wing cache is fully resident, so this is one more scan,
+            // not a load.
+            if scored.len() < k && probe.is_some() && !widen {
+                scored.clear();
+                st.cache.scan(&st.pq, &tables, None, &mut scored);
+                scored.retain(|(_, seq)| s.contains(seq));
+            }
         }
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {

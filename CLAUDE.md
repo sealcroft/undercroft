@@ -271,12 +271,28 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   the linear price of not losing answers; parallel hydration and dim/4
   codes are the named shrink levers. A fixed-size wing showed no leak —
   any scoped-recall claim still needs its own instrument.
-  Wings past `UNDERCROFT_WING_PQ_MIN` (4096, `off` = pre-tier behavior)
+  Wings past `UNDERCROFT_WING_PQ_MIN` (4096, `off` = no per-wing indexes;
+  scoped queries then ride the scope filter over global candidates —
+  starvation-free, but corpus-shaped generation)
   carry their own codebook/IVF/rows (`drawer_pq_wing`, sealed under
   `pqrow/<wing>/<seq>`; meta keys `codebook/<wing>`/`ivf/<wing>`, resealed
   dynamically at rotation since a fixed list cannot enumerate them);
   below the floor a scoped query full-scans its wing — bounded by the
-  floor, exact, and still starvation-free. A wing's population is MORE
+  floor, exact, and still starvation-free. **Every other declared filter
+  is scope-resolved before candidates are drawn** (`scope_seqs` →
+  `*_candidates_in`): `room` was a plain `WHERE` over globally generated
+  candidates — the wing defect with no tier and no fallback — and the FTS
+  prefilter shared the shape (both were recorded gaps, both closed
+  2026-08-02). A scope that fits the hydration budget (`max(256,
+  depth·32)`) drops the prefilter and is scanned exactly; a larger one
+  gets membership-filtered candidates (PQ/wing-PQ/FDE filter during
+  selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
+  filter their top-k and surrender to the bounded exact scan when the
+  scope's share cannot fill the page), pool scaled to the SCOPE's
+  population — never the corpus's. Rejected deliberately: retry-on-empty
+  (masks legitimate empties) and post-ranking filters (spend the pool on
+  excluded rows — the defect restated). `idx_drawers_room` serves
+  room-only resolution; the composite index is leftmost-prefix. A wing's population is MORE
   homogeneous than the vault's, so its codebook fits better, and
   derived-structure scope matches the isolation unit (wing) rather than
   the crypto unit (vault) — a writer in one wing no longer shapes the
