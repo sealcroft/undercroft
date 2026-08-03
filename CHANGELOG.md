@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased — the advisory tier: a model may say "suspicious", never "admitted" (C3.3 complete)
+
+- **The optional tier-2 classifier ships, advisory-only by
+  construction** (`UNDERCROFT_ADMISSION_LLM=advisory`, 71st env var; the
+  model is the existing `UNDERCROFT_LLM_*` runtime). Three properties
+  bound what an attacker can buy from a classifier that is itself an
+  injection target, and every one is pinned by test:
+  - **never consulted for tier-1-flagged content** — talking the model
+    into `CLEAN` bypasses nothing the deterministic tier caught,
+    because the model is never even asked;
+  - **only toward quarantine** — a successful injection can at worst
+    produce a false `SUSPICIOUS` on a clean candidate, which diverts it
+    to a human reviewer (the safe direction), with the `llm-advisory`
+    signal code carrying offset 0 and no content and no model reasoning
+    (reasoning could carry the injection back out);
+  - **failure is a non-event** — transport errors and answers outside
+    the closed two-word verdict vocabulary (`SUSPICIOUS`/`CLEAN`,
+    exact, hedges and prose are non-answers) degrade to tier-1-only and
+    never block a write.
+- **Wired like the reranker**: a `undercroft_core::admission::
+  AdmissionAdvisor` trait the store consults inside `admission_divert`,
+  an `LlmAdmissionAdvisor` in `undercroft-llm` (hardened data-marked
+  prompt), attached at every open surface (CLI/MCP/http via
+  `open_store`, per-vault in the multi-tenant server). A
+  declared-but-unusable advisor REFUSES to open — a screen that
+  silently isn't running is worse than a refusal to start. Transport is
+  TLS-or-loopback like the served embedder; recorded gaps, stated:
+  `UNDERCROFT_LLM_CA` does not exist yet (a self-signed TLS LLM endpoint
+  fails verification — the pin belongs to the queued LlmClient
+  transport-policy unit, alongside the pre-existing cleartext allowance
+  on the `refine` path), and the advisory call is synchronous on the
+  write path — an opt-in latency the deployment declares knowingly
+  (tagcost measured ~0.2 s/drawer on a served 1B CPU model).
+- With this, every mechanism on C3.3's shipping list is BUILT:
+  provenance, deterministic detector, quarantine wing, lifecycle audit,
+  posture, update-path screening, per-agent accident cap, advisory
+  tier. Remaining wishlist inside the tier-1 detector (attack-fixture
+  similarity, rate anomalies) stays recorded in ROADMAP.
+
 ## Unreleased — the training draw gains its accident bound: the per-agent cap (C3.3)
 
 - **`keyed_sample_capped` now bounds TWO groupings**, each at

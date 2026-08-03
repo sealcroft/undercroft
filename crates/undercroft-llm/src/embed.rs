@@ -280,7 +280,7 @@ fn pinned_roots_from_pem(pem: &[u8]) -> Result<std::sync::Arc<rustls::ClientConf
 /// Whether a base URL points at this machine. Deliberately conservative: an
 /// unparseable or unusual host counts as NOT loopback, so the warning errs
 /// toward telling the operator their text is leaving.
-fn is_loopback(base: &str) -> bool {
+pub(crate) fn is_loopback(base: &str) -> bool {
     // scheme → host:port/path → host
     let after_scheme = match base.find("://") {
         Some(i) => &base[i + 3..],
