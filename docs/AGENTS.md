@@ -472,9 +472,20 @@ undercroft backup create    # verified snapshot, keeps last 10
 
 ```bash
 undercroft bundle keygen --out ops.key            # prints the shareable recipient once
-undercroft export --to <recipient> --out palace.bundle
-undercroft import palace.bundle --identity ops.key
+undercroft bundle sign-keygen --out sign.key      # prints the pinnable sender once
+undercroft export --to <recipient> --out palace.bundle --sign sign.key
+undercroft import palace.bundle --identity ops.key --sender <sender-hex>
 ```
+
+  An export now leads with a **signed-able manifest** (sender, scope,
+  trust claim, expiry, record counts, provenance summary) and carries the
+  **whole palace**: drawers, KG entities, facts (receipts re-keyed at the
+  destination; grounding, authority tier and extractor identity intact)
+  and tunnels — the meta-rows gap is closed. Recipient encryption says who
+  may *read* a bundle; the manifest signature says who *wrote* it. Pin the
+  sender with `--sender` to enforce attestation; `--trust` is the sender's
+  claim for your policy, never a trust boundary by itself; an expired
+  bundle is refused at import. Legacy exports (no manifest) still import.
 
 - Durability is real: SQLite runs WAL + `synchronous=FULL`, the manifest
   anchor and key files are fsynced — an acknowledged write is on disk.
@@ -505,6 +516,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_list_hallways` | | entity co-occurrence within a wing |
 | `undercroft_get_closet_index` | | compact LLM-scannable index |
 | `undercroft_save` / `_add_drawer` also take `kind` | W | declared record kind (closed vocabulary: `question`\|`preference`\|`decision`\|`event`\|`procedure`\|`statement`; rejected if unknown — omit rather than guess). `undercroft_search` filters by it; while filtering, the reply says how many in-scope drawers carry no declared kind |
+| `undercroft_save` / `_add_drawer` also take `supersedes` | W | id of the drawer the new record replaces: a receipted update link (the KG receipt pattern one level up — bound to the superseded content's fingerprint under a keyed tag, re-keyed on rotation). The old drawer is **never** deleted or hidden; `undercroft_verify` reports every link's verdict (`verified`\|`source-changed`\|`dangling`\|`unreceipted`\|`tampered`, the last failing the verify) |
 | `undercroft_kg_add` / `_kg_invalidate` / `_kg_supersede` | W | temporal facts: assert/close/replace |
 | `undercroft_kg_query` / `_kg_timeline` / `_kg_stats` | | query facts (incl. `--as-of`) |
 | `undercroft_lookup_canonical` | | the exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks; an empty answer means no declared truth exists — never guess on the key's behalf |
@@ -526,7 +538,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
 | GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
-| POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `kind` — closed vocabulary, 400 if unknown — opt `vector`, `dedup_threshold`) |
+| POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `kind` — closed vocabulary, 400 if unknown — opt `supersedes` — a receipted update link to the drawer this save replaces; the old drawer stays — opt `vector`, `dedup_threshold`) |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`) |
@@ -548,12 +560,13 @@ graph answer across notes), or `unevaluated` (never checked; every fact
 distilled before grounding existed). `?grounding=` narrows to one of those and
 is **opt-in only** — the default returns all three, because filtering out
 background facts breaks exactly the multi-hop questions the graph is for.
-| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text` |
+| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none |
 | POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
+| GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
-| GET | `/v1/vaults/{id}/export` | lossless NDJSON (vectors + token artifacts) |
-| POST | `/v1/vaults/{id}/import` | parse-before-write import |
+| GET | `/v1/vaults/{id}/export` | lossless NDJSON: a manifest first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (receipts travel and re-key at import) and tunnels — the whole palace |
+| POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present |
 | GET | `/ui` | vault admin console (static page; every build) |
 | GET | `/metrics`, `/monitor`, `/v1/…/stream` | telemetry builds only |
 

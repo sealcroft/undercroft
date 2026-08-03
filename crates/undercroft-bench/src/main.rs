@@ -3004,6 +3004,7 @@ fn distill_eval(samples: &[Value], k: usize, qa_limit: usize) -> Result<()> {
                             None,
                             0.8,
                             (&d.id, &d.content),
+                            None,
                         )?;
                         store.upsert(&Drawer::new(
                             "facts",

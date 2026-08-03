@@ -346,6 +346,9 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "kg", "query"]) => self.kg_query(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "timeline"]) => self.kg_timeline(id, req, now),
             ("GET", &["v1", "vaults", id, "kg", "receipts"]) => self.kg_receipts(id, req, now),
+            ("GET", &["v1", "vaults", id, "supersessions"]) => {
+                self.drawer_supersessions(id, req, now)
+            }
             ("GET", &["v1", "vaults", id, "kg", "canonical", key]) => {
                 self.kg_canonical(id, key, req, now)
             }
@@ -590,12 +593,20 @@ impl Tenancy {
         if let Some(k) = kind.as_deref() {
             undercroft_core::validate_kind(k).map_err(|e| RestError::new(400, e.to_string()))?;
         }
+        // A declared supersession link: this save replaces the named
+        // drawer. The store receipts the link at its write choke point;
+        // the superseded drawer is never deleted or hidden.
+        let supersedes = body
+            .get("supersedes")
+            .and_then(Value::as_str)
+            .map(String::from);
 
         let store = self.store_for(id)?;
         let idx = store.next_append_index().map_err(err500)? as u32;
         let drawer = Drawer::new(wing, room, normalized, None, idx, "rest")
             .with_content_date(content_date)
-            .with_kind(kind);
+            .with_kind(kind)
+            .with_supersedes(supersedes);
 
         let out = if store.is_external() {
             let v =
@@ -1119,6 +1130,45 @@ impl Tenancy {
         ))
     }
 
+    /// `GET /v1/vaults/{id}/supersessions` — verify every drawer's declared
+    /// supersession link against the drawer it claims to replace, the
+    /// drawer-level analogue of `/kg/receipts` with the same verdicts plus
+    /// `unreceipted` (link written while its target was absent). The
+    /// summary counts let a caller alert on `tampered` without walking the
+    /// list.
+    fn drawer_supersessions(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let links = store.verify_supersessions().map_err(store_err)?;
+        let mut summary = serde_json::Map::new();
+        for verdict in [
+            "verified",
+            "source_changed",
+            "dangling",
+            "tampered",
+            "unreceipted",
+        ] {
+            let n = links
+                .iter()
+                .filter(|r| {
+                    serde_json::to_value(&r.verdict)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .as_deref()
+                        == Some(verdict)
+                })
+                .count();
+            summary.insert(verdict.into(), json!(n));
+        }
+        Ok((
+            200,
+            Body::Json(json!({
+                "supersessions": serde_json::to_value(&links).unwrap_or_else(|_| json!([])),
+                "summary": summary,
+            })),
+        ))
+    }
+
     /// `POST /v1/vaults/{id}/refine` — distil the vault's verbatim drawers
     /// into receipted knowledge-graph facts, and mirror each fact as a
     /// searchable drawer so distillation reaches the retrieval surface.
@@ -1254,6 +1304,10 @@ impl Tenancy {
                         0.8, // model-extracted: below human-asserted confidence
                         (&d.id, &d.content),
                         Some(&support),
+                        // The model's identity was already in this handler's
+                        // response JSON; now it is on the fact itself,
+                        // HMAC-covered — an extractor claim is provenance.
+                        Some(llm.model()),
                     )
                     .map_err(store_err)?;
                 // Restating a known fact still re-cites it in the graph — the
@@ -1317,6 +1371,7 @@ impl Tenancy {
         // derived data, carried so an import restores it by copy instead of
         // re-running one transformer forward per drawer.
         let mut out = String::new();
+        let mut counts = undercroft_vault::bundle::ManifestCounts::default();
         for (drawer, vector) in records {
             let mut line = json!({ "drawer": drawer, "vector": vector });
             if let Some((model, packed)) = store.token_artifact(&drawer.id).map_err(store_err)? {
@@ -1324,17 +1379,78 @@ impl Tenancy {
             }
             out.push_str(&line.to_string());
             out.push('\n');
+            counts.drawers += 1;
         }
-        Ok((200, Body::Ndjson(out)))
+        // The meta-rows gap, closed on this surface too: entities, facts
+        // (receipts and authority tier travel; receipt tags re-key at the
+        // destination) and tunnels ride the same NDJSON stream.
+        for (name, etype) in store.kg_export_entities().map_err(store_err)? {
+            out.push_str(&json!({ "entity": { "name": name, "etype": etype } }).to_string());
+            out.push('\n');
+            counts.kg_entities += 1;
+        }
+        for exp in store.kg_export().map_err(store_err)? {
+            out.push_str(&json!({ "triple": exp }).to_string());
+            out.push('\n');
+            counts.kg_triples += 1;
+        }
+        for t in store.list_tunnels(None).map_err(store_err)? {
+            out.push_str(&json!({ "tunnel": t }).to_string());
+            out.push('\n');
+            counts.tunnels += 1;
+        }
+        // Manifest first line — unsigned on this surface (the signing key
+        // is an operator file, not a server secret; the CLI signs).
+        let (vault_id, level, embedder, chain_head) = store.manifest_facts().map_err(store_err)?;
+        let manifest = undercroft_vault::bundle::BundleManifest {
+            version: 1,
+            vault: vault_id,
+            level,
+            created_at: rfc3339_now(),
+            counts,
+            embedder: Some(embedder),
+            chain_head: Some(chain_head),
+            trust: None,
+            expires: None,
+            sender: None,
+            payload_sha256: undercroft_vault::bundle::payload_digest(out.as_bytes()),
+            sig: None,
+        };
+        let framed = undercroft_vault::bundle::frame_payload(&manifest, out.as_bytes());
+        let framed = String::from_utf8(framed)
+            .map_err(|e| RestError::new(500, format!("payload not UTF-8: {e}")))?;
+        Ok((200, Body::Ndjson(framed)))
     }
 
     fn import(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
         self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
+        // A manifest first line, when present: the digest is always
+        // enforced (a payload that does not match its own declaration is
+        // refused), expiry is enforced, and signature status is reported
+        // via the response. Legacy payloads (no manifest) import as ever.
+        let (manifest, record_bytes) = undercroft_vault::bundle::split_payload(body.as_bytes())
+            .map_err(|e| RestError::new(400, format!("bundle manifest: {e}")))?;
+        if let Some(m) = &manifest {
+            if m.expired_at(&rfc3339_now()) {
+                return Err(RestError::new(
+                    400,
+                    format!(
+                        "bundle expired at {}",
+                        m.expires.as_deref().unwrap_or("(unparseable expiry)")
+                    ),
+                ));
+            }
+        }
+        let body = std::str::from_utf8(record_bytes)
+            .map_err(|e| RestError::new(400, format!("records not UTF-8: {e}")))?;
         // Parse every line before writing anything, so a malformed body
         // fails cleanly without a partial import.
         type ImportLine = (Drawer, Option<Vec<f32>>, Option<(String, Vec<u8>)>);
         let mut records: Vec<ImportLine> = Vec::new();
+        let mut kg_records: Vec<undercroft_store::TripleExport> = Vec::new();
+        let mut entity_records: Vec<(String, String)> = Vec::new();
+        let mut tunnel_records: Vec<(String, String, String)> = Vec::new();
         for (n, line) in body.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
@@ -1342,6 +1458,29 @@ impl Tenancy {
             }
             let obj: Value = serde_json::from_str(line)
                 .map_err(|e| RestError::new(400, format!("line {}: {e}", n + 1)))?;
+            if let Some(t) = obj.get("triple") {
+                kg_records.push(
+                    serde_json::from_value(t.clone())
+                        .map_err(|e| RestError::new(400, format!("line {}: {e}", n + 1)))?,
+                );
+                continue;
+            }
+            if let Some(e) = obj.get("entity") {
+                let name = e
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RestError::new(400, format!("line {}: entity.name", n + 1)))?;
+                let etype = e.get("etype").and_then(Value::as_str).unwrap_or("unknown");
+                entity_records.push((name.to_string(), etype.to_string()));
+                continue;
+            }
+            if let Some(t) = obj.get("tunnel") {
+                let g = |k: &str| t.get(k).and_then(Value::as_str).map(str::to_string);
+                if let (Some(f), Some(to_w), Some(l)) = (g("from_wing"), g("to_wing"), g("label")) {
+                    tunnel_records.push((f, to_w, l));
+                }
+                continue;
+            }
             let drawer_val = obj.get("drawer").cloned().unwrap_or_else(|| obj.clone());
             let drawer: Drawer = serde_json::from_value(drawer_val)
                 .map_err(|e| RestError::new(400, format!("line {}: {e}", n + 1)))?;
@@ -1391,7 +1530,34 @@ impl Tenancy {
             }
             imported += 1;
         }
-        Ok((200, Body::Json(json!({ "imported": imported }))))
+        // KG and tunnel rows after drawers, so receipts can bind against
+        // drawers arriving in the same payload.
+        for (name, etype) in &entity_records {
+            store.kg_import_entity(name, etype).map_err(store_err)?;
+        }
+        for exp in &kg_records {
+            store.kg_import(exp).map_err(store_err)?;
+        }
+        for (f, t, l) in &tunnel_records {
+            store.create_tunnel(f, t, l).map_err(store_err)?;
+        }
+        // Additive keys: a caller that ignores them sees the response this
+        // route always returned.
+        Ok((
+            200,
+            Body::Json(json!({
+                "imported": imported,
+                "kg_triples": kg_records.len(),
+                "kg_entities": entity_records.len(),
+                "tunnels": tunnel_records.len(),
+                "manifest": manifest.map(|m| json!({
+                    "vault": m.vault,
+                    "created_at": m.created_at,
+                    "trust": m.trust,
+                    "signed": m.sig.is_some(),
+                })),
+            })),
+        ))
     }
 
     // ---- helpers ------------------------------------------------------
@@ -1533,6 +1699,12 @@ fn pct_decode(s: &str) -> String {
 fn b64encode(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn rfc3339_now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 fn b64decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {

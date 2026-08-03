@@ -885,9 +885,23 @@ verification), audited promotion with per-key supersession, indexed
 `undercroft_kg_set_authority`) + CLI (`kg authority`, `kg canonical`),
 rotation carries the tier, five pinned tests incl. the
 poison-cannot-self-approve tamper case; (2) **extractor identity + generalized
-supersession** (receipted `supersedes_id` on drawers); (3) **bundle
-manifests** (Ed25519 sender attestation + scope/trust/expiry metadata,
-closing the meta-rows export gap); (4) **typed `kind` on promoted
+supersession** — **BUILT 2026-08-03**: extractor recorded inside the
+fact's HMAC via a third canonical extension (0x1d, the support/authority
+precedent — old facts byte-identical), both refine paths pass the model,
+a flipped column fails verification; receipted `supersedes` on drawers —
+meta_json link + mirror column + keyed receipt over the superseded
+content's unkeyed fp in separate columns (the kg source_fp/receipt_tag
+shape, so rotation re-keys it), five verdicts via
+`verify_supersessions`/`/v1/…/supersessions`/CLI+MCP verify, superseding
+never deletes; (3) **bundle
+manifests** — **BUILT 2026-08-03**: Ed25519 sender attestation beside the
+X25519 recipient flow, signed manifest (scope/trust-claim/expiry/counts/
+provenance + unconditionally-checked payload digest), `--sender` pinning
+at import, legacy bundles import unattested-and-said-so, and the
+meta-rows export gap CLOSED on both surfaces (KG facts travel with
+receipts re-keyed from the traveling fp, authority tier and extractor
+intact; tunnels travel; embedder identity and chain head travel as
+provenance, never as state); (4) **typed `kind` on promoted
 records** — **BUILT 2026-08-02 for drawers** (pulled forward on user
 decision once the doctrine and the scope machinery existed): declared
 closed vocabulary, HMAC-covered, scope-safe filter, unlabeled-rows

@@ -126,9 +126,139 @@ fn mine_and_export_roundtrip() {
     let out = cmd(&home).args(["export"]).assert().success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(stdout.contains("auth flow"));
-    let first: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
-    assert_eq!(first["meta"]["wing"], "team");
-    assert_eq!(first["meta"]["room"], "meeting-notes");
+    // Line 1 is the manifest (unsigned here), records follow — each typed.
+    let mut lines = stdout.lines();
+    let manifest: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    let m = &manifest["undercroft_manifest"];
+    assert_eq!(m["version"], 1);
+    assert!(m["counts"]["drawers"].as_u64().unwrap() >= 1);
+    assert!(m["sig"].is_null(), "unsigned without --sign");
+    let first: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert_eq!(first["drawer"]["meta"]["wing"], "team");
+    assert_eq!(first["drawer"]["meta"]["room"], "meeting-notes");
+}
+
+/// The whole sealed + signed bundle flow, across two palaces: recipient
+/// encryption (who may read), sender attestation (who wrote), and the
+/// closed meta-rows gap (KG facts travel and re-key). Pinned end to end
+/// because no CLI test exercised `export --to` / `import --identity` at
+/// all before the manifest existed.
+#[test]
+fn signed_bundle_migrates_a_palace_with_its_knowledge_graph() {
+    let src_home = TempDir::new().unwrap();
+    let dst_home = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    cmd(&src_home).args(["init"]).assert().success();
+    cmd(&dst_home).args(["init"]).assert().success();
+    cmd(&src_home)
+        .args(["remember", "the deploy window moved to Tuesday mornings"])
+        .assert()
+        .success();
+    cmd(&src_home)
+        .args(["kg", "add", "team", "deploy_window", "tuesday-mornings"])
+        .assert()
+        .success();
+
+    // Destination identity (who may read) + source signing key (who wrote).
+    let id_path = work.path().join("dst.key");
+    let out = cmd(&dst_home)
+        .args(["bundle", "keygen", "--out", id_path.to_str().unwrap()])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let recipient = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("Recipient (shareable): "))
+        .expect("recipient printed")
+        .to_string();
+    let sign_path = work.path().join("src-sign.key");
+    let out = cmd(&src_home)
+        .args([
+            "bundle",
+            "sign-keygen",
+            "--out",
+            sign_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let sender = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("Sender (importers pin this): "))
+        .expect("sender printed")
+        .to_string();
+
+    let bundle_path = work.path().join("palace.bundle");
+    cmd(&src_home)
+        .args([
+            "export",
+            "--to",
+            &recipient,
+            "--out",
+            bundle_path.to_str().unwrap(),
+            "--sign",
+            sign_path.to_str().unwrap(),
+            "--trust",
+            "partner",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sender-signed"));
+
+    // Import with the sender pinned: attestation is enforced, the KG rides.
+    cmd(&dst_home)
+        .args([
+            "import",
+            bundle_path.to_str().unwrap(),
+            "--identity",
+            id_path.to_str().unwrap(),
+            "--sender",
+            &sender,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(verified)"))
+        .stdout(predicate::str::contains("1 fact(s)"));
+
+    // The fact answers in the destination palace, and integrity holds.
+    cmd(&dst_home)
+        .args(["kg", "query", "team"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tuesday-mornings"));
+    cmd(&dst_home).args(["verify"]).assert().success();
+
+    // A wrong pinned sender refuses the import outright.
+    let (_, wrong_sender) = {
+        let out = cmd(&dst_home)
+            .args([
+                "bundle",
+                "sign-keygen",
+                "--out",
+                work.path().join("other.key").to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        let s = stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("Sender (importers pin this): "))
+            .unwrap()
+            .to_string();
+        ((), s)
+    };
+    cmd(&dst_home)
+        .args([
+            "import",
+            bundle_path.to_str().unwrap(),
+            "--identity",
+            id_path.to_str().unwrap(),
+            "--sender",
+            &wrong_sender,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("attestation failed"));
 }
 
 #[test]

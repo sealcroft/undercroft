@@ -187,7 +187,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
   vault.json.next staging, keycheck marker); bundle.rs:
   recipient-encrypted export bundles (X25519 ephemeral-static → HKDF →
-  XChaCha20-Poly1305); at-rest AAD domains: content, `/emb`, `/tok`
+  XChaCha20-Poly1305) + **signed manifests** (Ed25519 sender attestation
+  beside the recipient flow — encryption says who may READ, the signature
+  says who WROTE; scope/trust-claim/expiry/counts/provenance +
+  unconditionally-checked payload digest; a sender-declared trust label is
+  a CLAIM, never a boundary — docs/LABELS.md; legacy payloads import
+  unattested-and-said-so); at-rest AAD domains: content, `/emb`, `/tok`
   token matrices, `/pq` index artifacts)
 - `crates/undercroft-store` — per-vault SQLite storage, hybrid search (cosine +
   BM25 fusion; `SearchHit` carries **three** lexical channels — `lexical_exact`
@@ -321,6 +326,18 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   fact per key, promotion supersedes the previous holder audited; a
   column flip without the vault key fails verification — see
   docs/LABELS.md for the label doctrine it instantiates),
+  extractor identity (which model claimed each distilled fact, inside the
+  fact's HMAC via the third canonical extension — 0x1d, the
+  support/authority precedent, so untouched facts keep byte-identical
+  canonicals; a flipped attribution fails verification), receipted drawer
+  supersession (`meta.supersedes` under the drawer HMAC + mirror column +
+  keyed receipt over the superseded content's unkeyed fp in separate
+  columns — the kg source_fp/receipt_tag shape one level up, re-keyed on
+  rotation; five verdicts via `verify_supersessions`; superseding NEVER
+  deletes), whole-palace export/import (typed records: drawers + KG
+  entities/facts/tunnels; receipts re-key from the traveling fp at the
+  destination; the manifest carries embedder identity and chain head as
+  provenance, never as state),
   management surface (manage.rs),
   remote-index integration (remote.rs — a mirror records the embedder it was
   pushed with; `search_with_index` refuses a mismatch rather than ranking a
@@ -456,7 +473,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (249)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (165 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (169 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

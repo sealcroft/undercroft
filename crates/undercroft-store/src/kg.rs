@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 
 use crate::{chain_append, PalaceStore, StoreError};
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Triple {
     pub id: String,
     pub subject: String,
@@ -45,6 +45,12 @@ pub struct Triple {
     /// The exact-lookup slot [`PalaceStore::lookup_canonical`] answers by.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_key: Option<String>,
+    /// Which model/agent extracted this fact — the embedder-identity
+    /// pattern one level up, DECLARED by the write path and HMAC-covered.
+    /// `None` means never recorded: every fact written before the field
+    /// existed, and every manual add.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extractor: Option<String>,
 }
 
 impl Triple {
@@ -104,6 +110,7 @@ pub(crate) fn triple_canonical(
     confidence: f64,
     support_at_rest: Option<&[u8]>,
     authority: Option<&[u8]>,
+    extractor: Option<&[u8]>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
     for part in [
@@ -135,7 +142,30 @@ pub(crate) fn triple_canonical(
         out.push(0x1e);
         out.extend_from_slice(auth);
     }
+    // Extractor identity takes the third separator (0x1d) under the same
+    // rule: a fact that never recorded its extractor keeps byte-identical
+    // canonical bytes, and no extension can alias another's position.
+    if let Some(ext) = extractor {
+        out.push(0x1d);
+        out.extend_from_slice(ext);
+    }
     out
+}
+
+/// Canonical bytes of the extractor identity, or `None` when none was ever
+/// recorded — the `support`/authority precedent, so facts written before
+/// extractor identity existed are never re-tagged.
+///
+/// Inside the fact's HMAC on purpose: which model claimed a fact is
+/// provenance an offline attacker must not be able to rewrite — a flipped
+/// column fails `verify_tag` on read, exactly like a flipped
+/// `review_state`.
+pub(crate) fn extractor_ext(extractor: Option<&str>) -> Option<Vec<u8>> {
+    extractor.map(|e| {
+        let mut out = vec![0x1f];
+        out.extend_from_slice(e.as_bytes());
+        out
+    })
 }
 
 /// Canonical bytes of the authority tier, or `None` when no field was ever
@@ -209,6 +239,11 @@ pub enum ReceiptVerdict {
     Dangling,
     /// The receipt binding itself failed its HMAC — offline tampering.
     Tampered,
+    /// The link was declared but never bound: the cited drawer was absent
+    /// when the link was written (an out-of-order import), so there is no
+    /// receipt to check. Only drawer supersessions produce this — a KG
+    /// receipt is always written with its fact.
+    Unreceipted,
 }
 
 /// A fact's receipt and its verification outcome.
@@ -217,6 +252,27 @@ pub struct ReceiptStatus {
     pub triple_id: String,
     pub source_drawer_id: String,
     pub verdict: ReceiptVerdict,
+}
+
+/// A drawer's supersession link and its verification outcome — the drawer
+/// analogue of [`ReceiptStatus`], produced by
+/// [`PalaceStore::verify_supersessions`](crate::PalaceStore).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SupersessionStatus {
+    pub drawer_id: String,
+    pub supersedes: String,
+    pub verdict: ReceiptVerdict,
+}
+
+/// One exported fact: the decoded, verified triple plus its receipt's
+/// unkeyed source fingerprint (hex) when the fact was receipted — enough
+/// for an importing vault to re-key the receipt under its own mac without
+/// ever seeing the source content (the rotation precedent, across vaults).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TripleExport {
+    pub triple: Triple,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fp: Option<String>,
 }
 
 impl PalaceStore {
@@ -255,7 +311,13 @@ impl PalaceStore {
                  -- trade the file header records.
                  authority_class TEXT,
                  review_state    TEXT,
-                 canonical_key   TEXT
+                 canonical_key   TEXT,
+                 -- Which model/agent extracted the fact (the embedder-identity
+                 -- pattern, one level up). DECLARED by the write path, inside
+                 -- the fact's HMAC via the canonical's extractor extension.
+                 -- NULL = never recorded (every fact written before the field
+                 -- existed, and every manual add).
+                 extractor       TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject);
              CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate);",
@@ -270,6 +332,7 @@ impl PalaceStore {
             "authority_class TEXT",
             "review_state TEXT",
             "canonical_key TEXT",
+            "extractor TEXT",
         ] {
             let _ = self
                 .conn
@@ -333,6 +396,7 @@ impl PalaceStore {
             source_drawer_id,
             None,
             None,
+            None,
         )
     }
 
@@ -352,9 +416,10 @@ impl PalaceStore {
         valid_to: Option<&str>,
         confidence: f64,
         source: (&str, &str),
+        extractor: Option<&str>,
     ) -> Result<String, StoreError> {
         self.kg_add_grounded(
-            subject, predicate, object, valid_from, valid_to, confidence, source, None,
+            subject, predicate, object, valid_from, valid_to, confidence, source, None, extractor,
         )
     }
 
@@ -377,6 +442,7 @@ impl PalaceStore {
         confidence: f64,
         source: (&str, &str),
         support: Option<&undercroft_core::support::Support>,
+        extractor: Option<&str>,
     ) -> Result<String, StoreError> {
         let (drawer_id, drawer_content) = source;
         let fp = content_fp(drawer_content);
@@ -390,6 +456,7 @@ impl PalaceStore {
             Some(drawer_id),
             Some(fp),
             support,
+            extractor,
         )
     }
 
@@ -405,6 +472,7 @@ impl PalaceStore {
         source_drawer_id: Option<&str>,
         source_fp: Option<Vec<u8>>,
         support: Option<&undercroft_core::support::Support>,
+        extractor: Option<&str>,
     ) -> Result<String, StoreError> {
         let _span = undercroft_obs::scope("kg", self.vault.id());
         undercroft_core::validate_name(subject, "subject").map_err(|e| StoreError::CorruptRow {
@@ -433,6 +501,7 @@ impl PalaceStore {
                 self.vault
                     .content_at_rest(&format!("kg/{id}/support"), &bytes)
             });
+        let ext = extractor_ext(extractor);
         let tag = self.vault.tag(&triple_canonical(
             &id,
             subject,
@@ -445,6 +514,7 @@ impl PalaceStore {
             // A new fact is never born on the authority tier: placement is
             // a separate, audited declaration (`kg_set_authority`).
             None,
+            ext.as_deref(),
         ));
         // Receipt: a separate keyed tag over (triple id, citation, source
         // fingerprint). Kept distinct from the triple tag so it composes
@@ -459,8 +529,8 @@ impl PalaceStore {
         tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
                                      confidence, source_drawer_id, tag, extracted_at,
-                                     source_fp, receipt_tag, support)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                                     source_fp, receipt_tag, support, extractor)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
                  object = excluded.object,
                  valid_to = excluded.valid_to,
@@ -469,7 +539,8 @@ impl PalaceStore {
                  tag = excluded.tag,
                  source_fp = excluded.source_fp,
                  receipt_tag = excluded.receipt_tag,
-                 support = excluded.support",
+                 support = excluded.support,
+                 extractor = excluded.extractor",
             params![
                 id,
                 subject,
@@ -484,6 +555,7 @@ impl PalaceStore {
                 source_fp,
                 receipt_tag.as_ref().map(|t| t.as_slice()),
                 support_rest.as_deref(),
+                extractor,
             ],
         )?;
         let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
@@ -541,6 +613,204 @@ impl PalaceStore {
             });
         }
         Ok(out)
+    }
+
+    /// Every fact, decoded and tag-verified, paired with its receipt's
+    /// unkeyed source fingerprint (hex) where one exists — the export half
+    /// of closing the meta-rows gap. The fingerprint travels so the
+    /// importing vault can re-key the receipt under its own mac without
+    /// ever seeing the source content (exactly what rotation does).
+    pub fn kg_export(&self) -> Result<Vec<TripleExport>, StoreError> {
+        let sql =
+            format!("SELECT {TRIPLE_COLUMNS}, source_fp, receipt_tag FROM kg_triples ORDER BY seq");
+        let mut stmt = self.conn.prepare(&sql)?;
+        // (row, source fingerprint, receipt tag)
+        type ExportRow = (TripleRow, Option<Vec<u8>>, Option<Vec<u8>>);
+        let rows: Vec<ExportRow> = stmt
+            .query_map([], |r| {
+                Ok((TripleRow::from_row(r)?, r.get(15)?, r.get(16)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (row, fp, receipt) in rows {
+            let triple = self.decode_triple(row)?;
+            out.push(TripleExport {
+                triple,
+                // The fingerprint is receipt material: exported only when
+                // a receipt exists to re-key at the destination.
+                source_fp: receipt.and(fp).map(hex::encode),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Entity rows for export: `(name, etype)`, tag-verified.
+    pub fn kg_export_entities(&self) -> Result<Vec<(String, String)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, etype, tag, created_at FROM kg_entities ORDER BY name")?;
+        let rows: Vec<(String, String, String, Vec<u8>, String)> = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (id, name, etype, tag, created) in rows {
+            let canonical = format!("{id}\x1f{name}\x1f{etype}\x1f{created}");
+            self.vault
+                .verify_tag(canonical.as_bytes(), &tag)
+                .map_err(|_| StoreError::Integrity(id.clone()))?;
+            out.push((name, etype));
+        }
+        Ok(out)
+    }
+
+    /// Import one exported fact into this vault: re-sealed under this
+    /// vault's keys, re-tagged with every extension the fact carries
+    /// (support, authority, extractor), the receipt re-keyed from the
+    /// traveling fingerprint. History imports as history — a closed fact
+    /// stays closed. Idempotent by fact id.
+    pub fn kg_import(&mut self, exp: &TripleExport) -> Result<String, StoreError> {
+        let t = &exp.triple;
+        undercroft_core::validate_name(&t.subject, "subject").map_err(|e| {
+            StoreError::CorruptRow {
+                id: t.subject.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+        undercroft_core::validate_name(&t.predicate, "predicate").map_err(|e| {
+            StoreError::CorruptRow {
+                id: t.predicate.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+        self.ensure_entity(&t.subject)?;
+        // The id is re-derived, never trusted from the wire: the same
+        // deterministic recipe every locally-written fact gets.
+        let id = triple_id(&t.subject, &t.predicate, &t.object, t.valid_from.as_deref());
+        let object_rest = self
+            .vault
+            .content_at_rest(&format!("kg/{id}"), t.object.as_bytes());
+        let support_rest = t
+            .support
+            .as_ref()
+            .map(|s| serde_json::to_vec(s).unwrap_or_default())
+            .map(|bytes| {
+                self.vault
+                    .content_at_rest(&format!("kg/{id}/support"), &bytes)
+            });
+        let auth = authority_ext(
+            t.authority_class.as_deref(),
+            t.review_state.as_deref(),
+            t.canonical_key.as_deref(),
+        );
+        let ext = extractor_ext(t.extractor.as_deref());
+        let tag = self.vault.tag(&triple_canonical(
+            &id,
+            &t.subject,
+            &t.predicate,
+            &object_rest,
+            &t.valid_from,
+            &t.valid_to,
+            t.confidence,
+            support_rest.as_deref(),
+            auth.as_deref(),
+            ext.as_deref(),
+        ));
+        let source_fp = exp
+            .source_fp
+            .as_deref()
+            .map(hex::decode)
+            .transpose()
+            .map_err(|e| StoreError::CorruptRow {
+                id: id.clone(),
+                reason: format!("source_fp is not hex: {e}"),
+            })?;
+        let receipt_tag = source_fp
+            .as_ref()
+            .zip(t.source_drawer_id.as_deref())
+            .map(|(fp, did)| self.vault.tag(&receipt_canonical(&id, did, fp)));
+        let now = now_rfc3339();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
+                                     confidence, source_drawer_id, tag, extracted_at,
+                                     source_fp, receipt_tag, support,
+                                     authority_class, review_state, canonical_key, extractor)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+             ON CONFLICT(id) DO UPDATE SET
+                 object = excluded.object,
+                 valid_to = excluded.valid_to,
+                 confidence = excluded.confidence,
+                 source_drawer_id = excluded.source_drawer_id,
+                 tag = excluded.tag,
+                 source_fp = excluded.source_fp,
+                 receipt_tag = excluded.receipt_tag,
+                 support = excluded.support,
+                 authority_class = excluded.authority_class,
+                 review_state = excluded.review_state,
+                 canonical_key = excluded.canonical_key,
+                 extractor = excluded.extractor",
+            params![
+                id,
+                t.subject,
+                t.predicate,
+                object_rest,
+                t.valid_from,
+                t.valid_to,
+                t.confidence,
+                t.source_drawer_id,
+                tag.as_slice(),
+                // extracted_at is provenance from the source vault, kept.
+                t.extracted_at,
+                source_fp,
+                receipt_tag.as_ref().map(|r| r.as_slice()),
+                support_rest.as_deref(),
+                t.authority_class,
+                t.review_state,
+                t.canonical_key,
+                t.extractor,
+            ],
+        )?;
+        let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        undercroft_obs::kg_write(undercroft_obs::KgKind::Triple);
+        undercroft_obs::event_kg_triple(self.vault.id());
+        Ok(id)
+    }
+
+    /// Import one entity row: created when absent, and an `unknown` etype
+    /// is refined by the imported one; a more specific local etype is
+    /// never overwritten by an import.
+    pub fn kg_import_entity(&mut self, name: &str, etype: &str) -> Result<(), StoreError> {
+        undercroft_core::validate_name(name, "entity").map_err(|e| StoreError::CorruptRow {
+            id: name.into(),
+            reason: e.to_string(),
+        })?;
+        self.ensure_entity(name)?;
+        if etype == "unknown" {
+            return Ok(());
+        }
+        let existing: Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, etype, created_at FROM kg_entities WHERE name = ?1",
+                params![name],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        if let Some((id, cur, created)) = existing {
+            if cur == "unknown" {
+                let canonical = format!("{id}\x1f{name}\x1f{etype}\x1f{created}");
+                let tag = self.vault.tag(canonical.as_bytes());
+                self.conn.execute(
+                    "UPDATE kg_entities SET etype = ?1, tag = ?2 WHERE id = ?3",
+                    params![etype, tag.as_slice(), id],
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// One triple's raw row by id, tag NOT yet verified.
@@ -640,6 +910,7 @@ impl PalaceStore {
                     held.review_state.as_deref(),
                     held.canonical_key.as_deref(),
                 );
+                let ext = extractor_ext(held.extractor.as_deref());
                 let tag = self.vault.tag(&triple_canonical(
                     &held.id,
                     &held.subject,
@@ -650,6 +921,7 @@ impl PalaceStore {
                     held.confidence,
                     held.support.as_deref(),
                     auth.as_deref(),
+                    ext.as_deref(),
                 ));
                 let tx = self.conn.transaction()?;
                 tx.execute(
@@ -666,6 +938,7 @@ impl PalaceStore {
         }
 
         let auth = authority_ext(Some(authority_class), Some(review_state), canonical_key);
+        let ext = extractor_ext(row.extractor.as_deref());
         let tag = self.vault.tag(&triple_canonical(
             &row.id,
             &row.subject,
@@ -676,6 +949,7 @@ impl PalaceStore {
             row.confidence,
             row.support.as_deref(),
             auth.as_deref(),
+            ext.as_deref(),
         ));
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
@@ -775,6 +1049,7 @@ impl PalaceStore {
             authority_class: row.authority_class,
             review_state: row.review_state,
             canonical_key: row.canonical_key,
+            extractor: row.extractor,
         })
     }
 
@@ -868,6 +1143,7 @@ impl PalaceStore {
                 t.review_state.as_deref(),
                 t.canonical_key.as_deref(),
             );
+            let ext = extractor_ext(t.extractor.as_deref());
             let tag = self.vault.tag(&triple_canonical(
                 &t.id,
                 &t.subject,
@@ -878,6 +1154,7 @@ impl PalaceStore {
                 t.confidence,
                 support_rest.as_deref(),
                 auth.as_deref(),
+                ext.as_deref(),
             ));
             let tx = self.conn.transaction()?;
             tx.execute(
@@ -1039,6 +1316,10 @@ struct TripleRow {
     authority_class: Option<String>,
     review_state: Option<String>,
     canonical_key: Option<String>,
+    /// Extractor identity — inside the canonical (via the extractor
+    /// extension) whenever set, same warning as `support`: drop it from a
+    /// re-tag and every attributed fact reads as tampered.
+    extractor: Option<String>,
 }
 
 /// Columns every triple read needs, in the order `TripleRow::from_row`
@@ -1046,7 +1327,7 @@ struct TripleRow {
 /// miss another — the failure mode there is a false tamper alarm.
 const TRIPLE_COLUMNS: &str = "id, subject, predicate, object, valid_from, valid_to, confidence, \
                               source_drawer_id, tag, extracted_at, support, \
-                              authority_class, review_state, canonical_key";
+                              authority_class, review_state, canonical_key, extractor";
 
 impl TripleRow {
     fn from_row(r: &rusqlite::Row<'_>) -> Result<Self, rusqlite::Error> {
@@ -1065,6 +1346,7 @@ impl TripleRow {
             authority_class: r.get(11)?,
             review_state: r.get(12)?,
             canonical_key: r.get(13)?,
+            extractor: r.get(14)?,
         })
     }
 
@@ -1076,6 +1358,7 @@ impl TripleRow {
             self.review_state.as_deref(),
             self.canonical_key.as_deref(),
         );
+        let ext = extractor_ext(self.extractor.as_deref());
         triple_canonical(
             &self.id,
             &self.subject,
@@ -1086,6 +1369,7 @@ impl TripleRow {
             self.confidence,
             self.support.as_deref(),
             auth.as_deref(),
+            ext.as_deref(),
         )
     }
 }
@@ -1140,6 +1424,7 @@ mod tests {
             0.8,
             ("drawer-1", NOTE),
             Some(&support),
+            None,
         )
         .unwrap()
     }
@@ -1392,6 +1677,7 @@ mod tests {
                 None,
                 0.8,
                 (&src_id, &src.content),
+                None,
             )
             .unwrap();
 
@@ -1412,8 +1698,17 @@ mod tests {
     #[test]
     fn receipt_dangling_when_source_absent() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        s.kg_add_receipted("x", "rel", "y", None, None, 0.8, ("no-such-drawer", "text"))
-            .unwrap();
+        s.kg_add_receipted(
+            "x",
+            "rel",
+            "y",
+            None,
+            None,
+            0.8,
+            ("no-such-drawer", "text"),
+            None,
+        )
+        .unwrap();
         let r = s.kg_verify_receipts().unwrap();
         assert_eq!(r[0].verdict, ReceiptVerdict::Dangling);
     }
@@ -1425,8 +1720,17 @@ mod tests {
         s.upsert(&src).unwrap();
         s.kg_add("a", "rel", "b", None, None, 1.0, Some(&src.id))
             .unwrap();
-        s.kg_add_receipted("c", "rel", "d", None, None, 0.8, (&src.id, &src.content))
-            .unwrap();
+        s.kg_add_receipted(
+            "c",
+            "rel",
+            "d",
+            None,
+            None,
+            0.8,
+            (&src.id, &src.content),
+            None,
+        )
+        .unwrap();
         // Only the receipted fact is verified; the plain citation (stored
         // but not tamper-covered) is not treated as a receipt.
         let r = s.kg_verify_receipts().unwrap();
@@ -1440,8 +1744,17 @@ mod tests {
         let src = src_drawer("source words for the receipt");
         let src_id = src.id.clone();
         s.upsert(&src).unwrap();
-        s.kg_add_receipted("a", "rel", "b", None, None, 0.8, (&src_id, &src.content))
-            .unwrap();
+        s.kg_add_receipted(
+            "a",
+            "rel",
+            "b",
+            None,
+            None,
+            0.8,
+            (&src_id, &src.content),
+            None,
+        )
+        .unwrap();
         drop(s);
 
         // Offline attacker rewrites the citation binding.
@@ -1552,6 +1865,123 @@ mod tests {
             Err(crate::StoreError::Integrity(_))
         ));
         assert_eq!(s.kg_verify().unwrap(), vec![format!("kg/{id}")]);
+    }
+
+    /// Extractor identity: recorded on the fact, readable back, and inside
+    /// the HMAC — a flipped attribution fails verification exactly like a
+    /// flipped review_state. Facts that never recorded one stay verifiable
+    /// (every other test in this module writes extractor-less facts).
+    #[test]
+    fn extractor_identity_is_recorded_and_tamper_covered() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let src = src_drawer("Ada moved the deploys to Tuesdays.");
+        let src_id = src.id.clone();
+        s.upsert(&src).unwrap();
+        let id = s
+            .kg_add_receipted(
+                "ada",
+                "deploys_on",
+                "tuesdays",
+                None,
+                None,
+                0.8,
+                (&src_id, &src.content),
+                Some("llama3.2:1b"),
+            )
+            .unwrap();
+        let fact = s
+            .kg_query_entity("ada", None, "outgoing")
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == id)
+            .expect("fact readable");
+        assert_eq!(fact.extractor.as_deref(), Some("llama3.2:1b"));
+        assert!(s.kg_verify().unwrap().is_empty());
+
+        // An offline attacker rewrites the attribution — which model claimed
+        // a fact is provenance, so the flip must fail verification.
+        s.conn
+            .execute(
+                "UPDATE kg_triples SET extractor = 'gpt-x' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        assert_eq!(s.kg_verify().unwrap(), vec![format!("kg/{id}")]);
+    }
+
+    /// The meta-rows export gap, closed and pinned: facts cross vaults
+    /// with their receipts (re-keyed), grounding, authority tier,
+    /// extractor identity and validity windows intact — and verify clean
+    /// under the destination's keys.
+    #[test]
+    fn kg_export_import_roundtrip_preserves_everything() {
+        let (_d1, mut src_store) = store(SecurityLevel::Sealed);
+        let source = src_drawer("Ada moved the standup to 09:30 on Mondays.");
+        src_store.upsert(&source).unwrap();
+        let fact_id = src_store
+            .kg_add_receipted(
+                "ada",
+                "standup_at",
+                "0930-mondays",
+                Some("2026-01-01"),
+                None,
+                0.8,
+                (&source.id, &source.content),
+                Some("llama3.2:1b"),
+            )
+            .unwrap();
+        src_store
+            .kg_set_authority(&fact_id, "canonical", "approved", Some("ada-standup"))
+            .unwrap();
+        // A closed fact: history must import as history.
+        src_store
+            .kg_add(
+                "ada",
+                "office",
+                "berlin",
+                Some("2024-01-01"),
+                Some("2025-06-30"),
+                1.0,
+                None,
+            )
+            .unwrap();
+
+        let facts = src_store.kg_export().unwrap();
+        assert_eq!(facts.len(), 2);
+        assert!(facts.iter().any(|f| f.source_fp.is_some()));
+        let entities = src_store.kg_export_entities().unwrap();
+
+        let (_d2, mut dst) = store(SecurityLevel::Sealed);
+        // Drawer first (as an import stream orders it), then the graph.
+        dst.upsert(&source).unwrap();
+        for (name, etype) in &entities {
+            dst.kg_import_entity(name, etype).unwrap();
+        }
+        for exp in &facts {
+            dst.kg_import(exp).unwrap();
+        }
+
+        // Everything verifies under the DESTINATION's keys.
+        assert!(dst.kg_verify().unwrap().is_empty());
+        // The receipt re-keyed and binds against the imported drawer.
+        let receipts = dst.kg_verify_receipts().unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].verdict, ReceiptVerdict::Verified);
+        // The authority tier crossed: the exact door answers.
+        let hit = dst
+            .lookup_canonical("ada-standup")
+            .unwrap()
+            .expect("canonical fact imported");
+        assert_eq!(hit.object, "0930-mondays");
+        assert_eq!(hit.extractor.as_deref(), Some("llama3.2:1b"));
+        // History stayed history.
+        let closed = dst
+            .kg_timeline(None)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.predicate == "office")
+            .expect("closed fact imported");
+        assert_eq!(closed.valid_to.as_deref(), Some("2025-06-30"));
     }
 
     #[test]

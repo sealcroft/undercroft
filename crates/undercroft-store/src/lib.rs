@@ -23,7 +23,7 @@ mod pqidx;
 pub mod remote;
 mod rotate;
 
-pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, Triple};
+pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel};
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use rotate::RotationReport;
@@ -502,6 +502,27 @@ pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> V
     out.extend_from_slice(meta_json);
     out.push(0x1f);
     out.extend_from_slice(content_at_rest);
+    out
+}
+
+/// Canonical bytes of a drawer **supersession receipt**: the tamper-covered
+/// binding of a superseding drawer to the verbatim drawer it replaces —
+/// [`kg::receipt_canonical`] one level up, same shape and same reasoning.
+/// Keyed with the vault mac, and the superseding drawer's own id is inside
+/// the binding, so a receipt cannot be moved to a different drawer. The
+/// fingerprint is unkeyed (rotation-stable); the *tag* over these bytes is
+/// what makes the citation unforgeable.
+pub(crate) fn supersession_canonical(
+    drawer_id: &str,
+    supersedes_id: &str,
+    source_fp: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(drawer_id.as_bytes());
+    out.push(0x1f);
+    out.extend_from_slice(supersedes_id.as_bytes());
+    out.push(0x1f);
+    out.extend_from_slice(source_fp);
     out
 }
 
@@ -1631,6 +1652,27 @@ impl PalaceStore {
         matches!(self.vault.level(), SecurityLevel::Sealed)
     }
 
+    /// Facts a bundle manifest states about this vault: `(vault id,
+    /// security level, embedder identity, committed audit-chain head)`.
+    /// Provenance only — none of it is importable state.
+    pub fn manifest_facts(&self) -> Result<(String, String, String, String), StoreError> {
+        let head: String =
+            self.conn
+                .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
+                    r.get(0)
+                })?;
+        let level = match self.vault.level() {
+            undercroft_vault::SecurityLevel::Sealed => "sealed",
+            undercroft_vault::SecurityLevel::HmacOnly => "hmac-only",
+        };
+        Ok((
+            self.vault.id().to_string(),
+            level.to_string(),
+            self.embedder.model_name().to_string(),
+            head,
+        ))
+    }
+
     pub fn count(&self) -> Result<u64, StoreError> {
         let n: i64 = self
             .conn
@@ -1792,6 +1834,36 @@ impl PalaceStore {
                 reason: e.to_string(),
             })?;
         }
+        // A declared supersession link is receipted here, at the same choke
+        // point, so no surface can write an unbound claim by accident. When
+        // the superseded drawer exists, its verbatim content is
+        // fingerprinted (unkeyed — rotation-stable, the kg source_fp
+        // precedent) and bound under a keyed receipt; when it does not (an
+        // out-of-order import), the link is recorded with no receipt and
+        // `verify_supersessions` reports it, never silently dropped.
+        // Superseding never deletes: the old drawer is untouched.
+        // (superseded id, Some((fingerprint, receipt)) when bound)
+        type Supersession = Option<(String, Option<(Vec<u8>, Vec<u8>)>)>;
+        let supersession: Supersession = match drawer.meta.supersedes.as_deref() {
+            Some(old_id) if old_id == drawer.id => {
+                return Err(StoreError::CorruptRow {
+                    id: drawer.id.clone(),
+                    reason: "a drawer cannot supersede itself".into(),
+                });
+            }
+            Some(old_id) => {
+                let bound = self.get(old_id)?.map(|old| {
+                    let fp = crate::kg::content_fp(&old.content);
+                    let receipt = self
+                        .vault
+                        .tag(&supersession_canonical(&drawer.id, old_id, &fp))
+                        .to_vec();
+                    (fp, receipt)
+                });
+                Some((old_id.to_string(), bound))
+            }
+            None => None,
+        };
         // meta_json is stored unsealed, so it must not carry words copied out
         // of the content — the date expressions and names that derivation
         // lifts verbatim. `meta_at_rest` empties exactly those and keeps the
@@ -1829,9 +1901,24 @@ impl PalaceStore {
         // meta is compared against the filter's promise (and the filter
         // itself only ever narrows — a forged mirror can hide a row from a
         // kind filter, never smuggle one in past verification).
+        // The supersedes column mirrors meta_json's declared link the way
+        // kind mirrors its label: the copy inside meta_json is the one the
+        // drawer HMAC covers, the column serves the indexed chain query,
+        // and the keyed receipt binds the link to the superseded content
+        // so neither column can be rewritten offline without detection.
+        let (sup_id, sup_fp, sup_receipt) = match &supersession {
+            Some((old_id, Some((fp, receipt)))) => (
+                Some(old_id.as_str()),
+                Some(fp.as_slice()),
+                Some(receipt.as_slice()),
+            ),
+            Some((old_id, None)) => (Some(old_id.as_str()), None, None),
+            None => (None, None, None),
+        };
         self.conn.execute(
-            "INSERT INTO drawers (id, wing, room, kind, meta_json, content, embedding, tag, fp, filed_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+            "INSERT INTO drawers (id, wing, room, kind, meta_json, content, embedding, tag, fp, \
+                                  supersedes, supersedes_fp, supersedes_receipt, filed_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
              ON CONFLICT(id) DO UPDATE SET
                  wing = excluded.wing,
                  room = excluded.room,
@@ -1841,6 +1928,9 @@ impl PalaceStore {
                  embedding = excluded.embedding,
                  tag = excluded.tag,
                  fp = excluded.fp,
+                 supersedes = excluded.supersedes,
+                 supersedes_fp = excluded.supersedes_fp,
+                 supersedes_receipt = excluded.supersedes_receipt,
                  updated_at = excluded.updated_at",
             params![
                 drawer.id,
@@ -1852,6 +1942,9 @@ impl PalaceStore {
                 emb_rest,
                 tag.as_slice(),
                 fp,
+                sup_id,
+                sup_fp,
+                sup_receipt,
                 now,
             ],
         )?;
@@ -6378,6 +6471,9 @@ mod tests {
         .with_content_date(Some("2023-05-08".into()));
         d.meta.hall = Some("hallsecretlabel".into());
         d.meta.kind = Some("decision".into());
+        // A supersession link to a fabricated id: the link itself (both the
+        // meta copy and the mirror column) is part of the exposure below.
+        d.meta.supersedes = Some("supersededprobeid".into());
         s.upsert(&d).unwrap();
         drop(s);
         let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
@@ -6402,6 +6498,12 @@ mod tests {
             // the docs/LABELS.md exposure rule — readable both in the
             // mirror column and inside meta_json.
             ("declared kind", "decision"),
+            // The supersession link is a deliberate leak of relationship
+            // structure: drawer ids are HMAC-derived hex, so the link
+            // reveals which record replaced which — chain topology, never
+            // content. (The receipt fingerprint beside it is an unkeyed
+            // SHA-256 of superseded content — the kg source_fp precedent.)
+            ("supersession link", "supersededprobeid"),
         ] {
             assert!(
                 has(needle),
@@ -6628,15 +6730,20 @@ mod tests {
             .unwrap();
         assert_eq!(
             cols.join(","),
-            "content,embedding,filed_at,fp,id,kind,meta_json,room,seq,tag,updated_at,wing",
+            "content,embedding,filed_at,fp,id,kind,meta_json,room,seq,supersedes,\
+             supersedes_fp,supersedes_receipt,tag,updated_at,wing",
             "a column on `drawers` is per-drawer bytes: price it in `priced` or say \
              here why it is free. Unpriced today and known: `fp` (a truncated-HMAC \
              blind index), `meta_json` (unsealed metadata, whose exposure is pinned \
              by a_sealed_vault_exposes_metadata_but_never_content), `tag` (the \
              record HMAC), `kind` (a closed-vocabulary declared label, NULL for \
              every undeclared drawer, ≤10 bytes when set, mirrored out of \
-             meta_json for the indexed filter) — all fixed-size or \
-             metadata-sized, none scaling with content"
+             meta_json for the indexed filter), and the supersession trio \
+             (`supersedes` a 32-hex id mirror, `supersedes_fp` a 32-byte unkeyed \
+             fingerprint, `supersedes_receipt` a 32-byte keyed binding — all \
+             three NULL for every drawer that supersedes nothing, which is \
+             almost all of them) — all fixed-size or metadata-sized, none \
+             scaling with content"
         );
 
         // 3. The bytes, artifact by artifact — equalities.
