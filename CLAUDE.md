@@ -584,7 +584,14 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   shared literal tokens/trigrams — measured, an EN/AR translation pair scores
   *below* an unrelated sentence, and `car`/`automobile` do not match either.
   Needs a multilingual model via `onnx`/`ort`/**`http`**, or an external
-  vault. Reading dates *inside* the text is the **scanner's** job (`language`
+  vault. Measured 2026-08-03 (first real xlingual run, bge-m3 served):
+  the capability is real — R@1 88–100% per pair on a foreign-target
+  corpus — but a **mixed-language corpus collapses it to ~0%**, an OPEN
+  DEFECT: the `(cos+1)/2` map is hash-calibrated, so a served model's
+  compressed semantic channel loses to same-language function-word BM25
+  noise (root cause, three controls and the named per-embedder-floor fix
+  in CHANGELOG/ROADMAP). Reading dates *inside* the text is the
+  **scanner's** job (`language`
   per request) and is independent of which embedder found the drawer.
   **A served embedder is worth far more than the repo used to think.** The
   standing conclusion was "a semantic embedder is NOT the biggest lever",
