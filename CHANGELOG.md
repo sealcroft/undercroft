@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased — the update path is screened on who is writing NOW (C3.3)
+
+- **The recorded update-path gap closes, and it was provenance-shaped**:
+  `update_drawer` re-upserted the hydrated drawer carrying its ORIGINAL
+  `added_by`, so with a trusted-surface posture declared
+  (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`), an update arriving over an
+  untrusted surface rode the original writer's standing straight past
+  the screen. Now the drawer's `added_by` is **re-stamped with the
+  updating surface** (handler-stamped — `cli`/`mcp`/`rest` — never
+  caller-set) before the screen runs: the posture keys on who is
+  writing NOW, which is also the truthful provenance — the updater
+  wrote the content the drawer holds. Pinned: an untrusted-surface
+  flagged update to a trusted-surface drawer quarantines; the same
+  update from the trusted surface auto-admits; admission-off updates
+  are contract-identical.
+- **A diverted update tells the truth**: `UpdateOutcome`
+  (`Updated | Quarantined | NotFound`) replaces the old bool — a
+  flagged update diverts to quarantine like a flagged save, the drawer
+  keeps its previous content until a ruling, and every surface says so
+  (MCP text, `/v1` answers **202 `{quarantined: true}`**, CLI prints
+  the pending pointer) instead of reporting "updated". Allowing the
+  quarantined update re-files it onto the original slot — the review
+  IS the update's admission.
+- **Quarantine-pending drawers are not editable**: an update aimed at a
+  resident of the reserved wing is refused with the rulings named — the
+  reviewer must rule on exactly what the screen saw, so pending
+  evidence cannot be sanitized (or poisoned further) in place.
+- Pinned by the surface-riding test (untrusted update to a
+  trusted-surface drawer quarantines → allow applies it onto the
+  original slot carrying the updating surface → trusted-surface update
+  auto-admits → admission-off contract identical) and three e2e checks
+  (flagged update quarantines and says so, the drawer keeps its words,
+  the deny receipt cleans up). e2e grows 194 → **197**.
+
 ## Unreleased — time gets a policy and denial gets a receipt (C3.2 phase 2)
 
 - **Retention policies per wing/room** (`retention.rs`): the operator

@@ -2274,10 +2274,15 @@ fn main() -> Result<()> {
                     }
                 }
                 DrawerAction::Update { id, content } => {
-                    if store.update_drawer(id, content)? {
-                        println!("Updated drawer {id}");
-                    } else {
-                        bail!("no drawer with id {id}");
+                    match store.update_drawer(id, content, "cli")? {
+                        undercroft_store::UpdateOutcome::Updated => println!("Updated drawer {id}"),
+                        undercroft_store::UpdateOutcome::Quarantined => println!(
+                            "Update to {id} quarantined pending review — the drawer \
+                             keeps its previous content (see `undercroft admission list`)."
+                        ),
+                        undercroft_store::UpdateOutcome::NotFound => {
+                            bail!("no drawer with id {id}")
+                        }
                     }
                 }
                 DrawerAction::Delete { id } => {
