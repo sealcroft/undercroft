@@ -309,6 +309,23 @@ impl Tenancy {
         self.secret.is_some()
     }
 
+    /// The same assertion gate every `/v1` handler runs, for a transport
+    /// that is not `/v1`.
+    ///
+    /// `/mcp` is mounted on this server, in this process, and serves the
+    /// full read/write tool surface of the vault named by `--vault`. It had
+    /// no assertion check, so an operator who declared
+    /// `UNDERCROFT_ASSERTION_SECRET` — precisely to stop one bearer from
+    /// addressing every vault — still left that one vault open to anyone
+    /// holding the palace bearer, while the startup banner claimed
+    /// "per-vault assertions required" without qualification. Isolation is
+    /// a property of the engine, not of which port path you drive.
+    /// Unset secret ⇒ `Ok`, so a deployment that never declared it sees no
+    /// change at all.
+    pub fn assert_transport(&self, vault_id: &str, req: &Request, now: i64) -> Result<(), u16> {
+        self.assert_or_401(vault_id, req, now).map_err(|e| e.code)
+    }
+
     /// Consume and answer one `/v1/...` request. The body is read up front
     /// (tiny_http hands it out only via `&mut Request`); everything after
     /// routes on the borrowed request plus that body string.

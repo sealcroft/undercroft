@@ -15,6 +15,21 @@ use undercroft_core::{entity::extract_entities, Drawer};
 
 use crate::{chain_append, PalaceStore, StoreError};
 
+/// Whether a delete may destroy a drawer that is still awaiting an
+/// admission ruling. Stated by every caller of the delete choke point —
+/// a required argument cannot be forgotten the way a call-site check can,
+/// and `Ruled` is one greppable token naming the only legitimate reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingEvidence {
+    /// Refuse quarantine-pending drawers: destroying evidence that has no
+    /// ruling behind it leaves an audit trail that cannot tell an
+    /// admission decision from routine housekeeping.
+    Protect,
+    /// The caller IS the ruling path (`admission allow`/`deny`), which has
+    /// already appended its `admission/<id>/<verdict>` record.
+    Ruled,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DrawerSummary {
     pub id: String,
@@ -374,13 +389,18 @@ impl PalaceStore {
     }
 
     /// Exact-duplicate lookup by content. Returns the existing drawer id.
+    ///
+    /// Quarantine-pending rows do not answer: this is an oracle any writer
+    /// can drive with content it chose, so answering would confirm that a
+    /// screened write landed and hand back the quarantine id — the one
+    /// thing the save path deliberately withholds from the writer.
     pub fn check_duplicate(&self, content: &str) -> Result<Option<String>, StoreError> {
         let fp = self.fingerprint(content);
         Ok(self
             .conn
             .query_row(
-                "SELECT id FROM drawers WHERE fp = ?1 LIMIT 1",
-                params![fp],
+                "SELECT id FROM drawers WHERE fp = ?1 AND wing <> ?2 LIMIT 1",
+                params![fp, crate::admission::QUARANTINE_WING],
                 |r| r.get(0),
             )
             .optional()?)
@@ -437,7 +457,39 @@ impl PalaceStore {
 
     /// Delete one drawer. Logs a keyed tombstone in the audit chain so the
     /// deletion itself is tamper-evident. Returns whether the id existed.
+    ///
+    /// **Refuses a quarantine-pending drawer.** That drawer is the evidence
+    /// a reviewer has not ruled on yet, and an ordinary delete leaves only a
+    /// `del/<id>` tombstone — indistinguishable from routine housekeeping,
+    /// with no `admission/<id>/<verdict>` record and no destruction
+    /// attestation, while the row simply vanishes from `admission list`.
+    /// `update_drawer` already refuses to EDIT such a drawer; deleting it
+    /// destroys strictly more, so it is refused on every surface, not only
+    /// on the one an agent drives. `admission allow`/`deny` are the doors,
+    /// and both record their verdict before they touch the row.
     pub fn delete_drawer(&mut self, id: &str) -> Result<bool, StoreError> {
+        self.delete_drawer_ruled(id, PendingEvidence::Protect)
+    }
+
+    /// The delete choke point. Every caller states whether it may destroy
+    /// pending review evidence, so a new delete path does not compile until
+    /// its author decides — the same shape the write choke point uses for
+    /// the admission screen, and the reason `delete_by_source`,
+    /// `forget_with_proof` and the retention sweep all inherit the fence
+    /// without repeating it.
+    pub(crate) fn delete_drawer_ruled(
+        &mut self,
+        id: &str,
+        evidence: PendingEvidence,
+    ) -> Result<bool, StoreError> {
+        if let PendingEvidence::Protect = evidence {
+            if self.is_quarantine_pending(id)? {
+                return Err(StoreError::Invalid(format!(
+                    "{id} is quarantine-pending — rule on it with `admission \
+                     allow`/`deny`; pending review evidence is not deletable"
+                )));
+            }
+        }
         // Purge the PQ code first (needs the live seq): the ADC scan reads
         // codes without joining drawers, so orphans would linger as wasted
         // candidate slots until the next rebuild. Tail rows delete; a code
@@ -487,12 +539,35 @@ impl PalaceStore {
     }
 
     /// Delete every drawer mined from one source file. Returns the count.
+    ///
+    /// A diverted chunk keeps its `source_file`, so this can name pending
+    /// review evidence. The whole call is refused BEFORE anything is
+    /// deleted rather than half-way through: failing mid-loop would destroy
+    /// part of a source and then report an error, leaving the operator
+    /// unsure what survived.
     pub fn delete_by_source(&mut self, source_file: &str) -> Result<u64, StoreError> {
         let ids: Vec<String> = self
             .conn
             .prepare("SELECT id FROM drawers WHERE json_extract(meta_json, '$.source_file') = ?1")?
             .query_map(params![source_file], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
+        let pending: Vec<&String> = ids
+            .iter()
+            .filter(|id| self.is_quarantine_pending(id).unwrap_or(false))
+            .collect();
+        if !pending.is_empty() {
+            return Err(StoreError::Invalid(format!(
+                "{source_file} has {} drawer(s) awaiting admission review \
+                 ({}) — rule on them with `admission allow`/`deny` first; \
+                 nothing was deleted",
+                pending.len(),
+                pending
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         let mut count = 0u64;
         for id in ids {
             if self.delete_drawer(&id)? {
@@ -500,6 +575,24 @@ impl PalaceStore {
             }
         }
         Ok(count)
+    }
+
+    /// Whether `id` names a drawer currently awaiting an admission ruling.
+    ///
+    /// Reads the CLEAR `wing` column deliberately: `admission_pending` — the
+    /// reviewer's queue — enumerates on exactly this column, so the fence
+    /// and the queue can never disagree about what is pending. (Reading the
+    /// HMAC-covered `meta.wing` instead would make an unreadable row
+    /// undeletable, which turns a repair problem into a stuck vault; a
+    /// flipped column is already an integrity failure `verify` reports.)
+    pub fn is_quarantine_pending(&self, id: &str) -> Result<bool, StoreError> {
+        let wing: Option<String> = self
+            .conn
+            .query_row("SELECT wing FROM drawers WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(wing.as_deref() == Some(crate::admission::QUARANTINE_WING))
     }
 
     /// Replace a drawer's content in place (same id/slot), re-sealed,
@@ -650,13 +743,23 @@ impl PalaceStore {
     /// nothing could recover. Collapsing the *text* is right — it is the same
     /// text — but the chronology of when it appeared is data, so it moves to
     /// the survivor's `occurrences` before the row goes.
+    ///
+    /// Quarantine-pending rows are excluded from both halves of the scan.
+    /// They are not part of the retrievable corpus, so they are not
+    /// duplicates of anything in it; letting them in gave dedup two ways to
+    /// destroy a drawer no one had ruled on — as a dropped member of a
+    /// group, or by winning the earliest-`seq` survivor slot and taking a
+    /// live drawer down with it. Excluding is better than refusing here:
+    /// the operator gets the dedup they asked for, and the review queue is
+    /// simply not its business.
     pub fn dedup(&mut self, apply: bool) -> Result<DedupReport, StoreError> {
+        let live = format!("wing <> '{}'", crate::admission::QUARANTINE_WING);
         let groups: Vec<(Vec<u8>, i64)> = self
             .conn
-            .prepare(
-                "SELECT fp, COUNT(*) FROM drawers WHERE fp IS NOT NULL
-                 GROUP BY fp HAVING COUNT(*) > 1",
-            )?
+            .prepare(&format!(
+                "SELECT fp, COUNT(*) FROM drawers WHERE fp IS NOT NULL AND {live}
+                 GROUP BY fp HAVING COUNT(*) > 1"
+            ))?
             .query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<Result<_, _>>()?;
         let mut removed = Vec::new();
@@ -664,7 +767,9 @@ impl PalaceStore {
         for (fp, _) in &groups {
             let ids: Vec<String> = self
                 .conn
-                .prepare("SELECT id FROM drawers WHERE fp = ?1 ORDER BY seq")?
+                .prepare(&format!(
+                    "SELECT id FROM drawers WHERE fp = ?1 AND {live} ORDER BY seq"
+                ))?
                 .query_map(params![fp], |r| r.get(0))?
                 .collect::<Result<_, _>>()?;
             let Some((keep_id, drop_ids)) = ids.split_first() else {

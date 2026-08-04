@@ -281,7 +281,9 @@ impl PalaceStore {
             crate::Screen::Bypass(crate::BypassReason::OperatorRuling),
         )?;
         self.admission_ruling(id, "allowed", Some(&restored_id))?;
-        self.delete_drawer(id)?;
+        // `Ruled`: the verdict is already in the chain one line above, which
+        // is exactly what the plain delete path refuses to proceed without.
+        self.delete_drawer_ruled(id, crate::manage::PendingEvidence::Ruled)?;
         Ok(restored_id)
     }
 
@@ -299,7 +301,9 @@ impl PalaceStore {
         // Verifies it exists and is actually quarantined before ruling.
         self.quarantined(id)?;
         self.admission_ruling(id, "denied", None)?;
-        self.forget_with_proof(&[id.to_string()])
+        // `Ruled`: the deny verdict is committed; the attested destruction
+        // is the effect of a ruling, not an ordinary forget.
+        self.forget_with_proof_ruled(&[id.to_string()], crate::manage::PendingEvidence::Ruled)
     }
 
     /// Append a ruling record without acting on it — the crash-window
