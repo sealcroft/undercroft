@@ -8,8 +8,8 @@ mod assertion;
 mod http;
 mod i18n;
 mod mcp;
-mod search;
 mod refine;
+mod search;
 mod tenant;
 
 use anyhow::{bail, Context, Result};
@@ -390,14 +390,6 @@ enum Command {
         vault: String,
         #[arg(long)]
         wing: Option<String>,
-        /// Only distil drawers in this room (default: every room but
-        /// --fact-room, so a re-run never distils its own output)
-        #[arg(long)]
-        room: Option<String>,
-        /// Room the searchable fact-drawers land in, inside their source
-        /// drawer's wing — the same default as `/v1 …/refine`
-        #[arg(long, default_value = "facts")]
-        fact_room: String,
         /// Refine at most N drawers (0 = all)
         #[arg(long, default_value_t = 0)]
         limit: usize,
@@ -2617,56 +2609,69 @@ fn main() -> Result<()> {
         Command::Refine {
             vault,
             wing,
-            room,
-            fact_room,
             limit,
             dry_run,
         } => {
             let llm = undercroft_llm::LlmClient::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
-            undercroft_core::validate_name(fact_room, "fact_room")?;
             let mut store = open_store(&cli, vault)?;
-            // One implementation, shared with `POST /v1/vaults/{id}/refine`
-            // (crate::refine): the same UNDERCROFT_LLM_* configuration used
-            // to build two different vaults from this command depending on
-            // which surface ran it.
-            let opts = refine::RefineOptions {
-                wing: wing.as_deref(),
-                room: room.as_deref(),
-                fact_room,
-                limit: if *limit == 0 { 100_000 } else { *limit },
-                dry_run: *dry_run,
-            };
-            let rep = refine::refine(&mut store, &llm, &opts)?;
-            if rep.sources == 0 {
+            let drawers =
+                store.recent(wing.as_deref(), if *limit == 0 { 100_000 } else { *limit })?;
+            if drawers.is_empty() {
                 bail!("no drawers to refine");
             }
-            println!("Refined {} drawer(s) with {} …", rep.sources, llm.model());
-            for (s, p, o) in &rep.preview {
-                println!("  would add: {s} --{p}--> {o}");
+            println!(
+                "Refining {} drawer(s) with {} …",
+                drawers.len(),
+                llm.model()
+            );
+            let mut entities_added = 0usize;
+            let mut facts_added = 0usize;
+            for d in &drawers {
+                match llm.extract_triples(&d.content) {
+                    Ok(triples) => {
+                        for t in triples {
+                            if undercroft_core::validate_name(&t.subject, "subject").is_err()
+                                || undercroft_core::validate_name(&t.predicate, "predicate").is_err()
+                            {
+                                continue;
+                            }
+                            if *dry_run {
+                                println!(
+                                    "  would add: {} --{}--> {}",
+                                    t.subject, t.predicate, t.object
+                                );
+                            } else {
+                                // Distilled facts carry a receipt: an
+                                // HMAC-covered citation to the verbatim drawer
+                                // they were derived from, checkable later via
+                                // `undercroft kg receipts`.
+                                store.kg_add_receipted(
+                                    &t.subject.to_lowercase(),
+                                    &t.predicate.to_lowercase(),
+                                    &t.object,
+                                    None,
+                                    None,
+                                    0.8, // model-extracted: below human-asserted confidence
+                                    (&d.id, &d.content),
+                                    Some(llm.model()),
+                                )?;
+                            }
+                            facts_added += 1;
+                        }
+                    }
+                    Err(e) => undercroft_obs::diag_error!("  triples failed for {}: {e}", d.id),
+                }
+                match llm.extract_entities(&d.content) {
+                    Ok(ents) => entities_added += ents.len(),
+                    Err(e) => undercroft_obs::diag_error!("  entities failed for {}: {e}", d.id),
+                }
             }
             println!(
-                "Refinement {}: {} fact(s) into the knowledge graph",
+                "Refinement {}: {} fact(s) into the knowledge graph, {} entit(ies) seen",
                 if *dry_run { "dry run" } else { "complete" },
-                rep.facts
+                facts_added,
+                entities_added
             );
-            if !*dry_run {
-                // The same counts /v1 answers with, because it is the same
-                // run. `stated` vs background is which facts the notes'
-                // own words support; `dated_from_text` is how often the
-                // extractor pointed at a real span instead of the note's
-                // date. Both are how you tell a working extractor from one
-                // that is inventing.
-                println!(
-                    "  mirrored into room '{}' · {} stated / {} background",
-                    fact_room,
-                    rep.stated,
-                    rep.facts.saturating_sub(rep.stated)
-                );
-                println!(
-                    "  {} dated from the text · {} duplicate(s), {} skipped, {} failed",
-                    rep.dated_from_text, rep.duplicates, rep.skipped, rep.failed
-                );
-            }
         }
         Command::Hallways { wing, top, vault } => {
             let store = open_store(&cli, vault)?;
