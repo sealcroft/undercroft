@@ -232,6 +232,13 @@ pub struct Tenancy {
     reranker: Option<RerankerFactory>,
     stores: HashMap<String, PalaceStore>,
     read_only: bool,
+    /// The vault this same process ALSO holds open behind `/mcp`, when the
+    /// binary is running `serve-http` (which opens one store for MCP and
+    /// lets `Tenancy` open its own per vault). Two independent handles over
+    /// one vault directory is fine for reads and ordinary writes — SQLite
+    /// arbitrates those — but not for an operation that retires the keys or
+    /// removes the files under the other handle. See [`Self::deny_co_resident`].
+    mcp_vault: Option<String>,
     /// Per-request vault-assertion secret; when present every vault-
     /// addressing request must carry a valid `X-Vault-Assertion`.
     secret: Option<Vec<u8>>,
@@ -273,9 +280,20 @@ impl Tenancy {
             reranker: None,
             stores: HashMap::new(),
             read_only,
+            mcp_vault: None,
             secret,
             window: assertion::DEFAULT_WINDOW_SECS,
         }
+    }
+
+    /// Declare the vault this process also serves over `/mcp`, so the two
+    /// routes that would pull the ground out from under that second handle
+    /// — key rotation and vault deletion — can refuse instead of corrupting
+    /// it. `serve-http` is the only caller; a bare `/v1` deployment holds
+    /// exactly one handle per vault and needs none of this.
+    pub fn with_mcp_vault(mut self, vault: impl Into<String>) -> Self {
+        self.mcp_vault = Some(vault.into());
+        self
     }
 
     /// Attach a shared second-stage reranker, applied to every per-vault
@@ -322,6 +340,19 @@ impl Tenancy {
         let path = req.url().split('?').next().unwrap_or("").to_string();
         let method = req.method().to_string().to_uppercase();
         let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+        // The read-only posture is decided HERE, once, in front of dispatch —
+        // not by a guard at the top of each mutating handler. There were
+        // thirteen such guards and fourteen mutating routes: `POST
+        // .../kg/authority` was simply never given one, so a `--read-only`
+        // server rewrote HMAC-covered authority columns, superseded the
+        // previous canonical holder and appended to the audit chain while
+        // answering 200 — and the identical capability over `/mcp` in the same
+        // process answered "server is read-only". One forgotten call is a
+        // silent write door, so the decision moved to the one place every
+        // request passes through, and it fails CLOSED (see `mutates`).
+        if self.read_only && mutates(method.as_str(), segs.as_slice()) {
+            return Err(RestError::new(403, "server is read-only"));
+        }
         match (method.as_str(), segs.as_slice()) {
             ("POST", &["v1", "vaults"]) => self.create_vault(req, body, now),
             ("GET", &["v1", "vaults"]) => self.list_vaults(),
@@ -377,7 +408,6 @@ impl Tenancy {
     // ---- lifecycle ----------------------------------------------------
 
     fn create_vault(&mut self, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         let body = parse_json(body)?;
         let id = body_str(&body, "id")?;
         self.assert_or_401(&id, req, now)?;
@@ -431,8 +461,9 @@ impl Tenancy {
     }
 
     fn delete_vault(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
+        // Dropping the Tenancy's handle does not close the `/mcp` one.
+        self.deny_co_resident(id, "deleting a vault", "delete it while nothing serves it")?;
         self.stores.remove(id);
         let deleted = self
             .manager
@@ -567,7 +598,6 @@ impl Tenancy {
     // ---- drawers ------------------------------------------------------
 
     fn save_drawer(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let text = body_str(&body, "text")?;
@@ -852,7 +882,6 @@ impl Tenancy {
     }
 
     fn delete_drawer(&mut self, id: &str, drawer_id: &str, req: &Request, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         let deleted = store.delete_drawer(drawer_id).map_err(store_err)?;
@@ -926,7 +955,6 @@ impl Tenancy {
         body: &str,
         now: i64,
     ) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let text = body_str(&body, "text")?;
@@ -994,11 +1022,13 @@ impl Tenancy {
     /// `POST /v1/vaults/{id}/rotate` — rotate the vault onto fresh keys
     /// (fresh salt ⇒ all three derived keys change; every artifact is
     /// re-sealed in one transaction). The caller must be the only writer —
-    /// same contract as the CLI `vault rotate`. Remote-index copies go
-    /// stale; the response says so.
+    /// same contract as the CLI `vault rotate` — and, since that contract is
+    /// about being the ONLY handle, this refuses (409) for the vault the same
+    /// process also serves over `/mcp`. Remote-index copies go stale; the
+    /// response says so.
     fn rotate(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
+        self.deny_co_resident(id, "rotating keys", "run `undercroft vault rotate <name>`")?;
         let candidate = self
             .manager
             .rotation_candidate(id)
@@ -1116,6 +1146,10 @@ impl Tenancy {
     /// review_state, canonical_key?}`. Closed vocabulary, audited through
     /// the chain, and the resulting state lands inside the fact's HMAC —
     /// a column flip without the vault key fails verification on read.
+    ///
+    /// The only mutation among the `/v1` KG routes, and for a long time the
+    /// only mutating route anywhere in this file with no read-only guard;
+    /// `route` now decides that for every route at once.
     fn kg_authority(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let v: Value =
@@ -1218,7 +1252,6 @@ impl Tenancy {
     /// unsigned out — the signing identity is an operator file, so
     /// signing happens via the CLI). C3.2: GDPR/RTBF with a receipt.
     fn forget(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let ids: Vec<String> = body
@@ -1264,7 +1297,6 @@ impl Tenancy {
     /// deliberately absent from MCP (an agent whose write was quarantined
     /// must not be able to rule on it). Both verdicts are chain-audited.
     fn admission_rule(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let drawer_id = body_str(&body, "drawer_id")?;
@@ -1314,7 +1346,6 @@ impl Tenancy {
     /// clears. An operator surface, deliberately absent from MCP — an
     /// agent must not shorten the life of the memory it writes or reads.
     fn retention_set(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let wing = body_str(&body, "wing")?;
@@ -1349,7 +1380,6 @@ impl Tenancy {
     /// operator asks for one. The attestation in the response is the
     /// receipt (unsigned — the signing identity is an operator file).
     fn retention_sweep(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let dry_run = (!body.trim().is_empty())
             .then(|| parse_json(body))
@@ -1370,7 +1400,6 @@ impl Tenancy {
     /// from MCP — an agent that writes content must not be able to raise
     /// its own standing (docs/LABELS.md). Audited through the chain.
     fn set_trust(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let wing = body_str(&body, "wing")?;
@@ -1420,7 +1449,6 @@ impl Tenancy {
     /// Requires `UNDERCROFT_LLM_URL` — without it the vault is untouched and
     /// this answers 400. The verbatim drawers are never modified.
     fn refine(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let wing = body.get("wing").and_then(Value::as_str);
@@ -1668,7 +1696,6 @@ impl Tenancy {
     }
 
     fn import(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         // A manifest first line, when present: the digest is always
         // enforced (a payload that does not match its own declaration is
@@ -1848,12 +1875,41 @@ impl Tenancy {
         Ok(self.stores.get_mut(vault_id).expect("just inserted"))
     }
 
-    fn deny_read_only(&self) -> Result<(), RestError> {
-        if self.read_only {
-            Err(RestError::new(403, "server is read-only"))
-        } else {
-            Ok(())
+    /// Refuse an operation that would retire the keys of, or delete the
+    /// files under, a vault a SECOND live handle in this same process is
+    /// holding — the `/mcp` store `serve-http` opened at start-up.
+    ///
+    /// `rotate_keys` documents a sole-writer contract, and every doc states
+    /// it at PROCESS granularity ("do not rotate a vault another process is
+    /// serving"). Inside `serve-http` that contract was unsatisfiable: the
+    /// second reader is in the operator's own process, reachable from the
+    /// console's own ROTATE KEYS button, and no external discipline can
+    /// prevent it. Rotating through the `/v1` handle left the `/mcp` handle
+    /// on the retired keys — every read after it surfaced as
+    /// `StoreError::Integrity` (the agent is told the vault is TAMPERED when
+    /// the operator merely rotated), and any write it made was sealed and
+    /// chain-appended under the retired MAC key and then re-anchored the
+    /// manifest from its own stale cache, reverting `salt_hex` while the
+    /// rows on disk stayed under the new keys. `delete_vault` is the same
+    /// shape one level up: it drops the Tenancy's handle and removes the
+    /// directory while the MCP handle keeps an open connection to files that
+    /// no longer exist.
+    ///
+    /// So the refusal is the fix: it makes the documented contract
+    /// satisfiable by naming the one route that does it — stop the server,
+    /// hold the only handle, then rotate. Other tenant vaults are untouched:
+    /// only the `--vault` one is co-resident.
+    fn deny_co_resident(&self, id: &str, what: &str, remedy: &str) -> Result<(), RestError> {
+        if self.mcp_vault.as_deref() == Some(id) {
+            return Err(RestError::new(
+                409,
+                format!(
+                    "vault '{id}' is also open on this process's /mcp surface; {what} needs the \
+                     only handle — stop the server, then {remedy}"
+                ),
+            ));
         }
+        Ok(())
     }
 
     /// Verify the per-vault assertion, if a secret is set. The reason is
@@ -1959,6 +2015,30 @@ fn rfc3339_now() -> String {
 fn b64decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.decode(s)
+}
+
+/// Does this request change the vault? Consulted once, in front of
+/// dispatch, to decide what a `--read-only` server refuses.
+///
+/// **Fails closed by construction**: a request mutates unless it is a `GET`
+/// or one of the two `POST`s named below. A route added later is refused on
+/// a read-only server until someone deliberately adds it to that list — the
+/// opposite of the per-handler guard this replaced, where forgetting a line
+/// opened a write door and nothing said so.
+///
+/// The two exceptions are POST for cost, not for effect: `search` reads (its
+/// optional read-audit record is already suppressed by `open_read_only`),
+/// and `verify` walks HMACs and replays the chain. `GET .../export` is a
+/// read here too — the egress chain record it would otherwise write is
+/// skipped on a read-only server, which warns and serves.
+fn mutates(method: &str, segs: &[&str]) -> bool {
+    if method == "GET" {
+        return false;
+    }
+    !matches!(
+        (method, segs),
+        ("POST", &["v1", "vaults", _, "search"]) | ("POST", &["v1", "vaults", _, "verify"])
+    )
 }
 
 fn store_err(e: StoreError) -> RestError {
@@ -2091,5 +2171,114 @@ mod tests {
         assert_eq!(l.calendar, Calendar::Hijri);
         assert_eq!(l.week_start, WeekStart::Sunday);
         assert_eq!(l.date_order, DateOrder::DayFirst, "still from the language");
+    }
+
+    /// Every mutating `/v1` route a `--read-only` server must refuse, and
+    /// every read it must still serve. The per-handler `deny_read_only()`
+    /// this replaced was correct thirteen times and missing on the
+    /// fourteenth (`kg/authority`), which is why the classification now
+    /// lives in one place and is asserted from BOTH sides: a route that
+    /// stops mutating must be moved deliberately, not silently.
+    #[test]
+    fn a_read_only_server_refuses_every_mutating_route() {
+        let mutating = [
+            ("POST", "/v1/vaults"),
+            ("DELETE", "/v1/vaults/v"),
+            ("POST", "/v1/vaults/v/drawers"),
+            ("PUT", "/v1/vaults/v/drawers/d"),
+            ("DELETE", "/v1/vaults/v/drawers/d"),
+            ("POST", "/v1/vaults/v/trust"),
+            ("POST", "/v1/vaults/v/forget"),
+            ("POST", "/v1/vaults/v/admission"),
+            ("POST", "/v1/vaults/v/retention"),
+            ("POST", "/v1/vaults/v/retention/sweep"),
+            // The one that had no guard: a golden-value promotion rewrites
+            // an HMAC-covered column, closes the previous canonical
+            // holder's window and appends to the chain.
+            ("POST", "/v1/vaults/v/kg/authority"),
+            ("POST", "/v1/vaults/v/refine"),
+            ("POST", "/v1/vaults/v/rotate"),
+            ("POST", "/v1/vaults/v/import"),
+        ];
+        for (method, path) in mutating {
+            let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+            assert!(
+                mutates(method, segs.as_slice()),
+                "{method} {path} must be refused on a read-only server"
+            );
+        }
+
+        let reads = [
+            ("GET", "/v1/vaults"),
+            ("GET", "/v1/vaults/v/stats"),
+            ("GET", "/v1/vaults/v/stats/history"),
+            ("GET", "/v1/vaults/v/drawers"),
+            ("GET", "/v1/vaults/v/drawers/d"),
+            ("GET", "/v1/vaults/v/taxonomy"),
+            ("GET", "/v1/vaults/v/kg/query"),
+            ("GET", "/v1/vaults/v/kg/canonical/k"),
+            ("GET", "/v1/vaults/v/supersessions"),
+            ("GET", "/v1/vaults/v/trust"),
+            ("GET", "/v1/vaults/v/admission"),
+            ("GET", "/v1/vaults/v/retention"),
+            // Export warns and serves unaudited on a read-only server.
+            ("GET", "/v1/vaults/v/export"),
+            // POST for cost, not for effect.
+            ("POST", "/v1/vaults/v/search"),
+            ("POST", "/v1/vaults/v/verify"),
+        ];
+        for (method, path) in reads {
+            let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+            assert!(
+                !mutates(method, segs.as_slice()),
+                "{method} {path} must still be served on a read-only server"
+            );
+        }
+
+        // Fails closed: an unrecognised POST is a mutation until someone
+        // says otherwise, so a route added later cannot open a write door
+        // on a read-only server by omission.
+        assert!(mutates("POST", &["v1", "vaults", "v", "not-invented-yet"]));
+        assert!(mutates("PATCH", &["v1", "vaults", "v", "drawers", "d"]));
+    }
+
+    /// Rotating (or deleting) the vault this process ALSO serves over
+    /// `/mcp` retires the keys under a live second handle: every later MCP
+    /// read fails its tag and reports TAMPERED, and any MCP write is sealed
+    /// under the retired key and re-anchors the manifest from a stale cache.
+    /// The sole-writer contract is unsatisfiable there, so `/v1` refuses.
+    #[test]
+    fn rotate_and_delete_refuse_the_vault_this_process_also_serves_over_mcp() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let factory: EmbedderFactory = Box::new(|_: &Vault| {
+            Ok(Box::new(undercroft_core::HashEmbedder)
+                as Box<dyn undercroft_core::embed::Embedder + Send>)
+        });
+        let t = Tenancy::new(mgr, factory, false).with_mcp_vault("served");
+
+        for (what, remedy) in [("rotating keys", "…"), ("deleting a vault", "…")] {
+            let e = t
+                .deny_co_resident("served", what, remedy)
+                .expect_err("the co-resident vault must be refused");
+            assert_eq!(e.code, 409);
+            assert!(e.message.contains("/mcp"), "{}", e.message);
+            // Only that one vault: the others have exactly one handle.
+            assert!(t.deny_co_resident("elsewhere", what, remedy).is_ok());
+        }
+
+        // Premise: the refusal comes from the declaration, not from the
+        // vault name — a `/v1`-only server declares no MCP vault and
+        // refuses nothing.
+        let dir2 = tempfile::TempDir::new().unwrap();
+        let mgr2 = VaultManager::open(dir2.path(), None).unwrap();
+        let factory2: EmbedderFactory = Box::new(|_: &Vault| {
+            Ok(Box::new(undercroft_core::HashEmbedder)
+                as Box<dyn undercroft_core::embed::Embedder + Send>)
+        });
+        let plain = Tenancy::new(mgr2, factory2, false);
+        assert!(plain
+            .deny_co_resident("served", "rotating keys", "…")
+            .is_ok());
     }
 }

@@ -147,7 +147,22 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   `Authorization: Bearer <token>`.
 - `--read-only` strips all 12 mutating MCP tools and returns 403 on
   mutating `/v1` routes — run a second read-only instance for consumers
-  that should never write.
+  that should never write. It is a posture on the whole process, not a
+  route filter: **both** stores the server opens (the `/mcp` one and each
+  `/v1` tenant one) are opened read-only, so the vault gets no embedder
+  migration (an embedder upgrade warns and serves the old vectors instead
+  of re-embedding, and instead of refusing to start), no `embedder_name`
+  stamp, and no read-audit records even with
+  `UNDERCROFT_READ_AUDIT=chain` — that variable's trail is empty on a
+  read-only server, by design and with a warning at open. On `/v1` the
+  refusal is decided in front of dispatch and **fails closed**: anything
+  that is not a `GET` is refused except `POST .../search` and
+  `POST .../verify`, so a route added later is refused until it is
+  deliberately classified.
+- `POST /v1/vaults/{id}/rotate` and `DELETE /v1/vaults/{id}` answer
+  **409** for the vault named by `--vault`, because this same process
+  also holds that vault open behind `/mcp` and key rotation needs the
+  only handle (see §9). Every other tenant vault rotates normally.
 - `GET /healthz` is the only unauthenticated route.
 - Put TLS in front with a reverse proxy; the server itself speaks HTTP.
 
@@ -551,7 +566,8 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 ## 9. Reference — HTTP surface
 
 Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
-`UNDERCROFT_ASSERTION_SECRET` is set; mutating routes 403 in read-only):
+`UNDERCROFT_ASSERTION_SECRET` is set; in read-only everything below that is
+not a `GET`, `POST .../search` or `POST .../verify` answers 403):
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -595,7 +611,7 @@ background facts breaks exactly the multi-hop questions the graph is for.
 | POST | `/v1/vaults/{id}/retention/sweep` | destroy what aged out through the attested-forgetting path (`{dry_run: true}` previews); the response carries the sweep report + receipt. Nothing runs automatically — a sweep happens when the operator asks |
 | POST | `/v1/vaults/{id}/trust` | assign a wing's trust class (`wing`, `trust` ∈ `quarantined`\|`standard`\|`trusted`; 400 if unknown). The receiving principal's declaration — an OPERATOR surface, deliberately absent from MCP; audited, tamper-evident |
 | GET | `/v1/vaults/{id}/trust` | every assigned wing trust class (absent wings read as `standard`) |
-| POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
+| POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract — **409** for the vault this same process also serves over `/mcp`, i.e. the one named by `--vault`: rotating retires the keys under that second live handle, which then reports every read as TAMPERED and re-anchors the manifest from its stale cache. Stop the server and run `undercroft vault rotate <name>`, which holds the only handle) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON: a manifest first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (receipts travel and re-key at import) and tunnels — the whole palace |
 | POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present |
 | GET | `/ui` | vault admin console (static page; every build) |
