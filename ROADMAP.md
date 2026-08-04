@@ -1537,7 +1537,24 @@ release with the usual battery + measured gates.
     attack-fixture corpus quarantined at a target rate with a bounded
     false-positive rate on clean LoCoMo ingest; crash-window tests for
     the state machine; e2e scripted-attacker run over `/v1`.
-    **GATE MET IN FULL (2026-08-04)**: the detector clause measured
+    **GATE MET (2026-08-04), THEN FOUND INSUFFICIENT AND RE-MET
+    (2026-08-05)** — the correction matters more than the claim. The
+    original three clauses passed as written; a surface-parity audit the
+    next day then found the screen was **bypassable on `/v1` three ways**
+    (a `dedup_threshold` in the save body, a caller-supplied `vector` on
+    import — which made every backup-restore and orchestrator tenant
+    migration re-admit corpora unscreened — and external-embedding vaults
+    having no screened path at all), and that quarantined content reached
+    the agent through `wake_up` and the closet index because exclusion
+    lived in `search` alone. **The scripted-attacker clause passed because
+    it knocked on the one door that was locked**: it exercised the plain
+    `POST …/drawers` body and nothing else. All of it is closed by
+    construction now — screening lives at the write choke point behind a
+    required argument, so a write path that forgets it does not compile —
+    and `every_write_path_is_screened` walks all five public entry points.
+    The lesson recorded for the next gate: a clause that tests one route
+    of a capability tests the capability's *documentation*, not the
+    capability. Original clauses, for the record: the detector clause measured
     0/5,882 clean-corpus false positives with 18/18 fixtures tripping
     (`screenfp`); the crash-window clause pins all four partial states
     of the allow/deny machine converging with the chain green; the
