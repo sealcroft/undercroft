@@ -1836,11 +1836,29 @@ impl Tenancy {
             // advisor attaches per vault when the deployment declared it.
             crate::attach_admission_advisor(&mut store)
                 .map_err(|e| RestError::new(500, e.to_string()))?;
-            // Same retrieval contract as the CLI: UNDERCROFT_RETRIEVAL=pq
-            // enables the on-disk PQ/IVF prefilter per tenant vault (plain
-            // on hmac-only; AEAD-sealed rows + RAM cache on sealed).
-            if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("pq") {
-                store.set_pq(true);
+            // The SAME retrieval contract as the CLI, and it must stay the
+            // same: this arm once matched only "pq", so a server told
+            // UNDERCROFT_RETRIEVAL=fde silently served the default instead —
+            // a config the operator declared and never got, with no error.
+            // A typo behaved identically. `hnsw` stays CLI-only (the index
+            // is per-process RAM and the feature gate is a build choice),
+            // but it is REFUSED here rather than ignored.
+            match std::env::var("UNDERCROFT_RETRIEVAL").as_deref() {
+                Ok("pq") => store.set_pq(true),
+                Ok("fde") => store.set_fde(true),
+                Ok("hnsw") => {
+                    return Err(RestError::new(
+                        500,
+                        "UNDERCROFT_RETRIEVAL=hnsw is not available on the multi-tenant                          server (in-process index); use pq or fde, or serve a single vault",
+                    ))
+                }
+                Ok("") | Err(_) => {}
+                Ok(other) => {
+                    return Err(RestError::new(
+                        500,
+                        format!("unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, fde)"),
+                    ))
+                }
             }
             self.stores.insert(vault_id.to_string(), store);
             undercroft_obs::vault_opened();

@@ -400,6 +400,10 @@ impl PalaceStore {
         if let Some(w) = wing {
             binds.push(w.to_string());
             clauses.push(format!("wing = ?{}", binds.len()));
+        } else {
+            // Same rule as `recent` and `search`: quarantined content is
+            // reachable only by naming its wing.
+            clauses.push(format!("wing <> '{}'", crate::admission::QUARANTINE_WING));
         }
         if let Some(r) = room {
             binds.push(r.to_string());

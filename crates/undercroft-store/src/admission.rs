@@ -274,7 +274,12 @@ impl PalaceStore {
         // human ruling IS the override — re-screening would trap every
         // allowed drawer forever.
         let embedding = self.embedder.embed(&restored.content);
-        self.write_drawer(&restored, embedding)?;
+        // The human ruling IS the override — stated, not implied.
+        self.write_drawer(
+            &restored,
+            embedding,
+            crate::Screen::Bypass(crate::BypassReason::OperatorRuling),
+        )?;
         self.admission_ruling(id, "allowed", Some(&restored_id))?;
         self.delete_drawer(id)?;
         Ok(restored_id)
