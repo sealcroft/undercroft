@@ -638,25 +638,30 @@ impl Tenancy {
                         id: drawer.id.clone(),
                         created,
                         deduped: false,
+                        quarantined: false,
                     }
                 }
             }
         } else {
             match dedup {
                 Some(t) => store.save_with_dedup(&drawer, t).map_err(store_err)?,
-                None => {
-                    let created = store.upsert(&drawer).map_err(store_err)?;
-                    SaveOutcome {
-                        id: drawer.id.clone(),
-                        created,
-                        deduped: false,
-                    }
-                }
+                // The SCREENED save: when admission diverts, the response
+                // must say so and carry the id the drawer actually landed
+                // under — the update path's typed outcome, owed by the
+                // save path too (the scripted-attacker gate found this
+                // surface still reporting a plain `created: true`).
+                None => store.upsert_screened(&drawer).map_err(store_err)?,
             }
         };
+        let status = if out.quarantined { 202 } else { 200 };
         Ok((
-            200,
-            Body::Json(json!({ "id": out.id, "created": out.created, "deduped": out.deduped })),
+            status,
+            Body::Json(json!({
+                "id": out.id,
+                "created": out.created,
+                "deduped": out.deduped,
+                "quarantined": out.quarantined,
+            })),
         ))
     }
 
@@ -1960,7 +1965,11 @@ fn store_err(e: StoreError) -> RestError {
     let code = match &e {
         StoreError::ExternalVault
         | StoreError::NotExternalVault
-        | StoreError::EmbeddingDim { .. } => 400,
+        | StoreError::EmbeddingDim { .. }
+        // A rejected input — an unknown vocabulary value, a save aimed at
+        // the reserved wing, a ruling on an id that is not quarantined —
+        // is the caller's error, not the server's.
+        | StoreError::Invalid(_) => 400,
         StoreError::Integrity(_) => 409,
         _ => 500,
     };

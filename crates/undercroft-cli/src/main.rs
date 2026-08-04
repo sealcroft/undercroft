@@ -1394,19 +1394,29 @@ fn main() -> Result<()> {
                 .with_content_date(content_date.clone())
                 .with_supersedes(supersedes.clone())
                 .with_provenance(agent.clone(), channel.clone(), session.clone());
-            store.upsert(&drawer)?;
-            println!(
-                "{}",
-                fill(
-                    tr("drawer-filed"),
-                    &[
-                        ("id", drawer.id.clone()),
-                        ("wing", wing.clone()),
-                        ("room", room.clone()),
-                        ("vault", vault.clone()),
-                    ]
-                )
-            );
+            // Screened: a diverted save must not print "filed in <wing>",
+            // which is exactly what the caller did NOT get.
+            let out = store.upsert_screened(&drawer)?;
+            if out.quarantined {
+                println!(
+                    "Quarantined pending review: the content tripped the admission \
+                     screen and is NOT retrievable in {wing}/{room}. \
+                     Review with `undercroft admission list`."
+                );
+            } else {
+                println!(
+                    "{}",
+                    fill(
+                        tr("drawer-filed"),
+                        &[
+                            ("id", drawer.id.clone()),
+                            ("wing", wing.clone()),
+                            ("room", room.clone()),
+                            ("vault", vault.clone()),
+                        ]
+                    )
+                );
+            }
         }
         Command::Mine {
             path,

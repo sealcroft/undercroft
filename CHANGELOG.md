@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### the C3.3 gate's last two clauses run — and find two honesty defects
+
+- **Crash-window tests for the allow/deny state machine** (the gate
+  clause, previously prose): all four partial states converge and leave
+  the chain green — a crash after the restored copy is written but
+  before the ruling and delete (re-running the allow converges on one
+  copy, deterministic ids doing the work the doc comment promised); a
+  completed allow re-run; a crash after the deny ruling but before the
+  content is destroyed (re-running completes and hands back a verifiable
+  attestation); a completed deny re-run. Each asserts its own premise
+  first, so the test cannot pass by reproducing the wrong state.
+- **A scripted-attacker run over `/v1`** (the gate's last clause): an
+  attacker holding legitimate REST write access tries every route to
+  make poison retrievable — a marker injection, a marker-DODGING
+  fixture variant, a save aimed at the reserved wing, and poisoning an
+  existing clean drawer through update — and every route is diverted or
+  refused, with the review queue holding exactly the attempts and the
+  chain green over the whole episode.
+- **The run found two real defects, both now fixed.** *(1) The save
+  surfaces diverted silently.* `/v1 POST …/drawers`, both MCP save
+  tools, and CLI `remember` all reported success — `created: true` with
+  **the id the caller aimed at** — while the content sat in quarantine
+  under a different id. A caller was told its memory was filed where it
+  asked; it was not, and the id it got back retrieved nothing. That is
+  exactly the provenance-shaped dishonesty the update path fixed with a
+  typed outcome, still open on the save path. `SaveOutcome` now carries
+  `quarantined` and the id the drawer ACTUALLY landed under
+  (`upsert_screened`); `/v1` answers **202** with `"quarantined": true`,
+  MCP and the CLI say the write is not retrievable and point at the
+  review queue. *(2) Aiming a save at the reserved wing answered 500
+  "corrupt row".* Nothing was corrupt — a caller handed us a wing it may
+  not write to. That refusal and the closed-vocabulary `kind` check are
+  now `StoreError::Invalid`, and the REST layer maps `Invalid` to **400**.
+- test 520 → 523, e2e 214 → 222. The C3.3 gate is now met in full:
+  detector false-positive rate, crash windows, and the scripted-attacker
+  run.
+
 ### the chain learns about reads and exports
 
 - **Exports are chain-audited, unconditionally, on every surface** (the

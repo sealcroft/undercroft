@@ -367,7 +367,16 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   never destroys, so it does not need retention's HMAC clock; the
   `filed_at` index is created only on vaults that declare a rate; rate
   lives in store admission.rs because the candidate bytes cannot carry
-  it); `UNDERCROFT_ADMISSION=quarantine` diverts flagged
+  it); **a diverted save SAYS so on every surface** (`upsert_screened` →
+  `SaveOutcome{quarantined, id}` — the id the drawer ACTUALLY landed
+  under; `/v1` answers 202 + `quarantined:true`, MCP and CLI say the
+  write is not retrievable. The plain `upsert` returning "was the id
+  new" is what let all three surfaces report success with the aimed-at
+  id while the content sat in quarantine — found by the
+  scripted-attacker gate, the update path's typed-outcome precedent
+  applied one level down); forging the reserved wing or declaring an
+  unknown `kind` is `StoreError::Invalid` → **400**, never a 500
+  "corrupt row"; `UNDERCROFT_ADMISSION=quarantine` diverts flagged
   saves sealed into the reserved `quarantine-pending` wing, hard-excluded
   from retrieval except the reviewer's own scope; allow/deny chain-audited
   with the verdict inside the ruling tag; operator surfaces only, never
@@ -585,7 +594,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (511)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (214 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (222 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

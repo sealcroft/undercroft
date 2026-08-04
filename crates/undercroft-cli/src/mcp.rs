@@ -286,7 +286,16 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     opt_str(args, "channel").map(str::to_string),
                     opt_str(args, "session").map(str::to_string),
                 );
-            store.upsert(&drawer)?;
+            // The screened save: a diverted write must never be reported
+            // as filed where it aimed (the update tool's precedent).
+            let out = store.upsert_screened(&drawer)?;
+            if out.quarantined {
+                return Ok(format!(
+                    "save quarantined pending review — the content tripped the \
+                     admission screen and is NOT retrievable in {wing}/{room}; \
+                     an operator rules on it"
+                ));
+            }
             match supersedes {
                 Some(old) => Ok(format!(
                     "saved drawer {} in {}/{} superseding {} (the old drawer stays retrievable; the link is receipted)",
@@ -594,7 +603,13 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 opt_str(args, "channel").map(str::to_string),
                 opt_str(args, "session").map(str::to_string),
             );
-            store.upsert(&drawer)?;
+            let out = store.upsert_screened(&drawer)?;
+            if out.quarantined {
+                return Ok(format!(
+                    "drawer quarantined pending review — the content tripped the \
+                     admission screen and is NOT retrievable in {wing}/{room}"
+                ));
+            }
             Ok(format!("added drawer {} in {}/{}", drawer.id, wing, room))
         }
         "undercroft_update_drawer" => {
