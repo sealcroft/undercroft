@@ -3014,12 +3014,37 @@ impl PalaceStore {
                 // 0.10·recency. The admission gate below is untouched by
                 // the weight — evidence decides membership, the weight
                 // only orders it.
+                //
+                // Script-disjoint reweight (pairwise, byte-readable): when
+                // the query and a candidate share NO letter script, the
+                // lexical channel is STRUCTURALLY silent for that pair —
+                // no lettered token can possibly match — so its zero is
+                // not evidence and weighting it taxes exactly the pairs a
+                // multilingual embedder exists to serve (measured on
+                // FLORES-200: cross-script golds at 36–44% R@5 under the
+                // default weight while same-language lexical noise
+                // collected the blend's lexical mass). Such a pair takes
+                // the blend at the weight ceiling — the same declared
+                // operating point (0.70) the cross-lingual record
+                // publishes — with the residual lexical leg still paid to
+                // shared digits and dates. A function of the PAIR's own
+                // bytes only: no result-set coupling (the −9.4pp
+                // rescaling class), no language detection (inference —
+                // en↔de share a script and stay untouched), and
+                // same-script pairs are byte-identical by construction.
                 let w = self.fusion_weight;
+                let qmask = undercroft_core::script::letter_script_mask(query);
                 cands
                     .into_iter()
                     .zip(bm25)
                     .map(|(c, (lexical, lexical_exact, lexical_morph))| {
-                        let score = w * c.semantic + (0.90 - w) * lexical + 0.10 * c.recency;
+                        let dmask = undercroft_core::script::letter_script_mask(&c.drawer.content);
+                        let pw = if undercroft_core::script::scripts_disjoint(qmask, dmask) {
+                            FUSION_WEIGHT_MAX
+                        } else {
+                            w
+                        };
+                        let score = pw * c.semantic + (0.90 - pw) * lexical + 0.10 * c.recency;
                         SearchHit {
                             drawer: c.drawer,
                             score,
@@ -3342,7 +3367,17 @@ impl PalaceStore {
         let semantic = self.semantic_of(cosine(qvec, &emb));
         let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
         let recency = recency_boost(&drawer.meta.filed_at, now);
-        let w = self.fusion_weight;
+        // The same pairwise script-disjoint reweight as the Bm25 fusion
+        // arm (see the comment there): a pair that cannot share a
+        // lettered token takes the weight ceiling.
+        let w = if undercroft_core::script::scripts_disjoint(
+            undercroft_core::script::letter_script_mask(query),
+            undercroft_core::script::letter_script_mask(&drawer.content),
+        ) {
+            FUSION_WEIGHT_MAX
+        } else {
+            self.fusion_weight
+        };
         let score = w * semantic + (0.90 - w) * lexical + 0.10 * recency;
         SearchHit {
             drawer,
@@ -10526,10 +10561,12 @@ mod tests {
         }
         fn embed(&self, text: &str) -> Vec<f32> {
             let d = undercroft_core::embed::EMBED_DIM;
-            // "alpha"/"alfa" are one topic to this model, whatever the
-            // language; any other text gets a hash-derived topic of its
-            // own (so unrelated probe pairs do NOT share a direction).
-            let topic = if text.contains("alpha") || text.contains("alfa") {
+            // "alpha"/"alfa"/"الفا" are one topic to this model, whatever
+            // the language or script; any other text gets a hash-derived
+            // topic of its own (so unrelated probe pairs do NOT share a
+            // direction).
+            let topic = if text.contains("alpha") || text.contains("alfa") || text.contains("الفا")
+            {
                 5usize
             } else if text.contains("beta") {
                 6usize
@@ -10613,6 +10650,91 @@ mod tests {
                     h.lexical
                 ))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// The script-disjoint reweight, end to end with its counterfactual
+    /// (the FLORES arm-A shape in miniature): at the DEFAULT weight a
+    /// cross-SCRIPT gold — topic match through the embedder, zero
+    /// shareable letters — loses to same-script drawers riding lexical
+    /// noise; the pairwise reweight recovers it without moving the
+    /// declared weight, and same-script pairs take the declared blend
+    /// untouched. The counterfactual is exact arithmetic, not a rerun:
+    /// the recency term recovered from the actual score rebuilds what
+    /// the gold would have scored under the declared blend.
+    #[test]
+    fn a_cross_script_gold_stops_paying_the_lexical_noise_tax() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let mut s = PalaceStore::open_with_embedder(vault, Box::new(TopicEmbedder)).unwrap();
+        // The gold: the query's topic, in Arabic script — no letter it
+        // shares with the query CAN match.
+        let gold = drawer("w", "r", "اجتماع موضوع الفا في القاعة الكبيرة", 0);
+        s.upsert(&gold).unwrap();
+        // The crowd: same-script drawers sharing MOST of the query's
+        // words (four of five) — louder than the calibrated-map test's
+        // crowd on purpose: that test pins that the map alone beats a
+        // two-shared-word crowd at the default weight, so reproducing
+        // the arm-A tax in miniature takes the heavier lexical noise a
+        // real corpus supplies through BM25.
+        for i in 0..6u32 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("notes about where the beta meeting was held on thursday number {i}"),
+                1 + i,
+            ))
+            .unwrap();
+        }
+        let query = "where was the alpha meeting";
+        let hits = s.search(query, &SearchOptions::default()).unwrap();
+
+        // The reweight puts the cross-script gold first at the DEFAULT
+        // weight — the whole point.
+        assert_eq!(
+            hits.first().map(|h| h.drawer.id.clone()),
+            Some(gold.id.clone()),
+            "the script-disjoint pair must stop paying the lexical tax; got {:?}",
+            hits.iter()
+                .take(3)
+                .map(|h| (h.score, h.semantic, h.lexical))
+                .collect::<Vec<_>>()
+        );
+        let g = &hits[0];
+        // Decomposition: the gold's score is the CEILING blend. Its
+        // recency term recovered under ceiling coefficients must be a
+        // plausible 0.10·recency; under the declared coefficients it
+        // would come out negative here (sem ≈ 0.9 tilts it), so this
+        // discriminates which arithmetic ran.
+        let rec_term = g.score - FUSION_WEIGHT_MAX * g.semantic - 0.20 * g.lexical;
+        assert!(
+            (0.0..=0.101).contains(&rec_term),
+            "the gold pair must take the ceiling blend (recency term {rec_term})"
+        );
+        // Counterfactual: under the DECLARED blend the same gold loses to
+        // the crowd — the premise that makes the reweight worth having.
+        // If this arm starts failing the corpus no longer reproduces the
+        // tax: investigate, don't delete.
+        let counterfactual = 0.55 * g.semantic + 0.35 * g.lexical + rec_term;
+        let best_crowd = hits
+            .iter()
+            .filter(|h| h.drawer.id != gold.id)
+            .map(|h| h.score)
+            .fold(f32::MIN, f32::max);
+        assert!(
+            counterfactual < best_crowd,
+            "under the declared blend the gold would already win \
+             ({counterfactual} vs {best_crowd}) — the crowding premise is gone"
+        );
+        // Same-script pairs take the declared blend byte-for-byte: a
+        // crowd hit's recency term recovered under DECLARED coefficients
+        // is plausible, under the ceiling it goes negative.
+        let c = hits.iter().find(|h| h.drawer.id != gold.id).unwrap();
+        let crowd_rec = c.score - 0.55 * c.semantic - 0.35 * c.lexical;
+        assert!(
+            (0.0..=0.101).contains(&crowd_rec),
+            "a same-script pair must take the declared blend (recency term {crowd_rec})"
         );
     }
 

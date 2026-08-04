@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased — the cross-lingual default becomes honest: the script-disjoint fusion reweight
+
+- **The lexical-noise tax on cross-script pairs is repealed at the
+  default weight.** When a query and a candidate share NO letter script,
+  no lettered token can possibly match — the lexical channel is
+  structurally silent for that pair, and weighting its zero taxed
+  exactly the pairs a multilingual embedder exists to serve. Such a pair
+  now takes the fusion blend at the weight ceiling (0.70 — the same
+  declared operating point the cross-lingual record publishes), with the
+  residual lexical leg still paid to shared digits and dates. Pairwise,
+  from the pair's own bytes: no result-set coupling (the −9.4pp
+  rescaling class stays rejected), and NEVER language detection — en↔de
+  share a script and are untouched, exactly the case where detection
+  would have to guess.
+- **A new letter-identity classifier** (`script::letter_script_mask` /
+  `scripts_disjoint`), deliberately finer than the segmentation `Script`
+  enum, which lumps Latin/Greek/Cyrillic into `Other` — right for "can a
+  split find word edges", wrong for "can these texts share a token"
+  (reusing it would have silently declared en↔el same-script). ~28
+  Unicode-range classes, letters only (digits are cross-script evidence
+  and cancel nothing), with a catch-all bit so an unknown letter script
+  is never disjoint. Cost: one linear scan of each candidate's content
+  at fusion — the same order as the BM25 scan beside it.
+- **Every gate met, on a build proven fresh** (the stale-binary rule
+  caught its author twice this session — the first LoCoMo "gate" ran a
+  pre-reweight binary and was discarded):
+  - *LoCoMo hash regression*: **69.4 all-gold@10 / 81.8 CDF@40,
+    digit-for-digit** — an all-Latin corpus never fires the reweight,
+    byte-identity by construction and confirmed by measurement;
+  - *FLORES-200 arm A (defaults, bge-m3 through the TLS terminator)*:
+    cross-script pairs **36–44% → 95–100% R@5** (ar→en 36.2→97.5,
+    th→en 37.5→97.5, zh→en 37.5→95.0, en→th 42.5→98.8, en→zh
+    43.8→96.2, en→ar 68.8→98.8; el and ru pairs, now distinct classes,
+    57.5–95.0→97.5–100.0) while the same-script rows (de↔en) are
+    **digit-identical** to the pre-reweight run;
+  - *FLORES-200 arm B (declared w=0.70)*: **digit-identical** — at the
+    ceiling the two arithmetics coincide, so declared-weight
+    deployments do not move;
+  - *false-friends negative controls*: green in the suite (same-script
+    by construction, the reweight cannot reach them).
+- **The cross-lingual capability claim drops to ONE condition**: install
+  a multilingual embedder. The declared-weight recipe remains valid and
+  composing, but is no longer required for cross-script retrieval; every
+  surface that stated the two-conditioned claim is updated. The default
+  weight itself did not move — same-script retrieval is untouched
+  everywhere.
+- Pinned in miniature by `a_cross_script_gold_stops_paying_the_lexical_noise_tax`
+  (the arm-A shape end to end: gold recovered at the default weight,
+  exact-arithmetic counterfactual showing it lost under the declared
+  blend, decomposition proving which blend each pair took) and the mask
+  test (en↔el/ru separate; digits cancel nothing; letterless and
+  unknown-script sides never disjoint; embedded Latin keeps pairs
+  joined).
+
 ## Unreleased — every embedder posture becomes a ready configuration
 
 - **The posture guide ships** (`docs/EMBEDDERS.md`, published as

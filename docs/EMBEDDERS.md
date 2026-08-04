@@ -116,11 +116,13 @@ refuses a silent swap.
 
 ## Cross-lingual honesty, in one paragraph
 
-A multilingual embedder is **necessary but not sufficient** for
-cross-script retrieval: at the default fusion weight, pairs sharing no
-script (Arabic/Thai/Chinese ↔ English) measure 36–44% R@5 on FLORES-200
-because same-language lexical noise outvotes the gold's semantic score.
-The honest cross-lingual configuration is the multilingual embedder
-**plus a declared `UNDERCROFT_FUSION_WEIGHT=0.70`**, which measures
-97.5–100% R@5 on every pair. Full per-pair tables and the reproduction
-recipe live in the CHANGELOG.
+A multilingual embedder is the one condition for cross-lingual
+retrieval — **including cross-script**, since the script-disjoint fusion
+reweight: a query/candidate pair sharing no letter script (where no
+lettered token can possibly match) takes the fusion blend at the weight
+ceiling automatically, read from the pair's own bytes, never from
+language detection. Measured on FLORES-200: cross-script pairs at
+**95–100% R@5 at the default weight** (36–44% before the reweight),
+same-script pairs untouched, and a declared
+`UNDERCROFT_FUSION_WEIGHT=0.70` still composes. Full per-pair tables and
+the reproduction recipe live in the CHANGELOG.

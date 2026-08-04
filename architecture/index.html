@@ -1700,7 +1700,7 @@
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds). <strong>Necessary for cross-lingual retrieval but not sufficient</strong>: cross-<em>script</em> pairs also need a declared <code>UNDERCROFT_FUSION_WEIGHT=0.70</code> — at the default weight they measure 36–44% R@5 (FLORES-200, full table in CHANGELOG) and are honestly not served</td></tr>
+    <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds). <strong>Required for cross-lingual retrieval — and since the script-disjoint fusion reweight, sufficient</strong>: pairs sharing no letter script take the fusion ceiling automatically (pairwise, byte-readable, never language-ID), measuring 95–100% R@5 at the default weight on FLORES-200 (was 36–44%; full tables in CHANGELOG)</td></tr>
     <tr><td><code>UNDERCROFT_ONNX_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>User-supplied embedding model files</td></tr>
     <tr><td><code>UNDERCROFT_RERANKER</code></td><td>unset — no second stage</td><td><code>onnx</code> · <code>ort</code> · <code>colbert</code> · <code>colbert-ort</code></td></tr>
     <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores — a latency cap (one forward pass each)</td></tr>
