@@ -54,23 +54,79 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
-    pub fn new(base_url: &str, model: &str, kind: ApiKind) -> Self {
+    pub fn new(base_url: &str, model: &str, kind: ApiKind) -> Result<Self, LlmError> {
         Self::with_key(base_url, model, kind, "")
     }
 
     /// As [`LlmClient::new`], with a bearer credential sent as
     /// `Authorization: Bearer <key>` on every request. An empty key sends
     /// no header at all — the local-runtime default.
-    pub fn with_key(base_url: &str, model: &str, kind: ApiKind, key: &str) -> Self {
-        Self {
-            base: base_url.trim_end_matches('/').to_string(),
+    ///
+    /// **Transport: TLS or loopback, nothing else** — the same refusal as
+    /// the served embedder (operator decision 2026-08-03, extended here
+    /// 2026-08-04): every consumer of this client sends drawer content to
+    /// the endpoint (`refine` sends it verbatim, the admission advisor
+    /// sends candidates), so cleartext http beyond loopback is refused at
+    /// construction with no override. `UNDERCROFT_LLM_CA` declares a
+    /// self-signed root as a PIN — the file's certificates become the
+    /// ONLY roots this client trusts, and every failure shape refuses
+    /// rather than falling back (un-pinning silently is the failure
+    /// mode). The compose `embeddings-tls` terminator shape works here
+    /// too: any TLS front plus a declared root.
+    pub fn with_key(
+        base_url: &str,
+        model: &str,
+        kind: ApiKind,
+        key: &str,
+    ) -> Result<Self, LlmError> {
+        let base = base_url.trim_end_matches('/').to_string();
+        let loopback = crate::embed::is_loopback(&base);
+        let tls = base.starts_with("https://");
+        if !tls && !loopback {
+            return Err(LlmError::Refused(format!(
+                "cleartext http to non-loopback {base} — drawer content would \
+                 cross the network readable by anyone on the path, and no \
+                 override exists. Serve the endpoint over TLS (the compose \
+                 `embeddings-tls` terminator shape works) and declare a \
+                 self-signed root with UNDERCROFT_LLM_CA=<pem>."
+            )));
+        }
+        if !loopback {
+            undercroft_obs::diag_warn!(
+                "llm: {model} via {base} — TLS protects the wire, but the \
+                 ENDPOINT still reads the content it is sent in plaintext. \
+                 Sealing protects a vault at rest, not content handed to \
+                 another process."
+            );
+        }
+        let mut builder = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(120));
+        match std::env::var("UNDERCROFT_LLM_CA") {
+            Ok(path) if !path.trim().is_empty() => {
+                if tls {
+                    let pem = std::fs::read(&path).map_err(|e| {
+                        LlmError::Refused(format!("UNDERCROFT_LLM_CA {path:?} cannot be read: {e}"))
+                    })?;
+                    builder =
+                        builder.tls_config(crate::embed::pinned_roots_from_pem(&pem).map_err(
+                            |e| LlmError::Refused(format!("UNDERCROFT_LLM_CA {path:?}: {e}")),
+                        )?);
+                } else {
+                    undercroft_obs::diag_warn!(
+                        "UNDERCROFT_LLM_CA is set but {base} is not https — the \
+                         declared root is ignored on a loopback cleartext \
+                         connection"
+                    );
+                }
+            }
+            _ => {}
+        }
+        Ok(Self {
+            base,
             model: model.to_string(),
             kind,
             key: key.to_string(),
-            agent: ureq::AgentBuilder::new()
-                .timeout(std::time::Duration::from_secs(120))
-                .build(),
-        }
+            agent: builder.build(),
+        })
     }
 
     /// Build from `UNDERCROFT_LLM_URL`, `UNDERCROFT_LLM_MODEL`, and optional
@@ -92,7 +148,7 @@ impl LlmClient {
             _ => ApiKind::Ollama,
         };
         let key = std::env::var("UNDERCROFT_LLM_KEY").unwrap_or_default();
-        Ok(Self::with_key(&base, &model, kind, &key))
+        Self::with_key(&base, &model, kind, &key)
     }
 
     pub fn model(&self) -> &str {
@@ -491,7 +547,7 @@ mod tests {
             r#"Sure! Here you go: [{"name": "Alice", "type": "person"}, {"name": "Acme", "type": "organization"}]"#,
             ApiKind::Ollama,
         );
-        let client = LlmClient::new(&url, "test-model", ApiKind::Ollama);
+        let client = LlmClient::new(&url, "test-model", ApiKind::Ollama).unwrap();
         let ents = client.extract_entities("Alice works at Acme").unwrap();
         assert_eq!(ents.len(), 2);
         assert_eq!(ents[0].name, "Alice");
@@ -504,15 +560,32 @@ mod tests {
             r#"[{"subject": "alice", "predicate": "works_at", "object": "acme"}]"#,
             ApiKind::OpenAi,
         );
-        let client = LlmClient::new(&url, "test-model", ApiKind::OpenAi);
+        let client = LlmClient::new(&url, "test-model", ApiKind::OpenAi).unwrap();
         let triples = client.extract_triples("Alice works at Acme").unwrap();
         assert_eq!(triples[0].predicate, "works_at");
+    }
+
+    /// The transport policy, extended from the embedder to every LLM
+    /// consumer (refine sends drawer content verbatim, the advisor sends
+    /// candidates): cleartext beyond loopback refuses at construction
+    /// with the fix named, loopback constructs as before (every
+    /// stub-server test in this module is the standing proof).
+    #[test]
+    fn llm_client_refuses_cleartext_to_a_non_loopback_host() {
+        let err = match LlmClient::new("http://llm-box:11434", "m", ApiKind::Ollama) {
+            Err(e) => e,
+            Ok(_) => panic!("a non-loopback http URL must refuse at construction"),
+        };
+        let msg = err.to_string();
+        for needle in ["cleartext", "TLS", "UNDERCROFT_LLM_CA", "no override"] {
+            assert!(msg.contains(needle), "refusal must carry {needle:?}: {msg}");
+        }
     }
 
     #[test]
     fn classify_snaps_to_label() {
         let (url, _s) = stub_server("The label is: Question.", ApiKind::Ollama);
-        let client = LlmClient::new(&url, "m", ApiKind::Ollama);
+        let client = LlmClient::new(&url, "m", ApiKind::Ollama).unwrap();
         let labels: Vec<String> = ["question", "command"]
             .iter()
             .map(|s| s.to_string())

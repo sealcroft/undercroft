@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — the no-cleartext mandate reaches every LLM consumer
+
+- **`LlmClient` construction now enforces TLS-or-loopback — the served
+  embedder's policy (#93), one client over, no override.** Every
+  consumer of this client sends content to its endpoint: `refine` sends
+  drawer text verbatim, the admission advisor sends candidates, the
+  tagcost LLM arm sends corpus text. A cleartext non-loopback
+  `UNDERCROFT_LLM_URL` was the one path still allowed to put that on a
+  readable wire; it now refuses at construction with the fix named.
+  **A deliberate breaking change**, stated as such: a deployment
+  pointing `refine` at plain http beyond loopback stops working and
+  says exactly why. Loopback stays allowed and silent.
+- **`UNDERCROFT_LLM_CA` (72nd env var) pins a self-signed root** for the
+  LLM connection — the `UNDERCROFT_EMBED_CA` semantics exactly:
+  exclusive trust (public roots out), every failure shape refuses
+  rather than silently un-pinning. This closes the advisory tier's
+  recorded gap (a self-signed TLS advisory endpoint now works: front it
+  with the shipped `embeddings-tls`-style terminator and pin the root),
+  and `LlmClient::new`/`with_key` became fallible to carry the refusal.
+- The advisory tier's own duplicate transport pre-check is gone — the
+  policy lives in the client every consumer shares. Pinned: the refusal
+  carries the fix by name; every loopback stub-server test constructs
+  as before.
+
 ## Unreleased — the last open poisoning channel closes: non-finite external vectors are refused
 
 - **`upsert_external` refuses any vector with a NaN or infinite
