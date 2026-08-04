@@ -3,6 +3,96 @@
 Undercroft is the Rust conversion of MemPalace with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
+
+## Open residuals — ALL FOUR ARE WORK, none are accepted
+
+Recorded 2026-08-05 after the surface-drift program. **Maintainer's rule:
+nothing broken or half-baked stays as a gap.** An earlier draft of this
+section marked two of these "accepted" — that was settling, not deciding, and
+it is exactly the habit that let a bypassable screen ship behind a gate that
+said "met in full". Each of the four below is a unit of work with the shape of
+its fix stated. None ships as a permanent exception.
+
+### R1 · A read-only store with `UNDERCROFT_RETRIEVAL=pq` still WRITES
+
+`pq_candidates_in` calls `pq_schema()`, `pq_build()`, `pq_repack_*` and
+`pq_compact_tail()` on the first search after open and on drift; the FDE and
+token tiers share the shape. So the flag that exists to guarantee "this process
+does not write to your vault" does not hold the moment a prefilter is enabled.
+
+**Fix**: "load an existing index, never build one" at each prefilter entry
+point — the index becomes a read-time *artifact* rather than something a search
+may create. A read-only store that finds no usable index falls back to the
+exact scan it already has for below-floor scopes, and **says so** rather than
+silently degrading. Do NOT close it by refusing `set_pq`: that drops a replica
+onto the full scan (913 ms/query at 10⁶), which trades a correctness bug for a
+performance cliff. **Gate**: a read-only open, then a search, leaves the
+database bytes byte-identical — asserted, with its own premise proved by
+showing a writable open does change them.
+
+### R2 · Lexical channels are `/v1`-only
+
+`lexical_exact`, `lexical_morph` and `semantic` are returned by REST and by
+neither the CLI nor MCP. The store documents the three channels precisely so a
+surprising hit or miss is *reproducible*; two of three surfaces cannot see the
+evidence that would reproduce it.
+
+**Fix**: decide the presentation, then ship it to both. The open question is
+format, not principle — a terminal line and an agent's context budget both have
+to absorb three more floats. Candidate shapes: a compact suffix on the CLI hit
+line (`[ex .82 mo .00 sem .61]`) behind the existing verbosity flag, and a
+structured field on the MCP hit object where budget is the caller's problem
+rather than ours. **Gate**: the same query on all three surfaces reports the
+same three channel values.
+
+### R3 · `POST /v1/…/verify` is served on a read-only server and writes
+
+It fast-forwards the manifest anchor — the same healing write `open` performs.
+The verdict is a read; the heal is a write; today they are one operation, so
+"verify on a replica" and "this process does not write" cannot both be true.
+
+**Fix**: separate them. `verify()` computes the verdict without touching the
+anchor; healing becomes an explicit step a writable store takes and a read-only
+store **skips and reports** ("anchor behind by N; not healed: read-only"). That
+keeps verify-on-a-replica working — the use case that made this look
+unavoidable — while making the read-only promise true. **Gate**: a read-only
+verify leaves the manifest untouched and its output names the un-healed lag.
+
+### R4 · Open-time writes survive a read-only open
+
+Schema creation (`CREATE TABLE IF NOT EXISTS`), the rotation keycheck seed, and
+the chain anchor fast-forward all still run. The justification was that
+refusing leaves a replica unable to open a vault whose writer crashed — true,
+and an argument for *reporting*, not for writing.
+
+**Fix**: a read-only open **detects and reports** instead of healing. Missing
+schema on a read-only open is not something to create — it means a vault that
+was never written or is damaged, and the honest answer is a typed error naming
+which. An unreconciled rotation or a lagging anchor is surfaced as a warning
+carrying the lag, and the vault serves reads with that stated; the writer heals
+it when it next opens. **Gate**: a read-only open of an unreconciled vault
+writes nothing, serves reads, and says exactly what it did not heal.
+
+## Process: the drift check is part of the work now
+
+The surface-parity audit that found 65 drifts is not a one-off. It is a
+**pre-release gate** (see CLAUDE.md's release flow) and its mechanism is split
+in two on purpose:
+
+- `crates/undercroft-cli/src/parity.rs` holds the line continuously — the MCP
+  tool inventory is counted against the code in BOTH directions, and
+  `OPERATOR_ONLY` enforces that admission review, trust assignment, retention,
+  forgetting and rotation stay absent from MCP. It catches an added or removed
+  tool. It cannot catch a capability whose BEHAVIOUR drifts.
+- The **audit** catches that half, and must be re-run as a fan-out over the
+  seven dimensions with an adversarial verifier per dimension before a release.
+
+The lesson worth keeping, because it cost a session: **a gate clause that
+tests one route of a capability tests that capability's documentation, not the
+capability.** C3.3's scripted-attacker clause passed while the screen was
+bypassable three other ways, because it exercised the plain `POST …/drawers`
+body and nothing else.
+
 ## v0.2.0 — Feature parity + Python removal (done)
 
 - Legacy Python implementation and tooling fully removed

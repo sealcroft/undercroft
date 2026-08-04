@@ -2316,14 +2316,23 @@ impl PalaceStore {
         // paths returned before emitting anything while the bulk paths
         // emitted an ordinary drawer-saved whose only tell was the wing
         // name. One emission at the choke point cannot split again.
-        if let crate::admission::SaveEvent::Quarantined { intended_wing, .. } =
-            crate::admission::save_event(drawer)
+        // The purpose-built event, not a `drawer-saved` with the wing slot
+        // repurposed: `monitor.html` dispatches on `drawer-quarantined`, and
+        // emitting a save frame meant an operator watching a poisoning
+        // attempt saw an ordinary write whose only tell was a wing name —
+        // exactly the failure this emission was added to remove. The signal
+        // codes travel because they are a closed vocabulary; the offsets
+        // beside them do not, because those are positions in content.
+        if let crate::admission::SaveEvent::Quarantined {
+            intended_wing,
+            codes,
+        } = crate::admission::save_event(drawer)
         {
-            undercroft_obs::event_drawer_saved(
+            undercroft_obs::event_drawer_quarantined(
                 self.vault.id(),
-                crate::admission::QUARANTINE_WING,
                 intended_wing,
-                false,
+                &drawer.meta.room,
+                &codes,
                 self.is_sealed(),
             );
         }
@@ -2603,15 +2612,32 @@ impl PalaceStore {
                 Err(_) => {}
             }
         }
+        // The bulk path owns its transaction, so it cannot route through
+        // `write_drawer` — but it must not therefore announce a diversion as
+        // an ordinary save. `save_event` classifies by WHERE THE ROW LANDED,
+        // which is the one classification both paths can share, so the
+        // monitor sees the same frame whichever path wrote the drawer.
         for drawer in drawers {
             undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
-            undercroft_obs::event_drawer_saved(
-                self.vault.id(),
-                &drawer.meta.wing,
-                &drawer.meta.room,
-                false,
-                self.is_sealed(),
-            );
+            match crate::admission::save_event(drawer) {
+                crate::admission::SaveEvent::Saved => undercroft_obs::event_drawer_saved(
+                    self.vault.id(),
+                    &drawer.meta.wing,
+                    &drawer.meta.room,
+                    false,
+                    self.is_sealed(),
+                ),
+                crate::admission::SaveEvent::Quarantined {
+                    intended_wing,
+                    codes,
+                } => undercroft_obs::event_drawer_quarantined(
+                    self.vault.id(),
+                    intended_wing,
+                    &drawer.meta.room,
+                    &codes,
+                    self.is_sealed(),
+                ),
+            }
         }
         Ok(BulkOutcome {
             created,
@@ -2790,11 +2816,17 @@ impl PalaceStore {
         via: &str,
     ) -> Result<SaveOutcome, StoreError> {
         let drawer = &Self::import_stamp(drawer, via);
-        let vector_written = |created| SaveOutcome {
-            id: drawer.id.clone(),
-            created,
+        // Report what the choke point ACTUALLY did. Hard-coding
+        // `quarantined: false` here threw away the `Landing` the screen had
+        // just produced, so a `/v1` import that WAS diverted answered
+        // `imported: N, quarantined: 0` — the same dishonesty the
+        // scripted-attacker gate caught on the save path, on the route a
+        // backup restore and the orchestrator's tenant migration both use.
+        let landed = |l: Landing| SaveOutcome {
+            id: l.diverted_to.clone().unwrap_or_else(|| drawer.id.clone()),
+            created: l.is_new,
             deduped: false,
-            quarantined: false,
+            quarantined: l.diverted_to.is_some(),
         };
         match self.external_dim {
             Some(dim) => {
@@ -2805,13 +2837,12 @@ impl PalaceStore {
                         got: v.len(),
                     });
                 }
-                self.write_drawer(drawer, v, Screen::Apply)
-                    .map(|l| vector_written(l.is_new))
+                self.write_drawer(drawer, v, Screen::Apply).map(landed)
             }
             None => match vector {
-                Some(v) if v.len() == self.embedder.dimension() => self
-                    .write_drawer(drawer, v, Screen::Apply)
-                    .map(|l| vector_written(l.is_new)),
+                Some(v) if v.len() == self.embedder.dimension() => {
+                    self.write_drawer(drawer, v, Screen::Apply).map(landed)
+                }
                 _ => self.upsert_screened(drawer),
             },
         }

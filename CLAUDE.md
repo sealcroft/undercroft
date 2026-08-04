@@ -713,8 +713,11 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (554 run,
-                                      # +1 #[ignore]d at-scale migration probe)
+docker compose run --rm test          # cargo unit + integration tests (551 run,
+                                      # 4 #[ignore]d = 555 declared. Counted from
+                                      # a battery run, never inherited — the
+                                      # doc sweep that set this line first wrote
+                                      # 554/+1 from a different counting method)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (222 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
@@ -1058,6 +1061,61 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 - Vault/wing/room names go through `undercroft_core::validate_name` (path
   traversal guard).
 
+## Definition of done — every unit, no exceptions
+
+A unit is not done when the code works. It is done when all of this is true,
+and this list exists because a session shipped work that passed every check it
+had and was still bypassable on the surface most deployments use.
+
+1. **Unit tests AND integration tests.** Both, every time, for every change —
+   not "where it made sense". A unit test proves the function; an integration
+   test proves the SURFACE. The 65-drift audit happened because capabilities
+   were verified through one surface and assumed on the others. If a change
+   touches behaviour a user can reach, an e2e check exercises it *through the
+   surface a user actually drives*, and if it touches more than one surface it
+   is exercised through each of them.
+2. **A test that would have failed before the fix.** Assert the premise, so it
+   cannot pass for the wrong reason. Several tests here carry an explicit
+   counterfactual arm for exactly this.
+3. **Drift check.** If the change touches a capability reachable from more
+   than one of {CLI, MCP, `/v1`, orchestrator}, verify EVERY one of them —
+   by reading the other surfaces' code, not by assuming symmetry. `cargo test`
+   runs `parity.rs`, which counts the MCP tool surface against a written
+   inventory in both directions and enforces the operator-only boundary; it
+   catches an added or removed TOOL, and it cannot catch a capability that
+   drifts in behaviour. That half is yours.
+4. **Every governance surface updated in the same unit**: CHANGELOG, CLAUDE.md,
+   ROADMAP, and whichever of docs/AGENTS.md, docs/THREAT_MODEL.md, README,
+   architecture/index.html, website/ carry the claim you changed. A claim
+   lives on every surface that states it.
+5. **The full Docker battery** at the final tree, with raw exit codes:
+   `test`, `lint`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`, `backends-e2e`,
+   `site`. `cargo build -p <crate>` does **not** compile integration tests —
+   `--tests` does.
+
+## Session-end hygiene — leave no debt, drift or stale
+
+Run this before ending a session, and record the result. The rule from the
+maintainer: *we don't leave debts or drifts or even stales anywhere in this
+project.*
+
+- **Docs vs code**: every number, tool table, route table and `UNDERCROFT_*`
+  variable in README, CLAUDE.md, docs/*.md, architecture/index.html and
+  website/ verified against the code — counted, not remembered. Landing-page
+  stats and doc tables have gone generations stale before.
+- **The published site**: `docker compose run --rm site` builds, and after a
+  Pages deploy the live page is checked, not assumed.
+- **The architecture reference**: if a diagram changed, `build.sh` re-run in
+  Docker (diagrams/ is the only source; pdf/ and the inlined copies are
+  derived, and the script fails if a heading and the rail disagree).
+- **Open threads written down AS WORK**: every residual, gap and deferred
+  decision recorded in ROADMAP with its reason, the shape of its fix, and a
+  gate. A gap is a gap, never dressed up as a principled refusal — and
+  **"accepted" is not a resting state**. Nothing broken or half-baked stays a
+  gap; if it is genuinely not worth fixing, that is a decision with an
+  argument, written down, not a line item that quietly never moves.
+- **A handover** stating what is unmerged, unreleased, unrun and undecided.
+
 ## Conventions
 
 - Rust 2021, workspace-level dependency versions, `thiserror` per-crate error
@@ -1067,6 +1125,15 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 - License: **BUSL-1.1** (source-available; rolling 4-year conversion to
   MPL 2.0; `NOTICE` carries the MemPalace MIT heritage attribution).
   Never reintroduce MIT as the project license or publish under it.
+- **Drift check before every release**, not only when something feels off.
+  The 65-drift audit found capabilities present on one surface and missing,
+  weaker or silently ignored on another — 55 of them failing with no signal
+  at all. Re-run it as a fan-out over the same seven dimensions (config
+  wiring incl. every `UNDERCROFT_*` variable per surface, write path, search
+  path, operational capabilities, error/status classes, audit-chain coverage,
+  docs vs code) with an adversarial verifier per dimension. `parity.rs` holds
+  the line between audits; the audit is what finds what a fixed inventory
+  cannot express.
 - Release flow: full Docker battery (always `--build`) → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
