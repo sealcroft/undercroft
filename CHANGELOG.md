@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.46.0 — Fully covered: the wishlist closes, ort ships everywhere, and the reference catches up
+
+Three merged units since v0.45.0, each with its full record below. The
+arcs: the tier-1 detector finishes its stated list and passes its
+stated gate — attack-fixture similarity (windowed, calibrated from both
+sides, 0/5,882 false positives on clean LoCoMo with 18/18 fixtures
+tripping) and the declared per-writer rate screen (the signal candidate
+bytes cannot carry), which completes C3.3 wishlist included; the `ort`
+posture reaches every release target the default artifacts ship for —
+five binary assets smoked against their packaged layout and a
+multi-arch `:tag-ort` manifest, live-firing at this tag; and the
+illustrated architecture reference gains the defense program as a
+top-level section with its eleventh diagram, closing the last recorded
+docs gap. test 511 → 514, e2e 197 → 206, env vars 72 → 73; the default
+write contract stays byte-identical throughout.
 
 ### the architecture reference learns the defense program
 
