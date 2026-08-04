@@ -1,5 +1,54 @@
 # Changelog
 
+
+### surface parity: 65 drifts closed, and the mechanism that stops the next one
+
+- **A 14-agent surface-parity audit found 65 confirmed drifts** between the
+  CLI, the MCP tools and `/v1` — 20 high, **55 of them silent**. All 65 are
+  fixed. The security-critical cluster first: **admission screening was
+  bypassable on `/v1` three ways** — a `dedup_threshold` in the save body
+  routed to `save_with_dedup` (which hardcoded `quarantined: false`), a
+  caller-supplied `vector` routed import straight to the raw writer, and
+  external-embedding vaults had no screened path at all. Since `/v1` export
+  emits a vector on every line, the ordinary backup-restore round trip **and
+  the orchestrator's tenant migration** re-admitted whole corpora unscreened.
+- **Quarantined content reached the agent.** Exclusion lived in `search`
+  alone, so a diverted drawer was invisible to a query and then handed over
+  verbatim by `wake_up` and listed by the closet index — the two surfaces
+  whose entire job is loading context at session start, which is exactly
+  where injected text wants to be.
+- **Fixed structurally, not patched.** Screening now lives at `write_drawer`,
+  the one choke point every write funnels through, behind a **required
+  `Screen` argument**: a new write path does not compile until its author
+  decides, and the only bypasses are two named reasons carrying their
+  justification. The read-only gate moved in front of dispatch and **fails
+  closed** — everything is a mutation unless explicitly named otherwise, so
+  all thirteen per-handler guards were deleted rather than a fourteenth
+  added. Remote-backend search now takes its trust floor, quarantine fence
+  and closed vocabularies from the same `resolve_search_policy` the local
+  path uses.
+- **`--read-only` did not mean read-only**: the co-resident `/mcp` store
+  opened writable, so it ran the embedder migration and wrote read-audit
+  records to the very vault the flag protects, while `POST …/kg/authority`
+  mutated on a replica. A `Posture` argument now flows to both handles.
+- **The prevention layer** (`crates/undercroft-cli/src/parity.rs`): the MCP
+  tool surface is written down and the code is counted against it, failing in
+  **both** directions — a tool added without an inventory line fails, and a
+  line naming a tool that no longer exists fails too, which is the direction
+  a hand-maintained doc table rots in silently. The same list enforces the
+  boundary: admission review, trust assignment, retention, forgetting and
+  rotation must be **absent** from MCP, because an agent must not rule on the
+  queue that contains it. It earned its keep immediately — the first
+  hand-written inventory invented four tool names and missed four real ones,
+  and the test caught both halves, having also refused an extraction pattern
+  that matched nothing rather than passing on zero.
+- Honest residual, recorded not dressed up: a read-only store with
+  `UNDERCROFT_RETRIEVAL=pq` still **writes**, because the PQ tier builds its
+  index on first search. Closing it means "load, never build" at each
+  prefilter entry; refusing `set_pq` instead would drop a replica onto a full
+  scan. Noted in `open_read_only`'s doc comment.
+- unit battery 523 → **551**, e2e 214 → **222**.
+
 ## Unreleased
 
 ### `--read-only` is a posture on the process, not a filter on one port

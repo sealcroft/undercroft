@@ -1,3 +1,4 @@
+#![allow(dead_code)] // the inventory below is documentation its own tests consume
 //! Surface parity — the inventory that fails when a surface drifts.
 //!
 //! A 14-agent audit once found **65 confirmed drifts** between the CLI, the
@@ -19,62 +20,49 @@
 //! What this deliberately does NOT assert: that every capability exists on
 //! every surface. Some absences are boundaries, not drift — admission review
 //! and wing-trust assignment are operator-only and must NEVER reach MCP, the
-//! agent surface. Those are recorded as `Operator` and the test requires them
+//! agent surface. Those are recorded in `OPERATOR_ONLY` and the test requires them
 //! to be absent from MCP, so the boundary is enforced by the same mechanism
 //! that enforces the parity.
 
-/// Where a capability is reachable from. The point of the type is that a
-/// new capability cannot be added without answering the question.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reach {
-    /// Reachable from every surface that could sensibly host it.
-    Everywhere,
-    /// Operator-only: CLI and `/v1`, and **never** MCP. Reaching one of
-    /// these from MCP is a security-boundary violation, not a convenience.
-    Operator,
-    /// Deliberately one-surface, with the reason recorded beside it.
-    Scoped(&'static str),
-}
-
 /// The MCP tool inventory. Every tool the server advertises must appear
 /// here exactly once, and every entry must name a real tool.
-pub const MCP_TOOLS: &[(&str, Reach)] = &[
+pub const MCP_TOOLS: &[&str] = &[
     // Memory: the agent surface proper.
-    ("undercroft_save", Reach::Everywhere),
-    ("undercroft_add_drawer", Reach::Everywhere),
-    ("undercroft_update_drawer", Reach::Everywhere),
-    ("undercroft_delete_drawer", Reach::Everywhere),
-    ("undercroft_delete_by_source", Reach::Everywhere),
-    ("undercroft_search", Reach::Everywhere),
-    ("undercroft_get_drawer", Reach::Everywhere),
-    ("undercroft_list_drawers", Reach::Everywhere),
-    ("undercroft_wake_up", Reach::Everywhere),
-    ("undercroft_check_duplicate", Reach::Everywhere),
-    ("undercroft_dedup", Reach::Everywhere),
-    ("undercroft_list_wings", Reach::Everywhere),
-    ("undercroft_list_rooms", Reach::Everywhere),
-    ("undercroft_get_taxonomy", Reach::Everywhere),
-    ("undercroft_get_closet_index", Reach::Everywhere),
-    ("undercroft_list_agents", Reach::Everywhere),
-    ("undercroft_diary_write", Reach::Everywhere),
-    ("undercroft_diary_read", Reach::Everywhere),
-    ("undercroft_create_tunnel", Reach::Everywhere),
-    ("undercroft_list_tunnels", Reach::Everywhere),
-    ("undercroft_delete_tunnel", Reach::Everywhere),
-    ("undercroft_list_hallways", Reach::Everywhere),
-    ("undercroft_follow_tunnel", Reach::Everywhere),
-    ("undercroft_traverse", Reach::Everywhere),
-    ("undercroft_status", Reach::Everywhere),
-    ("undercroft_verify", Reach::Everywhere),
+    "undercroft_save",
+    "undercroft_add_drawer",
+    "undercroft_update_drawer",
+    "undercroft_delete_drawer",
+    "undercroft_delete_by_source",
+    "undercroft_search",
+    "undercroft_get_drawer",
+    "undercroft_list_drawers",
+    "undercroft_wake_up",
+    "undercroft_check_duplicate",
+    "undercroft_dedup",
+    "undercroft_list_wings",
+    "undercroft_list_rooms",
+    "undercroft_get_taxonomy",
+    "undercroft_get_closet_index",
+    "undercroft_list_agents",
+    "undercroft_diary_write",
+    "undercroft_diary_read",
+    "undercroft_create_tunnel",
+    "undercroft_list_tunnels",
+    "undercroft_delete_tunnel",
+    "undercroft_list_hallways",
+    "undercroft_follow_tunnel",
+    "undercroft_traverse",
+    "undercroft_status",
+    "undercroft_verify",
     // Knowledge graph.
-    ("undercroft_kg_add", Reach::Everywhere),
-    ("undercroft_kg_query", Reach::Everywhere),
-    ("undercroft_kg_timeline", Reach::Everywhere),
-    ("undercroft_kg_invalidate", Reach::Everywhere),
-    ("undercroft_kg_supersede", Reach::Everywhere),
-    ("undercroft_kg_stats", Reach::Everywhere),
-    ("undercroft_kg_set_authority", Reach::Everywhere),
-    ("undercroft_lookup_canonical", Reach::Everywhere),
+    "undercroft_kg_add",
+    "undercroft_kg_query",
+    "undercroft_kg_timeline",
+    "undercroft_kg_invalidate",
+    "undercroft_kg_supersede",
+    "undercroft_kg_stats",
+    "undercroft_kg_set_authority",
+    "undercroft_lookup_canonical",
 ];
 
 /// Capabilities that must NEVER appear on MCP. Not an oversight to be
@@ -117,8 +105,7 @@ mod tests {
             "found no tool definitions — the extraction, not the surface, is broken"
         );
 
-        let inventoried: std::collections::BTreeSet<&str> =
-            MCP_TOOLS.iter().map(|(n, _)| *n).collect();
+        let inventoried: std::collections::BTreeSet<&str> = MCP_TOOLS.iter().copied().collect();
         assert_eq!(
             MCP_TOOLS.len(),
             inventoried.len(),
@@ -130,7 +117,7 @@ mod tests {
         assert!(
             missing.is_empty(),
             "these MCP tools are not in the parity inventory — add them with a \
-             Reach, deciding whether every surface should host them: {missing:?}"
+             line, deciding whether every surface should host them: {missing:?}"
         );
         assert!(
             stale.is_empty(),
@@ -169,7 +156,7 @@ mod tests {
             &src[start..end]
         };
         // A tool whose name says it changes something must be refused.
-        for (name, _) in MCP_TOOLS {
+        for name in MCP_TOOLS {
             let mutating = ["_save", "_add", "_update", "_delete", "_create", "_write"]
                 .iter()
                 .any(|v| name.contains(v))

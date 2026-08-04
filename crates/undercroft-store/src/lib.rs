@@ -2310,6 +2310,23 @@ impl PalaceStore {
         }
         self.vault.anchor_manifest(&head, writes)?;
         self.post_write(drawer, embedding, is_new);
+        // The live feed learns what this write MEANT, classified by where
+        // the row landed rather than by which call site wrote it. Emitting
+        // per call site is what split the monitor before: the single-save
+        // paths returned before emitting anything while the bulk paths
+        // emitted an ordinary drawer-saved whose only tell was the wing
+        // name. One emission at the choke point cannot split again.
+        if let crate::admission::SaveEvent::Quarantined { intended_wing, .. } =
+            crate::admission::save_event(drawer)
+        {
+            undercroft_obs::event_drawer_saved(
+                self.vault.id(),
+                crate::admission::QUARANTINE_WING,
+                intended_wing,
+                false,
+                self.is_sealed(),
+            );
+        }
         Ok(Landing {
             is_new,
             diverted_to: None,
@@ -8040,7 +8057,7 @@ mod tests {
         let (_d3, mut s3) = store(SecurityLevel::Sealed);
         s3.set_admission(true);
         let d3 = drawer("w", "r", poison, 2);
-        s3.upsert_many(&[d3.clone()]).unwrap();
+        s3.upsert_many(std::slice::from_ref(&d3)).unwrap();
         assert!(s3.get(&d3.id).unwrap().is_none(), "upsert_many must screen");
 
         // 4. import_record WITH a vector — the import bypass. This is the

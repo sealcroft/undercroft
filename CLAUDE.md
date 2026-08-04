@@ -674,6 +674,25 @@ matching numbers then proved nothing):
   (`docker run -v <repo>:/src`) saw the current bytes. When compose output
   looks impossibly cached, verify `/src` content in-container
   (`grep -c <new-symbol> …`) and fall back to a mounted build.
+**Parallel agents sharing one `CARGO_TARGET_DIR` give a FALSE GREEN.** Every
+worktree mounts at `/src`, so cargo's fingerprints collide in a shared
+`undercroft-target` volume: a build "finished in 5.18s" replaying *another
+worktree's* warnings, having compiled nothing of its own. Give each parallel
+agent a private target dir (`CARGO_TARGET_DIR=/build/<agent>`), and re-verify
+every agent's build claim in the integrated tree rather than trusting it —
+found when a fix fleet's own report flagged it, which is the only reason it
+was not believed.
+
+**`cargo build -p <crate>` does not compile that crate's integration tests.**
+`tests/*.rs` needs `--tests`. Three unbalanced-brace defects survived several
+"green" targeted builds this way and only surfaced in the compose battery, one
+at a time, as different build targets reached each file.
+
+**Union is the right conflict resolution for CHANGELOG bullets and the WRONG
+one for code.** Applying it blindly across a 7-way merge spliced away closing
+braces in three `.rs` files. Resolve code conflicts on their merits; reserve
+union for additive prose.
+
 **Before trusting any run of a freshly built binary, prove the binary is
 fresh**: probe it for a symbol only the new code has (`--help | grep -c
 <new-flag>`). A stale binary passes every old test by construction.
