@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### the ort posture reaches every release target
+
+- **The `-ort` release artifacts now ship at full target parity with
+  the defaults** — the stated second increment of #100's
+  deliberately-scoped first. Binaries: all five targets (linux
+  x86_64/arm64, macOS Intel + Apple Silicon, windows) via the same
+  matrix as the default `binaries` job, `--features onnx,ort`,
+  cross-compiled Intel macOS smoked under Rosetta 2 (installed
+  explicitly in the job — a no-op where present). Images: the
+  `:tag-ort` GHCR tag becomes a **multi-arch manifest** (amd64 + arm64
+  per-arch native builds, each smoked against its own pushed image,
+  merged by a dedicated `manifest-ort` job with the same index
+  annotations as the default image). The `republish-ort-image`
+  dispatch lever carries the identical matrix + manifest shape, so a
+  republish produces exactly what the tag would have.
+- **The binary smoke now runs against the PACKAGED layout, not the
+  build tree**: the archive directory is assembled first and the probe
+  binary runs from inside it — a binary that secretly needs a shared
+  library left behind in `target/` fails at CI instead of on a user's
+  machine. Packaging also picks up any `libonnxruntime*`/
+  `onnxruntime*.dll` the build drops beside the binary: on every
+  probed target the link is static and nothing matches, but if a
+  platform's prebuilt ever goes dynamic the asset stays self-contained
+  and the packaged-layout smoke proves the pair. The probe itself is
+  unchanged and unweakened: `--help`, then `UNDERCROFT_EMBEDDER=ort`
+  without model files must fail on MODEL CONFIGURATION ("loading ORT
+  embedder"), never on a missing feature.
+- Honest scope, stated: these jobs live-fire at the next `v*` tag,
+  exactly as #100's did (whose docker-ort found its build-dep gap only
+  at the tag — the republish lever exists because of it); watch them
+  there.
+
 ### the tier-1 wishlist closes: attack-fixture similarity + the declared rate screen
 
 - **Attack-fixture similarity** joins the deterministic tier-1 admission
