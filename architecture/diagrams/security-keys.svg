@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t d">
 <title id="t">Key derivation and the AAD that binds every ciphertext</title>
-<desc id="d">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use X25519 to a recipient key.</desc>
+<desc id="d">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -92,14 +92,15 @@
 <text x="42" y="598" class="f s dim">crash mid-rotation leaves one of two consistent states and is</text>
 <text x="42" y="613" class="f s dim">reconciled at the next open.</text>
 
-<rect x="454" y="472" width="422" height="150" rx="9" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
+<rect x="454" y="472" width="422" height="165" rx="9" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
 <text x="472" y="496" class="f l" fill="var(--d-blue-ink,#33527d)">Sharing — an export bundle for one recipient</text>
-<text x="472" y="517" class="f s dim">X25519 ephemeral-static to the recipient's public key, through</text>
-<text x="472" y="532" class="f s dim">HKDF, into XChaCha20-Poly1305. The sender's vault keys never</text>
-<text x="472" y="547" class="f s dim">leave the machine and the bundle is readable by exactly one</text>
-<text x="472" y="562" class="f s dim">holder of the matching private key.</text>
-<text x="472" y="583" class="f s dim">This is the no-lock-in path: a vault can be handed over whole</text>
-<text x="472" y="598" class="f s dim">without ever exposing it to the operator moving it.</text>
+<text x="472" y="517" class="f s dim">Hybrid X25519 + ML-KEM-768 to the recipient's public key, both</text>
+<text x="472" y="532" class="f s dim">shared secrets through HKDF into XChaCha20-Poly1305. The sender's</text>
+<text x="472" y="547" class="f s dim">vault keys never leave the machine, the bundle is readable by</text>
+<text x="472" y="562" class="f s dim">exactly one holder of the matching secret, and a hybrid recipient</text>
+<text x="472" y="577" class="f s dim">never silently downgrades to the curve half alone.</text>
+<text x="472" y="598" class="f s dim">This is the no-lock-in path: a vault can be handed over whole</text>
+<text x="472" y="613" class="f s dim">without ever exposing it to the operator moving it.</text>
 
 <rect x="24" y="638" width="852" height="152" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="662" class="f l ink">Where the boundary honestly sits</text>

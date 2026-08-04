@@ -158,10 +158,22 @@ pub fn kg_write(kind: KgKind) {
     imp::counter_add("undercroft_kg_writes_total", 1, &[("kind", kind.as_str())]);
 }
 
-/// Record an audit-chain commit (fires once per mutation).
-pub fn chain_commit() {
+/// Record `records` audit-chain records committed by one manifest anchor
+/// — so the counter advances by the chain's actual growth, one per
+/// mutation, whatever batching the write path used.
+///
+/// It used to take no argument and fire once per ANCHOR. A bulk ingest
+/// anchors once per 256-drawer transaction and read-audit records do not
+/// anchor at all, so the natural "is the audit chain advancing" alert
+/// read bulk ingest as near-idle and read auditing as absent. The
+/// anchor-lag boundary remains (records appended without an anchor are
+/// counted by the next one) and is documented on the read path.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn chain_commit(records: u64) {
     #[cfg(feature = "telemetry")]
-    imp::counter_add("undercroft_chain_commits_total", 1, &[]);
+    if records > 0 {
+        imp::counter_add("undercroft_chain_commits_total", records, &[]);
+    }
 }
 
 /// Record an HMAC / integrity verification failure — the tamper signal.
@@ -344,6 +356,31 @@ pub fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool, se
     imp::event_drawer_saved(vault, wing, room, deduped, sealed);
 }
 
+/// A write was DIVERTED by the admission screen into the quarantine wing
+/// of `vault`. `intended_wing`/`room` are where it was headed (suppressed
+/// for a sealed vault like every other location here); `signals` are the
+/// tier-1 signal CODES — a closed vocabulary, never the flagged text and
+/// never its offsets.
+///
+/// Its own event rather than a `drawer-saved` into a wing that happens to
+/// be named `quarantine-pending`: the single-save paths emitted nothing at
+/// all for a diversion and the bulk paths emitted an ordinary save, so
+/// "did anything get quarantined just now?" was answered differently by
+/// the same stream depending on which surface wrote. An operator watching
+/// the monitor during a poisoning attempt is exactly the person this
+/// signal exists for.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn event_drawer_quarantined(
+    vault: &str,
+    intended_wing: &str,
+    room: &str,
+    signals: &[&str],
+    sealed: bool,
+) {
+    #[cfg(feature = "telemetry")]
+    imp::event_drawer_quarantined(vault, intended_wing, room, signals, sealed);
+}
+
 /// A drawer was deleted from `vault` (location not resolved at this site).
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn event_drawer_deleted(vault: &str) {
@@ -371,11 +408,14 @@ pub fn event_kg_triple(vault: &str) {
     imp::event_kg_triple(vault);
 }
 
-/// The audit chain advanced for `vault`.
+/// The audit chain advanced for `vault` by `records` records — one
+/// anchor, however many records it committed (see [`chain_commit`]).
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub fn event_chain_commit(vault: &str) {
+pub fn event_chain_commit(vault: &str, records: u64) {
     #[cfg(feature = "telemetry")]
-    imp::event_chain_commit(vault);
+    if records > 0 {
+        imp::event_chain_commit(vault, records);
+    }
 }
 
 /// An HMAC / integrity verification failed on `vault` — the live tamper
@@ -457,7 +497,8 @@ mod tests {
         drawer_delete();
         kg_write(KgKind::Triple);
         kg_write(KgKind::Supersede);
-        chain_commit();
+        chain_commit(1);
+        chain_commit(256);
         hmac_verify_failed("drawer");
         vault_opened();
         http_request("v1_search", 200, std::time::Duration::from_millis(1));
@@ -467,7 +508,14 @@ mod tests {
         event_drawer_deleted("personal");
         event_search("personal", Some("eng"), None, 3, false);
         event_kg_triple("personal");
-        event_chain_commit("personal");
+        event_chain_commit("personal", 1);
+        event_drawer_quarantined(
+            "personal",
+            "eng",
+            "decisions",
+            &["imperative-instruction"],
+            false,
+        );
     }
 
     #[cfg(feature = "telemetry")]
@@ -513,7 +561,7 @@ mod tests {
     #[test]
     fn render_contains_recorded_metrics() {
         let _g = init();
-        chain_commit();
+        chain_commit(1);
         drawer_write(WriteOutcome::Created);
         hmac_verify_failed("drawer");
         let text = render_prometheus().expect("telemetry build renders metrics");

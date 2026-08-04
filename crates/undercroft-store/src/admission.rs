@@ -54,6 +54,52 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
+/// What one just-written drawer means on the live event feed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SaveEvent<'a> {
+    /// Filed where it was headed.
+    Saved,
+    /// The admission screen diverted it. Carries where it was HEADED
+    /// (it is in [`QUARANTINE_WING`] now) and the tier-1 signal codes —
+    /// a closed vocabulary, so they are metadata a live feed may carry;
+    /// the offsets beside them are not published.
+    Quarantined {
+        intended_wing: &'a str,
+        codes: Vec<&'a str>,
+    },
+}
+
+/// Classify a written drawer by WHERE IT LANDED, not by which call site
+/// wrote it.
+///
+/// Exact rather than heuristic: the single write choke point refuses
+/// [`QUARANTINE_WING`] to any drawer without admission signals, so a row
+/// in that wing was put there by the screen. Deciding this per call site
+/// is what produced the split the monitor showed — the single-save paths
+/// returned before emitting anything (silence for MCP, `/v1` and CLI
+/// `remember`), while the bulk paths emitted an ordinary `drawer-saved`
+/// whose only tell was a wing named `quarantine-pending`.
+pub(crate) fn save_event(drawer: &Drawer) -> SaveEvent<'_> {
+    if drawer.meta.wing != QUARANTINE_WING {
+        return SaveEvent::Saved;
+    }
+    SaveEvent::Quarantined {
+        // A diverted drawer always records where it was going; fall back
+        // to the wing itself rather than inventing a destination.
+        intended_wing: drawer
+            .meta
+            .intended_wing
+            .as_deref()
+            .unwrap_or(&drawer.meta.wing),
+        codes: drawer
+            .meta
+            .admission_signals
+            .iter()
+            .map(|s| s.code.as_str())
+            .collect(),
+    }
+}
+
 impl PalaceStore {
     /// Whether admission screening diverts flagged writes on this store.
     pub fn admission_on(&self) -> bool {

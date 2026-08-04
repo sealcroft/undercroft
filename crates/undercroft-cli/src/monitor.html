@@ -79,6 +79,8 @@
   .b.search{background:#0b2632;color:var(--cyan)} .b.kg{background:#241634;color:var(--violet)}
   .b.chain{background:#2a230c;color:var(--gold)} .b.tamper{background:#2a0e10;color:var(--red)}
   .b.info{background:#12202b;color:var(--ink)}
+  /* A diversion is the defense working, not a tamper: amber, never the red alarm. */
+  .b.quar{background:#2a1f0c;color:var(--amber)}
   .foot{margin-top:14px;font-size:10px;color:#4d6070;line-height:1.6}
   .foot code{color:var(--ink)}
 </style>
@@ -202,7 +204,7 @@
     return `${p(s/3600|0)}:${p(s/60%60|0)}:${p(s%60|0)}`; }
   function log(kind, text, ts){
     const row=document.createElement('div'); row.className='row';
-    const map={save:'SAVE',del:'DEL',search:'SRCH',kg:'LINK',chain:'CMMT',tamper:'!TMP',info:'INFO'};
+    const map={save:'SAVE',quar:'QUAR',del:'DEL',search:'SRCH',kg:'LINK',chain:'CMMT',tamper:'!TMP',info:'INFO'};
     row.innerHTML=`<span class="t">${stamp(ts)}</span><span class="b ${kind}">${map[kind]||'·'}</span><span>${text}</span>`;
     tickerBody.prepend(row); while(tickerBody.children.length>7) tickerBody.lastChild.remove();
   }
@@ -236,6 +238,19 @@
     floaters.push({x:wg.cx,y:wg.cy-10,txt:d.deduped?'↻':'+1',life:1,col:d.deduped?AMBER:PHOS});
     if(soundOn) tick(d.deduped?540:720);
     log('save', sealedVault?`drawer → ◈ sealed`:`drawer → ${d.wing}/${d.room}${d.deduped?' (dedup)':''}`);
+  }
+  // The admission screen diverted a write. Deliberately distinct from a
+  // save: a diversion used to be either silence or a save into a wing
+  // called `quarantine-pending`, so the one moment an operator most needs
+  // to see looked like ordinary traffic. No siren — quarantine is the
+  // defense working, unlike `hmac-fail`.
+  function onQuarantined(d){
+    const name=sealedVault ? '◈ sealed' : (d.intended_wing||'general');
+    const wg=ensureWing(name, sealedVault); wg.pulse=1;
+    floaters.push({x:wg.cx,y:wg.cy-10,txt:'⚠',life:1.4,col:AMBER});
+    if(soundOn) tick(300);
+    const sig=(d.signals||[]).join(', ')||'flagged';
+    log('quar', sealedVault?`write quarantined · ${sig}`:`write → quarantine (was ${d.intended_wing}/${d.room}) · ${sig}`);
   }
   function onDrawerDeleted(d){
     const wg=sealedVault?byName.get('◈ sealed'):null;
@@ -275,6 +290,7 @@
     switch(ev){
       case 'sample': onSample(d); break;
       case 'drawer-saved': onDrawerSaved(d); break;
+      case 'drawer-quarantined': onQuarantined(d); break;
       case 'drawer-deleted': onDrawerDeleted(d); break;
       case 'search': onSearch(d); break;
       case 'kg-triple': onKg(d); break;

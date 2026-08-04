@@ -311,7 +311,8 @@ undercroft export [--vault]           # decrypted JSONL to stdout
 undercroft export --to <pub> --out f  # sealed bundle only that recipient can open
 undercroft import <file.jsonl>        # migrate from undercroft or mempalace exports
 undercroft import <bundle> --identity <key>  # open + import an encrypted bundle
-undercroft bundle keygen|recipient    # X25519 identities for sealed exports
+undercroft bundle keygen|recipient    # hybrid X25519+ML-KEM-768 identities for sealed exports
+undercroft bundle sign-keygen|sender  # Ed25519 sender-attestation identities (export --sign)
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet

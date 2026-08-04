@@ -244,7 +244,9 @@ resolves the token (stored only as an HMAC), forwards to
 `/v1/vaults/{their-vault}/<subpath>` with the engine bearer + a fresh
 assertion. The subpath allowlist is `drawers | search | stats | export |
 import` — vault lifecycle is deliberately unreachable with a tenant token.
-Optional per-tenant rate limiting: `UNDERCROFT_ORCH_RATE_LIMIT=<req/min>`.
+Optional per-tenant rate limiting: `UNDERCROFT_ORCH_RATE_LIMIT=<req/min>`
+(a plain integer; a declaration it cannot read refuses to start rather
+than serving unlimited in silence).
 Rotate a tenant token with `tenant-rotate` (the old one dies in the same
 statement — immediately on the writer, within the replication window on
 replicas). `GET /healthz` reports `mode` and `last_write` on writer and
@@ -559,7 +561,7 @@ undercroft import palace.bundle --identity ops.key --sender <sender-hex>
 
 ---
 
-## 8. Reference — MCP tools (32)
+## 8. Reference — MCP tools (34)
 
 Write tools (marked **W**) are refused when the server runs `--read-only`.
 
@@ -636,7 +638,7 @@ graph answer across notes), or `unevaluated` (never checked; every fact
 distilled before grounding existed). `?grounding=` narrows to one of those and
 is **opt-in only** — the default returns all three, because filtering out
 background facts breaks exactly the multi-hop questions the graph is for.
-| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none |
+| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none. **`undercroft refine` is the same code path** (`--wing`/`--room`/`--fact-room`/`--limit`/`--dry-run`), so the two surfaces build the same vault from the same `UNDERCROFT_LLM_*` configuration; before v0.47.0 the CLI wrote no fact date, no grounding verdict and no searchable mirror |
 | POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | integrity verdict: HMAC every record, replay the audit chain, and check every drawer supersession receipt. `ok` covers all three legs — the same verdict CLI `verify` exits 2 on and MCP prints as VERIFY FAILED — plus `records_checked`, `bad_records`, `chain_ok`, a `supersessions` count breakdown and `bad_supersessions` (links whose receipt failed its HMAC) |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
@@ -674,13 +676,21 @@ Models: `UNDERCROFT_EMBEDDER` (`hash`|`onnx`|`ort`|`http`) ·
 `UNDERCROFT_EMBED_URL`/`_MODEL`/`_API`/`_KEY`/`_DIM`/`_CA` (served
 embedder; TLS or loopback only, `_CA` pins a self-signed root) ·
 `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`/`_NAME` ·
-`UNDERCROFT_RERANKER` (`onnx`|`ort`|`colbert`|`colbert-ort`) ·
+`UNDERCROFT_RERANKER` (`onnx`|`ort`|`colbert`|`colbert-ort`; the two
+ColBERT values are **single-vault only** — `serve-http` refuses them,
+same shape as `UNDERCROFT_RETRIEVAL=hnsw`) ·
 `UNDERCROFT_RERANK_MODEL`/`_TOKENIZER`/`_NAME`/`_TOP_N` (50) ·
 `UNDERCROFT_COLBERT_MODEL`/`_QUERY_MODEL`/`_TOKENIZER`/`_NAME` ·
 `UNDERCROFT_ORT_POOL` (session pool, default = cores) ·
 `UNDERCROFT_FORCE_EMBEDDER` (allow identity swap, then `repair`).
 
-Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw`) · `UNDERCROFT_FUSION`
+Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw` — `hnsw` is an
+in-process index and **single-vault only**: `serve-http` refuses it and
+names the fix, so choose `pq` or `fde` for a multi-tenant server) ·
+`UNDERCROFT_SEARCH_TRACE` (unset — any value prints a per-phase timing
+trace of each search to stderr, the instrument that found this project's
+own search hotspot. **Presence-triggered**: `0` and `off` turn it ON
+too; unset it to turn it off) · `UNDERCROFT_FUSION`
 (`bm25` default |`legacy`; `rrf` removed — measured −7.3pp, warns and falls
 back to `bm25`) · `UNDERCROFT_FUSION_WEIGHT` (0.55 — the blend's semantic
 weight `w` in `w·semantic + (0.90−w)·lexical + 0.10·recency`; declared,
@@ -796,8 +806,11 @@ e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 Orchestrator: `UNDERCROFT_ORCH_DB` · `UNDERCROFT_ORCH_KEY` (required) ·
 `UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, ≥16 chars; unused
 by `serve --read-replica`) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
-`UNDERCROFT_ORCH_RATE_LIMIT` (req/min, 0 = off; per-process — each
-replica enforces its own windows).
+`UNDERCROFT_ORCH_RATE_LIMIT` (req/min per tenant; unset/`0`/`off` = off;
+per-process — each replica enforces its own windows. A value that is not
+one of those **refuses to start**, the engine's posture for a declaration
+it cannot read: `100/min` and `1_000` used to parse as "off" and serve
+unlimited in silence).
 
 ## 11. Verify your implementation
 
