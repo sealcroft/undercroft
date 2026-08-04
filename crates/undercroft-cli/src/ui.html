@@ -975,10 +975,21 @@ async function runVerify() {
     $("verifyMsg").textContent = r.ok ? "✔ OK" : "✘ FAILED";
     $("verifyMsg").style.color = r.ok ? "var(--phos)" : "var(--red)";
     $("verifyReport").style.display = "block";
+    // The supersession leg is part of the verdict ✔/✘ above; show its
+    // breakdown so a red tick names which leg failed. A link whose receipt
+    // fails its HMAC is tampering — the other verdicts are ordinary states.
+    const s = r.supersessions || {};
+    const sup = (s.verified || 0) + (s.source_changed || 0) + (s.dangling || 0) +
+                (s.unreceipted || 0) + (s.tampered || 0);
     $("verifyReport").textContent =
       "records checked: " + r.records_checked +
       "\nchain ok:        " + r.chain_ok +
-      "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none");
+      "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none") +
+      (sup ? "\nsupersessions:   " + (s.verified || 0) + " verified · " + (s.source_changed || 0) +
+             " source-changed · " + (s.dangling || 0) + " dangling · " + (s.unreceipted || 0) +
+             " unreceipted · " + (s.tampered || 0) + " tampered" +
+             ((r.bad_supersessions || []).length ? "\n  TAMPERED LINK: " + r.bad_supersessions.join("\n  TAMPERED LINK: ") : "")
+          : "");
   } catch (e) { $("verifyMsg").textContent = ""; toast("verify failed — " + e.message, true); }
 }
 

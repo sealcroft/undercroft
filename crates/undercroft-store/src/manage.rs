@@ -1232,6 +1232,51 @@ mod tests {
         );
     }
 
+    /// The supersession leg belongs to the vault's ONE integrity verdict,
+    /// not to a second call each surface had to remember to make. While it
+    /// was separate, `POST /v1/vaults/{id}/verify` — and the admin console
+    /// reading it — answered `{"ok": true}` on exactly this vault while
+    /// CLI `verify` printed `TAMPERED LINK` and exited 2.
+    #[test]
+    fn the_integrity_verdict_covers_supersession_receipts() {
+        use crate::kg::ReceiptVerdict;
+        let (_d, mut s) = store();
+        let old = drawer("w", "r", "the retro is on Thursdays", 0);
+        s.upsert(&old).unwrap();
+        let new = drawer("w", "r", "the retro moved to Tuesdays", 1)
+            .with_supersedes(Some(old.id.clone()));
+        s.upsert(&new).unwrap();
+
+        // Premise: the link exists, reaches the report, and the vault is
+        // green — so a red verdict below is the flip and not the fixture.
+        let report = s.verify().unwrap();
+        assert_eq!(report.supersessions.len(), 1, "the link reaches verify()");
+        assert_eq!(report.supersessions[0].verdict, ReceiptVerdict::Verified);
+        assert_eq!(report.tampered_supersessions(), 0);
+        assert!(report.ok());
+
+        // Offline column flip on the link mirror: the receipt was bound
+        // over the original target, so the redirect fails its HMAC.
+        s.conn
+            .execute(
+                "UPDATE drawers SET supersedes = '1111beadfeed1111' WHERE id = ?1",
+                params![new.id],
+            )
+            .unwrap();
+        let report = s.verify().unwrap();
+        assert_eq!(report.tampered_supersessions(), 1);
+        assert!(!report.ok(), "the vault's verdict is FAILED");
+        // And it is the ONLY failing leg — the mirror column sits outside
+        // the drawer's own `canonical(id, meta_json, content)` HMAC, which
+        // is exactly why a verdict assembled from the other two read green.
+        assert!(
+            report.bad_records.is_empty(),
+            "no drawer HMAC moved: {:?}",
+            report.bad_records
+        );
+        assert!(report.chain_ok, "the audit chain is untouched");
+    }
+
     #[test]
     fn a_drawer_cannot_supersede_itself() {
         let (_d, mut s) = store();

@@ -539,6 +539,19 @@ pub enum StoreError {
     EmbeddingDim { expected: usize, got: usize },
     #[error("invalid operation: {0}")]
     Invalid(String),
+    /// A destruction attestation did not verify against this vault: a
+    /// forged sender signature, a tombstone tag that is not this vault's,
+    /// a record inside the attested interval that is not a tombstone.
+    ///
+    /// Typed apart from [`StoreError::Invalid`] because it is a TAMPER
+    /// VERDICT, not a malformed request: `Invalid`'s "invalid operation:"
+    /// prefix is what a bad CLI argument produces, and while this verdict
+    /// wore it, `undercroft verify-forgetting` exited 1 on a forged
+    /// attestation — indistinguishable from "the file does not exist" to
+    /// the compliance script reading the exit code. It now exits 2, the
+    /// code `verify` and `repair` reserve for an integrity finding.
+    #[error("attestation failed: {0}")]
+    Attestation(String),
 }
 
 /// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
@@ -795,11 +808,34 @@ pub struct VerifyReport {
     pub records_checked: u64,
     pub bad_records: Vec<String>,
     pub chain_ok: bool,
+    /// Every drawer supersession link with its verdict (empty when no
+    /// drawer declares one). Carried INSIDE the report rather than left to
+    /// a separate [`PalaceStore::verify_supersessions`] call, because the
+    /// receipt lives in columns outside the drawer's own HMAC and so
+    /// `bad_records` structurally cannot see it: while the check was a
+    /// second call, `/v1/verify` answered `{"ok": true}` — and the shipped
+    /// admin console a green tick — on a vault where the CLI printed
+    /// `TAMPERED LINK` and exited 2. One walk, one verdict, and a surface
+    /// can no longer assemble a narrower one by forgetting a call.
+    pub supersessions: Vec<crate::kg::SupersessionStatus>,
 }
 
 impl VerifyReport {
+    /// The vault's integrity verdict: every leg this report covers.
     pub fn ok(&self) -> bool {
-        self.bad_records.is_empty() && self.chain_ok
+        self.bad_records.is_empty() && self.chain_ok && self.tampered_supersessions() == 0
+    }
+
+    /// Supersession links whose keyed receipt failed its HMAC. The other
+    /// four verdicts are states a legitimate vault reaches (the superseded
+    /// drawer was edited, deleted, or was absent when an import wrote the
+    /// link); only this one is offline tampering, so only this one fails
+    /// the verify.
+    pub fn tampered_supersessions(&self) -> usize {
+        self.supersessions
+            .iter()
+            .filter(|l| l.verdict == crate::kg::ReceiptVerdict::Tampered)
+            .count()
     }
 }
 
@@ -3700,8 +3736,11 @@ impl PalaceStore {
         }
     }
 
-    /// Walk every record verifying its HMAC, then replay the audit chain
-    /// against the manifest head.
+    /// Walk every record verifying its HMAC, replay the audit chain
+    /// against the manifest head, and check every drawer supersession
+    /// receipt. All three legs are in the one report: the receipt columns
+    /// sit outside the drawer HMAC, so a caller that verified only what
+    /// the first two legs returned answered green on a tampered link.
     pub fn verify(&self) -> Result<VerifyReport, StoreError> {
         let mut stmt = self
             .conn
@@ -3754,10 +3793,28 @@ impl PalaceStore {
             })
             .optional()?;
         let chain_ok = db_head.as_deref() == Some(head.as_str()) && anchor_seen;
+        // Not folded into `records_checked`: that count is HMAC-covered
+        // *records*, and a supersession link is a relation between two of
+        // them, reported with its own verdicts.
+        //
+        // The link walk reads each superseded drawer through `get`, which
+        // refuses to hand back a row whose own HMAC fails. Such a row is
+        // already in `bad_records` — the drawer walk above covers every
+        // row — so no alarm is lost by continuing; and a `verify` that
+        // returns an ERROR instead of a verdict is precisely the failure
+        // this function exists to prevent (`backup create` and
+        // `/v1/verify` both read the verdict, not the error). The swallow
+        // is conditional on the alarm already standing.
+        let supersessions = match self.verify_supersessions() {
+            Ok(links) => links,
+            Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
+            Err(e) => return Err(e),
+        };
         Ok(VerifyReport {
             records_checked: checked,
             bad_records: bad,
             chain_ok,
+            supersessions,
         })
     }
 
@@ -8232,13 +8289,26 @@ mod tests {
         assert!(s.get(&keep.id).unwrap().is_some(), "nothing else changed");
         assert!(s.verify().unwrap().ok(), "the chain stays green");
 
+        // Every refusal below is the TYPED tamper verdict, never the
+        // generic `Invalid` a bad argument produces. The CLI keys its
+        // exit-2 integrity code on this variant, so a forgery arriving as
+        // `Invalid` would exit 1 — the code that also means "no such
+        // file", i.e. "retry the run" to a compliance script.
+        let forgery = |r: Result<(), StoreError>, what: &str| match r {
+            Err(StoreError::Attestation(_)) => {}
+            other => panic!("{what}: expected StoreError::Attestation, got {other:?}"),
+        };
+
         // Signed: verifies; a flipped field then fails on the signature.
         let (secret, _) = undercroft_vault::bundle::sign_keygen();
         att.sign(&secret).unwrap();
         s.verify_forget_attestation(&att).unwrap();
         let mut forged = att.clone();
         forged.drawers[0].content_fp = "00".repeat(32);
-        assert!(s.verify_forget_attestation(&forged).is_err());
+        forgery(
+            s.verify_forget_attestation(&forged),
+            "a flipped content fingerprint",
+        );
 
         // Unsigned forgeries fail on the replay arithmetic instead.
         let mut unsigned = att.clone();
@@ -8246,19 +8316,22 @@ mod tests {
         unsigned.sender = None;
         let mut dropped = unsigned.clone();
         dropped.records.pop();
-        assert!(
-            s.verify_forget_attestation(&dropped).is_err(),
-            "a dropped tombstone must break the head chain"
+        forgery(
+            s.verify_forget_attestation(&dropped),
+            "a dropped tombstone must break the head chain",
         );
         let mut renamed = unsigned.clone();
         renamed.records[0].record_id = format!("del/{}", keep.id);
-        assert!(
-            s.verify_forget_attestation(&renamed).is_err(),
-            "a tombstone for an unnamed drawer must be refused"
+        forgery(
+            s.verify_forget_attestation(&renamed),
+            "a tombstone for an unnamed drawer must be refused",
         );
         // A foreign vault refuses outright.
         let (_d2, s2) = store(SecurityLevel::Sealed);
-        assert!(s2.verify_forget_attestation(&unsigned).is_err());
+        forgery(
+            s2.verify_forget_attestation(&unsigned),
+            "another vault's attestation",
+        );
     }
 
     /// C3.2 phase 2, retention half: policies are declared and audited,

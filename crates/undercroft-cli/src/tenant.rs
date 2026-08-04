@@ -1018,20 +1018,50 @@ impl Tenancy {
     }
 
     /// `POST /v1/vaults/{id}/verify` — walk every record verifying its
-    /// HMAC and replay the audit chain. Read-only despite the verb (POST
-    /// because it is an expensive action, not a resource read).
+    /// HMAC, replay the audit chain, and check every drawer supersession
+    /// receipt. Read-only despite the verb (POST because it is an
+    /// expensive action, not a resource read).
+    ///
+    /// `ok` is the vault's whole verdict, the same one CLI `verify` exits
+    /// 2 on and MCP prints as VERIFY FAILED. It used to be narrower here:
+    /// the supersession leg was a second store call only those two
+    /// surfaces made, so this route — and the admin console reading it —
+    /// answered green on a vault with a tampered link. The counts are the
+    /// same breakdown `GET …/supersessions` returns, so an alert can stay
+    /// on this one route.
     fn verify(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         let report = store.verify().map_err(store_err)?;
-        let ok = report.ok();
+        use undercroft_store::ReceiptVerdict as V;
+        let count = |v: V| {
+            report
+                .supersessions
+                .iter()
+                .filter(|l| l.verdict == v)
+                .count()
+        };
+        let bad_supersessions: Vec<&str> = report
+            .supersessions
+            .iter()
+            .filter(|l| l.verdict == V::Tampered)
+            .map(|l| l.drawer_id.as_str())
+            .collect();
         Ok((
             200,
             Body::Json(json!({
-                "ok": ok,
+                "ok": report.ok(),
                 "records_checked": report.records_checked,
                 "bad_records": report.bad_records,
                 "chain_ok": report.chain_ok,
+                "supersessions": {
+                    "verified": count(V::Verified),
+                    "source_changed": count(V::SourceChanged),
+                    "dangling": count(V::Dangling),
+                    "unreceipted": count(V::Unreceipted),
+                    "tampered": count(V::Tampered),
+                },
+                "bad_supersessions": bad_supersessions,
             })),
         ))
     }
@@ -2085,7 +2115,11 @@ fn store_err(e: StoreError) -> RestError {
         // the reserved wing, a ruling on an id that is not quarantined —
         // is the caller's error, not the server's.
         | StoreError::Invalid(_) => 400,
-        StoreError::Integrity(_) => 409,
+        // Both are verdicts about stored evidence rather than about the
+        // request: an HMAC that does not verify, or an attestation that
+        // does not describe what this vault did. 409, never 5xx — the
+        // server is working exactly as designed when it says so.
+        StoreError::Integrity(_) | StoreError::Attestation(_) => 409,
         _ => 500,
     };
     RestError::new(code, e.to_string())

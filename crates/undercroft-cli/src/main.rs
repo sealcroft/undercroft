@@ -1603,13 +1603,13 @@ fn main() -> Result<()> {
             );
             // Drawer supersession links are part of the vault's integrity
             // story: a receipted link that fails its HMAC is tampering,
-            // reported with the same severity as a bad record.
-            let links = store.verify_supersessions()?;
-            let mut sup_tampered = 0usize;
+            // reported with the same severity as a bad record. The leg now
+            // rides inside the report (one walk, and `report.ok()` covers
+            // it on every surface); this only renders it.
+            let links = &report.supersessions;
             if !links.is_empty() {
                 use undercroft_store::ReceiptVerdict as V;
                 let count = |v: V| links.iter().filter(|l| l.verdict == v).count();
-                sup_tampered = count(V::Tampered);
                 println!(
                     "supersessions:   {} verified · {} source-changed · {} dangling · \
                      {} unreceipted · {} tampered",
@@ -1617,13 +1617,13 @@ fn main() -> Result<()> {
                     count(V::SourceChanged),
                     count(V::Dangling),
                     count(V::Unreceipted),
-                    sup_tampered
+                    report.tampered_supersessions()
                 );
                 for l in links.iter().filter(|l| l.verdict == V::Tampered) {
                     println!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
                 }
             }
-            if report.ok() && sup_tampered == 0 {
+            if report.ok() {
                 println!("{}", tr("verify-ok"));
             } else {
                 println!("{}", tr("verify-failed"));
@@ -1664,7 +1664,22 @@ fn main() -> Result<()> {
                 .with_context(|| format!("reading {}", file.display()))?;
             let att: undercroft_store::ForgetAttestation = serde_json::from_str(&raw)
                 .with_context(|| format!("{} is not an attestation", file.display()))?;
-            store.verify_forget_attestation(&att)?;
+            // Exit 2 is this CLI's integrity verdict — the code `verify`
+            // and `repair` already reserve for "tampering detected". A
+            // forged signature or a tag that is not this vault's exited 1
+            // here, the same code as "no such file", so a compliance
+            // script that retries run errors retried a forged document
+            // and ignored it. Only the attestation verdict takes exit 2;
+            // an I/O or SQLite failure stays an ordinary error.
+            if let Err(e) = store.verify_forget_attestation(&att) {
+                match e {
+                    undercroft_store::StoreError::Attestation(why) => {
+                        println!("ATTESTATION FAILED: {why}");
+                        std::process::exit(2);
+                    }
+                    other => return Err(other.into()),
+                }
+            }
             println!(
                 "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
                  {}… and {}…, nothing else changed{}",
@@ -2640,9 +2655,17 @@ fn main() -> Result<()> {
             match action {
                 BackupAction::Create { vault } => {
                     // Verify before snapshotting — never archive a bad palace.
+                    // The refusal is an integrity verdict, so it exits 2
+                    // like `verify` and `repair` rather than 1: a script
+                    // that treats 1 as "retry the run" must not retry a
+                    // vault that failed its HMACs.
                     let store = open_store(&cli, vault)?;
                     if !store.verify()?.ok() {
-                        bail!("refusing to back up vault '{vault}': integrity verification failed");
+                        println!(
+                            "refusing to back up vault '{vault}': integrity verification \
+                             failed (run `undercroft verify --vault {vault}` for the detail)"
+                        );
+                        std::process::exit(2);
                     }
                     drop(store);
                     let stamp = time::OffsetDateTime::now_utc()

@@ -594,9 +594,11 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let report = store.verify()?;
             // Supersession links carry keyed receipts; a link that fails
             // its HMAC is tampering and fails the verify like a bad record.
-            let links = store.verify_supersessions()?;
+            // The check rides inside the report, so this verdict is the
+            // same one every other surface prints.
+            let links = &report.supersessions;
             use undercroft_store::ReceiptVerdict as V;
-            let sup_tampered = links.iter().filter(|l| l.verdict == V::Tampered).count();
+            let sup_tampered = report.tampered_supersessions();
             let sup_line = if links.is_empty() {
                 String::new()
             } else {
@@ -617,7 +619,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 report.bad_records.len(),
                 if report.chain_ok { "ok" } else { "BROKEN" },
                 sup_line,
-                if report.ok() && sup_tampered == 0 {
+                if report.ok() {
                     "VERIFY OK"
                 } else {
                     "VERIFY FAILED"
