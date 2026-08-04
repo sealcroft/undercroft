@@ -33,9 +33,17 @@ ARG UNDERCROFT_FEATURES=""
 # The features branch must still produce the orchestrator (the runtime
 # stage copies BOTH binaries — a features-only build used to leave it
 # missing, which only never fired because feature images stopped at the
-# builder stage until the :ort runtime variant existed).
+# builder stage until the :ort runtime variant existed). Feature builds
+# also need the ort toolchain deps (pkg-config/libssl-dev/g++ — the same
+# set the compose ort-build service installs; openssl-sys fails without
+# them, which is exactly how the first live docker-ort run died while
+# the runner-built binary sailed: GitHub runners carry them natively).
+# Installed only in the features branch so default images are untouched.
 RUN if [ -n "$UNDERCROFT_FEATURES" ]; then \
-        cargo build --release -p undercroft-cli --features "$UNDERCROFT_FEATURES" \
+        apt-get update \
+        && apt-get install -y --no-install-recommends pkg-config libssl-dev g++ \
+        && rm -rf /var/lib/apt/lists/* \
+        && cargo build --release -p undercroft-cli --features "$UNDERCROFT_FEATURES" \
         && cargo build --release -p undercroft-orchestrator; \
     else \
         cargo build --release && cargo test --release --no-run; \
