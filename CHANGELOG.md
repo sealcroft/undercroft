@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased — every embedder posture becomes a ready configuration
+
+- **The posture guide ships** (`docs/EMBEDDERS.md`, published as
+  "Choosing an embedder posture"): all four postures — `hash` zero-egress
+  default, `http` served (TLS terminator + pin recipe), `onnx`/`ort`
+  in-process — as copy-paste configurations with the security trade,
+  cost, and honest boundary of each stated in place; the out-of-repo
+  model-export recipe (Optimum, weights never enter the repo — the
+  corpus doctrine applied to models); and the two-conditioned
+  cross-lingual claim restated where embedder choices are made. The
+  framing fact is the repo's own measurement: the MODEL is the quality
+  lever (+3.2–4.2pp hash→modern), the runtime is not (≤1.0pp spread) —
+  postures are chosen for security and operational shape.
+- **Releases ship the `ort` posture ready-made** — deliberately scoped
+  to the deployable-server case as a first increment: a
+  `…-x86_64-unknown-linux-gnu-ort.tar.gz` binary asset and a
+  `ghcr.io/compufreq/undercroft:<tag>-ort` amd64 image. Both
+  **smoke-probed at build**: `--help` must run and
+  `UNDERCROFT_EMBEDDER=ort` without model files must fail on MODEL
+  CONFIGURATION ("loading ORT embedder"), never on a missing feature —
+  the failure shape a default binary would produce under the asset
+  name, which is exactly the silent miss the probe exists to catch.
+  Probed before writing the packaging (2026-08-04, in-container): the
+  ort build links ONNX Runtime statically — no shared library ships
+  beside the binary, so the asset is one file and the unchanged runtime
+  image stage suffices.
+- **A real Dockerfile bug found on the way**: the `UNDERCROFT_FEATURES`
+  branch built only the CLI while the runtime stage copies BOTH
+  binaries — a feature-built runtime image would have failed its
+  orchestrator COPY. It never fired only because feature images
+  stopped at the builder stage until now; the branch builds the
+  orchestrator too.
+- Honest scope, stated: the smoke proves the feature is compiled and
+  wired; full inference still needs a user-supplied model export (the
+  guide's recipe). macOS/Windows/arm64 ort variants are future
+  increments, not silent omissions. The workflow jobs run at the next
+  `v*` tag — the smoke logic itself is exercised there.
+
 ## Unreleased — the no-cleartext mandate reaches every LLM consumer
 
 - **`LlmClient` construction now enforces TLS-or-loopback — the served
