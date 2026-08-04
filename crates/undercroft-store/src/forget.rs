@@ -164,7 +164,11 @@ impl PalaceStore {
     /// tombstone for a named drawer with this vault's own tag, nothing
     /// else happened in the interval, and the drawers are gone.
     pub fn verify_forget_attestation(&self, att: &ForgetAttestation) -> Result<(), StoreError> {
-        let fail = |what: String| StoreError::Invalid(format!("attestation failed: {what}"));
+        // A typed verdict, not a generic input error: every branch below is
+        // "this document does not describe what this vault did", which the
+        // CLI reports with its integrity exit code (see
+        // [`StoreError::Attestation`]).
+        let fail = StoreError::Attestation;
         if att.vault != self.vault.id() {
             return Err(fail(format!(
                 "attests vault {:?}, this is {:?}",

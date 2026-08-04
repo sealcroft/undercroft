@@ -850,10 +850,14 @@ impl PalaceStore {
         review_state: &str,
         canonical_key: Option<&str>,
     ) -> Result<(), StoreError> {
-        let bad = |reason: String| StoreError::CorruptRow {
-            id: triple_id.to_string(),
-            reason,
-        };
+        // `Invalid`, not `CorruptRow` — the same rule the write choke point
+        // states: a value the closed vocabulary does not contain, or an id
+        // that names no fact, is the CALLER's error. `CorruptRow` reads as
+        // "corrupt row <id>: …" and maps to HTTP 500, so a typo'd
+        // `authority_class` told an operator their knowledge graph was
+        // broken (and a client library that retries 5xx retried a request
+        // that can never succeed) instead of returning 400.
+        let bad = |reason: String| StoreError::Invalid(format!("fact {triple_id}: {reason}"));
         if !matches!(authority_class, "stated" | "canonical") {
             return Err(bad(format!(
                 "authority_class must be stated|canonical, got {authority_class:?}"
@@ -1395,7 +1399,7 @@ fn valid_at(t: &Triple, as_of_key: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::ReceiptVerdict;
-    use crate::{PalaceStore, SearchOptions};
+    use crate::{PalaceStore, SearchOptions, StoreError};
     use undercroft_vault::{SecurityLevel, VaultManager};
     use tempfile::TempDir;
 
@@ -1990,24 +1994,52 @@ mod tests {
         let id = s
             .kg_add("user", "locale", "de-DE", None, None, 1.0, None)
             .unwrap();
+        // Premise: the same call with in-vocabulary values succeeds, so
+        // every refusal below is about the value, not about the fixture.
+        s.kg_set_authority(&id, "canonical", "approved", Some("user-locale"))
+            .unwrap();
+
+        // Every refusal is `Invalid` — the CALLER's error, 400 on /v1 —
+        // and names the fact. It was `CorruptRow` ("corrupt row <id>: …",
+        // mapped to 500), so a typo'd vocabulary value told the operator
+        // their knowledge graph was damaged and invited a client library
+        // to retry a request that can never succeed.
+        let refused = |r: Result<(), StoreError>, what: &str| match r {
+            Err(StoreError::Invalid(msg)) => assert!(
+                msg.contains(&id),
+                "{what}: the refusal should name the fact, got {msg:?}"
+            ),
+            other => panic!("{what}: expected StoreError::Invalid, got {other:?}"),
+        };
         // Unknown class or state: rejected, never coerced.
-        assert!(s
-            .kg_set_authority(&id, "golden", "approved", Some("user-locale"))
-            .is_err());
-        assert!(s
-            .kg_set_authority(&id, "canonical", "maybe", Some("user-locale"))
-            .is_err());
+        refused(
+            s.kg_set_authority(&id, "golden", "approved", Some("user-locale")),
+            "unknown authority_class",
+        );
+        refused(
+            s.kg_set_authority(&id, "canonical", "maybe", Some("user-locale")),
+            "unknown review_state",
+        );
         // canonical without a key, and stated with one: both refused.
-        assert!(s
-            .kg_set_authority(&id, "canonical", "approved", None)
-            .is_err());
-        assert!(s
-            .kg_set_authority(&id, "stated", "unreviewed", Some("user-locale"))
-            .is_err());
+        refused(
+            s.kg_set_authority(&id, "canonical", "approved", None),
+            "canonical without a key",
+        );
+        refused(
+            s.kg_set_authority(&id, "stated", "unreviewed", Some("user-locale")),
+            "stated with a key",
+        );
         // A key with a path separator never reaches the table.
-        assert!(s
-            .kg_set_authority(&id, "canonical", "approved", Some("user/locale"))
-            .is_err());
+        refused(
+            s.kg_set_authority(&id, "canonical", "approved", Some("user/locale")),
+            "canonical_key with a path separator",
+        );
+        // Naming a fact that does not exist is an input error too — the
+        // one arm that is about the id rather than the vocabulary.
+        match s.kg_set_authority("kg-nope", "stated", "unreviewed", None) {
+            Err(StoreError::Invalid(msg)) => assert!(msg.contains("no such fact"), "got {msg:?}"),
+            other => panic!("unknown fact id: expected StoreError::Invalid, got {other:?}"),
+        }
     }
 
     #[test]

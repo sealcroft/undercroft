@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### one integrity verdict, whichever surface asks for it
+
+- **`verify` now covers drawer supersession receipts on every surface.**
+  The receipt lives in columns outside the drawer's own HMAC, so
+  `VerifyReport::ok()` structurally could not see it; the check was a
+  second `verify_supersessions()` call that only CLI `verify` and MCP
+  `undercroft_verify` made. `POST /v1/vaults/{id}/verify` — and the admin
+  console reading it — therefore answered `{"ok": true}` and a green tick
+  on a vault where the CLI printed `TAMPERED LINK` and exited 2. The leg
+  now rides **inside** `PalaceStore::verify`: one walk, one verdict, and
+  no surface can assemble a narrower one by forgetting a call. `/v1`
+  gains a `supersessions` count breakdown plus `bad_supersessions`; the
+  console renders both. *Behaviour change:* a vault with a tampered
+  supersession link that `/v1/verify` called green now answers
+  `{"ok": false}` — that is the CLI's long-standing verdict reaching the
+  transport that was missing it, never the reverse.
+- **KG authority-tier rejections are 400, not 500.** `kg_set_authority`
+  raised `StoreError::CorruptRow` for every caller-input rejection — an
+  out-of-vocabulary `authority_class`/`review_state`, canonical without a
+  key, stated with one, an invalid `canonical_key`, an id that names no
+  fact — so `/v1 POST …/kg/authority` answered **500 "corrupt row …"**:
+  it told the operator their knowledge graph was damaged when only their
+  request was, and invited client libraries to retry a request that can
+  never succeed. All six are now `StoreError::Invalid` → **400**, the
+  rule the write choke point already states.
+- **Exit 2 means an integrity verdict on every command that can reach
+  one.** `verify-forgetting` exited 1 on a FORGED attestation — the same
+  code as "no such file" — because the verdict was a generic
+  `StoreError::Invalid` wearing an "invalid operation:" prefix. It is now
+  the typed `StoreError::Attestation` (409 on REST, beside `Integrity`)
+  and the CLI exits 2 on it; `backup create`'s refusal to archive a
+  palace that failed verification exits 2 as well. Exit 1 stays "the run
+  failed". Documented in AGENTS.md §7.
+- **Two live `/v1` routes reached the HTTP reference**: `GET
+  …/kg/receipts` (the KG half of "alert on `tampered` without walking the
+  list", documented nowhere before) and `GET …/stats/history`
+  (telemetry builds only).
+
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 
 - **Crash-window tests for the allow/deny state machine** (the gate
