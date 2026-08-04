@@ -159,7 +159,9 @@ grep -q "event: drawer-quarantined" /tmp/quar.sse && pass "stream emits drawer-q
   || fail "no drawer-quarantined frame" "$(cat /tmp/quar.sse)"
 grep -q '"intended_wing":"eng"' /tmp/quar.sse && pass "frame carries the intended wing" \
   || fail "intended_wing missing" "$(cat /tmp/quar.sse)"
-grep -qF '"signals":["imperative-instruction"]' /tmp/quar.sse && pass "frame carries signal codes" \
+# The poison string trips the imperative marker AND fixture similarity;
+# assert membership, not the exact list — the vocabulary may grow.
+grep -qE '"signals":\[[^]]*"imperative-instruction"' /tmp/quar.sse && pass "frame carries signal codes" \
   || fail "signal codes missing" "$(cat /tmp/quar.sse)"
 if grep -qi "ignore previous" /tmp/quar.sse; then
   fail "stream leaked flagged content" "$(cat /tmp/quar.sse)"
@@ -182,7 +184,7 @@ if grep -q "event: drawer-quarantined" /tmp/quars.sse \
 else
   fail "sealed quarantine frame wrong" "$(cat /tmp/quars.sse)"
 fi
-grep -qF '"signals":["imperative-instruction"]' /tmp/quars.sse \
+grep -qE '"signals":\[[^]]*"imperative-instruction"' /tmp/quars.sse \
   && pass "sealed quarantine frame keeps signal codes" \
   || fail "sealed frame lost signal codes" "$(cat /tmp/quars.sse)"
 
@@ -194,7 +196,10 @@ curl -s "${AUTH[@]}" -X POST "$QBASE" -d '{"id":"impsrc","level":"hmac-only"}' >
 curl -s "${AUTH[@]}" -X POST "$QBASE/impsrc/drawers" \
   -d '{"text":"IMPORTCLEAN marker text","wing":"eng","room":"notes"}' >/dev/null
 curl -s "${AUTH[@]}" "$QBASE/impsrc/export" >/tmp/impsrc.jsonl
-sed "s/IMPORTCLEAN marker text/$POISON/" /tmp/impsrc.jsonl >/tmp/imppoison.jsonl
+# Drop the manifest line — its digest covers the records, and this test
+# poisons a record on purpose (legacy manifest-less payloads import).
+grep -v undercroft_manifest /tmp/impsrc.jsonl \
+  | sed "s/IMPORTCLEAN marker text/$POISON/" >/tmp/imppoison.jsonl
 curl -s "${AUTH[@]}" -X POST "$QBASE" -d '{"id":"impdst","level":"hmac-only"}' >/dev/null
 iresp=$(curl -s "${AUTH[@]}" -X POST "$QBASE/impdst/import" --data-binary @/tmp/imppoison.jsonl)
 grep -q '"quarantined":1' <<<"$iresp" && pass "import reports the diversion count" \
