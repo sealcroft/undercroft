@@ -76,6 +76,14 @@ Every memory namespace is a **vault** — a hard isolation boundary:
 - **Choice of level** — `sealed` (encrypt everything) or `hmac-only`
   (plaintext + full-text indexing, but still integrity-tagged and chained) for
   memories where searchability outweighs confidentiality.
+- **Screened writes, receipted deletions** — opt-in admission control
+  diverts injection-shaped writes into a sealed quarantine wing that no
+  search can reach, with chain-audited allow/deny rulings (deny hands back
+  an attestation); `forget` destroys through the audit chain and emits a
+  **verifiable receipt**; retention policies per wing/room enforce by
+  explicit attested sweeps; wings carry operator-assigned trust classes
+  consumed as a retrieval floor. All operator surfaces — deliberately never
+  MCP.
 
 **Threat model:** protects memories at rest against disk theft, cross-vault
 bleed, and offline tampering of the database or manifest. It does *not* defend
@@ -140,9 +148,12 @@ row** — declaring German merges `flow`/`flower`, Italian merges `pesca`/`pesce
 48 negative controls guard them; see
 [docs/agents.html](https://compufreq.github.io/undercroft/agents.html).
 
-Note this is **within-language**. Cross-lingual retrieval needs a multilingual
-model via `onnx`/`ort` — the default hashed embedder matches on shared surface
-forms, so an EN/AR translation pair scores *below* an unrelated sentence.
+Note this is **within-language**. Cross-lingual retrieval needs one thing: a
+multilingual model via `onnx`/`ort`/`http` — the default hashed embedder
+matches on shared surface forms, so an EN/AR translation pair scores *below*
+an unrelated sentence. With one installed, cross-script pairs are served at
+the default configuration (the script-disjoint fusion reweight; measured
+95–100% R@5 on FLORES-200 — tables in the CHANGELOG).
 
 ## Embedders
 
@@ -164,7 +175,17 @@ set, after which `undercroft repair` re-embeds every drawer.
   `--features ort` and set `UNDERCROFT_EMBEDDER=ort`; reads the same
   `UNDERCROFT_ONNX_*` variables, so switching backends is one env change.
   Opt-in because it links ONNX Runtime's C++ library — tract stays the
-  pure-Rust default.
+  pure-Rust default. Releases ship a smoke-probed linux x86_64 `-ort`
+  binary and a `:tag-ort` container image ready-made.
+- **`http`** — a model served by Ollama, llama.cpp server, LM Studio, vLLM
+  or TEI (`UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`): no export, no
+  feature build. **Transport is TLS or loopback only** — cleartext http to a
+  non-loopback host is refused at construction with no override, and
+  `UNDERCROFT_EMBED_CA` pins a self-signed root (the compose
+  `embeddings-tls` terminator ships the infra). The stated trade: the
+  endpoint reads your text in plaintext — the in-process backends above
+  close that. The full posture guide is
+  [docs/EMBEDDERS.md](docs/EMBEDDERS.md).
 
 ### Cross-encoder reranker (optional, `onnx` / `ort` features)
 
@@ -286,7 +307,7 @@ undercroft bundle keygen|recipient    # X25519 identities for sealed exports
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
-undercroft serve-mcp [--vault]        # MCP stdio server (32 tools)
+undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
 undercroft assert-header <vault>      # mint an X-Vault-Assertion (per-tenant auth)
 ```
@@ -324,16 +345,21 @@ lag is observable. Design + surface:
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
-## MCP tools (32)
+## MCP tools (34)
 
 | Category | Tools |
 |---|---|
-| Palace core | `save`, `search`, `wake_up`, `verify`, `status` |
+| Palace core | `save`, `search`, `wake_up`, `verify`, `status`, `get_closet_index` |
 | Drawers | `get_drawer`, `add_drawer`, `update_drawer`, `delete_drawer`, `list_drawers`, `delete_by_source`, `check_duplicate` |
 | Navigation | `list_wings`, `list_rooms`, `get_taxonomy`, `create_tunnel`, `list_tunnels`, `follow_tunnel`, `delete_tunnel`, `traverse`, `list_hallways` |
-| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats` |
+| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical`, `kg_set_authority` |
 | Agent diaries | `diary_write`, `diary_read`, `list_agents` |
 | Maintenance | `dedup` |
+
+Deliberately **absent** from MCP: admission rulings, wing trust, retention,
+and forgetting — operator surfaces (CLI + `/v1`) only, because an agent must
+not rule on its own quarantined writes, raise its own standing, or shorten
+the life of the memory it reads.
 
 All tool names are prefixed `undercroft_`. The knowledge graph stores temporal
 facts with validity windows — `kg_query --as-of 2024-06-15` answers "what was
