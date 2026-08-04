@@ -8,6 +8,7 @@ mod assertion;
 mod http;
 mod i18n;
 mod mcp;
+mod parity;
 mod refine;
 mod search;
 mod tenant;

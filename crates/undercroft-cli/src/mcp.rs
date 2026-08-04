@@ -989,7 +989,7 @@ mod tests {
     }
 
     fn search(store: &mut PalaceStore, args: Value) -> String {
-        call(store, "undercroft_search", args)
+        call_direct(store, "undercroft_search", args)
     }
 
     /// Every declaration the tool ADVERTISES must reach the handler.
@@ -1001,8 +1001,8 @@ mod tests {
     /// values over a handler that already mapped thirteen.
     #[test]
     fn the_search_tool_honours_every_declaration_its_schema_advertises() {
-        let (_d, mut s) = store();
-        call(
+        let (_d, mut s) = plain_store();
+        call_direct(
             &mut s,
             "undercroft_save",
             json!({
@@ -1052,7 +1052,7 @@ mod tests {
             ("one", "release train notes for the third quarter"),
             ("two", "release train retrospective for the second quarter"),
         ] {
-            call(
+            call_direct(
                 &mut s,
                 "undercroft_add_drawer",
                 json!({"content": text, "wing": "team", "room": room}),
@@ -1076,8 +1076,8 @@ mod tests {
     /// tell it apart from a thin corpus. The id was on no MCP hit at all.
     #[test]
     fn a_search_names_its_exclusions_and_its_hits_ids() {
-        let (_d, mut s) = store();
-        let saved = call(
+        let (_d, mut s) = plain_store();
+        let saved = call_direct(
             &mut s,
             "undercroft_save",
             json!({"content": "the harbour lighthouse keeps a tide chart", "wing": "port"}),

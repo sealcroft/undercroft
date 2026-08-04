@@ -657,6 +657,8 @@ fn remember_can_declare_the_kind_that_search_filters_on() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("closed kind vocabulary"));
+}
+
 /// The raw stdout of one CLI search, for the search-surface tests below.
 fn search_out(home: &TempDir, args: &[&str]) -> String {
     let mut c = cmd(home);
