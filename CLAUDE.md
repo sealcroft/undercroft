@@ -340,7 +340,24 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   provenance, never as state),
   write-path admission control (admission.rs + core admission.rs — C3.3
   phase 2: deterministic tier-1 detector, closed signal vocabulary,
-  offsets never content; `UNDERCROFT_ADMISSION=quarantine` diverts flagged
+  offsets never content; **the tier-1 wishlist is closed (2026-08-04)**:
+  `ATTACK_FIXTURES` similarity — windowed hash-embedder cosine (32-word
+  windows, stride 16, so a short variant inside a long drawer is found;
+  whole-text cosine dilutes to invisibility), threshold 0.45 pinned from
+  BOTH sides (`fixture_threshold_is_calibrated`: hard negatives ≤ 0.369
+  incl. an instructions-shaped onboarding note, marker-dodging variants
+  ≥ 0.540) and measured at corpus scale by bench `screenfp` (0/5,882
+  clean LoCoMo turns flagged, corpus max 0.374, 18/18 fixtures trip) —
+  and the declared per-writer rate screen `UNDERCROFT_ADMISSION_RATE=
+  <count>/<seconds>` (unset = off: a write rate is deployment-shaped, so
+  declared never defaulted; garbage REFUSES to open — the CA-pin
+  precedent, not warn-and-fall-back; identity = `agent` claim else
+  surface-stamped `added_by` among claim-less rows, groupings never mix;
+  clock = the CLEAR `filed_at` column, stated: a rate screen diverts,
+  never destroys, so it does not need retention's HMAC clock; the
+  `filed_at` index is created only on vaults that declare a rate; rate
+  lives in store admission.rs because the candidate bytes cannot carry
+  it); `UNDERCROFT_ADMISSION=quarantine` diverts flagged
   saves sealed into the reserved `quarantine-pending` wing, hard-excluded
   from retrieval except the reviewer's own scope; allow/deny chain-audited
   with the verdict inside the ruling tag; operator surfaces only, never
@@ -450,16 +467,20 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   SCALE: a fixed 8192-drawer probe wing holding a fixed 512-row probe room,
   corpus grown around them to each checkpoint, four passes — unscoped
   control / wing / room / wing+room — the instrument any scoped-recall
-  claim must cite), and `xlingual` (cross-lingual R@1/R@5 per language pair
+  claim must cite), `xlingual` (cross-lingual R@1/R@5 per language pair
   over operator-supplied TSV pairs — parallel corpora carry their own
   licenses and never enter the repo; the embedder env is the printed
   variable, hash being the measured-zero baseline; a verbatim-recovery
-  sanity column guards the harness itself)
+  sanity column guards the harness itself), and `screenfp` (the C3.3
+  detector gate: the tier-1 screen over a clean LoCoMo-shaped corpus —
+  per-class trips, flagged fraction, fixture-score distribution for
+  threshold headroom, plus the true-positive arm where every committed
+  fixture must trip; deterministic, no vault, no model)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 72
+  which inlines them and documents every layer plus all 73
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -531,7 +552,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (511)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (197 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (206 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

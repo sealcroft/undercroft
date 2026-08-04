@@ -370,6 +370,36 @@ fn resolve_trust_floor(env: Option<&str>) -> Option<String> {
     }
 }
 
+/// The declared per-writer admission rate (`UNDERCROFT_ADMISSION_RATE`,
+/// `<count>/<seconds>`): at least `count` committed writes by the same
+/// writer identity inside the trailing window diverts the next one to
+/// quarantine. Unset = no rate screen — a write rate is deployment-shaped
+/// (a busy legitimate agent and a runaway one differ only by the
+/// deployment's own expectations), so the threshold is DECLARED, never
+/// defaulted. A garbage declaration REFUSES to open rather than warning:
+/// a deployment that declared a rate believes floods divert, and
+/// silently running without the screen is the failure mode (the CA-pin
+/// and advisory-tier precedent, not the older warn-and-fall-back one).
+fn resolve_admission_rate(env: Option<&str>) -> Result<Option<(u32, u32)>, StoreError> {
+    let Some(v) = env else { return Ok(None) };
+    let v = v.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("off") {
+        return Ok(None);
+    }
+    let parsed = v.split_once('/').and_then(|(c, s)| {
+        let count: u32 = c.trim().parse().ok()?;
+        let secs: u32 = s.trim().parse().ok()?;
+        (count > 0 && secs > 0).then_some((count, secs))
+    });
+    parsed.map(Some).ok_or_else(|| {
+        StoreError::Invalid(format!(
+            "UNDERCROFT_ADMISSION_RATE={v:?} — expected <count>/<seconds> with both \
+             positive (e.g. 120/60), or 'off'; refusing to open with an unreadable \
+             rate declaration"
+        ))
+    })
+}
+
 /// Pure for the same reason as [`resolve_late_top_n`].
 fn resolve_fusion_weight(env: Option<&str>) -> f32 {
     match env {
@@ -771,6 +801,11 @@ pub struct PalaceStore {
     /// reranker, consulted by `admission_divert` only for candidates the
     /// deterministic tier passed, only toward quarantine.
     admission_advisor: Option<Box<dyn undercroft_core::admission::AdmissionAdvisor + Send + Sync>>,
+    /// The declared per-writer rate screen (`UNDERCROFT_ADMISSION_RATE`,
+    /// `<count>/<seconds>`; unset = off — see [`resolve_admission_rate`]).
+    /// Consulted by `admission_divert` only when admission screening is
+    /// on: the tier-1 signal the candidate bytes cannot carry.
+    admission_rate: Option<(u32, u32)>,
     /// Surfaces whose writes bypass the admission screen
     /// (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`, comma list matched against the
     /// SURFACE-STAMPED `added_by` — never against writer-declared
@@ -1376,6 +1411,9 @@ impl PalaceStore {
                 Err(_) => false,
             },
             admission_advisor: None,
+            admission_rate: resolve_admission_rate(
+                std::env::var("UNDERCROFT_ADMISSION_RATE").ok().as_deref(),
+            )?,
             admit_trusted_sources: std::env::var("UNDERCROFT_ADMIT_TRUSTED_SOURCES")
                 .map(|v| {
                     v.split(',')
@@ -1472,6 +1510,15 @@ impl PalaceStore {
         store.init_manage_schema()?;
         store.init_retention_schema()?;
         store.init_chain()?;
+        // The rate screen counts recent rows by `filed_at`; only a vault
+        // that declared a rate pays for the index (created here so the
+        // per-save COUNT walks an index range, never the table).
+        if store.admission_rate.is_some() {
+            store.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_drawers_filed_at ON drawers(filed_at)",
+                [],
+            )?;
+        }
         Ok(store)
     }
 
@@ -7408,6 +7455,100 @@ mod tests {
         // The reserved wing cannot be forged into.
         let forged = drawer(crate::admission::QUARANTINE_WING, "r", "innocent", 3);
         assert!(s.upsert(&forged).is_err());
+    }
+
+    /// The declared rate screen (C3.3 tier-1 wishlist, closed): a writer
+    /// identity that exceeds its declared budget diverts, identities
+    /// never tax each other, trusted surfaces bypass, and clearing the
+    /// declaration restores the byte-normal write contract.
+    #[test]
+    fn a_declared_rate_bounds_a_writer_and_identities_never_mix() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.set_admission(true);
+        s.set_admission_rate(Some((3, 3600)));
+
+        // Three clean claim-less writes from the surface land normally.
+        for i in 0..3 {
+            let d = drawer("w", "r", &format!("ordinary note number {i}"), i);
+            s.upsert(&d).unwrap();
+            assert_eq!(s.get(&d.id).unwrap().unwrap().meta.wing, "w");
+        }
+        // The fourth diverts, and the signal names the class — content
+        // clean, rate the only evidence.
+        let d3 = drawer("w", "r", "one more ordinary note", 3);
+        s.upsert(&d3).unwrap();
+        assert!(s.get(&d3.id).unwrap().is_none(), "the flood write diverts");
+        let pending = s.admission_pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0]
+                .signals
+                .iter()
+                .map(|x| x.code.as_str())
+                .collect::<Vec<_>>(),
+            vec!["rate-anomaly"]
+        );
+
+        // A CLAIMED write from the same surface is a different identity:
+        // the claim-less flood does not tax it (a claim is not a
+        // surface, and the groupings never mix).
+        let mut claimed = drawer("w", "r", "a claimed note", 4);
+        claimed.meta.agent = Some("scheduler".into());
+        s.upsert(&claimed).unwrap();
+        assert_eq!(s.get(&claimed.id).unwrap().unwrap().meta.wing, "w");
+
+        // ...and the claimed identity is bounded by its own budget —
+        // including the quarantined rows it already produced, which keep
+        // their claim and keep counting (a flood being diverted stays
+        // diverted).
+        for i in 5..7 {
+            let mut d = drawer("w", "r", &format!("claimed note {i}"), i);
+            d.meta.agent = Some("scheduler".into());
+            s.upsert(&d).unwrap();
+        }
+        let mut over = drawer("w", "r", "the claimed writer overflows", 7);
+        over.meta.agent = Some("scheduler".into());
+        s.upsert(&over).unwrap();
+        assert!(
+            s.get(&over.id).unwrap().is_none(),
+            "the claimed writer's fourth write diverts"
+        );
+
+        // A deployment-trusted surface bypasses the rate screen exactly
+        // as it bypasses the content screen.
+        s.set_admit_trusted_sources(vec!["test".into()]);
+        let trusted = drawer("w", "r", "trusted surface write", 8);
+        s.upsert(&trusted).unwrap();
+        assert_eq!(s.get(&trusted.id).unwrap().unwrap().meta.wing, "w");
+        s.set_admit_trusted_sources(vec![]);
+
+        // Clearing the declaration restores the byte-normal contract.
+        s.set_admission_rate(None);
+        let after = drawer("w", "r", "note after the rate is cleared", 9);
+        s.upsert(&after).unwrap();
+        assert_eq!(s.get(&after.id).unwrap().unwrap().meta.wing, "w");
+    }
+
+    /// `UNDERCROFT_ADMISSION_RATE` parses `<count>/<seconds>` or REFUSES
+    /// to open — a deployment that declared a rate believes floods
+    /// divert, so an unreadable declaration must never silently run
+    /// without the screen.
+    #[test]
+    fn the_rate_declaration_parses_or_refuses() {
+        assert_eq!(resolve_admission_rate(None).unwrap(), None);
+        assert_eq!(resolve_admission_rate(Some("off")).unwrap(), None);
+        assert_eq!(resolve_admission_rate(Some("")).unwrap(), None);
+        assert_eq!(
+            resolve_admission_rate(Some("120/60")).unwrap(),
+            Some((120, 60))
+        );
+        assert_eq!(
+            resolve_admission_rate(Some(" 3 / 3600 ")).unwrap(),
+            Some((3, 3600))
+        );
+        for bad in ["120", "0/60", "120/0", "a/b", "120/60/1", "-1/60", "1.5/60"] {
+            assert!(resolve_admission_rate(Some(bad)).is_err(), "{bad:?}");
+        }
     }
 
     /// C3.2 phase 1: forgetting is proven — the attestation replays with
