@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+### one search contract, three surfaces
+
+A search declared different things depending on which surface asked, and
+answered with different things back. Nine separate omissions, none of them
+stated anywhere as deliberate; all closed, and closed at a shared parser
+rather than one handler at a time (`crates/undercroft-cli/src/search.rs`,
+which `/v1` and MCP now both call — they read the same key names off the
+same JSON, and re-implementing that is how each of them lost a different
+field).
+
+- **The CLI can pin a page's clock.** `--offset` shipped without
+  `--ranked-at`, so two pages sliced two different rankings: recency decay
+  was re-measured against a fresh instant on every call and hits could
+  repeat across pages or vanish between them — the exact defect
+  `SearchOptions::ranked_at` was added to prevent, left open on the only
+  surface that shipped `offset` without it. A full page now prints the
+  continuation, clock included, and a `--ranked-at` that does not parse is
+  refused out loud rather than falling back to the host clock.
+- **The CLI can declare its language** (`--language`, the same 13-value
+  vocabulary as MCP and `/v1`). German `-er` — the rule CLAUDE.md records
+  as taking German from 50% to 100% on the lexical channel — plus the
+  Romance/Dutch/Turkish inflection tables were unreachable from
+  `undercroft search`, which returned strictly fewer hits than the same
+  query over the other two surfaces, with no error and no flag to find.
+- **The CLI prints the drawer id**, so a search result can be acted on:
+  `drawer get|update|delete`, `forget` and `admission` all take an id this
+  surface never emitted, and every search had to be followed by a
+  `drawer list` hunt. MCP hits carry the id too, for the same reason.
+- **`week_start` reaches MCP.** One of the four read-time reading
+  conventions docs/AGENTS.md documents as per-request on both surfaces; the
+  MCP tool built its own locale and never read it, so `sunday` was
+  unreachable over MCP by any route while `/v1` honoured it. Same drawer,
+  same request, different resolved dates.
+- **`room_cap` reaches MCP and the CLI.** The room-diversification field
+  was `/v1`-only — unreachable from the agent surface it was designed for,
+  which silently got the starved result it exists to fix.
+- **A trust floor says what it excluded, on MCP too.** The
+  honest-exclusion count reached the CLI and `/v1` and not the surface an
+  agent uses, so an agent that set a floor could not tell its own floor's
+  thin answer from a thin corpus.
+- **The MCP `language` schema is generated from the parser's vocabulary**
+  (`MorphLang::CODES`). It described two values over a handler that mapped
+  thirteen, so an agent reading its own contract never declared `de` on a
+  German corpus while a `/v1` caller reading docs/AGENTS.md did. An
+  exhaustive match pins it: a fourteenth language fails to compile until it
+  has a code.
+- **BREAKING (small): `POST /v1/…/search` defaults `limit` to 5**, not 10
+  — one page size for every surface, since "the same search" answering with
+  a different number of hits per transport quietly moves any recall
+  comparison between them. Unified down: every surface now names its
+  continuation, and a page of full drawer text is charged to an agent's
+  context on every call. A REST client that wants ten passes `limit: 10`.
+- An unrecognised `date_order` no longer ERASES what the language implied
+  (Arabic's CLDR day-first survived a caller's typo only on MCP before).
+- `--language` and `--room-cap` with `--backend <remote>` are **refused**,
+  not ignored: that path ranks through the legacy fusion and consults
+  neither, and a declaration silently dropped is the very drift these flags
+  close.
+- Tests: CLI search paging/id end to end (the continuation is parsed out of
+  the output and fed back, and the printed id is proven by fetching the
+  drawer with it), CLI `--language` measured by the lexical evidence it
+  adds on a function-word-free German corpus (so it measures the
+  declaration and not the drawer-votes fallback), MCP `week_start`/
+  `room_cap`/trust-note/id through `call_tool`, and the shared parsers'
+  own vocabulary tests.
+
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 
 - **Crash-window tests for the allow/deny state machine** (the gate

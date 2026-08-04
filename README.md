@@ -285,7 +285,10 @@ undercroft vault rotate <name>        # fresh derived keys; re-seals everything,
 undercroft remember <text> [--vault --wing --room]
 undercroft mine <dir> [--mode files|convos]  # documents, or Claude Code/Codex JSONL sessions
 undercroft sweep <dir>                # one verbatim drawer per transcript message (idempotent)
-undercroft search <query> [--vault --wing --room -n N]
+undercroft search <query> [--vault --wing --room --kind --min-trust -n N]
+undercroft search <query> --language de   # declared morphology (en de nl it es fr pt tr ru el hi ka ko)
+undercroft search <query> --offset N --ranked-at <rfc3339>  # page one ranking, clock pinned
+undercroft search <query> --room-cap N    # spread hits across rooms, not the most verbose one
 undercroft wake-up [--vault --wing]   # L0 identity + L1 essential story
 undercroft drawer get|list|update|delete|delete-by-source|check-dup
 undercroft kg add|query|rel|invalidate|supersede|timeline|stats

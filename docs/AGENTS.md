@@ -306,6 +306,12 @@ already-ingested corpus answers correctly the moment you declare its conventions
 | `date_order` | `day_first`, `month_first` | see below | which field a bare numeric date puts first |
 | `calendar` | `gregorian`, `buddhist`, `minguo`, `hijri`, `jalali`, `reiwa`, `heisei`, `showa`, `taisho`, `meiji` | `gregorian` | which calendar counted the year, **unless a drawer names its own era** |
 
+All four are accepted on `POST /v1/vaults/{id}/search` and on `undercroft_search`
+— the same key names, parsed by the same code. The CLI takes the one of them it
+has a consumer for, `undercroft search --language <code>`, which selects the
+retrieval morphology; CLI search prints no in-text dates, so the three
+date-reading conventions have nothing to act on there.
+
 **`date_order`** — `07/05/2023` is 7 May or 5 July and the token does not say.
 Four signals are consulted, strongest first:
 
@@ -521,7 +527,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | Tool | W | Does |
 |---|---|---|
 | `undercroft_save` | W | save one memory verbatim |
-| `undercroft_search` | | hybrid semantic+lexical search. Pass `language: "ar"` to read the stored text as Arabic (Saturday-first weeks by default). Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, and the further days the same text was recorded on. A full page ends with the exact continuation to go deeper — repeat the search with the stated `offset` and `ranked_at` instead of re-asking the same question; a short page means the ranking is exhausted |
+| `undercroft_search` | | hybrid semantic+lexical search. All four reading conventions are accepted here exactly as on `/v1` — `language`, `week_start`, `date_order`, `calendar` (see §5) — so `language: "ar"` reads the stored text as Arabic and `language: "de"` reaches German word forms, while `week_start` decides what "last week" inside a drawer resolves to. Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, the further days the same text was recorded on, and the drawer **id** every follow-up tool takes (`_get_drawer`, `_update_drawer`, `_delete_drawer`, `supersedes` on a save). `room_cap` soft-caps how many hits may come from any one room, so an answer spanning several sessions is not starved by the most verbose one. Default `limit` is **5** on every surface. A full page ends with the exact continuation to go deeper — repeat the search with the stated `offset` and `ranked_at` instead of re-asking the same question; a short page means the ranking is exhausted |
 | `undercroft_wake_up` | | recent essential memories for session start |
 | `undercroft_verify` | | verify HMACs + audit chain |
 | `undercroft_status` | | palace statistics |
@@ -539,7 +545,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_get_closet_index` | | compact LLM-scannable index |
 | `undercroft_save` / `_add_drawer` also take `kind` | W | declared record kind (closed vocabulary: `question`\|`preference`\|`decision`\|`event`\|`procedure`\|`statement`; rejected if unknown — omit rather than guess). `undercroft_search` filters by it; while filtering, the reply says how many in-scope drawers carry no declared kind |
 | `undercroft_save` / `_add_drawer` also take `supersedes` | W | id of the drawer the new record replaces: a receipted update link (the KG receipt pattern one level up — bound to the superseded content's fingerprint under a keyed tag, re-keyed on rotation). The old drawer is **never** deleted or hidden; `undercroft_verify` reports every link's verdict (`verified`\|`source-changed`\|`dangling`\|`unreceipted`\|`tampered`, the last failing the verify) |
-| `undercroft_search` also takes `min_trust` | | minimum deployment-assigned wing trust for the query (`quarantined`\|`standard`\|`trusted`): wings the operator assigned below it never enter the candidate competition; unassigned wings count as `standard`. Reading with a floor is self-protection and always allowed — ASSIGNING trust is an operator action (`/v1` + CLI) and deliberately not an MCP tool: an agent that writes content must not be able to raise its own standing |
+| `undercroft_search` also takes `min_trust` | | minimum deployment-assigned wing trust for the query (`quarantined`\|`standard`\|`trusted`): wings the operator assigned below it never enter the candidate competition; unassigned wings count as `standard`. While the floor is set the reply says how many wings it kept out, so a thin answer is never mistaken for a thin corpus. Reading with a floor is self-protection and always allowed — ASSIGNING trust is an operator action (`/v1` + CLI) and deliberately not an MCP tool: an agent that writes content must not be able to raise its own standing |
 | `undercroft_kg_add` / `_kg_invalidate` / `_kg_supersede` | W | temporal facts: assert/close/replace |
 | `undercroft_kg_query` / `_kg_timeline` / `_kg_stats` | | query facts (incl. `--as-of`) |
 | `undercroft_lookup_canonical` | | the exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks; an empty answer means no declared truth exists — never guess on the key's behalf |
@@ -565,7 +571,7 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`); screened like a save when admission is on — a flagged update answers 202 `{quarantined: true}` and the drawer keeps its previous content |
-| POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
+| POST | `/v1/vaults/{id}/search` | search (`query`, `limit` — **default 5**, one page size for every surface; it was 10 here until v0.47.0, so a client relying on ten hits must now say `limit: 10` — opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |
