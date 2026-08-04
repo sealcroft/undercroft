@@ -73,6 +73,24 @@ carrying the lag, and the vault serves reads with that stated; the writer heals
 it when it next opens. **Gate**: a read-only open of an unreconciled vault
 writes nothing, serves reads, and says exactly what it did not heal.
 
+### R5 · The screening decision has TWO implementations
+
+`write_drawer` screens behind the required `Screen` argument; `upsert_many`
+owns its own transaction, cannot call `write_drawer`, and therefore runs its
+own `admission_divert` loop. Both are correct today and a test pins both — but
+"one choke point that cannot be forgotten" is **not true as stated**, and two
+implementations of one security decision is exactly the shape every drift in
+the 2026-08-04 audit had. The telemetry halves were unified (both classify
+through `save_event`); the screening halves were not.
+
+**Fix**: extract the screen-and-divert step into one function both paths call —
+`write_drawer` before its transaction, `upsert_many` inside its batch loop —
+so the decision exists once and the `Screen` argument stays the thing that
+forces a caller to make it. **Gate**: a test that greps the crate for calls to
+`admission_divert` and fails if there is more than one, the same shape as
+`parity.rs` counting the tool surface. Recorded 2026-08-05, found by the
+documentation sweep rather than by the parity audit that should have caught it.
+
 ## Process: the drift check is part of the work now
 
 The surface-parity audit that found 65 drifts is not a one-off. It is a
