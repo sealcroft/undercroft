@@ -1,0 +1,61 @@
+# Publish (or re-publish) the :<tag>-ort image for an existing release —
+# the manual lever for exactly the failure mode the first live docker-ort
+# run hit (a build-dep gap discovered only at the tag, fixed on main
+# after it). Builds from `ref` (default main, which carries the fix) and
+# tags the image for the named release; the run log states both, so the
+# provenance is explicit rather than implied.
+name: republish-ort-image
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish the image for (e.g. v0.45.0)"
+        required: true
+      ref:
+        description: "Git ref to build from (default: main)"
+        required: false
+        default: "main"
+
+permissions:
+  packages: write
+
+jobs:
+  docker-ort:
+    name: GHCR image (amd64, ort) for ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - name: State the provenance
+        run: |
+          echo "Publishing ghcr image tag ${{ inputs.tag }}-ort from ref ${{ inputs.ref }} ($(git rev-parse HEAD))"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          build-args: |
+            UNDERCROFT_FEATURES=onnx,ort
+          tags: ghcr.io/compufreq/undercroft:${{ inputs.tag }}-ort
+          cache-from: type=gha,scope=amd64-ort
+          cache-to: type=gha,mode=max,scope=amd64-ort
+      - name: Smoke — the pushed image carries the ort feature
+        run: |
+          IMG="ghcr.io/compufreq/undercroft:${{ inputs.tag }}-ort"
+          docker run --rm "$IMG" --help > /dev/null
+          docker volume create ort-smoke > /dev/null
+          docker run --rm -v ort-smoke:/data "$IMG" vault create smoke
+          set +e
+          OUT="$(docker run --rm -v ort-smoke:/data -e UNDERCROFT_EMBEDDER=ort "$IMG" remember probe --vault smoke 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUT"
+          [ "$RC" -ne 0 ] || { echo "expected a model-config refusal"; exit 1; }
+          echo "$OUT" | grep -q "loading ORT embedder" || {
+            echo "wrong failure shape — is the ort feature in the image?"; exit 1; }
