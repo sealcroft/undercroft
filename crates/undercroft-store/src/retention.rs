@@ -117,15 +117,14 @@ impl PalaceStore {
         max_age_days: u32,
     ) -> Result<(), StoreError> {
         let room = room.unwrap_or("");
-        undercroft_core::validate_name(wing, "wing").map_err(|e| StoreError::CorruptRow {
-            id: wing.into(),
-            reason: e.to_string(),
-        })?;
+        // `Invalid`, not `CorruptRow`: a bad name is the caller's input
+        // error and must reach `/v1` as 400 — the same name was already a
+        // 400 on the save route and a 500 reading "corrupt row" here.
+        undercroft_core::validate_name(wing, "wing")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
         if !room.is_empty() {
-            undercroft_core::validate_name(room, "room").map_err(|e| StoreError::CorruptRow {
-                id: room.into(),
-                reason: e.to_string(),
-            })?;
+            undercroft_core::validate_name(room, "room")
+                .map_err(|e| StoreError::Invalid(e.to_string()))?;
         }
         if wing == QUARANTINE_WING {
             return Err(StoreError::Invalid(format!(

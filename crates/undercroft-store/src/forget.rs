@@ -136,13 +136,16 @@ impl PalaceStore {
         for id in ids {
             let d = self
                 .get(id)?
-                .ok_or_else(|| StoreError::Invalid(format!("no drawer {id}")))?;
+                // NotFound, not Invalid: one status class for "not here"
+                // across every route (cluster: write-validation).
+                .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+            // ...and pending review evidence is not deletable through the
+            // forgetting path either (cluster: ops-boundaries).
             if evidence == crate::manage::PendingEvidence::Protect
                 && self.is_quarantine_pending(id)?
             {
                 return Err(StoreError::Invalid(format!(
-                    "{id} is quarantine-pending — rule on it with `admission \
-                     allow`/`deny`; pending review evidence is not deletable"
+                    "{id} is quarantine-pending — rule on it with `admission                      allow`/`deny`; pending review evidence is not deletable"
                 )));
             }
             drawers.push(ForgottenDrawer {

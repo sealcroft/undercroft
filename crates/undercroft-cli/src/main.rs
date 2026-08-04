@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use i18n::{fill, tr};
 use undercroft_core::normalize::mode_for_path;
-use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer, MAX_CONTENT_BYTES};
+use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer};
 use undercroft_store::{PalaceStore, SearchOptions};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
@@ -93,6 +93,15 @@ enum Command {
         /// never deleted or hidden.
         #[arg(long)]
         supersedes: Option<String>,
+        /// Declared record kind, from the closed vocabulary
+        /// (question|preference|decision|event|procedure|statement).
+        /// Absent is always valid — the label is declared, never inferred.
+        /// `search --kind` shipped without this, so the CLI could FILTER
+        /// by a label it had no way to write, and a kind-filtered search
+        /// (which excludes kind-less drawers by design) silently omitted
+        /// everything the CLI had written.
+        #[arg(long)]
+        kind: Option<String>,
         /// Provenance claim: which agent wrote this (recorded and
         /// tamper-covered, never a trust boundary)
         #[arg(long)]
@@ -834,13 +843,35 @@ fn build_export_payload(
 const INGEST_BATCH: usize = 256;
 
 /// Flush drawers through the store's single-transaction bulk path in
-/// bounded chunks. Returns how many were newly created.
-fn upsert_batched(store: &mut undercroft_store::PalaceStore, drawers: &[Drawer]) -> Result<usize> {
-    let mut created = 0;
+/// bounded chunks, accumulating the per-batch outcomes so a caller can
+/// report the diverted count as well as the created one.
+fn upsert_batched(
+    store: &mut undercroft_store::PalaceStore,
+    drawers: &[Drawer],
+) -> Result<undercroft_store::BulkOutcome> {
+    let mut total = undercroft_store::BulkOutcome::default();
     for chunk in drawers.chunks(INGEST_BATCH) {
-        created += store.upsert_many(chunk)?;
+        let out = store.upsert_many(chunk)?;
+        total.created += out.created;
+        total.quarantined += out.quarantined;
     }
-    Ok(created)
+    Ok(total)
+}
+
+/// The line every bulk ingest prints when the screen diverted part of the
+/// batch. `undercroft import` printed "imported 500" while an arbitrary
+/// number of those drawers sat in `quarantine-pending` — unretrievable by
+/// any search, and invisible unless the operator separately thought to run
+/// `admission list`. Nothing is printed when nothing was diverted, so the
+/// default (screening off) output is byte-identical.
+fn report_quarantined(quarantined: usize) {
+    if quarantined > 0 {
+        println!(
+            "{quarantined} of these tripped the admission screen and were quarantined \
+             pending review — they are NOT retrievable where they were filed. \
+             Review with `undercroft admission list`."
+        );
+    }
 }
 
 fn data_dir(cli: &Cli) -> PathBuf {
@@ -1408,19 +1439,21 @@ fn main() -> Result<()> {
             room,
             content_date,
             supersedes,
+            kind,
             agent,
             channel,
             session,
         } => {
-            if content.len() > MAX_CONTENT_BYTES {
-                bail!(
-                    "content too large ({} bytes, max {})",
-                    content.len(),
-                    MAX_CONTENT_BYTES
-                );
-            }
+            // Checked here as well as at the store's write choke point, so
+            // an over-sized argument fails before a vault is unlocked. The
+            // choke point is what makes the bound the ENGINE's rather than
+            // this command's — MCP and /v1 had no check at all.
+            undercroft_core::validate_content_len(content)?;
             undercroft_core::validate_name(wing, "wing")?;
             undercroft_core::validate_name(room, "room")?;
+            if let Some(k) = kind.as_deref() {
+                undercroft_core::validate_kind(k)?;
+            }
             let mut store = open_store(&cli, vault)?;
             let normalized = normalize_content(content);
             if normalized.is_empty() {
@@ -1435,6 +1468,7 @@ fn main() -> Result<()> {
             let idx = store.next_append_index()? as u32;
             let drawer = Drawer::new(wing, room, normalized, None, idx, "cli")
                 .with_content_date(content_date.clone())
+                .with_kind(kind.clone())
                 .with_supersedes(supersedes.clone())
                 .with_provenance(agent.clone(), channel.clone(), session.clone());
             // Screened: a diverted save must not print "filed in <wing>",
@@ -2127,9 +2161,17 @@ fn main() -> Result<()> {
                     None => v,
                 };
                 let drawer = if v.get("meta").is_some() {
-                    // Native undercroft export: full Drawer JSON.
-                    serde_json::from_value::<Drawer>(v)
-                        .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?
+                    // Native undercroft export: full Drawer JSON — including
+                    // a `meta.added_by` this payload wrote itself. Re-stamped
+                    // with the importing surface, because that field is the
+                    // key the admission screen's trusted-source auto-admit
+                    // rides and it is only sound while a caller cannot set
+                    // it (see `PalaceStore::import_stamp`); a bundle
+                    // claiming `added_by: "cli"` otherwise walks past the
+                    // screen on any vault that declares `cli` trusted.
+                    let d = serde_json::from_value::<Drawer>(v)
+                        .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?;
+                    undercroft_store::PalaceStore::import_stamp(&d, undercroft_store::IMPORT_SURFACE)
                 } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
                     // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
                     let meta = v.get("metadata").cloned().unwrap_or_default();
@@ -2146,7 +2188,7 @@ fn main() -> Result<()> {
                         meta.get("chunk_index")
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0) as u32,
-                        "import",
+                        undercroft_store::IMPORT_SURFACE,
                     )
                     // Carried across an import rather than reset to the
                     // import's own date: a mempalace export records when the
@@ -2170,7 +2212,7 @@ fn main() -> Result<()> {
                 batch.push(drawer);
             }
             let imported = batch.len();
-            upsert_batched(&mut store, &batch)?;
+            let bulk = upsert_batched(&mut store, &batch)?;
             // KG and tunnel records go after drawers so receipts can bind
             // against drawers arriving in the same payload.
             for (name, etype) in &entity_batch {
@@ -2196,6 +2238,7 @@ fn main() -> Result<()> {
                     ]
                 )
             );
+            report_quarantined(bulk.quarantined);
             if kg_facts + kg_entities + tunnels > 0 {
                 println!(
                     "knowledge graph: {kg_facts} fact(s) (receipts re-keyed), \
@@ -2415,8 +2458,19 @@ fn main() -> Result<()> {
             let mut store = open_store(&cli, vault)?;
             match action {
                 DiaryAction::Write { agent, entry } => {
-                    let id = store.diary_write(agent, entry)?;
-                    println!("Diary entry {id} written for agent '{agent}'");
+                    // Screened like every other save: a diverted entry must
+                    // not be reported as written for the agent, because
+                    // `diary read` will not find it.
+                    let out = store.diary_write(agent, entry, "cli")?;
+                    if out.quarantined {
+                        println!(
+                            "Quarantined pending review: the entry tripped the admission \
+                             screen and is NOT readable in agent '{agent}'s diary. \
+                             Review with `undercroft admission list`."
+                        );
+                    } else {
+                        println!("Diary entry {} written for agent '{agent}'", out.id);
+                    }
                 }
                 DiaryAction::Read { agent, limit } => {
                     let entries = store.diary_read(agent, *limit)?;
@@ -2771,6 +2825,7 @@ fn mine_files(
         bail!("no minable text files under {}", path.display());
     }
     let mut drawers = 0usize;
+    let mut screened = 0usize;
     let mut batch: Vec<Drawer> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -2796,12 +2851,13 @@ fn mine_files(
             ));
             drawers += 1;
             if batch.len() >= INGEST_BATCH {
-                upsert_batched(store, &batch)?;
+                screened += upsert_batched(store, &batch)?.quarantined;
                 batch.clear();
             }
         }
     }
-    upsert_batched(store, &batch)?;
+    screened += upsert_batched(store, &batch)?.quarantined;
+    report_quarantined(screened);
     Ok((files.len(), drawers))
 }
 
@@ -2815,6 +2871,7 @@ fn mine_convos(
         bail!("no .jsonl transcripts under {}", path.display());
     }
     let mut drawers = 0usize;
+    let mut screened = 0usize;
     let mut batch: Vec<Drawer> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -2845,12 +2902,13 @@ fn mine_convos(
             );
             drawers += 1;
             if batch.len() >= INGEST_BATCH {
-                upsert_batched(store, &batch)?;
+                screened += upsert_batched(store, &batch)?.quarantined;
                 batch.clear();
             }
         }
     }
-    upsert_batched(store, &batch)?;
+    screened += upsert_batched(store, &batch)?.quarantined;
+    report_quarantined(screened);
     Ok((files.len(), drawers))
 }
 
@@ -2873,6 +2931,7 @@ fn sweep_path(
     }
     let mut filed = 0usize;
     let mut skipped = 0usize;
+    let mut screened = 0usize;
     let mut batch: Vec<Drawer> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for file in &files {
@@ -2909,12 +2968,13 @@ fn sweep_path(
             );
             filed += 1;
             if batch.len() >= INGEST_BATCH {
-                upsert_batched(store, &batch)?;
+                screened += upsert_batched(store, &batch)?.quarantined;
                 batch.clear();
             }
         }
     }
-    upsert_batched(store, &batch)?;
+    screened += upsert_batched(store, &batch)?.quarantined;
+    report_quarantined(screened);
     Ok((files.len(), filed, skipped))
 }
 

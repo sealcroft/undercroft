@@ -322,7 +322,7 @@ impl PalaceStore {
     fn quarantined(&self, id: &str) -> Result<Drawer, StoreError> {
         let d = self
             .get(id)?
-            .ok_or_else(|| StoreError::Invalid(format!("no drawer {id}")))?;
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
         if d.meta.wing != QUARANTINE_WING {
             return Err(StoreError::Invalid(format!(
                 "{id} is not in the quarantine wing"
