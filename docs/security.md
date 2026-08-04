@@ -103,7 +103,7 @@ tenant*:
    Proves the caller reached the right server; it does not distinguish
    vaults, so on its own whoever holds it can address every vault.
 2. **Per-vault assertion** (`UNDERCROFT_ASSERTION_SECRET`, optional) — when
-   set, every `/v1` request must carry
+   set, every `/v1` request **and every `POST /mcp` call** must carry
    `X-Vault-Assertion: <ts>:<HMAC-SHA256(secret, "<ts>|<vault_id>")>` for
    the exact vault it addresses. The vault id is bound into the MAC, so an
    assertion for vault A cannot authorize vault B; timestamps outside ±120s

@@ -15,6 +15,12 @@
 //! transport itself is plaintext HTTP; for anything beyond a trusted
 //! private network, front it with a TLS-terminating reverse proxy.
 //! `/healthz` is unauthenticated for load-balancer probes.
+//!
+//! When `UNDERCROFT_ASSERTION_SECRET` is declared, **both** transports
+//! require a valid `X-Vault-Assertion` for the vault they address: `/v1`
+//! per handler, `/mcp` for the vault named by `--vault`. The banner says
+//! "per-vault assertions required" without qualification, and it now means
+//! it — a bearer alone reaches no vault on either path.
 
 use std::time::{Duration, Instant};
 
@@ -224,6 +230,19 @@ pub fn serve_http(
         let mut status: u16 = 200;
         match (request.method().clone(), path.as_str()) {
             (Method::Post, "/mcp") => {
+                // The per-vault assertion covers this transport too. /v1
+                // checked it on every handler and /mcp checked it nowhere,
+                // so declaring UNDERCROFT_ASSERTION_SECRET left the
+                // `--vault` vault fully readable and writable to anyone
+                // with the palace bearer — the exact isolation the secret
+                // is set to buy. Unset secret ⇒ this is a no-op.
+                let now = OffsetDateTime::now_utc().unix_timestamp();
+                if let Err(code) = tenancy.assert_transport(handler.vault_id(), &request, now) {
+                    let _ = request
+                        .respond(Response::from_string("unauthorized").with_status_code(code));
+                    undercroft_obs::http_request("mcp", code, start.elapsed());
+                    continue;
+                }
                 let mut body = String::new();
                 if std::io::Read::read_to_string(request.as_reader(), &mut body).is_err() {
                     let _ =

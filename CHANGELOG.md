@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+### surface drift: the operator boundary is the same on every surface
+
+A surface audit compared the CLI, MCP, `/v1` and the orchestrator on the
+same capability. The findings below are all one shape: an operator
+boundary that held on one surface and not on the next.
+
+- **Pending review evidence cannot be destroyed except by ruling on it.**
+  `update_drawer` refused to EDIT a quarantine-pending drawer; every
+  DELETE path was open. `undercroft_delete_drawer` over MCP — the surface
+  the ruling power was deliberately withheld from — purged the row and
+  left an ordinary `del/<id>` tombstone, so the entry vanished from
+  `admission list` with no `admission/<id>/<verdict>` record and no
+  attestation: an agent whose write was quarantined could destroy the
+  evidence of it, and the audit trail could not tell that from routine
+  housekeeping. Delete now runs through a choke point with a **required**
+  `PendingEvidence` argument; the only `Ruled` callers are
+  `admission allow`/`deny`, which record their verdict first. The refusal
+  is on every surface, not just MCP — `forget` and `delete-by-source`
+  inherit it (the latter refuses the whole call up front rather than
+  destroying half a source and then failing).
+- **MCP cannot reach the review queue at all.** Quarantine was a ranking
+  firewall, not a confidentiality boundary: naming the wing, or a
+  resident drawer's id, read the flagged content back verbatim. One fence
+  above tool dispatch — beside the read-only gate, for the same reason —
+  refuses any argument naming `quarantine-pending` and any `id`/`*_id`
+  naming a drawer inside it, so a tool added later inherits it. Two
+  content-keyed surfaces stopped answering for the queue as well:
+  `check_duplicate` (an oracle any writer can drive with content it
+  chose — answering confirmed the write landed and handed back the id the
+  save path withholds) and `dedup` (a quarantined row could win the
+  earliest-`seq` survivor slot and take a live drawer down with it).
+- **`UNDERCROFT_ASSERTION_SECRET` now covers `POST /mcp`.** Every `/v1`
+  handler asserted; the `/mcp` route mounted on the same server, in the
+  same process, asserted nowhere — so an operator who declared the secret
+  precisely to stop one bearer addressing every vault still left the
+  `--vault` vault fully readable and writable to anyone holding the
+  palace bearer, while the banner said "per-vault assertions required"
+  without qualification. Unset secret ⇒ no change.
+- **The orchestrator gained an operator plane**,
+  `/admin/tenants/{id}/ops/<subpath>`: attested forgetting, retention
+  policy + sweep, wing trust, admission review, verify and supersession
+  receipts, forwarded over a closed vocabulary. A fleet driven through
+  the control plane previously had none of them, while the one deletion
+  it *did* expose was the receipt-LESS one — a right-to-erasure request
+  answered through the orchestrator produced a bare tombstone where the
+  surface next door produced a signed-able attestation. Admin plane, not
+  data plane: a tenant token must not rule on the queue that screened its
+  own writes. A data-plane request for an operator subpath now says where
+  it lives instead of a bare "unknown route".
+- **The admin console grew an OPS tab.** `ui.html` had zero occurrences
+  of admission, retention, trust or forget, so `serve-http` with
+  `UNDERCROFT_ADMISSION=quarantine` gave an operator a console that never
+  showed the pending queue — silence reading as "nothing pending", the
+  wrong default for a review queue. The tab carries the review queue
+  (allow/deny with the deny receipt), wing trust assignment, retention
+  policies with a dry-run-first sweep, and attested forgetting. An empty
+  queue now says *why* it is empty (screening on vs. never declared).
+- **The README lists the five operator commands it claimed to have.**
+  `admission`, `retention`, `trust`, `forget` and `verify-forgetting`
+  ship in the binary and appeared in no reference document; README
+  asserted these were "operator surfaces (CLI + `/v1`) only" and then
+  never showed the CLI half.
+
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 
 - **Crash-window tests for the allow/deny state machine** (the gate

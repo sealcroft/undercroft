@@ -551,7 +551,8 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 ## 9. Reference — HTTP surface
 
 Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
-`UNDERCROFT_ASSERTION_SECRET` is set; mutating routes 403 in read-only):
+`UNDERCROFT_ASSERTION_SECRET` is set — on `/v1` **and** on `POST /mcp`, which
+asserts for the `--vault` vault; mutating routes 403 in read-only):
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -647,7 +648,14 @@ their signal codes and intended destination, into the reserved
 `quarantine-pending` wing: hard-excluded from retrieval except a
 reviewer's explicit wing scope, and reviewed via CLI
 `admission list|allow|deny` or `/v1` GET/POST `…/admission` — operator
-surfaces, deliberately never MCP. Heuristic, quarantine-not-reject; the
+surfaces, deliberately never MCP. **MCP cannot reach the wing at all**:
+any tool argument naming `quarantine-pending`, or any `id`/`*_id`
+argument naming a drawer resident there, is refused — the review queue
+is an operator surface for reading as well as for ruling. And on EVERY
+surface, a quarantine-pending drawer cannot be deleted or forgotten:
+`admission allow`/`deny` are the doors, because a plain delete leaves
+only a `del/<id>` tombstone that no one can tell from housekeeping.
+Heuristic, quarantine-not-reject; the
 default leaves the write contract byte-identical) ·
 `UNDERCROFT_ADMISSION_LLM` (unset — `advisory` wires the
 `UNDERCROFT_LLM_*` runtime as the screen's tier-2 classifier: consulted

@@ -299,6 +299,11 @@ undercroft dedup [--apply]            # exact-duplicate detection (keyed fingerp
 undercroft backup create|list|restore # verified snapshots, keeps last 10
 undercroft repair                     # backfill + vacuum + re-verify
 undercroft verify [--vault]           # HMAC every record + replay audit chain
+undercroft admission list|allow|deny  # review writes the ingest screen quarantined
+undercroft trust set|list <wing>      # deployment-assigned wing trust (candidate floor)
+undercroft retention set|list|clear|sweep  # per wing/room max age; sweep is explicit
+undercroft forget <id...> [--sign]    # destroy + chain-attested receipt (RTBF)
+undercroft verify-forgetting <receipt># replay a receipt against this vault
 undercroft export [--vault]           # decrypted JSONL to stdout
 undercroft export --to <pub> --out f  # sealed bundle only that recipient can open
 undercroft import <file.jsonl>        # migrate from undercroft or mempalace exports

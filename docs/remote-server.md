@@ -78,7 +78,9 @@ reads (stats, search, export) are served; every mutation returns 403.
 The palace-wide bearer proves the caller reached the right *server*; it does
 not distinguish *tenants*. Set `UNDERCROFT_ASSERTION_SECRET` and every `/v1`
 request must additionally carry a short-lived assertion for the exact vault
-it addresses:
+it addresses — and so must `POST /mcp`, for the vault the server was started
+with (`--vault`). Both transports are gated, or the one the MCP handler
+serves would stay open to a bare bearer:
 
 ```text
 X-Vault-Assertion: <unix_ts>:<hex>

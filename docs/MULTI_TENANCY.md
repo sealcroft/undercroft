@@ -55,6 +55,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `GET /v1/vaults/{id}/drawers` · `GET`/`PUT .../drawers/{drawer_id}` | paged browse, full drawer, verbatim content replace |
 | `GET /v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | `GET /v1/vaults/{id}/kg/stats` · `.../kg/entities` · `.../kg/query` · `.../kg/timeline` | read-only knowledge-graph browse (mutations stay on CLI/MCP) |
+| `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting |
 | `POST /v1/vaults/{id}/verify` · `POST .../rotate` | integrity report · key rotation (sole-writer contract) |
 | `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair |
 | `GET /ui` | vault admin console (static page, every build) |
@@ -286,6 +287,7 @@ sequenceDiagram
 | `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
 | `GET /admin/tenants/{id}/stats` | admin | metadata-only stats relay (counts, sizes, chain head) via the stored engine creds — content stays behind the tenant's own token |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
+| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting, retention policy + sweep, wing trust, admission review, verify, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by |
 | `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>` |
 
 The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
@@ -306,6 +308,14 @@ hardened the way the engine hardens its own secrets:
   lifecycle off the data plane (the vault root is unroutable), and even a
   routing bug downstream fails cryptographically — the assertion and the
   vault AAD both carry the vault id.
+- The data-plane allowlist keeps **operator** capabilities off a tenant
+  token too, and that is now stated rather than incidental: forgetting,
+  retention, trust, admission and verify live on the admin plane's
+  `ops/` prefix. The one deletion a tenant token reaches
+  (`DELETE /t/…/drawers/{id}`) produces a bare tombstone, so an erasure
+  request should be answered through `ops/forget`, which returns a
+  chain-attested receipt. A data-plane request for an operator subpath
+  now says so instead of answering a bare `unknown route`.
 
 **Migration** (`POST /admin/tenants/{id}/migrate {"to": …}`): export from
 the source (the v0.18 artifact-carrying NDJSON, so token matrices restore
