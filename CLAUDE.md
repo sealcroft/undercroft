@@ -350,7 +350,37 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   provenance, never as state),
   write-path admission control (admission.rs + core admission.rs — C3.3
   phase 2: deterministic tier-1 detector, closed signal vocabulary,
-  offsets never content; **the tier-1 wishlist is closed (2026-08-04)**:
+  offsets never content; **the screen lives at the write CHOKE POINT**
+  (2026-08-04): `write_drawer` takes a REQUIRED `Screen` argument —
+  `Apply`, or `Bypass(BypassReason::{AlreadyDiverted,OperatorRuling})`,
+  one greppable token carrying the reason — so a new write path does not
+  compile until its author decides, and adding a bypass variant is where
+  someone has to justify it in review. Screening used to be applied per
+  call site, and a surface audit found three ways past it on `/v1`
+  alone: a `dedup_threshold` in the save body routed to
+  `save_with_dedup`, a caller-supplied `vector` routed import to the raw
+  writer (so backup-restore AND orchestrator tenant migration re-admitted
+  whole corpora unscreened), and external-embedding vaults had no
+  screened path at all — three call sites someone forgot, with nothing
+  able to say so. `upsert`/`upsert_screened`, `upsert_external`,
+  `save_with_dedup{,_vec}` and `import_record` all state `Apply` now;
+  the operator's `allow` ruling is the one `OperatorRuling` bypass, since
+  re-screening a human's verdict would trap every allowed drawer forever.
+  **`upsert_many` is the stated exception**: a batch owns its transaction,
+  so it cannot call `write_drawer` and screens through its own
+  `admission_divert` loop into `BulkOutcome{created, quarantined}` — the
+  same decision reached by a SECOND implementation, which is the shape the
+  `Screen` argument exists to prevent, and it is what leaves the bulk
+  path's diversions unclassified (see the obs bullet). One more recorded
+  gap on the same theme: `import_record` hard-codes `quarantined: false`
+  on both vector-carrying branches, discarding the `Landing.diverted_to`
+  it just received, so a diverted import still reports a clean save under
+  the id the caller aimed at — the exact dishonesty `upsert_screened`
+  exists to fix, one door along. No
+  assertion about the reserved wing at the choke point: a CALLER may
+  legitimately aim a write at it (a forgery attempt) and must reach the
+  reserved-wing guard and be refused as invalid input, not trip an
+  assertion; **the tier-1 wishlist is closed (2026-08-04)**:
   `ATTACK_FIXTURES` similarity — windowed hash-embedder cosine (32-word
   windows, stride 16, so a short variant inside a long drawer is found;
   whole-text cosine dilutes to invisibility), threshold 0.45 pinned from
@@ -377,8 +407,17 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   applied one level down); forging the reserved wing or declaring an
   unknown `kind` is `StoreError::Invalid` → **400**, never a 500
   "corrupt row"; `UNDERCROFT_ADMISSION=quarantine` diverts flagged
-  saves sealed into the reserved `quarantine-pending` wing, hard-excluded
-  from retrieval except the reviewer's own scope; allow/deny chain-audited
+  saves sealed into the reserved `quarantine-pending` wing, excluded from
+  **every read that returns content** and not from `search` alone:
+  `search` through `resolve_search_policy` (pre-candidate, so poison
+  cannot crowd or starve), `recent` — which is what `wake_up` and the
+  closet index call, i.e. the two surfaces whose whole job is loading
+  context at session start, exactly where injected text wants to be —
+  and `list_drawers`. Naming the wing is how the reviewer opts back in,
+  and MCP may not: `mcp.rs`'s **quarantine fence** refuses any tool whose
+  arguments name the reserved wing or an `*id` resident in it, so the
+  agent whose write was diverted can neither read the evidence back nor
+  delete it; allow/deny chain-audited
   with the verdict inside the ruling tag; operator surfaces only, never
   MCP; default off = byte-identical write contract; **deny is receipted**
   — it destroys through `forget_with_proof` and hands back the
@@ -452,10 +491,21 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   worth knowing: `chain_commit(records)` counts audit-chain **records**, not
   manifest anchors (a 256-drawer batch anchors once and advances it by 256;
   records appended without an anchor — read audits — are counted by the next
-  one), and a diverted write emits `drawer-quarantined` (intended wing/room
-  + signal codes) rather than a `drawer-saved` into the quarantine wing —
-  the classifier is `admission::save_event`, which every save path funnels
-  through so a new write path cannot report a diversion as a file
+  one), and **how a diversion reaches the live feed is a RECORDED GAP, not
+  a design — read this before quoting the monitor**. The intent is one
+  classifier, `admission::save_event`, at the write choke point, and
+  `event_drawer_quarantined` (intended wing/room + the closed-vocabulary
+  signal codes, codes shipped even for a sealed vault since they are not
+  names) is the frame it should emit; `monitor.html` already dispatches on
+  `drawer-quarantined` and `website/src/observability.md` documents it.
+  What the code does: `write_drawer` calls `save_event`, then emits
+  `drawer-saved` with `wing = quarantine-pending` and the intended wing in
+  the ROOM slot, dropping the signal codes at the `SaveEvent::Quarantined
+  { .. }` destructure; `upsert_many` never reaches that site at all and
+  emits a plain per-drawer `drawer-saved` whose only tell is the wing
+  name — the pre-choke-point failure mode, still live on the bulk path.
+  So **nothing calls `event_drawer_quarantined` outside obs's own smoke
+  test**, and a `drawer-quarantined` frame never reaches a client
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
@@ -493,14 +543,53 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   CLI via `--features ort` (`UNDERCROFT_EMBEDDER=ort`,
   `UNDERCROFT_RERANKER=ort|colbert-ort`; multi-tenant server shares one
   session pool across vaults)
-- `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI; mcp.rs: MCP stdio;
+- `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI, plus `Posture`
+  — `open_store_as` makes read-vs-write something a caller must STATE, so
+  `serve-http --read-only` opens BOTH its stores read-only; the two opens
+  had drifted apart, and which port path opened the vault decided whether
+  a `--read-only` server re-embedded every drawer at start-up and appended
+  a read-audit record per `/mcp` search; mcp.rs: MCP stdio, `WRITE_TOOLS`
+  + the quarantine fence over raw arguments;
+  parity.rs: the surface inventory the code is COUNTED AGAINST in both
+  directions — a tool advertised without a line fails the build, a line
+  naming a dead tool fails it too, and `OPERATOR_ONLY`
+  (admission/trust/retention/forget/rotate) asserts those never reach MCP,
+  so a boundary is enforced by the same mechanism as the parity instead of
+  living in a doc table that rots; search.rs: what a search DECLARES and
+  what it OWES back, once for all three surfaces — `SearchOptions`, the
+  read-time `Locale` and the honest-exclusion notes were rebuilt by hand
+  per handler and each forgot a different piece (`week_start` reached only
+  `/v1`, `room_cap` only `/v1`, `language` only MCP+`/v1`, `ranked_at`
+  only MCP+`/v1`, the trust-floor exclusion count only CLI+`/v1`), and
+  `DEFAULT_LIMIT` is now **5 everywhere** (it was 5 on CLI/MCP and 10 on
+  `/v1`, so "the same search" answered differently per transport —
+  unified DOWN, since every surface names its continuation);
+  i18n.rs: result-string localization for nine languages
+  (`UNDERCROFT_LANG` → `LANG`, primary subtag; errors, help and
+  machine-oriented output stay English);
   refine.rs: the ONE LLM-distillation implementation both `undercroft refine`
   and `POST /v1/…/refine` drive — same `UNDERCROFT_LLM_*` config used to
   build two different vaults, the CLI's facts carrying no date resolved from
   the note's words, no grounding verdict and no searchable mirror;
-  http.rs/tenant.rs: HTTP + multi-tenant `/v1` incl. management routes
-  (drawers list/get/update, taxonomy, verify, rotate, read-only kg
-  browse); ui.html: the vault admin console (incl. live MONITOR +
+  http.rs/tenant.rs: HTTP + multi-tenant `/v1` incl. the management and
+  operator planes (drawers list/get/update/delete, taxonomy, stats +
+  history, read-only kg browse + `kg/authority`, supersessions, trust,
+  admission list/rule, retention set/list/sweep, forget, refine, verify,
+  rotate, export/import). **`--read-only` is a posture on the whole
+  process, decided once in FRONT of dispatch** (`mutates`), not a guard
+  per mutating handler: there were thirteen guards for fourteen mutating
+  routes and `POST …/kg/authority` never got one, so a read-only server
+  rewrote HMAC-covered authority columns, superseded the previous
+  canonical holder and appended to the chain while answering 200 — while
+  the identical capability over `/mcp` in the same process refused. It
+  fails CLOSED (anything not GET is a write unless named), and the two
+  named exceptions are `POST …/search` and `POST …/verify` — verify
+  fast-forwards the manifest anchor and is classified a read. Two
+  boundaries stated rather than hidden: opening still writes (schema
+  creation, rotation reconcile, chain init), and `open_read_only`'s own
+  doc records that with `UNDERCROFT_RETRIEVAL=pq` a search may still
+  build or retrain a missing index — a gap, not a decision;
+  ui.html: the vault admin console (incl. live MONITOR +
   KNOWLEDGE tabs), `include_str!`'d and served at `GET /ui` on every
   build; monitor.html: the Palace Monitor
   UI, `include_str!`'d and served at `GET /monitor` on telemetry builds);
@@ -536,10 +625,16 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 75
-  `UNDERCROFT_*` variables (`UNDERCROFT_SEARCH_TRACE` was the 75th —
-  honoured by the store since the parallel-fuse pass and in no reference
-  until the drift sweep). **`diagrams/` is the only source; `pdf/` and
+  which inlines them and documents every layer plus all **76**
+  `UNDERCROFT_*` variables the engine honours — 61 written out in full
+  across the env table's 57 rows, plus 15 siblings abbreviated to a
+  suffix inside the row that owns them (`_TOKENIZER` three times, one
+  per model role), which is why grepping the page for full names
+  undercounts it. Count the truth, never a number in prose:
+  `grep -rhoE '"UNDERCROFT_[A-Z0-9_]+"' crates/ | sort -u` over every
+  crate except `undercroft-bench`, whose `UNDERCROFT_VS_*`/`UNDERCROFT_TEST_*`
+  belong to the harness rather than the engine.
+  **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
   re-derives every `<h3>` id and the whole sidebar from the sections,
@@ -618,7 +713,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (511)
+docker compose run --rm test          # cargo unit + integration tests (554 run,
+                                      # +1 #[ignore]d at-scale migration probe)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (222 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
@@ -844,10 +940,12 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   the delimiting floor 8→5 it admitted `other`/`mother` and
   `count`/`accounting`. Any rule feeding a channel that ADMITS needs negative
   controls, not just a link count. **The controls now exist**:
-  `false_friends_stay_apart` (store lib.rs) runs 20 known false friends across
-  en/de/ar/el end-to-end through `search` at realistic drawer length, asserting
-  only the LEXICAL channels (a sem-only hit is the embedder's opinion, not a
-  rule's) and failing in BOTH directions — `Verdict::Apart` must not gain a
+  `false_friends_stay_apart` (store lib.rs) runs **58 rows in 10 control
+  sets** — 49 `Apart` plus 9 pinned `Cost` — across en (declared and
+  undeclared), nl (declared and identified-from-the-drawer), de, ar, fr,
+  it, ru and el, end-to-end through `search` at realistic drawer length,
+  asserting only the LEXICAL channels (a sem-only hit is the embedder's
+  opinion, not a rule's) and failing in BOTH directions — `Verdict::Apart` must not gain a
   channel, `Verdict::Cost` is a pinned known price whose disappearance is good
   news that must be recorded rather than absorbed. Padding is asserted disjoint
   from every control word: the first run of this instrument reported the
@@ -935,6 +1033,26 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   candidate set moves). A rebuild that reuses the stored codebook is not a new
   generation. The counter is outside HMAC coverage, so it is evidence about
   ambiguity, never about tampering.
+- **A capability missing from one surface is a boundary or a drift, and
+  which one has to be written down.** A 14-agent audit of CLI vs MCP vs
+  `/v1` found **65 confirmed drifts** — a capability present on one
+  surface and missing, weaker, or differently named on another — of which
+  **55 failed silently**: a declared configuration that never took effect,
+  a screen a route walked past, an exclusion enforced on one read path and
+  not its neighbour. Every one was born the same way, someone adding a
+  capability to two surfaces and forgetting the third. Two mechanisms
+  close them, and new work must use whichever fits. Where the drift is a
+  CLASS, a **choke point**: screening at `write_drawer` behind a required
+  `Screen`, the read-only gate in front of dispatch, one search-declaration
+  parse in `cli/search.rs`, one diversion classifier in
+  `admission::save_event`. Where it is arithmetic, an **inventory the code
+  is counted against in both directions** (`cli/parity.rs`) — a tool
+  without a line fails the build and a line without a tool fails it too,
+  which a hand-maintained doc table cannot do. Deliberate absences are
+  entries in `OPERATOR_ONLY` carrying their reason (an agent must not rule
+  on the queue that exists to contain it, nor assign the trust class that
+  decides what it may retrieve), asserted by the same test as the parity,
+  so the two can never disagree about what MCP is allowed to reach.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path
