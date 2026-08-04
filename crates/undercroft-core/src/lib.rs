@@ -61,7 +61,26 @@ pub fn validate_name(value: &str, what: &'static str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// The largest content one drawer may carry. The **engine's** contract,
+/// not one entry point's ergonomic: enforced at the store's single write
+/// choke point, so every surface refuses the same bytes.
+///
+/// It lived only in `undercroft remember` until 2026-08-04, which made the
+/// bound a property of the CLI — MCP and `/v1` accepted drawers orders of
+/// magnitude larger, and `ContentTooLarge` below was a variant nothing
+/// ever constructed. Well above what the miner produces (chunks are 800
+/// bytes) so no ingest path moves; a caller with a genuinely larger
+/// document is asked to chunk it, which is what the chunker is for.
 pub const MAX_CONTENT_BYTES: usize = 100_000;
+
+/// Reject content past [`MAX_CONTENT_BYTES`]. Bytes, not chars — the
+/// bound is about what a row costs, and the id is over bytes too.
+pub fn validate_content_len(content: &str) -> Result<(), CoreError> {
+    if content.len() > MAX_CONTENT_BYTES {
+        return Err(CoreError::ContentTooLarge(content.len(), MAX_CONTENT_BYTES));
+    }
+    Ok(())
+}
 
 /// The closed vocabulary a declared drawer `kind` must come from — the
 /// exposure rule in docs/LABELS.md: a filterable label on a sealed vault

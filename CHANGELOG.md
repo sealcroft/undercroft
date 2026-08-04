@@ -2,6 +2,98 @@
 
 ## Unreleased
 
+### the write path stops depending on which surface you drove
+
+Eleven write-path defects where the same capability behaved differently —
+or silently wrongly — depending on whether the CLI, MCP or `/v1` was
+driving. Every one of them is closed at the narrowest choke point that
+makes the next surface unable to reintroduce it.
+
+- **Diary entries could destroy each other.** `diary_write` derived its
+  append slot from `SELECT COUNT(*)`, and a diary's wing, room and source
+  are all fixed — so the id was a pure function of a count that goes DOWN
+  after any delete (`drawer delete`, a retention sweep, an `admission
+  deny`). The next entry derived an id already in use and `ON
+  CONFLICT(id) DO UPDATE` overwrote an unrelated entry: a record destroyed
+  by writing a different one, with no error on either surface. It now
+  uses `next_append_index`, the hazard CLAUDE.md documents in writing and
+  every other save path had already been fixed for.
+- **`diary_write` handed the caller's `agent` argument straight into
+  `added_by`** — the surface identity the admission screen's
+  trusted-source auto-admit keys on precisely because "handlers stamp it
+  and a caller cannot set it". With `UNDERCROFT_ADMIT_TRUSTED_SOURCES=cli`
+  declared, one MCP call (`{"agent": "cli", "entry": "<poison>"}`) walked
+  past the screen. `added_by` is now the SURFACE (a required `via`
+  argument, the `update_drawer` precedent) and the agent name travels as
+  the provenance CLAIM it is — which is also the identity the declared
+  rate screen groups by.
+- **Both import surfaces let a payload set `added_by`.** They deserialize
+  a whole `Drawer`, so a bundle whose records claimed `added_by: "cli"`
+  auto-admitted every record past the screen — poison admitting itself by
+  declaration. Imports now re-stamp `added_by` with the importing
+  surface, deliberately `import` on every transport rather than `cli` or
+  `rest`: an import is a distinct act, and declaring a SAVE surface
+  trusted must not silently extend that trust to bundle contents. An
+  operator who wants bulk restore to bypass the screen says
+  `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import`.
+- **Bulk ingest reported nothing about what it quarantined.**
+  `upsert_many` screened every drawer and returned a bare created-count,
+  so `undercroft import` printed "imported 500" while an arbitrary number
+  of them sat in `quarantine-pending` — unretrievable by any search and
+  invisible short of running `admission list`. `upsert_many` now returns
+  `BulkOutcome { created, quarantined }`; `import`, `mine`, `sweep` and
+  the daemon print the diverted count, and `POST /v1/…/import` carries
+  `quarantined` beside `imported`. The single-save honesty fix, one level
+  up.
+- **An update was screened TWICE** — once for the verdict it reported,
+  once inside `upsert` for where the content actually landed. The
+  deterministic tier agrees across the pair, so this was invisible until
+  the tier-2 advisor was wired: a live model is not a pure function of
+  its input, and when the two answers disagreed the surface printed a
+  verdict that did not govern the write. One screen now, the
+  authoritative one — and one advisor round trip per update instead of
+  two.
+- **`validate_name` now runs at the store's write choke point.**
+  CLAUDE.md states it as an invariant; it held for the three save
+  surfaces and for neither import surface. The reachable damage was
+  policy reach, not traversal: `set_wing_trust` and `retention_set`
+  validate, so a wing an import invented could never be assigned a trust
+  class or governed by a retention policy — an operator control silently
+  unreachable for imported data.
+- **`MAX_CONTENT_BYTES` is the engine's bound, not one command's.** It
+  was enforced only by `undercroft remember`; MCP and `/v1` accepted
+  drawers orders of magnitude larger, and `CoreError::ContentTooLarge`
+  was a variant nothing ever constructed. Now checked at the same choke
+  point beside `kind`. Well above what the miner produces (chunks are 800
+  bytes), so no ingest path moves.
+- **CLI `remember --kind`.** `search --kind` shipped without it, so the
+  CLI could FILTER by a label it had no way to write — and a kind-filtered
+  search deliberately excludes kind-less drawers, so a mixed CLI/MCP
+  deployment silently got a result set omitting everything the CLI wrote,
+  with no CLI path to repair it afterwards.
+- **A bad name or vocabulary value on the operator routes was a 500
+  reading "corrupt row".** `set_wing_trust` and `set_retention` raised
+  `CorruptRow`, which `/v1` maps to 500 — describing STORED DATA for a
+  request that was simply wrong, and retryable to any client library. The
+  same invalid wing was already a 400 on the save route, and within the
+  trust route which FIELD you got wrong decided the class. Both are
+  `StoreError::Invalid` → 400 now, the doctrine already written down at
+  the write choke point.
+- **"That record is not here" had three status classes.** `GET`/`PUT`
+  answered 404, `forget` and `admission` answered 400, and `DELETE`
+  answered **200 `{"deleted": false}`** — telling a client that a typo'd,
+  stale or already-swept id had been deleted, where CLI and MCP both
+  treat it as an error. New `StoreError::NotFound` → 404 everywhere, and
+  DELETE returns 404 rather than a green 200.
+- **External-embedding vaults refuse CLI and MCP writes with an error
+  that names the boundary.** External embedding is a `/v1`-only
+  capability end to end (neither surface can supply a vector, and `vault
+  create` cannot make such a vault) — a coherent scope decision that was
+  stated nowhere, so `StoreError::ExternalVault` read as a missing flag
+  rather than as a surface that does not have one.
+- Seven new store tests + one CLI integration test, each asserting its
+  own premise so it cannot pass for the wrong reason.
+
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 
 - **Crash-window tests for the allow/deny state machine** (the gate

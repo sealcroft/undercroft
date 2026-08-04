@@ -783,8 +783,21 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             ))
         }
         "undercroft_diary_write" => {
-            let id = store.diary_write(req_str(args, "agent")?, req_str(args, "entry")?)?;
-            Ok(format!("diary entry {id} written"))
+            let agent = req_str(args, "agent")?;
+            // "mcp" is the SURFACE stamp; the agent argument travels as a
+            // provenance claim. The screened outcome is what gets reported:
+            // a diverted entry is not readable by `undercroft_diary_read`,
+            // so saying "written" would tell the agent it recorded
+            // something it did not.
+            let out = store.diary_write(agent, req_str(args, "entry")?, "mcp")?;
+            if out.quarantined {
+                return Ok(format!(
+                    "diary entry quarantined pending review — it tripped the \
+                     admission screen and is NOT readable in {agent}'s diary; \
+                     an operator rules on it"
+                ));
+            }
+            Ok(format!("diary entry {} written", out.id))
         }
         "undercroft_diary_read" => {
             let entries = store.diary_read(

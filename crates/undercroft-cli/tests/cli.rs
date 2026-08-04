@@ -595,3 +595,66 @@ fn remember_after_a_delete_must_not_overwrite_an_unrelated_drawer() {
         .success()
         .stdout(predicate::str::contains("third note about tides"));
 }
+
+/// The CLI can WRITE the label it can already filter by.
+///
+/// `search --kind` shipped without a `remember --kind`, and a kind-filtered
+/// search deliberately EXCLUDES kind-less drawers — so in a mixed CLI/MCP
+/// deployment every drawer the CLI wrote was silently missing from every
+/// kind-filtered result, with no CLI path to repair it afterwards. The
+/// premise is asserted from both sides: the labelled drawer is found under
+/// its own kind, and the unlabelled one written beside it is not.
+#[test]
+fn remember_can_declare_the_kind_that_search_filters_on() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+
+    cmd(&home)
+        .args([
+            "remember",
+            "we decided to move the retro to Tuesdays",
+            "--wing",
+            "w",
+            "--room",
+            "r",
+            "--kind",
+            "decision",
+        ])
+        .assert()
+        .success();
+    cmd(&home)
+        .args([
+            "remember",
+            "we decided to keep the standup at nine",
+            "--wing",
+            "w",
+            "--room",
+            "r",
+        ])
+        .assert()
+        .success();
+
+    // Declared, so the filter reaches it.
+    cmd(&home)
+        .args(["search", "decided", "--kind", "decision"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("retro"))
+        .stdout(predicate::str::contains("standup").not());
+
+    // The closed vocabulary is enforced, not coerced.
+    cmd(&home)
+        .args([
+            "remember",
+            "a typo'd label",
+            "--wing",
+            "w",
+            "--room",
+            "r",
+            "--kind",
+            "desicion",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("closed kind vocabulary"));
+}

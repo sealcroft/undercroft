@@ -117,7 +117,7 @@ impl PalaceStore {
         for id in ids {
             let d = self
                 .get(id)?
-                .ok_or_else(|| StoreError::Invalid(format!("no drawer {id}")))?;
+                .ok_or_else(|| StoreError::NotFound(id.clone()))?;
             drawers.push(ForgottenDrawer {
                 id: id.clone(),
                 content_fp: hex::encode(crate::kg::content_fp(&d.content)),

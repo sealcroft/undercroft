@@ -855,11 +855,17 @@ impl Tenancy {
         self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
-        let deleted = store.delete_drawer(drawer_id).map_err(store_err)?;
-        Ok((
-            200,
-            Body::Json(json!({ "id": drawer_id, "deleted": deleted })),
-        ))
+        // A delete of an id that is not here is NOT a success. This
+        // answered 200 `{"deleted": false}`, so a client checking only the
+        // status was told the delete worked when the id was a typo, a
+        // stale id or an already-swept drawer — while CLI `drawer delete`
+        // and MCP `undercroft_delete_drawer` both treat it as an error, and
+        // GET/PUT on the same id answer 404. The `deleted` key stays for
+        // the callers that read it; it is now always `true` on a 200.
+        if !store.delete_drawer(drawer_id).map_err(store_err)? {
+            return Err(RestError::new(404, format!("no drawer {drawer_id}")));
+        }
+        Ok((200, Body::Json(json!({ "id": drawer_id, "deleted": true }))))
     }
 
     // ---- management (admin UI surface) --------------------------------
@@ -1762,10 +1768,18 @@ impl Tenancy {
         }
         let store = self.store_for(id)?;
         let mut imported = 0u64;
+        let mut quarantined = 0u64;
         for (drawer, vector, tok) in &records {
-            store
-                .import_record(drawer, vector.clone())
+            // `import_record` re-stamps `added_by` with the importing
+            // surface: the payload's own value is the key the admission
+            // screen's trusted-source auto-admit rides, and a caller must
+            // not be able to set it.
+            let out = store
+                .import_record(drawer, vector.clone(), undercroft_store::IMPORT_SURFACE)
                 .map_err(store_err)?;
+            if out.quarantined {
+                quarantined += 1;
+            }
             if let Some((model, packed)) = tok {
                 // Re-sealed under this vault's key; restore skips the
                 // per-drawer encode forward.
@@ -1792,6 +1806,11 @@ impl Tenancy {
             200,
             Body::Json(json!({
                 "imported": imported,
+                // How many of those the admission screen diverted: counted
+                // in `imported` (they were written) but NOT retrievable
+                // where the payload aimed them. Always 0 while screening is
+                // off, so the default response shape is unchanged.
+                "quarantined": quarantined,
                 "kg_triples": kg_records.len(),
                 "kg_entities": entity_records.len(),
                 "tunnels": tunnel_records.len(),
@@ -1971,6 +1990,11 @@ fn store_err(e: StoreError) -> RestError {
         // is the caller's error, not the server's.
         | StoreError::Invalid(_) => 400,
         StoreError::Integrity(_) => 409,
+        // "That record is not here" has ONE status class across every
+        // route: `forget` and `admission` used to answer 400 for it while
+        // GET/PUT on the same id answered 404, so a client could not key
+        // retry or alerting logic on the class at all.
+        StoreError::NotFound(_) => 404,
         _ => 500,
     };
     RestError::new(code, e.to_string())
