@@ -76,6 +76,56 @@ jobs:
             gh release create "$TAG" --title "$TAG" --notes "Release $TAG" || true
           gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
 
+  # The `ort` posture as a ready configuration (docs/EMBEDDERS.md): one
+  # feature-built binary asset so UNDERCROFT_EMBEDDER=ort is reachable
+  # from a download, not a compile. Deliberately scoped to linux x86_64
+  # as the first increment — the deployable-server case — and verified
+  # self-contained (the ort build links ONNX Runtime statically; no
+  # shared library ships beside the binary, probed 2026-08-04).
+  binaries-ort:
+    name: Binaries (x86_64-unknown-linux-gnu, ort)
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build with the in-process embedder features
+        run: cargo build --release -p undercroft-cli --features onnx,ort
+      - name: Smoke — the features are compiled in and wired
+        run: |
+          BIN=target/release/undercroft
+          "$BIN" --help > /dev/null
+          export UNDERCROFT_HOME="$(mktemp -d)"
+          "$BIN" vault create smoke
+          # An ort-built binary asked for the ort embedder without model
+          # files must fail on MODEL CONFIGURATION ("loading ORT
+          # embedder: ..."), never on a missing feature — the latter is
+          # what a default binary says, and shipping one under this
+          # asset name would be the silent failure this probe exists to
+          # catch. Full inference needs a user-supplied model export
+          # (docs/EMBEDDERS.md), which is why the smoke stops here.
+          set +e
+          OUT="$(UNDERCROFT_EMBEDDER=ort "$BIN" remember probe --vault smoke 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUT"
+          [ "$RC" -ne 0 ] || { echo "expected a model-config refusal"; exit 1; }
+          echo "$OUT" | grep -q "loading ORT embedder" || {
+            echo "wrong failure shape — is the ort feature actually compiled in?"; exit 1; }
+      - name: Package and upload
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NAME="undercroft-${TAG}-x86_64-unknown-linux-gnu-ort"
+          mkdir -p "dist/${NAME}"
+          cp target/release/undercroft "dist/${NAME}/"
+          cp LICENSE NOTICE README.md SECURITY.md "dist/${NAME}/"
+          cd dist
+          tar -czf "${NAME}.tar.gz" "${NAME}"
+          sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --notes "Release $TAG" || true
+          gh release upload "$TAG" "${NAME}.tar.gz" "${NAME}.tar.gz.sha256" --clobber
+
   # Each architecture builds natively (no QEMU emulation — a full Rust
   # build under emulation is unreasonably slow), then one job merges the
   # per-arch images into a single multi-arch manifest.
@@ -105,6 +155,47 @@ jobs:
           tags: ghcr.io/compufreq/undercroft:${{ github.ref_name }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  # The :ort image variant — the in-process posture as a pullable image
+  # (docs/EMBEDDERS.md). amd64-only first increment, same deliberate
+  # scope as the binary asset; the ort build is statically linked, so
+  # the unchanged runtime stage carries everything it needs.
+  docker-ort:
+    name: GHCR image (amd64, ort)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          build-args: |
+            UNDERCROFT_FEATURES=onnx,ort
+          tags: ghcr.io/compufreq/undercroft:${{ github.ref_name }}-ort
+          cache-from: type=gha,scope=amd64-ort
+          cache-to: type=gha,mode=max,scope=amd64-ort
+      - name: Smoke — the pushed image carries the ort feature
+        run: |
+          IMG="ghcr.io/compufreq/undercroft:${GITHUB_REF_NAME}-ort"
+          docker run --rm "$IMG" --help > /dev/null
+          # /data is ephemeral per `docker run`, so create-then-probe
+          # shares a named volume.
+          docker volume create ort-smoke > /dev/null
+          docker run --rm -v ort-smoke:/data "$IMG" vault create smoke
+          set +e
+          OUT="$(docker run --rm -v ort-smoke:/data -e UNDERCROFT_EMBEDDER=ort "$IMG" remember probe --vault smoke 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUT"
+          [ "$RC" -ne 0 ] || { echo "expected a model-config refusal"; exit 1; }
+          echo "$OUT" | grep -q "loading ORT embedder" || {
+            echo "wrong failure shape — is the ort feature in the image?"; exit 1; }
 
   manifest:
     name: Multi-arch manifest

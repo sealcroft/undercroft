@@ -509,7 +509,16 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   macos-latest + Apple Silicon, windows) uploaded to the release with
   sha256, and the multi-arch `ghcr.io/compufreq/undercroft` image
   (per-arch native builds merged into one manifest; index annotations
-  carry the package description)
+  carry the package description). Since the posture-configs unit also
+  the **`ort` variant**: a linux x86_64 `…-ort.tar.gz` asset and a
+  `:tag-ort` amd64 image (deliberate first-increment scope), each
+  smoke-probed — `--help`, then `UNDERCROFT_EMBEDDER=ort` must fail on
+  MODEL CONFIG ("loading ORT embedder"), never on a missing feature,
+  which is what a default binary under the asset name would say. The
+  ort build is statically linked (probed 2026-08-04: no shared libs
+  beside the binary), and the Dockerfile features branch now also
+  builds the orchestrator (the runtime stage copies both binaries — a
+  features-only build used to leave it missing)
 
 The upstream Python implementation (the MemPalace project) is *not* in
 this repo and no longer linked as a fork; its behavior is documented in

@@ -5,6 +5,7 @@
 - [Agents implementation guide](agents.md)
 - [Architecture](architecture.md)
 - [Retrieval, scoring & scaling](retrieval.md)
+- [Choosing an embedder posture](embedders.md)
 - [Security model](security.md)
 - [Threat model (whitepaper)](threat-model.md)
 - [Integrations](integrations.md)
