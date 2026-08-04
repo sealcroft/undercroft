@@ -188,6 +188,9 @@ impl PalaceStore {
         if opts.offset > 0 {
             hits.drain(..opts.offset.min(hits.len()));
         }
+        if self.read_audit {
+            self.audit_read("search", query, opts, hits.len())?;
+        }
         Ok(hits)
     }
 

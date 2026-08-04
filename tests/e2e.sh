@@ -367,6 +367,40 @@ UNDERCROFT_HOME="$LEGACY_HOME" "$BIN" init >/dev/null
 check "legacy identity imports"   0 "Imported"                       -- \
   env UNDERCROFT_HOME="$LEGACY_HOME" "$BIN" import "$LEGACY_FILE" --identity "$LEGACY_KEY"
 
+echo "== Read-path + egress auditing =="
+# Every export appends one egress record to the audit chain; reads append
+# only under the declared UNDERCROFT_READ_AUDIT=chain, and a garbage
+# declaration refuses rather than silently running unaudited.
+chain_writes() { "$BIN" vault status default | sed -n 's/^writes: *//p'; }
+W1="$(chain_writes)"
+"$BIN" export > /dev/null
+W2="$(chain_writes)"
+if [ "$W2" -eq "$((W1 + 1))" ]; then
+  echo "ok    export appends one egress record"; PASS=$((PASS+1))
+else
+  echo "FAIL  export appends one egress record ($W1 -> $W2)"; FAIL=$((FAIL+1))
+fi
+"$BIN" search "retro" > /dev/null
+W3="$(chain_writes)"
+if [ "$W3" -eq "$W2" ]; then
+  echo "ok    default search appends nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  default search appends nothing ($W2 -> $W3)"; FAIL=$((FAIL+1))
+fi
+env UNDERCROFT_READ_AUDIT=chain "$BIN" search "retro" > /dev/null
+check "garbage read audit refuses" 1 "UNDERCROFT_READ_AUDIT"           -- \
+  env UNDERCROFT_READ_AUDIT=yes "$BIN" search "retro"
+# Read records deliberately do not advance the manifest anchor (the read
+# path is &self); the next store open reconciles it forward — which the
+# verify below is, so the counter is read after it.
+check "verify green with audit records" 0 "audit chain:     ok"       -- "$BIN" verify
+W4="$(chain_writes)"
+if [ "$W4" -eq "$((W3 + 1))" ]; then
+  echo "ok    declared read audit appends"; PASS=$((PASS+1))
+else
+  echo "FAIL  declared read audit appends ($W3 -> $W4)"; FAIL=$((FAIL+1))
+fi
+
 echo "== HTTP MCP server =="
 # Non-loopback bind without token must be refused.
 check "http refuses tokenless 0.0.0.0" 1 "UNDERCROFT_MCP_HTTP_TOKEN" -- "$BIN" serve-http --host 0.0.0.0 --port 18765

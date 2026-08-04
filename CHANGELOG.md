@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### the chain learns about reads and exports
+
+- **Exports are chain-audited, unconditionally, on every surface** (the
+  consultation-filed gap: "the chain covers writes; reads and exports
+  are observability events"). Every full-palace egress — CLI `export`
+  (plain or sealed, any recipient) and `/v1 GET …/export` — appends one
+  `egress/export` record whose canonical binds the surface, the
+  recipient string (public by construction; empty = plaintext export),
+  the per-type record counts, and **the export's own manifest digest**
+  — so the audit trail and the exported file corroborate each other.
+  Egress is rare, operator-initiated, and exactly the event a
+  compliance trail exists for, which is why this one is not opt-in. A
+  read-only replica serves the export and SAYS the egress went
+  unaudited (the replica precedent: warn and serve, never write).
+- **Reads are chain-audited under a declaration**
+  (`UNDERCROFT_READ_AUDIT=chain`, 74th env var, unset = the
+  byte-identical default): one record per search, on every path (local,
+  external-vector, remote-index), carrying a **keyed fingerprint of the
+  query** — the chain must never hold content, and a query is content —
+  plus the declared scope and hit count. The operator can later prove a
+  specific query ran by recomputing the fingerprint with the key; the
+  record alone reveals nothing, pinned by a test that scans the raw
+  database and WAL bytes for the query text. A per-query chain append
+  is a real durability cost, so the threshold for paying it is a
+  declaration; garbage REFUSES to open (a declared audit posture must
+  never silently not exist), and a read-only open warns and serves
+  unaudited.
+- **The anchor-lag boundary, stated rather than hidden**: the read path
+  runs behind `&self`, so read records do not advance the manifest
+  anchor — the legitimate crash shape, fast-forwarded at the next store
+  open exactly like a crash. Between anchored writes an attacker with
+  file access could strip a tail of read records undetected until the
+  next open covers them; write records never stretch that window beyond
+  the single in-flight record. A deployment that needs the anchor tight
+  runs writes or `verify` on its own cadence.
+- test 517 → 520, e2e 209 → 214 (export appends exactly one record,
+  default search appends nothing, declared read audit appends and
+  verifies, garbage refuses). The default contracts — read and write —
+  stay byte-identical.
+
 ### C3.4: hybrid post-quantum bundles — harvest-now-decrypt-later closes
 
 - **`bundle keygen` is hybrid X25519 + ML-KEM-768 by default** (FIPS

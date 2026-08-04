@@ -912,7 +912,14 @@ latency win, exactly as the doctrine predicted (docs/LABELS.md). The review also
 since the per-wing tier, a wing is an *enforceable trust zone* for scoped
 retrieval — poison in another wing can neither crowd a scoped query's
 candidates nor shape its codebook — which the C3.3 defense cluster builds
-on. New confirmed gaps filed there: read-path/export auditing, entity
+on. New confirmed gaps filed there: read-path/export auditing
+(**CLOSED 2026-08-04**: exports chain-audited unconditionally on
+writable stores — one `egress/export` record binding the export's own
+manifest digest, on every surface; reads chain-audited under the
+declared `UNDERCROFT_READ_AUDIT=chain` — one record per search carrying
+a keyed query fingerprint, never text, with the anchor-lag boundary
+stated; garbage declarations refuse to open, read-only opens warn and
+serve), entity
 resolution, artifact references (image bytes), region-as-policy.
 
 **Labeling discussion — RESOLVED (2026-08-02), doctrine written down.**

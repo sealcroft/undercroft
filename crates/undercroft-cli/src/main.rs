@@ -1773,7 +1773,7 @@ fn main() -> Result<()> {
             trust,
             expires,
         } => {
-            let store = open_store(&cli, vault)?;
+            let mut store = open_store(&cli, vault)?;
             let signing = sign
                 .as_ref()
                 .map(|p| {
@@ -1787,6 +1787,14 @@ fn main() -> Result<()> {
                 trust.as_deref(),
                 expires.as_deref(),
             )?;
+            // Every full-palace egress leaves a chain record binding the
+            // export's own manifest digest — the audit trail and the
+            // exported file corroborate each other.
+            if let (Some(m), _) = undercroft_vault::bundle::split_payload(&payload)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            {
+                store.audit_export("cli", &m.counts, &m.payload_sha256, to.as_deref())?;
+            }
             match to {
                 Some(recipient) => {
                     let path = out
