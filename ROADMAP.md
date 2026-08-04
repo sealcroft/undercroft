@@ -1451,9 +1451,23 @@ release with the usual battery + measured gates.
   failure degrades to tier-1-only, declared-but-unusable refuses to
   open, TLS-or-loopback — since 2026-08-04 enforced by `LlmClient`
   itself for every consumer, with `UNDERCROFT_LLM_CA` pinning
-  self-signed roots; the remaining tier-1 wishlist — attack-fixture
-  similarity, rate anomalies — stays open below). C3.3's shipping
-  mechanism list is BUILT end to end. The provenance foundation + posture are BUILT (2026-08-03):
+  self-signed roots). **The tier-1 wishlist is CLOSED (2026-08-04):
+  attack-fixture similarity** (committed fixture corpus in
+  `undercroft_core::admission::ATTACK_FIXTURES`, windowed hash-embedder
+  cosine so a 20-word variant inside 1,000 words of notes is still
+  found; threshold 0.45 pinned from BOTH sides — hard negatives ≤
+  0.369, marker-dodging variants ≥ 0.540 — and validated at corpus
+  scale by the new `screenfp` bench instrument: **0/5,882 clean LoCoMo
+  turns flagged, corpus max score 0.374, 18/18 fixtures trip**, which
+  meets the stated gate) **and rate anomalies**
+  (`UNDERCROFT_ADMISSION_RATE=<count>/<seconds>`, declared never
+  defaulted since a write rate is deployment-shaped; identity = the
+  `agent` claim else the surface-stamped `added_by` among claim-less
+  rows, the training-cap grouping — accident bound per claim, surface
+  floor under claim rotation; unreadable declarations refuse to open;
+  checked in the store because a rate lives in the write history, not
+  the candidate bytes). C3.3's shipping
+  mechanism list is BUILT end to end, wishlist included. The provenance foundation + posture are BUILT (2026-08-03):
   `agent`/`channel`/`session` claims on every save surface
   (HMAC-covered, never trusted) and `UNDERCROFT_ADMIT_TRUSTED_SOURCES`
   keyed on the surface-stamped `added_by` only — a channel CLAIM never

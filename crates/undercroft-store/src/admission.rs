@@ -73,6 +73,15 @@ impl PalaceStore {
         self.admit_trusted_sources = sources;
     }
 
+    /// Declare the per-writer rate screen programmatically (the env
+    /// `UNDERCROFT_ADMISSION_RATE` resolved at open is the deployment's
+    /// way). `Some((count, seconds))`: at least `count` committed writes
+    /// by the same writer identity inside the trailing window diverts
+    /// the next one.
+    pub fn set_admission_rate(&mut self, rate: Option<(u32, u32)>) {
+        self.admission_rate = rate;
+    }
+
     /// Wire the optional tier-2 advisor (the binary's job, like the
     /// reranker — `UNDERCROFT_ADMISSION_LLM=advisory` resolves to this).
     /// Consulted only when screening is on, only for candidates the
@@ -112,6 +121,15 @@ impl PalaceStore {
             return None;
         }
         let mut signals = undercroft_core::admission::screen(&drawer.content);
+        // The declared rate screen (the tier-1 signal candidate bytes
+        // cannot carry): checked beside the content screen, so a
+        // reviewer sees both kinds of evidence when both fired.
+        if self.rate_flagged(drawer) {
+            signals.push(undercroft_core::admission::AdmissionSignal {
+                code: undercroft_core::admission::RATE_ANOMALY_CODE.to_string(),
+                offset: 0,
+            });
+        }
         if signals.is_empty() {
             // Tier 2, advisory-only (C3.3): a wired model may push a
             // candidate the deterministic tier passed toward quarantine —
@@ -140,6 +158,67 @@ impl PalaceStore {
             d.meta.chunk_index,
         );
         Some(d)
+    }
+
+    /// Whether the declared rate screen flags this write: the writer
+    /// identity already has ≥ `count` COMMITTED rows filed inside the
+    /// trailing window. Identity is the `agent` claim when the write
+    /// carries one (the accident bound: a runaway agent loops with its
+    /// own claim attached — the same grouping as the training-draw cap),
+    /// else the surface-stamped `added_by` among claim-less rows — so a
+    /// claim-less flood through one surface is still bounded, and the
+    /// two groupings never mix (a claim is not a surface).
+    ///
+    /// Honest boundaries, stated rather than hidden:
+    /// * the clock is the CLEAR `filed_at` column, not the HMAC-covered
+    ///   `meta.filed_at` retention uses — a rate screen diverts
+    ///   (recoverable, reviewed), never destroys, so it sits with the
+    ///   other clear columns that shape candidate behavior while every
+    ///   integrity claim rides the HMAC;
+    /// * an `agent` claim is the writer's own statement — a deliberate
+    ///   attacker rotates claims to evade the per-claim bound, exactly
+    ///   as documented for the training-draw cap; the surface grouping
+    ///   is the floor under that;
+    /// * rows land only at commit, so one bulk `upsert_many` batch is
+    ///   screened against the history BEFORE the batch — the burst the
+    ///   screen bounds is repeated committed writes, which is the shape
+    ///   a runaway agent actually has (trusted surfaces bypass the
+    ///   screen entirely for deliberate bulk ingest);
+    /// * timestamps compare lexicographically (one writer, one format);
+    ///   at the window's edge sub-second fractions can slip a row by
+    ///   under a second — noise at any declarable window.
+    fn rate_flagged(&self, drawer: &Drawer) -> bool {
+        let Some((count, secs)) = self.admission_rate else {
+            return false;
+        };
+        let cutoff = (OffsetDateTime::now_utc() - time::Duration::seconds(i64::from(secs)))
+            .format(&Rfc3339)
+            .expect("rfc3339 cutoff");
+        let counted: Result<i64, _> = if let Some(agent) = &drawer.meta.agent {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM drawers WHERE filed_at >= ?1 \
+                 AND json_extract(meta_json, '$.agent') = ?2",
+                params![cutoff, agent],
+                |r| r.get(0),
+            )
+        } else {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM drawers WHERE filed_at >= ?1 \
+                 AND json_extract(meta_json, '$.agent') IS NULL \
+                 AND json_extract(meta_json, '$.added_by') = ?2",
+                params![cutoff, &drawer.meta.added_by],
+                |r| r.get(0),
+            )
+        };
+        match counted {
+            Ok(n) => n >= i64::from(count),
+            Err(e) => {
+                // A screen must never fail a write; a rate query that
+                // cannot run degrades to not-flagged, loudly.
+                undercroft_obs::diag_warn!("admission rate query failed ({e}); write not screened");
+                false
+            }
+        }
     }
 
     /// Every drawer awaiting an admission ruling, oldest first.

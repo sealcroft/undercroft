@@ -651,6 +651,14 @@ quarantine (the `llm-advisory` signal code) — never auto-admit, because
 the model is itself an injection target; a failed or unparseable answer
 is a non-event, and a declared-but-unusable advisor refuses to open.
 TLS or loopback only) ·
+`UNDERCROFT_ADMISSION_RATE` (unset — `<count>/<seconds>` declares the
+per-writer rate screen: a writer identity (the `agent` claim when the
+write carries one, else the surface-stamped `added_by` among claim-less
+rows) that already has ≥ count committed writes inside the trailing
+window diverts to quarantine with the `rate-anomaly` signal. The
+threshold is deployment-shaped, so it is declared, never defaulted; an
+unreadable declaration refuses to open rather than silently running
+unscreened; consulted only when `UNDERCROFT_ADMISSION=quarantine`) ·
 `UNDERCROFT_TRAIN_SOURCE_CAP` (4 — per-wing cap divisor on global
 codebook training draws: no single wing supplies more than 1/N of a
 training sample while others can fill it; within-quota corpora draw

@@ -1,5 +1,84 @@
 # Changelog
 
+## Unreleased
+
+### the tier-1 wishlist closes: attack-fixture similarity + the declared rate screen
+
+- **Attack-fixture similarity** joins the deterministic tier-1 admission
+  detector (`fixture-similarity` signal): a committed corpus of 18
+  attack payload shapes (`undercroft_core::admission::ATTACK_FIXTURES` —
+  system-override/role-hijack, MINJA-style deferred instructions,
+  exfil templates, tool abuse, AgentPoison-style trigger demos) is
+  hash-embedded once, and every screened candidate is compared by
+  cosine over **32-word windows at stride 16** — window granularity
+  because whole-text cosine dilutes: a 20-word injection inside 1,000
+  words of notes is invisible whole-text and obvious per-window. The
+  signal's offset is the best window's start (structure, never
+  content). This is the tier that catches the VARIANT: a paraphrase
+  that dodges every marker substring still shares the fixture's
+  surface vocabulary, and surface overlap is exactly what the hash
+  embedder measures — so the check stays deterministic, model-free,
+  and unit-testable as data. Honest boundary: a rewrite that shares no
+  vocabulary with any fixture passes; fixtures are detection data, and
+  the review queue is the stated source of new entries.
+- **The threshold is measured, pinned from BOTH sides** (the
+  recall-cannot-justify-precision rule): hard negatives — security
+  prose ABOUT prompt injection, this module's own vocabulary, an
+  instructions-shaped onboarding note sharing follow/steps/confirm/done
+  with the deferred-instruction fixtures — measured **≤ 0.369**;
+  marker-dodging variants **≥ 0.540** (the floor case is a 17-word
+  variant embedded mid-paragraph, paying ~15 words of window
+  dilution); `FIXTURE_SIM_MIN = 0.45` sits between with ≥ 0.08 margin
+  each side (`fixture_threshold_is_calibrated`).
+- **The C3.3 detector gate ran, and passed with nothing to spare on
+  either sentence** (new bench instrument `screenfp`, deterministic, no
+  vault): over the **5,882 dialog turns of clean LoCoMo
+  (locomo10_merged.json), the full tier-1 screen flags 0 = 0.000%
+  false positives** (corpus fixture-score distribution p50 0.172 /
+  p99 0.284 / max 0.374 — 0.076 of headroom under the threshold), at
+  79.1 µs/turn debug-unoptimized; and **18/18 committed fixtures trip
+  their own screen** (the instrument fails hard if one stops). A
+  verbatim-ish injection now carries evidence from two classes at once
+  (marker + fixture), recorded separately — a reviewer reads
+  independent evidence, not a collapsed verdict.
+- **The declared per-writer rate screen** (`rate-anomaly` signal,
+  `UNDERCROFT_ADMISSION_RATE=<count>/<seconds>`, 73rd env var, unset =
+  off): a writer identity that already has ≥ count committed writes
+  inside the trailing window has its next write diverted to
+  quarantine — the runaway-agent accident bound, checked in the STORE
+  because a rate lives in the write history, not the candidate bytes
+  (the same reason `llm-advisory` lives outside `screen()`). Identity
+  is the `agent` claim when the write carries one — the training-cap
+  grouping — else the surface-stamped `added_by` among claim-less rows,
+  and the groupings never mix: a claim is not a surface, a claim-less
+  flood through one surface is still bounded, and claim rotation by a
+  deliberate attacker degrades to the surface floor (stated, as for the
+  training-draw cap). The threshold is **declared, never defaulted** —
+  a busy legitimate agent and a runaway one differ only by the
+  deployment's own expectations — and an unreadable declaration
+  **refuses to open** (the CA-pin precedent: a deployment that declared
+  a rate believes floods divert, and silently running unscreened is the
+  failure mode). Honest boundaries stated in code: the clock is the
+  clear `filed_at` column (a rate screen diverts — recoverable,
+  reviewed — never destroys, so it does not need retention's HMAC
+  clock); one bulk `upsert_many` batch is screened against pre-batch
+  history (trusted surfaces are the bulk-ingest path); sub-second
+  fractions can slip a row at the window edge. The `filed_at` index is
+  created only on vaults that declare a rate.
+- Store: `set_admission_rate` beside `set_admission`; the rate signal
+  is appended beside content signals so a reviewer sees both kinds of
+  evidence when both fired; a rate-flagged candidate never consults
+  the tier-2 advisor (it is tier-1 evidence). Tests:
+  `a_declared_rate_bounds_a_writer_and_identities_never_mix`,
+  `the_rate_declaration_parses_or_refuses`,
+  `fixture_threshold_is_calibrated` (+ updated marker tests pin the
+  dual-evidence shape). e2e 197 → 206 (rate boundary at the declared
+  count, signal codes named in `admission list`, garbage declaration
+  refuses, fixture variant diverts on similarity alone). test 511 →
+  514. The default write contract stays byte-identical: everything
+  above is inert unless `UNDERCROFT_ADMISSION=quarantine` is on, and
+  the rate screen additionally requires its own declaration.
+
 ## 0.45.0 — Honest by default: the defense program completes and the cross-lingual tax is repealed
 
 Ten merged units since v0.44.0, each with its full record below. The

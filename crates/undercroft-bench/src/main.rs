@@ -249,6 +249,19 @@ enum Command {
         #[arg(long, default_value = "ollama")]
         llm_api: String,
     },
+    /// Tier-1 admission screen over a clean corpus: the false-positive
+    /// side of the C3.3 gate ("attack-fixture corpus quarantined at a
+    /// target rate with a bounded false-positive rate on clean LoCoMo
+    /// ingest"). Runs `undercroft_core::admission::screen` over every
+    /// dialog turn, reports trips per signal class + the flagged
+    /// fraction, the fixture-score distribution (threshold headroom),
+    /// and the true-positive arm: every committed attack fixture must
+    /// trip its own class. Deterministic, no vault, no model.
+    Screenfp {
+        /// Dataset with dialog turns (LoCoMo-shaped json)
+        #[arg(long)]
+        dataset: String,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -1579,6 +1592,81 @@ fn collect_turns(v: &Value, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+/// Tier-1 admission screen over a clean corpus: per-class trip counts,
+/// flagged fraction, fixture-score distribution, and the fixture
+/// true-positive arm. The C3.3 gate's two sentences in one output.
+fn run_screenfp(dataset: &str) -> Result<()> {
+    use undercroft_core::admission;
+    let raw = std::fs::read_to_string(dataset)
+        .map_err(|e| anyhow::anyhow!("cannot read --dataset {dataset:?}: {e}"))?;
+    let v: Value = serde_json::from_str(&raw)?;
+    let mut texts = Vec::new();
+    collect_turns(&v, &mut texts);
+    if texts.is_empty() {
+        anyhow::bail!("no dialog turns found in {dataset:?}");
+    }
+    println!("Screenfp — {} turns from {dataset}", texts.len());
+
+    let started = Instant::now();
+    let mut per_class: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut flagged = 0usize;
+    let mut scores: Vec<f32> = Vec::with_capacity(texts.len());
+    let mut flagged_examples: Vec<String> = Vec::new();
+    for t in &texts {
+        let signals = admission::screen(t);
+        if let Some((_, s)) = admission::fixture_score(t) {
+            scores.push(s);
+        }
+        if !signals.is_empty() {
+            flagged += 1;
+            if flagged_examples.len() < 20 {
+                let codes: Vec<&str> = signals.iter().map(|x| x.code.as_str()).collect();
+                let head: String = t.chars().take(100).collect();
+                flagged_examples.push(format!("    {codes:?}  {head}"));
+            }
+            for sig in signals {
+                *per_class.entry(sig.code).or_default() += 1;
+            }
+        }
+    }
+    let us = started.elapsed().as_secs_f64() * 1e6 / texts.len() as f64;
+    scores.sort_by(|a, b| a.total_cmp(b));
+    let pct = |p: f64| scores[((scores.len() - 1) as f64 * p) as usize];
+    println!(
+        "  false-positive side (clean corpus): {flagged}/{} turns flagged = {:.3}% — {us:.1} µs/turn",
+        texts.len(),
+        100.0 * flagged as f64 / texts.len() as f64
+    );
+    println!("  per class: {per_class:?}");
+    println!(
+        "  fixture-score distribution: p50 {:.3}  p99 {:.3}  max {:.3}  (threshold headroom)",
+        pct(0.50),
+        pct(0.99),
+        pct(1.00)
+    );
+    for line in &flagged_examples {
+        println!("{line}");
+    }
+
+    // True-positive arm: every committed fixture, screened verbatim,
+    // must trip — the "quarantined at a target rate" sentence, where
+    // the target for the fixtures themselves is all of them.
+    let tripped = admission::ATTACK_FIXTURES
+        .iter()
+        .filter(|f| !admission::screen(f).is_empty())
+        .count();
+    println!(
+        "  true-positive side (committed fixtures): {tripped}/{} trip their own screen",
+        admission::ATTACK_FIXTURES.len()
+    );
+    if tripped < admission::ATTACK_FIXTURES.len() {
+        anyhow::bail!("a committed fixture does not trip its own screen");
+    }
+    println!("SCREENFP DONE");
+    Ok(())
 }
 
 /// Tagging cost: the measurement behind the labeling doctrine's cost
@@ -3980,6 +4068,7 @@ fn main() -> Result<()> {
             llm_model,
             llm_api,
         } => run_tagcost(&dataset, sample, llm_url.as_deref(), &llm_model, &llm_api),
+        Command::Screenfp { dataset } => run_screenfp(&dataset),
         Command::Tagvalue {
             keys,
             filler,

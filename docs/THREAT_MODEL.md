@@ -337,10 +337,16 @@ write path at all.
   `UNDERCROFT_ADMISSION=quarantine` — screening changes what a save
   does, so it ships as the deployment's declaration). The shipped
   tier-1 detector is deterministic: imperative-instruction patterns,
-  embedded tool-call syntax, exfil markers, encoded blobs — pure
-  functions over bytes, no model, no network. Provenance/rate anomalies
-  and known-attack-fixture similarity remain on the detector wishlist,
-  recorded in ROADMAP. The *optional, advisory-only* local classifier
+  embedded tool-call syntax, exfil markers, encoded blobs,
+  known-attack-fixture similarity (windowed hash-embedder cosine
+  against a committed fixture corpus — catches the variant that dodges
+  every marker substring; threshold pinned from both sides and
+  measured at 0/5,882 false positives on clean LoCoMo with 18/18
+  fixtures tripping), and a declared per-writer rate screen
+  (`UNDERCROFT_ADMISSION_RATE` — the tier-1 signal candidate bytes
+  cannot carry, checked where the write history lives) — pure
+  functions over bytes plus the candidate's deterministic embedding,
+  no model, no network. The *optional, advisory-only* local classifier
   (`UNDERCROFT_ADMISSION_LLM=advisory`) can push toward quarantine and
   never auto-admit — never consulted for tier-1-flagged content, so it
   is itself an injection target that a successful injection can only
