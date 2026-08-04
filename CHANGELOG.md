@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### the mirror stops answering under its own rules
+
+- **`search --backend <remote>` now applies the retrieval policy the
+  local path applies** — the defect: after an `index push`, the
+  identical query returned admission-quarantined content and
+  below-floor wings on `--backend qdrant` that `--backend local`
+  hard-excluded, while the CLI still printed "(N wing(s) below the
+  trust floor were not considered)" having applied no floor. That is
+  the exact poisoning path admission control and wing trust exist to
+  close, reachable by one flag. Nothing about it was policy: remote.rs
+  already justified keeping the `kind` filter and the semantic gate
+  identical to the local path so "the same query [does not] admit
+  differently depending on which path answered it" — the trust and
+  quarantine legs were simply never carried over.
+- **Fixed by making it one function rather than one more copy.**
+  `resolve_search_policy` now owns everything a search settles from the
+  caller's declarations before it may look at a drawer — the closed
+  vocabularies, the effective trust floor, the quarantine fence — and
+  both search paths call it. So `--kind desicion` and `--min-trust
+  bogus` are typed errors on a mirror too (the second was the worse
+  half: accepted, ignored, and silent, because an unknown class ranks
+  lowest and the exclusion note then stays quiet). The fence is applied
+  to each candidate's **HMAC-verified** wing, never the label the
+  mirror echoed back.
+- `index_push` still mirrors quarantined rows, deliberately: a
+  push-side filter is not a boundary when the mirror can offer any id,
+  and dropping them would make an operator's explicit `--wing
+  quarantine-pending` review scope answer an empty page. Residue
+  stated in code and docs: remotely the floor bounds what came back
+  rather than what was generated, so an excluded wing still spends part
+  of the candidate budget — availability, never integrity.
+- **An external-embedding vault is now refused on the remote path**, as
+  `search` already refused it. `ExternalEmbedder::embed` degrades to a
+  zero vector rather than panicking ("if some path slips through the
+  store's guards"); this was such a path, and it probed the mirror with
+  zeros and returned an empty page from a vault holding the answer.
+- **Remote searches emit the telemetry local searches emit**
+  (`search_completed`, `event_search`, the obs span). The chain and the
+  metrics used to disagree about how many searches ran on a vault: the
+  remote path left an audit record and contributed nothing to latency,
+  hit counts or the live feed.
+
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 
 - **Crash-window tests for the allow/deny state machine** (the gate

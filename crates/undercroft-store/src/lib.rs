@@ -2684,25 +2684,25 @@ impl PalaceStore {
         }
     }
 
-    fn search_inner(
+    /// Everything a search must settle from the caller's DECLARATIONS
+    /// before it may look at a single drawer: the closed-vocabulary
+    /// checks, the effective trust floor, and the quarantine fence. The
+    /// wing-set restriction that comes out is the whole retrieval policy;
+    /// `None` means "no wing is excluded".
+    ///
+    /// This is a shared, required step rather than a block inside
+    /// `search_inner` because it once WAS such a block: the remote-backend
+    /// path (`search_with_index`) validated neither vocabulary and applied
+    /// neither the floor nor the fence, so after an `index push` the same
+    /// query answered with admission-quarantined content and below-floor
+    /// wings on `--backend qdrant` that `--backend local` hard-excluded.
+    /// A mirror is an accelerator, not a different policy. Any future
+    /// retrieval path must call this too — that is the point of it having
+    /// a name.
+    pub(crate) fn resolve_search_policy(
         &self,
-        query: &str,
-        qvec: Vec<f32>,
         opts: &SearchOptions,
-    ) -> Result<Vec<SearchHit>, StoreError> {
-        let _span = undercroft_obs::scope("search", self.vault.id());
-        let obs_start = std::time::Instant::now();
-        let limit = if opts.limit == 0 { 10 } else { opts.limit };
-        // Everything below ranks to `depth` and slices the page off at the
-        // end: a page is defined as ranks `[offset, offset + limit)` of the
-        // list one deeper call would produce, so the ranking must be built
-        // to the page's far edge, not to its size.
-        let depth = opts.offset.saturating_add(limit);
-        // Declared by the caller, never read off the text: German and English
-        // share a script, so nothing in the bytes says which endings are legal.
-        let lang = opts.morph_lang;
-        let qterms: Vec<String> = tokenize(query);
-
+    ) -> Result<Option<crate::manage::TrustClause>, StoreError> {
         // A declared kind filter is validated against the closed
         // vocabulary before anything runs: an unknown value is a typo to
         // report, and silently returning nothing for it is the silence the
@@ -2736,35 +2736,53 @@ impl PalaceStore {
         // wing, riding the same pre-candidate machinery as the trust
         // floor. Zero cost for the (near-universal) vault with nothing
         // quarantined — one indexed EXISTS decides.
-        let trust = if opts.wing.as_deref() == Some(crate::admission::QUARANTINE_WING) {
-            trust
-        } else {
-            let quarantined_present: bool = self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM drawers WHERE wing = ?1)",
-                params![crate::admission::QUARANTINE_WING],
-                |r| r.get(0),
-            )?;
-            if !quarantined_present {
-                trust
-            } else {
-                Some(match trust {
-                    None => crate::manage::TrustClause::Exclude(vec![
-                        crate::admission::QUARANTINE_WING.to_string(),
-                    ]),
-                    Some(crate::manage::TrustClause::Exclude(mut v)) => {
-                        v.push(crate::admission::QUARANTINE_WING.to_string());
-                        crate::manage::TrustClause::Exclude(v)
-                    }
-                    Some(crate::manage::TrustClause::Allow(v)) => {
-                        crate::manage::TrustClause::Allow(
-                            v.into_iter()
-                                .filter(|w| w != crate::admission::QUARANTINE_WING)
-                                .collect(),
-                        )
-                    }
-                })
+        if opts.wing.as_deref() == Some(crate::admission::QUARANTINE_WING) {
+            return Ok(trust);
+        }
+        let quarantined_present: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM drawers WHERE wing = ?1)",
+            params![crate::admission::QUARANTINE_WING],
+            |r| r.get(0),
+        )?;
+        if !quarantined_present {
+            return Ok(trust);
+        }
+        Ok(Some(match trust {
+            None => crate::manage::TrustClause::Exclude(vec![
+                crate::admission::QUARANTINE_WING.to_string()
+            ]),
+            Some(crate::manage::TrustClause::Exclude(mut v)) => {
+                v.push(crate::admission::QUARANTINE_WING.to_string());
+                crate::manage::TrustClause::Exclude(v)
             }
-        };
+            Some(crate::manage::TrustClause::Allow(v)) => crate::manage::TrustClause::Allow(
+                v.into_iter()
+                    .filter(|w| w != crate::admission::QUARANTINE_WING)
+                    .collect(),
+            ),
+        }))
+    }
+
+    fn search_inner(
+        &self,
+        query: &str,
+        qvec: Vec<f32>,
+        opts: &SearchOptions,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let _span = undercroft_obs::scope("search", self.vault.id());
+        let obs_start = std::time::Instant::now();
+        let limit = if opts.limit == 0 { 10 } else { opts.limit };
+        // Everything below ranks to `depth` and slices the page off at the
+        // end: a page is defined as ranks `[offset, offset + limit)` of the
+        // list one deeper call would produce, so the ranking must be built
+        // to the page's far edge, not to its size.
+        let depth = opts.offset.saturating_add(limit);
+        // Declared by the caller, never read off the text: German and English
+        // share a script, so nothing in the bytes says which endings are legal.
+        let lang = opts.morph_lang;
+        let qterms: Vec<String> = tokenize(query);
+
+        let trust = self.resolve_search_policy(opts)?;
         // Opt-in phase trace (`UNDERCROFT_SEARCH_TRACE=1`): where one search
         // actually spends its time, on stderr. Built after the parallel-
         // hydration pass measured ZERO change and a 1-vs-24-thread probe
