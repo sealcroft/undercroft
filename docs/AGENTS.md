@@ -276,15 +276,16 @@ external vault, where you supply vectors yourself and the engine never
 embeds. Either way the vectors are sealed at rest exactly like the default
 ones, so this costs nothing in confidentiality.
 
-**And the embedder alone is not the whole claim.** Measured on FLORES-200
-(bge-m3, sealed, 12 directed pairs — full table in CHANGELOG): pairs that
-share a script do fine at the default fusion weight (de/ru↔en 81–99% R@5),
-but pairs sharing **no script** (Arabic, Thai, Chinese ↔ English) measure
-**36–44% R@5 at the default weight** — the gold's lexical channel is
-structurally silent while same-language competitors collect BM25 noise. The
-honest configuration for cross-script retrieval is the multilingual
-embedder **plus a declared `UNDERCROFT_FUSION_WEIGHT=0.70`**, which measures
-97.5–100% R@5 on every pair. Declare both or expect the default's numbers.
+**And the default weight now serves cross-script pairs honestly** (the
+script-disjoint fusion reweight, 2026-08-04): a (query, candidate) pair
+sharing **no letter script** — where no lettered token can possibly
+match — takes the fusion blend at the weight ceiling automatically,
+read from the pair's own bytes (never language detection; en↔de share a
+script and are untouched). Measured on FLORES-200 (bge-m3, sealed, full
+tables in CHANGELOG): cross-script pairs went **36–44% → 95–100% R@5 at
+the default weight**, same-script pairs digit-identical, and a declared
+`UNDERCROFT_FUSION_WEIGHT=0.70` still composes (digit-identical at the
+ceiling). One condition remains: the multilingual embedder itself.
 
 Note the two axes are independent. **Retrieval** across languages is the
 embedder's job. **Reading dates inside the text** is the scanner's, selected

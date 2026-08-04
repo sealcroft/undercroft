@@ -680,15 +680,20 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   `UNDERCROFT_FUSION_WEIGHT=0.70` — map and weight compose, the default
   weight stays put. Replicated on a public corpus 2026-08-03 (FLORES-200
   dev, 12 pairs en↔{ar,de,el,ru,zh,th} on disjoint blocks, sealed,
-  bge-m3 through the shipped TLS terminator, v0.44.0 + TLS unit;
-  digit-identical over both transports): defaults R@5 36.2–98.8% — a
-  lexical-evidence gradient, and at the default weight cross-SCRIPT
-  pairs (ar/th/zh↔en, 36–44%) are NOT served, so **the capability claim
-  is two-conditioned: multilingual embedder AND declared w=0.70**;
-  under that weight R@5 97.5–100.0% (10/12 pairs at 100.0) — full
-  table + recipe in CHANGELOG; the gated script-disjoint fusion design
-  (pairwise byte-readable script disjointness, never language-ID) is
-  the queued candidate for an honest default. Reading dates *inside* the text is the
+  bge-m3 through the shipped TLS terminator; digit-identical over both
+  transports): pre-reweight defaults R@5 36.2–98.8% — a
+  lexical-evidence gradient with cross-SCRIPT pairs at 36–44%. **The
+  script-disjoint fusion reweight (2026-08-04) made the default honest
+  and the claim ONE-conditioned (a multilingual embedder suffices)**: a
+  (query, candidate) pair sharing no letter script takes the blend at
+  the weight ceiling — pairwise byte-readable evidence
+  (`script::letter_script_mask`, finer than the segmentation enum which
+  lumps Latin/Greek/Cyrillic; digits cancel nothing; unknown scripts
+  never disjoint), never language-ID. Gates: LoCoMo hash
+  digit-for-digit; FLORES arm A cross-script 36–44→**95–100% R@5 at
+  defaults** with same-script rows digit-identical; declared-w arm
+  digit-identical (the arithmetics coincide at the ceiling);
+  false-friends untouched. Full tables + recipe in CHANGELOG. Reading dates *inside* the text is the
   **scanner's** job (`language`
   per request) and is independent of which embedder found the drawer.
   **A served embedder is worth far more than the repo used to think.** The

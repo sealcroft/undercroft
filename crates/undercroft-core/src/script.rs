@@ -372,9 +372,117 @@ fn emit(out: &mut Segmented, sub: &str, script: Script) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Script identity for fusion (script-disjoint reweighting)
+// ---------------------------------------------------------------------------
+//
+// A DIFFERENT granularity from [`Script`] above, on purpose: segmentation
+// asks "can a split find word edges here", for which Latin, Greek and
+// Cyrillic are one class (`Other` — all delimit). Fusion asks "can these
+// two texts possibly share a lettered token", for which Latin vs Greek vs
+// Cyrillic are exactly the distinctions that matter. Reusing the
+// segmentation enum here silently declared en↔el same-script; this table
+// exists so that mistake is unrepresentable.
+//
+// The mask covers LETTERS only — digits, punctuation and symbols carry no
+// bit, because shared digits ARE cross-script lexical evidence (dates,
+// versions, quantities) and must not cancel disjointness. An alphabetic
+// character outside every listed range gets the catch-all bit, so two
+// texts in unlisted scripts read as sharing it — conservative: unknown
+// never means disjoint.
+
+/// One bit per letter-script over `text` (see the module note above —
+/// deliberately finer than [`Script`]). Empty mask = no letters at all.
+pub fn letter_script_mask(text: &str) -> u64 {
+    let mut mask = 0u64;
+    for c in text.chars() {
+        if !c.is_alphabetic() {
+            continue;
+        }
+        let bit = match c as u32 {
+            0x0041..=0x005A | 0x0061..=0x007A | 0x00C0..=0x024F | 0x1E00..=0x1EFF => 0, // Latin
+            0x0370..=0x03FF | 0x1F00..=0x1FFF => 1,                                     // Greek
+            0x0400..=0x052F => 2,                                                       // Cyrillic
+            0x0530..=0x058F => 3,                                                       // Armenian
+            0x0590..=0x05FF => 4,                                                       // Hebrew
+            0x0600..=0x06FF
+            | 0x0750..=0x077F
+            | 0x08A0..=0x08FF
+            | 0xFB50..=0xFDFF
+            | 0xFE70..=0xFEFF => 5, // Arabic
+            0x0900..=0x097F => 6,                    // Devanagari
+            0x0980..=0x09FF => 7,                    // Bengali
+            0x0A00..=0x0A7F => 8,                    // Gurmukhi
+            0x0A80..=0x0AFF => 9,                    // Gujarati
+            0x0B00..=0x0B7F => 10,                   // Oriya
+            0x0B80..=0x0BFF => 11,                   // Tamil
+            0x0C00..=0x0C7F => 12,                   // Telugu
+            0x0C80..=0x0CFF => 13,                   // Kannada
+            0x0D00..=0x0D7F => 14,                   // Malayalam
+            0x0D80..=0x0DFF => 15,                   // Sinhala
+            0x0E00..=0x0E7F => 16,                   // Thai
+            0x0E80..=0x0EFF => 17,                   // Lao
+            0x0F00..=0x0FFF => 18,                   // Tibetan
+            0x1000..=0x109F => 19,                   // Myanmar
+            0x10A0..=0x10FF | 0x1C90..=0x1CBF => 20, // Georgian
+            0x1200..=0x137F => 21,                   // Ethiopic
+            0x1780..=0x17FF => 22,                   // Khmer
+            0x3040..=0x309F => 23,                   // Hiragana
+            0x30A0..=0x30FF => 24,                   // Katakana
+            0x3100..=0x312F => 25,                   // Bopomofo
+            0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF => 26, // Han
+            0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF => 27, // Hangul
+            _ => 63, // catch-all: an unknown letter script is never disjoint
+        };
+        mask |= 1u64 << bit;
+    }
+    mask
+}
+
+/// Whether two letter-script masks are DISJOINT: both sides carry letters,
+/// and no script appears on both. This is the readable, deterministic
+/// pairwise signal the fusion reweight keys on — never language detection,
+/// which would be inference over shared-script texts.
+pub fn scripts_disjoint(a: u64, b: u64) -> bool {
+    a != 0 && b != 0 && a & b == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fusion mask separates exactly what segmentation lumps —
+    /// en↔el/ru are distinct here though both are `Script::Other` — and
+    /// its conservatisms are pinned: shared digits never cancel
+    /// disjointness, a letterless side is never disjoint, embedded Latin
+    /// keeps a pair joined, and unknown letter scripts share the
+    /// catch-all bit so unknown never means disjoint.
+    #[test]
+    fn letter_script_masks_separate_what_segmentation_lumps() {
+        let m = letter_script_mask;
+        let dj = scripts_disjoint;
+        // The classes segmentation cannot tell apart:
+        assert!(dj(m("hello"), m("Παράδειγμα κειμένου")), "en vs el");
+        assert!(dj(m("hello"), m("Привет мир")), "en vs ru");
+        // The classes it already could:
+        assert!(dj(m("hello"), m("مرحبا بالعالم")), "en vs ar");
+        assert!(dj(m("hello"), m("สวัสดีชาวโลก")), "en vs th");
+        assert!(dj(m("hello"), m("你好世界")), "en vs zh");
+        assert!(dj(m("hello"), m("שלום עולם")), "en vs he");
+        // Shared script is never disjoint — including cross-language:
+        assert!(!dj(m("hello"), m("Grüße aus Köln")), "en vs de share Latin");
+        // Embedded Latin (a brand name in CJK) keeps the pair joined:
+        assert!(!dj(m("iphone battery"), m("iPhone のバッテリーは良い")));
+        // Kana vs Han: no shareable letter, disjoint by design.
+        assert!(dj(m("ひらがなのぶん"), m("漢字文章")));
+        // Digits are evidence, not identity — they cancel nothing:
+        assert!(dj(m("meeting 2023"), m("اجتماع 2023")));
+        // A letterless side is never disjoint:
+        assert!(!dj(m("12345 — !!"), m("hello")));
+        assert!(!dj(m(""), m("hello")));
+        // Unknown letter scripts share the catch-all: never disjoint.
+        assert!(!dj(m("ᏣᎳᎩ"), m("ᖃᓂᐅᔮᖅ")), "Cherokee vs syllabics");
+    }
 
     /// Mirrors `undercroft_store::tokenize` exactly: the retrieval fold, then
     /// segmentation, then the historical byte filter. Using bare

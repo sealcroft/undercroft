@@ -1106,17 +1106,18 @@ default because *this* corpus is temporal; conversational heuristics;
   narrative in CHANGELOG. **Replicated on a public corpus 2026-08-03**
   (FLORES-200 dev, 12 directed pairs en↔{ar,de,el,ru,zh,th}, 80
   disjoint-block sentences each, sealed, bge-m3 served through the
-  shipped TLS terminator with a pinned root, v0.44.0 + the TLS unit;
-  the same tables measured digit-for-digit over both transports):
-  arm A defaults R@5 36.2–98.8% — a lexical-evidence gradient, and
-  **stated plainly: at the default weight cross-SCRIPT pairs (ar/th/zh,
-  36–44%) are NOT served; the capability claim is two-conditioned** —
-  multilingual embedder AND declared w=0.70; arm B under that declared
-  weight R@5 **97.5–100.0%, ten of twelve pairs at 100.0**, R@1
-  88.8–100.0%, verbatim sanity 100.0% both arms — citable, full
-  12-row table + recipe in CHANGELOG. The queued script-disjoint
-  fusion design (pairwise, byte-readable script disjointness, never
-  language-ID) is the gated candidate for an honest default.
+  shipped TLS terminator with a pinned root; digit-identical over both
+  transports): pre-reweight arm A defaults R@5 36.2–98.8% with
+  cross-SCRIPT pairs at 36–44%; arm B (declared w=0.70) R@5
+  97.5–100.0%. **The script-disjoint fusion reweight BUILT 2026-08-04,
+  all gates met**: pairwise byte-readable script disjointness (never
+  language-ID) takes the blend to the weight ceiling for pairs that
+  cannot share a lettered token — arm A at DEFAULTS recovers to
+  **95–100% R@5 on every pair** (ar→en 36.2→97.5, th→en 37.5→97.5,
+  zh→en 37.5→95.0) with same-script rows digit-identical, LoCoMo hash
+  digit-for-digit, and the declared-weight arm digit-identical (the
+  arithmetics coincide at the ceiling). The capability claim is now
+  ONE-conditioned: a multilingual embedder suffices.
 
 ### 1. Inverted FDE tier (BUILT v0.39.0 — measured, shipped OPT-IN)
 
