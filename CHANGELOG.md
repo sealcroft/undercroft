@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### `--read-only` is a posture on the process, not a filter on one port
+
+- **The `/mcp` store on a `serve-http --read-only` server was opened
+  read-write.** `open_store` had no read-only arm at all, so the flag
+  reached only the `/v1` tenant stores: the vault named by `--vault` got
+  a full embedder migration at start-up when the build's embedder had
+  moved on (re-embed every drawer, drop the PQ/IVF tables), kept
+  `UNDERCROFT_READ_AUDIT=chain` on and appended a chain record per `/mcp`
+  search, and stamped an `embedder_name` on a vault that had none —
+  every one of them a write to the vault the flag exists to protect.
+  Whether the vault was written depended only on which port path opened
+  it. Both handles now take the same declared `Posture`, and a read-only
+  open no longer records an embedder identity either. Side effect,
+  stated: an embedder mismatch that is not a known upgrade now **warns
+  and serves** on `--read-only` instead of refusing to start, which is
+  what `/v1` already did.
+- **`POST /v1/vaults/{id}/kg/authority` was the one mutating route with
+  no read-only guard.** On a read-only replica it answered 200 while
+  rewriting an HMAC-covered authority column, closing the previous
+  canonical holder's validity window and appending to the audit chain —
+  the same capability over `/mcp` in the same process answered "server
+  is read-only". Rather than adding the fourteenth guard to the
+  fourteenth handler, the decision moved in front of dispatch and now
+  **fails closed**: on a read-only server everything that is not a `GET`
+  is refused except `POST .../search` and `POST .../verify`, so a route
+  added later is refused until someone classifies it deliberately.
+- **Key rotation from `/v1` corrupted the co-resident `/mcp` handle.**
+  `serve-http` holds two independent `PalaceStore`s over one vault, and
+  `rotate_keys`' sole-writer contract is documented at *process*
+  granularity — unsatisfiable here, since the second reader is inside
+  the operator's own process and reachable from the console's own ROTATE
+  KEYS button. After a `/v1` rotation the `/mcp` handle kept the retired
+  keys: every read surfaced as `StoreError::Integrity` (the agent is
+  told the vault is TAMPERED when the operator merely rotated), and any
+  write it made was sealed and chain-appended under the retired MAC key
+  and then re-anchored `vault.json` from its own stale cache, reverting
+  `salt_hex` while the rows on disk stayed under the new keys.
+  `POST …/rotate` and `DELETE /v1/vaults/{id}` now answer **409** for
+  the `--vault` vault, naming the remedy (stop the server, then
+  `undercroft vault rotate <name>`). Other tenant vaults are untouched —
+  they have exactly one handle.
+
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 
 - **Crash-window tests for the allow/deny state machine** (the gate

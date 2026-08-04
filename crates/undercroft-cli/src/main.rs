@@ -272,7 +272,10 @@ enum Command {
         port: u16,
         #[arg(long, default_value = "default")]
         vault: String,
-        /// Expose recall without write access
+        /// Expose recall without write access. A posture on the whole
+        /// process, not a route filter: both stores it opens (MCP and each
+        /// /v1 tenant vault) are opened read-only, so no embedder migration
+        /// runs and UNDERCROFT_READ_AUDIT records nothing
         #[arg(long)]
         read_only: bool,
     },
@@ -862,16 +865,44 @@ fn manager(cli: &Cli) -> Result<VaultManager> {
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
 
+/// Whether a store this process opens is allowed to write to the vault.
+///
+/// A required argument on [`open_store_as`], not a defaulted flag: the
+/// `serve-http --read-only` process opens TWO handles on the same vault (one
+/// for `/mcp`, one per tenant vault inside `Tenancy`), and for a while only
+/// the second one honoured the flag — so a "read-only" server re-embedded
+/// every drawer on the `--vault` vault at start-up (a bulk write, plus
+/// dropping the PQ/IVF tables) and, under `UNDERCROFT_READ_AUDIT=chain`,
+/// appended a chain record per `/mcp` search. Whether the vault was written
+/// depended on which port path opened it. Making the posture something a
+/// caller must state is what keeps the two handles from drifting apart again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Posture {
+    ReadWrite,
+    ReadOnly,
+}
+
 fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
+    open_store_as(cli, vault, Posture::ReadWrite)
+}
+
+fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
     let mgr = manager(cli)?;
     let v = mgr.unlock(vault)?;
+    // One place decides what the posture means, so every embedder reaches the
+    // same two opens. `open_read_only` declines the embedder migration (warn
+    // and serve, the replica precedent) and force-disables read auditing.
+    let open = |v: Vault, e: Box<dyn undercroft_core::embed::Embedder + Send>| match posture {
+        Posture::ReadOnly => PalaceStore::open_read_only(v, e),
+        Posture::ReadWrite => PalaceStore::open_with_embedder(v, e),
+    };
     let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
         Ok("onnx") => {
             #[cfg(feature = "onnx")]
             {
                 let embedder = undercroft_embed_onnx::from_env()
                     .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
-                PalaceStore::open_with_embedder(v, Box::new(embedder))?
+                open(v, Box::new(embedder))?
             }
             #[cfg(not(feature = "onnx"))]
             bail!(
@@ -884,7 +915,7 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
             {
                 let embedder = undercroft_embed_ort::embedder_from_env()
                     .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
-                PalaceStore::open_with_embedder(v, Box::new(embedder))?
+                open(v, Box::new(embedder))?
             }
             #[cfg(not(feature = "ort"))]
             bail!(
@@ -898,9 +929,9 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
         Ok("http") => {
             let embedder = undercroft_llm::HttpEmbedder::from_env()
                 .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
-            PalaceStore::open_with_embedder(v, Box::new(embedder))?
+            open(v, Box::new(embedder))?
         }
-        Ok("hash") | Ok("") | Err(_) => PalaceStore::open(v)?,
+        Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
         Ok(other) => {
             bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, http, onnx, ort)")
         }
@@ -1858,11 +1889,24 @@ fn main() -> Result<()> {
             vault,
             read_only,
         } => {
-            let store = open_store(&cli, vault)?;
+            // Both handles this process opens take the SAME posture. The
+            // `/mcp` store used to be opened read-write regardless, so a
+            // `--read-only` server migrated embeddings and audited reads on
+            // the very vault the flag exists to protect.
+            let posture = if *read_only {
+                Posture::ReadOnly
+            } else {
+                Posture::ReadWrite
+            };
+            let store = open_store_as(&cli, vault, posture)?;
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only);
+            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only)
+                // `/v1` must know which vault the `/mcp` handle above holds:
+                // rotating or deleting it from under a second live handle is
+                // the one thing two handles in one process cannot survive.
+                .with_mcp_vault(vault.clone());
             if let Some(reranker) = reranker_factory()? {
                 tenancy = tenancy.with_reranker(reranker);
             }

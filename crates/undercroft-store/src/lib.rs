@@ -1022,7 +1022,15 @@ impl PalaceStore {
     /// leaves the old vectors in place. The semantic leg is then comparing
     /// vectors from two different spaces and is not trustworthy, which the
     /// warning says — the lexical leg is unaffected, and `search` already
-    /// admits a hit on lexical evidence alone.
+    /// admits a hit on lexical evidence alone. A vault that has recorded no
+    /// identity at all gets none stamped here either: stamping is a write.
+    ///
+    /// Both stores `serve-http --read-only` opens take this path — the `/mcp`
+    /// one as well as each `/v1` tenant vault — so the flag means the same
+    /// thing whichever port answered. What it does NOT yet cover is the
+    /// derived-index tier: with `UNDERCROFT_RETRIEVAL=pq` a search may still
+    /// build or retrain a missing PQ/IVF index, which is a write. Recorded
+    /// gap, not a decision.
     pub fn open_read_only(
         vault: Vault,
         embedder: Box<dyn Embedder + Send>,
@@ -1118,6 +1126,13 @@ impl PalaceStore {
                     current_dim,
                 })
             }
+            // No identity recorded yet (a fresh vault, or one predating the
+            // record). Stamping it is a write, and a read-only role must not
+            // write — the same rule the `UNDERCROFT_FORCE_EMBEDDER` arm above
+            // already follows. Nothing is lost: the first writable open
+            // stamps it, and until then this open behaves exactly as it would
+            // have with the identity present and matching.
+            _ if !may_migrate => Ok(()),
             _ => self.record_embedder_identity(),
         }
     }
@@ -10700,6 +10715,31 @@ mod tests {
         }
     }
 
+    /// The other half of the read-only rule: a vault that has never recorded
+    /// an identity must not get one stamped by a read-only open either.
+    /// `serve-http --read-only` now opens its `/mcp` store this way too, and
+    /// the identity-recording arm was the one write on that path with no
+    /// read-only branch at all.
+    #[test]
+    fn a_read_only_open_does_not_stamp_a_fresh_vault() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        drop(PalaceStore::open_read_only(vault, Box::new(undercroft_core::HashEmbedder)).unwrap());
+        assert!(
+            PalaceStore::recorded_embedder(&mgr.unlock("test").unwrap())
+                .unwrap()
+                .is_none(),
+            "a read-only open stamped an embedder identity"
+        );
+        // Premise: the writable open does record it, so the assertion above
+        // is about the posture and not about the vault being unopenable.
+        drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
+        assert!(PalaceStore::recorded_embedder(&mgr.unlock("test").unwrap())
+            .unwrap()
+            .is_some());
+    }
+
     /// The migration writes the new identity last, so an interrupted walk
     /// leaves the vault claiming v1 and the next open simply does it again.
     /// Re-embedding is idempotent, so repeating it is free of consequence.
@@ -10857,34 +10897,60 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        {
+        let staged = {
             let mut s = PalaceStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
             make_it_look_like_v1(&s);
-        }
+            s.conn
+                .query_row("SELECT embedding FROM drawers", [], |r| {
+                    r.get::<_, Vec<u8>>(0)
+                })
+                .unwrap()
+        };
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s = PalaceStore::open_read_only(mgr.unlock("test").unwrap(), Box::new(HashEmbedder))
-            .expect("a read-only open must still succeed");
-        let stored: String = s
+        {
+            let s =
+                PalaceStore::open_read_only(mgr.unlock("test").unwrap(), Box::new(HashEmbedder))
+                    .expect("a read-only open must still succeed");
+            let stored: String = s
+                .conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key='embedder_name'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                undercroft_core::embed::HASH_EMBEDDER_V1,
+                "a read-only open rewrote the vault"
+            );
+            // The label is the cheap half. The migration's actual cost is the
+            // re-embed, so assert the vectors on disk did not move either —
+            // `serve-http --read-only` now opens its `/mcp` store this way,
+            // and that store used to perform the whole bulk write at start-up.
+            let now: Vec<u8> = s
+                .conn
+                .query_row("SELECT embedding FROM drawers", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(now, staged, "a read-only open re-embedded the corpus");
+            // The lexical leg still works, which is the point of degrading
+            // rather than refusing.
+            let hits = s
+                .search("heron verbatim", &SearchOptions::default())
+                .unwrap();
+            assert!(!hits.is_empty());
+        }
+        // Premise: this very vault DOES migrate the moment the open may
+        // write — otherwise both assertions above would hold on a vault with
+        // nothing staged to migrate.
+        let s = reopen_vault(&dir).unwrap();
+        let now: Vec<u8> = s
             .conn
-            .query_row(
-                "SELECT value FROM meta WHERE key='embedder_name'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT embedding FROM drawers", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(
-            stored,
-            undercroft_core::embed::HASH_EMBEDDER_V1,
-            "a read-only open rewrote the vault"
-        );
-        // The lexical leg still works, which is the point of degrading
-        // rather than refusing.
-        let hits = s
-            .search("heron verbatim", &SearchOptions::default())
-            .unwrap();
-        assert!(!hits.is_empty());
+        assert_ne!(now, staged, "the writable open did not re-embed");
     }
 
     /// The documented override has to dominate every identity path, including
