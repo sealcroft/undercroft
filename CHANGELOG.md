@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+### one configuration, one behaviour: the config/docs half of the surface-drift sweep
+
+- **`refine` is one implementation now** (`crates/undercroft-cli/src/refine.rs`),
+  driven identically by `undercroft refine` and `POST /v1/vaults/{id}/refine`.
+  The same `UNDERCROFT_LLM_*` configuration built two different vaults
+  depending on which surface ran it: the CLI wrote facts with **no validity
+  window, no grounding verdict** (`support: None` means "no such check was
+  run", not "unsupported") and **no searchable mirror**, so nothing it
+  distilled could be found by `search` at all, then spent a second LLM call
+  per drawer extracting entities it only counted and discarded. The CLI now
+  takes `--room` and `--fact-room` like the route, reports the same counts
+  (`stated`/background, `dated_from_text`, duplicates/skipped/failed), and
+  no longer makes the entity call. **Both surfaces changed**: the mirror
+  drawer's append index comes from the store's sequence instead of a
+  per-call fact counter — with wing, room and source all fixed for a mirror
+  drawer, the counter re-derived ids starting at 0 on every run and a second
+  `refine` silently overwrote the first run's fact-drawers.
+- **Stats report the committed chain, never a handle's cached anchor.**
+  `PalaceStats.writes` (and a new `chain_head`) come from `chain_meta`, like
+  `records` comes from `drawers`. `serve-http` holds two store handles on one
+  vault — the MCP store and the REST tenancy's — and `Vault::writes()` is a
+  field of the handle's own manifest that nothing reloads, so the Palace
+  Monitor's `audit_chain_height` sat frozen at whatever the REST handle last
+  anchored while the `drawers` gauge beside it climbed. `/v1 …/stats`,
+  `undercroft_status` and the telemetry sampler now answer the same number at
+  the same instant.
+- **A diverted write is an event.** New SSE `drawer-quarantined` (intended
+  wing/room + the tier-1 signal codes; never the flagged text, never its
+  offsets) and one classifier every save path funnels through. Before, a
+  diversion was **silence** on the single-save paths and an ordinary
+  `drawer-saved` into a wing named `quarantine-pending` on the bulk ones —
+  "did anything get quarantined just now?" answered differently by the same
+  stream depending on which surface wrote. The Palace Monitor shows it in
+  amber, with no siren: quarantine is the defense working.
+- **`undercroft_chain_commits_total` counts records, not anchors.** Its
+  contract said "once per mutation" while it fired once per manifest anchor,
+  so the same 1,000-drawer NDJSON incremented it 1,000 times through
+  `POST /v1/…/import` and 4 times through `undercroft import`, and read-audit
+  records never moved it at all. It now advances by the number of chain
+  records each anchor commits (SSE `chain-commit` carries `records`).
+  Anchor lag is unchanged and stated: records appended without an anchor are
+  counted by the next one.
+- **`UNDERCROFT_ORCH_RATE_LIMIT` refuses garbage instead of disabling
+  itself.** `100/min` (the engine's own rate syntax, borrowed by mistake) or
+  `1_000` parsed as "off" and the orchestrator served unlimited with nothing
+  printed anywhere. Unset/`0`/`off` still mean off; anything else is now a
+  startup refusal — the engine's posture for a declaration it cannot read.
+- **Documentation corrected against the code** (each of these was wrong in
+  the reference an operator would consult): `UNDERCROFT_ORT_POOL` defaults to
+  **cores**, not 1, and the pool holds one model copy per slot — a 8–64×
+  memory under-estimate; `UNDERCROFT_TOK_PQ_MIN` / `UNDERCROFT_FDE_PQ_MIN`
+  default to **256**, not "off", so two quantization tiers self-activate
+  while the architecture page framed them as opt-in; `UNDERCROFT_EMBEDDER`
+  accepts **`http`**, the one served-embedder posture that needs no
+  feature-gated build; `UNDERCROFT_SEARCH_TRACE` is documented for the first
+  time, including that it is **presence-triggered** (`0` and `off` turn it
+  ON); `UNDERCROFT_RETRIEVAL=hnsw` and `UNDERCROFT_RERANKER=colbert*` are
+  single-vault only and the multi-tenant server refuses them; the MCP tool
+  count in the AGENTS.md heading said 32 against 34 registered — now pinned
+  by a test that reads the guide at compile time, so the next added tool
+  fails the build rather than restating the defect; and README and the
+  architecture reference no longer describe export bundles as X25519-only
+  (they are hybrid X25519 + ML-KEM-768 since C3.4) or omit
+  `bundle sign-keygen` / `bundle sender`.
+
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 
 - **Crash-window tests for the allow/deny state machine** (the gate

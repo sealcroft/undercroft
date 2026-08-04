@@ -332,7 +332,10 @@ writer's rotations.
   tenant, off by default): applied on the data plane *after* token
   resolution, keyed per tenant — one noisy tenant is throttled (429),
   the rest are untouched. Blast-radius isolation, applied to request
-  volume.
+  volume. A plain positive integer declares it; unset, `0` and `off`
+  mean off; **anything else refuses to start**, because a limit that
+  silently failed to parse would serve unlimited traffic with nothing
+  said in `/healthz`, the console, or the log.
 - **Token rotation** (`POST /admin/tenants/{id}/rotate` or
   `tenant-rotate`): mints a fresh token and revokes the old one **in the
   same statement** — rotation *is* the revocation primitive; there is no

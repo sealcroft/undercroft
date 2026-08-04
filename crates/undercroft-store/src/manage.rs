@@ -32,7 +32,14 @@ pub struct PalaceStats {
     pub rooms: u64,
     pub kg: crate::KgStats,
     pub tunnels: u64,
+    /// Audit-chain height: how many records the chain has COMMITTED, read
+    /// from `chain_meta` like `records` is read from `drawers`. Both
+    /// clocks in this struct are now the database's — see
+    /// [`PalaceStore::chain_state`] for why the handle's cached manifest
+    /// (`Vault::writes()`) is not the height.
     pub writes: u64,
+    /// The committed chain head, from the same read as `writes`.
+    pub chain_head: String,
     pub level: String,
     pub db_bytes: u64,
     /// `(artifact, generation)` for every trained index artifact — how many
@@ -623,13 +630,18 @@ impl PalaceStore {
         let db_bytes = std::fs::metadata(self.vault.db_path())
             .map(|m| m.len())
             .unwrap_or(0);
+        // One clock for the whole struct: `records` is a live COUNT(*) and
+        // the chain height used to be the handle's cached manifest, so the
+        // two disagreed on any vault a second handle was writing.
+        let (chain_head, writes) = self.chain_state()?;
         Ok(PalaceStats {
             records: self.count()?,
             wings: self.wings()?,
             rooms: rooms as u64,
             kg: self.kg_stats()?,
             tunnels: self.tunnel_count()?,
-            writes: self.vault.writes(),
+            writes,
+            chain_head,
             level: self.vault.level().to_string(),
             db_bytes,
             codebooks: self.codebook_generations(),

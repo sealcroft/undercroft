@@ -57,16 +57,45 @@ pub(crate) struct RateLimiter {
     windows: std::cell::RefCell<std::collections::HashMap<String, (u64, u64)>>,
 }
 
+/// Read `UNDERCROFT_ORCH_RATE_LIMIT`: unset, empty, `off` or `0` = off;
+/// a positive integer declares requests per tenant per minute. Anything
+/// else REFUSES to start.
+///
+/// It used to be `parse().ok().unwrap_or(0)`, i.e. every unreadable
+/// declaration became "off" with nothing printed — and the two typos a
+/// reader of this project is most likely to make are `100/min` and
+/// `1_000`, the first because the engine's own rate variable really is
+/// `<count>/<seconds>`. An operator who declared a limit believes noisy
+/// tenants are throttled; silently serving unlimited is the failure
+/// mode, and neither `/healthz` nor the console would have said so.
+/// This is the engine's `resolve_read_audit` /
+/// `resolve_admission_rate` posture applied to the control plane: a
+/// declaration this process cannot read is a startup refusal, not a
+/// default. Pure, so the parse is tested without touching the
+/// environment.
+fn resolve_rate_limit(env: Option<&str>) -> anyhow::Result<u64> {
+    let Some(v) = env else { return Ok(0) };
+    let v = v.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("off") {
+        return Ok(0);
+    }
+    v.parse::<u64>().map_err(|_| {
+        anyhow::anyhow!(
+            "UNDERCROFT_ORCH_RATE_LIMIT={v:?} — expected requests per minute as a \
+             plain positive integer (e.g. 600), or 0/off; refusing to start with \
+             an unreadable rate-limit declaration"
+        )
+    })
+}
+
 impl RateLimiter {
-    pub(crate) fn from_env() -> Self {
-        let per_minute = std::env::var("UNDERCROFT_ORCH_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0);
-        Self {
+    pub(crate) fn from_env() -> anyhow::Result<Self> {
+        let per_minute =
+            resolve_rate_limit(std::env::var("UNDERCROFT_ORCH_RATE_LIMIT").ok().as_deref())?;
+        Ok(Self {
             per_minute,
             windows: std::cell::RefCell::new(std::collections::HashMap::new()),
-        }
+        })
     }
 
     #[cfg(test)]
@@ -140,8 +169,11 @@ pub enum Role<'a> {
 
 /// Run the proxy loop forever.
 pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
+    // Resolved BEFORE the bind: a refusal about configuration must not
+    // arrive after the port is open and a load balancer has started
+    // sending traffic to it.
+    let limiter = RateLimiter::from_env()?;
     let server = Server::http(addr).map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
-    let limiter = RateLimiter::from_env();
     let mode = match role {
         Role::Writer { .. } => "writer",
         Role::ReadReplica => "read replica",
@@ -574,6 +606,36 @@ mod tests {
         let off = RateLimiter::with_limit(0);
         for _ in 0..100 {
             assert!(off.allow_at("acme", 100));
+        }
+    }
+
+    #[test]
+    fn an_unreadable_rate_limit_declaration_refuses_to_start() {
+        // The premise: 0 really is always-allow, so "parsed as 0" and
+        // "refused" are two different worlds and this test can tell them
+        // apart.
+        assert!(RateLimiter::with_limit(0).allow_at("acme", 1));
+
+        // Off is declarable three ways, and a plain integer is honoured.
+        assert_eq!(resolve_rate_limit(None).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some("")).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some("off")).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some("0")).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some(" 600 ")).unwrap(), 600);
+
+        // Garbage refuses instead of resolving to the always-allow 0 —
+        // `100/min` (the engine's `<count>/<seconds>` shape borrowed by
+        // mistake) and `1_000` are the two typos that used to disable
+        // rate limiting in silence.
+        for bad in ["100/min", "1_000", "600rpm", "-5", "unlimited"] {
+            let err = resolve_rate_limit(Some(bad))
+                .expect_err("an unreadable declaration must refuse, not default to off");
+            let msg = err.to_string();
+            assert!(msg.contains(bad), "the refusal quotes what was read: {msg}");
+            assert!(
+                msg.contains("requests per minute"),
+                "the refusal names the fix: {msg}"
+            );
         }
     }
 }

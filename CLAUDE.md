@@ -435,7 +435,14 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   advisory encode paths must never BEGIN or batching breaks)
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
-  OTLP traces (metadata-only spans), and the live SSE broker
+  OTLP traces (metadata-only spans), and the live SSE broker. Two contracts
+  worth knowing: `chain_commit(records)` counts audit-chain **records**, not
+  manifest anchors (a 256-drawer batch anchors once and advances it by 256;
+  records appended without an anchor — read audits — are counted by the next
+  one), and a diverted write emits `drawer-quarantined` (intended wing/room
+  + signal codes) rather than a `drawer-saved` into the quarantine wing —
+  the classifier is `admission::save_event`, which every save path funnels
+  through so a new write path cannot report a diversion as a file
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
@@ -474,6 +481,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `UNDERCROFT_RERANKER=ort|colbert-ort`; multi-tenant server shares one
   session pool across vaults)
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI; mcp.rs: MCP stdio;
+  refine.rs: the ONE LLM-distillation implementation both `undercroft refine`
+  and `POST /v1/…/refine` drive — same `UNDERCROFT_LLM_*` config used to
+  build two different vaults, the CLI's facts carrying no date resolved from
+  the note's words, no grounding verdict and no searchable mirror;
   http.rs/tenant.rs: HTTP + multi-tenant `/v1` incl. management routes
   (drawers list/get/update, taxonomy, verify, rotate, read-only kg
   browse); ui.html: the vault admin console (incl. live MONITOR +
@@ -512,8 +523,10 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 74
-  `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
+  which inlines them and documents every layer plus all 75
+  `UNDERCROFT_*` variables (`UNDERCROFT_SEARCH_TRACE` was the 75th —
+  honoured by the store since the parallel-fuse pass and in no reference
+  until the drift sweep). **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
   re-derives every `<h3>` id and the whole sidebar from the sections,
@@ -772,7 +785,13 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   committed head lives in `chain_meta` and advances via `chain_append` inside
   the same SQLite transaction (the manifest holds a lagging rollback anchor,
   reconciled at open — crash ⇒ fast-forward, rollback ⇒ tamper). Every read
-  must verify the record HMAC before returning data.
+  must verify the record HMAC before returning data. **Anything that
+  REPORTS the chain reads `chain_meta`** (`PalaceStore::chain_state`, behind
+  `PalaceStats.writes`/`chain_head`), never `Vault::writes()` /
+  `chain_head_hex()`: those are the handle's own manifest fields, written
+  only by its own `anchor_manifest` and never reloaded, so in `serve-http`
+  — two handles on one vault — the handle that did not write reported a
+  frozen height beside a climbing live `drawers` count.
 - Durability is pinned, not assumed: SQLite runs WAL + `synchronous=FULL`
   on both binaries, the manifest anchor is fsynced through an atomic
   rename (+ dir sync), and key material is fsynced at creation. The

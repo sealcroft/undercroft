@@ -819,3 +819,43 @@ fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 fn opt_u64(args: &Value, key: &str) -> Option<u64> {
     args.get(key).and_then(Value::as_u64)
 }
+
+#[cfg(test)]
+mod tests {
+    /// The MCP reference in docs/AGENTS.md offers exactly one number as a
+    /// completeness check — the tool count in its heading — and it had
+    /// drifted to 32 against 34 registered tools, so a reader diffing the
+    /// reference against a live `tools/list` could only conclude that two
+    /// tools were undocumented (none are).
+    ///
+    /// Pinned here rather than fixed once: the guide is read at COMPILE
+    /// time, so adding a tool without touching the heading fails the test
+    /// instead of quietly restating the same defect. `include_str!` sits
+    /// inside `#[cfg(test)]`, so the shipped binary carries no copy of the
+    /// guide.
+    #[test]
+    fn the_documented_mcp_tool_count_matches_the_registered_tools() {
+        let registered = super::tool_definitions()
+            .as_array()
+            .expect("tool_definitions is an array")
+            .len();
+        // Sanity floor: if this ever read zero, the assertion below would
+        // pass for the wrong reason against an equally wrong heading.
+        assert!(registered > 20, "only {registered} tools registered?");
+
+        const GUIDE: &str = include_str!("../../../docs/AGENTS.md");
+        let heading = GUIDE
+            .lines()
+            .find(|l| l.starts_with("## 8. Reference — MCP tools ("))
+            .expect("docs/AGENTS.md section 8 heading (renamed? update this test)");
+        let documented: usize = heading
+            .rsplit_once('(')
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("unparseable tool count in {heading:?}"));
+        assert_eq!(
+            documented, registered,
+            "docs/AGENTS.md section 8 says {documented} MCP tools, mcp.rs registers {registered}"
+        );
+    }
+}

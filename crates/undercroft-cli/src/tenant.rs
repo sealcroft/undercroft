@@ -452,7 +452,12 @@ impl Tenancy {
         let external = store.is_external();
         let vault = store.vault();
         undercroft_obs::set_gauge("drawers", id, full.records as f64);
-        undercroft_obs::set_gauge("audit_chain_height", id, vault.writes() as f64);
+        // The COMMITTED height (`PalaceStats`, i.e. `chain_meta`), never
+        // this handle's cached manifest: in `serve-http` the MCP store is
+        // a second handle on the same vault, and whichever handle did not
+        // write kept reporting the head it last anchored — a frozen gauge
+        // beside a climbing `drawers` count.
+        undercroft_obs::set_gauge("audit_chain_height", id, full.writes as f64);
         // Original fields kept verbatim (clients depend on them); the
         // management fields ride along. Wing names are fine here — this
         // route is authorized per vault, unlike the telemetry sampler which
@@ -464,8 +469,8 @@ impl Tenancy {
                 "drawers": full.records,
                 "level": vault.level().to_string(),
                 "external": external,
-                "writes": vault.writes(),
-                "chain_head": vault.chain_head_hex(),
+                "writes": full.writes,
+                "chain_head": full.chain_head,
                 "wings": full.wings
                     .iter()
                     .map(|(w, c)| json!({ "wing": w, "count": c }))
@@ -1439,151 +1444,43 @@ impl Tenancy {
             undercroft_llm::LlmClient::from_env().map_err(|e| RestError::new(400, e.to_string()))?;
         let store = self.store_for(id)?;
 
-        // Read the verbatim side only: never re-distil fact-drawers, or a
-        // second call would compound its own output into the graph.
-        let sources: Vec<Drawer> = store
-            .recent(wing, limit)
-            .map_err(store_err)?
-            .into_iter()
-            .filter(|d| d.meta.room != fact_room)
-            .filter(|d| room.is_none_or(|r| d.meta.room == r))
-            .collect();
-
-        // The knowledge graph already collapses a repeated triple onto one
-        // row (`triple_id` is content-derived, ON CONFLICT DO UPDATE). The
-        // searchable mirror has to match that, or a fact restated across
-        // several source chunks would occupy several slots of one top-k and
-        // crowd out distinct evidence. Keyed on the triple id the graph
-        // itself returns, so the two notions of identity cannot drift.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let (mut facts, mut duplicates, mut skipped, mut failed) = (0u32, 0u32, 0u32, 0u32);
-        let (mut dated_from_text, mut stated) = (0u32, 0u32);
-        for d in &sources {
-            let anchor = d
-                .meta
-                .content_date
-                .as_deref()
-                .and_then(undercroft_core::temporal::parse_anchor);
-            let triples = match llm.extract_triples(&d.content) {
-                Ok(t) => t,
-                Err(e) => {
-                    undercroft_obs::diag_error!("refine: triples failed for {}: {e}", d.id);
-                    failed += 1;
-                    continue;
-                }
-            };
-            for t in triples {
-                let subject = t.subject.to_lowercase();
-                let predicate = t.predicate.to_lowercase();
-                if validate_name(&subject, "subject").is_err()
-                    || validate_name(&predicate, "predicate").is_err()
-                {
-                    skipped += 1;
-                    continue;
-                }
-                // When the fact was established, which is not the same as
-                // when the note was written: "I quit smoking three months
-                // ago" is a fact about February in a note dated May. The
-                // extractor is asked to point at the words that say so and
-                // is not permitted to supply a date — `resolve_claimed_span`
-                // rejects any span the note does not literally contain and
-                // resolves the rest deterministically. Anything unverified
-                // falls back to the note's own date, which is what every
-                // fact used to get.
-                let dated = t.when.as_deref().and_then(|claim| {
-                    undercroft_core::temporal::resolve_claimed_span(&d.content, claim, anchor)
-                });
-                if dated.is_some() {
-                    dated_from_text += 1;
-                }
-                let fact_date = dated
-                    .as_ref()
-                    .and_then(|m| m.resolved.clone())
-                    .or_else(|| d.meta.content_date.clone());
-                // The receipt is an HMAC-covered citation back to the
-                // verbatim drawer this fact came from — checkable later via
-                // `GET /v1/vaults/{id}/kg/receipts`.
-                // `valid_to` stays open even when the span named a period.
-                // A period says when the event *happened*; it does not say
-                // the fact stopped holding, and "in May 2023" must not be
-                // read as "expired on the 31st".
-                // Where the fact rests. The quote is checked against the note
-                // the same way the `when` span is; what the note does not
-                // contain is not evidence. A fact with no quotable support is
-                // NOT thereby wrong — "Leeds is in the United Kingdom" is the
-                // edge that answers which country Ana works in, and the graph
-                // wants it. This only records which of the two it is, so a
-                // caller that needs the user's own words can ask for them.
-                let support = undercroft_core::support::Support::evaluate(
-                    &d.content,
-                    t.quote
-                        .as_deref()
-                        .map(|q| [q])
-                        .unwrap_or_default()
-                        .as_slice(),
-                );
-                if support.is_stated() {
-                    stated += 1;
-                }
-                let triple_id = store
-                    .kg_add_grounded(
-                        &subject,
-                        &predicate,
-                        &t.object,
-                        fact_date.as_deref(),
-                        None,
-                        0.8, // model-extracted: below human-asserted confidence
-                        (&d.id, &d.content),
-                        Some(&support),
-                        // The model's identity was already in this handler's
-                        // response JSON; now it is on the fact itself,
-                        // HMAC-covered — an extractor claim is provenance.
-                        Some(llm.model()),
-                    )
-                    .map_err(store_err)?;
-                // Restating a known fact still re-cites it in the graph — the
-                // receipt above is refreshed either way — but it must not add
-                // a second copy to the retrieval surface.
-                if !seen.insert(triple_id) {
-                    duplicates += 1;
-                    continue;
-                }
-                store
-                    .upsert(
-                        &Drawer::new(
-                            &d.meta.wing,
-                            fact_room,
-                            format!("{} {} {}", t.subject, t.predicate, t.object),
-                            None,
-                            facts,
-                            "distill",
-                        )
-                        .with_content_date(fact_date),
-                    )
-                    .map_err(store_err)?;
-                facts += 1;
-            }
-        }
+        // The distillation itself lives in `crate::refine`, driven
+        // identically by `undercroft refine` — same LLM configuration must
+        // not mean two different vaults (it did: no fact date resolved
+        // from the note's words, no grounding verdict and no searchable
+        // mirror on the CLI side).
+        let rep = crate::refine::refine(
+            store,
+            &llm,
+            &crate::refine::RefineOptions {
+                wing,
+                room,
+                fact_room,
+                limit,
+                dry_run: false,
+            },
+        )
+        .map_err(store_err)?;
 
         Ok((
             200,
             Body::Json(json!({
-                "sources": sources.len(),
-                "facts": facts,
-                "duplicates": duplicates,
-                "skipped": skipped,
-                "failed": failed,
+                "sources": rep.sources,
+                "facts": rep.facts,
+                "duplicates": rep.duplicates,
+                "skipped": rep.skipped,
+                "failed": rep.failed,
                 // How many facts were dated by words in the note rather than
                 // by the note's own date. Reported because it is the only
                 // visible measure of whether the extractor is pointing at
                 // real spans — a model that answers with dates instead of
                 // quotations drives this to zero without erroring.
-                "dated_from_text": dated_from_text,
+                "dated_from_text": rep.dated_from_text,
                 // Facts the note's own words support, against facts that rest
                 // on the extractor's background knowledge. Both are wanted:
                 // the second is what lets the graph answer across notes.
-                "stated": stated,
-                "background": facts.saturating_sub(stated),
+                "stated": rep.stated,
+                "background": rep.facts.saturating_sub(rep.stated),
                 "fact_room": fact_room,
                 "model": llm.model(),
             })),
