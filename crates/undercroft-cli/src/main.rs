@@ -8,6 +8,7 @@ mod assertion;
 mod http;
 mod i18n;
 mod mcp;
+mod search;
 mod tenant;
 
 use anyhow::{bail, Context, Result};
@@ -154,13 +155,30 @@ enum Command {
         /// candidate competition; unassigned wings count as standard.
         #[arg(long)]
         min_trust: Option<String>,
+        /// Language of the stored text, declared not detected: en, de, nl,
+        /// it, es, fr, pt, tr, ru, el, hi, ka, ko. Reaches word forms one
+        /// script cannot settle — German -er takes Kind→Kinder, and the
+        /// Romance/Dutch/Turkish tables need saying too
+        #[arg(long)]
+        language: Option<String>,
         /// Max results
-        #[arg(short = 'n', long, default_value_t = 5)]
+        #[arg(short = 'n', long, default_value_t = search::DEFAULT_LIMIT)]
         limit: usize,
         /// Rank to continue from: ranks [offset, offset+limit) of the same
         /// ranking a single deeper call would produce
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// RFC 3339 instant to rank as of — repeat the one the previous page
+        /// printed, so every page slices ONE ranking. Without it each call
+        /// re-measures recency against a fresh clock and pages can repeat or
+        /// skip hits
+        #[arg(long)]
+        ranked_at: Option<String>,
+        /// Soft cap on how many results may come from any single room, so an
+        /// answer spanning several sessions is not starved by the most
+        /// verbose one. Leftover slots refill in score order
+        #[arg(long)]
+        room_cap: Option<usize>,
         /// Retrieval backend: local (scan), or a remote vector index
         /// (qdrant | chroma | pgvector) used as an untrusted accelerator —
         /// results are always re-verified and re-ranked locally
@@ -1544,47 +1562,73 @@ fn main() -> Result<()> {
             room,
             kind,
             min_trust,
+            language,
             limit,
             offset,
+            ranked_at,
+            room_cap,
             backend,
         } => {
             let store = open_store(&cli, vault)?;
+            // The instant the ranking is measured as of. Resolved HERE, printed
+            // in the continuation line, and repeatable — because `--offset`
+            // without it slices two different rankings: recency decay is
+            // measured against a fresh clock on every call, so hits repeat
+            // across pages or vanish between them. This surface shipped the
+            // offset and not the clock that makes it mean anything.
+            // A value that does not parse is said out loud, never a silent
+            // fall-back to the host clock.
+            let ranked_at = match ranked_at.as_deref() {
+                Some(s) => {
+                    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                        .map_err(|_| anyhow::anyhow!("--ranked-at must be an RFC 3339 instant"))?
+                }
+                None => time::OffsetDateTime::now_utc(),
+            };
             let opts = SearchOptions {
-                morph_lang: Default::default(),
+                // Whose inflection applies, declared by the caller and parsed
+                // from the same vocabulary MCP and `/v1` use. Undeclared, the
+                // CLI reached only what the script settles (Greek, Georgian,
+                // Hangul, Cyrillic, Devanagari) and the common suffix set —
+                // German `-er` and the Romance/Dutch/Turkish tables need
+                // saying, and this surface had no way to say them.
+                morph_lang: undercroft_store::MorphLang::declared(language.as_deref()),
                 wing: wing.clone(),
                 room: room.clone(),
                 kind: kind.clone(),
                 min_trust: min_trust.clone(),
                 limit: *limit,
+                room_cap: *room_cap,
                 offset: *offset,
-                ..Default::default()
+                ranked_at: Some(ranked_at),
             };
             let hits = if backend == "local" {
                 store.search(query, &opts)?
             } else {
+                // A remote index answers through the legacy fusion and its own
+                // candidate loop, which consults neither the declared
+                // morphology nor the per-room cap. Refused rather than
+                // ignored: a declaration this path cannot honour must not look
+                // like one it did — that silence is the drift, one flag over.
+                if language.is_some() || room_cap.is_some() {
+                    bail!(
+                        "--language and --room-cap are not honoured by --backend {backend} \
+                         (the remote path ranks with the legacy fusion); drop the flag or \
+                         search --backend local"
+                    );
+                }
                 let mut index = open_index(backend)?;
                 store.search_with_index(index.as_mut(), query, &opts)?
             };
             if hits.is_empty() {
                 println!("{}", tr("no-matches"));
             }
-            // The unlabeled-rows policy: a kind filter says what it passed
-            // over, so thin labeling is never mistaken for a thin corpus.
-            if kind.is_some() {
-                let n = store.unkinded_in_scope(wing.as_deref(), room.as_deref())?;
-                if n > 0 {
-                    println!(
-                        "({n} in-scope drawers carry no declared kind and were not considered)"
-                    );
-                }
-            }
-            // The same honesty for a trust floor: say how many wings it
-            // kept out of the competition.
-            if let Some(floor) = min_trust.as_deref() {
-                let n = store.trust_excluded_wing_count(floor)?;
-                if n > 0 {
-                    println!("({n} wing(s) below the trust floor were not considered)");
-                }
+            // What this request's own filters kept out of the competition
+            // (docs/LABELS.md): a thin answer under a `kind` filter or a trust
+            // floor must not be mistaken for a thin corpus. Counted by the same
+            // helper every surface uses.
+            for note in search::Exclusions::measure(&store, &opts)?.notes() {
+                println!("{note}");
             }
             for (i, hit) in hits.iter().enumerate() {
                 println!(
@@ -1597,6 +1641,28 @@ fn main() -> Result<()> {
                     hit.drawer.meta.room,
                     snippet(&hit.drawer.content, query, 100),
                     hit.drawer.meta.filed_at
+                );
+                // The id, on its own line so the hit line keeps its shape.
+                // `drawer get|update|delete`, `forget` and `admission` all take
+                // an id this surface never printed, so acting on a search
+                // result meant hunting for it through `drawer list`. The line
+                // also names the door back to the verbatim text, which the
+                // 100-character snippet above is not.
+                println!(
+                    "   id {} — undercroft drawer get {}",
+                    hit.drawer.id, hit.drawer.id
+                );
+            }
+            // A full page may have more below it; say exactly how to continue,
+            // clock included. A short page means the ranking is exhausted and
+            // says nothing.
+            if hits.len() == *limit {
+                let echo = ranked_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default();
+                println!(
+                    "— deeper results may exist: repeat with --offset {} --ranked-at {echo}",
+                    offset + hits.len()
                 );
             }
         }

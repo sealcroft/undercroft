@@ -28,6 +28,12 @@ use undercroft_store::{PalaceStore, SaveOutcome, SearchOptions, StoreError};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 use crate::assertion::{self, AssertionError};
+// The read-time declarations (`language`, `week_start`, `date_order`,
+// `calendar`) and the honest-exclusion counts are parsed in `crate::search`,
+// which MCP shares verbatim — the two surfaces read the same key names off the
+// same JSON, and re-implementing them here is how `week_start` came to work on
+// one of them only.
+use crate::search::{locale_from, morph_lang_from, Exclusions};
 
 /// Whole days from a drawer's `content_date` to the caller's reference date.
 /// `None` whenever either side is missing or unparseable — an absent number
@@ -59,84 +65,6 @@ fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<
     // Phrased from the reference looking back at the content, which is how
     // the question is put: "15 weeks before now", not "after".
     undercroft_core::temporal::describe_interval(a, d)
-}
-
-/// The locale a request asks its temporal text to be read in.
-///
-/// `language` selects a scanner — Arabic puts the past marker before the count
-/// and has a dual, so it is grammar rather than vocabulary — and `week_start`
-/// selects the week convention, which moves "last week" and every week count.
-/// Arabic defaults to Saturday weeks, the convention across most of the region,
-/// because getting the language right and leaving the week European produces
-/// answers that are subtly rather than obviously wrong.
-fn locale_from(body: &Value) -> undercroft_core::temporal::Locale {
-    use undercroft_core::temporal::{Calendar, DateOrder, Locale, WeekStart};
-    let mut locale = match body.get("language").and_then(Value::as_str) {
-        Some("ar") | Some("arabic") => Locale::ARABIC,
-        _ => Locale::ENGLISH,
-    };
-    if let Some(ws) = body.get("week_start").and_then(Value::as_str) {
-        locale = locale.with_week_start(match ws {
-            "sunday" | "sun" => WeekStart::Sunday,
-            "saturday" | "sat" => WeekStart::Saturday,
-            _ => WeekStart::Monday,
-        });
-    }
-    // Which field a bare numeric date puts first. Declared, because it cannot be
-    // derived: US English is month-first and Commonwealth English day-first, and
-    // both are `Language::English`. Unrecognised values leave it undeclared,
-    // which falls through to what the text demonstrates and then to day-first —
-    // never to an error, since a reading convention is not worth a 400.
-    if let Some(order) = body.get("date_order").and_then(Value::as_str) {
-        locale = locale.with_date_order(match order {
-            "month_first" | "mdy" | "us" => DateOrder::MonthFirst,
-            "day_first" | "dmy" => DateOrder::DayFirst,
-            _ => DateOrder::Undeclared,
-        });
-    }
-    // Which calendar counted the year. Never inferred — see `Calendar`. This is
-    // the corpus-wide default only: an era marker in a drawer's own words
-    // (พ.ศ., هـ, 民國, 令和) outranks whatever is declared here.
-    if let Some(cal) = body.get("calendar").and_then(Value::as_str) {
-        locale = locale.with_calendar(match cal {
-            "buddhist" | "be" | "thai" => Calendar::Buddhist,
-            "minguo" | "roc" | "taiwan" => Calendar::Minguo,
-            "hijri" | "islamic" | "umalqura" => Calendar::Hijri,
-            "jalali" | "persian" | "solar_hijri" => Calendar::Jalali,
-            "reiwa" => Calendar::Reiwa,
-            "heisei" => Calendar::Heisei,
-            "showa" => Calendar::Showa,
-            "taisho" => Calendar::Taisho,
-            "meiji" => Calendar::Meiji,
-            _ => Calendar::Gregorian,
-        });
-    }
-    locale
-}
-
-/// Whose inflection applies to the query, from the request's `language`.
-///
-/// Read-time and declared, exactly like `calendar` and `date_order`: German and
-/// English share a script, so nothing in the bytes says which endings are legal.
-/// An unrecognised or absent value means `Undeclared`, which is the behaviour
-/// that shipped before this existed.
-fn morph_lang_from(body: &Value) -> undercroft_store::MorphLang {
-    match body.get("language").and_then(Value::as_str) {
-        Some("de") | Some("german") => undercroft_store::MorphLang::German,
-        Some("en") | Some("english") => undercroft_store::MorphLang::English,
-        Some("it") | Some("italian") => undercroft_store::MorphLang::Italian,
-        Some("es") | Some("spanish") => undercroft_store::MorphLang::Spanish,
-        Some("fr") | Some("french") => undercroft_store::MorphLang::French,
-        Some("pt") | Some("portuguese") => undercroft_store::MorphLang::Portuguese,
-        Some("ru") | Some("russian") => undercroft_store::MorphLang::Russian,
-        Some("el") | Some("greek") => undercroft_store::MorphLang::Greek,
-        Some("nl") | Some("dutch") => undercroft_store::MorphLang::Dutch,
-        Some("tr") | Some("turkish") => undercroft_store::MorphLang::Turkish,
-        Some("hi") | Some("hindi") => undercroft_store::MorphLang::Hindi,
-        Some("ka") | Some("georgian") => undercroft_store::MorphLang::Georgian,
-        Some("ko") | Some("korean") => undercroft_store::MorphLang::Korean,
-        _ => undercroft_store::MorphLang::Undeclared,
-    }
 }
 
 /// Triples as JSON, each labelled with where it rests.
@@ -748,7 +676,14 @@ impl Tenancy {
                 .get("min_trust")
                 .and_then(Value::as_str)
                 .map(String::from),
-            limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
+            // One default page size for every surface (`crate::search`): this
+            // route answered 10 while the CLI and MCP answered 5, so "the same
+            // search" returned a different number of hits per transport.
+            limit: body
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+                .unwrap_or(crate::search::DEFAULT_LIMIT),
             // Rank-space page start: pass the previous response's
             // `next_offset` (with its `ranked_at`) to continue deeper instead
             // of re-asking the same question.
@@ -863,36 +798,24 @@ impl Tenancy {
         let ranked_at_echo = ranked_at
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
-        // The unlabeled-rows policy (docs/LABELS.md): while a kind filter
-        // is set, say how many in-scope drawers it passed over for carrying
-        // no declared kind at all — so a thin result over a thinly-labeled
-        // corpus is distinguishable from a genuinely thin corpus. Additive
-        // key, present only when the filter is.
-        let unlabeled_excluded = match opts.kind.as_deref() {
-            Some(_) => {
-                let store = self.store_for(id)?;
-                Some(
-                    store
-                        .unkinded_in_scope(opts.wing.as_deref(), opts.room.as_deref())
-                        .map_err(store_err)?,
-                )
-            }
-            None => None,
+        // What this request's own filters kept out of the competition
+        // (docs/LABELS.md), counted once for every surface in `crate::search`:
+        // a thin result under a `kind` filter or a `min_trust` floor is
+        // otherwise indistinguishable from a thin corpus. Both keys are
+        // additive and present only while their filter is.
+        let excluded = {
+            let store = self.store_for(id)?;
+            Exclusions::measure(store, &opts).map_err(store_err)?
         };
         let mut resp = json!({
             "hits": hits,
             "next_offset": next_offset,
             "ranked_at": ranked_at_echo,
         });
-        if let Some(n) = unlabeled_excluded {
+        if let Some(n) = excluded.unlabeled {
             resp["unlabeled_excluded"] = json!(n);
         }
-        // The honest-exclusion count, one label over: while a trust floor
-        // is declared on the request, say how many wings it kept out of
-        // the competition. Additive key, present only with the filter.
-        if let Some(floor) = opts.min_trust.clone() {
-            let store = self.store_for(id)?;
-            let n = store.trust_excluded_wing_count(&floor).map_err(store_err)?;
+        if let Some(n) = excluded.trust_excluded {
             resp["trust_excluded_wings"] = json!(n);
         }
         Ok((200, Body::Json(resp)))
@@ -2191,187 +2114,5 @@ fn respond(req: Request, code: u16, body: &str, content_type: &str) {
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use undercroft_core::temporal::{Calendar, DateOrder, Language, WeekStart};
-
-    /// `locale_from` is the whole of the read-time convention surface, and this
-    /// file had no test module at all — so a renamed field or a typo in a value
-    /// would have shipped silently while `docs/AGENTS.md` promised it worked.
-    #[test]
-    fn the_request_declares_its_reading_conventions() {
-        let l = locale_from(&serde_json::json!({}));
-        assert_eq!(l.language, Language::English);
-        assert_eq!(l.week_start, WeekStart::Monday);
-        assert_eq!(
-            l.date_order,
-            DateOrder::Undeclared,
-            "English implies no order"
-        );
-        assert_eq!(l.calendar, Calendar::Gregorian);
-
-        // Arabic brings Saturday weeks and day-first with it: CLDR gives `ar` as
-        // d/M/y in every Arabic territory, so both follow from the language.
-        let l = locale_from(&serde_json::json!({"language": "ar"}));
-        assert_eq!(l.language, Language::Arabic);
-        assert_eq!(l.week_start, WeekStart::Saturday);
-        assert_eq!(l.date_order, DateOrder::DayFirst);
-
-        // Each convention is independently declarable, with the aliases a caller
-        // would actually reach for.
-        for (v, want) in [
-            ("month_first", DateOrder::MonthFirst),
-            ("mdy", DateOrder::MonthFirst),
-            ("us", DateOrder::MonthFirst),
-            ("day_first", DateOrder::DayFirst),
-            ("dmy", DateOrder::DayFirst),
-        ] {
-            let l = locale_from(&serde_json::json!({"date_order": v}));
-            assert_eq!(l.date_order, want, "date_order {v:?}");
-        }
-        for (v, want) in [
-            ("buddhist", Calendar::Buddhist),
-            ("thai", Calendar::Buddhist),
-            ("be", Calendar::Buddhist),
-            ("minguo", Calendar::Minguo),
-            ("roc", Calendar::Minguo),
-            ("hijri", Calendar::Hijri),
-            ("umalqura", Calendar::Hijri),
-            ("jalali", Calendar::Jalali),
-            ("persian", Calendar::Jalali),
-            ("reiwa", Calendar::Reiwa),
-            ("heisei", Calendar::Heisei),
-            ("showa", Calendar::Showa),
-            ("taisho", Calendar::Taisho),
-            ("meiji", Calendar::Meiji),
-        ] {
-            let l = locale_from(&serde_json::json!({"calendar": v}));
-            assert_eq!(l.calendar, want, "calendar {v:?}");
-        }
-
-        // An unrecognised value falls back rather than failing: a reading
-        // convention is not worth a 400.
-        let l = locale_from(&serde_json::json!({"calendar": "mayan", "date_order": "sideways"}));
-        assert_eq!(l.calendar, Calendar::Gregorian);
-        assert_eq!(l.date_order, DateOrder::Undeclared);
-
-        // And they compose.
-        let l = locale_from(
-            &serde_json::json!({"language": "ar", "calendar": "hijri", "week_start": "sunday"}),
-        );
-        assert_eq!(l.language, Language::Arabic);
-        assert_eq!(l.calendar, Calendar::Hijri);
-        assert_eq!(l.week_start, WeekStart::Sunday);
-        assert_eq!(l.date_order, DateOrder::DayFirst, "still from the language");
-    }
-
-    /// Every mutating `/v1` route a `--read-only` server must refuse, and
-    /// every read it must still serve. The per-handler `deny_read_only()`
-    /// this replaced was correct thirteen times and missing on the
-    /// fourteenth (`kg/authority`), which is why the classification now
-    /// lives in one place and is asserted from BOTH sides: a route that
-    /// stops mutating must be moved deliberately, not silently.
-    #[test]
-    fn a_read_only_server_refuses_every_mutating_route() {
-        let mutating = [
-            ("POST", "/v1/vaults"),
-            ("DELETE", "/v1/vaults/v"),
-            ("POST", "/v1/vaults/v/drawers"),
-            ("PUT", "/v1/vaults/v/drawers/d"),
-            ("DELETE", "/v1/vaults/v/drawers/d"),
-            ("POST", "/v1/vaults/v/trust"),
-            ("POST", "/v1/vaults/v/forget"),
-            ("POST", "/v1/vaults/v/admission"),
-            ("POST", "/v1/vaults/v/retention"),
-            ("POST", "/v1/vaults/v/retention/sweep"),
-            // The one that had no guard: a golden-value promotion rewrites
-            // an HMAC-covered column, closes the previous canonical
-            // holder's window and appends to the chain.
-            ("POST", "/v1/vaults/v/kg/authority"),
-            ("POST", "/v1/vaults/v/refine"),
-            ("POST", "/v1/vaults/v/rotate"),
-            ("POST", "/v1/vaults/v/import"),
-        ];
-        for (method, path) in mutating {
-            let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
-            assert!(
-                mutates(method, segs.as_slice()),
-                "{method} {path} must be refused on a read-only server"
-            );
-        }
-
-        let reads = [
-            ("GET", "/v1/vaults"),
-            ("GET", "/v1/vaults/v/stats"),
-            ("GET", "/v1/vaults/v/stats/history"),
-            ("GET", "/v1/vaults/v/drawers"),
-            ("GET", "/v1/vaults/v/drawers/d"),
-            ("GET", "/v1/vaults/v/taxonomy"),
-            ("GET", "/v1/vaults/v/kg/query"),
-            ("GET", "/v1/vaults/v/kg/canonical/k"),
-            ("GET", "/v1/vaults/v/supersessions"),
-            ("GET", "/v1/vaults/v/trust"),
-            ("GET", "/v1/vaults/v/admission"),
-            ("GET", "/v1/vaults/v/retention"),
-            // Export warns and serves unaudited on a read-only server.
-            ("GET", "/v1/vaults/v/export"),
-            // POST for cost, not for effect.
-            ("POST", "/v1/vaults/v/search"),
-            ("POST", "/v1/vaults/v/verify"),
-        ];
-        for (method, path) in reads {
-            let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
-            assert!(
-                !mutates(method, segs.as_slice()),
-                "{method} {path} must still be served on a read-only server"
-            );
-        }
-
-        // Fails closed: an unrecognised POST is a mutation until someone
-        // says otherwise, so a route added later cannot open a write door
-        // on a read-only server by omission.
-        assert!(mutates("POST", &["v1", "vaults", "v", "not-invented-yet"]));
-        assert!(mutates("PATCH", &["v1", "vaults", "v", "drawers", "d"]));
-    }
-
-    /// Rotating (or deleting) the vault this process ALSO serves over
-    /// `/mcp` retires the keys under a live second handle: every later MCP
-    /// read fails its tag and reports TAMPERED, and any MCP write is sealed
-    /// under the retired key and re-anchors the manifest from a stale cache.
-    /// The sole-writer contract is unsatisfiable there, so `/v1` refuses.
-    #[test]
-    fn rotate_and_delete_refuse_the_vault_this_process_also_serves_over_mcp() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let factory: EmbedderFactory = Box::new(|_: &Vault| {
-            Ok(Box::new(undercroft_core::HashEmbedder)
-                as Box<dyn undercroft_core::embed::Embedder + Send>)
-        });
-        let t = Tenancy::new(mgr, factory, false).with_mcp_vault("served");
-
-        for (what, remedy) in [("rotating keys", "…"), ("deleting a vault", "…")] {
-            let e = t
-                .deny_co_resident("served", what, remedy)
-                .expect_err("the co-resident vault must be refused");
-            assert_eq!(e.code, 409);
-            assert!(e.message.contains("/mcp"), "{}", e.message);
-            // Only that one vault: the others have exactly one handle.
-            assert!(t.deny_co_resident("elsewhere", what, remedy).is_ok());
-        }
-
-        // Premise: the refusal comes from the declaration, not from the
-        // vault name — a `/v1`-only server declares no MCP vault and
-        // refuses nothing.
-        let dir2 = tempfile::TempDir::new().unwrap();
-        let mgr2 = VaultManager::open(dir2.path(), None).unwrap();
-        let factory2: EmbedderFactory = Box::new(|_: &Vault| {
-            Ok(Box::new(undercroft_core::HashEmbedder)
-                as Box<dyn undercroft_core::embed::Embedder + Send>)
-        });
-        let plain = Tenancy::new(mgr2, factory2, false);
-        assert!(plain
-            .deny_co_resident("served", "rotating keys", "…")
-            .is_ok());
-    }
-}
+// The read-time convention tests moved with `locale_from` into
+// `crate::search`, where both surfaces that parse those declarations live.

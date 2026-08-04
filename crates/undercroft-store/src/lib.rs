@@ -4294,6 +4294,46 @@ pub enum MorphLang {
     Korean,
 }
 
+impl MorphLang {
+    /// Every code a caller may declare, as the surfaces must advertise them.
+    ///
+    /// Here rather than in each handler because the vocabulary drifted: the MCP
+    /// tool schema described `language` as "en (default) or ar" — the date
+    /// scanner's two — while the handler behind it already mapped thirteen, so
+    /// an agent reading its own contract never declared `de` on a German corpus
+    /// and a `/v1` caller reading docs/AGENTS.md did. A surface that builds its
+    /// documentation from this list cannot fall behind the parser again.
+    pub const CODES: &'static [&'static str] = &[
+        "en", "de", "nl", "it", "es", "fr", "pt", "tr", "ru", "el", "hi", "ka", "ko",
+    ];
+
+    /// The `language` a request declared, as morphology reads it.
+    ///
+    /// Absent or unrecognised is [`MorphLang::Undeclared`] — the behaviour that
+    /// shipped before the field existed, and never an error: a reading
+    /// convention the engine can fall back on is not worth refusing a query
+    /// over. The long English names are accepted beside the codes because a
+    /// caller writing JSON by hand reaches for `"german"` as readily as `"de"`.
+    pub fn declared(v: Option<&str>) -> MorphLang {
+        match v {
+            Some("en") | Some("english") => MorphLang::English,
+            Some("de") | Some("german") => MorphLang::German,
+            Some("nl") | Some("dutch") => MorphLang::Dutch,
+            Some("it") | Some("italian") => MorphLang::Italian,
+            Some("es") | Some("spanish") => MorphLang::Spanish,
+            Some("fr") | Some("french") => MorphLang::French,
+            Some("pt") | Some("portuguese") => MorphLang::Portuguese,
+            Some("tr") | Some("turkish") => MorphLang::Turkish,
+            Some("ru") | Some("russian") => MorphLang::Russian,
+            Some("el") | Some("greek") => MorphLang::Greek,
+            Some("hi") | Some("hindi") => MorphLang::Hindi,
+            Some("ka") | Some("georgian") => MorphLang::Georgian,
+            Some("ko") | Some("korean") => MorphLang::Korean,
+            _ => MorphLang::Undeclared,
+        }
+    }
+}
+
 /// The inflectional endings a word may gain, as a CLOSED set per language.
 ///
 /// Deliberately never `-e`: German `Reis` (rice) + `e` is `Reise` (journey),
@@ -12829,6 +12869,81 @@ mod tests {
                 lexical.1
             );
         }
+    }
+
+    /// Every declarable language has exactly one advertised code and one
+    /// parse, so a surface that builds its contract from [`MorphLang::CODES`]
+    /// advertises precisely what the handler implements.
+    ///
+    /// The `code_of` match is exhaustive deliberately: a fourteenth variant
+    /// fails to COMPILE here until it is given a code. That is what stops the
+    /// defect this closed — a tool schema promising `en` and `ar` over a
+    /// handler that already mapped thirteen — from recurring by omission.
+    #[test]
+    fn every_declarable_language_has_one_code_and_one_parse() {
+        // Exhaustive: the compiler owns the completeness claim.
+        let code_of = |l: MorphLang| -> Option<&'static str> {
+            match l {
+                MorphLang::Undeclared => None,
+                MorphLang::English => Some("en"),
+                MorphLang::German => Some("de"),
+                MorphLang::Dutch => Some("nl"),
+                MorphLang::Italian => Some("it"),
+                MorphLang::Spanish => Some("es"),
+                MorphLang::French => Some("fr"),
+                MorphLang::Portuguese => Some("pt"),
+                MorphLang::Turkish => Some("tr"),
+                MorphLang::Russian => Some("ru"),
+                MorphLang::Greek => Some("el"),
+                MorphLang::Hindi => Some("hi"),
+                MorphLang::Georgian => Some("ka"),
+                MorphLang::Korean => Some("ko"),
+            }
+        };
+        let all = [
+            MorphLang::Undeclared,
+            MorphLang::English,
+            MorphLang::German,
+            MorphLang::Dutch,
+            MorphLang::Italian,
+            MorphLang::Spanish,
+            MorphLang::French,
+            MorphLang::Portuguese,
+            MorphLang::Turkish,
+            MorphLang::Russian,
+            MorphLang::Greek,
+            MorphLang::Hindi,
+            MorphLang::Georgian,
+            MorphLang::Korean,
+        ];
+        // Premise: the advertised list is neither longer nor shorter than the
+        // set of declarable variants. A code with no variant, or a variant
+        // added to `code_of` and the list but not to `all`, fails here.
+        assert_eq!(
+            MorphLang::CODES.len(),
+            all.len() - 1,
+            "CODES must advertise every variant but Undeclared"
+        );
+        for l in all {
+            match code_of(l) {
+                None => continue,
+                Some(code) => {
+                    assert!(
+                        MorphLang::CODES.contains(&code),
+                        "{l:?} parses from {code:?} but is not advertised"
+                    );
+                    assert_eq!(MorphLang::declared(Some(code)), l, "code {code:?}");
+                }
+            }
+        }
+        // The long names a hand-written request reaches for resolve the same.
+        assert_eq!(MorphLang::declared(Some("german")), MorphLang::German);
+        assert_eq!(MorphLang::declared(Some("korean")), MorphLang::Korean);
+        // Absent or unrecognised is the pre-existing behaviour, never an error:
+        // `ar` selects the Arabic date scanner and declares no morphology.
+        assert_eq!(MorphLang::declared(None), MorphLang::Undeclared);
+        assert_eq!(MorphLang::declared(Some("ar")), MorphLang::Undeclared);
+        assert_eq!(MorphLang::declared(Some("klingon")), MorphLang::Undeclared);
     }
 
     /// German plurals need `-er`, which English cannot have — so they reach
