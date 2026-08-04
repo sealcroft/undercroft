@@ -3,7 +3,9 @@
 # run hit (a build-dep gap discovered only at the tag, fixed on main
 # after it). Builds from `ref` (default main, which carries the fix) and
 # tags the image for the named release; the run log states both, so the
-# provenance is explicit rather than implied.
+# provenance is explicit rather than implied. Same per-arch + manifest
+# shape as release.yml's docker-ort/manifest-ort, so a republish
+# produces exactly what the tag would have.
 name: republish-ort-image
 on:
   workflow_dispatch:
@@ -21,15 +23,23 @@ permissions:
 
 jobs:
   docker-ort:
-    name: GHCR image (amd64, ort) for ${{ inputs.tag }}
-    runs-on: ubuntu-latest
+    name: GHCR image (${{ matrix.arch }}, ort) for ${{ inputs.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
       - name: State the provenance
         run: |
-          echo "Publishing ghcr image tag ${{ inputs.tag }}-ort from ref ${{ inputs.ref }} ($(git rev-parse HEAD))"
+          echo "Publishing ghcr image tag ${{ inputs.tag }}-ort-${{ matrix.arch }} from ref ${{ inputs.ref }} ($(git rev-parse HEAD))"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -42,12 +52,12 @@ jobs:
           push: true
           build-args: |
             UNDERCROFT_FEATURES=onnx,ort
-          tags: ghcr.io/compufreq/undercroft:${{ inputs.tag }}-ort
-          cache-from: type=gha,scope=amd64-ort
-          cache-to: type=gha,mode=max,scope=amd64-ort
+          tags: ghcr.io/compufreq/undercroft:${{ inputs.tag }}-ort-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}-ort
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-ort
       - name: Smoke — the pushed image carries the ort feature
         run: |
-          IMG="ghcr.io/compufreq/undercroft:${{ inputs.tag }}-ort"
+          IMG="ghcr.io/compufreq/undercroft:${{ inputs.tag }}-ort-${{ matrix.arch }}"
           docker run --rm "$IMG" --help > /dev/null
           docker volume create ort-smoke > /dev/null
           docker run --rm -v ort-smoke:/data "$IMG" vault create smoke
@@ -59,3 +69,25 @@ jobs:
           [ "$RC" -ne 0 ] || { echo "expected a model-config refusal"; exit 1; }
           echo "$OUT" | grep -q "loading ORT embedder" || {
             echo "wrong failure shape — is the ort feature in the image?"; exit 1; }
+
+  manifest-ort:
+    name: Multi-arch manifest (ort) for ${{ inputs.tag }}
+    needs: docker-ort
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Merge per-arch ort images
+        run: |
+          TAG="${{ inputs.tag }}"
+          IMG="ghcr.io/compufreq/undercroft"
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.description=Hardened local-first AI memory (ort build: in-process ONNX Runtime embedder/reranker/ColBERT compiled in)" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/compufreq/undercroft" \
+            --annotation "index:org.opencontainers.image.licenses=BUSL-1.1" \
+            -t "${IMG}:${TAG}-ort" \
+            "${IMG}:${TAG}-ort-amd64" "${IMG}:${TAG}-ort-arm64"
+          docker buildx imagetools inspect "${IMG}:${TAG}-ort"

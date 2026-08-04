@@ -69,6 +69,11 @@ vector (lexically findable, semantically invisible until re-embedded).
 
 ## `onnx` / `ort` — in-process, nothing leaves
 
+For `ort`, no build is required: every release ships `…-<target>-ort`
+binary assets for all five targets and a multi-arch
+`ghcr.io/compufreq/undercroft:<tag>-ort` image (amd64 + arm64), each
+smoke-probed at build for the compiled feature. Building yourself:
+
 ```sh
 # build once with the feature compiled in
 cargo build --release -p undercroft-cli --features onnx   # tract, pure Rust

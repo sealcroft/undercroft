@@ -531,13 +531,23 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   sha256, and the multi-arch `ghcr.io/compufreq/undercroft` image
   (per-arch native builds merged into one manifest; index annotations
   carry the package description). Since the posture-configs unit also
-  the **`ort` variant**: a linux x86_64 `…-ort.tar.gz` asset and a
-  `:tag-ort` amd64 image (deliberate first-increment scope), each
-  smoke-probed — `--help`, then `UNDERCROFT_EMBEDDER=ort` must fail on
+  the **`ort` variant**, and since 2026-08-04 at FULL target parity
+  with the default artifacts: a `…-ort` binary asset for all five
+  targets (same matrix, Intel-macOS smoke under Rosetta, installed
+  explicitly) and a `:tag-ort` multi-arch image (amd64+arm64 per-arch
+  builds + their own manifest job; `republish-ort-image` dispatch
+  carries the same shape so a republish produces exactly what the tag
+  would have), each smoke-probed — `--help`, then
+  `UNDERCROFT_EMBEDDER=ort` must fail on
   MODEL CONFIG ("loading ORT embedder"), never on a missing feature,
   which is what a default binary under the asset name would say. The
-  ort build is statically linked (probed 2026-08-04: no shared libs
-  beside the binary), and the Dockerfile features branch now also
+  binary smoke runs against the PACKAGED layout, not the build tree —
+  a binary that secretly needs a shared library beside it fails at CI,
+  not on a user's machine — and packaging carries any onnxruntime
+  runtime library the build drops beside the binary (statically linked
+  on every probed target, so normally nothing matches; the copy is the
+  honest fallback, not the expectation). The Dockerfile features
+  branch also
   builds the orchestrator (the runtime stage copies both binaries — a
   features-only build used to leave it missing)
 
