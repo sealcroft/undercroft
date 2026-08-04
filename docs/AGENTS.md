@@ -664,6 +664,13 @@ window diverts to quarantine with the `rate-anomaly` signal. The
 threshold is deployment-shaped, so it is declared, never defaulted; an
 unreadable declaration refuses to open rather than silently running
 unscreened; consulted only when `UNDERCROFT_ADMISSION=quarantine`) ·
+`UNDERCROFT_READ_AUDIT` (unset — `chain` appends one audit-chain record
+per search: a keyed fingerprint of the query (never its text), the
+declared scope, and the hit count, on every search path. A per-query
+chain append is a real durability cost, so it is declared; garbage
+refuses to open; a read-only open warns and serves unaudited. Exports
+are chain-audited unconditionally — one `egress/export` record binding
+the export's own manifest digest — with no variable to set) ·
 `UNDERCROFT_TRAIN_SOURCE_CAP` (4 — per-wing cap divisor on global
 codebook training draws: no single wing supplies more than 1/N of a
 training sample while others can fill it; within-quota corpora draw

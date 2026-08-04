@@ -406,6 +406,19 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   remote-index integration (remote.rs — a mirror records the embedder it was
   pushed with; `search_with_index` refuses a mismatch rather than ranking a
   v2 query against v1 vectors, which returned an empty result with no error),
+  read/egress auditing (the consultation-filed gap, closed 2026-08-04:
+  **exports chain-audited unconditionally on every surface** —
+  `audit_export`, one `egress/export` record binding surface + recipient
+  + counts + the export's own manifest digest; read-only replicas warn
+  and serve; **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
+  `audit_read` at the search_inner + remote tails covers every path, one
+  record per search with a KEYED query fingerprint (never text, pinned
+  by a db+WAL byte scan), scope and hit count; runs behind `&self` via
+  `unchecked_transaction` and deliberately does NOT anchor — the
+  anchor-lag boundary is stated: read records anchor at the next store
+  open, and a stripped unanchored tail is crash-indistinguishable until
+  then; garbage declaration refuses to open, read-only open warns and
+  disables),
   in-place key rotation
   (rotate.rs: one-transaction re-seal of every artifact + chain re-key
   over preserved audit bytes, crash-reconciled at open), bulk ingest
@@ -490,7 +503,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 73
+  which inlines them and documents every layer plus all 74
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
@@ -572,7 +585,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (511)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (209 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (214 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

@@ -370,6 +370,23 @@ fn resolve_trust_floor(env: Option<&str>) -> Option<String> {
     }
 }
 
+/// `UNDERCROFT_READ_AUDIT`: `chain` puts a record on the audit chain for
+/// every search (declared — a per-query append is a real durability
+/// cost); unset/`off` = the byte-identical default. Garbage REFUSES to
+/// open: a deployment that declared read auditing believes reads leave a
+/// trail, and silently running without one is the failure mode.
+fn resolve_read_audit(env: Option<&str>) -> Result<bool, StoreError> {
+    match env.map(str::trim) {
+        None => Ok(false),
+        Some(v) if v.is_empty() || v.eq_ignore_ascii_case("off") => Ok(false),
+        Some(v) if v.eq_ignore_ascii_case("chain") => Ok(true),
+        Some(v) => Err(StoreError::Invalid(format!(
+            "UNDERCROFT_READ_AUDIT={v:?} — the only modes are 'chain' and 'off'; \
+             refusing to open with an unreadable audit declaration"
+        ))),
+    }
+}
+
 /// The declared per-writer admission rate (`UNDERCROFT_ADMISSION_RATE`,
 /// `<count>/<seconds>`): at least `count` committed writes by the same
 /// writer identity inside the trailing window diverts the next one to
@@ -806,6 +823,14 @@ pub struct PalaceStore {
     /// Consulted by `admission_divert` only when admission screening is
     /// on: the tier-1 signal the candidate bytes cannot carry.
     admission_rate: Option<(u32, u32)>,
+    /// Chain-audit reads (`UNDERCROFT_READ_AUDIT=chain`; unset = off — a
+    /// per-query chain append is a durability cost a sovereign deployment
+    /// DECLARES). When on, every search appends a read record: a keyed
+    /// fingerprint of the query (never its text), the declared scope, and
+    /// the hit count. Disabled with a warning on read-only opens (the
+    /// replica precedent: warn and serve). Exports are audited
+    /// unconditionally — egress is rare and high-value.
+    read_audit: bool,
     /// Surfaces whose writes bypass the admission screen
     /// (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`, comma list matched against the
     /// SURFACE-STAMPED `added_by` — never against writer-declared
@@ -962,6 +987,17 @@ impl PalaceStore {
     ) -> Result<Self, StoreError> {
         let mut store = Self::open_inner(vault, embedder)?;
         store.enforce_embedder_identity(false)?;
+        // A read-only role must not write, and a read-audit record is a
+        // write. The replica precedent (embedder identity above) is warn
+        // and serve, not refuse: a replica exists to answer reads across
+        // config drift, and the WARNING is what keeps the posture honest.
+        if store.read_audit {
+            undercroft_obs::diag_warn!(
+                "UNDERCROFT_READ_AUDIT=chain declared but this open is read-only; \
+                 reads served here will NOT be audited"
+            );
+            store.read_audit = false;
+        }
         Ok(store)
     }
 
@@ -1414,6 +1450,7 @@ impl PalaceStore {
             admission_rate: resolve_admission_rate(
                 std::env::var("UNDERCROFT_ADMISSION_RATE").ok().as_deref(),
             )?,
+            read_audit: resolve_read_audit(std::env::var("UNDERCROFT_READ_AUDIT").ok().as_deref())?,
             admit_trusted_sources: std::env::var("UNDERCROFT_ADMIT_TRUSTED_SOURCES")
                 .map(|v| {
                     v.split(',')
@@ -3200,7 +3237,96 @@ impl PalaceStore {
             hits.len(),
             self.is_sealed(),
         );
+        if self.read_audit {
+            self.audit_read("search", query, opts, hits.len())?;
+        }
         Ok(hits)
+    }
+
+    /// Turn read auditing on or off programmatically (the env
+    /// `UNDERCROFT_READ_AUDIT` resolved at open is the deployment's way).
+    pub fn set_read_audit(&mut self, on: bool) {
+        self.read_audit = on;
+    }
+
+    /// One chain record for a read (C-track read-path auditing). The
+    /// canonical carries a KEYED fingerprint of the query — the chain
+    /// must never hold content, and a query is content — plus the
+    /// declared scope and the hit count; the operator can later prove a
+    /// specific query was run by recomputing the fingerprint with the
+    /// key in hand, while the record alone reveals nothing.
+    ///
+    /// Runs behind `&self` (the whole read path does), so it uses an
+    /// unchecked transaction and deliberately does NOT advance the
+    /// manifest anchor — `anchor_manifest` needs `&mut`, and a lagging
+    /// anchor is the legitimate crash shape the open-time reconciliation
+    /// already fast-forwards. **Boundary, stated**: read records between
+    /// two anchored writes share the crash window — an attacker with
+    /// file write access could strip that unanchored tail undetected
+    /// until the next anchored write covers it. Write records never
+    /// stretch that window beyond the single in-flight record; read
+    /// records can, and a deployment that needs the anchor tight runs
+    /// writes (or `verify`, which anchors) on its own cadence.
+    fn audit_read(
+        &self,
+        kind: &str,
+        query: &str,
+        opts: &SearchOptions,
+        hits: usize,
+    ) -> Result<(), StoreError> {
+        let now = OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 now");
+        let qfp = hex::encode(
+            &self
+                .vault
+                .tag(format!("read-query\u{1f}{query}").as_bytes())[..16],
+        );
+        let canonical = format!(
+            "read\u{1f}{kind}\u{1f}{qfp}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{hits}\u{1f}{now}",
+            opts.wing.as_deref().unwrap_or(""),
+            opts.room.as_deref().unwrap_or(""),
+            opts.kind.as_deref().unwrap_or(""),
+            opts.min_trust.as_deref().unwrap_or(""),
+        );
+        let tag = self.vault.tag(canonical.as_bytes());
+        let tx = self.conn.unchecked_transaction()?;
+        chain_append(&tx, &self.vault, &format!("read/{kind}"), &tag, &now)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// One chain record for a full-palace egress (C-track export
+    /// auditing) — unconditional on writable stores: an export is rare,
+    /// operator-initiated, and exactly the event a compliance trail is
+    /// for. The canonical binds the export's own manifest digest, so the
+    /// audit record and the exported file corroborate each other; the
+    /// recipient string (public by construction) records who could read
+    /// a sealed bundle, `""` records a plaintext export.
+    pub fn audit_export(
+        &mut self,
+        surface: &str,
+        counts: &undercroft_vault::bundle::ManifestCounts,
+        payload_sha256: &str,
+        recipient: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let now = OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 now");
+        let canonical = format!(
+            "egress\u{1f}export\u{1f}{surface}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{payload_sha256}\u{1f}{now}",
+            recipient.unwrap_or(""),
+            counts.drawers,
+            counts.kg_entities,
+            counts.kg_triples,
+            counts.tunnels,
+        );
+        let tag = self.vault.tag(canonical.as_bytes());
+        let tx = self.conn.transaction()?;
+        let (head, writes) = chain_append(&tx, &self.vault, "egress/export", &tag, &now)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        Ok(())
     }
 
     /// Cut a semantic candidate pool to `keep` seqs by **exact** cosine
@@ -7455,6 +7581,91 @@ mod tests {
         // The reserved wing cannot be forged into.
         let forged = drawer(crate::admission::QUARANTINE_WING, "r", "innocent", 3);
         assert!(s.upsert(&forged).is_err());
+    }
+
+    /// Read-path auditing (the consultation-filed gap, closed): off by
+    /// default with a byte-identical read contract, declared on it puts
+    /// one chain record per search — carrying a KEYED fingerprint of the
+    /// query, never its text — and the chain stays green.
+    #[test]
+    fn reads_are_audited_only_when_declared_and_never_leak_the_query() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "the quarterly plan is finalized", 0))
+            .unwrap();
+        let audit_reads = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        // Default: reads leave nothing — the read contract is untouched.
+        s.search("quarterly plan", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(audit_reads(&s), 0);
+        // Declared: one record per search, chain green.
+        s.set_read_audit(true);
+        let marker = "quarterly zq1x7probe plan";
+        s.search(marker, &SearchOptions::default()).unwrap();
+        assert_eq!(audit_reads(&s), 1);
+        assert!(s.verify().unwrap().ok(), "chain green with read records");
+        // The query text reaches no disk byte: the record holds a keyed
+        // fingerprint. Scan the db AND its WAL — recent writes live there.
+        let mut bytes = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        if let Ok(wal) = std::fs::read(dir.path().join("vaults/test/palace.db-wal")) {
+            bytes.extend_from_slice(&wal);
+        }
+        let needle = b"zq1x7probe";
+        assert!(
+            !bytes.windows(needle.len()).any(|w| w == needle),
+            "query text leaked into the database"
+        );
+        // Off again: byte-identical default restored.
+        s.set_read_audit(false);
+        s.search("quarterly plan", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(audit_reads(&s), 1);
+    }
+
+    /// Export auditing: every full-palace egress leaves a chain record
+    /// binding the export's own manifest digest, and the chain stays
+    /// green through it.
+    #[test]
+    fn exports_leave_a_chain_record_binding_the_manifest_digest() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("w", "r", "words that leave", 0)).unwrap();
+        let counts = undercroft_vault::bundle::ManifestCounts {
+            drawers: 1,
+            ..Default::default()
+        };
+        s.audit_export("test", &counts, "abc123digest", Some("pq1recipientstring"))
+            .unwrap();
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit WHERE record_id = 'egress/export'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// `UNDERCROFT_READ_AUDIT` parses its two modes or REFUSES to open —
+    /// a declared audit posture must never silently not exist.
+    #[test]
+    fn the_read_audit_declaration_parses_or_refuses() {
+        assert!(!resolve_read_audit(None).unwrap());
+        assert!(!resolve_read_audit(Some("off")).unwrap());
+        assert!(!resolve_read_audit(Some("")).unwrap());
+        assert!(resolve_read_audit(Some("chain")).unwrap());
+        assert!(resolve_read_audit(Some(" CHAIN ")).unwrap());
+        for bad in ["yes", "1", "full", "chain,extra"] {
+            assert!(resolve_read_audit(Some(bad)).is_err(), "{bad:?}");
+        }
     }
 
     /// The declared rate screen (C3.3 tier-1 wishlist, closed): a writer
