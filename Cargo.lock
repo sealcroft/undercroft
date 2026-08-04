@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-bench"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1589,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-cli"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-core"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "calendrical_calculations",
  "hex",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-embed-onnx"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "undercroft-core",
  "rayon",
@@ -1643,7 +1643,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-embed-ort"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "undercroft-core",
  "ort",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-index"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "postgres",
  "serde",
@@ -1665,7 +1665,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-llm"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "undercroft-core",
  "undercroft-obs",
@@ -1680,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-obs"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -1696,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-orchestrator"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "anyhow",
  "chacha20poly1305",
@@ -1717,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-store"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-vault"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",

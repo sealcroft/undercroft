@@ -1,6 +1,27 @@
 # Changelog
 
-## Unreleased — the cross-lingual default becomes honest: the script-disjoint fusion reweight
+## 0.45.0 — Honest by default: the defense program completes and the cross-lingual tax is repealed
+
+Ten merged units since v0.44.0, each with its full record below. The
+arcs: C3.2 and C3.3 finish end to end — retention policies enforced by
+attested sweeps on the HMAC-covered clock, denial and every sweep
+receipted, the update path screened on the surface writing NOW, the
+advisory classifier that may say "suspicious" and never "admitted", the
+per-agent accident bound on the training draws, and the last poisoning
+residual (non-finite external vectors) refused at the door. The
+no-cleartext mandate reaches every content egress path — served embedder
+and every LLM consumer alike refuse non-loopback cleartext with no
+override, both CA pins exist, and the required TLS infra ships
+containerized. The cross-lingual claim is made honest twice over: first
+recorded on a citable public corpus with the full per-pair tables, then
+made TRUE at the default weight by the script-disjoint fusion reweight
+(FLORES-200 cross-script 36–44% → 95–100% R@5 at defaults, LoCoMo
+digit-for-digit, declared-weight arm digit-identical). Embedder postures
+become ready configurations with a published guide and smoke-probed ort
+release artifacts. test 499 → 511, e2e 181 → 197, env vars 69 → 72; the
+default same-language contracts are byte-identical throughout.
+
+### the cross-lingual default becomes honest: the script-disjoint fusion reweight
 
 - **The lexical-noise tax on cross-script pairs is repealed at the
   default weight.** When a query and a candidate share NO letter script,
@@ -54,7 +75,7 @@
   unknown-script sides never disjoint; embedded Latin keeps pairs
   joined).
 
-## Unreleased — every embedder posture becomes a ready configuration
+### every embedder posture becomes a ready configuration
 
 - **The posture guide ships** (`docs/EMBEDDERS.md`, published as
   "Choosing an embedder posture"): all four postures — `hash` zero-egress
@@ -92,7 +113,7 @@
   increments, not silent omissions. The workflow jobs run at the next
   `v*` tag — the smoke logic itself is exercised there.
 
-## Unreleased — the no-cleartext mandate reaches every LLM consumer
+### the no-cleartext mandate reaches every LLM consumer
 
 - **`LlmClient` construction now enforces TLS-or-loopback — the served
   embedder's policy (#93), one client over, no override.** Every
@@ -116,7 +137,7 @@
   carries the fix by name; every loopback stub-server test constructs
   as before.
 
-## Unreleased — the last open poisoning channel closes: non-finite external vectors are refused
+### the last open poisoning channel closes: non-finite external vectors are refused
 
 - **`upsert_external` refuses any vector with a NaN or infinite
   component.** The codebook-poisoning invariant rested on L2
@@ -133,7 +154,7 @@
   vectors are untouched. Measured nothing, on purpose — a refusal of
   arithmetic that corrupts is not a tunable.
 
-## Unreleased — the advisory tier: a model may say "suspicious", never "admitted" (C3.3 complete)
+### the advisory tier: a model may say "suspicious", never "admitted" (C3.3 complete)
 
 - **The optional tier-2 classifier ships, advisory-only by
   construction** (`UNDERCROFT_ADMISSION_LLM=advisory`, 71st env var; the
@@ -172,7 +193,7 @@
   tier. Remaining wishlist inside the tier-1 detector (attack-fixture
   similarity, rate anomalies) stays recorded in ROADMAP.
 
-## Unreleased — the training draw gains its accident bound: the per-agent cap (C3.3)
+### the training draw gains its accident bound: the per-agent cap (C3.3)
 
 - **`keyed_sample_capped` now bounds TWO groupings**, each at
   `want / UNDERCROFT_TRAIN_SOURCE_CAP`: the wing (the adversarial bound
@@ -199,7 +220,7 @@
   even-stride-lesson gates (synth 16384 periodic, wingscale 16-wing both
   floors) re-run green at this tree as no-regression.
 
-## Unreleased — the update path is screened on who is writing NOW (C3.3)
+### the update path is screened on who is writing NOW (C3.3)
 
 - **The recorded update-path gap closes, and it was provenance-shaped**:
   `update_drawer` re-upserted the hydrated drawer carrying its ORIGINAL
@@ -233,7 +254,7 @@
   (flagged update quarantines and says so, the drawer keeps its words,
   the deny receipt cleans up). e2e grows 194 → **197**.
 
-## Unreleased — time gets a policy and denial gets a receipt (C3.2 phase 2)
+### time gets a policy and denial gets a receipt (C3.2 phase 2)
 
 - **Retention policies per wing/room** (`retention.rs`): the operator
   declares how long a wing — or one room in it — keeps drawers
@@ -273,7 +294,7 @@
   grows 181 → **194** (deny receipt + retention CLI + `/v1` retention
   routes). Schema gains `retention_policy` (inventoried not-per-drawer).
 
-## Unreleased — the cross-lingual claim gets a citable corpus, and an honest one: FLORES-200
+### the cross-lingual claim gets a citable corpus, and an honest one: FLORES-200
 
 - **The session-24 xlingual result replicates on a public corpus** —
   docs-only unit; the numbers, with their full configuration
@@ -346,7 +367,7 @@
     digit-identical, arm A recovering without a declared weight,
     false-friend controls untouched).
 
-## Unreleased — the wire class closes: TLS or loopback, nothing else
+### the wire class closes: TLS or loopback, nothing else
 
 - **Cleartext http to a non-loopback embeddings host is REFUSED at
   construction — no override exists, deliberately** (operator decision
