@@ -91,6 +91,19 @@ forces a caller to make it. **Gate**: a test that greps the crate for calls to
 `parity.rs` counting the tool surface. Recorded 2026-08-05, found by the
 documentation sweep rather than by the parity audit that should have caught it.
 
+**Scope grew on 2026-08-05, by reading the callers**: the same unit owes the
+typed-outcome honesty to the two save arms that still lack it.
+`upsert_external` returns a bare bool and `save_with_dedup_vec` hard-codes
+`quarantined: false` on both its branches, so a diverted save on `/v1`'s
+`dedup_threshold` or external-vault bodies answers 200 clean under the
+aimed-at id — and both emit a `drawer-saved` frame with the aimed-at wing
+beside the choke point's honest `drawer-quarantined`, so the monitor sees one
+write as two contradictory events. The dedup-refresh branch is the worst of
+it: a flagged refresh reports `deduped: true` for a refresh that never
+happened (the content went to quarantine; the matched drawer kept its old
+text). Additional gate: a diverted save reports `quarantined` with the landed
+id and emits exactly one frame, on every save arm — asserted per arm.
+
 ## Process: the drift check is part of the work now
 
 The surface-parity audit that found 65 drifts is not a one-off. It is a

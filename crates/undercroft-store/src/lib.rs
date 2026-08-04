@@ -8093,27 +8093,40 @@ mod tests {
 
         // 4. import_record WITH a vector — the import bypass. This is the
         //    engine's own export format, so it is the restore path and the
-        //    orchestrator's tenant migration.
+        //    orchestrator's tenant migration. The outcome must also SAY the
+        //    diversion happened: this arm hard-coded `quarantined: false`,
+        //    discarding the Landing the screen had just produced, so a
+        //    diverted `/v1` import answered `imported: N, quarantined: 0`.
         let (_d4, mut s4) = store(SecurityLevel::Sealed);
         s4.set_admission(true);
         let d4 = drawer("w", "r", poison, 3);
         let vec4 = vec![0.1f32; undercroft_core::embed::EMBED_DIM];
-        s4.import_record(&d4, Some(vec4), "test").unwrap();
+        let out4 = s4.import_record(&d4, Some(vec4), "test").unwrap();
         assert!(
             s4.get(&d4.id).unwrap().is_none(),
             "import_record with a vector must screen — a restore must not re-admit poison"
         );
         assert_eq!(s4.admission_pending().unwrap().len(), 1);
+        assert!(
+            out4.quarantined,
+            "a diverted import must report the diversion, not a clean save"
+        );
+        assert_ne!(out4.id, d4.id, "the id the row LANDED under, not the aim");
+        assert!(
+            s4.get(&out4.id).unwrap().is_some(),
+            "the reported id must exist"
+        );
 
         // 5. import_record WITHOUT a vector
         let (_d5, mut s5) = store(SecurityLevel::Sealed);
         s5.set_admission(true);
         let d5 = drawer("w", "r", poison, 4);
-        s5.import_record(&d5, None, "test").unwrap();
+        let out5 = s5.import_record(&d5, None, "test").unwrap();
         assert!(
             s5.get(&d5.id).unwrap().is_none(),
             "vector-less import must screen"
         );
+        assert!(out5.quarantined, "the vector-less arm reports it too");
 
         // And the one legitimate bypass still works: an operator ruling
         // re-files the drawer without the screen trapping it forever.

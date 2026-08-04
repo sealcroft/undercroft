@@ -370,13 +370,16 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   so it cannot call `write_drawer` and screens through its own
   `admission_divert` loop into `BulkOutcome{created, quarantined}` — the
   same decision reached by a SECOND implementation, which is the shape the
-  `Screen` argument exists to prevent, and it is what leaves the bulk
-  path's diversions unclassified (see the obs bullet). One more recorded
-  gap on the same theme: `import_record` hard-codes `quarantined: false`
-  on both vector-carrying branches, discarding the `Landing.diverted_to`
-  it just received, so a diverted import still reports a clean save under
-  the id the caller aimed at — the exact dishonesty `upsert_screened`
-  exists to fix, one door along. No
+  `Screen` argument exists to prevent (ROADMAP R5: extract one
+  screen-and-divert function both paths call; the telemetry half is
+  already shared, both paths classifying through `admission::save_event`).
+  `import_record` reports the `Landing` it receives — a diverted import
+  answers `quarantined` with the id the row actually landed under, on
+  every branch. Still open on the same theme, R5's unit: `upsert_external`
+  returns a bare bool and `save_with_dedup_vec` hard-codes
+  `quarantined: false` on both its branches, so a diverted save on those
+  arms — `/v1`'s `dedup_threshold` and external-vault save bodies — still
+  reports clean under the aimed-at id. No
   assertion about the reserved wing at the choke point: a CALLER may
   legitimately aim a write at it (a forgery attempt) and must reach the
   reserved-wing guard and be refused as invalid input, not trip an
@@ -491,21 +494,20 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   worth knowing: `chain_commit(records)` counts audit-chain **records**, not
   manifest anchors (a 256-drawer batch anchors once and advances it by 256;
   records appended without an anchor — read audits — are counted by the next
-  one), and **how a diversion reaches the live feed is a RECORDED GAP, not
-  a design — read this before quoting the monitor**. The intent is one
-  classifier, `admission::save_event`, at the write choke point, and
-  `event_drawer_quarantined` (intended wing/room + the closed-vocabulary
-  signal codes, codes shipped even for a sealed vault since they are not
-  names) is the frame it should emit; `monitor.html` already dispatches on
-  `drawer-quarantined` and `website/src/observability.md` documents it.
-  What the code does: `write_drawer` calls `save_event`, then emits
-  `drawer-saved` with `wing = quarantine-pending` and the intended wing in
-  the ROOM slot, dropping the signal codes at the `SaveEvent::Quarantined
-  { .. }` destructure; `upsert_many` never reaches that site at all and
-  emits a plain per-drawer `drawer-saved` whose only tell is the wing
-  name — the pre-choke-point failure mode, still live on the bulk path.
-  So **nothing calls `event_drawer_quarantined` outside obs's own smoke
-  test**, and a `drawer-quarantined` frame never reaches a client
+  one), and **a diversion is a `drawer-quarantined` frame decided by ONE
+  classifier**: `admission::save_event` classifies by WHERE THE ROW LANDED,
+  `write_drawer` emits at the choke point, and `upsert_many` — which owns
+  its transaction and cannot reach the choke point — runs the same
+  classifier over its batch. The frame carries the intended wing/room and
+  the closed-vocabulary signal codes; codes ship even for a sealed vault
+  since they are not names (a sealed frame suppresses the names), and
+  offsets and content never travel. `monitor.html` dispatches on
+  `drawer-quarantined`; `website/src/observability.md` documents it.
+  Residue, R5's unit (ROADMAP): `upsert_external` and `save_with_dedup_vec`
+  still emit `drawer-saved` with the aimed-at wing and report
+  `quarantined: false` even when the choke point diverted the row — one
+  honest frame and one lying one on the same write; the typed-outcome fix
+  that reached `upsert_screened` and `import_record` is owed on those arms
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
@@ -721,7 +723,7 @@ docker compose run --rm test          # cargo unit + integration tests (551 run,
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (222 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)

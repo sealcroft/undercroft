@@ -1,5 +1,6 @@
 # Changelog
 
+## Unreleased
 
 ### surface parity: 65 drifts closed, and the mechanism that stops the next one
 
@@ -102,11 +103,25 @@
   variables; `false_friends_stay_apart` is **58 rows in 10 control sets**
   across eight languages, not 20. README's claim that Milvus was "not carried
   over" contradicted its own backend table 300 lines above.
+- **The sweep's two fixes now carry the tests they were owed** (the
+  Definition of done, applied to the sweep itself):
+  `every_write_path_is_screened` asserts `import_record`'s RETURNED
+  outcome on both arms — `quarantined`, plus the id the row actually
+  landed under — and e2e-telemetry grew a screening-on server: the
+  `drawer-quarantined` frame is asserted on the live feed (intended wing
+  + signal codes; the flagged text never travels), the sealed variant
+  suppresses names while keeping the codes, a diverted `/v1` save
+  answers 202 + `quarantined: true`, and a poisoned re-import reports
+  its diversion count (e2e-telemetry 16 → 24 checks). CLAUDE.md's obs
+  and admission bullets describe the fixed state instead of the gap —
+  and name what is STILL open on the same theme, now folded into
+  ROADMAP's R5: `upsert_external` and `save_with_dedup_vec` report
+  `quarantined: false` and emit a `drawer-saved` frame for writes the
+  screen diverted, so `/v1`'s `dedup_threshold` and external-vault save
+  bodies still answer clean under the aimed-at id.
 - `.handover/NEXT_SESSION.md`: the order of work — residuals, then v0.47.0,
   then the AMB benchmark — with everything the benchmark needs already
   prepared and deliberately parked.
-
-## Unreleased
 
 ### `--read-only` is a posture on the process, not a filter on one port
 
