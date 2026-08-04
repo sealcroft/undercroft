@@ -1,5 +1,6 @@
 # Changelog
 
+## Unreleased
 
 ### surface parity: 65 drifts closed, and the mechanism that stops the next one
 
@@ -49,7 +50,78 @@
   scan. Noted in `open_read_only`'s doc comment.
 - unit battery 523 → **551**, e2e 214 → **222**.
 
-## Unreleased
+
+### the hygiene pass: process becomes a rule, and the docs stop lying
+
+- **Definition of done, in CLAUDE.md, binding on every unit**: unit tests AND
+  integration tests, every time — a unit test proves the function, an
+  integration test proves the SURFACE, and the 65-drift audit happened because
+  capabilities were verified through one surface and assumed on the others. A
+  test that would have failed before the fix. A **drift check** whenever a
+  capability spans more than one of {CLI, MCP, `/v1`, orchestrator}. Every
+  governance surface updated in the same unit. The full Docker battery at the
+  final tree, with the note that `cargo build -p` does **not** compile
+  integration tests.
+- **Session-end hygiene, also binding**: docs verified against code by
+  counting rather than remembering; the site built and the published page
+  checked rather than assumed; `build.sh` re-run if a diagram moved; every
+  open thread written down **as work with a fix and a gate**. And the rule
+  that produced this entry: **"accepted" is not a resting state** — nothing
+  broken or half-baked stays a gap.
+- **The drift check joins the release flow**, not just the toolbox.
+  `parity.rs` holds the line continuously (the MCP inventory counted in both
+  directions, `OPERATOR_ONLY` enforced); the seven-dimension fan-out with an
+  adversarial verifier per dimension is what catches a capability whose
+  *behaviour* drifts, which no fixed inventory can express.
+- **ROADMAP's four residuals are now four units of work**, each with the shape
+  of its fix and a gate — including the two an earlier draft called
+  "accepted": `verify` on a read-only server will separate the verdict from
+  the anchor heal, and a read-only open will **detect and report** rather than
+  silently heal schema, rotation and anchor state.
+- **A six-surface documentation sweep** (README, CLAUDE.md, AGENTS,
+  THREAT_MODEL/LABELS/SECURITY/PQ, the ops docs, the architecture page, the
+  website) fixed dozens of stale claims — and **found three code defects**,
+  reported rather than papered over:
+  - the write choke point emitted `drawer-saved` with the quarantine wing in
+    the wing slot and the intended wing in the ROOM slot, dropping the signal
+    codes, while the purpose-built `event_drawer_quarantined` — which
+    `monitor.html` dispatches on — had no caller outside a smoke test. An
+    operator watching a poisoning attempt saw an ordinary write. **Fixed.**
+  - `upsert_many` owns its transaction so it cannot route through
+    `write_drawer`, which means the screening decision has **two
+    implementations**, and the bulk path announced diversions as plain saves.
+    Both paths now classify through the same `save_event`, and CLAUDE.md
+    states the honest shape rather than "one choke point".
+  - `import_record` hard-coded `quarantined: false`, discarding the `Landing`
+    the screen had just produced, so a `/v1` import that WAS diverted reported
+    `imported: N, quarantined: 0` — the same dishonesty the scripted-attacker
+    gate caught on the save path, on the route a backup restore and the
+    orchestrator's tenant migration both use. **Fixed.**
+- Numbers corrected by counting: the battery is **551 run / 4 ignored / 555
+  declared** (the sweep's own first answer, 554/+1, came from a different
+  method and is recorded beside the corrected one); **76** `UNDERCROFT_*`
+  variables; `false_friends_stay_apart` is **58 rows in 10 control sets**
+  across eight languages, not 20. README's claim that Milvus was "not carried
+  over" contradicted its own backend table 300 lines above.
+- **The sweep's two fixes now carry the tests they were owed** (the
+  Definition of done, applied to the sweep itself):
+  `every_write_path_is_screened` asserts `import_record`'s RETURNED
+  outcome on both arms — `quarantined`, plus the id the row actually
+  landed under — and e2e-telemetry grew a screening-on server: the
+  `drawer-quarantined` frame is asserted on the live feed (intended wing
+  + signal codes; the flagged text never travels), the sealed variant
+  suppresses names while keeping the codes, a diverted `/v1` save
+  answers 202 + `quarantined: true`, and a poisoned re-import reports
+  its diversion count (e2e-telemetry 16 → 24 checks). CLAUDE.md's obs
+  and admission bullets describe the fixed state instead of the gap —
+  and name what is STILL open on the same theme, now folded into
+  ROADMAP's R5: `upsert_external` and `save_with_dedup_vec` report
+  `quarantined: false` and emit a `drawer-saved` frame for writes the
+  screen diverted, so `/v1`'s `dedup_threshold` and external-vault save
+  bodies still answer clean under the aimed-at id.
+- `.handover/NEXT_SESSION.md`: the order of work — residuals, then v0.47.0,
+  then the AMB benchmark — with everything the benchmark needs already
+  prepared and deliberately parked.
 
 ### `--read-only` is a posture on the process, not a filter on one port
 

@@ -60,16 +60,56 @@ candidates and is embedder-independent. The rrf mode measured below both
 score blends (rank fusion discards score magnitude) and has been removed;
 its row stays as the record of why.
 
-### The embedder is a wash under BM25
+### MiniLM is a wash under BM25 — a *modern* embedder is not
 
 | Embedder (BM25) | R@10 | Query embed | Ingest (full corpus) |
 |---|---|---|---|
 | hash (zero-model) | 94.6% | ~6 ms | ~9 s |
 | MiniLM-L6 (ONNX) | 94.6% | ~128 ms | ~221 s |
 
-On LoCoMo the model adds **~128 ms/query and ~24× ingest for no accuracy gain**
-under BM25 — it only helps with weaker fusion. The zero-model hash embedder is
-the fast default.
+On LoCoMo, MiniLM adds **~128 ms/query and ~24× ingest for no accuracy gain**
+under BM25. This page used to generalise that row into "the embedder is a
+wash" — **it was a fact about MiniLM, not about model embedders as a class**,
+and four served models measured on the same corpus overturned it (separate run,
+own k and pool, so read it against its own hash baseline rather than against
+the table above):
+
+| Embedder (served) | params | session R@10 | turn all-gold | ingest | ms/q |
+|---|---|---|---|---|---|
+| hash (default) | — | 95.5% | 74.2% | 16 s | 110 |
+| nomic-embed-text | 137M | 96.8% | 77.4% | 177 s | 132 |
+| mxbai-embed-large | 335M | 96.9% | **78.4%** | 416 s | 149 |
+| bge-m3 | 567M | 96.9% | 77.9% | 469 s | 172 |
+| Qwen3-Embedding-0.6B (Q8) | 600M | **97.0%** | 78.1% | 413 s | 171 |
+
+**+3.2 to +4.2pp** of turn all-gold over hash — comparable to ColBERT's
++4.9pp, at no storage cost and no ONNX export. The second reading matters as
+much: the four modern models span **1.0pp**, so the lever is *using a real
+embedder at all*, not picking the best one, and public leaderboard order does
+not transfer here. No winner is claimed — one run per model, and the served
+path has not been shown run-to-run deterministic. The cost is 11–29× ingest
+(one HTTP call per drawer) and +20–57% search.
+
+Serve one with `UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`. The
+transport is **TLS or loopback, nothing else** — cleartext http to a
+non-loopback host is refused at construction with no override, and
+`UNDERCROFT_EMBED_CA` pins a self-signed root (a garbage file refuses rather
+than falling back to the public roots). Two hazards are stated rather than
+hidden: the endpoint reads drawer text in plaintext, so TLS protects the wire
+and not the destination — only the in-process `onnx`/`ort` backends close that
+— and a failed embed cannot fail a write, so it degrades to a counted zero
+vector: lexically findable, semantically invisible until re-embedded.
+
+**Cross-lingual retrieval is the embedder's job, and the default cannot do
+it.** `HashEmbedder` is feature hashing over surface forms, so texts meet only
+on shared literal tokens and trigrams: measured, an EN/AR translation pair
+scores *below* an unrelated sentence, and `car`/`automobile` do not match
+either. With a multilingual model served, FLORES-200 cross-script pairs read
+**95–100% R@5 at the shipped defaults** — reached by two calibrations rather
+than by tuning: the semantic map's neutral is the embedder's own measured
+unrelated floor, and a (query, candidate) pair sharing no letter script takes
+the blend at the weight ceiling. Both are pairwise byte-readable evidence,
+never language identification, and the hash default stays bit-identical.
 
 ### The reranker: big accuracy, big cost — then tamed
 
@@ -134,10 +174,14 @@ drawer count it already knows.
 A research spike (`undercroft-bench pqpage-synth`) priced the multi-million
 follow-up — sealing one AEAD *page per IVF list* and decrypting only probed
 lists: at 10⁷ synthetic drawers pages cut at-rest size 2.1×, drop the 22 s
-open-time decrypt-all to zero, and run warm at 630 MB vs ~1 GB — but the
-urgent fix at that scale is slab-grouping the existing RAM cache (no format
-change), so the page format stays demand-driven with its design questions
-answered (measured details in
+open-time decrypt-all to zero, and run warm at 630 MB vs ~1 GB. Both landed:
+slab-grouping the existing RAM cache by IVF list (no format change) is on by
+default, and the **sealed page tier ships behind `UNDERCROFT_PQ_PAGE_MIN`** —
+one AEAD page per list, lazily decrypted per probed list, default off because
+the flat cache is faster until the corpus makes the open-time decrypt hurt.
+Those pages are sealed but deliberately **not compressed**: a 4096-row page is
+InnoDB's geometry, and compressing-then-encrypting page-shaped data is exactly
+DBREACH's precondition (measured details in
 [`docs/RETRIEVAL_SCALING.md`](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)).
 
 **IVF inverted lists** now sit on top of the codes: a coarse quantizer
@@ -154,6 +198,51 @@ that scales with N. On by default above `UNDERCROFT_IVF_MIN` (8192) whenever
 PQ is enabled (`UNDERCROFT_RETRIEVAL=pq`, now wired through the CLI and the
 multi-tenant `/v1` server, not just the bench harness).
 
+### Settled at a million drawers
+
+The tables above stop at 50k because that is where the instruments stopped.
+They no longer do. `undercroft-bench pqscale` and `scopescale` grow one
+cumulative vault through four checkpoints from **131k to 1M drawers**, and the
+shipped defaults hold **R@5 100.0% in every column at every checkpoint**:
+
+| Query shape | 131k | 262k | 524k | 1M |
+|---|---|---|---|---|
+| unscoped | 20.4 ms | 32.6 ms | 59.1 ms | 112.7 ms |
+| wing-scoped | 32.7 ms | 31.8 ms | 35.3 ms | 32.0 ms |
+
+Room-scoped queries run 13–17 ms and wing+room 13–15 ms, flat across all four
+checkpoints. Only the unscoped row grows with the corpus; every scoped shape is
+flat, because **a declared filter is resolved into the candidate draw rather than
+applied to it afterwards** — `room` used to be a plain `WHERE` over globally
+generated candidates, which is the wing-starvation defect one level down. A
+scope that fits the hydration budget is scanned exactly; a larger one gets
+membership-filtered candidates and a pool sized by the scope.
+
+Three findings worth carrying away, because each cost a belief:
+
+- **The per-wing index tier's query-latency benefit is dead.** `pqscale`'s
+  unscoped PQ curve shows no break anywhere from 131k to 1M, so the tier's real
+  value is the *build* economics (wing-shaped rather than corpus-shaped) and
+  the starvation fix — a global top-k can miss a scoped wing entirely, leaving
+  candidates ∩ wing empty while the wing holds the answer. The 913 s/query
+  figure that once motivated the tier was the **full-scan** path, which the
+  global PQ tier answers on its own.
+- **Recall leaks are a pool-sizing problem, not an index problem.** Unscoped
+  R@5 drifted 100.0 → 96.8% by 1M against a fixed 256-candidate pool while the
+  competitor set grew. Closed by a two-stage pool sized in the corpus, and
+  scoped queries by a pool sized in the *scope* — which read 89.6% until the
+  scope-sized policy closed it at 100.0%. The stage-2 cut is deliberately
+  floored: a sealed vault has no lexical prefilter, so hydration is the only
+  door through which BM25 evidence reaches fusion, and cutting by pure cosine
+  measurably regressed 1M to 98.9%.
+- **The hotspot was not where anyone thought.** Parallel candidate hydration —
+  the queued lever — changed *nothing* when built. An opt-in phase trace
+  (`UNDERCROFT_SEARCH_TRACE=1`) then found the cost in BM25's serial
+  per-candidate scan, ~70 µs each and dominant at every scope. Fanning that
+  out (order-preserving, byte-identical) is what produced the numbers above,
+  from 39.4/66.1/132.8/269.3 unscoped and ~85 ms/q wing-scoped. The instrument
+  that refutes a belief is cheaper than the optimization that encodes it.
+
 ### Remote vector backends are untrusted accelerators, not a store swap
 
 Undercroft can push **sealed** content + embeddings to Qdrant / Weaviate /
@@ -164,6 +253,19 @@ remote backends sat at **~0.5% CPU** while the client did all the work, and were
 local decrypt per candidate outweigh ANN when the palace is small). They earn
 their keep only on very large corpora — and even then the scoring stays local.
 Accuracy and integrity never depend on the untrusted index.
+
+**Retrieval policy on that path is the local path's, verbatim.** The closed
+vocabularies, the deployment trust floor and the quarantine fence all come from
+one shared resolver and are applied to each candidate's HMAC-verified metadata.
+They were absent here until 2026-08-04, which made `index push --backend
+qdrant` a route around admission control — closed with a shared *required*
+step, not a second copy of the logic. `index_push` still mirrors quarantined
+rows deliberately: an untrusted mirror can offer any id, so a push-side filter
+would not be a boundary, and dropping them would make a reviewer's explicit
+`--wing quarantine-pending` scope answer an empty page instead of the truth.
+The residue is stated rather than hidden — remotely the floor bounds what came
+*back*, not what was generated, which is an availability cost, never an
+integrity one.
 
 ### Inference runtime: tract vs ONNX Runtime
 
@@ -242,7 +344,8 @@ Defaults are local-first and pure-Rust; every faster option is opt-in.
 |---|---|---|
 | Full-scan + BM25 (default) | transient | small palaces |
 | In-memory HNSW (`hnsw` feature) | O(corpus) | moderate corpora, raw speed |
-| **On-disk PQ** (hmac-only) | ~O(codebook) | large corpora, edge/IoT |
+| **On-disk PQ/IVF** (both vault levels) | ~O(codebook) | large corpora, edge/IoT |
+| **MUVERA FDE** (`UNDERCROFT_RETRIEVAL=fde`) | ~O(codebook) | token-aware candidates |
 
 **Scoring**
 
@@ -273,17 +376,19 @@ Concrete configurations with the measured expectations:
 | **Personal palace** (default) | hash + bm25, no reranker | ~6 ms/query, 94.6% R@10 |
 | **Accuracy-critical, many-core** | + reranker `top_n=20`, `ort` + int8, pool = cores | ~330 ms/query, ~98% |
 | **Fast + accurate compromise** | + reranker `top_n=5–10`, `ort` + int8 | ~100–170 ms/query, ~98% |
-| **4-core / edge, large corpus** | hmac-only + **PQ prefilter**; reranker `pool=1` or off | bounded RAM, ~ms retrieval |
+| **4-core / edge, large corpus** | **PQ prefilter** (sealed or hmac-only — both tiers ship); reranker `pool=1` or off | bounded RAM, ~ms retrieval |
 | **GPU box** | `ort` CUDA (each forward ~1–5 ms) | reranked query well under 50 ms |
 | **Huge corpus, RAM-rich** | HNSW (tune `ef` with N) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded RAM (PQ+IVF) |
 
 Rules of thumb from the measurements: **BM25 fusion is always on** (free
-+1.9 pts); **the model embedder is not worth 20× latency under BM25** — measure
-before paying for it; **the reranker is the accuracy lever** (+3 pts) and is now
-affordable (`top_n=20`, ort+int8); **PQ is the bounded-RAM index whose recall
-holds at scale**; **remote vector DBs never make a small palace faster** — they
-are for corpora too large to scan locally, and all trust stays local
-regardless.
++1.9 pts); **MiniLM is not worth 20× latency under BM25, but a modern served
+embedder is** (+3.2–4.2pp of turn all-gold, and the *only* way to retrieve
+across languages at all); **the reranker is the accuracy lever** (+3 pts) and is
+now affordable (`top_n=20`, ort+int8); **PQ is the bounded-RAM index whose
+recall holds at scale** — 100.0% R@5 measured at every checkpoint from 131k to
+1M drawers; **remote vector DBs never make a small palace faster** — they are
+for corpora too large to scan locally, and all trust (and all retrieval policy)
+stays local regardless.
 
 ## Invariants preserved throughout
 

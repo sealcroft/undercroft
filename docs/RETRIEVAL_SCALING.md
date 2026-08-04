@@ -7,25 +7,46 @@ throughout: sealed vaults never persist a plaintext-derived index to disk.
 
 ## The pipeline today
 
-`search` runs three stages:
+`search` runs four stages:
 
-1. **Candidate generation** — pull candidates. Default: full O(n) cosine scan
-   over the decrypted embeddings (an FTS5 BM25 prefilter narrows it for large
-   *hmac-only* vaults). An experimental in-memory HNSW prefilter exists behind
-   the off-by-default `hnsw` feature.
+0. **Scope resolution** — every declared filter (`wing`, `room`, `kind`,
+   `min_trust`, plus the quarantine exclusion) is resolved into a seq set
+   **before** any candidate is drawn. This is not an optimization; it is
+   the difference between a filter and a starvation bug. A `WHERE` applied
+   to globally generated candidates can find the intersection empty while
+   the scope holds the answer — pinned by test, and it was the shape of
+   three separate defects (wing, room, and the FTS prefilter's top-k).
+1. **Candidate generation** — pull candidates through exactly one tier
+   (`UNDERCROFT_RETRIEVAL`, an `else if` chain with FDE first). Default:
+   full O(n) cosine scan over the decrypted embeddings; an FTS5 BM25
+   prefilter narrows it for large *hmac-only* vaults; PQ/IVF and MUVERA
+   FDE are the bounded-RAM tiers at **both** vault levels; an experimental
+   in-memory HNSW prefilter exists behind the off-by-default `hnsw`
+   feature. Scopes that fit the hydration budget skip the prefilter and
+   are scanned **exactly**; larger ones get membership-filtered candidates
+   and pools sized by the scope.
 2. **Fusion** — cosine + Okapi BM25 (+ recency), the hybrid rank.
 3. **Reranking (optional)** — a cross-encoder re-scores the top-N by the full
-   `(query, passage)` pair.
+   `(query, passage)` pair, or ColBERT MaxSim rescores from stored token
+   matrices.
+
+`UNDERCROFT_SEARCH_TRACE=1` prints per-phase milliseconds to stderr. It
+exists because the queued optimization was wrong: parallel candidate
+hydration was built first and measured **zero**, and a 1-vs-24-thread
+probe read identical numbers. The trace then found the cost in `fuse` —
+`bm25_raw`'s per-candidate scan at ~70 µs each. An instrument that refutes
+a belief is cheaper than the optimization that encodes it.
 
 The full tier map as shipped (every tier measured in this document; at
 both vault levels the derived artifacts follow the sealing invariant):
 
 ```mermaid
 flowchart TB
+    scope["Scope resolution<br/><i>wing · room · kind · trust floor · quarantine fence<br/>→ seq set, BEFORE candidates</i>"] --> c
     subgraph c["Candidate tier — pick one (UNDERCROFT_RETRIEVAL)"]
         scan["full cosine scan<br/><i>default, small palaces</i>"]
         ftsx["FTS5 BM25 prefilter<br/><i>hmac-only, ≥2k drawers</i>"]
-        pqx["PQ / IVF ADC<br/><i>48 B/vector, RAM code cache,<br/>sealed rows AEAD</i>"]
+        pqx["PQ / IVF ADC<br/><i>48 B/vector, slab-grouped RAM cache,<br/>sealed rows AEAD, per-wing tier</i>"]
         fdex["MUVERA FDE dot<br/><i>token-aware; 256 B PQ codes,<br/>sealed rows AEAD</i>"]
         hnswx["HNSW (feature)<br/><i>RAM-only, ef scales with N</i>"]
     end
@@ -41,6 +62,18 @@ flowchart TB
 ## Measured costs (LoCoMo, 1,982 QA, and synthetic corpora)
 
 Two costs dominate, and they are **independent** — conflating them is the trap.
+
+**Dating note, because a latency number without its build is not a
+measurement.** Every end-to-end search figure from here down to *The
+million-drawer settlement* predates the parallel-fuse pass, which took the
+serial `bm25_raw` scan and fanned it (with candidate hydration and the
+stage-2 exact-cosine decrypts) across cores, order-preserving and
+byte-identical. *Recall* rows are unaffected — the equivalence was
+verified by reproducing a full LoCoMo sweep row digit for digit — but
+*latency* rows are conservative: the harness itself went from **~40 min to
+308 s (7.8×)** for one full LoCoMo pass. *The million-drawer settlement*
+is the one section measured after it, and states its configuration in
+full.
 
 ### Cost 1 — scoring: the reranker
 
@@ -97,7 +130,9 @@ billion-scale-on-modest-RAM design.
 
 **Shipped (flat PQ prefilter, hmac-only vaults)** — the invariant rule mirrors
 FTS5: hmac-only vaults may hold plaintext-derived indexes on disk, sealed
-vaults never do (their encrypted-at-rest variant is the research follow-up).
+vaults never do. (At the time of this table the sealed variant was the
+research follow-up; it shipped, and its own measurements are two sections
+down under *Security tiering*.)
 `set_pq(true)` / `UNDERCROFT_RETRIEVAL=pq`; codes maintained incrementally on
 write with FTS-style self-heal. Measured (synth, hmac-only, N=20k):
 
@@ -115,7 +150,6 @@ in this table's run; the v0.22.0 ef-scaling fix lifts it to 98.8%/96.3% at
 ~126–164 q/s — see the flaws list above). PQ's flat scan is still O(n) —
 q/s falls ~linearly (59 → 19), ~3–9× the true scan. HNSW is the raw-speed
 option when O(corpus) RAM is acceptable.
-**Still open:** the sealed-tier encrypted index.
 
 ### IVF inverted lists — and the three scan bottlenecks the sweeps exposed
 
@@ -163,8 +197,23 @@ ADC arithmetic is now only ~4–6 ms even at 50k; its share (the only part of
 query cost that scales with N) grows with the corpus, so IVF is kept on by
 default above `UNDERCROFT_IVF_MIN` (8192; `off` restores the flat scan,
 `UNDERCROFT_IVF_NPROBE` overrides the probe count). Recall parity, in-place
-migration from the v0.14.0 layout, and self-healing partitions (retrain when
-the corpus doubles past their training size) are all test-asserted.
+migration from the v0.14.0 layout, and self-healing partitions are all
+test-asserted.
+
+Two of those constants have since moved, both for measured reasons:
+
+- **`nlist` is `√N` clamped to `[16, 4096]`**, not `[16, 1024]`. The old
+  upper clamp put ~10k rows in every probed slab at 10⁷; 4096 keeps `√N`
+  tracking the corpus to ~16M drawers.
+- **Partitions retrain at 1.5× their training size** (`ivf_fresh`, every
+  site including FDE), not strictly past 2×. The doubling rule was priced
+  when a retrain appeared to cost 73 minutes — ~95% of which turned out to
+  be a per-row-autocommit fsync **bug** in the rebuild loop, not a cost
+  (one transaction around the rewrite collapsed an 8k smoke warm-up
+  36.2 s → 2.3 s, and is strictly better crash atomicity besides). A 524k
+  rebuild now costs ~14 s, and the strict boundary let a corpus sit at
+  *exactly* 2.0× stale — measured at 262k, where staleness sank one
+  query's gold beyond even a 2048 pool.
 
 ### Scoring → two strategies, chosen by the deployment
 
@@ -580,6 +629,117 @@ activates the inverted tier only for operators past ~10⁶ drawers who
 have validated containment on their real corpus
 (`UNDERCROFT_FDE_NPROBE` sets the probed fraction).
 
+## The million-drawer settlement (`pqscale`, `scopescale`)
+
+Every table above was measured at 20k–200k, on the tiers as they stood at
+the time. Two instruments took the question to 10⁶, and between them they
+killed one claim, filed one defect, and closed it. These are the numbers
+the shipped defaults deliver today.
+
+**Configuration for every number in this section**: one cumulative
+**sealed** vault, hash embedder, `UNDERCROFT_RETRIEVAL=pq`, k=5, ~200
+queries per checkpoint, one run, bulk-ingested through `upsert_many`.
+Warm-up (the event-driven verify/train/retrain debt) is reported
+separately and never folded into a per-query average — folding a one-time
+index build into a query mean is how this project's own first per-wing
+instrument manufactured a 15× "effect".
+
+### What died: the query-latency case for the per-wing tier
+
+`pqscale` grew one vault through four checkpoints. Unscoped PQ search held
+**24.3 → 31.0 ms/q from 131k to 1M** — +28% over 8× corpus, linear creep
+in probed codes, **no break**. The 913 s/query figure that once motivated
+"the wing must be the retrieval unit" was a *full-scan* number, and the
+global PQ tier answers it alone.
+
+So the per-wing tier is reclassified to what it provably buys: **build
+economics** (a wing-shaped index instead of a corpus-shaped one) and **the
+scoped-recall fix** below. It buys no unscoped latency at any size
+measured, and is documented as exactly that. Wings past
+`UNDERCROFT_WING_PQ_MIN` (4096; `off` = no per-wing indexes) carry their
+own codebook/IVF/rows; below the floor a scoped query full-scans its wing
+— bounded by the floor, exact, and starvation-free. Stated honestly:
+BM25's IDF stays global, so the wing isolates *candidates*, not *scores*.
+
+### What was filed, and closed: recall leaks with corpus size
+
+The same run found unscoped R@5 decaying **100.0 → 96.8%** across the four
+checkpoints. Classified as a **defect**, not a property: it violates the
+prefilter's own charter — narrow the candidate set, never lose the answer.
+Root cause was arithmetic, not approximation: the candidate pool was fixed
+at 256 while competitors grew linearly, so a fixed pool must eventually
+crowd the true answer out. Everything downstream already re-scores with
+exact vectors, so the loss was confined entirely to candidate *selection*.
+
+The fix took three measured steps, and the two failures taught more than
+the success:
+
+1. A scaled single-stage pool (`live/512`, hydrating everything it
+   fetched) recovered 524k and 1M — but a fresh-vault control at 262k
+   still read 98.8%, refuting "codebook staleness" as that row's sole
+   cause.
+2. A wider net cut back to the fixed floor **by exact cosine** regressed
+   1M from 100.0% to 98.9%. The instructive failure: a sealed vault has no
+   lexical prefilter, so **hydration is the only door through which BM25
+   evidence reaches fusion** — a pure-cosine cut below the proven
+   hydration pool drops lexically-carried golds. A wide net is worthless
+   if the cut metric ignores why fusion would have ranked its contents.
+3. **Shipped: a two-stage pool.** Stage 1 fetches `live/64` ADC candidates
+   (`UNDERCROFT_POOL_DIV`; `off` restores the measured-leaky fixed floor).
+   Stage 2 cuts by exact cosine over just those candidates' embeddings
+   (~µs each) to `stage1/8` = `live/512` — **never below**, for the reason
+   step 2 proved. Stage 3 hydrates as before.
+
+**Shipped default, gate-verified** (plus the 1.5× freshness rule above;
+the 262k row needed all three levers at once and no single-lever
+configuration ever recovered it):
+
+| corpus | unscoped R@5 | ms/q |
+|---|---|---|
+| 131,072 | **100.0%** | 20.4 |
+| 262,144 | **100.0%** | 32.6 |
+| 524,288 | **100.0%** | 59.1 |
+| 1,048,576 | **100.0%** | 112.7 |
+
+The price curve is linear-in-corpus by design (hydration `live/512` ×
+~0.09 ms + stage-2 `live/64` × ~5 µs) and is the recorded cost of not
+losing answers. It was 34.4/69.6/138.4/280.6 ms/q before the parallel-fuse
+pass; `dim/4` codes remain the unused shrink lever.
+
+### Scoped queries at scale (`scopescale`)
+
+The instrument any scoped-recall claim must cite: a fixed 8,192-drawer
+probe wing holding a fixed 512-row probe room, with the corpus grown
+*around* them to each checkpoint, and four passes per checkpoint —
+unscoped control / wing / room / wing+room.
+
+Its first run filed its own defect: **wing-scoped R@5 89.6%,
+corpus-independent**. Wings live exactly in the size band (10³–10⁵) where
+the corpus pool divisors collapse to the fixed 256 floor, so per-wing
+search ran the very configuration the global leak was measured in.
+Widening stage 1 alone plateaued at 96.9%, for step 2's reason above.
+
+**The fix is scope-sized pools** (`scoped_pool_k` / `scoped_keep`): a
+scoped search fetches at least `min(scope, 2048)` ADC candidates and
+hydrates at least `min(scope, 1024)`, both floored at the page edge and
+converging to the proven corpus divisors as the scope grows. Scopes at or
+below the hydrate floor are answered **exactly**. These are declared
+constants with their measurement in the doc comment, deliberately **not**
+env knobs — a pool floor below these values is a measured-leaky
+configuration, not a preference.
+
+| pass | R@5, 131k → 1M | ms/q |
+|---|---|---|
+| unscoped control | 100.0% at every checkpoint | 20.4 / 32.6 / 59.1 / 112.7 |
+| wing | 100.0% | ~32, flat |
+| room | 100.0% | ~13–17 |
+| wing + room | 100.0% | ~13–15 |
+
+Scoped latency is **flat across 8× corpus growth** — that is the property
+scoping is for. Two things deliberately rejected on the way: retry-on-empty
+(it masks legitimate empties) and post-ranking filters (they spend the pool
+on excluded rows, which is the starvation defect restated).
+
 ## Configurable — pick per deployment, not one-size-fits-all
 
 Retrieval, scoring, and runtime are **independent, user-selectable axes**. The
@@ -590,9 +750,13 @@ defaults stay local-first and pure-Rust; every faster option is opt-in.
 | Option | RAM | Best for | Status |
 |---|---|---|---|
 | Full-scan cosine + BM25 | O(corpus) transient | small palaces (default) | shipped |
+| FTS5 BM25 prefilter | on-disk | hmac-only vaults ≥ `UNDERCROFT_FTS_PREFILTER_MIN` (2k) | shipped |
 | In-memory HNSW (`hnsw`) | O(corpus) | moderate corpora, raw speed | experimental |
-| **On-disk PQ + IVF** (`set_pq`, `UNDERCROFT_RETRIEVAL=pq`) | ~O(codebook) | large corpora, edge/IoT (hmac-only) | **shipped** |
-| + sealed encrypted tier | ~O(codebook) | sealed vaults | planned |
+| **On-disk PQ + IVF** (`set_pq`, `UNDERCROFT_RETRIEVAL=pq`) | ~O(codebook) | large corpora, edge/IoT — **both vault levels**, sealed rows AEAD'd with a decrypt-once slab-grouped cache | **shipped** |
+| + per-wing codebook/IVF (`UNDERCROFT_WING_PQ_MIN`, 4096; `off`) | ~O(codebook) | wing-shaped build cost; scoped retrieval as a trust zone — **not** a query-latency win, settled at 10⁶ | shipped |
+| + sealed page tier (`UNDERCROFT_PQ_PAGE_MIN`) | ~O(working set) | sealed vaults past the RAM/open-time wall | shipped, **default off** |
+| **MUVERA FDE** (`UNDERCROFT_RETRIEVAL=fde`) | ~O(codes) | token-aware candidates ahead of ColBERT rescore | **shipped** |
+| + FDE inverted tier (`UNDERCROFT_FDE_IVF_MIN`) | ~O(codes) | past ~10⁶, only with containment validated on your corpus | shipped, **default off** (measured net-negative below that) |
 
 **Scoring**
 
@@ -623,12 +787,12 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    tract kept as fallback. Measured: ingest ~4–5× faster; reranker
    **327 ms @ 98.3% (top_n=20) / 101 ms @ 98.0% (top_n=5)** with the session
    pool + int8 models — ~100–160× over the original sequential reranker.
-3. **On-disk PQ retrieval (done, flat + IVF):** bounded-RAM prefilter for
-   hmac-only vaults — codebook-only RAM, recall holds where HNSW's collapses.
-   IVF inverted lists shipped on top (clustered `(list, seq)` layout,
-   `nprobe = nlist/4`, self-healing partitions) and the scan-path fixes they
-   motivated lifted flat PQ itself ~45%; IVF adds +7–11% at N=20–50k and
-   grows with N. Remaining: the sealed-tier encrypted-at-rest index.
+3. **On-disk PQ retrieval (done, flat + IVF):** bounded-RAM prefilter at
+   both vault levels — codebook-only RAM, recall holds where HNSW's
+   collapses. IVF inverted lists shipped on top (clustered `(list, seq)`
+   layout, `nprobe = nlist/4`, self-healing partitions) and the scan-path
+   fixes they motivated lifted flat PQ itself ~45%; IVF adds +7–11% at
+   N=20–50k and grows with N.
 4. **ColBERT late interaction (done, incl. `ort` forwards):** the
    core-independent second stage — LoCoMo 94.6 → **96.77% R@10 at a flat
    92.7 ms/query** on tract, **70.3 ms/query** with the `ort` forwards +
@@ -641,11 +805,20 @@ server can add the **cross-encoder + rayon** fast path; a GPU box turns on
    ships sealed too — AEAD rows + decrypt-once RAM cache; sealed search
    **2.1 → 33.4 q/s at N=20k (×16)**, parity with the plaintext index.
    The hmac-only path adopted the same RAM cache in v0.22.0 — measured
-   parity within noise, kept as the single scan path. Remaining refinement:
-   page-level decryption matters only past multi-million drawers.
-6. **Restore economics** (next): portable derived artifacts in export
-   bundles, background backfill, token-store PQ with register-LUT MaxSim —
-   see "Restore economics" above.
+   parity within noise, kept as the single scan path. Page-level
+   decryption shipped opt-in in v0.42.0; it matters only past
+   multi-million drawers, so the per-row default stands.
+6. **Restore economics (done):** portable derived artifacts in export
+   bundles, background backfill, token-store PQ with LUT MaxSim — see
+   "Restore economics" above. Remaining micro-optimization: the 4-bit
+   register-LUT (`std::arch`) variant.
+7. **Scale to 10⁶ (done):** the corpus-scaled two-stage candidate pool and
+   the scope-sized pools, both gate-verified at **R@5 100.0% from 131k to
+   1M**, plus the parallel-fuse pass that made the price of them
+   affordable — see "The million-drawer settlement" above. Remaining
+   levers, both untaken because nothing needs them yet: `dim/4` codes, and
+   the FTS prefilter's fixed-`k` pool, which shares the leak shape the PQ
+   tier's did and is flagged rather than fixed.
 
 The in-memory HNSW (`hnsw` feature) stays as an experimental fast path for
 moderate sealed corpora and as the benchmark baseline — not the default.

@@ -52,8 +52,8 @@ A memory layer therefore has two distinct security jobs:
    written, by whom, when, so that poisoning is attributable,
    auditable, and reversible rather than laundered into anonymous
    "facts." This is where verbatim storage is a security property, not
-   a retrieval preference (§6), and where the planned provenance work
-   (§8) extends the design.
+   a retrieval preference (§6), and where the write-path provenance and
+   admission work (§8) extends the design.
 
 ## 2. System sketch
 
@@ -155,14 +155,38 @@ route. Optionally (and always, in multi-tenant deployments), every
 MAC** — an assertion for vault A cannot address vault B, timestamps
 outside ±120 s are refused, comparison is constant-time, and failures
 return a bare 401 with the reason only logged server-side (a detailed
-error would leak vault existence or forgery proximity). `--read-only`
-strips every mutating tool. The orchestrator stores tenant tokens as
-HMACs and seals engine credentials; token rotation invalidates the old
-token fleet-wide on the next request.
+error would leak vault existence or forgery proximity). The
+orchestrator stores tenant tokens as HMACs and seals engine
+credentials; token rotation invalidates the old token fleet-wide on the
+next request.
+
+`--read-only` is a **posture on the whole process**, not a filter on
+one port. Both stores `serve-http` opens — the `/mcp` handle and every
+`/v1` tenant vault — are opened read-only, so no embedder migration
+runs and read auditing is force-disabled with a warning rather than
+silently. The REST gate sits **in front of dispatch**, not at the top
+of each mutating handler, and it **fails closed**: every non-GET is
+refused unless it is on a two-entry allowlist (`POST …/search`, and
+`POST …/verify` — which only fast-forwards the manifest anchor and is
+classified as a read). MCP refuses every tool on its write list, and a
+test derives that list from the tool inventory so a mutating tool added
+later cannot escape it. The shape changed because the per-handler
+version had thirteen guards for fourteen mutating routes: `POST
+…/kg/authority` was simply never given one, so a `--read-only` server
+rewrote HMAC-covered authority columns, superseded the previous
+canonical holder and appended to the audit chain while answering 200 —
+while the identical capability over `/mcp` in the same process answered
+"server is read-only". One forgotten call is a silent write door, so
+the decision moved to the one place every request passes through.
 
 **Residual**: TLS termination is deliberately delegated to the
 operator's proxy (documented deployment guidance); the engine does not
-ship its own certificate machinery.
+ship its own certificate machinery. And `--read-only` bounds the
+*request* surface, not every byte written: opening a palace still
+creates schema, reconciles an interrupted rotation and initializes the
+chain, and with `UNDERCROFT_RETRIEVAL=pq` a search may still build or
+retrain a missing PQ/IVF index. The first three are open-time and
+accepted; the index build is a recorded gap, not a decision.
 
 ### A5 — Untrusted accelerator (remote vector indexes)
 
@@ -176,11 +200,29 @@ accelerators by design**. They receive sealed content bytes and
 embeddings only; every candidate they return is decrypted and
 **HMAC-re-verified locally** before use, so a malicious index can skew
 *which* verified records surface (availability/ranking) but can never
-forge content. **Residual (documented, opt-in)**: the embeddings pushed
-to a remote index are plaintext vectors — embedding-inversion recovery
-of approximate content is a real research capability, which is why
-remote indexes are off by default and the trade-off is stated where the
-feature is documented.
+forge content. Since 2026-08-04 the remote path also applies the
+**same retrieval policy as the local one, from the same function**
+(`resolve_search_policy`): closed-vocabulary validation of `kind` and
+`min_trust`, the effective trust floor, and the quarantine fence — each
+decided per candidate off the **HMAC-verified** `meta.wing`, never off
+the wing payload the backend stored. They were absent here until then,
+so an `index push` turned `--backend qdrant` into a route around
+admission control; the fix is one shared required step rather than a
+second copy that can drift again.
+
+**Residual (documented, opt-in)**: the embeddings pushed to a remote
+index are plaintext vectors — embedding-inversion recovery of
+approximate content is a real research capability, which is why remote
+indexes are off by default and the trade-off is stated where the
+feature is documented. And the shared policy bounds less here than
+locally: the backend trait filters on one wing and nothing else, so the
+floor bounds what came *back*, not what was generated, and an excluded
+wing's rows can still spend the candidate budget. That is an
+availability cost, never an integrity one — excluded content cannot be
+returned or scored. `index push` also still mirrors quarantined rows,
+deliberately: an untrusted mirror can offer any id, so a push-side
+filter would not be a boundary, and dropping them would empty the
+reviewer's own scope.
 
 ### A6 — Exfiltration channels (telemetry, phone-home, models)
 
@@ -226,11 +268,13 @@ cannot:
 
 **Residual (honest, updated as C3.3 shipped — 2026-08-03/04)**: the
 write path is now screened (deterministic detector + quarantine wing +
-chain-audited rulings, opt-in via `UNDERCROFT_ADMISSION`), writes carry
-provenance claims, wings carry operator-assigned trust classes consumed
-as a retrieval floor, updates are screened on the updating surface, the
-global training draws are capped per wing and per agent claim, and
-non-finite external vectors are refused. What remains true: detection
+chain-audited rulings, opt-in via `UNDERCROFT_ADMISSION`) at the single
+write choke point rather than at call sites, so no surface can reach
+storage unscreened; writes carry provenance claims, wings carry
+operator-assigned trust classes consumed as a retrieval floor, updates
+are screened on the updating surface, the global training draws are
+capped per wing and per agent claim, and non-finite external vectors
+are refused. What remains true: detection
 is heuristic, so a poison written without any of the marker classes
 passes the screen, and a record that passes can still be retrieved and
 shown to the agent — with provenance, but shown. Against
@@ -263,7 +307,10 @@ enclave execution) compose with undercroft but are not provided by it.
 | Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; fsync'd key files | keeps A2 detection sound under power loss |
 | Key rotation | one-transaction byte-exact reseal of every artifact + chain re-key; two-phase manifest swap, crash-safe | key-compromise recovery; A1 going forward |
 | Export bundles | hybrid X25519 + ML-KEM-768 ephemeral-static → HKDF → XChaCha20-Poly1305; header + KEM ct as AAD (v2; legacy X25519 v1 still opens) | A1 for backups in transit/at rest, incl. harvest-now-decrypt-later |
-| Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s) | A4 |
+| Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
+| Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
+| Retrieval policy | trust floor + quarantine fence + closed-vocabulary validation resolved before candidates are drawn, and shared verbatim by the remote path | A5 result steering, A7 reach |
+| Read/egress audit | `egress/export` chain record on every export, behind no declaration (a read-only replica warns and serves unaudited); `UNDERCROFT_READ_AUDIT=chain` records each search with a **keyed** query fingerprint, never text | A7 forensics; insider/exfil accounting |
 | Remote-index posture | sealed bytes out, local re-verification in; feature off by default | A5 |
 | Zero-telemetry default | no telemetry deps compiled in; metadata-only when opted in | A6 |
 | Verbatim + tombstones | exact words, keyed deletion markers, chain ordering | A7 attribution/excision |
@@ -271,14 +318,43 @@ enclave execution) compose with undercroft but are not provided by it.
 ## 5. What `verify` proves
 
 `undercroft verify` (CLI, `/v1` route, and fleet console) re-checks
-every record HMAC, every KG and tunnel tag, the sealed index
-commitments (including page-tier row counts), and replays the audit
-chain against the manifest anchor. A clean verify is a machine-checked
+every drawer record HMAC, every KG and tunnel tag, and every receipted
+supersession link, then replays the audit chain **twice over**: the
+audit rows must reproduce exactly the head committed in `chain_meta`,
+and the manifest anchor must appear somewhere in that replay — equal in
+steady state, strictly behind after a crash-before-anchor (legal), and
+absent only when the database was rolled back or forked relative to an
+anchor it never produced. A clean verify is a machine-checked
 statement: *every byte this palace will ever return is exactly what was
 written, in the order recorded, under the keys it claims.* On telemetry
 builds the same real signals — never synthetic — drive the
 `undercroft_hmac_verify_failures_total` metric, the live event stream,
 and the `PalaceTamperDetected` alert with its published runbook.
+
+Stated precisely, because the boundary matters to a reviewer: `verify`
+walks the **evidence**, not the derived index tier. A sealed PQ page is
+one AEAD unit carrying its own row-count commitment, so that commitment
+is authenticated when the page is opened at search time and again when
+rotation reseals it — not by `verify`. That asymmetry is deliberate:
+index artifacts are recomputable from content, so a failure there costs
+a rebuild, while a failure in the walked set costs evidence.
+
+The chain also carries what left and what was read. Every export
+appends an `egress/export` record binding the surface, the recipient
+(when the export names one), the record counts and the export's own
+manifest digest. That one is **not** behind a declaration — an egress
+is worth recording whether or not the deployment opted into anything.
+Under `UNDERCROFT_READ_AUDIT=chain` each search appends a record too,
+carrying a **keyed fingerprint of the query** (never its text), the
+scope and the hit count.
+
+Two boundaries come with it, both stated rather than hidden. A
+**read-only** process cannot append, so it serves an export and says the
+egress went unaudited, and it disables read auditing with a warning at
+open — the replica precedent: warn and serve, never silently pretend.
+And read records are appended **without advancing the manifest anchor**;
+they anchor at the next store open, so a stripped unanchored tail is
+indistinguishable from a crash until then.
 
 ## 6. Verbatim storage as a security property
 
@@ -298,8 +374,8 @@ judged uninteresting simply ceased to exist. Applied to security:
   to retrieval time, where provenance is still attached.
 - **Deletion that means something**: you can only prove you deleted
   what you can identify. Verbatim records are identifiable; facts
-  blended from many sources are not. (The forthcoming retention work
-  builds on this — §9.)
+  blended from many sources are not. The shipped retention and
+  attested-forgetting work is built directly on that — §9.
 
 ## 7. Custody boundary (stated for operators)
 
@@ -335,7 +411,20 @@ write path at all.
   posture keys on the handler-stamped `added_by`, never on a claim.
 - **Admission check at ingest** (BUILT; opt-in via
   `UNDERCROFT_ADMISSION=quarantine` — screening changes what a save
-  does, so it ships as the deployment's declaration). The shipped
+  does, so it ships as the deployment's declaration). It runs at the
+  **single write choke point** every write funnels through, and every
+  caller must state its decision in a required `Screen` argument.
+  That is not decoration: screening used to be applied at call sites,
+  and a surface audit found three ways past it on `/v1` alone — a
+  `dedup_threshold` in the body routed to the dedup writer, a
+  caller-supplied `vector` routed import to the raw writer (so
+  backup-restore *and* orchestrator tenant migration re-admitted whole
+  corpora unscreened), and external-embedding vaults had no screened
+  path at all. Each was a call site someone forgot, and nothing could
+  have told them. A `Screen` argument cannot be forgotten: a new write
+  path does not compile until its author decides, and the only two
+  bypasses are named, greppable variants carrying the reason they are
+  allowed. The shipped
   tier-1 detector is deterministic: imperative-instruction patterns,
   embedded tool-call syntax, exfil markers, encoded blobs,
   known-attack-fixture similarity (windowed hash-embedder cosine
@@ -352,18 +441,45 @@ write path at all.
   is itself an injection target that a successful injection can only
   steer in the safe direction.
 - **Quarantine wing** (BUILT) — flagged writes divert sealed into the
-  reserved wing, `pending`, **excluded from all retrieval** except a
-  reviewer's explicit scope; the wing refuses forged residents, and
-  quarantine-pending drawers are not editable. Updates are screened on
-  the UPDATING surface, so an untrusted surface cannot ride a trusted
-  writer's standing. Deployment-trusted surfaces bypass by declaration
-  (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`).
+  reserved `quarantine-pending` wing, **excluded from every read that
+  returns content** unless the caller explicitly names the wing:
+  `search`, `recent` (which is what `wake_up` and the closet index ride
+  — the two surfaces whose whole job is loading context at session
+  start, i.e. exactly where injected text wants to be), `list_drawers`,
+  the duplicate-check oracle, and `dedup`. Exclusion lived in `search`
+  alone until 2026-08-04, so a diverted drawer was invisible to a query
+  and then handed to the agent verbatim at the next wake-up. Over
+  **MCP the wing is not reachable at all**: one fence over the raw
+  argument map refuses any argument naming the wing and any `*id`
+  argument naming a resident, so a tool added later inherits it without
+  its author remembering — ruling on quarantined evidence is an
+  operator act (`undercroft admission …`, `GET /v1/vaults/<id>/admission`),
+  not an agent one. The wing refuses forged residents (aiming a save at
+  it is a typed 400, never a 500), and quarantine-pending drawers are
+  not editable. Updates are screened on the UPDATING surface, so an
+  untrusted surface cannot ride a trusted writer's standing.
+  Deployment-trusted surfaces bypass by declaration
+  (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`). A diverted save **says so on
+  every surface** — `/v1` answers 202 with `quarantined: true`, MCP and
+  CLI say the write is not retrievable, and all three report the id the
+  drawer actually landed under rather than the one the caller aimed at.
 - **Full lifecycle audit** (BUILT) — quarantine, allow, and deny are
   each chain-logged with the verdict inside the ruling tag's canonical;
   a human allows (the accountable override) or denies — and a deny
   destroys through C3.2's attested forgetting, handing back the
   receipt. Crash-safe by the same reconciliation the rotation path
   proves.
+- **The operator/agent boundary is counted, not remembered** (BUILT) —
+  admission review, wing-trust assignment, retention, attested
+  forgetting and key rotation are recorded as operator-only in the
+  surface-parity inventory, and a test fails the build if any of them
+  appears as an MCP tool. The same inventory counts the MCP tool
+  surface in **both** directions, so a tool added without a line fails
+  and a line naming a tool that no longer exists fails too. That
+  arithmetic exists because a 14-agent audit found 65 confirmed drifts
+  between the CLI, MCP and `/v1`, 55 of them silent; an absence that is
+  a boundary now has to be written down beside the absences that are
+  drift.
 
 What Zone 1 **cannot** do: detection is heuristic, so a poison arriving
 through a channel you have told the system to trust can still be
@@ -378,16 +494,30 @@ is read by the agent's LLM. undercroft can *offer* the defenses but
 cannot *enforce* them, and says so:
 
 - **Data-not-instructions delivery** — retrieval returns memory as
-  clearly-delimited *untrusted data* carrying its provenance and trust
-  score, never as instruction/system text. The SDKs (C2.1) can enforce
-  the envelope shape and AGENTS.md documents the assembly pattern (the
-  standard spotlighting defense against prompt injection).
-- **Trust-threshold gating** — a per-result trust score the integrator
-  thresholds before anything enters the agent's context.
-- **Receipts for action-gating (C3.1)** — before a consequential
-  action, the agent can require that the supporting memory carries a
-  valid HMAC receipt chain to a trusted source: *verify the memory*
-  rather than *trust the memory*.
+  *untrusted data* carrying its provenance (the surface-stamped
+  `added_by`, the writer's `agent`/`channel`/`session` claims, source
+  and file time), never as instruction/system text. AGENTS.md documents
+  the assembly pattern — the standard spotlighting defense against
+  prompt injection. Stated exactly: the **envelope is the integrator's**
+  today. The typed SDKs that would enforce its shape are C2.1, still
+  planned.
+- **Trust-class gating** — deployment-assigned wing trust
+  (`quarantined | standard | trusted`) applied as a **floor on the
+  candidate set**, either per request (`min_trust`) or vault-wide
+  (`UNDERCROFT_TRUST_FLOOR`), resolved before candidates are drawn so a
+  low-trust wing can neither answer nor crowd a floored query. Note
+  what this is *not*: there is no per-result trust score, and there
+  will not be one. A label decides who competes and never adjusts how
+  they score (docs/LABELS.md) — every score-modifier variant this
+  project measured lost. The surface reports how many wings the floor
+  excluded, so a thin answer is distinguishable from a thin corpus.
+- **Receipts for action-gating** — before a consequential action, the
+  agent can require that supporting memory carries a valid keyed
+  receipt rather than trusting it. Shipped today for the relations that
+  have one: a KG fact's receipt to its verbatim source drawer, and a
+  drawer supersession's receipt over the superseded content. The
+  general "every distilled fact cites its sources" tier is C3.1 and
+  still planned.
 
 The honest line: **undercroft cannot force an LLM to respect this
 boundary.** If an integrator pastes retrieved text into the instruction
@@ -417,28 +547,47 @@ poisoned record cannot make undercroft do anything. The danger is
 entirely downstream, in components we are honest about not being.
 
 The posture, stated once: undercroft provides the materials to defend
-Zones 1 and 2 — trust-scored, provenance-tagged, receipt-verifiable,
+Zones 1 and 2 — trust-classed, provenance-tagged, receipt-verifiable,
 admission-controlled memory that no competitor offers — and is explicit
 that Zone 3 belongs to the runtime. Defense-in-depth with a drawn
 responsibility boundary is a posture a serious operator respects; "our
 memory makes your agent safe" is a claim they would rightly distrust.
 
-## 9. Planned extensions (labeled planned; ROADMAP C3)
+## 9. Phase C3 — status, planned labeled as planned (ROADMAP C3)
 
-- **Facts-with-receipts (C3.1)**: optional distillation *on top of*
-  verbatim — every derived fact HMAC-cited to its source drawers, so
-  compression never costs provenance. Gated: ships only if it beats
-  the retrieval-only baseline.
-- **Provable forgetting (C3.2)**: retention policies per wing/room and
-  a deletion attestation derived from the audit chain — an auditable
-  answer to right-to-be-forgotten requests.
-- **Memory-poisoning defense (C3.3)**: write-path admission control —
-  provenance on every write, a deterministic (optionally
-  classifier-assisted) detector, a retrieval-excluded quarantine wing
-  with a crash-safe human allow/deny gate, and a full lifecycle audit
-  (quarantine and denial each logged with their reason). The direct
-  answer to MINJA/AgentPoison-class attacks, built on the attribution
-  machinery that already exists. Full design in §8 above.
+One item of this cluster is still design; the other three shipped
+inside a week. The section keeps all four so the record reads
+straight, each carrying what it actually is.
+
+- **Facts-with-receipts (C3.1) — the one still PLANNED**: optional
+  distillation *on top of* verbatim — every derived fact HMAC-cited to
+  its source drawers, so compression never costs provenance. Gated:
+  ships only if it beats the retrieval-only baseline. Two of its
+  materials exist already and are shipped independently of it: KG
+  facts carry receipts to the verbatim source, and **extractor
+  identity** — which model claimed a fact — lives inside the fact's own
+  HMAC, so a flipped attribution fails verification.
+- **Provable forgetting (C3.2) — BUILT (2026-08-03), both phases**:
+  `forget` destroys named drawers through the chain and emits an
+  attestation (ids + unkeyed content fingerprints, heads before/after,
+  the tombstone interval, optional Ed25519 signature);
+  `verify-forgetting` replays it with the key in hand. Retention
+  policies per wing/room ride the wing-trust pattern — operator-only,
+  HMAC-tagged, chain-audited, and enforced by an **explicit sweep**
+  through the same attested path, never on a timer and never at open.
+  The clock is the HMAC-covered `meta.filed_at`, tag-verified per
+  drawer, so a flipped clear column can neither launder a deletion nor
+  hide a drawer from its declared retention. Honest boundary: a third
+  party verifies the operator's *signature*, not the replay — the chain
+  step is keyed.
+- **Memory-poisoning defense (C3.3) — BUILT (2026-08-03/04)**:
+  write-path admission control — provenance on every write, a
+  deterministic (optionally classifier-assisted) detector at the write
+  choke point, a retrieval-excluded quarantine wing with a crash-safe
+  human allow/deny gate, and a full lifecycle audit (quarantine and
+  denial each logged with their reason). The direct answer to
+  MINJA/AgentPoison-class attacks, built on the attribution machinery
+  that already existed. Full design in §8 above.
 - **Post-quantum posture (C3.4) — BUILT (2026-08-04)**: the at-rest
   stack is symmetric-first and already conservative against quantum
   adversaries (256-bit XChaCha20 keys, HMAC-SHA256, HKDF); the one

@@ -66,7 +66,10 @@ Every memory namespace is a **vault** — a hard isolation boundary:
   embedding* are encrypted with **XChaCha20-Poly1305**. The AEAD associated
   data binds vault id + record id, so ciphertext cannot be replayed into
   another vault or another record slot. Nothing content-derived is written to
-  disk in plaintext — search runs by decrypt-scan.
+  disk in plaintext — a default vault searches by decrypt-scan, and the
+  optional index tiers below (PQ codes and codebooks, ColBERT token
+  matrices, FDE vectors) are sealed under their own AAD domains and read
+  through decrypt-once RAM caches rather than in the clear.
 - **HMAC integrity** — every record carries an **HMAC-SHA256** tag (independent
   MAC key) over its id, metadata, and at-rest content; reads verify before
   returning data. An append-only audit table feeds a **tamper-evident HMAC
@@ -77,13 +80,26 @@ Every memory namespace is a **vault** — a hard isolation boundary:
   (plaintext + full-text indexing, but still integrity-tagged and chained) for
   memories where searchability outweighs confidentiality.
 - **Screened writes, receipted deletions** — opt-in admission control
-  diverts injection-shaped writes into a sealed quarantine wing that no
-  search can reach, with chain-audited allow/deny rulings (deny hands back
-  an attestation); `forget` destroys through the audit chain and emits a
-  **verifiable receipt**; retention policies per wing/room enforce by
-  explicit attested sweeps; wings carry operator-assigned trust classes
-  consumed as a retrieval floor. All operator surfaces — deliberately never
-  MCP.
+  diverts injection-shaped writes into a sealed quarantine wing, with
+  chain-audited allow/deny rulings (deny hands back an attestation).
+  The screen sits at the **write choke point** rather than at each call
+  site, behind an argument every write path must state, so a save, a
+  dedup-refresh, a caller-supplied-vector import and a backup restore are
+  all screened by construction; a diverted *save* says so on every save
+  surface — CLI, MCP and `/v1` alike — and hands back the id the drawer
+  actually landed under, instead of reporting success under the id you
+  aimed at. Quarantined drawers answer no one but their reviewer:
+  excluded from search, from wake-up and the closet index, and from
+  drawer listings — and MCP, the agent surface, may neither read them
+  back nor delete them. Beside it,
+  `forget` destroys through the audit chain and emits a **verifiable
+  receipt**; retention policies per wing/room enforce by explicit
+  attested sweeps; wings carry operator-assigned trust classes consumed
+  as a retrieval floor; every export leaves an audit-chain record binding
+  its own manifest digest, with no flag to set (a read-only replica
+  cannot write one and says so instead), and reads can be audited too
+  (`UNDERCROFT_READ_AUDIT=chain` — a keyed query fingerprint, never the
+  query text). All operator surfaces — deliberately never MCP.
 
 **Threat model:** protects memories at rest against disk theft, cross-vault
 bleed, and offline tampering of the database or manifest. It does *not* defend
@@ -113,9 +129,14 @@ databases — Undercroft uploads only the **sealed** content blob plus the
 embedding and wing/room labels. Remote search returns candidate ids; every
 candidate is re-loaded from the local palace, HMAC-verified, decrypted, and
 re-ranked locally. A compromised index can hide results but cannot forge,
-alter, or inject them. The trade-off that remains: embeddings are visible
-server-side (ANN cannot work otherwise) — if embedding-inversion leakage is
-unacceptable, use local search.
+alter, or inject them. Retrieval policy is the local path's, from the same
+code: the trust floor, the quarantine fence and the closed-vocabulary
+filters are applied per candidate off the *verified* metadata, so
+`--backend qdrant` is not a route around admission control. The trade-off
+that remains: embeddings are visible server-side (ANN cannot work
+otherwise) — if embedding-inversion leakage is unacceptable, use local
+search. Remotely the floor can only bound what came *back* rather than
+what was generated, which costs availability, never integrity.
 
 ```bash
 undercroft index push qdrant            # upload sealed records
@@ -145,8 +166,11 @@ with `πόλη` (city).
 
 Morphology admits, so every rule has a price and **each one is a pinned test
 row** — declaring German merges `flow`/`flower`, Italian merges `pesca`/`pesce`.
-48 negative controls guard them; see
-[docs/agents.html](https://compufreq.github.io/undercroft/agents.html).
+58 control rows in eight languages guard them, run end to end through the
+real search at realistic drawer length: 49 pairs that must stay apart, plus
+9 that already meet and are pinned as the known price, so a cost that
+disappears gets reported rather than absorbed. See
+[docs/agents.html](https://compufreq.github.io/undercroft/docs/agents.html).
 
 Note this is **within-language**. Cross-lingual retrieval needs one thing: a
 multilingual model via `onnx`/`ort`/`http` — the default hashed embedder
@@ -175,8 +199,10 @@ set, after which `undercroft repair` re-embeds every drawer.
   `--features ort` and set `UNDERCROFT_EMBEDDER=ort`; reads the same
   `UNDERCROFT_ONNX_*` variables, so switching backends is one env change.
   Opt-in because it links ONNX Runtime's C++ library — tract stays the
-  pure-Rust default. Releases ship a smoke-probed linux x86_64 `-ort`
-  binary and a `:tag-ort` container image ready-made.
+  pure-Rust default. Releases ship it ready-made at **full parity with
+  the default artifacts**: a smoke-probed `-ort` binary for all five
+  targets (Linux x86_64/arm64, macOS Intel/Apple Silicon, Windows) and a
+  multi-arch `:tag-ort` container image.
 - **`http`** — a model served by Ollama, llama.cpp server, LM Studio, vLLM
   or TEI (`UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`): no export, no
   feature build. **Transport is TLS or loopback only** — cleartext http to a
@@ -292,6 +318,7 @@ undercroft search <query> --room-cap N    # spread hits across rooms, not the mo
 undercroft wake-up [--vault --wing]   # L0 identity + L1 essential story
 undercroft drawer get|list|update|delete|delete-by-source|check-dup
 undercroft kg add|query|rel|invalidate|supersede|timeline|stats
+undercroft kg authority|canonical|receipts  # golden-values tier + its receipts
 undercroft diary write|read|agents    # per-agent diaries in their own wings
 undercroft tunnel create|list|follow|delete|traverse   # cross-wing links
 undercroft hallways <wing>            # within-wing entity co-occurrence
@@ -318,23 +345,32 @@ undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
 undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
+                                     # --read-only is a posture on the whole
+                                     # process: both stores open read-only and
+                                     # the route gate fails closed
 undercroft assert-header <vault>      # mint an X-Vault-Assertion (per-tenant auth)
 ```
 
 `serve-http` is both the shared team server (MCP over HTTP, bearer auth) and
 a multi-tenant memory engine: a versioned `/v1` REST surface with vault
 lifecycle, per-vault HMAC assertions (`UNDERCROFT_ASSERTION_SECRET`),
-caller-supplied embeddings, dedup-refresh on save, and lossless
-export/import for migrating a tenant between instances. See
+caller-supplied embeddings, dedup-refresh on save, the operator plane
+(trust, admission rulings, retention, forget, rotate, verify), and lossless
+export/import for migrating a tenant between instances — every one of those
+write doors screened by the same admission control, and every read of them
+answering with the same trust floor and quarantine exclusion as the CLI. See
 [the remote-server guide](https://github.com/compufreq/undercroft/blob/main/docs/remote-server.md).
 
 It also serves a **vault admin console at `GET /ui`** — one static,
 dependency-free page (every build, no telemetry feature needed): vault
-lifecycle, stats, one-click HMAC + chain verification, key rotation, a
-taxonomy-driven drawer browser with verbatim view/edit/delete, search, and
-export/import. Credentials stay in the browser tab (assertions are minted
-client-side via WebCrypto), and destructive operations require typing the
-target's name.
+lifecycle, stats, a live monitor, a knowledge-graph browser, one-click HMAC
++ chain verification, key rotation, a taxonomy-driven drawer browser with
+verbatim view/edit/delete, search, export/import, and an **ops** tab
+carrying the operator plane the agent surface deliberately lacks —
+the admission review queue (allow re-files, deny destroys with a receipt,
+both audited), wing-trust assignment, retention, and attested forgetting.
+Credentials stay in the browser tab (assertions are minted client-side via
+WebCrypto), and destructive operations require typing the target's name.
 
 Fleets of engines get the **optional orchestrator**
 (`undercroft-orchestrator`): instance registry, tenant creation with
@@ -366,9 +402,17 @@ Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 | Maintenance | `dedup` |
 
 Deliberately **absent** from MCP: admission rulings, wing trust, retention,
-and forgetting — operator surfaces (CLI + `/v1`) only, because an agent must
-not rule on its own quarantined writes, raise its own standing, or shorten
-the life of the memory it reads.
+forgetting, and key rotation — operator surfaces (CLI + `/v1`) only, because
+an agent must not rule on its own quarantined writes, raise its own
+standing, or shorten the life of the memory it reads. Both halves of that
+sentence are enforced by a test rather than by this table: the tool list
+above is inventoried in code and counted against the server in **both**
+directions (a tool without an entry fails the build, an entry without a tool
+fails it too), and the operator-only capabilities are asserted absent from
+MCP by the same mechanism — so the boundary cannot quietly become a gap, and
+the list cannot rot. An agent also cannot read or delete another agent's
+quarantined evidence: no MCP tool may name the review wing or a drawer
+sitting in it.
 
 All tool names are prefixed `undercroft_`. The knowledge graph stores temporal
 facts with validity windows — `kg_query --as-of 2024-06-15` answers "what was
@@ -379,17 +423,21 @@ sealed in encrypted vaults, and every triple is HMAC-tagged and audit-chained.
 ## Testing (all in Docker)
 
 ```bash
-docker compose run --rm test          # unit + integration tests (cargo)
-docker compose run --rm e2e           # end-to-end UI/UX suite against the real binary
-docker compose run --rm backends-e2e  # remote-index suite (spins up qdrant/chroma/pgvector)
-docker compose run --rm onnx-build    # compile check for the ONNX embedder feature
+docker compose run --rm test              # unit + integration tests (cargo)
+docker compose run --rm e2e               # end-to-end UI/UX suite against the real binary
+docker compose run --rm orchestrator-e2e  # two engines + the control plane
+docker compose run --rm e2e-telemetry     # telemetry build + /metrics gating
+docker compose run --rm backends-e2e      # remote-index suite (five live vector DBs)
+docker compose run --rm onnx-build        # compile check for the ONNX embedder feature
 ```
 
 The e2e suite drives the actual CLI the way a user would — help text, happy
 paths, exit codes, vault isolation, plaintext-leak checks against the raw DB
-file, deliberate on-disk tampering (must be detected), and a scripted MCP
-JSON-RPC session. The backends suite runs the full push → remote search →
-verify flow against real Qdrant, Chroma, and Postgres+pgvector servers.
+file, deliberate on-disk tampering (must be detected), a scripted attacker
+whose injection-shaped writes must land in quarantine and stay unreadable,
+and a scripted MCP JSON-RPC session. The backends suite runs the full
+push → remote search → verify flow against real Qdrant, Chroma,
+Postgres+pgvector, Milvus, and Weaviate servers.
 
 ## Architecture
 
@@ -398,9 +446,18 @@ crates/
   undercroft-core/    domain model: drawers, chunking, ids, normalization,
                      deterministic hashed n-gram embedder
   undercroft-vault/   security layer: VaultManager, HKDF key derivation,
-                     XChaCha20-Poly1305 sealing, HMAC tags + audit chain
-  undercroft-store/   SQLite per-vault storage + hybrid search
-  undercroft-cli/     `undercroft` binary: CLI + MCP stdio server
+                     XChaCha20-Poly1305 sealing, HMAC tags + audit chain,
+                     hybrid PQ export bundles + signed manifests
+  undercroft-store/   SQLite per-vault storage, hybrid search, PQ/IVF + FDE
+                     index tiers, admission control, forgetting, retention
+  undercroft-cli/     `undercroft` binary: CLI, MCP stdio, HTTP + /v1, admin UI
+  undercroft-index/   remote vector backends as untrusted accelerators
+  undercroft-llm/     local LLM runtimes + the HTTP-served embedder
+  undercroft-obs/     observability shim: no-op and zero-dep by default
+  undercroft-orchestrator/  optional multi-tenant control plane (own binary)
+  undercroft-bench/   retrieval benchmark + synthetic-instrument harnesses
+  undercroft-embed-onnx/, undercroft-embed-ort/
+                     feature-gated in-process model backends (built explicitly)
 ```
 
 Drawer metadata (wing, room, source_file, chunk_index, added_by, filed_at,
@@ -416,9 +473,11 @@ sweep), wake-up layers, knowledge graph, tunnels/hallways navigation, agent
 diaries, drawer management, dedup/stats/backups/repair, hooks output, the
 MCP tool surface, remote vector backends (Qdrant, Chroma, pgvector — with
 client-side sealing, unlike upstream's plaintext uploads), and model-based
-embeddings (ONNX via tract, feature-gated). Not carried over: Milvus
-(gRPC-only, opt-in extra upstream) and embedded ChromaDB (a Python library;
-the bundled SQLite store fills that role).
+embeddings (ONNX via tract, feature-gated). Milvus was upstream's gRPC-only
+opt-in extra and is carried here as a **REST v2** client instead, tested
+against a live standalone server; Weaviate exists only here. Not carried
+over: embedded ChromaDB (a Python library; the bundled SQLite store fills
+that role).
 
 ## Benchmarks (measured, not inherited)
 
