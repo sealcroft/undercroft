@@ -478,7 +478,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   fixture must trip; deterministic, no vault, no model)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md)
-- `architecture/` — illustrated architecture reference: ten theme-aware
+- `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
   which inlines them and documents every layer plus all 73
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and

@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### the architecture reference learns the defense program
+
+- **A new top-level section, "The defense program"** (`architecture/
+  index.html` — the recorded gap: the env table was current while the
+  prose predated C3.2/C3.3 entirely). Six subsections in the house
+  voice: trust assigned vs claimed (wing classes as candidate-set
+  floors through the scope machinery, claims as HMAC-covered evidence
+  that is never a boundary); the two-tier admission screen with the
+  full closed signal vocabulary including `fixture-similarity` (its
+  both-sides calibration and the 0/5,882 LoCoMo measurement) and
+  `rate-anomaly` (declared, never defaulted); quarantine and the two
+  rulings; receipted destruction (forget attestations, retention on
+  the HMAC-covered clock, supersession that never deletes); the
+  poisoning invariants (independent per-item scoring,
+  propose-candidates-never-decide-score, the three bounds on codebook
+  training, the NaN door, the wing as an enforceable trust zone); and
+  the transport doctrine (TLS-or-loopback with no override, CA
+  declarations as pins). Honest-boundaries note included: heuristic
+  detection stated as such, claims bound accidents not adversaries,
+  and a slot-winning poison still reaches the reader.
+- **An eleventh theme-aware diagram** (`diagrams/defense-admission.svg`
+  → PDF + inlined copy, both derived by `build.sh` as always): the
+  admission flow from surface stamp through trusted-surface bypass,
+  tier-1's six signal classes, the advisory tier, the quarantine wing,
+  and the allow/deny rulings with their receipts. Verified rendered in
+  both the page (dark, following the manual toggle) and the flattened
+  light PDF.
+- The page's engine version stamps read v0.42.0 — three releases
+  stale — and now read v0.45.0 (hero, sidebar foot, page footer).
+  `build.sh` re-derived ids and the rail: 11 sections, 36 headings,
+  all 11 inlined diagrams media-query-free.
+
 ### the ort posture reaches every release target
 
 - **The `-ort` release artifacts now ship at full target parity with
