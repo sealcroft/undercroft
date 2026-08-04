@@ -8,6 +8,7 @@
 - [Choosing an embedder posture](embedders.md)
 - [Security model](security.md)
 - [Threat model (whitepaper)](threat-model.md)
+- [Post-quantum posture](pq.md)
 - [Integrations](integrations.md)
 - [Remote team server](remote-server.md)
 - [Observability](observability.md)

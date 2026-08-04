@@ -503,6 +503,11 @@ undercroft import palace.bundle --identity ops.key --sender <sender-hex>
   sender with `--sender` to enforce attestation; `--trust` is the sender's
   claim for your policy, never a trust boundary by itself; an expired
   bundle is refused at import. Legacy exports (no manifest) still import.
+  Since C3.4, `bundle keygen` produces a **hybrid post-quantum identity**
+  (X25519 + ML-KEM-768, `pq1`-prefixed strings) and seals v2 bundles that
+  close harvest-now-decrypt-later; legacy bare-hex X25519 identities keep
+  working in both directions, and nothing downgrades silently — the full
+  posture and compat matrix live in [PQ.md](PQ.md).
 
 - Durability is real: SQLite runs WAL + `synchronous=FULL`, the manifest
   anchor and key files are fsynced — an acknowledged write is on disk.

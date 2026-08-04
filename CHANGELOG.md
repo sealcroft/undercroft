@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### C3.4: hybrid post-quantum bundles — harvest-now-decrypt-later closes
+
+- **`bundle keygen` is hybrid X25519 + ML-KEM-768 by default** (FIPS
+  203 final, RustCrypto `ml-kem` 0.2.3 — pure Rust, RustSec-audited in
+  CI). Identity and recipient strings carry the `pq1` prefix — a
+  declared format, never a length inference. An exported bundle is the
+  one artifact that leaves the machine, and its X25519 exchange was the
+  single quantum-vulnerable spot in the codebase (ROADMAP C3.4
+  inventory: everything at rest is symmetric at the accepted PQ bar);
+  a recorded bundle file was therefore exposed to
+  harvest-now-decrypt-later. No longer: the v2 format
+  (`UNDERCROFT-BUNDLE-2` ‖ eph_pub ‖ kem_ct(1088) ‖ nonce ‖ ct) derives
+  its file key from BOTH shared secrets — `HKDF-SHA256(ikm = DH ‖
+  kem_shared, info = "undercroft.v2/bundle")` — so an attacker must
+  break the curve AND the lattice; magic, ephemeral key and KEM
+  ciphertext are all bound as AAD.
+- **Compatibility is total, and downgrade is refused in every
+  direction** (the C3.4 gate, pinned by test): a legacy bare-hex
+  recipient still receives a v1 bundle it can actually open; a hybrid
+  identity opens old v1 backups with its curve half (upgrading an
+  identity never orphans a backup); a hybrid recipient ALWAYS receives
+  v2 — no silent downgrade exists; an X25519-only secret handed a v2
+  bundle gets a typed refusal naming the hybrid format, never a quiet
+  curve-half attempt; a v2 bundle with its magic rewritten to v1 fails
+  to open (the magic is AAD on both sides); a tampered KEM ciphertext
+  fails (AAD + ML-KEM implicit rejection).
+- **docs/PQ.md — the posture page** (published as a site chapter): the
+  PQ inventory, the compat matrix, deployment guidance (hybrid-KEM TLS
+  — `X25519MLKEM768` — at the reverse proxy, covering `/v1`,
+  orchestrator, and served-embedder hops with no engine change), the
+  signature story stated honestly (Ed25519 is a future-forgery risk,
+  not a harvest risk; the ML-DSA hybrid migration is recorded as
+  future work rather than omitted), and the honest boundary in
+  writing: this is quantum-resistant **cryptography** — nothing here
+  processes anything on a quantum computer, and no such claim exists
+  in this project.
+- test 514 → 517, e2e 206 → 209 (hybrid `pq1` recipient shape, legacy
+  identity still exports and imports end to end). Existing
+  vaults, keys and workflows are untouched: only `keygen`'s output
+  moved, because a new identity has no reason to be harvestable.
+
 ## 0.46.0 — Fully covered: the wishlist closes, ort ships everywhere, and the reference catches up
 
 Three merged units since v0.45.0, each with its full record below. The

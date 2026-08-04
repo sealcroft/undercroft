@@ -2,38 +2,70 @@
 //!
 //! `undercroft export --to <recipient>` seals the export so only the holder
 //! of the matching identity key can read it — a backup or migration file
-//! never has to exist in plaintext. Construction (age-style
-//! ephemeral-static):
+//! never has to exist in plaintext. Two wire formats, one construction
+//! family (age-style ephemeral-static):
 //!
-//! * recipient identity = X25519 keypair (`keygen`); the secret stays in a
-//!   0600 file, the public half is the shareable hex "recipient string";
-//! * each bundle uses a **fresh ephemeral** X25519 keypair; the file key is
-//!   `HKDF-SHA256(salt = eph_pub ‖ recipient_pub, ikm = DH(eph, recipient),
-//!   info = "undercroft.v1/bundle")`;
-//! * payload sealed with XChaCha20-Poly1305 (random 24-byte nonce), with
-//!   the magic + ephemeral public key bound as AAD — a bundle spliced onto
-//!   a different header fails to open;
-//! * layout: `UNDERCROFT-BUNDLE-1` (18 bytes) ‖ eph_pub (32) ‖ nonce (24) ‖
-//!   ciphertext.
+//! * **v2, the default since C3.4** — hybrid X25519 + ML-KEM-768. A
+//!   recipient identity is an X25519 keypair AND an ML-KEM-768 keypair
+//!   (`keygen`; strings carry the `pq1` prefix). Each bundle uses a fresh
+//!   ephemeral X25519 keypair and a fresh ML-KEM encapsulation against the
+//!   recipient's KEM key; the file key is `HKDF-SHA256(salt = eph_pub ‖
+//!   recipient_x_pub, ikm = DH(eph, recipient_x) ‖ kem_shared, info =
+//!   "undercroft.v2/bundle")` — an attacker must break BOTH the curve and
+//!   the lattice, which is what closes harvest-now-decrypt-later against
+//!   the one asymmetric exchange in the codebase (the ROADMAP C3.4
+//!   inventory: everything else at rest is symmetric and already at the
+//!   accepted PQ bar).
+//!   Layout: `UNDERCROFT-BUNDLE-2` ‖ eph_pub (32) ‖ kem_ct (1088) ‖
+//!   nonce (24) ‖ ciphertext, with magic + eph_pub + kem_ct all bound as
+//!   AAD — a spliced header, a swapped encapsulation, or a magic rewritten
+//!   to fake the other version all fail to open.
+//! * **v1, still read and still writable to legacy recipients** — X25519
+//!   only: `HKDF-SHA256(salt = eph_pub ‖ recipient_pub, ikm = DH(eph,
+//!   recipient), info = "undercroft.v1/bundle")`, layout
+//!   `UNDERCROFT-BUNDLE-1` ‖ eph_pub (32) ‖ nonce (24) ‖ ciphertext.
+//!   A bare-hex recipient string selects it; a hybrid recipient NEVER
+//!   silently downgrades to it (pinned by test).
 //!
+//! Payloads seal with XChaCha20-Poly1305 (random 24-byte nonce) in both.
 //! Compromise of a bundle file alone reveals nothing without the identity
 //! key; compromise of the identity key does not affect the palace's own
-//! at-rest keys (they are unrelated derivations).
+//! at-rest keys (they are unrelated derivations). Honest boundary, stated
+//! once for the whole C3.4 posture: this is quantum-resistant
+//! **cryptography** — nothing here processes anything on a quantum
+//! computer, and no such claim exists anywhere in this project.
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
+use ml_kem::kem::{Decapsulate, Encapsulate};
+use ml_kem::{EncodedSizeUser, KemCore, MlKem768, MlKem768Params};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
-/// Bundle file magic (also AAD, with the ephemeral key).
+type KemDk = ml_kem::kem::DecapsulationKey<MlKem768Params>;
+type KemEk = ml_kem::kem::EncapsulationKey<MlKem768Params>;
+
+/// v1 bundle file magic (also AAD, with the ephemeral key).
 pub const BUNDLE_MAGIC: &[u8; 18] = b"UNDERCROFT-BUNDLE-1";
+/// v2 (hybrid X25519 + ML-KEM-768) magic (also AAD, with the ephemeral
+/// key and the KEM ciphertext).
+pub const BUNDLE_MAGIC_V2: &[u8; 18] = b"UNDERCROFT-BUNDLE-2";
+
+/// Prefix on hybrid identity/recipient strings. A bare 64-char hex string
+/// remains a legacy X25519 key; the prefix is a declared format, not an
+/// inference.
+pub const HYBRID_PREFIX: &str = "pq1";
 
 const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
+/// ML-KEM-768 encoded sizes (FIPS 203).
+const KEM_EK_LEN: usize = 1184;
+const KEM_DK_LEN: usize = 2400;
+const KEM_CT_LEN: usize = 1088;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BundleError {
@@ -41,12 +73,17 @@ pub enum BundleError {
     BadMagic,
     #[error("bundle is truncated")]
     Truncated,
-    #[error("recipient string is not a 32-byte hex public key")]
+    #[error("recipient string is neither a 32-byte hex X25519 key nor a pq1 hybrid key")]
     BadRecipient,
-    #[error("identity is not a 32-byte hex secret key")]
+    #[error("identity is neither a 32-byte hex X25519 secret nor a pq1 hybrid secret")]
     BadIdentity,
     #[error("bundle failed to open — wrong identity key or corrupted file")]
     Open,
+    #[error(
+        "this bundle uses the hybrid post-quantum format and the identity is X25519-only — \
+         it was addressed to a pq1 hybrid recipient; use that identity's secret"
+    )]
+    NeedsHybrid,
     #[error("signing key is not a 32-byte hex ed25519 secret")]
     BadSigner,
     #[error("manifest signature is missing or does not verify against its sender")]
@@ -57,79 +94,176 @@ pub enum BundleError {
     Expired(String),
 }
 
-/// Generate a recipient identity: `(secret_hex, recipient_hex)`. The secret
-/// belongs in a private file; the recipient string is shareable.
+/// A parsed recipient: who a bundle can be addressed to.
+enum Recipient {
+    X25519(PublicKey),
+    Hybrid(PublicKey, Box<KemEk>),
+}
+
+/// A parsed identity secret: who can open a bundle.
+enum Identity {
+    X25519(StaticSecret),
+    Hybrid(StaticSecret, Box<KemDk>),
+}
+
+/// Generate a recipient identity: `(secret_hex, recipient_hex)` — **hybrid
+/// X25519 + ML-KEM-768 since C3.4** (`pq1` prefix on both strings). The
+/// secret belongs in a private file; the recipient string is shareable.
+/// Legacy bare-hex X25519 identities remain accepted everywhere; only
+/// generation moved, because a new identity has no reason to be
+/// harvestable.
 pub fn keygen() -> (String, String) {
     let secret = StaticSecret::random_from_rng(OsRng);
     let public = PublicKey::from(&secret);
+    let (dk, ek) = MlKem768::generate(&mut OsRng);
+    let mut secret_bytes = Vec::with_capacity(32 + KEM_DK_LEN);
+    secret_bytes.extend_from_slice(secret.as_bytes());
+    secret_bytes.extend_from_slice(&dk.as_bytes());
+    let mut public_bytes = Vec::with_capacity(32 + KEM_EK_LEN);
+    public_bytes.extend_from_slice(public.as_bytes());
+    public_bytes.extend_from_slice(&ek.as_bytes());
     (
-        hex::encode(secret.as_bytes()),
-        hex::encode(public.as_bytes()),
+        format!("{HYBRID_PREFIX}{}", hex::encode(secret_bytes)),
+        format!("{HYBRID_PREFIX}{}", hex::encode(public_bytes)),
     )
 }
 
-/// The public recipient string for a stored identity secret.
+/// The public recipient string for a stored identity secret, in the same
+/// format the secret uses (hybrid secret → hybrid recipient).
 pub fn recipient_of(secret_hex: &str) -> Result<String, BundleError> {
-    let secret = parse_secret(secret_hex)?;
-    Ok(hex::encode(PublicKey::from(&secret).as_bytes()))
+    match parse_secret(secret_hex)? {
+        Identity::X25519(secret) => Ok(hex::encode(PublicKey::from(&secret).as_bytes())),
+        Identity::Hybrid(secret, dk) => {
+            let mut out = Vec::with_capacity(32 + KEM_EK_LEN);
+            out.extend_from_slice(PublicKey::from(&secret).as_bytes());
+            // FIPS 203: the encapsulation key is embedded verbatim inside
+            // the decapsulation key (dk = dk_pke ‖ ek ‖ H(ek) ‖ z).
+            out.extend_from_slice(&dk.encapsulation_key().as_bytes());
+            Ok(format!("{HYBRID_PREFIX}{}", hex::encode(out)))
+        }
+    }
 }
 
-/// True if `bytes` starts with the bundle magic.
+/// True if `bytes` starts with either bundle magic.
 pub fn is_bundle(bytes: &[u8]) -> bool {
-    bytes.len() >= BUNDLE_MAGIC.len() && &bytes[..BUNDLE_MAGIC.len()] == BUNDLE_MAGIC
+    bytes.len() >= BUNDLE_MAGIC.len()
+        && (&bytes[..BUNDLE_MAGIC.len()] == BUNDLE_MAGIC
+            || &bytes[..BUNDLE_MAGIC_V2.len()] == BUNDLE_MAGIC_V2)
 }
 
-/// Seal `plaintext` so only `recipient_hex`'s identity can open it.
+/// Seal `plaintext` so only `recipient_hex`'s identity can open it. The
+/// recipient string selects the format: a hybrid (`pq1`) recipient always
+/// produces a v2 hybrid bundle — never a silent downgrade — and a legacy
+/// bare-hex recipient produces a v1 bundle it can actually open.
 pub fn encrypt_for(recipient_hex: &str, plaintext: &[u8]) -> Result<Vec<u8>, BundleError> {
-    let recipient = parse_public(recipient_hex).map_err(|_| BundleError::BadRecipient)?;
-    let eph = EphemeralSecret::random_from_rng(OsRng);
-    let eph_pub = PublicKey::from(&eph);
-    let shared = eph.diffie_hellman(&recipient);
-    let key = file_key(eph_pub.as_bytes(), recipient.as_bytes(), shared.as_bytes());
-
-    let mut nonce = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
-    let cipher = XChaCha20Poly1305::new((&key).into());
-    let mut aad = Vec::with_capacity(BUNDLE_MAGIC.len() + 32);
-    aad.extend_from_slice(BUNDLE_MAGIC);
-    aad.extend_from_slice(eph_pub.as_bytes());
-    let ct = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &aad,
-            },
-        )
-        .map_err(|_| BundleError::Open)?;
-
-    let mut out = Vec::with_capacity(BUNDLE_MAGIC.len() + 32 + NONCE_LEN + ct.len());
-    out.extend_from_slice(BUNDLE_MAGIC);
-    out.extend_from_slice(eph_pub.as_bytes());
-    out.extend_from_slice(&nonce);
-    out.extend_from_slice(&ct);
-    Ok(out)
+    match parse_public(recipient_hex)? {
+        Recipient::X25519(recipient) => {
+            let eph = EphemeralSecret::random_from_rng(OsRng);
+            let eph_pub = PublicKey::from(&eph);
+            let shared = eph.diffie_hellman(&recipient);
+            let key = file_key(eph_pub.as_bytes(), recipient.as_bytes(), shared.as_bytes());
+            let mut aad = Vec::with_capacity(BUNDLE_MAGIC.len() + 32);
+            aad.extend_from_slice(BUNDLE_MAGIC);
+            aad.extend_from_slice(eph_pub.as_bytes());
+            let (nonce, ct) = seal(&key, plaintext, &aad)?;
+            let mut out = Vec::with_capacity(BUNDLE_MAGIC.len() + 32 + NONCE_LEN + ct.len());
+            out.extend_from_slice(BUNDLE_MAGIC);
+            out.extend_from_slice(eph_pub.as_bytes());
+            out.extend_from_slice(&nonce);
+            out.extend_from_slice(&ct);
+            Ok(out)
+        }
+        Recipient::Hybrid(recipient_x, ek) => {
+            let eph = EphemeralSecret::random_from_rng(OsRng);
+            let eph_pub = PublicKey::from(&eph);
+            let x_shared = eph.diffie_hellman(&recipient_x);
+            let (kem_ct, kem_shared) = ek
+                .encapsulate(&mut OsRng)
+                .map_err(|_| BundleError::BadRecipient)?;
+            let key = hybrid_file_key(
+                eph_pub.as_bytes(),
+                recipient_x.as_bytes(),
+                x_shared.as_bytes(),
+                &kem_shared,
+            );
+            let mut aad = Vec::with_capacity(BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN);
+            aad.extend_from_slice(BUNDLE_MAGIC_V2);
+            aad.extend_from_slice(eph_pub.as_bytes());
+            aad.extend_from_slice(&kem_ct);
+            let (nonce, ct) = seal(&key, plaintext, &aad)?;
+            let mut out =
+                Vec::with_capacity(BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN + NONCE_LEN + ct.len());
+            out.extend_from_slice(BUNDLE_MAGIC_V2);
+            out.extend_from_slice(eph_pub.as_bytes());
+            out.extend_from_slice(&kem_ct);
+            out.extend_from_slice(&nonce);
+            out.extend_from_slice(&ct);
+            Ok(out)
+        }
+    }
 }
 
-/// Open a bundle with the identity secret that matches its recipient.
+/// Open a bundle with the identity secret that matches its recipient. The
+/// bundle's magic selects the path: a v2 bundle demands the hybrid
+/// identity's KEM half (an X25519-only secret gets [`BundleError::NeedsHybrid`],
+/// never a downgraded attempt); a v1 bundle opens with the X25519 half of
+/// either identity form.
 pub fn decrypt_with(secret_hex: &str, bundle: &[u8]) -> Result<Vec<u8>, BundleError> {
     if !is_bundle(bundle) {
         return Err(BundleError::BadMagic);
     }
+    if &bundle[..BUNDLE_MAGIC_V2.len()] == BUNDLE_MAGIC_V2 {
+        let rest = &bundle[BUNDLE_MAGIC_V2.len()..];
+        if rest.len() < 32 + KEM_CT_LEN + NONCE_LEN + 16 {
+            return Err(BundleError::Truncated);
+        }
+        let Identity::Hybrid(secret, dk) = parse_secret(secret_hex)? else {
+            return Err(BundleError::NeedsHybrid);
+        };
+        let (eph_pub_bytes, rest) = rest.split_at(32);
+        let (kem_ct_bytes, rest) = rest.split_at(KEM_CT_LEN);
+        let (nonce, ct) = rest.split_at(NONCE_LEN);
+        let eph_pub_arr: [u8; 32] = eph_pub_bytes.try_into().expect("split_at(32)");
+        let eph_pub = PublicKey::from(eph_pub_arr);
+        let my_pub = PublicKey::from(&secret);
+        let x_shared = secret.diffie_hellman(&eph_pub);
+        let kem_ct = ml_kem::Ciphertext::<MlKem768>::try_from(kem_ct_bytes)
+            .map_err(|_| BundleError::Truncated)?;
+        // ML-KEM decapsulation is implicit-rejection: a forged ct yields
+        // a wrong shared secret, and the AEAD open below fails.
+        let kem_shared = dk.decapsulate(&kem_ct).map_err(|_| BundleError::Open)?;
+        let key = hybrid_file_key(
+            eph_pub.as_bytes(),
+            my_pub.as_bytes(),
+            x_shared.as_bytes(),
+            &kem_shared,
+        );
+        let mut aad = Vec::with_capacity(BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN);
+        aad.extend_from_slice(BUNDLE_MAGIC_V2);
+        aad.extend_from_slice(eph_pub_bytes);
+        aad.extend_from_slice(kem_ct_bytes);
+        let cipher = XChaCha20Poly1305::new((&key).into());
+        return cipher
+            .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
+            .map_err(|_| BundleError::Open);
+    }
+    // v1: X25519 only — a hybrid identity opens it with its curve half,
+    // so upgrading an identity never orphans old backups.
     let rest = &bundle[BUNDLE_MAGIC.len()..];
     if rest.len() < 32 + NONCE_LEN + 16 {
         return Err(BundleError::Truncated);
     }
+    let secret = match parse_secret(secret_hex)? {
+        Identity::X25519(s) => s,
+        Identity::Hybrid(s, _) => s,
+    };
     let (eph_pub_bytes, rest) = rest.split_at(32);
     let (nonce, ct) = rest.split_at(NONCE_LEN);
     let eph_pub_arr: [u8; 32] = eph_pub_bytes.try_into().expect("split_at(32)");
     let eph_pub = PublicKey::from(eph_pub_arr);
-
-    let secret = parse_secret(secret_hex)?;
     let my_pub = PublicKey::from(&secret);
     let shared = secret.diffie_hellman(&eph_pub);
     let key = file_key(eph_pub.as_bytes(), my_pub.as_bytes(), shared.as_bytes());
-
     let cipher = XChaCha20Poly1305::new((&key).into());
     let mut aad = Vec::with_capacity(BUNDLE_MAGIC.len() + 32);
     aad.extend_from_slice(BUNDLE_MAGIC);
@@ -137,6 +271,27 @@ pub fn decrypt_with(secret_hex: &str, bundle: &[u8]) -> Result<Vec<u8>, BundleEr
     cipher
         .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
         .map_err(|_| BundleError::Open)
+}
+
+/// Random-nonce AEAD seal shared by both formats.
+fn seal(
+    key: &[u8; KEY_LEN],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<([u8; NONCE_LEN], Vec<u8>), BundleError> {
+    let mut nonce = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce);
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let ct = cipher
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| BundleError::Open)?;
+    Ok((nonce, ct))
 }
 
 // ---- signed manifests -------------------------------------------------
@@ -406,34 +561,150 @@ fn file_key(eph_pub: &[u8], recipient_pub: &[u8], shared: &[u8]) -> [u8; KEY_LEN
     key
 }
 
-fn parse_secret(hex_str: &str) -> Result<StaticSecret, BundleError> {
-    let bytes: [u8; 32] = hex::decode(hex_str.trim())
+/// The hybrid file key: both shared secrets concatenated as the HKDF ikm,
+/// under a distinct info string. The KEM ciphertext itself is bound as
+/// AAD rather than salted in here — either binding suffices and AAD keeps
+/// the derivation's shape identical to v1's.
+fn hybrid_file_key(
+    eph_pub: &[u8],
+    recipient_x_pub: &[u8],
+    x_shared: &[u8],
+    kem_shared: &[u8],
+) -> [u8; KEY_LEN] {
+    let mut salt = Vec::with_capacity(64);
+    salt.extend_from_slice(eph_pub);
+    salt.extend_from_slice(recipient_x_pub);
+    let mut ikm = Vec::with_capacity(64);
+    ikm.extend_from_slice(x_shared);
+    ikm.extend_from_slice(kem_shared);
+    let hk = Hkdf::<Sha256>::new(Some(&salt), &ikm);
+    let mut key = [0u8; KEY_LEN];
+    hk.expand(b"undercroft.v2/bundle", &mut key)
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    key
+}
+
+fn parse_secret(s: &str) -> Result<Identity, BundleError> {
+    let s = s.trim();
+    if let Some(hex_str) = s.strip_prefix(HYBRID_PREFIX) {
+        let bytes = hex::decode(hex_str).map_err(|_| BundleError::BadIdentity)?;
+        if bytes.len() != 32 + KEM_DK_LEN {
+            return Err(BundleError::BadIdentity);
+        }
+        let x: [u8; 32] = bytes[..32].try_into().expect("checked length");
+        let dk_bytes = ml_kem::Encoded::<KemDk>::try_from(&bytes[32..])
+            .map_err(|_| BundleError::BadIdentity)?;
+        let dk = KemDk::from_bytes(&dk_bytes);
+        return Ok(Identity::Hybrid(StaticSecret::from(x), Box::new(dk)));
+    }
+    let bytes: [u8; 32] = hex::decode(s)
         .map_err(|_| BundleError::BadIdentity)?
         .try_into()
         .map_err(|_| BundleError::BadIdentity)?;
-    Ok(StaticSecret::from(bytes))
+    Ok(Identity::X25519(StaticSecret::from(bytes)))
 }
 
-fn parse_public(hex_str: &str) -> Result<PublicKey, BundleError> {
-    let bytes: [u8; 32] = hex::decode(hex_str.trim())
+fn parse_public(s: &str) -> Result<Recipient, BundleError> {
+    let s = s.trim();
+    if let Some(hex_str) = s.strip_prefix(HYBRID_PREFIX) {
+        let bytes = hex::decode(hex_str).map_err(|_| BundleError::BadRecipient)?;
+        if bytes.len() != 32 + KEM_EK_LEN {
+            return Err(BundleError::BadRecipient);
+        }
+        let x: [u8; 32] = bytes[..32].try_into().expect("checked length");
+        let ek_bytes = ml_kem::Encoded::<KemEk>::try_from(&bytes[32..])
+            .map_err(|_| BundleError::BadRecipient)?;
+        let ek = KemEk::from_bytes(&ek_bytes);
+        return Ok(Recipient::Hybrid(PublicKey::from(x), Box::new(ek)));
+    }
+    let bytes: [u8; 32] = hex::decode(s)
         .map_err(|_| BundleError::BadRecipient)?
         .try_into()
         .map_err(|_| BundleError::BadRecipient)?;
-    Ok(PublicKey::from(bytes))
+    Ok(Recipient::X25519(PublicKey::from(bytes)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A legacy X25519-only keypair, exactly what pre-C3.4 `keygen`
+    /// produced — bare hex, no prefix.
+    fn legacy_keygen() -> (String, String) {
+        let secret = StaticSecret::random_from_rng(OsRng);
+        let public = PublicKey::from(&secret);
+        (
+            hex::encode(secret.as_bytes()),
+            hex::encode(public.as_bytes()),
+        )
+    }
+
     #[test]
     fn roundtrip() {
+        // `keygen` is hybrid since C3.4: both strings carry the prefix,
+        // the bundle is v2, and the roundtrip is exact.
         let (secret, recipient) = keygen();
+        assert!(secret.starts_with(HYBRID_PREFIX));
+        assert!(recipient.starts_with(HYBRID_PREFIX));
         let bundle = encrypt_for(&recipient, b"verbatim words survive").unwrap();
         assert!(is_bundle(&bundle));
+        assert_eq!(&bundle[..BUNDLE_MAGIC_V2.len()], BUNDLE_MAGIC_V2);
         let plain = decrypt_with(&secret, &bundle).unwrap();
         assert_eq!(plain, b"verbatim words survive");
         assert_eq!(recipient_of(&secret).unwrap(), recipient);
+    }
+
+    #[test]
+    fn legacy_identities_still_work_both_ways() {
+        // A bare-hex recipient gets a v1 bundle it can actually open —
+        // "old format still importable" covers WRITING to old recipients
+        // too, or upgrading one side would strand the other.
+        let (secret, recipient) = legacy_keygen();
+        let bundle = encrypt_for(&recipient, b"legacy words").unwrap();
+        assert_eq!(&bundle[..BUNDLE_MAGIC.len()], BUNDLE_MAGIC);
+        assert_eq!(decrypt_with(&secret, &bundle).unwrap(), b"legacy words");
+        assert_eq!(recipient_of(&secret).unwrap(), recipient);
+    }
+
+    #[test]
+    fn a_hybrid_identity_opens_v1_bundles_addressed_to_its_curve_half() {
+        // Upgrading an identity never orphans old backups: a v1 bundle
+        // addressed to the hybrid identity's X25519 component opens.
+        let (secret, recipient) = keygen();
+        let x_pub_hex = &recipient[HYBRID_PREFIX.len()..HYBRID_PREFIX.len() + 64];
+        let bundle = encrypt_for(x_pub_hex, b"old backup").unwrap();
+        assert_eq!(&bundle[..BUNDLE_MAGIC.len()], BUNDLE_MAGIC);
+        assert_eq!(decrypt_with(&secret, &bundle).unwrap(), b"old backup");
+    }
+
+    /// The C3.4 gate's second sentence: no silent downgrade, in any
+    /// direction an attacker or a stale tool could push.
+    #[test]
+    fn hybrid_never_downgrades() {
+        let (secret, recipient) = keygen();
+        // A hybrid recipient ALWAYS yields a v2 bundle.
+        let bundle = encrypt_for(&recipient, b"post-quantum words").unwrap();
+        assert_eq!(&bundle[..BUNDLE_MAGIC_V2.len()], BUNDLE_MAGIC_V2);
+        // Rewriting the magic to v1 must not open anything: the magic is
+        // AAD on both sides, and the v1 parse reads KEM bytes as nonce.
+        let mut downgraded = bundle.clone();
+        downgraded[..BUNDLE_MAGIC.len()].copy_from_slice(BUNDLE_MAGIC);
+        assert!(decrypt_with(&secret, &downgraded).is_err());
+        // An X25519-only identity handed a v2 bundle gets the typed
+        // refusal, never a quiet curve-half attempt.
+        let (legacy_secret, _) = legacy_keygen();
+        assert!(matches!(
+            decrypt_with(&legacy_secret, &bundle),
+            Err(BundleError::NeedsHybrid)
+        ));
+        // A tampered KEM ciphertext fails (AAD-bound + the AEAD key moves
+        // under ML-KEM's implicit rejection).
+        let mut kem_tampered = bundle.clone();
+        kem_tampered[BUNDLE_MAGIC_V2.len() + 32] ^= 0x01;
+        assert!(matches!(
+            decrypt_with(&secret, &kem_tampered),
+            Err(BundleError::Open)
+        ));
     }
 
     #[test]
