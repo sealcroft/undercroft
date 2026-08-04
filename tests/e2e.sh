@@ -349,6 +349,23 @@ WRONG_KEY="$(mktemp -u)"
 "$BIN" bundle keygen --out "$WRONG_KEY" >/dev/null
 check "wrong identity refused"    1 "wrong identity key"             -- env UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$BUNDLE_FILE" --identity "$WRONG_KEY"
 check "keygen refuses overwrite"  1 "refusing to overwrite"          -- "$BIN" bundle keygen --out "$BUNDLE_KEY"
+# The hybrid post-quantum format (C3.4): new identities are pq1-prefixed
+# (X25519 + ML-KEM-768, sealed as a v2 bundle above), and a legacy bare-hex
+# X25519 identity — the pre-C3.4 format — still exports AND imports.
+case "$RECIPIENT" in
+  pq1*) echo "ok    keygen emits a pq1 hybrid recipient"; PASS=$((PASS+1));;
+  *)    echo "FAIL  keygen emits a pq1 hybrid recipient"; FAIL=$((FAIL+1));;
+esac
+LEGACY_KEY="$(mktemp -u)"
+printf '202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f' > "$LEGACY_KEY"
+LEGACY_RECIPIENT="$("$BIN" bundle recipient "$LEGACY_KEY")"
+LEGACY_FILE="$(mktemp -u)"
+check "legacy identity exports"   0 "Sealed bundle written"          -- \
+  "$BIN" export --to "$LEGACY_RECIPIENT" --out "$LEGACY_FILE"
+LEGACY_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$LEGACY_HOME" "$BIN" init >/dev/null
+check "legacy identity imports"   0 "Imported"                       -- \
+  env UNDERCROFT_HOME="$LEGACY_HOME" "$BIN" import "$LEGACY_FILE" --identity "$LEGACY_KEY"
 
 echo "== HTTP MCP server =="
 # Non-loopback bind without token must be refused.

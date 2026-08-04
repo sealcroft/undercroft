@@ -1532,22 +1532,31 @@ release with the usual battery + measured gates.
     the state machine; e2e scripted-attacker run over `/v1`.
   - *Effort*: ~2 releases (provenance + deterministic gate first;
     classifier tier and posture policy second).
-- **C3.4 Post-quantum posture.** The stack is symmetric-first, so most
-  of it is **already PQ-safe by construction**: XChaCha20-Poly1305
+- **C3.4 Post-quantum posture — BUILT (2026-08-04), all three items.**
+  The stack is symmetric-first, so most
+  of it was **already PQ-safe by construction**: XChaCha20-Poly1305
   sealing (256-bit keys — Grover-limited to ~128-bit effective, the
   accepted PQ bar), HMAC-SHA256 tags/chain/tokens/assertions,
   HKDF/Argon2id derivation. The **single quantum-vulnerable spot in
-  the codebase** is `bundle.rs`'s X25519 exchange — exported bundles
-  are exposed to harvest-now-decrypt-later. Ship: (1) hybrid KEM
-  (X25519 + ML-KEM-768) bundle format, old format still importable;
-  (2) a PQ posture page documenting the inventory above plus
-  deployment guidance (hybrid-KEM TLS at the reverse proxy) and the
-  release-signing path; (3) the honest boundary stated in writing —
-  this is quantum-resistant **cryptography**; "quantum processing"
-  for retrieval is vapor and we do not claim it. Competitors would
-  have to retrofit PQ onto stacks they haven't encrypted at all; we
-  touch one file. *Gate*: bundle round-trip + downgrade-refusal
-  tests; RustSec-clean ML-KEM dependency (FIPS 203 final).
+  the codebase** was `bundle.rs`'s X25519 exchange — exported bundles
+  were exposed to harvest-now-decrypt-later. Shipped: (1) the hybrid
+  KEM (X25519 + ML-KEM-768, FIPS 203 via RustCrypto `ml-kem`) v2
+  bundle format — `keygen` is hybrid by default (`pq1` strings), the
+  file key derives from BOTH shared secrets, magic+ephemeral+KEM-ct
+  are all AAD; legacy identities still parse, still receive openable
+  v1 bundles, hybrid identities open old v1 backups with their curve
+  half, and NOTHING downgrades silently (a hybrid recipient always
+  gets v2; an X25519-only secret gets a typed refusal on v2);
+  (2) docs/PQ.md, the posture page — the inventory above, the compat
+  matrix, hybrid-KEM TLS guidance (X25519MLKEM768 at the reverse
+  proxy), and the signature story stated honestly (Ed25519 is a
+  future-forgery risk, not a harvest risk; ML-DSA hybrid recorded as
+  future work); (3) the honest boundary in writing on the same page —
+  quantum-resistant **cryptography**; "quantum processing"
+  for retrieval is vapor and we do not claim it.
+  *Gate met*: round-trip + downgrade-refusal tests pinned in every
+  direction (v1↔v2 × legacy/hybrid identities); `ml-kem` 0.2.3 through
+  the RustSec audit in CI.
 
 Sequencing note: C1 needs no code beyond bench runners and can start
 immediately; C2 items are independent of each other; C3.1 depends on

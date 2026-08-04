@@ -262,7 +262,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Audit chain | hash chain advanced in the data transaction; MAC'd manifest anchor; open-time reconciliation (crash ≠ rollback) | A2 rollback/truncation, A7 forensics |
 | Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; fsync'd key files | keeps A2 detection sound under power loss |
 | Key rotation | one-transaction byte-exact reseal of every artifact + chain re-key; two-phase manifest swap, crash-safe | key-compromise recovery; A1 going forward |
-| Export bundles | X25519 ephemeral-static → HKDF → XChaCha20-Poly1305; header as AAD | A1 for backups in transit/at rest |
+| Export bundles | hybrid X25519 + ML-KEM-768 ephemeral-static → HKDF → XChaCha20-Poly1305; header + KEM ct as AAD (v2; legacy X25519 v1 still opens) | A1 for backups in transit/at rest, incl. harvest-now-decrypt-later |
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s) | A4 |
 | Remote-index posture | sealed bytes out, local re-verification in; feature off by default | A5 |
 | Zero-telemetry default | no telemetry deps compiled in; metadata-only when opted in | A6 |
@@ -439,11 +439,14 @@ memory makes your agent safe" is a claim they would rightly distrust.
   (quarantine and denial each logged with their reason). The direct
   answer to MINJA/AgentPoison-class attacks, built on the attribution
   machinery that already exists. Full design in §8 above.
-- **Post-quantum posture (C3.4)**: the at-rest stack is symmetric-first
-  and already conservative against quantum adversaries (256-bit
-  XChaCha20 keys, HMAC-SHA256, HKDF); the one asymmetric primitive is
-  the export bundle's X25519, to be upgraded to a hybrid with ML-KEM-768.
-  No "quantum" marketing beyond this paragraph.
+- **Post-quantum posture (C3.4) — BUILT (2026-08-04)**: the at-rest
+  stack is symmetric-first and already conservative against quantum
+  adversaries (256-bit XChaCha20 keys, HMAC-SHA256, HKDF); the one
+  asymmetric exchange — the export bundle's X25519 — is now hybrid
+  X25519 + ML-KEM-768 by default (`bundle keygen`), with legacy
+  identities fully supported and downgrade refused in every direction.
+  Full inventory, compat matrix, and deployment guidance in
+  [PQ.md](PQ.md). No "quantum" marketing beyond this paragraph.
 
 ## 10. Audit us
 

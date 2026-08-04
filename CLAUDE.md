@@ -186,8 +186,18 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
   vault.json.next staging, keycheck marker); bundle.rs:
-  recipient-encrypted export bundles (X25519 ephemeral-static → HKDF →
-  XChaCha20-Poly1305) + **signed manifests** (Ed25519 sender attestation
+  recipient-encrypted export bundles — **hybrid post-quantum since
+  C3.4**: `keygen` = X25519 + ML-KEM-768 (`pq1` strings), v2 bundles
+  derive the file key from BOTH shared secrets (HKDF ikm = DH ‖
+  kem_shared, magic+eph+kem_ct all AAD), closing
+  harvest-now-decrypt-later on the one asymmetric exchange in the
+  codebase; legacy bare-hex X25519 identities still parse, still
+  receive v1 bundles they can open, and a hybrid identity opens old v1
+  backups with its curve half — but a hybrid recipient NEVER silently
+  downgrades and an X25519-only secret gets a typed refusal on v2
+  (downgrade-refusal pinned; docs/PQ.md is the posture page, incl. the
+  honest boundary: quantum-resistant CRYPTOGRAPHY, never "quantum
+  processing") + **signed manifests** (Ed25519 sender attestation
   beside the recipient flow — encryption says who may READ, the signature
   says who WROTE; scope/trust-claim/expiry/counts/provenance +
   unconditionally-checked payload digest; a sender-declared trust label is
@@ -562,7 +572,7 @@ Build and test **inside containers**, not on the host (project policy):
 ```bash
 docker compose run --rm test          # cargo unit + integration tests (511)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (206 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (209 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (44 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (16 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate

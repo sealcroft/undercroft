@@ -1246,6 +1246,10 @@ fn main() -> Result<()> {
                     "Identity key written to {} (keep it private).",
                     path.display()
                 );
+                println!(
+                    "Hybrid post-quantum identity (X25519 + ML-KEM-768). Legacy \
+                     X25519 identities and their bundles keep working."
+                );
                 println!("Recipient (shareable): {recipient_hex}");
                 println!("Seal an export with: undercroft export --to {recipient_hex} --out palace.bundle");
             }
