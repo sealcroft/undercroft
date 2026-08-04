@@ -65,7 +65,11 @@ address (loopback unless you deliberately expose the server), and sits
 Exposed series (all `undercroft_*`):
 
 - **Counters** — `search_total{fusion}`, `search_prefiltered_total`,
-  `drawer_writes_total{outcome}`, `drawer_deletes_total`,
+  `search_wings_probed_total` (how many per-wing indexes served one
+  query's candidates — the honest cost metric for anything fan-out
+  shaped; a count, never a wing name),
+  `drawer_writes_total{outcome}` (`created` / `deduped`),
+  `drawer_deletes_total`,
   `kg_writes_total{kind}`, `chain_commits_total` (audit-chain RECORDS,
   not manifest anchors — a 256-drawer bulk transaction anchors once and
   advances this by 256, and records appended without an anchor, such as
@@ -75,7 +79,19 @@ Exposed series (all `undercroft_*`):
 - **Histograms** — `search_duration_seconds`, `search_hits`,
   `http_request_duration_seconds{route}`.
 - **Gauges** (per vault) — `drawers`, `audit_chain_height`, plus
-  `kg_triples` / `kg_entities` / `store_bytes` where sampled.
+  `kg_triples` / `kg_entities` / `store_bytes` where sampled, and the
+  five **codebook generation** counters —
+  `codebook_generation_pq_codebook`, `…_pq_ivf`, `…_fde_codebook`,
+  `…_fde_ivf`, `…_tok_codebook`. A step means every row coded against
+  the previous generation was re-coded (or, for the IVF pairs,
+  re-partitioned: the code bytes are unchanged and the candidate set
+  moved). They sit outside HMAC coverage, so they are evidence about
+  ambiguity in a retrieval result, never about tampering.
+
+A gauge name must appear in `undercroft_obs::GAUGE_NAMES` or the value is
+dropped without a trace — write-only telemetry that looks live at the
+call site and never reaches `/metrics`. The list is public so a producer
+can pin the names it emits against the names actually registered.
 
 `hmac_verify_failures_total` is the headline signal: any non-zero value
 means a record, KG triple, tunnel, or vault manifest failed HMAC
@@ -180,9 +196,10 @@ the security notes.
 Prometheus is pull-based; for a **live** view the multi-tenant server also
 pushes an [SSE](https://developer.mozilla.org/docs/Web/API/Server-sent_events)
 stream per vault — a periodic sample of aggregate counts plus discrete
-event pings as they happen. This is what the forthcoming Palace Monitor
-UI consumes. Telemetry build + bearer required; sealed vaults stream only
-aggregates (wing/room names suppressed).
+event pings as they happen. This is what the [Palace Monitor
+UI](#palace-monitor-ui) below consumes. Telemetry build + bearer
+required; sealed vaults stream only aggregates (wing/room names
+suppressed).
 
 ```bash
 # live event stream (Ctrl-C to stop)

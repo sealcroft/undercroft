@@ -821,21 +821,28 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       <div class="feat" data-glyph="Ω">
         <h3>Untrusted accelerators</h3>
         <p>Qdrant, Chroma, pgvector, Milvus, Weaviate — fed only sealed bytes. Their answers are
-           re-verified against local HMACs before you ever see them.</p>
+           re-verified against local HMACs before you ever see them, then filtered by the
+           same retrieval policy the local path uses — trust floor, quarantine fence, closed
+           vocabularies — off each candidate's verified metadata. An index push is not a
+           route around admission control.</p>
       </div>
       <div class="feat" data-glyph="Σ">
         <h3>Agent-native</h3>
-        <p>34 MCP tools over stdio or team HTTP (bearer-enforced, read-only mode),
-           auto-save hooks, per-agent diaries, transcript sweeps — memory that survives
-           the crossing between sessions.</p>
+        <p>34 MCP tools over stdio or team HTTP (bearer-enforced; <code>--read-only</code> is a
+           posture on the whole process, not a filter on one port), auto-save hooks, per-agent
+           diaries, transcript sweeps — memory that survives the crossing between sessions. The
+           tool list is an inventory the build counts itself against, in both directions.</p>
       </div>
       <div class="feat" data-glyph="Δ">
         <h3>Screened at the door</h3>
-        <p>Opt-in write-path admission: a deterministic detector diverts injection-shaped
-           writes into a sealed quarantine wing no search can reach, rulings are
-           chain-audited, and an optional local classifier may say <i>suspicious</i> —
-           never <i>admitted</i>. Trust classes and training-draw caps bound what any
-           writer can shape.</p>
+        <p>Opt-in write-path admission, enforced at the one write choke point behind a
+           <i>required</i> argument — a new write path does not compile until its author
+           decides. A deterministic detector diverts injection-shaped writes into a sealed
+           quarantine wing that no read reaches: not search, not <code>wake-up</code>, not
+           the closet index, and MCP refuses to read or destroy the evidence at all. Rulings
+           are chain-audited, a diversion says so on every surface, and an optional local
+           classifier may say <i>suspicious</i> — never <i>admitted</i>. Trust classes and
+           training-draw caps bound what any writer can shape.</p>
       </div>
       <div class="feat" data-glyph="Θ">
         <h3>Forgetting with a receipt</h3>
@@ -846,7 +853,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
     </div>
     <div class="stats">
-      <div class="stat"><div class="n" data-count="511">0</div><div class="l">cargo tests</div></div>
+      <div class="stat"><div class="n" data-count="551">0</div><div class="l">cargo tests</div></div>
       <div class="stat"><div class="n" data-count="329">0</div><div class="l">e2e checks</div></div>
       <div class="stat"><div class="n" data-count="5">0</div><div class="l">live backends</div></div>
       <div class="stat"><div class="n" data-count="34">0</div><div class="l">mcp tools</div></div>
@@ -866,9 +873,11 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
       <div class="feat" data-glyph="Β">
         <h3>A team's shared memory</h3>
-        <p>One <code>serve-http</code> instance, bearer-enforced beyond loopback,
-           read-only mode for consumers. Same MCP tools over HTTP — every teammate's
-           agent shares one sealed palace.</p>
+        <p>One <code>serve-http</code> instance, bearer-enforced beyond loopback, with
+           <code>--read-only</code> for consumers — a posture the whole process takes, gated
+           in front of dispatch and failing closed, so a route nobody remembered to guard is
+           refused rather than served. Same MCP tools over HTTP — every teammate's agent
+           shares one sealed palace.</p>
       </div>
       <div class="feat" data-glyph="Γ">
         <h3>A multi-tenant memory product</h3>
@@ -880,13 +889,17 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <h3>An auditable record of what was said</h3>
         <p>Verbatim storage, HMAC on every record, a tamper-evident audit chain, and
            crash-safe key rotation. <code>verify</code> replays it all; a rollback is
-           an alarm, a crash never is.</p>
+           an alarm, a crash never is. Egress joins the chain too: every export is
+           audited unconditionally, and <code>UNDERCROFT_READ_AUDIT=chain</code> adds a
+           record per search — a <i>keyed fingerprint</i> of the query, never its text.</p>
       </div>
       <div class="feat" data-glyph="Ε">
         <h3>Backups that never leak</h3>
-        <p>Encrypted export bundles sealed to an X25519 recipient — a migration file
-           never exists in plaintext. Restore is <code>import --identity</code>;
-           token matrices ride along as portable artifacts.</p>
+        <p>Encrypted export bundles sealed to a <b>hybrid post-quantum</b> recipient —
+           X25519 <i>and</i> ML-KEM-768, both shared secrets feeding one key, because the
+           bundle is the one thing that leaves the machine and harvest-now-decrypt-later
+           only needs it copied. A migration file never exists in plaintext. Restore is
+           <code>import --identity</code>; token matrices ride along as portable artifacts.</p>
       </div>
       <div class="feat" data-glyph="Ζ">
         <h3>Offline retrieval that scales</h3>
@@ -1202,14 +1215,14 @@ document.body.classList.add('js');
     { t: 'Ask it', p: 'Hybrid semantic + lexical + recency search returns your exact words (one typo tolerated). wake-up loads a session’s worth of identity and recent essentials.',
       c: 'undercroft search "why did we pick graphql"\nundercroft wake-up                    # L0 identity + L1 essential story\nundercroft kg query alice --as-of 2024-06-15',
       l: [['docs/retrieval.html','retrieval & scaling →']] },
-    { t: 'Wire an agent', p: 'The MCP stdio server exposes 32 tools; hooks print ready-to-paste auto-save settings so every session files its own memories.',
+    { t: 'Wire an agent', p: 'The MCP stdio server exposes 34 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
       c: '# claude_desktop_config.json / .mcp.json\n{ "mcpServers": { "undercroft": {\n    "command": "undercroft", "args": ["serve-mcp"] } } }\n\nundercroft hooks claude-code          # auto-save hook snippet',
       l: [['docs/integrations.html','integrations →'],['docs/agents.html','agents guide →']] },
-    { t: 'Share it', p: 'One server, a whole team — or a whole product. Bearer beyond loopback, per-vault assertions, read-only mode, and an orchestrator for fleets.',
+    { t: 'Share it', p: 'One server, a whole team — or a whole product. Bearer beyond loopback, per-vault assertions (enforced on /mcp as well as /v1), a process-wide read-only posture, and an orchestrator for fleets.',
       c: 'UNDERCROFT_MCP_HTTP_TOKEN=$(openssl rand -hex 24) \\\n  undercroft serve-http --host 0.0.0.0 --port 8800\n# per-tenant: UNDERCROFT_ASSERTION_SECRET=... + X-Vault-Assertion',
       l: [['docs/remote-server.html','team server →'],['docs/agents.html','multi-tenant →']] },
-    { t: 'Operate', p: 'Integrity is a command, not a hope. Verify replays every HMAC and the audit chain; rotation re-seals under fresh keys; bundles back up without plaintext.',
-      c: 'undercroft verify                     # HMAC every record + replay chain\nundercroft backup create\nundercroft vault rotate default       # fresh keys, crash-safe\nundercroft bundle keygen --out me.key\nundercroft export --to <recipient> --out palace.bundle',
+    { t: 'Operate', p: 'Integrity is a command, not a hope. Verify replays every HMAC and the audit chain; rotation re-seals under fresh keys; bundles back up without plaintext, sealed to a hybrid X25519 + ML-KEM-768 recipient.',
+      c: 'undercroft verify                     # HMAC every record + replay chain\nundercroft backup create\nundercroft vault rotate default       # fresh keys, crash-safe\nundercroft bundle keygen --out me.key  # a pq1 hybrid identity\nundercroft export --to <recipient> --out palace.bundle',
       l: [['docs/runbook.html','tamper runbook →']] },
   ];
   let cur = 0;
