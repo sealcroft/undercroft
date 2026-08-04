@@ -40,6 +40,15 @@ HMAC-SHA256 record tags plus a tamper-evident audit chain). It does **not**
 defend against an attacker who can read process memory while a vault is
 unlocked, nor against a compromised host OS.
 
+Above that layer the served surfaces carry boundaries of their own, and
+they are in scope too: the write-path admission screen (applied at the
+single write choke point, so no surface reaches storage unscreened), the
+quarantine wing's exclusion from every read that returns content, the
+operator-only capabilities that must never appear over MCP, and
+`--read-only` as a posture on the whole process rather than a filter on
+one port. The whitepaper linked below states each mechanism and its
+residual.
+
 **Tamper is detected on read, not prevented.** Any record, KG triple, tunnel,
 or manifest that fails its HMAC surfaces immediately: `undercroft verify` names
 the record, and (on a `--features telemetry` build) the
@@ -74,7 +83,20 @@ In scope (examples, not a limit):
 - Plaintext or plaintext-derived data persisted to disk by a sealed
   vault (including via derived indexes, logs, or telemetry).
 - Key material exposure through logs, errors, or telemetry.
-- Opening an encrypted export bundle without its identity key.
+- Opening an encrypted export bundle without its identity key, or
+  making a hybrid (`pq1`) recipient silently accept a legacy X25519-only
+  bundle — the downgrade refusal is a security property.
+- Reaching stored content **without passing the admission screen** when
+  a deployment declares `UNDERCROFT_ADMISSION=quarantine`: any write path
+  that lands a drawer unscreened, or a save that reports success under
+  the id the caller aimed at while the content sits in quarantine.
+- Reading, editing, or destroying **quarantine-pending** content through
+  any surface but the operator's own (`admission` on the CLI and `/v1`)
+  — MCP in particular must refuse it — or reaching an operator-only
+  capability (admission rulings, wing-trust assignment, retention,
+  forgetting, rotation) from the agent surface.
+- A `--read-only` server changing state: any request that writes, and
+  any read-path write beyond the accepted open-time ones below.
 
 Out of scope (documented threat-model boundaries):
 
@@ -83,6 +105,15 @@ Out of scope (documented threat-model boundaries):
 - A consistent old database + manifest pair restored **together** by an
   attacker with full disk control (documented residual; external witness
   is the planned mitigation).
+- Writes a `--read-only` process performs at **open** — schema creation,
+  rotation reconciliation, chain initialization — and `POST …/verify`,
+  which only fast-forwards the manifest anchor and is deliberately
+  classified as a read. Two things are **known gaps rather than
+  boundaries**, so a report adds nothing but we would rather say so than
+  have you find them: under `UNDERCROFT_RETRIEVAL=pq` a read-only search
+  can still build or retrain a missing PQ/IVF index, and audited read
+  records anchor only at the next store open, so a stripped unanchored
+  tail is crash-indistinguishable until then.
 - Denial of service against a server you operate, and resource
   exhaustion requiring authenticated access.
 - Vulnerabilities exclusively in optional attached components (remote

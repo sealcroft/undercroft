@@ -43,6 +43,17 @@ on a label most rows never carried returns near-nothing, silently — the
 the filter excluded (a count is enough), or the label's design states that
 absence is meaningful (as with `wing`/`room`, which every drawer carries).
 
+That obligation now has **two** instances and one implementation. `kind`
+reports the in-scope drawers carrying no declared kind; `min_trust`
+reports the wings below the floor; both report `None` rather than zero
+when the caller set no filter, because "you set no floor" and "your floor
+excluded nothing" are different statements. The implementation is shared
+(`Exclusions` in the CLI crate, consumed by CLI, MCP and `/v1` alike)
+because it was written twice and each copy dropped one leg — `/v1` and
+the CLI disclosed the trust count and MCP did not. A policy this document
+states once must be *implemented* once too, or the surfaces will disagree
+about it.
+
 ## Cost is not trust: the two axes
 
 - **Cost tiers, now measured** (`undercroft-bench tagcost`, LoCoMo corpus,
@@ -65,7 +76,20 @@ absence is meaningful (as with `wing`/`room`, which every drawer carries).
 - Model-assigned labels are **extractor claims**: they require extractor
   identity and receipts (the KG's receipt pattern, one level up) before any
   surface may filter on them, and they may never feed a hard filter while
-  unreviewed — extractor error would silently unreach content.
+  unreviewed — extractor error would silently unreach content. The
+  precondition SHIPPED: a KG fact records **which model claimed it**, and
+  that identity lives inside the fact's own HMAC (a third canonical
+  extension on the support/authority precedent, so untouched facts keep
+  byte-identical canonicals), which means a flipped attribution fails
+  verification rather than laundering a claim onto a better-trusted
+  extractor. No surface filters on it yet; the requirement above is what
+  a first one must satisfy.
+- A label crossing a **trust boundary in transit** is still only a claim by
+  its sender. A signed export bundle's manifest carries a sender-declared
+  trust class beside the Ed25519 attestation: the signature proves *who
+  wrote it*, never *what it deserves*. The receiving deployment's own
+  operator assigns trust on arrival, exactly as at ingest — the same rule
+  as below, one machine further away.
 
 ## The exposure rule on sealed vaults
 
@@ -112,12 +136,36 @@ an identifier, never with content words that should stay sealed.
   riding the gate-verified scope machinery (kind-starvation test with a
   raw premise), an unknown filter value erroring instead of silently
   emptying, and the unlabeled-rows count on `/v1`
-  (`unlabeled_excluded`), MCP and CLI. Its **value instrument**
+  (`unlabeled_excluded`, beside `trust_excluded_wings`), MCP and CLI.
+  Its **value instrument**
   (`undercroft-bench tagvalue`) shipped with it: R@1/R@5 + wrong-kind@1,
   unfiltered vs filtered, on a corpus built so every key's words live in
   two kinds — the number beside any claim the filter makes.
+- **Trust labels** (ingest-time, deployment-assigned) SHIPPED 2026-08-03
+  with the C3.3 defense cluster, on wing-as-trust-zone as designed and
+  obeying every rule above. `TRUST_VOCAB` is a closed vocabulary
+  (`quarantined | standard | trusted`) assigned by the **operator only**
+  — CLI and `/v1`, deliberately never MCP, because the surface an agent
+  drives must not set the class that decides what it may retrieve. The
+  assignment is HMAC-tagged and chain-audited, so a column flip without
+  the vault key fails verification and a floored search refuses rather
+  than quietly ranking on a forged class. It is consumed as a
+  **candidate-set floor** (`min_trust` per request, `UNDERCROFT_TRUST_FLOOR`
+  per vault) resolved through the scope machinery before candidates are
+  drawn — never a weight — so a quarantined wing can neither answer nor
+  crowd a floored query, pinned by a starvation test with a raw premise.
+  Unassigned means `standard`; naming a wing explicitly is self-scoping
+  and bypasses the *vault* floor, never a request's own `min_trust`. The
+  same clause reaches the remote-index path from the one shared policy
+  function, so an attached backend is not a route around it.
+  A self-declared `kind` remains ergonomics, never a trust boundary.
+- The **quarantine wing** is this doctrine's hardest instance: a reserved
+  clear-text wing value that *hard-excludes* from every read returning
+  content unless the caller names it, and is refused outright on MCP.
+  Note what makes that legitimate rather than a silent filter — it is
+  operator-declared (`UNDERCROFT_ADMISSION`), the write that lands there
+  says so on every surface, and the review queue is an operator surface
+  with its own scope. An exclusion nobody can see or opt into would be
+  exactly the silence this document forbids.
 - **Free-form tags** wait for a product case, and ship blind-indexed if
   ever.
-- **Trust labels** (ingest-time, deployment-assigned) belong to the C3.3
-  defense cluster and build on wing-as-trust-zone. A self-declared
-  `kind` remains ergonomics, never a trust boundary.
