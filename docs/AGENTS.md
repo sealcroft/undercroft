@@ -487,6 +487,19 @@ accelerators**: they hold sealed bytes, every candidate is re-verified and
 decrypted locally. They pay off only at very large corpora — measure
 before adopting. After a key rotation, re-run `index push`.
 
+A mirror-served query answers under the **same retrieval policy** as
+`--backend local`: the closed vocabularies (`--kind`, `--min-trust`) are
+validated the same way, the trust floor — the request's and the vault's —
+is applied, and admission-quarantined drawers are excluded unless you
+name the quarantine wing yourself. The push mirrors every drawer,
+quarantined rows included, because an untrusted mirror can offer any id
+it likes: the fence is applied where the bytes are decrypted, not where
+they are uploaded. Cost of the accelerator, stated: locally the floor
+bounds candidate *generation*, remotely it can only bound what came back,
+so an excluded wing's rows still spend part of the candidate budget.
+An external-embedding vault is refused on this path exactly as it is on
+`search` — the query vector has to come from the caller.
+
 ---
 
 ## 7. Scenario F — operating it securely

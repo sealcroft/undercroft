@@ -126,6 +126,23 @@ pub(crate) enum TrustClause {
     Allow(Vec<String>),
 }
 
+impl TrustClause {
+    /// Does this wing survive the clause? The per-candidate form of the
+    /// `wing IN (…)` / `wing NOT IN (…)` the local path pushes into SQL.
+    ///
+    /// The remote-backend path holds decrypted, HMAC-verified drawers
+    /// rather than a query it can bound, so the same decision has to be
+    /// made in Rust there — and it must be made from the VERIFIED
+    /// `meta.wing`, never from the label the mirror echoed back, which an
+    /// untrusted accelerator writes.
+    pub(crate) fn admits(&self, wing: &str) -> bool {
+        match self {
+            TrustClause::Exclude(w) => !w.iter().any(|x| x == wing),
+            TrustClause::Allow(w) => w.iter().any(|x| x == wing),
+        }
+    }
+}
+
 pub(crate) fn wing_trust_canonical(wing: &str, trust: &str, assigned_at: &str) -> Vec<u8> {
     format!("wingtrust\x1f{wing}\x1f{trust}\x1f{assigned_at}").into_bytes()
 }

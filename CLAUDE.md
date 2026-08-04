@@ -414,7 +414,20 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   floor, never a request's own),
   remote-index integration (remote.rs — a mirror records the embedder it was
   pushed with; `search_with_index` refuses a mismatch rather than ranking a
-  v2 query against v1 vectors, which returned an empty result with no error),
+  v2 query against v1 vectors, which returned an empty result with no error,
+  and refuses an external vault for the same reason one level earlier —
+  `ExternalEmbedder::embed` degrades to a ZERO vector, so the mirror was
+  probed with zeros. **Retrieval policy is the local path's, verbatim**:
+  closed vocabularies + trust floor + quarantine fence all come from the
+  shared `resolve_search_policy`, applied per candidate off the
+  HMAC-verified `meta.wing`. They were absent here until 2026-08-04, so an
+  `index push` turned `--backend qdrant` into a route around admission
+  control — the fix is a shared REQUIRED step, not a second copy. `index_push`
+  still mirrors quarantined rows (an untrusted mirror can offer any id, so a
+  push-side filter is not a boundary, and dropping them would empty the
+  reviewer's own `--wing quarantine-pending` scope); the residue is stated —
+  remotely the floor bounds what came BACK, not what was generated, i.e. an
+  availability cost, never an integrity one. Telemetry is at parity too),
   read/egress auditing (the consultation-filed gap, closed 2026-08-04:
   **exports chain-audited unconditionally on every surface** —
   `audit_export`, one `egress/export` record binding surface + recipient
