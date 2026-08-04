@@ -16,11 +16,11 @@ The whole procedure at a glance — each step is detailed below:
 ```mermaid
 flowchart TB
     alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface + vault labels</i>"]
-    loc --> conf["2 · Confirm + pinpoint<br/><i>undercroft verify vault —<br/>names the exact record(s), chain state</i>"]
-    conf --> mit["3 · Mitigate<br/><i>freeze writes (--read-only) ·<br/>preserve evidence copy · isolate vault</i>"]
+    loc --> conf["2 · Confirm + pinpoint<br/><i>undercroft verify --vault —<br/>names the exact record(s), chain state</i>"]
+    conf --> mit["3 · Mitigate<br/><i>preserve evidence copy FIRST ·<br/>freeze writes (--read-only) · isolate vault</i>"]
     mit --> fix{"4 · Fix — verbatim restore,<br/>never repair-in-place"}
     fix -- "known-good backup" --> restore["backup restore →<br/>verify must report 0 failures"]
-    fix -- "single record,<br/>source available" --> refile["re-file it —<br/><i>deterministic id ⇒ idempotent re-seal</i>"]
+    fix -- "single MINED record,<br/>source document available" --> refile["re-file it —<br/><i>source-derived id ⇒ idempotent re-seal</i>"]
     restore --> clean["repair (housekeeping) →<br/>read-write only once verify is clean"]
     refile --> clean
     clean --> prev["5 · Prevent<br/><i>scheduled backups · 0600 perms ·<br/>OS-level FIM · alerting on ·<br/>per-vault assertions</i>"]
@@ -44,7 +44,7 @@ Run a full verification of the affected vault — it re-checks every record's
 HMAC and replays the audit chain, naming the exact bad record(s):
 
 ```bash
-undercroft verify <vault>
+undercroft verify --vault <vault>
 # records checked: 1284
 # hmac failures:   1
 #   TAMPERED: 5a2fc91d…
@@ -57,16 +57,28 @@ forge the chain MAC).
 
 ## 3. Mitigate now (stop the bleeding)
 
-1. **Freeze writes.** Restart the server read-only so nothing new is written on
+1. **Preserve evidence first.** Copy the vault directory *before* anything else
+   touches it — the DB, its `-wal`/`-shm`, and `vault.json`. This comes before
+   the restart on purpose: opening a store is not a pure read (schema creation,
+   a rotation reconcile, chain init), so the copy must predate the next open:
+   ```bash
+   cp -a "$UNDERCROFT_HOME/vaults/<vault>" "/tmp/<vault>.evidence.$(date +%s)"
+   ```
+2. **Freeze writes.** Restart the server read-only so nothing new is written on
    top of a compromised store while you investigate:
    ```bash
    undercroft serve-http --read-only …
    ```
-2. **Preserve evidence.** Copy the vault directory *before* changing anything —
-   the DB, its `-wal`/`-shm`, and `vault.json`:
-   ```bash
-   cp -a "$UNDERCROFT_HOME/vaults/<vault>" "/tmp/<vault>.evidence.$(date +%s)"
-   ```
+   `--read-only` is a posture on the **whole process**, not a filter on one
+   port: both stores the server opens take it, the gate sits in front of route
+   dispatch and **fails closed** (everything is a mutation unless explicitly
+   named otherwise), and the read-audit record and the embedder migration —
+   both writes — are suppressed. Two exceptions are deliberate and worth
+   knowing here: `POST …/verify` is allowed, because verification
+   fast-forwards the manifest anchor and is classified as a read; and with
+   `UNDERCROFT_RETRIEVAL=pq` a search may still build a missing PQ/IVF index,
+   which is a write (a recorded gap, not a decision). If your incident needs
+   a byte-frozen vault, stop the server rather than restarting it.
 3. **Isolate.** If this is a multi-tenant server, the vault id in the alert
    scopes the blast radius — other vaults have independent HKDF-derived keys, so
    one vault falling tells an attacker nothing about its siblings.
@@ -79,24 +91,31 @@ restore**, not a repair-in-place of forged bytes:
 1. **Restore from the most recent good backup.** `backup` refuses to run if the
    source failed verification, so a listed backup is known-good at capture time:
    ```bash
-   undercroft backup list
-   undercroft backup restore <vault> <backup-id>
-   undercroft verify <vault>          # must now report 0 hmac failures, chain ok
+   undercroft backup list                          # names are <vault>-<stamp>
+   undercroft backup restore <vault>-<stamp> --force   # --force to overwrite the live vault
+   undercroft verify --vault <vault>   # must now report 0 hmac failures, chain ok
    ```
-2. **If a single record was hit and you have the source**, re-file it (the
-   drawer id is deterministic, so re-mining is idempotent and re-seals it) and
-   re-verify.
+2. **If a single record was hit and you have the source document**, re-file it:
+   a mined or swept drawer's id is derived from (wing, room, source, chunk
+   index, normalize version), so re-mining is idempotent and simply re-seals
+   the row. Re-verify afterwards. This does **not** hold for drawers written
+   through `remember` / the API, which have no source and carry a unique append
+   index instead — re-saving those creates a *new* drawer beside the tampered
+   one rather than replacing it, so restore from backup is the only verbatim
+   fix there.
 3. **Housekeeping** after a clean restore:
    ```bash
-   undercroft repair <vault>          # backfill fingerprints, vacuum, re-verify
+   undercroft repair --vault <vault>  # backfill fingerprints, vacuum, re-verify
    ```
 
 Only return the server to read-write once `verify` is clean.
 
 ## 5. Prevent (before the next time)
 
-- **Back up on a schedule.** `undercroft backup create <vault>` is the recovery
-  path above; without a good backup, a verbatim restore isn't possible.
+- **Back up on a schedule.** `undercroft backup create --vault <vault>` is the
+  recovery path above; without a good backup, a verbatim restore isn't possible.
+  Only the ten most recent snapshots per vault are kept — older ones are pruned
+  on each create, so a schedule needs its own off-box retention.
 - **Lock down the store.** The vault directory and `master.key` should be
   `0600`/owner-only. Anything that can write the vault DB out-of-band can
   tamper; anything that can read `master.key` can forge.
