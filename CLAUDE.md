@@ -408,6 +408,9 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   handed to another process; in-process onnx/ort close it), and a failed
   embed cannot fail a write, so it degrades to a **counted** zero vector
   (lexically findable, semantically invisible until re-embedded).
+  The same transport policy covers `LlmClient` itself (2026-08-04):
+  refine and the admission advisor refuse cleartext beyond loopback,
+  `UNDERCROFT_LLM_CA` pins a self-signed root, construction is fallible.
   No external API by default: nothing is contacted unless a URL is set
 - `crates/undercroft-embed-onnx` — feature-gated ONNX embedder, cross-encoder
   reranker, **and** ColBERT late-interaction encoder (tract, pure Rust; two
@@ -456,7 +459,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: ten theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all 71
+  which inlines them and documents every layer plus all 72
   `UNDERCROFT_*` variables. **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also

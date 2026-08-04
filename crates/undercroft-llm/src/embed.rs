@@ -257,7 +257,9 @@ fn parse_embedding(resp: &Value) -> Option<Vec<f32>> {
 /// bundled public roots are deliberately absent, because a declaration is a
 /// pin. Errors (empty file, no parseable certificate, a root rustls
 /// rejects) are construction refusals at the caller, never fallbacks.
-fn pinned_roots_from_pem(pem: &[u8]) -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
+pub(crate) fn pinned_roots_from_pem(
+    pem: &[u8],
+) -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
     let certs: Vec<_> = rustls_pemfile::certs(&mut &pem[..])
         .collect::<Result<_, _>>()
         .map_err(|e| format!("not parseable as PEM certificates: {e}"))?;

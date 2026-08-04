@@ -17,13 +17,11 @@
 //! * the prompt data-marks the candidate and the answer is parsed
 //!   closed-vocabulary: anything but an exact verdict is a non-answer.
 //!
-//! **Transport: TLS or loopback, nothing else** — the same refusal as
-//! the served embedder, because the candidate text crosses to the
-//! endpoint in plaintext. Recorded gap, stated: `UNDERCROFT_LLM_CA` does
-//! not exist yet, so a SELF-SIGNED TLS LLM endpoint fails verification —
-//! the pin variable belongs to the queued LlmClient transport-policy
-//! unit; until then the advisor's non-loopback story is a
-//! publicly-verifiable certificate.
+//! **Transport: TLS or loopback, nothing else** — enforced by
+//! [`LlmClient`] itself since the transport-policy unit (2026-08-04):
+//! cleartext http beyond loopback refuses at construction, and
+//! `UNDERCROFT_LLM_CA` pins a self-signed root exactly as
+//! `UNDERCROFT_EMBED_CA` does for the embedder.
 
 use undercroft_core::admission::AdmissionAdvisor;
 
@@ -63,15 +61,9 @@ impl LlmAdmissionAdvisor {
             }
             Err(_) => return Ok(None),
         }
-        let base = std::env::var("UNDERCROFT_LLM_URL").map_err(|_| LlmError::NotConfigured)?;
-        if !base.starts_with("https://") && !crate::embed::is_loopback(&base) {
-            return Err(LlmError::Refused(format!(
-                "UNDERCROFT_ADMISSION_LLM: cleartext http to non-loopback {base} — \
-                 candidate text would cross the network readable by anyone on \
-                 the path, and no override exists. Serve the endpoint over TLS \
-                 or run it on loopback."
-            )));
-        }
+        // Transport policy (TLS or loopback, UNDERCROFT_LLM_CA pin) is the
+        // client's own construction contract — a violation surfaces here
+        // as the refusal it is.
         Ok(Some(Self {
             client: LlmClient::from_env()?,
         }))

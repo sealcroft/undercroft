@@ -1629,7 +1629,8 @@ fn run_tagcost(
         "openai" => undercroft_llm::ApiKind::OpenAi,
         _ => undercroft_llm::ApiKind::Ollama,
     };
-    let client = undercroft_llm::LlmClient::new(url, llm_model, kind);
+    let client = undercroft_llm::LlmClient::new(url, llm_model, kind)
+        .map_err(|e| anyhow::anyhow!("llm arm: {e}"))?;
     let labels: Vec<String> = TAG_VOCAB.iter().map(|s| s.to_string()).collect();
     let stride = texts.len().div_ceil(sample.max(1)).max(1);
     let sampled: Vec<&String> = texts.iter().step_by(stride).take(sample.max(1)).collect();

@@ -1448,9 +1448,9 @@ release with the usual battery + measured gates.
   only for tier-1-clean candidates, only toward quarantine
   (`llm-advisory` signal, offset 0, no content, no model reasoning),
   failure degrades to tier-1-only, declared-but-unusable refuses to
-  open, TLS-or-loopback. Recorded gaps of its own: `UNDERCROFT_LLM_CA`
-  for self-signed advisory endpoints belongs to the queued LlmClient
-  transport-policy unit, and the tier-1 wishlist — attack-fixture
+  open, TLS-or-loopback — since 2026-08-04 enforced by `LlmClient`
+  itself for every consumer, with `UNDERCROFT_LLM_CA` pinning
+  self-signed roots; the remaining tier-1 wishlist — attack-fixture
   similarity, rate anomalies — stays open below). C3.3's shipping
   mechanism list is BUILT end to end. The provenance foundation + posture are BUILT (2026-08-03):
   `agent`/`channel`/`session` claims on every save surface
