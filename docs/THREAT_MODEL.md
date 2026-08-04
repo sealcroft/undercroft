@@ -224,15 +224,23 @@ cannot:
    already contaminated summaries. Deletions leave keyed tombstones in
    the chain.
 
-**Residual (honest)**: undercroft does not today score, quarantine, or
-trust-rank writes; a poisoned record that matches a future query can
-still be retrieved and shown to the agent — with provenance, but shown.
-Retrieval-rank manipulation (AgentPoison-style optimization against the
-embedder) is not specifically defended. This is exactly the gap the
-planned C3.3 work addresses (§8). What the design refuses to do is
-pretend the problem away by distilling — the literature's core finding
-is that *the write path is an attack surface*, and a write path that
-rewrites content with an LLM adds an attack surface inside the defense.
+**Residual (honest, updated as C3.3 shipped — 2026-08-03/04)**: the
+write path is now screened (deterministic detector + quarantine wing +
+chain-audited rulings, opt-in via `UNDERCROFT_ADMISSION`), writes carry
+provenance claims, wings carry operator-assigned trust classes consumed
+as a retrieval floor, updates are screened on the updating surface, the
+global training draws are capped per wing and per agent claim, and
+non-finite external vectors are refused. What remains true: detection
+is heuristic, so a poison written without any of the marker classes
+passes the screen, and a record that passes can still be retrieved and
+shown to the agent — with provenance, but shown. Against
+retrieval-rank manipulation (AgentPoison-style optimization against
+the embedder) the specific defenses are structural — per-item scoring,
+normalized training vectors, capped draws — not detection of the
+optimized content itself. What the design refuses to do is pretend the
+problem away by distilling — the literature's core finding is that
+*the write path is an attack surface*, and a write path that rewrites
+content with an LLM adds an attack surface inside the defense.
 
 ### A8 — Process and host adversary (non-goal)
 
@@ -317,30 +325,39 @@ exactly the security theater this document refuses. The attack crosses
 ### Zone 1 — the memory store (undercroft owns this)
 
 Reduce and mark what can ever reach the agent. This is where the C3.3
-**write-path admission control** lives, and it is a genuine
-category-difference: no surveyed competitor screens the write path at
-all.
+**write-path admission control** lives — **BUILT 2026-08-03/04** — and
+it is a genuine category-difference: no surveyed competitor screens the
+write path at all.
 
-- **Provenance on every write** — which channel/identity/session
-  produced it, tamper-covered by the record HMAC.
-- **Admission check at ingest** — admit / quarantine / reject. The
-  detector is deterministic and default-on (instruction-injection
-  patterns, embedded tool-call syntax, exfil markers, provenance and
-  rate anomalies, similarity to known-attack fixtures — pure functions
-  over bytes and the deterministic embedding, so it never needs a model
-  or a network), with an *optional, advisory-only* local classifier
-  that can raise suspicion but never auto-admit (and is itself treated
-  as an injection target, never a trusted gate).
-- **Quarantine wing** — flagged writes are sealed, marked `pending`,
-  and **excluded from all retrieval**: the agent cannot see a
-  quarantined drawer even in principle. Untrusted channels (tool
-  output, scraped content, other agents) default to quarantine; trusted
-  channels auto-admit.
-- **Full lifecycle audit** — quarantine, allow, and deny are each
-  chain-logged with their reason, retained across transitions
-  (§3 A7, ROADMAP C3.3). A human allows (an accountable override of
-  named signals) or denies (attested deletion via C3.2). The gate is
-  crash-safe by the same reconciliation the rotation path proves.
+- **Provenance on every write** (BUILT) — `agent`/`channel`/`session`
+  claims on every save surface, tamper-covered by the record HMAC, and
+  deliberately never themselves a trust boundary: the trusted-surface
+  posture keys on the handler-stamped `added_by`, never on a claim.
+- **Admission check at ingest** (BUILT; opt-in via
+  `UNDERCROFT_ADMISSION=quarantine` — screening changes what a save
+  does, so it ships as the deployment's declaration). The shipped
+  tier-1 detector is deterministic: imperative-instruction patterns,
+  embedded tool-call syntax, exfil markers, encoded blobs — pure
+  functions over bytes, no model, no network. Provenance/rate anomalies
+  and known-attack-fixture similarity remain on the detector wishlist,
+  recorded in ROADMAP. The *optional, advisory-only* local classifier
+  (`UNDERCROFT_ADMISSION_LLM=advisory`) can push toward quarantine and
+  never auto-admit — never consulted for tier-1-flagged content, so it
+  is itself an injection target that a successful injection can only
+  steer in the safe direction.
+- **Quarantine wing** (BUILT) — flagged writes divert sealed into the
+  reserved wing, `pending`, **excluded from all retrieval** except a
+  reviewer's explicit scope; the wing refuses forged residents, and
+  quarantine-pending drawers are not editable. Updates are screened on
+  the UPDATING surface, so an untrusted surface cannot ride a trusted
+  writer's standing. Deployment-trusted surfaces bypass by declaration
+  (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`).
+- **Full lifecycle audit** (BUILT) — quarantine, allow, and deny are
+  each chain-logged with the verdict inside the ruling tag's canonical;
+  a human allows (the accountable override) or denies — and a deny
+  destroys through C3.2's attested forgetting, handing back the
+  receipt. Crash-safe by the same reconciliation the rotation path
+  proves.
 
 What Zone 1 **cannot** do: detection is heuristic, so a poison arriving
 through a channel you have told the system to trust can still be
