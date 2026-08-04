@@ -175,6 +175,7 @@
         <button data-tab="knowledge">KNOWLEDGE</button>
         <button data-tab="browse">BROWSE</button>
         <button data-tab="search">SEARCH</button>
+        <button data-tab="ops">OPS</button>
         <button data-tab="transfer">TRANSFER</button>
       </div>
       <div class="tabbody">
@@ -342,6 +343,77 @@
               </div>
               <table><thead><tr><th>SUBJECT</th><th>PREDICATE</th><th>OBJECT</th><th>VALIDITY</th><th>CONF</th></tr></thead><tbody id="tripleRows"></tbody></table>
             </div>
+          </div>
+        </div>
+
+        <!-- OPS — the operator half of the product. Everything here is
+             deliberately absent from MCP (an agent whose write was
+             quarantined must not rule on it; wing trust is assigned by the
+             deployment, never claimed by a writer), so CLI and this console
+             are the only places it can be driven. The console shipped with
+             none of it: a review queue nobody could see reads as "nothing
+             pending", which is the wrong default for a queue. -->
+        <div id="tab-ops" style="display:none">
+          <div class="sect" style="border-top:none;margin-top:0;padding-top:0">
+            <div class="rowflex">
+              <span class="h" style="margin:0">ADMISSION REVIEW QUEUE</span>
+              <span class="spacer"></span>
+              <button class="ctl" id="admRefresh">↻ REFRESH</button>
+            </div>
+            <p class="kv">Writes the tier-1 screen diverted into <code>quarantine-pending</code>. They are sealed, excluded from retrieval, and stay here until ruled on. <b>Allow</b> re-files the drawer where it was headed; <b>deny</b> destroys it through the attested-forgetting path and returns a receipt. Both append a verdict to the audit chain. Empty here means empty — the queue is only populated when <code>UNDERCROFT_ADMISSION=quarantine</code> is declared.</p>
+            <table><thead><tr><th>ID</th><th>INTENDED</th><th>SIGNALS</th><th>FILED</th><th>RULING</th></tr></thead><tbody id="admRows"></tbody></table>
+            <pre class="report" id="admReport" style="display:none"></pre>
+          </div>
+
+          <div class="sect">
+            <div class="rowflex">
+              <span class="h" style="margin:0">WING TRUST</span>
+              <span class="spacer"></span>
+              <button class="ctl" id="trustRefresh">↻ REFRESH</button>
+            </div>
+            <p class="kv">Deployment-assigned, HMAC-tagged, audited: a flip without the vault key fails verification. Consumed as a candidate-set floor (<code>min_trust</code>), so a low-trust wing can neither answer nor crowd a floored query. Unassigned wings are <code>standard</code>.</p>
+            <div class="rowflex">
+              <input id="trustWing" placeholder="wing" style="width:160px">
+              <!-- TRUST_VOCAB verbatim (undercroft-core): a closed
+                   vocabulary, so the console offers exactly it — a free
+                   text box here would just manufacture 400s. -->
+              <select id="trustClass">
+                <option value="quarantined">quarantined</option>
+                <option value="standard">standard</option>
+                <option value="trusted">trusted</option>
+              </select>
+              <button class="ctl" id="trustSet">◈ ASSIGN</button>
+            </div>
+            <table><thead><tr><th>WING</th><th>TRUST</th></tr></thead><tbody id="trustRows"></tbody></table>
+          </div>
+
+          <div class="sect">
+            <div class="rowflex">
+              <span class="h" style="margin:0">RETENTION</span>
+              <span class="spacer"></span>
+              <button class="ctl" id="retRefresh">↻ REFRESH</button>
+            </div>
+            <p class="kv">Per wing (optionally per room), in days, measured against the HMAC-covered filing date — never the clear column. Nothing expires on its own: enforcement is an explicit <b>sweep</b>, which destroys through the attested path and hands back one receipt. Leave <i>days</i> empty to clear a policy.</p>
+            <div class="rowflex">
+              <input id="retWing" placeholder="wing" style="width:140px">
+              <input id="retRoom" placeholder="room (optional)" style="width:140px">
+              <input id="retDays" type="number" min="1" placeholder="days" style="width:80px">
+              <button class="ctl" id="retSet">◈ SET</button>
+              <span class="spacer"></span>
+              <button class="ctl danger" id="retSweep">⌫ SWEEP NOW</button>
+            </div>
+            <table><thead><tr><th>WING</th><th>ROOM</th><th>DAYS</th></tr></thead><tbody id="retRows"></tbody></table>
+            <pre class="report" id="retReport" style="display:none"></pre>
+          </div>
+
+          <div class="sect">
+            <div class="h">ATTESTED FORGETTING</div>
+            <p class="kv">Destroys the named drawers and returns a chain-attested receipt (heads before/after, the tombstone interval, and each content fingerprint) — the answer to a right-to-erasure request. Save the receipt: it is the only proof afterwards. Signing (<code>--sign</code>) stays on the CLI, where the Ed25519 secret never enters a browser.</p>
+            <div class="rowflex">
+              <input id="forgetIds" placeholder="drawer id(s), comma-separated" style="flex:1;min-width:200px">
+              <button class="ctl danger" id="forgetBtn">⌫ FORGET + ATTEST</button>
+            </div>
+            <pre class="report" id="forgetReport" style="display:none"></pre>
           </div>
         </div>
 
@@ -554,7 +626,7 @@ function showTab(tab) {
   state.tab = tab;
   for (const b of document.querySelectorAll(".tabs button"))
     b.className = b.dataset.tab === tab ? "sel" : "";
-  for (const t of ["overview","monitor","palace","grafana","knowledge","browse","search","transfer"])
+  for (const t of ["overview","monitor","palace","grafana","knowledge","browse","search","ops","transfer"])
     $("tab-" + t).style.display = t === tab ? "block" : "none";
   if (tab === "overview") loadOverview();
   if (tab === "monitor") startMonitor();
@@ -562,6 +634,7 @@ function showTab(tab) {
   if (tab === "grafana") loadGrafana();
   if (tab === "knowledge") loadKg();
   if (tab === "browse") { loadTaxonomy(); loadDrawers(); }
+  if (tab === "ops") loadOps();
 }
 
 // ---- palace monitor (pixel-art page, telemetry builds) -------------------
@@ -902,10 +975,21 @@ async function runVerify() {
     $("verifyMsg").textContent = r.ok ? "✔ OK" : "✘ FAILED";
     $("verifyMsg").style.color = r.ok ? "var(--phos)" : "var(--red)";
     $("verifyReport").style.display = "block";
+    // The supersession leg is part of the verdict ✔/✘ above; show its
+    // breakdown so a red tick names which leg failed. A link whose receipt
+    // fails its HMAC is tampering — the other verdicts are ordinary states.
+    const s = r.supersessions || {};
+    const sup = (s.verified || 0) + (s.source_changed || 0) + (s.dangling || 0) +
+                (s.unreceipted || 0) + (s.tampered || 0);
     $("verifyReport").textContent =
       "records checked: " + r.records_checked +
       "\nchain ok:        " + r.chain_ok +
-      "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none");
+      "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none") +
+      (sup ? "\nsupersessions:   " + (s.verified || 0) + " verified · " + (s.source_changed || 0) +
+             " source-changed · " + (s.dangling || 0) + " dangling · " + (s.unreceipted || 0) +
+             " unreceipted · " + (s.tampered || 0) + " tampered" +
+             ((r.bad_supersessions || []).length ? "\n  TAMPERED LINK: " + r.bad_supersessions.join("\n  TAMPERED LINK: ") : "")
+          : "");
   } catch (e) { $("verifyMsg").textContent = ""; toast("verify failed — " + e.message, true); }
 }
 
@@ -1086,6 +1170,141 @@ async function runImport() {
 }
 
 // ---- wiring -----------------------------------------------------------
+// ---- ops: admission review, wing trust, retention, attested forgetting --
+// These are the operator surfaces the console shipped without. All four are
+// deliberately unreachable over MCP, so a console that omits them leaves
+// them CLI-only for anyone driving the server over HTTP.
+function opsPath(sub) { return "/v1/vaults/" + encodeURIComponent(state.vault) + "/" + sub; }
+
+async function loadOps() { loadAdmission(); loadTrust(); loadRetention(); }
+
+async function loadAdmission() {
+  const v = state.vault;
+  try {
+    const r = await api("GET", opsPath("admission"), { vault: v });
+    const rows = (r.pending || []).map(p => {
+      const sig = (p.signals || []).map(s => esc(s.code) + "@" + s.offset).join(" ");
+      return "<tr><td class='kv'>" + esc(p.id) + "</td>" +
+        "<td><span class='pill wing'>" + esc(p.intended_wing) + "</span>/" + esc(p.intended_room) + "</td>" +
+        "<td class='kv'>" + sig + "</td><td class='kv'>" + esc(p.filed_at) + "</td>" +
+        "<td><button class='ctl' data-adm-allow='" + esc(p.id) + "'>✓ ALLOW</button> " +
+        "<button class='ctl danger' data-adm-deny='" + esc(p.id) + "'>✕ DENY</button></td></tr>";
+    });
+    // Say WHY the queue is empty: with screening off, "no pending" is a
+    // configuration fact, not a clean bill of health.
+    $("admRows").innerHTML = rows.join("") || "<tr><td colspan=5 class='kv'>" +
+      (r.screening ? "nothing pending — screening is ON" :
+        "screening is OFF (set UNDERCROFT_ADMISSION=quarantine to enable it); nothing can be pending") +
+      "</td></tr>";
+    for (const b of document.querySelectorAll("[data-adm-allow]"))
+      b.onclick = () => ruleAdmission(b.dataset.admAllow, "allow");
+    for (const b of document.querySelectorAll("[data-adm-deny]"))
+      b.onclick = () => ruleAdmission(b.dataset.admDeny, "deny");
+  } catch (e) { toast("admission list failed — " + e.message, true); }
+}
+
+async function ruleAdmission(drawerId, verdict) {
+  const v = state.vault;
+  if (verdict === "deny") {
+    const ok = await guard("DENY QUARANTINED DRAWER",
+      "Destroys drawer '" + drawerId + "' through the attested-forgetting path. " +
+      "The receipt below is the only proof afterwards; there is no undo.", "deny");
+    if (!ok) return;
+  }
+  try {
+    const r = await api("POST", opsPath("admission"), { vault: v, body: { drawer_id: drawerId, verdict } });
+    $("admReport").style.display = "block";
+    $("admReport").textContent = JSON.stringify(r, null, 2);
+    toast(verdict === "allow" ? "allowed — re-filed as " + r.restored_id : "denied " + drawerId);
+    loadAdmission();
+  } catch (e) { toast("ruling failed — " + e.message, true); }
+}
+
+async function loadTrust() {
+  const v = state.vault;
+  try {
+    const r = await api("GET", opsPath("trust"), { vault: v });
+    const rows = (r.assignments || []).map(a =>
+      "<tr><td><span class='pill wing'>" + esc(a.wing) + "</span></td><td>" + esc(a.trust) + "</td></tr>");
+    $("trustRows").innerHTML = rows.join("") ||
+      "<tr><td colspan=2 class='kv'>no assignments — every wing reads as '" + esc(r.default || "standard") + "'</td></tr>";
+  } catch (e) { toast("trust list failed — " + e.message, true); }
+}
+
+async function setTrust() {
+  const v = state.vault, wing = $("trustWing").value.trim();
+  if (!wing) { toast("name a wing", true); return; }
+  try {
+    await api("POST", opsPath("trust"), { vault: v, body: { wing, trust: $("trustClass").value } });
+    toast("assigned " + $("trustClass").value + " to " + wing);
+    loadTrust();
+  } catch (e) { toast("trust assign failed — " + e.message, true); }
+}
+
+async function loadRetention() {
+  const v = state.vault;
+  try {
+    const r = await api("GET", opsPath("retention"), { vault: v });
+    const rows = (r.policies || []).map(p =>
+      "<tr><td><span class='pill wing'>" + esc(p.wing) + "</span></td><td>" +
+      (p.room ? esc(p.room) : "<span class='kv'>(whole wing)</span>") + "</td><td>" + p.max_age_days + "</td></tr>");
+    $("retRows").innerHTML = rows.join("") || "<tr><td colspan=3 class='kv'>no policies declared</td></tr>";
+  } catch (e) { toast("retention list failed — " + e.message, true); }
+}
+
+async function setRetention() {
+  const v = state.vault, wing = $("retWing").value.trim();
+  const room = $("retRoom").value.trim(), days = $("retDays").value.trim();
+  if (!wing) { toast("name a wing", true); return; }
+  const body = { wing };
+  if (room) body.room = room;
+  if (days) body.days = parseInt(days, 10); else body.clear = true;
+  try {
+    await api("POST", opsPath("retention"), { vault: v, body });
+    toast(days ? "policy set" : "policy cleared");
+    loadRetention();
+  } catch (e) { toast("retention set failed — " + e.message, true); }
+}
+
+async function sweepRetention() {
+  const v = state.vault;
+  // Preview first, always: a sweep destroys, and the operator should see
+  // the id list before it does, not in the receipt afterwards.
+  let preview;
+  try {
+    preview = await api("POST", opsPath("retention/sweep"), { vault: v, body: { dry_run: true } });
+  } catch (e) { toast("sweep preview failed — " + e.message, true); return; }
+  $("retReport").style.display = "block";
+  $("retReport").textContent = "DRY RUN\n" + JSON.stringify(preview, null, 2);
+  if (!preview.destroyed) { toast("nothing has aged out"); return; }
+  const ok = await guard("SWEEP RETENTION",
+    "Destroys " + preview.destroyed + " drawer(s) that have aged past their declared policy, " +
+    "through the attested-forgetting path. There is no undo.", "sweep");
+  if (!ok) return;
+  try {
+    const r = await api("POST", opsPath("retention/sweep"), { vault: v, body: { dry_run: false } });
+    $("retReport").textContent = JSON.stringify(r, null, 2);
+    toast("swept " + r.destroyed + " drawer(s)");
+    loadRetention();
+  } catch (e) { toast("sweep failed — " + e.message, true); }
+}
+
+async function runForget() {
+  const v = state.vault;
+  const ids = $("forgetIds").value.split(",").map(s => s.trim()).filter(Boolean);
+  if (!ids.length) { toast("name at least one drawer id", true); return; }
+  const ok = await guard("FORGET DRAWERS",
+    "Permanently destroys " + ids.length + " drawer(s) and returns a chain-attested receipt. " +
+    "Save the receipt — it is the only proof the destruction happened.", "forget");
+  if (!ok) return;
+  try {
+    const r = await api("POST", opsPath("forget"), { vault: v, body: { ids } });
+    $("forgetReport").style.display = "block";
+    $("forgetReport").textContent = JSON.stringify(r, null, 2);
+    toast("forgot " + ids.length + " drawer(s) — receipt below");
+  } catch (e) { toast("forget failed — " + e.message, true); }
+}
+
 $("connectBtn").onclick = connect;
 $("attachBtn").onclick = attach;
 $("createBtn").onclick = createVault;
@@ -1110,6 +1329,13 @@ $("palaceExit").onclick = () => setTheatre(false);
 $("grafanaEmbedBtn").onclick = embedGrafana;
 $("grafanaBack").onclick = embedGrafana;
 $("grafanaUrl").addEventListener("keydown", e => { if (e.key === "Enter") embedGrafana(); });
+$("admRefresh").onclick = loadAdmission;
+$("trustRefresh").onclick = loadTrust;
+$("trustSet").onclick = setTrust;
+$("retRefresh").onclick = loadRetention;
+$("retSet").onclick = setRetention;
+$("retSweep").onclick = sweepRetention;
+$("forgetBtn").onclick = runForget;
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
 $("bearer").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
 $("asecret").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });

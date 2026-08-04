@@ -13,8 +13,15 @@
 //!
 //! **Admin plane** — `/admin/*` behind `UNDERCROFT_ORCH_ADMIN_TOKEN`:
 //! instance registry, tenant lifecycle (create = pick instance → create
-//! engine vault → record mapping → return the token once), and migration
-//! (export → import → count-verified → mapping flip → source delete).
+//! engine vault → record mapping → return the token once), migration
+//! (export → import → count-verified → mapping flip → source delete), and
+//! the **operator plane** `/admin/tenants/{id}/ops/<subpath>` — attested
+//! forgetting, retention policy, wing trust, admission review and verify,
+//! forwarded to the tenant's engine over a closed vocabulary
+//! ([`OPS_ROUTES`]). Note `/admin/tenants/{id}/rotate` rotates the tenant's
+//! BEARER TOKEN, while `ops/…` reaches the engine's own routes; the vault
+//! KEY rotation `/v1/.../rotate` is deliberately not among them, since it
+//! must not run while a process is serving the vault.
 //!
 //! **Read-replica mode** (`serve --read-replica`) opens the state database
 //! read-only and serves *only* `/healthz` and the `/t/*` data plane —
@@ -57,16 +64,45 @@ pub(crate) struct RateLimiter {
     windows: std::cell::RefCell<std::collections::HashMap<String, (u64, u64)>>,
 }
 
+/// Read `UNDERCROFT_ORCH_RATE_LIMIT`: unset, empty, `off` or `0` = off;
+/// a positive integer declares requests per tenant per minute. Anything
+/// else REFUSES to start.
+///
+/// It used to be `parse().ok().unwrap_or(0)`, i.e. every unreadable
+/// declaration became "off" with nothing printed — and the two typos a
+/// reader of this project is most likely to make are `100/min` and
+/// `1_000`, the first because the engine's own rate variable really is
+/// `<count>/<seconds>`. An operator who declared a limit believes noisy
+/// tenants are throttled; silently serving unlimited is the failure
+/// mode, and neither `/healthz` nor the console would have said so.
+/// This is the engine's `resolve_read_audit` /
+/// `resolve_admission_rate` posture applied to the control plane: a
+/// declaration this process cannot read is a startup refusal, not a
+/// default. Pure, so the parse is tested without touching the
+/// environment.
+fn resolve_rate_limit(env: Option<&str>) -> anyhow::Result<u64> {
+    let Some(v) = env else { return Ok(0) };
+    let v = v.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("off") {
+        return Ok(0);
+    }
+    v.parse::<u64>().map_err(|_| {
+        anyhow::anyhow!(
+            "UNDERCROFT_ORCH_RATE_LIMIT={v:?} — expected requests per minute as a \
+             plain positive integer (e.g. 600), or 0/off; refusing to start with \
+             an unreadable rate-limit declaration"
+        )
+    })
+}
+
 impl RateLimiter {
-    pub(crate) fn from_env() -> Self {
-        let per_minute = std::env::var("UNDERCROFT_ORCH_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0);
-        Self {
+    pub(crate) fn from_env() -> anyhow::Result<Self> {
+        let per_minute =
+            resolve_rate_limit(std::env::var("UNDERCROFT_ORCH_RATE_LIMIT").ok().as_deref())?;
+        Ok(Self {
             per_minute,
             windows: std::cell::RefCell::new(std::collections::HashMap::new()),
-        }
+        })
     }
 
     #[cfg(test)]
@@ -112,6 +148,43 @@ fn data_subpath_ok(subpath: &str) -> bool {
     )
 }
 
+/// The operator capabilities the admin plane forwards to an engine, as
+/// `(method, subpath)` — a **closed vocabulary**, so extending the operator
+/// surface is a deliberate edit here rather than a wildcard proxy that
+/// quietly grows into one.
+///
+/// These exist on the engine's `/v1` and were reachable from nowhere in a
+/// fleet: the data-plane allowlist was written to keep vault *lifecycle*
+/// off a tenant token and, as a side effect, kept attested forgetting,
+/// retention, wing trust, admission review and verify off every plane. The
+/// one deletion a fleet operator could reach was `DELETE /t/…/drawers/{id}`
+/// — the receipt-LESS one. A right-to-erasure request answered through the
+/// orchestrator produced a bare tombstone while the surface next door
+/// produced a signed-able attestation; that is the asymmetry this closes.
+///
+/// They live on the ADMIN plane, never the data plane: a tenant token must
+/// not rule on the admission queue that screened its own writes, nor assign
+/// the trust its wings are floored by. Same boundary the engine draws
+/// between `/v1` and MCP, one level up.
+const OPS_ROUTES: &[(&str, &str)] = &[
+    ("POST", "verify"),
+    ("GET", "supersessions"),
+    ("POST", "forget"),
+    ("GET", "admission"),
+    ("POST", "admission"),
+    ("GET", "retention"),
+    ("POST", "retention"),
+    ("POST", "retention/sweep"),
+    ("GET", "trust"),
+    ("POST", "trust"),
+];
+
+fn ops_route_ok(method: &str, subpath: &str) -> bool {
+    OPS_ROUTES
+        .iter()
+        .any(|(m, s)| *m == method && *s == subpath)
+}
+
 fn bearer(req: &tiny_http::Request) -> Option<String> {
     req.headers()
         .iter()
@@ -140,8 +213,11 @@ pub enum Role<'a> {
 
 /// Run the proxy loop forever.
 pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
+    // Resolved BEFORE the bind: a refusal about configuration must not
+    // arrive after the port is open and a load balancer has started
+    // sending traffic to it.
+    let limiter = RateLimiter::from_env()?;
     let server = Server::http(addr).map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
-    let limiter = RateLimiter::from_env();
     let mode = match role {
         Role::Writer { .. } => "writer",
         Role::ReadReplica => "read replica",
@@ -257,6 +333,18 @@ fn data_plane(
         return err_response(429, "rate limited");
     }
     if !data_subpath_ok(subpath) {
+        // Say WHICH kind of "no". A bare "unknown route" made an operator
+        // capability that exists one plane over look like a capability the
+        // product does not have — the reason forgetting, retention, trust,
+        // admission and verify were reported as missing rather than as
+        // admin-plane routes.
+        if ops_route_ok(method.as_str(), subpath) {
+            return err_response(
+                404,
+                "operator route: not reachable with a tenant token — \
+                 POST/GET /admin/tenants/{id}/ops/<subpath> on the writer",
+            );
+        }
         return err_response(404, "unknown route");
     }
     let creds = match orch.instance_creds(&tenant.instance) {
@@ -375,7 +463,66 @@ fn admin_plane(
                 Err(e) => err_response(502, &e),
             }
         }
+        (m, ["admin", "tenants", id, "ops", rest @ ..]) => {
+            tenant_ops(orch, m, id, &rest.join("/"), body)
+        }
         _ => err_response(404, "unknown admin route"),
+    }
+}
+
+/// Forward one operator capability to the tenant's engine. The verb and
+/// subpath must be in [`OPS_ROUTES`]; the response relays verbatim, so the
+/// engine's own status classes and bodies (a 400 for a bad wing name, a 409
+/// for an integrity failure, the `ForgetAttestation` JSON) reach the
+/// operator unchanged rather than being re-invented here.
+fn tenant_ops(
+    orch: &Orch,
+    method: &str,
+    tenant_id: &str,
+    subpath: &str,
+    body: &[u8],
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    if !ops_route_ok(method, subpath) {
+        // Named, not a bare 404: the data plane's "unknown route" was
+        // indistinguishable from "does not exist", which is how these
+        // capabilities stayed invisible.
+        return err_response(
+            404,
+            &format!(
+                "{method} {subpath} is not an operator route; allowed: {}",
+                OPS_ROUTES
+                    .iter()
+                    .map(|(m, s)| format!("{m} {s}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
+    }
+    let tenant = match orch.tenant_get(tenant_id) {
+        Ok(Some(t)) => t,
+        Ok(None) => return err_response(404, "unknown tenant"),
+        Err(e) => return err_response(500, &e.to_string()),
+    };
+    let creds = match orch.instance_creds(&tenant.instance) {
+        Ok(c) => c,
+        Err(_) => return err_response(502, "instance unavailable"),
+    };
+    match engine::vault_request(
+        &creds,
+        &tenant.vault,
+        method,
+        subpath,
+        "application/json",
+        body,
+    ) {
+        Ok(r) => Response::from_data(r.body)
+            .with_status_code(r.status)
+            .with_header(
+                Header::from_bytes("Content-Type", r.content_type.as_bytes()).unwrap_or_else(
+                    |_| Header::from_bytes("Content-Type", "application/json").unwrap(),
+                ),
+            ),
+        Err(e) => err_response(502, &e),
     }
 }
 
@@ -574,6 +721,36 @@ mod tests {
         let off = RateLimiter::with_limit(0);
         for _ in 0..100 {
             assert!(off.allow_at("acme", 100));
+        }
+    }
+
+    #[test]
+    fn an_unreadable_rate_limit_declaration_refuses_to_start() {
+        // The premise: 0 really is always-allow, so "parsed as 0" and
+        // "refused" are two different worlds and this test can tell them
+        // apart.
+        assert!(RateLimiter::with_limit(0).allow_at("acme", 1));
+
+        // Off is declarable three ways, and a plain integer is honoured.
+        assert_eq!(resolve_rate_limit(None).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some("")).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some("off")).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some("0")).unwrap(), 0);
+        assert_eq!(resolve_rate_limit(Some(" 600 ")).unwrap(), 600);
+
+        // Garbage refuses instead of resolving to the always-allow 0 —
+        // `100/min` (the engine's `<count>/<seconds>` shape borrowed by
+        // mistake) and `1_000` are the two typos that used to disable
+        // rate limiting in silence.
+        for bad in ["100/min", "1_000", "600rpm", "-5", "unlimited"] {
+            let err = resolve_rate_limit(Some(bad))
+                .expect_err("an unreadable declaration must refuse, not default to off");
+            let msg = err.to_string();
+            assert!(msg.contains(bad), "the refusal quotes what was read: {msg}");
+            assert!(
+                msg.contains("requests per minute"),
+                "the refusal names the fix: {msg}"
+            );
         }
     }
 }

@@ -595,3 +595,226 @@ fn remember_after_a_delete_must_not_overwrite_an_unrelated_drawer() {
         .success()
         .stdout(predicate::str::contains("third note about tides"));
 }
+
+/// The CLI can WRITE the label it can already filter by.
+///
+/// `search --kind` shipped without a `remember --kind`, and a kind-filtered
+/// search deliberately EXCLUDES kind-less drawers — so in a mixed CLI/MCP
+/// deployment every drawer the CLI wrote was silently missing from every
+/// kind-filtered result, with no CLI path to repair it afterwards. The
+/// premise is asserted from both sides: the labelled drawer is found under
+/// its own kind, and the unlabelled one written beside it is not.
+#[test]
+fn remember_can_declare_the_kind_that_search_filters_on() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+
+    cmd(&home)
+        .args([
+            "remember",
+            "we decided to move the retro to Tuesdays",
+            "--wing",
+            "w",
+            "--room",
+            "r",
+            "--kind",
+            "decision",
+        ])
+        .assert()
+        .success();
+    cmd(&home)
+        .args([
+            "remember",
+            "we decided to keep the standup at nine",
+            "--wing",
+            "w",
+            "--room",
+            "r",
+        ])
+        .assert()
+        .success();
+
+    // Declared, so the filter reaches it.
+    cmd(&home)
+        .args(["search", "decided", "--kind", "decision"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("retro"))
+        .stdout(predicate::str::contains("standup").not());
+
+    // The closed vocabulary is enforced, not coerced.
+    cmd(&home)
+        .args([
+            "remember",
+            "a typo'd label",
+            "--wing",
+            "w",
+            "--room",
+            "r",
+            "--kind",
+            "desicion",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("closed kind vocabulary"));
+}
+
+/// The raw stdout of one CLI search, for the search-surface tests below.
+fn search_out(home: &TempDir, args: &[&str]) -> String {
+    let mut c = cmd(home);
+    c.arg("search");
+    c.args(args);
+    String::from_utf8(c.assert().success().get_output().stdout.clone()).unwrap()
+}
+
+/// A CLI search result must be ACTIONABLE and CONTINUABLE.
+///
+/// Neither was true: `drawer get|update|delete`, `forget` and `admission` all
+/// take an id this surface never printed, and `--offset` shipped without the
+/// clock (`--ranked-at`) that makes two pages slice ONE ranking — so paging
+/// re-measured recency against a fresh instant on every call and hits could
+/// repeat or be skipped. MCP and `/v1` carried both.
+#[test]
+fn cli_search_hands_back_an_id_and_a_continuation_it_can_be_asked_to_repeat() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    for text in [
+        "harbour lighthouse tide chart for the northern approach",
+        "harbour crane maintenance window agreed for the northern quay",
+        "harbour dredging schedule published for the northern channel",
+    ] {
+        cmd(&home)
+            .args(["remember", text, "--wing", "port", "--room", "notes"])
+            .assert()
+            .success();
+    }
+
+    // Premise: a one-hit page over a three-drawer corpus is a FULL page, so
+    // the continuation line must appear. A short page says nothing.
+    let page1 = search_out(&home, &["harbour northern", "-n", "1"]);
+    assert!(page1.contains("1. ["), "no rank 1 in:\n{page1}");
+    assert!(
+        page1.contains("deeper results may exist"),
+        "a full page must name its continuation:\n{page1}"
+    );
+
+    // The id is printed, and it is the id every follow-up command takes —
+    // proven by fetching the drawer with it rather than by its shape.
+    let id = page1
+        .split("   id ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no drawer id in search output:\n{page1}"))
+        .to_string();
+    cmd(&home)
+        .args(["drawer", "get", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("harbour"));
+
+    // The continuation names both halves: the next offset AND the instant to
+    // rank as of. Repeating them verbatim continues the same ranking.
+    let cont = page1
+        .lines()
+        .find(|l| l.contains("deeper results may exist"))
+        .unwrap()
+        .to_string();
+    let offset = cont
+        .split("--offset ")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    let ranked_at = cont.split("--ranked-at ").nth(1).unwrap().trim();
+    assert_eq!(offset, "1", "continuation offset in {cont:?}");
+    let page2 = search_out(
+        &home,
+        &[
+            "harbour northern",
+            "-n",
+            "1",
+            "--offset",
+            offset,
+            "--ranked-at",
+            ranked_at,
+        ],
+    );
+    assert!(
+        page2.contains("2. ["),
+        "the second page must hold rank 2, not restart at 1:\n{page2}"
+    );
+    let id2 = page2
+        .split("   id ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap();
+    assert_ne!(id, id2, "page 2 must not repeat page 1's hit");
+    // And the echoed instant round-trips: the page names it back unchanged, so
+    // a third page can keep slicing the same ranking.
+    assert!(
+        page2.contains(&format!("--ranked-at {ranked_at}")),
+        "the pinned instant must be echoed unchanged:\n{page2}"
+    );
+
+    // A clock that does not parse is said out loud — never a silent fall-back
+    // to the host clock, which is the drift this flag exists to close.
+    cmd(&home)
+        .args(["search", "harbour", "--ranked-at", "yesterday"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("RFC 3339"));
+}
+
+/// The declared retrieval morphology reaches the CLI.
+///
+/// `--language` did not exist here, so a German corpus answered a CLI search
+/// with strictly less lexical evidence than the identical query over MCP or
+/// `/v1`. The drawers below carry no function words on purpose: those are the
+/// fallback that settles the language WITHOUT a declaration, and this test must
+/// measure the declaration rather than that fallback.
+#[test]
+fn cli_search_can_declare_the_language_its_morphology_uses() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    for text in [
+        "Kinder Buecher Haeuser Regale Fenster Treppen Zimmer Wohnung",
+        "Zug Hamburg Hauptbahnhof Gleis Ankunft Abfahrt Verspaetung",
+        "Suppe Kuerbis Ingwer Pfeffer Salz Loeffel Teller Kueche",
+    ] {
+        cmd(&home)
+            .args(["remember", text, "--wing", "de", "--room", "a"])
+            .assert()
+            .success();
+    }
+    // The score of the top hit, which must be the same drawer both times.
+    let top_score = |out: &str| -> f32 {
+        assert!(out.contains("Kinder"), "wrong top hit:\n{out}");
+        out.split('[')
+            .nth(1)
+            .and_then(|r| r.split(']').next())
+            .unwrap_or_else(|| panic!("no score in:\n{out}"))
+            .parse()
+            .unwrap()
+    };
+    // The remote-backend path ranks with the legacy fusion and consults
+    // neither declaration, so declaring one there is REFUSED — never accepted
+    // and quietly dropped, which is the same silence this flag closes.
+    // (Refused before the index is opened, so no backend need be running.)
+    cmd(&home)
+        .args(["search", "Kind", "--backend", "qdrant", "--language", "de"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not honoured by --backend"));
+
+    let undeclared = search_out(&home, &["Kind", "--wing", "de"]);
+    let declared = search_out(&home, &["Kind", "--wing", "de", "--language", "de"]);
+    // German plurals need `-er`, which English cannot have (`flow`/`flower`),
+    // so `Kind`/`Kinder` reaches the lexical channel only under a declaration
+    // — and the score moves because of it.
+    assert!(
+        top_score(&declared) > top_score(&undeclared),
+        "declaring German must add lexical evidence.\n\
+         undeclared:\n{undeclared}\ndeclared:\n{declared}"
+    );
+}

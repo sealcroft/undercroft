@@ -1,6 +1,457 @@
 # Changelog
 
+
+### surface parity: 65 drifts closed, and the mechanism that stops the next one
+
+- **A 14-agent surface-parity audit found 65 confirmed drifts** between the
+  CLI, the MCP tools and `/v1` — 20 high, **55 of them silent**. All 65 are
+  fixed. The security-critical cluster first: **admission screening was
+  bypassable on `/v1` three ways** — a `dedup_threshold` in the save body
+  routed to `save_with_dedup` (which hardcoded `quarantined: false`), a
+  caller-supplied `vector` routed import straight to the raw writer, and
+  external-embedding vaults had no screened path at all. Since `/v1` export
+  emits a vector on every line, the ordinary backup-restore round trip **and
+  the orchestrator's tenant migration** re-admitted whole corpora unscreened.
+- **Quarantined content reached the agent.** Exclusion lived in `search`
+  alone, so a diverted drawer was invisible to a query and then handed over
+  verbatim by `wake_up` and listed by the closet index — the two surfaces
+  whose entire job is loading context at session start, which is exactly
+  where injected text wants to be.
+- **Fixed structurally, not patched.** Screening now lives at `write_drawer`,
+  the one choke point every write funnels through, behind a **required
+  `Screen` argument**: a new write path does not compile until its author
+  decides, and the only bypasses are two named reasons carrying their
+  justification. The read-only gate moved in front of dispatch and **fails
+  closed** — everything is a mutation unless explicitly named otherwise, so
+  all thirteen per-handler guards were deleted rather than a fourteenth
+  added. Remote-backend search now takes its trust floor, quarantine fence
+  and closed vocabularies from the same `resolve_search_policy` the local
+  path uses.
+- **`--read-only` did not mean read-only**: the co-resident `/mcp` store
+  opened writable, so it ran the embedder migration and wrote read-audit
+  records to the very vault the flag protects, while `POST …/kg/authority`
+  mutated on a replica. A `Posture` argument now flows to both handles.
+- **The prevention layer** (`crates/undercroft-cli/src/parity.rs`): the MCP
+  tool surface is written down and the code is counted against it, failing in
+  **both** directions — a tool added without an inventory line fails, and a
+  line naming a tool that no longer exists fails too, which is the direction
+  a hand-maintained doc table rots in silently. The same list enforces the
+  boundary: admission review, trust assignment, retention, forgetting and
+  rotation must be **absent** from MCP, because an agent must not rule on the
+  queue that contains it. It earned its keep immediately — the first
+  hand-written inventory invented four tool names and missed four real ones,
+  and the test caught both halves, having also refused an extraction pattern
+  that matched nothing rather than passing on zero.
+- Honest residual, recorded not dressed up: a read-only store with
+  `UNDERCROFT_RETRIEVAL=pq` still **writes**, because the PQ tier builds its
+  index on first search. Closing it means "load, never build" at each
+  prefilter entry; refusing `set_pq` instead would drop a replica onto a full
+  scan. Noted in `open_read_only`'s doc comment.
+- unit battery 523 → **551**, e2e 214 → **222**.
+
 ## Unreleased
+
+### `--read-only` is a posture on the process, not a filter on one port
+
+- **The `/mcp` store on a `serve-http --read-only` server was opened
+  read-write.** `open_store` had no read-only arm at all, so the flag
+  reached only the `/v1` tenant stores: the vault named by `--vault` got
+  a full embedder migration at start-up when the build's embedder had
+  moved on (re-embed every drawer, drop the PQ/IVF tables), kept
+  `UNDERCROFT_READ_AUDIT=chain` on and appended a chain record per `/mcp`
+  search, and stamped an `embedder_name` on a vault that had none —
+  every one of them a write to the vault the flag exists to protect.
+  Whether the vault was written depended only on which port path opened
+  it. Both handles now take the same declared `Posture`, and a read-only
+  open no longer records an embedder identity either. Side effect,
+  stated: an embedder mismatch that is not a known upgrade now **warns
+  and serves** on `--read-only` instead of refusing to start, which is
+  what `/v1` already did.
+- **`POST /v1/vaults/{id}/kg/authority` was the one mutating route with
+  no read-only guard.** On a read-only replica it answered 200 while
+  rewriting an HMAC-covered authority column, closing the previous
+  canonical holder's validity window and appending to the audit chain —
+  the same capability over `/mcp` in the same process answered "server
+  is read-only". Rather than adding the fourteenth guard to the
+  fourteenth handler, the decision moved in front of dispatch and now
+  **fails closed**: on a read-only server everything that is not a `GET`
+  is refused except `POST .../search` and `POST .../verify`, so a route
+  added later is refused until someone classifies it deliberately.
+- **Key rotation from `/v1` corrupted the co-resident `/mcp` handle.**
+  `serve-http` holds two independent `PalaceStore`s over one vault, and
+  `rotate_keys`' sole-writer contract is documented at *process*
+  granularity — unsatisfiable here, since the second reader is inside
+  the operator's own process and reachable from the console's own ROTATE
+  KEYS button. After a `/v1` rotation the `/mcp` handle kept the retired
+  keys: every read surfaced as `StoreError::Integrity` (the agent is
+  told the vault is TAMPERED when the operator merely rotated), and any
+  write it made was sealed and chain-appended under the retired MAC key
+  and then re-anchored `vault.json` from its own stale cache, reverting
+  `salt_hex` while the rows on disk stayed under the new keys.
+  `POST …/rotate` and `DELETE /v1/vaults/{id}` now answer **409** for
+  the `--vault` vault, naming the remedy (stop the server, then
+  `undercroft vault rotate <name>`). Other tenant vaults are untouched —
+  they have exactly one handle.
+### surface drift: the operator boundary is the same on every surface
+
+A surface audit compared the CLI, MCP, `/v1` and the orchestrator on the
+same capability. The findings below are all one shape: an operator
+boundary that held on one surface and not on the next.
+
+- **Pending review evidence cannot be destroyed except by ruling on it.**
+  `update_drawer` refused to EDIT a quarantine-pending drawer; every
+  DELETE path was open. `undercroft_delete_drawer` over MCP — the surface
+  the ruling power was deliberately withheld from — purged the row and
+  left an ordinary `del/<id>` tombstone, so the entry vanished from
+  `admission list` with no `admission/<id>/<verdict>` record and no
+  attestation: an agent whose write was quarantined could destroy the
+  evidence of it, and the audit trail could not tell that from routine
+  housekeeping. Delete now runs through a choke point with a **required**
+  `PendingEvidence` argument; the only `Ruled` callers are
+  `admission allow`/`deny`, which record their verdict first. The refusal
+  is on every surface, not just MCP — `forget` and `delete-by-source`
+  inherit it (the latter refuses the whole call up front rather than
+  destroying half a source and then failing).
+- **MCP cannot reach the review queue at all.** Quarantine was a ranking
+  firewall, not a confidentiality boundary: naming the wing, or a
+  resident drawer's id, read the flagged content back verbatim. One fence
+  above tool dispatch — beside the read-only gate, for the same reason —
+  refuses any argument naming `quarantine-pending` and any `id`/`*_id`
+  naming a drawer inside it, so a tool added later inherits it. Two
+  content-keyed surfaces stopped answering for the queue as well:
+  `check_duplicate` (an oracle any writer can drive with content it
+  chose — answering confirmed the write landed and handed back the id the
+  save path withholds) and `dedup` (a quarantined row could win the
+  earliest-`seq` survivor slot and take a live drawer down with it).
+- **`UNDERCROFT_ASSERTION_SECRET` now covers `POST /mcp`.** Every `/v1`
+  handler asserted; the `/mcp` route mounted on the same server, in the
+  same process, asserted nowhere — so an operator who declared the secret
+  precisely to stop one bearer addressing every vault still left the
+  `--vault` vault fully readable and writable to anyone holding the
+  palace bearer, while the banner said "per-vault assertions required"
+  without qualification. Unset secret ⇒ no change.
+- **The orchestrator gained an operator plane**,
+  `/admin/tenants/{id}/ops/<subpath>`: attested forgetting, retention
+  policy + sweep, wing trust, admission review, verify and supersession
+  receipts, forwarded over a closed vocabulary. A fleet driven through
+  the control plane previously had none of them, while the one deletion
+  it *did* expose was the receipt-LESS one — a right-to-erasure request
+  answered through the orchestrator produced a bare tombstone where the
+  surface next door produced a signed-able attestation. Admin plane, not
+  data plane: a tenant token must not rule on the queue that screened its
+  own writes. A data-plane request for an operator subpath now says where
+  it lives instead of a bare "unknown route".
+- **The admin console grew an OPS tab.** `ui.html` had zero occurrences
+  of admission, retention, trust or forget, so `serve-http` with
+  `UNDERCROFT_ADMISSION=quarantine` gave an operator a console that never
+  showed the pending queue — silence reading as "nothing pending", the
+  wrong default for a review queue. The tab carries the review queue
+  (allow/deny with the deny receipt), wing trust assignment, retention
+  policies with a dry-run-first sweep, and attested forgetting. An empty
+  queue now says *why* it is empty (screening on vs. never declared).
+- **The README lists the five operator commands it claimed to have.**
+  `admission`, `retention`, `trust`, `forget` and `verify-forgetting`
+  ship in the binary and appeared in no reference document; README
+  asserted these were "operator surfaces (CLI + `/v1`) only" and then
+  never showed the CLI half.
+### one integrity verdict, whichever surface asks for it
+
+- **`verify` now covers drawer supersession receipts on every surface.**
+  The receipt lives in columns outside the drawer's own HMAC, so
+  `VerifyReport::ok()` structurally could not see it; the check was a
+  second `verify_supersessions()` call that only CLI `verify` and MCP
+  `undercroft_verify` made. `POST /v1/vaults/{id}/verify` — and the admin
+  console reading it — therefore answered `{"ok": true}` and a green tick
+  on a vault where the CLI printed `TAMPERED LINK` and exited 2. The leg
+  now rides **inside** `PalaceStore::verify`: one walk, one verdict, and
+  no surface can assemble a narrower one by forgetting a call. `/v1`
+  gains a `supersessions` count breakdown plus `bad_supersessions`; the
+  console renders both. *Behaviour change:* a vault with a tampered
+  supersession link that `/v1/verify` called green now answers
+  `{"ok": false}` — that is the CLI's long-standing verdict reaching the
+  transport that was missing it, never the reverse.
+- **KG authority-tier rejections are 400, not 500.** `kg_set_authority`
+  raised `StoreError::CorruptRow` for every caller-input rejection — an
+  out-of-vocabulary `authority_class`/`review_state`, canonical without a
+  key, stated with one, an invalid `canonical_key`, an id that names no
+  fact — so `/v1 POST …/kg/authority` answered **500 "corrupt row …"**:
+  it told the operator their knowledge graph was damaged when only their
+  request was, and invited client libraries to retry a request that can
+  never succeed. All six are now `StoreError::Invalid` → **400**, the
+  rule the write choke point already states.
+- **Exit 2 means an integrity verdict on every command that can reach
+  one.** `verify-forgetting` exited 1 on a FORGED attestation — the same
+  code as "no such file" — because the verdict was a generic
+  `StoreError::Invalid` wearing an "invalid operation:" prefix. It is now
+  the typed `StoreError::Attestation` (409 on REST, beside `Integrity`)
+  and the CLI exits 2 on it; `backup create`'s refusal to archive a
+  palace that failed verification exits 2 as well. Exit 1 stays "the run
+  failed". Documented in AGENTS.md §7.
+- **Two live `/v1` routes reached the HTTP reference**: `GET
+  …/kg/receipts` (the KG half of "alert on `tampered` without walking the
+  list", documented nowhere before) and `GET …/stats/history`
+  (telemetry builds only).
+### the write path stops depending on which surface you drove
+
+Eleven write-path defects where the same capability behaved differently —
+or silently wrongly — depending on whether the CLI, MCP or `/v1` was
+driving. Every one of them is closed at the narrowest choke point that
+makes the next surface unable to reintroduce it.
+
+- **Diary entries could destroy each other.** `diary_write` derived its
+  append slot from `SELECT COUNT(*)`, and a diary's wing, room and source
+  are all fixed — so the id was a pure function of a count that goes DOWN
+  after any delete (`drawer delete`, a retention sweep, an `admission
+  deny`). The next entry derived an id already in use and `ON
+  CONFLICT(id) DO UPDATE` overwrote an unrelated entry: a record destroyed
+  by writing a different one, with no error on either surface. It now
+  uses `next_append_index`, the hazard CLAUDE.md documents in writing and
+  every other save path had already been fixed for.
+- **`diary_write` handed the caller's `agent` argument straight into
+  `added_by`** — the surface identity the admission screen's
+  trusted-source auto-admit keys on precisely because "handlers stamp it
+  and a caller cannot set it". With `UNDERCROFT_ADMIT_TRUSTED_SOURCES=cli`
+  declared, one MCP call (`{"agent": "cli", "entry": "<poison>"}`) walked
+  past the screen. `added_by` is now the SURFACE (a required `via`
+  argument, the `update_drawer` precedent) and the agent name travels as
+  the provenance CLAIM it is — which is also the identity the declared
+  rate screen groups by.
+- **Both import surfaces let a payload set `added_by`.** They deserialize
+  a whole `Drawer`, so a bundle whose records claimed `added_by: "cli"`
+  auto-admitted every record past the screen — poison admitting itself by
+  declaration. Imports now re-stamp `added_by` with the importing
+  surface, deliberately `import` on every transport rather than `cli` or
+  `rest`: an import is a distinct act, and declaring a SAVE surface
+  trusted must not silently extend that trust to bundle contents. An
+  operator who wants bulk restore to bypass the screen says
+  `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import`.
+- **Bulk ingest reported nothing about what it quarantined.**
+  `upsert_many` screened every drawer and returned a bare created-count,
+  so `undercroft import` printed "imported 500" while an arbitrary number
+  of them sat in `quarantine-pending` — unretrievable by any search and
+  invisible short of running `admission list`. `upsert_many` now returns
+  `BulkOutcome { created, quarantined }`; `import`, `mine`, `sweep` and
+  the daemon print the diverted count, and `POST /v1/…/import` carries
+  `quarantined` beside `imported`. The single-save honesty fix, one level
+  up.
+- **An update was screened TWICE** — once for the verdict it reported,
+  once inside `upsert` for where the content actually landed. The
+  deterministic tier agrees across the pair, so this was invisible until
+  the tier-2 advisor was wired: a live model is not a pure function of
+  its input, and when the two answers disagreed the surface printed a
+  verdict that did not govern the write. One screen now, the
+  authoritative one — and one advisor round trip per update instead of
+  two.
+- **`validate_name` now runs at the store's write choke point.**
+  CLAUDE.md states it as an invariant; it held for the three save
+  surfaces and for neither import surface. The reachable damage was
+  policy reach, not traversal: `set_wing_trust` and `retention_set`
+  validate, so a wing an import invented could never be assigned a trust
+  class or governed by a retention policy — an operator control silently
+  unreachable for imported data.
+- **`MAX_CONTENT_BYTES` is the engine's bound, not one command's.** It
+  was enforced only by `undercroft remember`; MCP and `/v1` accepted
+  drawers orders of magnitude larger, and `CoreError::ContentTooLarge`
+  was a variant nothing ever constructed. Now checked at the same choke
+  point beside `kind`. Well above what the miner produces (chunks are 800
+  bytes), so no ingest path moves.
+- **CLI `remember --kind`.** `search --kind` shipped without it, so the
+  CLI could FILTER by a label it had no way to write — and a kind-filtered
+  search deliberately excludes kind-less drawers, so a mixed CLI/MCP
+  deployment silently got a result set omitting everything the CLI wrote,
+  with no CLI path to repair it afterwards.
+- **A bad name or vocabulary value on the operator routes was a 500
+  reading "corrupt row".** `set_wing_trust` and `set_retention` raised
+  `CorruptRow`, which `/v1` maps to 500 — describing STORED DATA for a
+  request that was simply wrong, and retryable to any client library. The
+  same invalid wing was already a 400 on the save route, and within the
+  trust route which FIELD you got wrong decided the class. Both are
+  `StoreError::Invalid` → 400 now, the doctrine already written down at
+  the write choke point.
+- **"That record is not here" had three status classes.** `GET`/`PUT`
+  answered 404, `forget` and `admission` answered 400, and `DELETE`
+  answered **200 `{"deleted": false}`** — telling a client that a typo'd,
+  stale or already-swept id had been deleted, where CLI and MCP both
+  treat it as an error. New `StoreError::NotFound` → 404 everywhere, and
+  DELETE returns 404 rather than a green 200.
+- **External-embedding vaults refuse CLI and MCP writes with an error
+  that names the boundary.** External embedding is a `/v1`-only
+  capability end to end (neither surface can supply a vector, and `vault
+  create` cannot make such a vault) — a coherent scope decision that was
+  stated nowhere, so `StoreError::ExternalVault` read as a missing flag
+  rather than as a surface that does not have one.
+- Seven new store tests + one CLI integration test, each asserting its
+  own premise so it cannot pass for the wrong reason.
+### one search contract, three surfaces
+
+A search declared different things depending on which surface asked, and
+answered with different things back. Nine separate omissions, none of them
+stated anywhere as deliberate; all closed, and closed at a shared parser
+rather than one handler at a time (`crates/undercroft-cli/src/search.rs`,
+which `/v1` and MCP now both call — they read the same key names off the
+same JSON, and re-implementing that is how each of them lost a different
+field).
+
+- **The CLI can pin a page's clock.** `--offset` shipped without
+  `--ranked-at`, so two pages sliced two different rankings: recency decay
+  was re-measured against a fresh instant on every call and hits could
+  repeat across pages or vanish between them — the exact defect
+  `SearchOptions::ranked_at` was added to prevent, left open on the only
+  surface that shipped `offset` without it. A full page now prints the
+  continuation, clock included, and a `--ranked-at` that does not parse is
+  refused out loud rather than falling back to the host clock.
+- **The CLI can declare its language** (`--language`, the same 13-value
+  vocabulary as MCP and `/v1`). German `-er` — the rule CLAUDE.md records
+  as taking German from 50% to 100% on the lexical channel — plus the
+  Romance/Dutch/Turkish inflection tables were unreachable from
+  `undercroft search`, which returned strictly fewer hits than the same
+  query over the other two surfaces, with no error and no flag to find.
+- **The CLI prints the drawer id**, so a search result can be acted on:
+  `drawer get|update|delete`, `forget` and `admission` all take an id this
+  surface never emitted, and every search had to be followed by a
+  `drawer list` hunt. MCP hits carry the id too, for the same reason.
+- **`week_start` reaches MCP.** One of the four read-time reading
+  conventions docs/AGENTS.md documents as per-request on both surfaces; the
+  MCP tool built its own locale and never read it, so `sunday` was
+  unreachable over MCP by any route while `/v1` honoured it. Same drawer,
+  same request, different resolved dates.
+- **`room_cap` reaches MCP and the CLI.** The room-diversification field
+  was `/v1`-only — unreachable from the agent surface it was designed for,
+  which silently got the starved result it exists to fix.
+- **A trust floor says what it excluded, on MCP too.** The
+  honest-exclusion count reached the CLI and `/v1` and not the surface an
+  agent uses, so an agent that set a floor could not tell its own floor's
+  thin answer from a thin corpus.
+- **The MCP `language` schema is generated from the parser's vocabulary**
+  (`MorphLang::CODES`). It described two values over a handler that mapped
+  thirteen, so an agent reading its own contract never declared `de` on a
+  German corpus while a `/v1` caller reading docs/AGENTS.md did. An
+  exhaustive match pins it: a fourteenth language fails to compile until it
+  has a code.
+- **BREAKING (small): `POST /v1/…/search` defaults `limit` to 5**, not 10
+  — one page size for every surface, since "the same search" answering with
+  a different number of hits per transport quietly moves any recall
+  comparison between them. Unified down: every surface now names its
+  continuation, and a page of full drawer text is charged to an agent's
+  context on every call. A REST client that wants ten passes `limit: 10`.
+- An unrecognised `date_order` no longer ERASES what the language implied
+  (Arabic's CLDR day-first survived a caller's typo only on MCP before).
+- `--language` and `--room-cap` with `--backend <remote>` are **refused**,
+  not ignored: that path ranks through the legacy fusion and consults
+  neither, and a declaration silently dropped is the very drift these flags
+  close.
+- Tests: CLI search paging/id end to end (the continuation is parsed out of
+  the output and fed back, and the printed id is proven by fetching the
+  drawer with it), CLI `--language` measured by the lexical evidence it
+  adds on a function-word-free German corpus (so it measures the
+  declaration and not the drawer-votes fallback), MCP `week_start`/
+  `room_cap`/trust-note/id through `call_tool`, and the shared parsers'
+  own vocabulary tests.
+### the mirror stops answering under its own rules
+
+- **`search --backend <remote>` now applies the retrieval policy the
+  local path applies** — the defect: after an `index push`, the
+  identical query returned admission-quarantined content and
+  below-floor wings on `--backend qdrant` that `--backend local`
+  hard-excluded, while the CLI still printed "(N wing(s) below the
+  trust floor were not considered)" having applied no floor. That is
+  the exact poisoning path admission control and wing trust exist to
+  close, reachable by one flag. Nothing about it was policy: remote.rs
+  already justified keeping the `kind` filter and the semantic gate
+  identical to the local path so "the same query [does not] admit
+  differently depending on which path answered it" — the trust and
+  quarantine legs were simply never carried over.
+- **Fixed by making it one function rather than one more copy.**
+  `resolve_search_policy` now owns everything a search settles from the
+  caller's declarations before it may look at a drawer — the closed
+  vocabularies, the effective trust floor, the quarantine fence — and
+  both search paths call it. So `--kind desicion` and `--min-trust
+  bogus` are typed errors on a mirror too (the second was the worse
+  half: accepted, ignored, and silent, because an unknown class ranks
+  lowest and the exclusion note then stays quiet). The fence is applied
+  to each candidate's **HMAC-verified** wing, never the label the
+  mirror echoed back.
+- `index_push` still mirrors quarantined rows, deliberately: a
+  push-side filter is not a boundary when the mirror can offer any id,
+  and dropping them would make an operator's explicit `--wing
+  quarantine-pending` review scope answer an empty page. Residue
+  stated in code and docs: remotely the floor bounds what came back
+  rather than what was generated, so an excluded wing still spends part
+  of the candidate budget — availability, never integrity.
+- **An external-embedding vault is now refused on the remote path**, as
+  `search` already refused it. `ExternalEmbedder::embed` degrades to a
+  zero vector rather than panicking ("if some path slips through the
+  store's guards"); this was such a path, and it probed the mirror with
+  zeros and returned an empty page from a vault holding the answer.
+- **Remote searches emit the telemetry local searches emit**
+  (`search_completed`, `event_search`, the obs span). The chain and the
+  metrics used to disagree about how many searches ran on a vault: the
+  remote path left an audit record and contributed nothing to latency,
+  hit counts or the live feed.
+### one configuration, one behaviour: the config/docs half of the surface-drift sweep
+
+- **`refine` is one implementation now** (`crates/undercroft-cli/src/refine.rs`),
+  driven identically by `undercroft refine` and `POST /v1/vaults/{id}/refine`.
+  The same `UNDERCROFT_LLM_*` configuration built two different vaults
+  depending on which surface ran it: the CLI wrote facts with **no validity
+  window, no grounding verdict** (`support: None` means "no such check was
+  run", not "unsupported") and **no searchable mirror**, so nothing it
+  distilled could be found by `search` at all, then spent a second LLM call
+  per drawer extracting entities it only counted and discarded. The CLI now
+  takes `--room` and `--fact-room` like the route, reports the same counts
+  (`stated`/background, `dated_from_text`, duplicates/skipped/failed), and
+  no longer makes the entity call. **Both surfaces changed**: the mirror
+  drawer's append index comes from the store's sequence instead of a
+  per-call fact counter — with wing, room and source all fixed for a mirror
+  drawer, the counter re-derived ids starting at 0 on every run and a second
+  `refine` silently overwrote the first run's fact-drawers.
+- **Stats report the committed chain, never a handle's cached anchor.**
+  `PalaceStats.writes` (and a new `chain_head`) come from `chain_meta`, like
+  `records` comes from `drawers`. `serve-http` holds two store handles on one
+  vault — the MCP store and the REST tenancy's — and `Vault::writes()` is a
+  field of the handle's own manifest that nothing reloads, so the Palace
+  Monitor's `audit_chain_height` sat frozen at whatever the REST handle last
+  anchored while the `drawers` gauge beside it climbed. `/v1 …/stats`,
+  `undercroft_status` and the telemetry sampler now answer the same number at
+  the same instant.
+- **A diverted write is an event.** New SSE `drawer-quarantined` (intended
+  wing/room + the tier-1 signal codes; never the flagged text, never its
+  offsets) and one classifier every save path funnels through. Before, a
+  diversion was **silence** on the single-save paths and an ordinary
+  `drawer-saved` into a wing named `quarantine-pending` on the bulk ones —
+  "did anything get quarantined just now?" answered differently by the same
+  stream depending on which surface wrote. The Palace Monitor shows it in
+  amber, with no siren: quarantine is the defense working.
+- **`undercroft_chain_commits_total` counts records, not anchors.** Its
+  contract said "once per mutation" while it fired once per manifest anchor,
+  so the same 1,000-drawer NDJSON incremented it 1,000 times through
+  `POST /v1/…/import` and 4 times through `undercroft import`, and read-audit
+  records never moved it at all. It now advances by the number of chain
+  records each anchor commits (SSE `chain-commit` carries `records`).
+  Anchor lag is unchanged and stated: records appended without an anchor are
+  counted by the next one.
+- **`UNDERCROFT_ORCH_RATE_LIMIT` refuses garbage instead of disabling
+  itself.** `100/min` (the engine's own rate syntax, borrowed by mistake) or
+  `1_000` parsed as "off" and the orchestrator served unlimited with nothing
+  printed anywhere. Unset/`0`/`off` still mean off; anything else is now a
+  startup refusal — the engine's posture for a declaration it cannot read.
+- **Documentation corrected against the code** (each of these was wrong in
+  the reference an operator would consult): `UNDERCROFT_ORT_POOL` defaults to
+  **cores**, not 1, and the pool holds one model copy per slot — a 8–64×
+  memory under-estimate; `UNDERCROFT_TOK_PQ_MIN` / `UNDERCROFT_FDE_PQ_MIN`
+  default to **256**, not "off", so two quantization tiers self-activate
+  while the architecture page framed them as opt-in; `UNDERCROFT_EMBEDDER`
+  accepts **`http`**, the one served-embedder posture that needs no
+  feature-gated build; `UNDERCROFT_SEARCH_TRACE` is documented for the first
+  time, including that it is **presence-triggered** (`0` and `off` turn it
+  ON); `UNDERCROFT_RETRIEVAL=hnsw` and `UNDERCROFT_RERANKER=colbert*` are
+  single-vault only and the multi-tenant server refuses them; the MCP tool
+  count in the AGENTS.md heading said 32 against 34 registered — now pinned
+  by a test that reads the guide at compile time, so the next added tool
+  fails the build rather than restating the defect; and README and the
+  architecture reference no longer describe export bundles as X25519-only
+  (they are hybrid X25519 + ML-KEM-768 since C3.4) or omit
+  `bundle sign-keygen` / `bundle sender`.
 
 ### the C3.3 gate's last two clauses run — and find two honesty defects
 

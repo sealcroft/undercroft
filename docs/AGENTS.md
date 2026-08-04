@@ -147,7 +147,22 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   `Authorization: Bearer <token>`.
 - `--read-only` strips all 12 mutating MCP tools and returns 403 on
   mutating `/v1` routes — run a second read-only instance for consumers
-  that should never write.
+  that should never write. It is a posture on the whole process, not a
+  route filter: **both** stores the server opens (the `/mcp` one and each
+  `/v1` tenant one) are opened read-only, so the vault gets no embedder
+  migration (an embedder upgrade warns and serves the old vectors instead
+  of re-embedding, and instead of refusing to start), no `embedder_name`
+  stamp, and no read-audit records even with
+  `UNDERCROFT_READ_AUDIT=chain` — that variable's trail is empty on a
+  read-only server, by design and with a warning at open. On `/v1` the
+  refusal is decided in front of dispatch and **fails closed**: anything
+  that is not a `GET` is refused except `POST .../search` and
+  `POST .../verify`, so a route added later is refused until it is
+  deliberately classified.
+- `POST /v1/vaults/{id}/rotate` and `DELETE /v1/vaults/{id}` answer
+  **409** for the vault named by `--vault`, because this same process
+  also holds that vault open behind `/mcp` and key rotation needs the
+  only handle (see §9). Every other tenant vault rotates normally.
 - `GET /healthz` is the only unauthenticated route.
 - Put TLS in front with a reverse proxy; the server itself speaks HTTP.
 
@@ -229,7 +244,9 @@ resolves the token (stored only as an HMAC), forwards to
 `/v1/vaults/{their-vault}/<subpath>` with the engine bearer + a fresh
 assertion. The subpath allowlist is `drawers | search | stats | export |
 import` — vault lifecycle is deliberately unreachable with a tenant token.
-Optional per-tenant rate limiting: `UNDERCROFT_ORCH_RATE_LIMIT=<req/min>`.
+Optional per-tenant rate limiting: `UNDERCROFT_ORCH_RATE_LIMIT=<req/min>`
+(a plain integer; a declaration it cannot read refuses to start rather
+than serving unlimited in silence).
 Rotate a tenant token with `tenant-rotate` (the old one dies in the same
 statement — immediately on the writer, within the replication window on
 replicas). `GET /healthz` reports `mode` and `last_write` on writer and
@@ -305,6 +322,12 @@ already-ingested corpus answers correctly the moment you declare its conventions
 | `week_start` | `monday`, `sunday`, `saturday` | `monday` (`saturday` for `ar`) | which day begins a week — moves "last week" and every week count |
 | `date_order` | `day_first`, `month_first` | see below | which field a bare numeric date puts first |
 | `calendar` | `gregorian`, `buddhist`, `minguo`, `hijri`, `jalali`, `reiwa`, `heisei`, `showa`, `taisho`, `meiji` | `gregorian` | which calendar counted the year, **unless a drawer names its own era** |
+
+All four are accepted on `POST /v1/vaults/{id}/search` and on `undercroft_search`
+— the same key names, parsed by the same code. The CLI takes the one of them it
+has a consumer for, `undercroft search --language <code>`, which selects the
+retrieval morphology; CLI search prints no in-text dates, so the three
+date-reading conventions have nothing to act on there.
 
 **`date_order`** — `07/05/2023` is 7 May or 5 July and the token does not say.
 Four signals are consulted, strongest first:
@@ -466,6 +489,19 @@ accelerators**: they hold sealed bytes, every candidate is re-verified and
 decrypted locally. They pay off only at very large corpora — measure
 before adopting. After a key rotation, re-run `index push`.
 
+A mirror-served query answers under the **same retrieval policy** as
+`--backend local`: the closed vocabularies (`--kind`, `--min-trust`) are
+validated the same way, the trust floor — the request's and the vault's —
+is applied, and admission-quarantined drawers are excluded unless you
+name the quarantine wing yourself. The push mirrors every drawer,
+quarantined rows included, because an untrusted mirror can offer any id
+it likes: the fence is applied where the bytes are decrypted, not where
+they are uploaded. Cost of the accelerator, stated: locally the floor
+bounds candidate *generation*, remotely it can only bound what came back,
+so an excluded wing's rows still spend part of the candidate budget.
+An external-embedding vault is refused on this path exactly as it is on
+`search` — the query vector has to come from the caller.
+
 ---
 
 ## 7. Scenario F — operating it securely
@@ -473,9 +509,20 @@ before adopting. After a key rotation, re-run `index push`.
 Daily/CI:
 
 ```bash
-undercroft verify           # HMAC every record + replay the audit chain; exit 2 on failure
+undercroft verify           # HMAC every record + replay the audit chain
+                           # + check every supersession receipt; exit 2 on failure
 undercroft backup create    # verified snapshot, keeps last 10
 ```
+
+**Exit 2 means an integrity verdict**, on every command that can reach one:
+`verify` (a bad record, a broken chain or a tampered supersession link),
+`repair` (same, after backfilling), `backup create` (it refuses to archive a
+palace that failed verification) and `verify-forgetting` (the attestation does
+not describe what this vault did — a forged signature, a tombstone tag that is
+not this vault's, or something other than a tombstone inside the attested
+interval). Exit 1 stays what it always was: the run itself failed — bad
+arguments, a missing file, an unreadable vault. A compliance script may retry
+exit 1; retrying exit 2 only re-detects the tampering.
 
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record
@@ -514,14 +561,14 @@ undercroft import palace.bundle --identity ops.key --sender <sender-hex>
 
 ---
 
-## 8. Reference — MCP tools (32)
+## 8. Reference — MCP tools (34)
 
 Write tools (marked **W**) are refused when the server runs `--read-only`.
 
 | Tool | W | Does |
 |---|---|---|
 | `undercroft_save` | W | save one memory verbatim |
-| `undercroft_search` | | hybrid semantic+lexical search. Pass `language: "ar"` to read the stored text as Arabic (Saturday-first weeks by default). Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, and the further days the same text was recorded on. A full page ends with the exact continuation to go deeper — repeat the search with the stated `offset` and `ranked_at` instead of re-asking the same question; a short page means the ranking is exhausted |
+| `undercroft_search` | | hybrid semantic+lexical search. All four reading conventions are accepted here exactly as on `/v1` — `language`, `week_start`, `date_order`, `calendar` (see §5) — so `language: "ar"` reads the stored text as Arabic and `language: "de"` reaches German word forms, while `week_start` decides what "last week" inside a drawer resolves to. Pass `as_of` and each hit reports how long before it the content happened ("15 weeks before"), computed by the engine — do not subtract dates yourself. Hits also carry the dates written *inside* the text, resolved against that drawer's own anchor, the further days the same text was recorded on, and the drawer **id** every follow-up tool takes (`_get_drawer`, `_update_drawer`, `_delete_drawer`, `supersedes` on a save). `room_cap` soft-caps how many hits may come from any one room, so an answer spanning several sessions is not starved by the most verbose one. Default `limit` is **5** on every surface. A full page ends with the exact continuation to go deeper — repeat the search with the stated `offset` and `ranked_at` instead of re-asking the same question; a short page means the ranking is exhausted |
 | `undercroft_wake_up` | | recent essential memories for session start |
 | `undercroft_verify` | | verify HMACs + audit chain |
 | `undercroft_status` | | palace statistics |
@@ -539,7 +586,7 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 | `undercroft_get_closet_index` | | compact LLM-scannable index |
 | `undercroft_save` / `_add_drawer` also take `kind` | W | declared record kind (closed vocabulary: `question`\|`preference`\|`decision`\|`event`\|`procedure`\|`statement`; rejected if unknown — omit rather than guess). `undercroft_search` filters by it; while filtering, the reply says how many in-scope drawers carry no declared kind |
 | `undercroft_save` / `_add_drawer` also take `supersedes` | W | id of the drawer the new record replaces: a receipted update link (the KG receipt pattern one level up — bound to the superseded content's fingerprint under a keyed tag, re-keyed on rotation). The old drawer is **never** deleted or hidden; `undercroft_verify` reports every link's verdict (`verified`\|`source-changed`\|`dangling`\|`unreceipted`\|`tampered`, the last failing the verify) |
-| `undercroft_search` also takes `min_trust` | | minimum deployment-assigned wing trust for the query (`quarantined`\|`standard`\|`trusted`): wings the operator assigned below it never enter the candidate competition; unassigned wings count as `standard`. Reading with a floor is self-protection and always allowed — ASSIGNING trust is an operator action (`/v1` + CLI) and deliberately not an MCP tool: an agent that writes content must not be able to raise its own standing |
+| `undercroft_search` also takes `min_trust` | | minimum deployment-assigned wing trust for the query (`quarantined`\|`standard`\|`trusted`): wings the operator assigned below it never enter the candidate competition; unassigned wings count as `standard`. While the floor is set the reply says how many wings it kept out, so a thin answer is never mistaken for a thin corpus. Reading with a floor is self-protection and always allowed — ASSIGNING trust is an operator action (`/v1` + CLI) and deliberately not an MCP tool: an agent that writes content must not be able to raise its own standing |
 | `undercroft_kg_add` / `_kg_invalidate` / `_kg_supersede` | W | temporal facts: assert/close/replace |
 | `undercroft_kg_query` / `_kg_timeline` / `_kg_stats` | | query facts (incl. `--as-of`) |
 | `undercroft_lookup_canonical` | | the exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks; an empty answer means no declared truth exists — never guess on the key's behalf |
@@ -551,7 +598,10 @@ Write tools (marked **W**) are refused when the server runs `--read-only`.
 ## 9. Reference — HTTP surface
 
 Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
-`UNDERCROFT_ASSERTION_SECRET` is set; mutating routes 403 in read-only):
+`UNDERCROFT_ASSERTION_SECRET` is set; in read-only everything below that is
+not a `GET`, `POST .../search` or `POST .../verify` answers 403):
+`UNDERCROFT_ASSERTION_SECRET` is set — on `/v1` **and** on `POST /mcp`, which
+asserts for the `--vault` vault; mutating routes 403 in read-only):
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -561,11 +611,15 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
 | GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
+| GET | `/v1/vaults/{id}/stats/history` | the recent stats sample ring buffer (aggregate counts only, `?window=N` ≤ 300) so a fresh stream client can backfill its chart. **`telemetry` builds only** — a default build answers 501 |
 | POST | `/v1/vaults/{id}/drawers` | save (`text`, `wing`, `room`, opt `kind` — closed vocabulary, 400 if unknown — opt `supersedes` — a receipted update link to the drawer this save replaces; the old drawer stays — opt `vector`, `dedup_threshold`) |
+| POST | `/v1/vaults/{id}/drawers` | save (`text` — **max 100,000 bytes**, the engine's bound, enforced at the store write choke point on every surface since 2026-08-04; `wing`/`room` go through the same name guard on every write path including import — opt `kind` — closed vocabulary, 400 if unknown — opt `supersedes` — a receipted update link to the drawer this save replaces; the old drawer stays — opt `vector`, `dedup_threshold`) |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`) |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`); screened like a save when admission is on — a flagged update answers 202 `{quarantined: true}` and the drawer keeps its previous content |
 | POST | `/v1/vaults/{id}/search` | search (`query`, `limit`, opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
+| DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer. **404 when the id is not here** — it answered 200 `{"deleted": false}` until 2026-08-04, so a client checking only the status was told a typo'd or stale id had been deleted. "That record is not here" is 404 on every route now, including `forget` and `admission`, which used to raise it as 400 |
+| POST | `/v1/vaults/{id}/search` | search (`query`, `limit` — **default 5**, one page size for every surface; it was 10 here until v0.47.0, so a client relying on ten hits must now say `limit: 10` — opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |
@@ -573,7 +627,8 @@ Engine (`serve-http`; bearer always; `X-Vault-Assertion` when
 | GET | `/v1/vaults/{id}/kg/query` | facts about an entity (`entity`, `direction`, `as_of`, `grounding`) |
 | GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`, `grounding`) |
 | GET | `/v1/vaults/{id}/kg/canonical/{key}` | the exact-authority door: the one active, approved, canonical fact for the key, or 404 — consult before semantic recall for exact/high-risk asks |
-| POST | `/v1/vaults/{id}/kg/authority` | place a fact on the authority tier (`triple_id`, `authority_class`, `review_state`, opt `canonical_key`); audited, HMAC-covered |
+| POST | `/v1/vaults/{id}/kg/authority` | place a fact on the authority tier (`triple_id`, `authority_class`, `review_state`, opt `canonical_key`); audited, HMAC-covered. A value outside the closed vocabulary, or a `triple_id` that names no fact, is **400** |
+| GET | `/v1/vaults/{id}/kg/receipts` | every distilled fact's receipt verdict against its cited verbatim source (`verified`\|`source_changed`\|`dangling`\|`tampered`) + summary counts — the KG half of "alert on `tampered` without walking the list"; `GET …/supersessions` below is the drawer-level analogue |
 
 Every fact returned by `kg/query` and `kg/timeline` carries `grounding`:
 `stated` (the source note's own words support it — `support.spans` gives the
@@ -583,9 +638,9 @@ graph answer across notes), or `unevaluated` (never checked; every fact
 distilled before grounding existed). `?grounding=` narrows to one of those and
 is **opt-in only** — the default returns all three, because filtering out
 background facts breaks exactly the multi-hop questions the graph is for.
-| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none |
+| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none. **`undercroft refine` is the same code path** (`--wing`/`--room`/`--fact-room`/`--limit`/`--dry-run`), so the two surfaces build the same vault from the same `UNDERCROFT_LLM_*` configuration; before v0.47.0 the CLI wrote no fact date, no grounding verdict and no searchable mirror |
 | POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
-| POST | `/v1/vaults/{id}/verify` | HMAC + audit-chain verification report |
+| POST | `/v1/vaults/{id}/verify` | integrity verdict: HMAC every record, replay the audit chain, and check every drawer supersession receipt. `ok` covers all three legs — the same verdict CLI `verify` exits 2 on and MCP prints as VERIFY FAILED — plus `records_checked`, `bad_records`, `chain_ok`, a `supersessions` count breakdown and `bad_supersessions` (links whose receipt failed its HMAC) |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
 | POST | `/v1/vaults/{id}/forget` | destroy the named drawers through the audit chain and return the attestation (`{ids}` in; heads + tombstone interval + content fingerprints out, unsigned — sign via CLI `forget --sign`). Verify with CLI `verify-forgetting` |
 | GET | `/v1/vaults/{id}/admission` | drawers awaiting an admission ruling (signal codes + offsets, intended destination) plus whether screening is on |
@@ -595,9 +650,9 @@ background facts breaks exactly the multi-hop questions the graph is for.
 | POST | `/v1/vaults/{id}/retention/sweep` | destroy what aged out through the attested-forgetting path (`{dry_run: true}` previews); the response carries the sweep report + receipt. Nothing runs automatically — a sweep happens when the operator asks |
 | POST | `/v1/vaults/{id}/trust` | assign a wing's trust class (`wing`, `trust` ∈ `quarantined`\|`standard`\|`trusted`; 400 if unknown). The receiving principal's declaration — an OPERATOR surface, deliberately absent from MCP; audited, tamper-evident |
 | GET | `/v1/vaults/{id}/trust` | every assigned wing trust class (absent wings read as `standard`) |
-| POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract) |
+| POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract — **409** for the vault this same process also serves over `/mcp`, i.e. the one named by `--vault`: rotating retires the keys under that second live handle, which then reports every read as TAMPERED and re-anchors the manifest from its stale cache. Stop the server and run `undercroft vault rotate <name>`, which holds the only handle) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON: a manifest first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (receipts travel and re-key at import) and tunnels — the whole palace |
-| POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present |
+| POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present. The response carries `quarantined` beside `imported` — how many records the admission screen diverted (0 while screening is off). Every imported record's `added_by` is **re-stamped `import`**, overwriting whatever the payload claimed: that field is the key the trusted-source auto-admit rides, so a bundle claiming `added_by: "cli"` must not inherit a save surface's standing. Declare `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import` to trust the import act itself |
 | GET | `/ui` | vault admin console (static page; every build) |
 | GET | `/metrics`, `/monitor`, `/v1/…/stream` | telemetry builds only |
 
@@ -621,13 +676,21 @@ Models: `UNDERCROFT_EMBEDDER` (`hash`|`onnx`|`ort`|`http`) ·
 `UNDERCROFT_EMBED_URL`/`_MODEL`/`_API`/`_KEY`/`_DIM`/`_CA` (served
 embedder; TLS or loopback only, `_CA` pins a self-signed root) ·
 `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`/`_NAME` ·
-`UNDERCROFT_RERANKER` (`onnx`|`ort`|`colbert`|`colbert-ort`) ·
+`UNDERCROFT_RERANKER` (`onnx`|`ort`|`colbert`|`colbert-ort`; the two
+ColBERT values are **single-vault only** — `serve-http` refuses them,
+same shape as `UNDERCROFT_RETRIEVAL=hnsw`) ·
 `UNDERCROFT_RERANK_MODEL`/`_TOKENIZER`/`_NAME`/`_TOP_N` (50) ·
 `UNDERCROFT_COLBERT_MODEL`/`_QUERY_MODEL`/`_TOKENIZER`/`_NAME` ·
 `UNDERCROFT_ORT_POOL` (session pool, default = cores) ·
 `UNDERCROFT_FORCE_EMBEDDER` (allow identity swap, then `repair`).
 
-Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw`) · `UNDERCROFT_FUSION`
+Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw` — `hnsw` is an
+in-process index and **single-vault only**: `serve-http` refuses it and
+names the fix, so choose `pq` or `fde` for a multi-tenant server) ·
+`UNDERCROFT_SEARCH_TRACE` (unset — any value prints a per-phase timing
+trace of each search to stderr, the instrument that found this project's
+own search hotspot. **Presence-triggered**: `0` and `off` turn it ON
+too; unset it to turn it off) · `UNDERCROFT_FUSION`
 (`bm25` default |`legacy`; `rrf` removed — measured −7.3pp, warns and falls
 back to `bm25`) · `UNDERCROFT_FUSION_WEIGHT` (0.55 — the blend's semantic
 weight `w` in `w·semantic + (0.90−w)·lexical + 0.10·recency`; declared,
@@ -647,7 +710,14 @@ their signal codes and intended destination, into the reserved
 `quarantine-pending` wing: hard-excluded from retrieval except a
 reviewer's explicit wing scope, and reviewed via CLI
 `admission list|allow|deny` or `/v1` GET/POST `…/admission` — operator
-surfaces, deliberately never MCP. Heuristic, quarantine-not-reject; the
+surfaces, deliberately never MCP. **MCP cannot reach the wing at all**:
+any tool argument naming `quarantine-pending`, or any `id`/`*_id`
+argument naming a drawer resident there, is refused — the review queue
+is an operator surface for reading as well as for ruling. And on EVERY
+surface, a quarantine-pending drawer cannot be deleted or forgotten:
+`admission allow`/`deny` are the doors, because a plain delete leaves
+only a `del/<id>` tombstone that no one can tell from housekeeping.
+Heuristic, quarantine-not-reject; the
 default leaves the write contract byte-identical) ·
 `UNDERCROFT_ADMISSION_LLM` (unset — `advisory` wires the
 `UNDERCROFT_LLM_*` runtime as the screen's tier-2 classifier: consulted
@@ -736,8 +806,11 @@ e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 Orchestrator: `UNDERCROFT_ORCH_DB` · `UNDERCROFT_ORCH_KEY` (required) ·
 `UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, ≥16 chars; unused
 by `serve --read-replica`) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
-`UNDERCROFT_ORCH_RATE_LIMIT` (req/min, 0 = off; per-process — each
-replica enforces its own windows).
+`UNDERCROFT_ORCH_RATE_LIMIT` (req/min per tenant; unset/`0`/`off` = off;
+per-process — each replica enforces its own windows. A value that is not
+one of those **refuses to start**, the engine's posture for a declaration
+it cannot read: `100/min` and `1_000` used to parse as "off" and serve
+unlimited in silence).
 
 ## 11. Verify your implementation
 

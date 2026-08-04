@@ -107,17 +107,47 @@ impl PalaceStore {
     /// Destroy the named drawers and attest it. Every id must exist —
     /// attesting the destruction of what was never there is a claim this
     /// store refuses to mint.
+    ///
+    /// Quarantine-pending drawers are refused here too (the delete choke
+    /// point enforces it): a `forget` receipt attests destruction but says
+    /// nothing about a review, so forgetting pending evidence would still
+    /// leave the admission trail with a hole. `admission deny` is the door
+    /// — it records the verdict and then destroys through *this* path, so
+    /// the operator loses no receipt by going the long way round.
     pub fn forget_with_proof(&mut self, ids: &[String]) -> Result<ForgetAttestation, StoreError> {
+        self.forget_with_proof_ruled(ids, crate::manage::PendingEvidence::Protect)
+    }
+
+    /// `forget_with_proof` with the pending-evidence decision stated —
+    /// `admission deny` is the one caller allowed to pass `Ruled`.
+    pub(crate) fn forget_with_proof_ruled(
+        &mut self,
+        ids: &[String],
+        evidence: crate::manage::PendingEvidence,
+    ) -> Result<ForgetAttestation, StoreError> {
         if ids.is_empty() {
             return Err(StoreError::Invalid("nothing to forget".into()));
         }
         // Existence + fingerprints first, so a bad id aborts before any
-        // deletion.
+        // deletion. The pending-evidence fence is checked here too, for the
+        // same reason: the choke point would catch it, but only after the
+        // ids before it in the list were already gone.
         let mut drawers = Vec::with_capacity(ids.len());
         for id in ids {
             let d = self
                 .get(id)?
-                .ok_or_else(|| StoreError::Invalid(format!("no drawer {id}")))?;
+                // NotFound, not Invalid: one status class for "not here"
+                // across every route (cluster: write-validation).
+                .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+            // ...and pending review evidence is not deletable through the
+            // forgetting path either (cluster: ops-boundaries).
+            if evidence == crate::manage::PendingEvidence::Protect
+                && self.is_quarantine_pending(id)?
+            {
+                return Err(StoreError::Invalid(format!(
+                    "{id} is quarantine-pending — rule on it with `admission                      allow`/`deny`; pending review evidence is not deletable"
+                )));
+            }
             drawers.push(ForgottenDrawer {
                 id: id.clone(),
                 content_fp: hex::encode(crate::kg::content_fp(&d.content)),
@@ -128,7 +158,7 @@ impl PalaceStore {
             self.conn
                 .query_row("SELECT COALESCE(MAX(seq), 0) FROM audit", [], |r| r.get(0))?;
         for id in ids {
-            self.delete_drawer(id)?;
+            self.delete_drawer_ruled(id, evidence)?;
         }
         let head_after: String = self.chain_head()?;
         let mut stmt = self
@@ -164,7 +194,11 @@ impl PalaceStore {
     /// tombstone for a named drawer with this vault's own tag, nothing
     /// else happened in the interval, and the drawers are gone.
     pub fn verify_forget_attestation(&self, att: &ForgetAttestation) -> Result<(), StoreError> {
-        let fail = |what: String| StoreError::Invalid(format!("attestation failed: {what}"));
+        // A typed verdict, not a generic input error: every branch below is
+        // "this document does not describe what this vault did", which the
+        // CLI reports with its integrity exit code (see
+        // [`StoreError::Attestation`]).
+        let fail = StoreError::Attestation;
         if att.vault != self.vault.id() {
             return Err(fail(format!(
                 "attests vault {:?}, this is {:?}",

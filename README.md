@@ -282,10 +282,13 @@ undercroft init                       # master key + 'default' sealed vault
 undercroft vault create work          # new isolated vault (own keys, own DB)
 undercroft vault list | status <name>
 undercroft vault rotate <name>        # fresh derived keys; re-seals everything, crash-safe
-undercroft remember <text> [--vault --wing --room]
+undercroft remember <text> [--vault --wing --room --kind]  # --kind: the label search --kind filters on
 undercroft mine <dir> [--mode files|convos]  # documents, or Claude Code/Codex JSONL sessions
 undercroft sweep <dir>                # one verbatim drawer per transcript message (idempotent)
-undercroft search <query> [--vault --wing --room -n N]
+undercroft search <query> [--vault --wing --room --kind --min-trust -n N]
+undercroft search <query> --language de   # declared morphology (en de nl it es fr pt tr ru el hi ka ko)
+undercroft search <query> --offset N --ranked-at <rfc3339>  # page one ranking, clock pinned
+undercroft search <query> --room-cap N    # spread hits across rooms, not the most verbose one
 undercroft wake-up [--vault --wing]   # L0 identity + L1 essential story
 undercroft drawer get|list|update|delete|delete-by-source|check-dup
 undercroft kg add|query|rel|invalidate|supersede|timeline|stats
@@ -299,11 +302,17 @@ undercroft dedup [--apply]            # exact-duplicate detection (keyed fingerp
 undercroft backup create|list|restore # verified snapshots, keeps last 10
 undercroft repair                     # backfill + vacuum + re-verify
 undercroft verify [--vault]           # HMAC every record + replay audit chain
+undercroft admission list|allow|deny  # review writes the ingest screen quarantined
+undercroft trust set|list <wing>      # deployment-assigned wing trust (candidate floor)
+undercroft retention set|list|clear|sweep  # per wing/room max age; sweep is explicit
+undercroft forget <id...> [--sign]    # destroy + chain-attested receipt (RTBF)
+undercroft verify-forgetting <receipt># replay a receipt against this vault
 undercroft export [--vault]           # decrypted JSONL to stdout
 undercroft export --to <pub> --out f  # sealed bundle only that recipient can open
 undercroft import <file.jsonl>        # migrate from undercroft or mempalace exports
 undercroft import <bundle> --identity <key>  # open + import an encrypted bundle
-undercroft bundle keygen|recipient    # X25519 identities for sealed exports
+undercroft bundle keygen|recipient    # hybrid X25519+ML-KEM-768 identities for sealed exports
+undercroft bundle sign-keygen|sender  # Ed25519 sender-attestation identities (export --sign)
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet

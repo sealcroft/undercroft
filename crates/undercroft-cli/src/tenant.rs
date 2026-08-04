@@ -28,6 +28,12 @@ use undercroft_store::{PalaceStore, SaveOutcome, SearchOptions, StoreError};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 use crate::assertion::{self, AssertionError};
+// The read-time declarations (`language`, `week_start`, `date_order`,
+// `calendar`) and the honest-exclusion counts are parsed in `crate::search`,
+// which MCP shares verbatim — the two surfaces read the same key names off the
+// same JSON, and re-implementing them here is how `week_start` came to work on
+// one of them only.
+use crate::search::{locale_from, morph_lang_from, Exclusions};
 
 /// Whole days from a drawer's `content_date` to the caller's reference date.
 /// `None` whenever either side is missing or unparseable — an absent number
@@ -59,84 +65,6 @@ fn elapsed_phrase(content_date: &Option<String>, as_of: Option<&str>) -> Option<
     // Phrased from the reference looking back at the content, which is how
     // the question is put: "15 weeks before now", not "after".
     undercroft_core::temporal::describe_interval(a, d)
-}
-
-/// The locale a request asks its temporal text to be read in.
-///
-/// `language` selects a scanner — Arabic puts the past marker before the count
-/// and has a dual, so it is grammar rather than vocabulary — and `week_start`
-/// selects the week convention, which moves "last week" and every week count.
-/// Arabic defaults to Saturday weeks, the convention across most of the region,
-/// because getting the language right and leaving the week European produces
-/// answers that are subtly rather than obviously wrong.
-fn locale_from(body: &Value) -> undercroft_core::temporal::Locale {
-    use undercroft_core::temporal::{Calendar, DateOrder, Locale, WeekStart};
-    let mut locale = match body.get("language").and_then(Value::as_str) {
-        Some("ar") | Some("arabic") => Locale::ARABIC,
-        _ => Locale::ENGLISH,
-    };
-    if let Some(ws) = body.get("week_start").and_then(Value::as_str) {
-        locale = locale.with_week_start(match ws {
-            "sunday" | "sun" => WeekStart::Sunday,
-            "saturday" | "sat" => WeekStart::Saturday,
-            _ => WeekStart::Monday,
-        });
-    }
-    // Which field a bare numeric date puts first. Declared, because it cannot be
-    // derived: US English is month-first and Commonwealth English day-first, and
-    // both are `Language::English`. Unrecognised values leave it undeclared,
-    // which falls through to what the text demonstrates and then to day-first —
-    // never to an error, since a reading convention is not worth a 400.
-    if let Some(order) = body.get("date_order").and_then(Value::as_str) {
-        locale = locale.with_date_order(match order {
-            "month_first" | "mdy" | "us" => DateOrder::MonthFirst,
-            "day_first" | "dmy" => DateOrder::DayFirst,
-            _ => DateOrder::Undeclared,
-        });
-    }
-    // Which calendar counted the year. Never inferred — see `Calendar`. This is
-    // the corpus-wide default only: an era marker in a drawer's own words
-    // (พ.ศ., هـ, 民國, 令和) outranks whatever is declared here.
-    if let Some(cal) = body.get("calendar").and_then(Value::as_str) {
-        locale = locale.with_calendar(match cal {
-            "buddhist" | "be" | "thai" => Calendar::Buddhist,
-            "minguo" | "roc" | "taiwan" => Calendar::Minguo,
-            "hijri" | "islamic" | "umalqura" => Calendar::Hijri,
-            "jalali" | "persian" | "solar_hijri" => Calendar::Jalali,
-            "reiwa" => Calendar::Reiwa,
-            "heisei" => Calendar::Heisei,
-            "showa" => Calendar::Showa,
-            "taisho" => Calendar::Taisho,
-            "meiji" => Calendar::Meiji,
-            _ => Calendar::Gregorian,
-        });
-    }
-    locale
-}
-
-/// Whose inflection applies to the query, from the request's `language`.
-///
-/// Read-time and declared, exactly like `calendar` and `date_order`: German and
-/// English share a script, so nothing in the bytes says which endings are legal.
-/// An unrecognised or absent value means `Undeclared`, which is the behaviour
-/// that shipped before this existed.
-fn morph_lang_from(body: &Value) -> undercroft_store::MorphLang {
-    match body.get("language").and_then(Value::as_str) {
-        Some("de") | Some("german") => undercroft_store::MorphLang::German,
-        Some("en") | Some("english") => undercroft_store::MorphLang::English,
-        Some("it") | Some("italian") => undercroft_store::MorphLang::Italian,
-        Some("es") | Some("spanish") => undercroft_store::MorphLang::Spanish,
-        Some("fr") | Some("french") => undercroft_store::MorphLang::French,
-        Some("pt") | Some("portuguese") => undercroft_store::MorphLang::Portuguese,
-        Some("ru") | Some("russian") => undercroft_store::MorphLang::Russian,
-        Some("el") | Some("greek") => undercroft_store::MorphLang::Greek,
-        Some("nl") | Some("dutch") => undercroft_store::MorphLang::Dutch,
-        Some("tr") | Some("turkish") => undercroft_store::MorphLang::Turkish,
-        Some("hi") | Some("hindi") => undercroft_store::MorphLang::Hindi,
-        Some("ka") | Some("georgian") => undercroft_store::MorphLang::Georgian,
-        Some("ko") | Some("korean") => undercroft_store::MorphLang::Korean,
-        _ => undercroft_store::MorphLang::Undeclared,
-    }
 }
 
 /// Triples as JSON, each labelled with where it rests.
@@ -232,6 +160,13 @@ pub struct Tenancy {
     reranker: Option<RerankerFactory>,
     stores: HashMap<String, PalaceStore>,
     read_only: bool,
+    /// The vault this same process ALSO holds open behind `/mcp`, when the
+    /// binary is running `serve-http` (which opens one store for MCP and
+    /// lets `Tenancy` open its own per vault). Two independent handles over
+    /// one vault directory is fine for reads and ordinary writes — SQLite
+    /// arbitrates those — but not for an operation that retires the keys or
+    /// removes the files under the other handle. See [`Self::deny_co_resident`].
+    mcp_vault: Option<String>,
     /// Per-request vault-assertion secret; when present every vault-
     /// addressing request must carry a valid `X-Vault-Assertion`.
     secret: Option<Vec<u8>>,
@@ -273,9 +208,20 @@ impl Tenancy {
             reranker: None,
             stores: HashMap::new(),
             read_only,
+            mcp_vault: None,
             secret,
             window: assertion::DEFAULT_WINDOW_SECS,
         }
+    }
+
+    /// Declare the vault this process also serves over `/mcp`, so the two
+    /// routes that would pull the ground out from under that second handle
+    /// — key rotation and vault deletion — can refuse instead of corrupting
+    /// it. `serve-http` is the only caller; a bare `/v1` deployment holds
+    /// exactly one handle per vault and needs none of this.
+    pub fn with_mcp_vault(mut self, vault: impl Into<String>) -> Self {
+        self.mcp_vault = Some(vault.into());
+        self
     }
 
     /// Attach a shared second-stage reranker, applied to every per-vault
@@ -289,6 +235,23 @@ impl Tenancy {
     /// True when this server enforces per-vault assertions.
     pub fn requires_assertion(&self) -> bool {
         self.secret.is_some()
+    }
+
+    /// The same assertion gate every `/v1` handler runs, for a transport
+    /// that is not `/v1`.
+    ///
+    /// `/mcp` is mounted on this server, in this process, and serves the
+    /// full read/write tool surface of the vault named by `--vault`. It had
+    /// no assertion check, so an operator who declared
+    /// `UNDERCROFT_ASSERTION_SECRET` — precisely to stop one bearer from
+    /// addressing every vault — still left that one vault open to anyone
+    /// holding the palace bearer, while the startup banner claimed
+    /// "per-vault assertions required" without qualification. Isolation is
+    /// a property of the engine, not of which port path you drive.
+    /// Unset secret ⇒ `Ok`, so a deployment that never declared it sees no
+    /// change at all.
+    pub fn assert_transport(&self, vault_id: &str, req: &Request, now: i64) -> Result<(), u16> {
+        self.assert_or_401(vault_id, req, now).map_err(|e| e.code)
     }
 
     /// Consume and answer one `/v1/...` request. The body is read up front
@@ -322,6 +285,19 @@ impl Tenancy {
         let path = req.url().split('?').next().unwrap_or("").to_string();
         let method = req.method().to_string().to_uppercase();
         let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+        // The read-only posture is decided HERE, once, in front of dispatch —
+        // not by a guard at the top of each mutating handler. There were
+        // thirteen such guards and fourteen mutating routes: `POST
+        // .../kg/authority` was simply never given one, so a `--read-only`
+        // server rewrote HMAC-covered authority columns, superseded the
+        // previous canonical holder and appended to the audit chain while
+        // answering 200 — and the identical capability over `/mcp` in the same
+        // process answered "server is read-only". One forgotten call is a
+        // silent write door, so the decision moved to the one place every
+        // request passes through, and it fails CLOSED (see `mutates`).
+        if self.read_only && mutates(method.as_str(), segs.as_slice()) {
+            return Err(RestError::new(403, "server is read-only"));
+        }
         match (method.as_str(), segs.as_slice()) {
             ("POST", &["v1", "vaults"]) => self.create_vault(req, body, now),
             ("GET", &["v1", "vaults"]) => self.list_vaults(),
@@ -377,7 +353,6 @@ impl Tenancy {
     // ---- lifecycle ----------------------------------------------------
 
     fn create_vault(&mut self, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         let body = parse_json(body)?;
         let id = body_str(&body, "id")?;
         self.assert_or_401(&id, req, now)?;
@@ -431,8 +406,9 @@ impl Tenancy {
     }
 
     fn delete_vault(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
+        // Dropping the Tenancy's handle does not close the `/mcp` one.
+        self.deny_co_resident(id, "deleting a vault", "delete it while nothing serves it")?;
         self.stores.remove(id);
         let deleted = self
             .manager
@@ -452,7 +428,12 @@ impl Tenancy {
         let external = store.is_external();
         let vault = store.vault();
         undercroft_obs::set_gauge("drawers", id, full.records as f64);
-        undercroft_obs::set_gauge("audit_chain_height", id, vault.writes() as f64);
+        // The COMMITTED height (`PalaceStats`, i.e. `chain_meta`), never
+        // this handle's cached manifest: in `serve-http` the MCP store is
+        // a second handle on the same vault, and whichever handle did not
+        // write kept reporting the head it last anchored — a frozen gauge
+        // beside a climbing `drawers` count.
+        undercroft_obs::set_gauge("audit_chain_height", id, full.writes as f64);
         // Original fields kept verbatim (clients depend on them); the
         // management fields ride along. Wing names are fine here — this
         // route is authorized per vault, unlike the telemetry sampler which
@@ -464,8 +445,8 @@ impl Tenancy {
                 "drawers": full.records,
                 "level": vault.level().to_string(),
                 "external": external,
-                "writes": vault.writes(),
-                "chain_head": vault.chain_head_hex(),
+                "writes": full.writes,
+                "chain_head": full.chain_head,
                 "wings": full.wings
                     .iter()
                     .map(|(w, c)| json!({ "wing": w, "count": c }))
@@ -567,7 +548,6 @@ impl Tenancy {
     // ---- drawers ------------------------------------------------------
 
     fn save_drawer(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let text = body_str(&body, "text")?;
@@ -701,7 +681,14 @@ impl Tenancy {
                 .get("min_trust")
                 .and_then(Value::as_str)
                 .map(String::from),
-            limit: body.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
+            // One default page size for every surface (`crate::search`): this
+            // route answered 10 while the CLI and MCP answered 5, so "the same
+            // search" returned a different number of hits per transport.
+            limit: body
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+                .unwrap_or(crate::search::DEFAULT_LIMIT),
             // Rank-space page start: pass the previous response's
             // `next_offset` (with its `ranked_at`) to continue deeper instead
             // of re-asking the same question.
@@ -816,50 +803,43 @@ impl Tenancy {
         let ranked_at_echo = ranked_at
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
-        // The unlabeled-rows policy (docs/LABELS.md): while a kind filter
-        // is set, say how many in-scope drawers it passed over for carrying
-        // no declared kind at all — so a thin result over a thinly-labeled
-        // corpus is distinguishable from a genuinely thin corpus. Additive
-        // key, present only when the filter is.
-        let unlabeled_excluded = match opts.kind.as_deref() {
-            Some(_) => {
-                let store = self.store_for(id)?;
-                Some(
-                    store
-                        .unkinded_in_scope(opts.wing.as_deref(), opts.room.as_deref())
-                        .map_err(store_err)?,
-                )
-            }
-            None => None,
+        // What this request's own filters kept out of the competition
+        // (docs/LABELS.md), counted once for every surface in `crate::search`:
+        // a thin result under a `kind` filter or a `min_trust` floor is
+        // otherwise indistinguishable from a thin corpus. Both keys are
+        // additive and present only while their filter is.
+        let excluded = {
+            let store = self.store_for(id)?;
+            Exclusions::measure(store, &opts).map_err(store_err)?
         };
         let mut resp = json!({
             "hits": hits,
             "next_offset": next_offset,
             "ranked_at": ranked_at_echo,
         });
-        if let Some(n) = unlabeled_excluded {
+        if let Some(n) = excluded.unlabeled {
             resp["unlabeled_excluded"] = json!(n);
         }
-        // The honest-exclusion count, one label over: while a trust floor
-        // is declared on the request, say how many wings it kept out of
-        // the competition. Additive key, present only with the filter.
-        if let Some(floor) = opts.min_trust.clone() {
-            let store = self.store_for(id)?;
-            let n = store.trust_excluded_wing_count(&floor).map_err(store_err)?;
+        if let Some(n) = excluded.trust_excluded {
             resp["trust_excluded_wings"] = json!(n);
         }
         Ok((200, Body::Json(resp)))
     }
 
     fn delete_drawer(&mut self, id: &str, drawer_id: &str, req: &Request, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
-        let deleted = store.delete_drawer(drawer_id).map_err(store_err)?;
-        Ok((
-            200,
-            Body::Json(json!({ "id": drawer_id, "deleted": deleted })),
-        ))
+        // A delete of an id that is not here is NOT a success. This
+        // answered 200 `{"deleted": false}`, so a client checking only the
+        // status was told the delete worked when the id was a typo, a
+        // stale id or an already-swept drawer — while CLI `drawer delete`
+        // and MCP `undercroft_delete_drawer` both treat it as an error, and
+        // GET/PUT on the same id answer 404. The `deleted` key stays for
+        // the callers that read it; it is now always `true` on a 200.
+        if !store.delete_drawer(drawer_id).map_err(store_err)? {
+            return Err(RestError::new(404, format!("no drawer {drawer_id}")));
+        }
+        Ok((200, Body::Json(json!({ "id": drawer_id, "deleted": true }))))
     }
 
     // ---- management (admin UI surface) --------------------------------
@@ -926,7 +906,6 @@ impl Tenancy {
         body: &str,
         now: i64,
     ) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let text = body_str(&body, "text")?;
@@ -973,20 +952,50 @@ impl Tenancy {
     }
 
     /// `POST /v1/vaults/{id}/verify` — walk every record verifying its
-    /// HMAC and replay the audit chain. Read-only despite the verb (POST
-    /// because it is an expensive action, not a resource read).
+    /// HMAC, replay the audit chain, and check every drawer supersession
+    /// receipt. Read-only despite the verb (POST because it is an
+    /// expensive action, not a resource read).
+    ///
+    /// `ok` is the vault's whole verdict, the same one CLI `verify` exits
+    /// 2 on and MCP prints as VERIFY FAILED. It used to be narrower here:
+    /// the supersession leg was a second store call only those two
+    /// surfaces made, so this route — and the admin console reading it —
+    /// answered green on a vault with a tampered link. The counts are the
+    /// same breakdown `GET …/supersessions` returns, so an alert can stay
+    /// on this one route.
     fn verify(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         let report = store.verify().map_err(store_err)?;
-        let ok = report.ok();
+        use undercroft_store::ReceiptVerdict as V;
+        let count = |v: V| {
+            report
+                .supersessions
+                .iter()
+                .filter(|l| l.verdict == v)
+                .count()
+        };
+        let bad_supersessions: Vec<&str> = report
+            .supersessions
+            .iter()
+            .filter(|l| l.verdict == V::Tampered)
+            .map(|l| l.drawer_id.as_str())
+            .collect();
         Ok((
             200,
             Body::Json(json!({
-                "ok": ok,
+                "ok": report.ok(),
                 "records_checked": report.records_checked,
                 "bad_records": report.bad_records,
                 "chain_ok": report.chain_ok,
+                "supersessions": {
+                    "verified": count(V::Verified),
+                    "source_changed": count(V::SourceChanged),
+                    "dangling": count(V::Dangling),
+                    "unreceipted": count(V::Unreceipted),
+                    "tampered": count(V::Tampered),
+                },
+                "bad_supersessions": bad_supersessions,
             })),
         ))
     }
@@ -994,11 +1003,13 @@ impl Tenancy {
     /// `POST /v1/vaults/{id}/rotate` — rotate the vault onto fresh keys
     /// (fresh salt ⇒ all three derived keys change; every artifact is
     /// re-sealed in one transaction). The caller must be the only writer —
-    /// same contract as the CLI `vault rotate`. Remote-index copies go
-    /// stale; the response says so.
+    /// same contract as the CLI `vault rotate` — and, since that contract is
+    /// about being the ONLY handle, this refuses (409) for the vault the same
+    /// process also serves over `/mcp`. Remote-index copies go stale; the
+    /// response says so.
     fn rotate(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
+        self.deny_co_resident(id, "rotating keys", "run `undercroft vault rotate <name>`")?;
         let candidate = self
             .manager
             .rotation_candidate(id)
@@ -1116,6 +1127,10 @@ impl Tenancy {
     /// review_state, canonical_key?}`. Closed vocabulary, audited through
     /// the chain, and the resulting state lands inside the fact's HMAC —
     /// a column flip without the vault key fails verification on read.
+    ///
+    /// The only mutation among the `/v1` KG routes, and for a long time the
+    /// only mutating route anywhere in this file with no read-only guard;
+    /// `route` now decides that for every route at once.
     fn kg_authority(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let v: Value =
@@ -1218,7 +1233,6 @@ impl Tenancy {
     /// unsigned out — the signing identity is an operator file, so
     /// signing happens via the CLI). C3.2: GDPR/RTBF with a receipt.
     fn forget(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let ids: Vec<String> = body
@@ -1264,7 +1278,6 @@ impl Tenancy {
     /// deliberately absent from MCP (an agent whose write was quarantined
     /// must not be able to rule on it). Both verdicts are chain-audited.
     fn admission_rule(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let drawer_id = body_str(&body, "drawer_id")?;
@@ -1314,7 +1327,6 @@ impl Tenancy {
     /// clears. An operator surface, deliberately absent from MCP — an
     /// agent must not shorten the life of the memory it writes or reads.
     fn retention_set(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let wing = body_str(&body, "wing")?;
@@ -1349,7 +1361,6 @@ impl Tenancy {
     /// operator asks for one. The attestation in the response is the
     /// receipt (unsigned — the signing identity is an operator file).
     fn retention_sweep(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let dry_run = (!body.trim().is_empty())
             .then(|| parse_json(body))
@@ -1370,7 +1381,6 @@ impl Tenancy {
     /// from MCP — an agent that writes content must not be able to raise
     /// its own standing (docs/LABELS.md). Audited through the chain.
     fn set_trust(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let wing = body_str(&body, "wing")?;
@@ -1420,7 +1430,6 @@ impl Tenancy {
     /// Requires `UNDERCROFT_LLM_URL` — without it the vault is untouched and
     /// this answers 400. The verbatim drawers are never modified.
     fn refine(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;
         let wing = body.get("wing").and_then(Value::as_str);
@@ -1439,151 +1448,43 @@ impl Tenancy {
             undercroft_llm::LlmClient::from_env().map_err(|e| RestError::new(400, e.to_string()))?;
         let store = self.store_for(id)?;
 
-        // Read the verbatim side only: never re-distil fact-drawers, or a
-        // second call would compound its own output into the graph.
-        let sources: Vec<Drawer> = store
-            .recent(wing, limit)
-            .map_err(store_err)?
-            .into_iter()
-            .filter(|d| d.meta.room != fact_room)
-            .filter(|d| room.is_none_or(|r| d.meta.room == r))
-            .collect();
-
-        // The knowledge graph already collapses a repeated triple onto one
-        // row (`triple_id` is content-derived, ON CONFLICT DO UPDATE). The
-        // searchable mirror has to match that, or a fact restated across
-        // several source chunks would occupy several slots of one top-k and
-        // crowd out distinct evidence. Keyed on the triple id the graph
-        // itself returns, so the two notions of identity cannot drift.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let (mut facts, mut duplicates, mut skipped, mut failed) = (0u32, 0u32, 0u32, 0u32);
-        let (mut dated_from_text, mut stated) = (0u32, 0u32);
-        for d in &sources {
-            let anchor = d
-                .meta
-                .content_date
-                .as_deref()
-                .and_then(undercroft_core::temporal::parse_anchor);
-            let triples = match llm.extract_triples(&d.content) {
-                Ok(t) => t,
-                Err(e) => {
-                    undercroft_obs::diag_error!("refine: triples failed for {}: {e}", d.id);
-                    failed += 1;
-                    continue;
-                }
-            };
-            for t in triples {
-                let subject = t.subject.to_lowercase();
-                let predicate = t.predicate.to_lowercase();
-                if validate_name(&subject, "subject").is_err()
-                    || validate_name(&predicate, "predicate").is_err()
-                {
-                    skipped += 1;
-                    continue;
-                }
-                // When the fact was established, which is not the same as
-                // when the note was written: "I quit smoking three months
-                // ago" is a fact about February in a note dated May. The
-                // extractor is asked to point at the words that say so and
-                // is not permitted to supply a date — `resolve_claimed_span`
-                // rejects any span the note does not literally contain and
-                // resolves the rest deterministically. Anything unverified
-                // falls back to the note's own date, which is what every
-                // fact used to get.
-                let dated = t.when.as_deref().and_then(|claim| {
-                    undercroft_core::temporal::resolve_claimed_span(&d.content, claim, anchor)
-                });
-                if dated.is_some() {
-                    dated_from_text += 1;
-                }
-                let fact_date = dated
-                    .as_ref()
-                    .and_then(|m| m.resolved.clone())
-                    .or_else(|| d.meta.content_date.clone());
-                // The receipt is an HMAC-covered citation back to the
-                // verbatim drawer this fact came from — checkable later via
-                // `GET /v1/vaults/{id}/kg/receipts`.
-                // `valid_to` stays open even when the span named a period.
-                // A period says when the event *happened*; it does not say
-                // the fact stopped holding, and "in May 2023" must not be
-                // read as "expired on the 31st".
-                // Where the fact rests. The quote is checked against the note
-                // the same way the `when` span is; what the note does not
-                // contain is not evidence. A fact with no quotable support is
-                // NOT thereby wrong — "Leeds is in the United Kingdom" is the
-                // edge that answers which country Ana works in, and the graph
-                // wants it. This only records which of the two it is, so a
-                // caller that needs the user's own words can ask for them.
-                let support = undercroft_core::support::Support::evaluate(
-                    &d.content,
-                    t.quote
-                        .as_deref()
-                        .map(|q| [q])
-                        .unwrap_or_default()
-                        .as_slice(),
-                );
-                if support.is_stated() {
-                    stated += 1;
-                }
-                let triple_id = store
-                    .kg_add_grounded(
-                        &subject,
-                        &predicate,
-                        &t.object,
-                        fact_date.as_deref(),
-                        None,
-                        0.8, // model-extracted: below human-asserted confidence
-                        (&d.id, &d.content),
-                        Some(&support),
-                        // The model's identity was already in this handler's
-                        // response JSON; now it is on the fact itself,
-                        // HMAC-covered — an extractor claim is provenance.
-                        Some(llm.model()),
-                    )
-                    .map_err(store_err)?;
-                // Restating a known fact still re-cites it in the graph — the
-                // receipt above is refreshed either way — but it must not add
-                // a second copy to the retrieval surface.
-                if !seen.insert(triple_id) {
-                    duplicates += 1;
-                    continue;
-                }
-                store
-                    .upsert(
-                        &Drawer::new(
-                            &d.meta.wing,
-                            fact_room,
-                            format!("{} {} {}", t.subject, t.predicate, t.object),
-                            None,
-                            facts,
-                            "distill",
-                        )
-                        .with_content_date(fact_date),
-                    )
-                    .map_err(store_err)?;
-                facts += 1;
-            }
-        }
+        // The distillation itself lives in `crate::refine`, driven
+        // identically by `undercroft refine` — same LLM configuration must
+        // not mean two different vaults (it did: no fact date resolved
+        // from the note's words, no grounding verdict and no searchable
+        // mirror on the CLI side).
+        let rep = crate::refine::refine(
+            store,
+            &llm,
+            &crate::refine::RefineOptions {
+                wing,
+                room,
+                fact_room,
+                limit,
+                dry_run: false,
+            },
+        )
+        .map_err(store_err)?;
 
         Ok((
             200,
             Body::Json(json!({
-                "sources": sources.len(),
-                "facts": facts,
-                "duplicates": duplicates,
-                "skipped": skipped,
-                "failed": failed,
+                "sources": rep.sources,
+                "facts": rep.facts,
+                "duplicates": rep.duplicates,
+                "skipped": rep.skipped,
+                "failed": rep.failed,
                 // How many facts were dated by words in the note rather than
                 // by the note's own date. Reported because it is the only
                 // visible measure of whether the extractor is pointing at
                 // real spans — a model that answers with dates instead of
                 // quotations drives this to zero without erroring.
-                "dated_from_text": dated_from_text,
+                "dated_from_text": rep.dated_from_text,
                 // Facts the note's own words support, against facts that rest
                 // on the extractor's background knowledge. Both are wanted:
                 // the second is what lets the graph answer across notes.
-                "stated": stated,
-                "background": facts.saturating_sub(stated),
+                "stated": rep.stated,
+                "background": rep.facts.saturating_sub(rep.stated),
                 "fact_room": fact_room,
                 "model": llm.model(),
             })),
@@ -1668,7 +1569,6 @@ impl Tenancy {
     }
 
     fn import(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
-        self.deny_read_only()?;
         self.assert_or_401(id, req, now)?;
         // A manifest first line, when present: the digest is always
         // enforced (a payload that does not match its own declaration is
@@ -1762,10 +1662,18 @@ impl Tenancy {
         }
         let store = self.store_for(id)?;
         let mut imported = 0u64;
+        let mut quarantined = 0u64;
         for (drawer, vector, tok) in &records {
-            store
-                .import_record(drawer, vector.clone())
+            // `import_record` re-stamps `added_by` with the importing
+            // surface: the payload's own value is the key the admission
+            // screen's trusted-source auto-admit rides, and a caller must
+            // not be able to set it.
+            let out = store
+                .import_record(drawer, vector.clone(), undercroft_store::IMPORT_SURFACE)
                 .map_err(store_err)?;
+            if out.quarantined {
+                quarantined += 1;
+            }
             if let Some((model, packed)) = tok {
                 // Re-sealed under this vault's key; restore skips the
                 // per-drawer encode forward.
@@ -1792,6 +1700,11 @@ impl Tenancy {
             200,
             Body::Json(json!({
                 "imported": imported,
+                // How many of those the admission screen diverted: counted
+                // in `imported` (they were written) but NOT retrievable
+                // where the payload aimed them. Always 0 while screening is
+                // off, so the default response shape is unchanged.
+                "quarantined": quarantined,
                 "kg_triples": kg_records.len(),
                 "kg_entities": entity_records.len(),
                 "tunnels": tunnel_records.len(),
@@ -1836,11 +1749,29 @@ impl Tenancy {
             // advisor attaches per vault when the deployment declared it.
             crate::attach_admission_advisor(&mut store)
                 .map_err(|e| RestError::new(500, e.to_string()))?;
-            // Same retrieval contract as the CLI: UNDERCROFT_RETRIEVAL=pq
-            // enables the on-disk PQ/IVF prefilter per tenant vault (plain
-            // on hmac-only; AEAD-sealed rows + RAM cache on sealed).
-            if std::env::var("UNDERCROFT_RETRIEVAL").as_deref() == Ok("pq") {
-                store.set_pq(true);
+            // The SAME retrieval contract as the CLI, and it must stay the
+            // same: this arm once matched only "pq", so a server told
+            // UNDERCROFT_RETRIEVAL=fde silently served the default instead —
+            // a config the operator declared and never got, with no error.
+            // A typo behaved identically. `hnsw` stays CLI-only (the index
+            // is per-process RAM and the feature gate is a build choice),
+            // but it is REFUSED here rather than ignored.
+            match std::env::var("UNDERCROFT_RETRIEVAL").as_deref() {
+                Ok("pq") => store.set_pq(true),
+                Ok("fde") => store.set_fde(true),
+                Ok("hnsw") => {
+                    return Err(RestError::new(
+                        500,
+                        "UNDERCROFT_RETRIEVAL=hnsw is not available on the multi-tenant                          server (in-process index); use pq or fde, or serve a single vault",
+                    ))
+                }
+                Ok("") | Err(_) => {}
+                Ok(other) => {
+                    return Err(RestError::new(
+                        500,
+                        format!("unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, fde)"),
+                    ))
+                }
             }
             self.stores.insert(vault_id.to_string(), store);
             undercroft_obs::vault_opened();
@@ -1848,12 +1779,41 @@ impl Tenancy {
         Ok(self.stores.get_mut(vault_id).expect("just inserted"))
     }
 
-    fn deny_read_only(&self) -> Result<(), RestError> {
-        if self.read_only {
-            Err(RestError::new(403, "server is read-only"))
-        } else {
-            Ok(())
+    /// Refuse an operation that would retire the keys of, or delete the
+    /// files under, a vault a SECOND live handle in this same process is
+    /// holding — the `/mcp` store `serve-http` opened at start-up.
+    ///
+    /// `rotate_keys` documents a sole-writer contract, and every doc states
+    /// it at PROCESS granularity ("do not rotate a vault another process is
+    /// serving"). Inside `serve-http` that contract was unsatisfiable: the
+    /// second reader is in the operator's own process, reachable from the
+    /// console's own ROTATE KEYS button, and no external discipline can
+    /// prevent it. Rotating through the `/v1` handle left the `/mcp` handle
+    /// on the retired keys — every read after it surfaced as
+    /// `StoreError::Integrity` (the agent is told the vault is TAMPERED when
+    /// the operator merely rotated), and any write it made was sealed and
+    /// chain-appended under the retired MAC key and then re-anchored the
+    /// manifest from its own stale cache, reverting `salt_hex` while the
+    /// rows on disk stayed under the new keys. `delete_vault` is the same
+    /// shape one level up: it drops the Tenancy's handle and removes the
+    /// directory while the MCP handle keeps an open connection to files that
+    /// no longer exist.
+    ///
+    /// So the refusal is the fix: it makes the documented contract
+    /// satisfiable by naming the one route that does it — stop the server,
+    /// hold the only handle, then rotate. Other tenant vaults are untouched:
+    /// only the `--vault` one is co-resident.
+    fn deny_co_resident(&self, id: &str, what: &str, remedy: &str) -> Result<(), RestError> {
+        if self.mcp_vault.as_deref() == Some(id) {
+            return Err(RestError::new(
+                409,
+                format!(
+                    "vault '{id}' is also open on this process's /mcp surface; {what} needs the \
+                     only handle — stop the server, then {remedy}"
+                ),
+            ));
         }
+        Ok(())
     }
 
     /// Verify the per-vault assertion, if a secret is set. The reason is
@@ -1961,6 +1921,30 @@ fn b64decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64::engine::general_purpose::STANDARD.decode(s)
 }
 
+/// Does this request change the vault? Consulted once, in front of
+/// dispatch, to decide what a `--read-only` server refuses.
+///
+/// **Fails closed by construction**: a request mutates unless it is a `GET`
+/// or one of the two `POST`s named below. A route added later is refused on
+/// a read-only server until someone deliberately adds it to that list — the
+/// opposite of the per-handler guard this replaced, where forgetting a line
+/// opened a write door and nothing said so.
+///
+/// The two exceptions are POST for cost, not for effect: `search` reads (its
+/// optional read-audit record is already suppressed by `open_read_only`),
+/// and `verify` walks HMACs and replays the chain. `GET .../export` is a
+/// read here too — the egress chain record it would otherwise write is
+/// skipped on a read-only server, which warns and serves.
+fn mutates(method: &str, segs: &[&str]) -> bool {
+    if method == "GET" {
+        return false;
+    }
+    !matches!(
+        (method, segs),
+        ("POST", &["v1", "vaults", _, "search"]) | ("POST", &["v1", "vaults", _, "verify"])
+    )
+}
+
 fn store_err(e: StoreError) -> RestError {
     let code = match &e {
         StoreError::ExternalVault
@@ -1970,7 +1954,16 @@ fn store_err(e: StoreError) -> RestError {
         // the reserved wing, a ruling on an id that is not quarantined —
         // is the caller's error, not the server's.
         | StoreError::Invalid(_) => 400,
-        StoreError::Integrity(_) => 409,
+        // Both are verdicts about stored evidence rather than about the
+        // request: an HMAC that does not verify, or an attestation that
+        // does not describe what this vault did. 409, never 5xx — the
+        // server is working exactly as designed when it says so.
+        StoreError::Integrity(_) | StoreError::Attestation(_) => 409,
+        // "That record is not here" has ONE status class across every
+        // route: `forget` and `admission` used to answer 400 for it while
+        // GET/PUT on the same id answered 404, so a client could not key
+        // retry or alerting logic on the class at all.
+        StoreError::NotFound(_) => 404,
         _ => 500,
     };
     RestError::new(code, e.to_string())
@@ -2018,78 +2011,5 @@ fn respond(req: Request, code: u16, body: &str, content_type: &str) {
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use undercroft_core::temporal::{Calendar, DateOrder, Language, WeekStart};
-
-    /// `locale_from` is the whole of the read-time convention surface, and this
-    /// file had no test module at all — so a renamed field or a typo in a value
-    /// would have shipped silently while `docs/AGENTS.md` promised it worked.
-    #[test]
-    fn the_request_declares_its_reading_conventions() {
-        let l = locale_from(&serde_json::json!({}));
-        assert_eq!(l.language, Language::English);
-        assert_eq!(l.week_start, WeekStart::Monday);
-        assert_eq!(
-            l.date_order,
-            DateOrder::Undeclared,
-            "English implies no order"
-        );
-        assert_eq!(l.calendar, Calendar::Gregorian);
-
-        // Arabic brings Saturday weeks and day-first with it: CLDR gives `ar` as
-        // d/M/y in every Arabic territory, so both follow from the language.
-        let l = locale_from(&serde_json::json!({"language": "ar"}));
-        assert_eq!(l.language, Language::Arabic);
-        assert_eq!(l.week_start, WeekStart::Saturday);
-        assert_eq!(l.date_order, DateOrder::DayFirst);
-
-        // Each convention is independently declarable, with the aliases a caller
-        // would actually reach for.
-        for (v, want) in [
-            ("month_first", DateOrder::MonthFirst),
-            ("mdy", DateOrder::MonthFirst),
-            ("us", DateOrder::MonthFirst),
-            ("day_first", DateOrder::DayFirst),
-            ("dmy", DateOrder::DayFirst),
-        ] {
-            let l = locale_from(&serde_json::json!({"date_order": v}));
-            assert_eq!(l.date_order, want, "date_order {v:?}");
-        }
-        for (v, want) in [
-            ("buddhist", Calendar::Buddhist),
-            ("thai", Calendar::Buddhist),
-            ("be", Calendar::Buddhist),
-            ("minguo", Calendar::Minguo),
-            ("roc", Calendar::Minguo),
-            ("hijri", Calendar::Hijri),
-            ("umalqura", Calendar::Hijri),
-            ("jalali", Calendar::Jalali),
-            ("persian", Calendar::Jalali),
-            ("reiwa", Calendar::Reiwa),
-            ("heisei", Calendar::Heisei),
-            ("showa", Calendar::Showa),
-            ("taisho", Calendar::Taisho),
-            ("meiji", Calendar::Meiji),
-        ] {
-            let l = locale_from(&serde_json::json!({"calendar": v}));
-            assert_eq!(l.calendar, want, "calendar {v:?}");
-        }
-
-        // An unrecognised value falls back rather than failing: a reading
-        // convention is not worth a 400.
-        let l = locale_from(&serde_json::json!({"calendar": "mayan", "date_order": "sideways"}));
-        assert_eq!(l.calendar, Calendar::Gregorian);
-        assert_eq!(l.date_order, DateOrder::Undeclared);
-
-        // And they compose.
-        let l = locale_from(
-            &serde_json::json!({"language": "ar", "calendar": "hijri", "week_start": "sunday"}),
-        );
-        assert_eq!(l.language, Language::Arabic);
-        assert_eq!(l.calendar, Calendar::Hijri);
-        assert_eq!(l.week_start, WeekStart::Sunday);
-        assert_eq!(l.date_order, DateOrder::DayFirst, "still from the language");
-    }
-}
+// The read-time convention tests moved with `locale_from` into
+// `crate::search`, where both surfaces that parse those declarations live.

@@ -337,11 +337,24 @@ impl Vault {
     /// fast-forwarding — a power loss is not a tamper alarm, a restored old
     /// database still is.
     pub fn anchor_manifest(&mut self, head_hex: &str, writes: u64) -> Result<(), VaultError> {
+        // How many chain RECORDS this anchor commits. One anchor is not
+        // one record: `upsert_many` appends per drawer inside one
+        // transaction and anchors once at the end (256 records, one
+        // anchor), and read-audit records append with no anchor at all
+        // and are picked up by the next one. Counting anchors made the
+        // same 1,000-drawer NDJSON read as 1,000 commits through
+        // `/v1 …/import` and 4 through `undercroft import`, on a counter
+        // whose own contract says "once per mutation" — so the counter
+        // advances by the delta, which is exactly the chain's growth.
+        let records = writes.saturating_sub(self.manifest.writes);
         self.manifest.chain_head_hex = head_hex.to_string();
         self.manifest.writes = writes;
         self.save_manifest()?;
-        undercroft_obs::chain_commit();
-        undercroft_obs::event_chain_commit(self.id());
+        // Emitted only after the anchor is durable, as before — the
+        // records it counts are already committed, so no rolled-back
+        // write can be counted.
+        undercroft_obs::chain_commit(records);
+        undercroft_obs::event_chain_commit(self.id(), records);
         Ok(())
     }
 

@@ -1331,7 +1331,7 @@
     <tr><td>Rollback detection</td><td>Manifest anchor that must never run ahead of the database</td></tr>
     <tr><td>Durability</td><td>WAL + <code>synchronous=FULL</code>; anchor fsynced through an atomic rename plus directory sync; key material fsynced at creation</td></tr>
     <tr><td>Key rotation</td><td>In-place re-seal of every artifact plus chain re-key over preserved audit bytes, in one transaction, crash-reconciled at open</td></tr>
-    <tr><td>Sharing</td><td>Recipient-encrypted export bundles: X25519 ephemeral-static → HKDF → XChaCha20-Poly1305</td></tr>
+    <tr><td>Sharing</td><td>Recipient-encrypted export bundles: <strong>hybrid post-quantum</strong> X25519 + ML-KEM-768 (<code>pq1</code> identities) → HKDF over both shared secrets → XChaCha20-Poly1305. Legacy bare-hex X25519 identities still parse and still receive openable v1 bundles, but a hybrid recipient never silently downgrades — an X25519-only secret is refused on a v2 bundle. Beside it, an optional Ed25519 <em>sender attestation</em> (<code>bundle sign-keygen</code> / <code>bundle sender</code>): encryption says who may READ, the signature says who WROTE. See <code>docs/PQ.md</code></td></tr>
     <tr><td>Path safety</td><td>Vault, wing, and room names pass <code>validate_name</code>, a path-traversal guard</td></tr>
     <tr><td>Secrets in memory</td><td>Key material lives in a zeroize-on-drop wrapper and is never <code>Debug</code>-printed</td></tr>
   </tbody>
@@ -1439,7 +1439,7 @@
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t_securitykeys d_securitykeys">
 <title id="t_securitykeys">Key derivation and the AAD that binds every ciphertext</title>
-<desc id="d_securitykeys">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use X25519 to a recipient key.</desc>
+<desc id="d_securitykeys">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -1521,14 +1521,15 @@
 <text x="42" y="598" class="f s dim">crash mid-rotation leaves one of two consistent states and is</text>
 <text x="42" y="613" class="f s dim">reconciled at the next open.</text>
 
-<rect x="454" y="472" width="422" height="150" rx="9" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
+<rect x="454" y="472" width="422" height="165" rx="9" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
 <text x="472" y="496" class="f l" fill="var(--d-blue-ink,#33527d)">Sharing — an export bundle for one recipient</text>
-<text x="472" y="517" class="f s dim">X25519 ephemeral-static to the recipient's public key, through</text>
-<text x="472" y="532" class="f s dim">HKDF, into XChaCha20-Poly1305. The sender's vault keys never</text>
-<text x="472" y="547" class="f s dim">leave the machine and the bundle is readable by exactly one</text>
-<text x="472" y="562" class="f s dim">holder of the matching private key.</text>
-<text x="472" y="583" class="f s dim">This is the no-lock-in path: a vault can be handed over whole</text>
-<text x="472" y="598" class="f s dim">without ever exposing it to the operator moving it.</text>
+<text x="472" y="517" class="f s dim">Hybrid X25519 + ML-KEM-768 to the recipient's public key, both</text>
+<text x="472" y="532" class="f s dim">shared secrets through HKDF into XChaCha20-Poly1305. The sender's</text>
+<text x="472" y="547" class="f s dim">vault keys never leave the machine, the bundle is readable by</text>
+<text x="472" y="562" class="f s dim">exactly one holder of the matching secret, and a hybrid recipient</text>
+<text x="472" y="577" class="f s dim">never silently downgrades to the curve half alone.</text>
+<text x="472" y="598" class="f s dim">This is the no-lock-in path: a vault can be handed over whole</text>
+<text x="472" y="613" class="f s dim">without ever exposing it to the operator moving it.</text>
 
 <rect x="24" y="638" width="852" height="152" rx="9" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="662" class="f l ink">Where the boundary honestly sits</text>
@@ -1841,7 +1842,7 @@
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td><code>UNDERCROFT_RETRIEVAL</code></td><td>unset — flat scan</td><td><code>pq</code> · <code>fde</code> · <code>hnsw</code> (feature-gated). Approximate; verify recall before relying on it</td></tr>
+    <tr><td><code>UNDERCROFT_RETRIEVAL</code></td><td>unset — flat scan</td><td><code>pq</code> · <code>fde</code> · <code>hnsw</code> (feature-gated). Approximate; verify recall before relying on it. <code>hnsw</code> is an <strong>in-process index and single-vault only</strong> — the multi-tenant server refuses it (use <code>pq</code> or <code>fde</code> there)</td></tr>
     <tr><td><code>UNDERCROFT_FUSION</code></td><td><code>bm25</code></td><td><code>bm25</code> · <code>legacy</code> (<code>rrf</code> removed; warns, falls back)</td></tr>
     <tr><td><code>UNDERCROFT_FUSION_WEIGHT</code></td><td>0.55</td><td>The blend's semantic weight <em>w</em> in <em>w</em>·semantic + (0.90−<em>w</em>)·lexical + 0.10·recency. Declared and clamped to 0.20–0.70 — no configuration can retire a channel; one global value, never per-query</td></tr>
     <tr><td><code>UNDERCROFT_TRUST_FLOOR</code></td><td>unset — no floor</td><td>Vault-level minimum wing trust (<code>quarantined</code> · <code>standard</code> · <code>trusted</code>): unscoped searches exclude wings the operator assigned below it, resolved before candidates are drawn so a quarantined wing can neither crowd the pool nor starve an answer. Explicitly naming a wing bypasses the vault floor (self-scoping); a request's own <code>min_trust</code> is never bypassed. Garbage warns and stays off</td></tr>
@@ -1855,7 +1856,9 @@
     <tr><td><code>UNDERCROFT_WING_PQ_MIN</code></td><td>4096</td><td>Wing size at which a wing earns its own PQ codebook and code rows — a wing-scoped search then probes the wing's index instead of intersecting corpus-wide candidates; below the floor it full-scans the wing (bounded, exact). <code>off</code> disables the per-wing tier only: every declared scope (wing or room) is resolved before candidates are drawn, so a scoped query cannot be starved by the corpus top-k</td></tr>
     <tr><td><code>UNDERCROFT_POOL_DIV</code></td><td>64</td><td>Corpus-scaled stage-1 candidate pool: semantic prefilters fetch at least <code>live_rows/div</code> ADC candidates, then an exact-cosine second stage over just those candidates' embeddings cuts back to hydration size. Measured: a fixed 256 pool leaked R@5 100→96.8% by 1M drawers. <code>off</code> = fixed floor (the measured-leaky behavior)</td></tr>
     <tr><td><code>UNDERCROFT_PQ_PAGE_MIN</code></td><td>off</td><td>Sealed PQ page tier: one AEAD page per IVF list, decrypted lazily per probe</td></tr>
-    <tr><td><code>UNDERCROFT_TOK_PQ_MIN</code> · <code>UNDERCROFT_FDE_PQ_MIN</code> · <code>UNDERCROFT_FDE_IVF_MIN</code></td><td>off</td><td>Compression and inverted tiers for token matrices and FDE rows</td></tr>
+    <tr><td><code>UNDERCROFT_TOK_PQ_MIN</code> · <code>UNDERCROFT_FDE_PQ_MIN</code></td><td>256</td><td>Row count at which the token-matrix and FDE quantization tiers engage. <strong>Not opt-in</strong>: once the corresponding tier is in use these self-activate, so a recall measurement past 256 rows is measuring PQ-coded artifacts unless you set <code>off</code></td></tr>
+    <tr><td><code>UNDERCROFT_FDE_IVF_MIN</code></td><td>off</td><td>The FDE inverted tier — genuinely opt-in, kept off by its measured containment gate</td></tr>
+    <tr><td><code>UNDERCROFT_SEARCH_TRACE</code></td><td>unset</td><td>Per-phase search timing to stderr — the instrument that located this project's own search hotspot. <strong>Presence-triggered</strong>: any value turns it ON, including <code>0</code> and <code>off</code>; unset it to turn it off</td></tr>
     <tr><td><code>UNDERCROFT_FDE_REPS</code> · <code>_KSIM</code> · <code>_DPROJ</code> · <code>_NPROBE</code> · <code>_SEED</code></td><td>tuned</td><td>FDE construction and probe parameters</td></tr>
   </tbody>
 </table>
@@ -1864,9 +1867,9 @@
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td>hashed n-gram</td><td><code>onnx</code> or <code>ort</code> for a neural embedder (feature-gated builds). <strong>Required for cross-lingual retrieval — and since the script-disjoint fusion reweight, sufficient</strong>: pairs sharing no letter script take the fusion ceiling automatically (pairwise, byte-readable, never language-ID), measuring 95–100% R@5 at the default weight on FLORES-200 (was 36–44%; full tables in CHANGELOG)</td></tr>
+    <tr><td><code>UNDERCROFT_EMBEDDER</code></td><td><code>hash</code> — hashed n-gram</td><td><code>hash</code> · <code>http</code> · <code>onnx</code> · <code>ort</code>. <code>http</code> is a served model and needs <strong>no feature-gated build</strong> (see <code>UNDERCROFT_EMBED_URL</code> below); <code>onnx</code>/<code>ort</code> run in-process. <strong>Required for cross-lingual retrieval — and since the script-disjoint fusion reweight, sufficient</strong>: pairs sharing no letter script take the fusion ceiling automatically (pairwise, byte-readable, never language-ID), measuring 95–100% R@5 at the default weight on FLORES-200 (was 36–44%; full tables in CHANGELOG)</td></tr>
     <tr><td><code>UNDERCROFT_ONNX_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>User-supplied embedding model files</td></tr>
-    <tr><td><code>UNDERCROFT_RERANKER</code></td><td>unset — no second stage</td><td><code>onnx</code> · <code>ort</code> · <code>colbert</code> · <code>colbert-ort</code></td></tr>
+    <tr><td><code>UNDERCROFT_RERANKER</code></td><td>unset — no second stage</td><td><code>onnx</code> · <code>ort</code> · <code>colbert</code> · <code>colbert-ort</code>. The two ColBERT values are <strong>single-vault only</strong>; <code>serve-http</code> refuses them and names the fix</td></tr>
     <tr><td><code>UNDERCROFT_RERANK_TOP_N</code></td><td>50</td><td>Candidates the cross-encoder rescores — a latency cap (one forward pass each)</td></tr>
 <tr><td><code>UNDERCROFT_LATE_TOP_N</code></td><td>200</td><td>Candidates late interaction rescores — a depth, not a latency cap (MaxSim is arithmetic). Falls back to <code>UNDERCROFT_RERANK_TOP_N</code></td></tr>
 <tr><td><code>UNDERCROFT_EMBED_URL</code></td><td>unset</td><td>Embeddings endpoint for <code>UNDERCROFT_EMBEDDER=http</code>. Unset ⇒ nothing is contacted. <strong>TLS or loopback only</strong>: cleartext <code>http</code> to a non-loopback host is refused at construction, no override — the compose <code>embeddings-tls</code> terminator ships the required infra. The endpoint itself still reads drawer text in plaintext (stated at construction)</td></tr>
@@ -1880,7 +1883,7 @@
 <tr><td><code>UNDERCROFT_EMBED_DIM</code></td><td>probed</td><td>Declare the dimension to skip the probe embed at construction</td></tr>
     <tr><td><code>UNDERCROFT_RERANK_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Reranker model files</td></tr>
     <tr><td><code>UNDERCROFT_COLBERT_MODEL</code> · <code>_QUERY_MODEL</code> · <code>_TOKENIZER</code> · <code>_NAME</code></td><td>unset</td><td>Late-interaction encoder exports</td></tr>
-    <tr><td><code>UNDERCROFT_ORT_POOL</code></td><td>1</td><td>ONNX Runtime session-pool size</td></tr>
+    <tr><td><code>UNDERCROFT_ORT_POOL</code></td><td>cores</td><td>ONNX Runtime session-pool size. Defaults to <code>available_parallelism()</code>, and the pool holds <strong>one model copy per slot</strong> — size RAM for cores, not for one</td></tr>
     <tr><td><code>UNDERCROFT_FORCE_EMBEDDER</code></td><td>unset</td><td>Override the identity recorded in a vault — changes what its vectors mean; use only when re-embedding</td></tr>
   </tbody>
 </table>

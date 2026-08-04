@@ -8,6 +8,9 @@ mod assertion;
 mod http;
 mod i18n;
 mod mcp;
+mod parity;
+mod refine;
+mod search;
 mod tenant;
 
 use anyhow::{bail, Context, Result};
@@ -17,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use i18n::{fill, tr};
 use undercroft_core::normalize::mode_for_path;
-use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer, MAX_CONTENT_BYTES};
+use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer};
 use undercroft_store::{PalaceStore, SearchOptions};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
@@ -93,6 +96,15 @@ enum Command {
         /// never deleted or hidden.
         #[arg(long)]
         supersedes: Option<String>,
+        /// Declared record kind, from the closed vocabulary
+        /// (question|preference|decision|event|procedure|statement).
+        /// Absent is always valid — the label is declared, never inferred.
+        /// `search --kind` shipped without this, so the CLI could FILTER
+        /// by a label it had no way to write, and a kind-filtered search
+        /// (which excludes kind-less drawers by design) silently omitted
+        /// everything the CLI had written.
+        #[arg(long)]
+        kind: Option<String>,
         /// Provenance claim: which agent wrote this (recorded and
         /// tamper-covered, never a trust boundary)
         #[arg(long)]
@@ -145,13 +157,30 @@ enum Command {
         /// candidate competition; unassigned wings count as standard.
         #[arg(long)]
         min_trust: Option<String>,
+        /// Language of the stored text, declared not detected: en, de, nl,
+        /// it, es, fr, pt, tr, ru, el, hi, ka, ko. Reaches word forms one
+        /// script cannot settle — German -er takes Kind→Kinder, and the
+        /// Romance/Dutch/Turkish tables need saying too
+        #[arg(long)]
+        language: Option<String>,
         /// Max results
-        #[arg(short = 'n', long, default_value_t = 5)]
+        #[arg(short = 'n', long, default_value_t = search::DEFAULT_LIMIT)]
         limit: usize,
         /// Rank to continue from: ranks [offset, offset+limit) of the same
         /// ranking a single deeper call would produce
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// RFC 3339 instant to rank as of — repeat the one the previous page
+        /// printed, so every page slices ONE ranking. Without it each call
+        /// re-measures recency against a fresh clock and pages can repeat or
+        /// skip hits
+        #[arg(long)]
+        ranked_at: Option<String>,
+        /// Soft cap on how many results may come from any single room, so an
+        /// answer spanning several sessions is not starved by the most
+        /// verbose one. Leftover slots refill in score order
+        #[arg(long)]
+        room_cap: Option<usize>,
         /// Retrieval backend: local (scan), or a remote vector index
         /// (qdrant | chroma | pgvector) used as an untrusted accelerator —
         /// results are always re-verified and re-ranked locally
@@ -272,7 +301,10 @@ enum Command {
         port: u16,
         #[arg(long, default_value = "default")]
         vault: String,
-        /// Expose recall without write access
+        /// Expose recall without write access. A posture on the whole
+        /// process, not a route filter: both stores it opens (MCP and each
+        /// /v1 tenant vault) are opened read-only, so no embedder migration
+        /// runs and UNDERCROFT_READ_AUDIT records nothing
         #[arg(long)]
         read_only: bool,
     },
@@ -831,13 +863,35 @@ fn build_export_payload(
 const INGEST_BATCH: usize = 256;
 
 /// Flush drawers through the store's single-transaction bulk path in
-/// bounded chunks. Returns how many were newly created.
-fn upsert_batched(store: &mut undercroft_store::PalaceStore, drawers: &[Drawer]) -> Result<usize> {
-    let mut created = 0;
+/// bounded chunks, accumulating the per-batch outcomes so a caller can
+/// report the diverted count as well as the created one.
+fn upsert_batched(
+    store: &mut undercroft_store::PalaceStore,
+    drawers: &[Drawer],
+) -> Result<undercroft_store::BulkOutcome> {
+    let mut total = undercroft_store::BulkOutcome::default();
     for chunk in drawers.chunks(INGEST_BATCH) {
-        created += store.upsert_many(chunk)?;
+        let out = store.upsert_many(chunk)?;
+        total.created += out.created;
+        total.quarantined += out.quarantined;
     }
-    Ok(created)
+    Ok(total)
+}
+
+/// The line every bulk ingest prints when the screen diverted part of the
+/// batch. `undercroft import` printed "imported 500" while an arbitrary
+/// number of those drawers sat in `quarantine-pending` — unretrievable by
+/// any search, and invisible unless the operator separately thought to run
+/// `admission list`. Nothing is printed when nothing was diverted, so the
+/// default (screening off) output is byte-identical.
+fn report_quarantined(quarantined: usize) {
+    if quarantined > 0 {
+        println!(
+            "{quarantined} of these tripped the admission screen and were quarantined \
+             pending review — they are NOT retrievable where they were filed. \
+             Review with `undercroft admission list`."
+        );
+    }
 }
 
 fn data_dir(cli: &Cli) -> PathBuf {
@@ -862,16 +916,44 @@ fn manager(cli: &Cli) -> Result<VaultManager> {
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
 
+/// Whether a store this process opens is allowed to write to the vault.
+///
+/// A required argument on [`open_store_as`], not a defaulted flag: the
+/// `serve-http --read-only` process opens TWO handles on the same vault (one
+/// for `/mcp`, one per tenant vault inside `Tenancy`), and for a while only
+/// the second one honoured the flag — so a "read-only" server re-embedded
+/// every drawer on the `--vault` vault at start-up (a bulk write, plus
+/// dropping the PQ/IVF tables) and, under `UNDERCROFT_READ_AUDIT=chain`,
+/// appended a chain record per `/mcp` search. Whether the vault was written
+/// depended on which port path opened it. Making the posture something a
+/// caller must state is what keeps the two handles from drifting apart again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Posture {
+    ReadWrite,
+    ReadOnly,
+}
+
 fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
+    open_store_as(cli, vault, Posture::ReadWrite)
+}
+
+fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
     let mgr = manager(cli)?;
     let v = mgr.unlock(vault)?;
+    // One place decides what the posture means, so every embedder reaches the
+    // same two opens. `open_read_only` declines the embedder migration (warn
+    // and serve, the replica precedent) and force-disables read auditing.
+    let open = |v: Vault, e: Box<dyn undercroft_core::embed::Embedder + Send>| match posture {
+        Posture::ReadOnly => PalaceStore::open_read_only(v, e),
+        Posture::ReadWrite => PalaceStore::open_with_embedder(v, e),
+    };
     let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
         Ok("onnx") => {
             #[cfg(feature = "onnx")]
             {
                 let embedder = undercroft_embed_onnx::from_env()
                     .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
-                PalaceStore::open_with_embedder(v, Box::new(embedder))?
+                open(v, Box::new(embedder))?
             }
             #[cfg(not(feature = "onnx"))]
             bail!(
@@ -884,7 +966,7 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
             {
                 let embedder = undercroft_embed_ort::embedder_from_env()
                     .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
-                PalaceStore::open_with_embedder(v, Box::new(embedder))?
+                open(v, Box::new(embedder))?
             }
             #[cfg(not(feature = "ort"))]
             bail!(
@@ -898,9 +980,9 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
         Ok("http") => {
             let embedder = undercroft_llm::HttpEmbedder::from_env()
                 .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
-            PalaceStore::open_with_embedder(v, Box::new(embedder))?
+            open(v, Box::new(embedder))?
         }
-        Ok("hash") | Ok("") | Err(_) => PalaceStore::open(v)?,
+        Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
         Ok(other) => {
             bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, http, onnx, ort)")
         }
@@ -1077,9 +1159,21 @@ fn embedder_factory() -> tenant::EmbedderFactory {
                          (cargo build -p undercroft-cli --features ort)"
                     )
                 }
+                // A model served over HTTP. The CLI resolver has always had
+                // this arm; the server's had not, so `UNDERCROFT_EMBEDDER=http`
+                // worked for `remember` and answered 500 on every `/v1` write
+                // — the served posture unreachable from the surface teams
+                // actually deploy, with the TLS terminator and CA pin shipped
+                // for it. Found by driving the engine as AMB's provider.
+                Ok("http") => {
+                    let embedder = undercroft_llm::HttpEmbedder::from_env().map_err(|e| {
+                        anyhow::anyhow!("connecting to the embeddings endpoint: {e}")
+                    })?;
+                    Ok(Box::new(embedder))
+                }
                 Ok("hash") | Ok("") | Err(_) => Ok(Box::new(undercroft_core::HashEmbedder)),
                 Ok(other) => {
-                    bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx, ort)")
+                    bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, http, onnx, ort)")
                 }
             }
         },
@@ -1365,19 +1459,21 @@ fn main() -> Result<()> {
             room,
             content_date,
             supersedes,
+            kind,
             agent,
             channel,
             session,
         } => {
-            if content.len() > MAX_CONTENT_BYTES {
-                bail!(
-                    "content too large ({} bytes, max {})",
-                    content.len(),
-                    MAX_CONTENT_BYTES
-                );
-            }
+            // Checked here as well as at the store's write choke point, so
+            // an over-sized argument fails before a vault is unlocked. The
+            // choke point is what makes the bound the ENGINE's rather than
+            // this command's — MCP and /v1 had no check at all.
+            undercroft_core::validate_content_len(content)?;
             undercroft_core::validate_name(wing, "wing")?;
             undercroft_core::validate_name(room, "room")?;
+            if let Some(k) = kind.as_deref() {
+                undercroft_core::validate_kind(k)?;
+            }
             let mut store = open_store(&cli, vault)?;
             let normalized = normalize_content(content);
             if normalized.is_empty() {
@@ -1392,6 +1488,7 @@ fn main() -> Result<()> {
             let idx = store.next_append_index()? as u32;
             let drawer = Drawer::new(wing, room, normalized, None, idx, "cli")
                 .with_content_date(content_date.clone())
+                .with_kind(kind.clone())
                 .with_supersedes(supersedes.clone())
                 .with_provenance(agent.clone(), channel.clone(), session.clone());
             // Screened: a diverted save must not print "filed in <wing>",
@@ -1467,47 +1564,73 @@ fn main() -> Result<()> {
             room,
             kind,
             min_trust,
+            language,
             limit,
             offset,
+            ranked_at,
+            room_cap,
             backend,
         } => {
             let store = open_store(&cli, vault)?;
+            // The instant the ranking is measured as of. Resolved HERE, printed
+            // in the continuation line, and repeatable — because `--offset`
+            // without it slices two different rankings: recency decay is
+            // measured against a fresh clock on every call, so hits repeat
+            // across pages or vanish between them. This surface shipped the
+            // offset and not the clock that makes it mean anything.
+            // A value that does not parse is said out loud, never a silent
+            // fall-back to the host clock.
+            let ranked_at = match ranked_at.as_deref() {
+                Some(s) => {
+                    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                        .map_err(|_| anyhow::anyhow!("--ranked-at must be an RFC 3339 instant"))?
+                }
+                None => time::OffsetDateTime::now_utc(),
+            };
             let opts = SearchOptions {
-                morph_lang: Default::default(),
+                // Whose inflection applies, declared by the caller and parsed
+                // from the same vocabulary MCP and `/v1` use. Undeclared, the
+                // CLI reached only what the script settles (Greek, Georgian,
+                // Hangul, Cyrillic, Devanagari) and the common suffix set —
+                // German `-er` and the Romance/Dutch/Turkish tables need
+                // saying, and this surface had no way to say them.
+                morph_lang: undercroft_store::MorphLang::declared(language.as_deref()),
                 wing: wing.clone(),
                 room: room.clone(),
                 kind: kind.clone(),
                 min_trust: min_trust.clone(),
                 limit: *limit,
+                room_cap: *room_cap,
                 offset: *offset,
-                ..Default::default()
+                ranked_at: Some(ranked_at),
             };
             let hits = if backend == "local" {
                 store.search(query, &opts)?
             } else {
+                // A remote index answers through the legacy fusion and its own
+                // candidate loop, which consults neither the declared
+                // morphology nor the per-room cap. Refused rather than
+                // ignored: a declaration this path cannot honour must not look
+                // like one it did — that silence is the drift, one flag over.
+                if language.is_some() || room_cap.is_some() {
+                    bail!(
+                        "--language and --room-cap are not honoured by --backend {backend} \
+                         (the remote path ranks with the legacy fusion); drop the flag or \
+                         search --backend local"
+                    );
+                }
                 let mut index = open_index(backend)?;
                 store.search_with_index(index.as_mut(), query, &opts)?
             };
             if hits.is_empty() {
                 println!("{}", tr("no-matches"));
             }
-            // The unlabeled-rows policy: a kind filter says what it passed
-            // over, so thin labeling is never mistaken for a thin corpus.
-            if kind.is_some() {
-                let n = store.unkinded_in_scope(wing.as_deref(), room.as_deref())?;
-                if n > 0 {
-                    println!(
-                        "({n} in-scope drawers carry no declared kind and were not considered)"
-                    );
-                }
-            }
-            // The same honesty for a trust floor: say how many wings it
-            // kept out of the competition.
-            if let Some(floor) = min_trust.as_deref() {
-                let n = store.trust_excluded_wing_count(floor)?;
-                if n > 0 {
-                    println!("({n} wing(s) below the trust floor were not considered)");
-                }
+            // What this request's own filters kept out of the competition
+            // (docs/LABELS.md): a thin answer under a `kind` filter or a trust
+            // floor must not be mistaken for a thin corpus. Counted by the same
+            // helper every surface uses.
+            for note in search::Exclusions::measure(&store, &opts)?.notes() {
+                println!("{note}");
             }
             for (i, hit) in hits.iter().enumerate() {
                 println!(
@@ -1520,6 +1643,28 @@ fn main() -> Result<()> {
                     hit.drawer.meta.room,
                     snippet(&hit.drawer.content, query, 100),
                     hit.drawer.meta.filed_at
+                );
+                // The id, on its own line so the hit line keeps its shape.
+                // `drawer get|update|delete`, `forget` and `admission` all take
+                // an id this surface never printed, so acting on a search
+                // result meant hunting for it through `drawer list`. The line
+                // also names the door back to the verbatim text, which the
+                // 100-character snippet above is not.
+                println!(
+                    "   id {} — undercroft drawer get {}",
+                    hit.drawer.id, hit.drawer.id
+                );
+            }
+            // A full page may have more below it; say exactly how to continue,
+            // clock included. A short page means the ranking is exhausted and
+            // says nothing.
+            if hits.len() == *limit {
+                let echo = ranked_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default();
+                println!(
+                    "— deeper results may exist: repeat with --offset {} --ranked-at {echo}",
+                    offset + hits.len()
                 );
             }
         }
@@ -1560,13 +1705,13 @@ fn main() -> Result<()> {
             );
             // Drawer supersession links are part of the vault's integrity
             // story: a receipted link that fails its HMAC is tampering,
-            // reported with the same severity as a bad record.
-            let links = store.verify_supersessions()?;
-            let mut sup_tampered = 0usize;
+            // reported with the same severity as a bad record. The leg now
+            // rides inside the report (one walk, and `report.ok()` covers
+            // it on every surface); this only renders it.
+            let links = &report.supersessions;
             if !links.is_empty() {
                 use undercroft_store::ReceiptVerdict as V;
                 let count = |v: V| links.iter().filter(|l| l.verdict == v).count();
-                sup_tampered = count(V::Tampered);
                 println!(
                     "supersessions:   {} verified · {} source-changed · {} dangling · \
                      {} unreceipted · {} tampered",
@@ -1574,13 +1719,13 @@ fn main() -> Result<()> {
                     count(V::SourceChanged),
                     count(V::Dangling),
                     count(V::Unreceipted),
-                    sup_tampered
+                    report.tampered_supersessions()
                 );
                 for l in links.iter().filter(|l| l.verdict == V::Tampered) {
                     println!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
                 }
             }
-            if report.ok() && sup_tampered == 0 {
+            if report.ok() {
                 println!("{}", tr("verify-ok"));
             } else {
                 println!("{}", tr("verify-failed"));
@@ -1621,7 +1766,22 @@ fn main() -> Result<()> {
                 .with_context(|| format!("reading {}", file.display()))?;
             let att: undercroft_store::ForgetAttestation = serde_json::from_str(&raw)
                 .with_context(|| format!("{} is not an attestation", file.display()))?;
-            store.verify_forget_attestation(&att)?;
+            // Exit 2 is this CLI's integrity verdict — the code `verify`
+            // and `repair` already reserve for "tampering detected". A
+            // forged signature or a tag that is not this vault's exited 1
+            // here, the same code as "no such file", so a compliance
+            // script that retries run errors retried a forged document
+            // and ignored it. Only the attestation verdict takes exit 2;
+            // an I/O or SQLite failure stays an ordinary error.
+            if let Err(e) = store.verify_forget_attestation(&att) {
+                match e {
+                    undercroft_store::StoreError::Attestation(why) => {
+                        println!("ATTESTATION FAILED: {why}");
+                        std::process::exit(2);
+                    }
+                    other => return Err(other.into()),
+                }
+            }
             println!(
                 "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
                  {}… and {}…, nothing else changed{}",
@@ -1846,11 +2006,24 @@ fn main() -> Result<()> {
             vault,
             read_only,
         } => {
-            let store = open_store(&cli, vault)?;
+            // Both handles this process opens take the SAME posture. The
+            // `/mcp` store used to be opened read-write regardless, so a
+            // `--read-only` server migrated embeddings and audited reads on
+            // the very vault the flag exists to protect.
+            let posture = if *read_only {
+                Posture::ReadOnly
+            } else {
+                Posture::ReadWrite
+            };
+            let store = open_store_as(&cli, vault, posture)?;
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only);
+            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only)
+                // `/v1` must know which vault the `/mcp` handle above holds:
+                // rotating or deleting it from under a second live handle is
+                // the one thing two handles in one process cannot survive.
+                .with_mcp_vault(vault.clone());
             if let Some(reranker) = reranker_factory()? {
                 tenancy = tenancy.with_reranker(reranker);
             }
@@ -2056,9 +2229,17 @@ fn main() -> Result<()> {
                     None => v,
                 };
                 let drawer = if v.get("meta").is_some() {
-                    // Native undercroft export: full Drawer JSON.
-                    serde_json::from_value::<Drawer>(v)
-                        .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?
+                    // Native undercroft export: full Drawer JSON — including
+                    // a `meta.added_by` this payload wrote itself. Re-stamped
+                    // with the importing surface, because that field is the
+                    // key the admission screen's trusted-source auto-admit
+                    // rides and it is only sound while a caller cannot set
+                    // it (see `PalaceStore::import_stamp`); a bundle
+                    // claiming `added_by: "cli"` otherwise walks past the
+                    // screen on any vault that declares `cli` trusted.
+                    let d = serde_json::from_value::<Drawer>(v)
+                        .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?;
+                    undercroft_store::PalaceStore::import_stamp(&d, undercroft_store::IMPORT_SURFACE)
                 } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
                     // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
                     let meta = v.get("metadata").cloned().unwrap_or_default();
@@ -2075,7 +2256,7 @@ fn main() -> Result<()> {
                         meta.get("chunk_index")
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0) as u32,
-                        "import",
+                        undercroft_store::IMPORT_SURFACE,
                     )
                     // Carried across an import rather than reset to the
                     // import's own date: a mempalace export records when the
@@ -2099,7 +2280,7 @@ fn main() -> Result<()> {
                 batch.push(drawer);
             }
             let imported = batch.len();
-            upsert_batched(&mut store, &batch)?;
+            let bulk = upsert_batched(&mut store, &batch)?;
             // KG and tunnel records go after drawers so receipts can bind
             // against drawers arriving in the same payload.
             for (name, etype) in &entity_batch {
@@ -2125,6 +2306,7 @@ fn main() -> Result<()> {
                     ]
                 )
             );
+            report_quarantined(bulk.quarantined);
             if kg_facts + kg_entities + tunnels > 0 {
                 println!(
                     "knowledge graph: {kg_facts} fact(s) (receipts re-keyed), \
@@ -2344,8 +2526,19 @@ fn main() -> Result<()> {
             let mut store = open_store(&cli, vault)?;
             match action {
                 DiaryAction::Write { agent, entry } => {
-                    let id = store.diary_write(agent, entry)?;
-                    println!("Diary entry {id} written for agent '{agent}'");
+                    // Screened like every other save: a diverted entry must
+                    // not be reported as written for the agent, because
+                    // `diary read` will not find it.
+                    let out = store.diary_write(agent, entry, "cli")?;
+                    if out.quarantined {
+                        println!(
+                            "Quarantined pending review: the entry tripped the admission \
+                             screen and is NOT readable in agent '{agent}'s diary. \
+                             Review with `undercroft admission list`."
+                        );
+                    } else {
+                        println!("Diary entry {} written for agent '{agent}'", out.id);
+                    }
                 }
                 DiaryAction::Read { agent, limit } => {
                     let entries = store.diary_read(agent, *limit)?;
@@ -2584,9 +2777,17 @@ fn main() -> Result<()> {
             match action {
                 BackupAction::Create { vault } => {
                     // Verify before snapshotting — never archive a bad palace.
+                    // The refusal is an integrity verdict, so it exits 2
+                    // like `verify` and `repair` rather than 1: a script
+                    // that treats 1 as "retry the run" must not retry a
+                    // vault that failed its HMACs.
                     let store = open_store(&cli, vault)?;
                     if !store.verify()?.ok() {
-                        bail!("refusing to back up vault '{vault}': integrity verification failed");
+                        println!(
+                            "refusing to back up vault '{vault}': integrity verification \
+                             failed (run `undercroft verify --vault {vault}` for the detail)"
+                        );
+                        std::process::exit(2);
                     }
                     drop(store);
                     let stamp = time::OffsetDateTime::now_utc()
@@ -2692,6 +2893,7 @@ fn mine_files(
         bail!("no minable text files under {}", path.display());
     }
     let mut drawers = 0usize;
+    let mut screened = 0usize;
     let mut batch: Vec<Drawer> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -2717,12 +2919,13 @@ fn mine_files(
             ));
             drawers += 1;
             if batch.len() >= INGEST_BATCH {
-                upsert_batched(store, &batch)?;
+                screened += upsert_batched(store, &batch)?.quarantined;
                 batch.clear();
             }
         }
     }
-    upsert_batched(store, &batch)?;
+    screened += upsert_batched(store, &batch)?.quarantined;
+    report_quarantined(screened);
     Ok((files.len(), drawers))
 }
 
@@ -2736,6 +2939,7 @@ fn mine_convos(
         bail!("no .jsonl transcripts under {}", path.display());
     }
     let mut drawers = 0usize;
+    let mut screened = 0usize;
     let mut batch: Vec<Drawer> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -2766,12 +2970,13 @@ fn mine_convos(
             );
             drawers += 1;
             if batch.len() >= INGEST_BATCH {
-                upsert_batched(store, &batch)?;
+                screened += upsert_batched(store, &batch)?.quarantined;
                 batch.clear();
             }
         }
     }
-    upsert_batched(store, &batch)?;
+    screened += upsert_batched(store, &batch)?.quarantined;
+    report_quarantined(screened);
     Ok((files.len(), drawers))
 }
 
@@ -2794,6 +2999,7 @@ fn sweep_path(
     }
     let mut filed = 0usize;
     let mut skipped = 0usize;
+    let mut screened = 0usize;
     let mut batch: Vec<Drawer> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for file in &files {
@@ -2830,12 +3036,13 @@ fn sweep_path(
             );
             filed += 1;
             if batch.len() >= INGEST_BATCH {
-                upsert_batched(store, &batch)?;
+                screened += upsert_batched(store, &batch)?.quarantined;
                 batch.clear();
             }
         }
     }
-    upsert_batched(store, &batch)?;
+    screened += upsert_batched(store, &batch)?.quarantined;
+    report_quarantined(screened);
     Ok((files.len(), filed, skipped))
 }
 

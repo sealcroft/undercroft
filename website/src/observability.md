@@ -66,7 +66,10 @@ Exposed series (all `undercroft_*`):
 
 - **Counters** — `search_total{fusion}`, `search_prefiltered_total`,
   `drawer_writes_total{outcome}`, `drawer_deletes_total`,
-  `kg_writes_total{kind}`, `chain_commits_total`,
+  `kg_writes_total{kind}`, `chain_commits_total` (audit-chain RECORDS,
+  not manifest anchors — a 256-drawer bulk transaction anchors once and
+  advances this by 256, and records appended without an anchor, such as
+  read-audit records, are counted by the next anchor),
   `hmac_verify_failures_total{surface}`, `vault_opens_total`,
   `http_requests_total{route,status}`, `auth_rejections_total{kind}`.
 - **Histograms** — `search_duration_seconds`, `search_hits`,
@@ -197,9 +200,14 @@ Frames:
   kg_active, tunnels, chain_height, db_bytes, sealed}`. Emitted on the
   sampler tick (default 2s, `UNDERCROFT_SAMPLE_INTERVAL_MS`), and only for
   vaults with an active subscriber.
-- `event: drawer-saved` / `drawer-deleted` / `search` / `kg-triple` /
-  `chain-commit` — discrete pings carrying vault + (for hmac-only vaults)
-  wing/room. A comment heartbeat (`: ping`) every 15s keeps the
+- `event: drawer-saved` / `drawer-quarantined` / `drawer-deleted` /
+  `search` / `kg-triple` / `chain-commit` — discrete pings carrying vault +
+  (for hmac-only vaults) wing/room. `drawer-quarantined` is a write the
+  admission screen DIVERTED: it carries the intended wing/room and the
+  tier-1 signal codes (a closed vocabulary — never the flagged text, never
+  its offsets), and it is deliberately not a `drawer-saved` into a wing
+  named `quarantine-pending`. `chain-commit` carries `records`, how many
+  chain records that anchor committed. A comment heartbeat (`: ping`) every 15s keeps the
   connection detectably alive.
 
 Each connection is served on its own thread (the request is handed off so

@@ -357,6 +357,29 @@ pub(crate) fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: b
     emit(vault, "drawer-saved", data);
 }
 
+pub(crate) fn event_drawer_quarantined(
+    vault: &str,
+    intended_wing: &str,
+    room: &str,
+    signals: &[&str],
+    sealed: bool,
+) {
+    // Signal codes are a closed vocabulary, so they are metadata and ship
+    // even for a sealed vault; the intended location is a name and is
+    // suppressed with every other name.
+    let data = if sealed {
+        serde_json::json!({ "vault": vault, "signals": signals })
+    } else {
+        serde_json::json!({
+            "vault": vault,
+            "intended_wing": intended_wing,
+            "room": room,
+            "signals": signals,
+        })
+    };
+    emit(vault, "drawer-quarantined", data);
+}
+
 pub(crate) fn event_drawer_deleted(vault: &str) {
     emit(
         vault,
@@ -384,8 +407,12 @@ pub(crate) fn event_kg_triple(vault: &str) {
     emit(vault, "kg-triple", serde_json::json!({ "vault": vault }));
 }
 
-pub(crate) fn event_chain_commit(vault: &str) {
-    emit(vault, "chain-commit", serde_json::json!({ "vault": vault }));
+pub(crate) fn event_chain_commit(vault: &str, records: u64) {
+    emit(
+        vault,
+        "chain-commit",
+        serde_json::json!({ "vault": vault, "records": records }),
+    );
 }
 
 pub(crate) fn event_hmac_fail(vault: &str, surface: &str) {

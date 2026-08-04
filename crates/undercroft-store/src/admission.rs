@@ -54,6 +54,52 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
+/// What one just-written drawer means on the live event feed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SaveEvent<'a> {
+    /// Filed where it was headed.
+    Saved,
+    /// The admission screen diverted it. Carries where it was HEADED
+    /// (it is in [`QUARANTINE_WING`] now) and the tier-1 signal codes —
+    /// a closed vocabulary, so they are metadata a live feed may carry;
+    /// the offsets beside them are not published.
+    Quarantined {
+        intended_wing: &'a str,
+        codes: Vec<&'a str>,
+    },
+}
+
+/// Classify a written drawer by WHERE IT LANDED, not by which call site
+/// wrote it.
+///
+/// Exact rather than heuristic: the single write choke point refuses
+/// [`QUARANTINE_WING`] to any drawer without admission signals, so a row
+/// in that wing was put there by the screen. Deciding this per call site
+/// is what produced the split the monitor showed — the single-save paths
+/// returned before emitting anything (silence for MCP, `/v1` and CLI
+/// `remember`), while the bulk paths emitted an ordinary `drawer-saved`
+/// whose only tell was a wing named `quarantine-pending`.
+pub(crate) fn save_event(drawer: &Drawer) -> SaveEvent<'_> {
+    if drawer.meta.wing != QUARANTINE_WING {
+        return SaveEvent::Saved;
+    }
+    SaveEvent::Quarantined {
+        // A diverted drawer always records where it was going; fall back
+        // to the wing itself rather than inventing a destination.
+        intended_wing: drawer
+            .meta
+            .intended_wing
+            .as_deref()
+            .unwrap_or(&drawer.meta.wing),
+        codes: drawer
+            .meta
+            .admission_signals
+            .iter()
+            .map(|s| s.code.as_str())
+            .collect(),
+    }
+}
+
 impl PalaceStore {
     /// Whether admission screening diverts flagged writes on this store.
     pub fn admission_on(&self) -> bool {
@@ -274,9 +320,16 @@ impl PalaceStore {
         // human ruling IS the override — re-screening would trap every
         // allowed drawer forever.
         let embedding = self.embedder.embed(&restored.content);
-        self.write_drawer(&restored, embedding)?;
+        // The human ruling IS the override — stated, not implied.
+        self.write_drawer(
+            &restored,
+            embedding,
+            crate::Screen::Bypass(crate::BypassReason::OperatorRuling),
+        )?;
         self.admission_ruling(id, "allowed", Some(&restored_id))?;
-        self.delete_drawer(id)?;
+        // `Ruled`: the verdict is already in the chain one line above, which
+        // is exactly what the plain delete path refuses to proceed without.
+        self.delete_drawer_ruled(id, crate::manage::PendingEvidence::Ruled)?;
         Ok(restored_id)
     }
 
@@ -294,7 +347,9 @@ impl PalaceStore {
         // Verifies it exists and is actually quarantined before ruling.
         self.quarantined(id)?;
         self.admission_ruling(id, "denied", None)?;
-        self.forget_with_proof(&[id.to_string()])
+        // `Ruled`: the deny verdict is committed; the attested destruction
+        // is the effect of a ruling, not an ordinary forget.
+        self.forget_with_proof_ruled(&[id.to_string()], crate::manage::PendingEvidence::Ruled)
     }
 
     /// Append a ruling record without acting on it — the crash-window
@@ -313,7 +368,7 @@ impl PalaceStore {
     fn quarantined(&self, id: &str) -> Result<Drawer, StoreError> {
         let d = self
             .get(id)?
-            .ok_or_else(|| StoreError::Invalid(format!("no drawer {id}")))?;
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
         if d.meta.wing != QUARANTINE_WING {
             return Err(StoreError::Invalid(format!(
                 "{id} is not in the quarantine wing"
