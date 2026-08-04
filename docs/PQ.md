@@ -16,7 +16,7 @@ asymmetry-of-impact is the whole posture:
 | content/artifact sealing | XChaCha20-Poly1305, 256-bit keys | ~128-bit effective under Grover — the accepted PQ bar |
 | record tags, audit chain, tokens, attestation replay | HMAC-SHA256 | PQ-safe (no useful quantum speedup beyond Grover) |
 | key derivation | HKDF-SHA256, Argon2id | PQ-safe |
-| dedup fingerprints, blind indexes | keyed HMAC (truncated) | PQ-safe |
+| dedup fingerprints, blind indexes, audited read-query fingerprints | keyed HMAC (truncated) | PQ-safe |
 | **export-bundle recipient encryption** | was X25519 alone | **the one vulnerable spot — closed, hybrid since C3.4** |
 | bundle/attestation signatures | Ed25519 | quantum-forgeable *in the future*; not a harvest risk (see below) |
 
@@ -75,9 +75,17 @@ signed manifest today does not let a future adversary alter what you
 verified in the past, it lets them mint *new* forgeries once a CRQC
 exists. That is a real but later problem, and the migration path
 (ML-DSA alongside Ed25519, the same hybrid pattern) is recorded here
-as future work rather than silently omitted. Release artifacts ship
-with SHA-256 checksums (PQ-safe) and GitHub's provenance; there is no
-separate code-signing key to migrate.
+as future work rather than silently omitted.
+
+Both signing paths are **optional and operator-held**, which bounds the
+exposure: a bundle manifest is signed only when the exporter supplies
+an identity, a forgetting attestation only when `forget --sign` is
+given, and an unsigned document is imported or verified as
+unattested-and-said-so rather than as trusted. The release path carries
+no signing key at all — every binary asset ships beside a SHA-256
+checksum (PQ-safe), and the workflow emits no build-provenance
+attestation today, so there is nothing there to migrate and nothing
+there to over-claim either.
 
 ## The honest boundary
 
