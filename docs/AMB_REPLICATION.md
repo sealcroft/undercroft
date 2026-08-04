@@ -123,7 +123,7 @@ Verified by reading the adapters. Prompt **text** is deliberately absent.
 | Dataset | Document unit | Answer prompt | Judge prompt | Skips |
 |---|---|---|---|---|
 | `locomo` | one session of one conversation | overrides | overrides | category 5 (adversarial) |
-| `longmemeval` | one haystack session of one question | overrides | base fallback (its own override is a dead stub returning `None`) | none |
+| `longmemeval` | one haystack session of one question | overrides | **per-question-type, via `get_judge_prompt_fn`** — NOT the base fallback | none |
 | `personamem` | one session of a shared context | overrides (MCQ template) | **none — no judge** | none |
 | `lifebench` | one session of one user (one calendar day) | overrides | overrides | none — including its `unanswerable` category |
 | `beam` | one session, sub-chunked to ~100k chars | overrides | **never called** | none |
@@ -143,20 +143,106 @@ procedure on its first attempt.
   or more sessions. **Consuming the cached `queries.json.gz` avoids this
   entirely**, because the cache already holds AMB's computed value — which is
   the main reason to prefer the cache over re-deriving from raw data.
-* **Category integers are not intuitive.** For LoCoMo: `1` **multi-hop**,
-  `2` temporal, `3` **open-domain**, `4` **single-hop**, `5` adversarial.
-  Getting `1` and `4` backwards silently mislabels every per-category figure —
-  and this document had them backwards, in this very list, while warning about
-  exactly that. Two independent checks settle it: the **counts** (category 4 is
-  by far the largest) and the **evidence statistics** (category 1 carries ~3.1
-  evidence turns over ~2.7 distinct sessions; category 4 carries ~1.1 over
-  1.0 — a single-hop question cannot span three turns in three sessions).
+* **Category integers are not intuitive, and AMB's own label map disagrees
+  with the evidence structure.** What AMB *does* — the only thing that matters
+  for replication — is `_CATEGORY_NAMES` in `dataset/locomo.py`: `1`
+  **single-hop**, `2` temporal, `3` **multi-hop**, `4` **open-domain**, `5`
+  adversarial (skipped). **Use those names.** Consuming the cached
+  `queries.json.gz` gets them for free, because `load_queries` resolves each
+  integer to its name before caching — so the trap cannot bite a run that
+  reads the cache, only one that re-derives the map.
+
+  Recorded because it is real: measured from the cache, the category AMB
+  labels **single-hop** carries **2.67** gold sessions per query, while the
+  one it labels **open-domain** carries exactly **1.00** and is by far the
+  largest (841 of 1,540). A single-hop question cannot span 2.67 sessions,
+  so AMB's `1`/`3`/`4` names look transposed against their own data. That is
+  **AMB's defect to carry, not ours to silently fix**: replicating means
+  using their labels, and any per-category table we publish must footnote
+  this so a reader comparing against LoCoMo's paper is not misled. An earlier
+  version of this document "corrected" the map, which would have made every
+  per-category figure incomparable to the thing it claims to replicate.
 * **`gold_answers` is a list**, and judges may use only its first element.
 * **`retrieval_query`** falls back to the raw question when a dataset does not
   set it; where a dataset *does* set it, retrieving on the raw question is wrong.
 * **Empty context short-circuits.** The runner marks a query incorrect without
   calling the judge when retrieval returned nothing. Reproduce that, or the
-  score is inflated.
+  score is inflated. Note the branch **precedes the MCQ branch**, so it applies
+  to `personamem` too — an empty context is wrong even where no judge exists.
+* **The context string has an exact shape**, built in `modes/rag.py` from the
+  retrieved documents: each document becomes `## Memory <i>` on its own line
+  (1-based) followed by its content, and the blocks are joined by a blank
+  line. Concatenating the drawers any other way changes the prompt.
+* **The answer prompt may take a raw provider response instead of that
+  string.** `locomo`'s `build_rag_prompt` uses the provider's raw response
+  JSON *when the provider returns one*, falling back to the context string
+  otherwise. Our provider returns none, so the fallback is what runs — keep it
+  that way, or the prompt stops matching the run being replicated.
+* **The MCQ answer field is `choice`, not `answer`**, and the letter is
+  normalised (`strip → lowercase → strip "(). " → first character`) on both
+  the model's choice and every gold before comparison. `_score_mcq` checks
+  the answer against **all** gold answers, not just the first.
+* **The `query_timestamp` quirk fires on every LoCoMo query, not just long
+  conversations.** All ten conversations hold 19–32 sessions, so the
+  lexicographic maximum is always `session_9`, and every cached timestamp is
+  that session's date — **3 to 6 months before the conversation actually
+  ends**. The "current date" line LoCoMo injects into the answer prompt is
+  therefore mid-conversation for all 1,540 queries. Reading the cache
+  reproduces this exactly, which is the point: it is AMB's behaviour, and a
+  "corrected" timestamp would be a different benchmark.
+* **Six LoCoMo gold answers are integers, not strings.** Calling a string
+  method on gold crashes or silently reformats; AMB's f-string formatting
+  tolerates them, so coerce with `str()` at the boundary.
+* **Nine LoCoMo queries carry empty `gold_ids`.** Harmless for standard
+  scoring (gold ids are unused outside oracle mode), fatal to any recall
+  metric computed against them.
+* **LoCoMo turns carry image fields.** 1,226 of 5,882 turns hold
+  `blip_caption`/`img_url` keys, serialised into the document content — and
+  sometimes the evidence *is* the caption. Ingest the cached content
+  verbatim; re-serialising only speaker and text drops that evidence.
+* **`personamem` declares no `isolation_unit`**, so AMB ingests all its
+  documents up front and isolates only by `user_id` at retrieval, while
+  `locomo` runs unit-sequentially with memory accumulating across
+  conversations and never reset. Wing-scoped retrieval reproduces both, but
+  the ingest ORDER differs and an order-sensitive system would notice. Note
+  also that personamem's `gold_ids` are *all history before the question*,
+  not evidence annotations — a recall metric against them is meaningless.
+
+---
+
+## 4b. Defects in AMB, and why this procedure reproduces them
+
+Reading the harness closely turned up defects in it. **None of them are fixed
+here, and none of them may be.** A replication's entire value is that its
+number can be set beside theirs; correct a defect and the delta becomes
+unattributable — it could be the memory layer or it could be the fix, and no
+reader can tell which. This document already contains one cautionary example:
+an earlier version "corrected" the category map, which would have made every
+per-category figure incomparable to the thing it claims to replicate.
+
+So: reproduce the behaviour, record the defect, and let the report carry it.
+
+| Defect | Confidence | What it does | What we do |
+|---|---|---|---|
+| **`query_timestamp` is the wrong session's date.** `_session_keys` sorts lexicographically, so the maximum is always `session_9`; every conversation has 19–32 sessions. Their own docstring says "the date of the last session". | Certain — code, comment and data all agree | Fires on **100% of 1,540 queries**. The "current date" handed to the answer model sits **3–6 months before the conversation ends**, while the prompt instructs the model to resolve relative time against it. Distorts the 321 temporal questions most. | Consume the cached value. It IS their value. |
+| **`k` is chosen by the provider, not the harness.** `RAGMode` never passes `k`; bm25/hindsight default to 10, hybrid-search/qdrant to 50. | High | Published rows may compare systems given a **5× different retrieval budget** before any memory-quality difference enters. | Use 10, and state the budget against whichever row is being compared. |
+| **Category labels `1`/`3`/`4` look transposed.** What they label single-hop needs 2.67 evidence sessions (95% span ≥2); what they label open-domain spans exactly 1 in 840 of 841. | Probable, not provable offline — `evidence` may list all mentions rather than required hops, and settling it needs LoCoMo's paper | Their per-category tables are likely mislabeled. No effect on an overall score. | Use their labels. Footnote the anomaly in any per-category table. |
+| **Their CLI crashes on a LoCoMo subset run** — the runner passes `user_ids` to `load_documents`, which LoCoMo's adapter does not accept. | Certain | The README's own smoke recipe raises `TypeError` for this dataset; only full-split or `--oracle` runs avoid the branch. | Run full splits. Do not "repair" it into different document-loading semantics. |
+| Minor: `--llm` is parsed but unused; the README names a different answerer than the code defaults to; `longmemeval.build_judge_prompt` is a dead stub returning `None`; MCQ summaries still record a judge model although no judge ran. | Certain | Documentation drift. The dead stub is what misled **this document** into describing the wrong judge for longmemeval. | Read the code, not the README — including theirs. |
+
+**If you want to know how much a defect costs, measure it — as a second,
+clearly-labeled arm.** Run the faithful configuration first and publish that as
+the AMB-protocol result; then, if it is worth knowing, run one variable changed
+(corrected timestamps, say) and publish it as *ours, not comparable*. The delta
+is then an honest statement about the defect rather than a contaminated
+statement about the memory layer. Never let the corrected arm stand in for the
+faithful one.
+
+**Upstreaming is the other half.** Recording a defect here helps our readers;
+telling AMB helps everyone, and it is the difference between an audit and a
+grudge. That is the operator's call, not this document's — but note the clone
+carries no LICENSE, so a patch may not be redistributable and an issue may be
+the only available venue.
 
 ---
 
@@ -193,6 +279,13 @@ Then, from the cached split:
    the value a faithful run uses. Raising it is a legitimate experiment but it
    is no longer AMB's configuration, so say so in the report.
 
+   **But know whose default you are matching.** `RAGMode` never passes `k`, so
+   the **provider's own default governs**: the bm25 and hindsight baselines
+   take the 10 above, while AMB's hybrid-search/qdrant baseline overrides to
+   **50**. A `k=10` run set beside a published hybrid-search row differs by a
+   10-vs-50 retrieval budget *before* any model difference — name that in the
+   report rather than letting it read as a memory-layer result.
+
    Before choosing `k`, work out **what fraction of one isolation unit it
    actually returns**: divide the drawer count by the number of units. On
    `locomo10` the corpus is ~876 drawers over 10 conversations, so ~88 per
@@ -217,6 +310,17 @@ file the answerer was given, which would have voided the run.
 
 Use the workflow tool. Batch the queries (20 per agent is comfortable) and
 pipeline them, so a batch is judged as soon as it is answered.
+
+**Batching is a declared deviation, not a free optimisation.** AMB answers
+**one query per schema-enforced call**, so nothing can travel between two
+questions. An agent holding twenty questions and their contexts can carry
+information across them — and because batches mix conversations, that is
+information AMB's isolation makes unavailable. Answering one query per agent
+would remove the deviation and cost 1,540 agents on `locomo10`; batching is
+the practical choice, so it must be **named in the report's
+non-comparability list** ([§7](#7-reporting)) and mitigated by telling each
+agent to treat every query in its batch as independent and to use only that
+query's own context.
 
 ### Pin the model, for both roles
 
@@ -277,6 +381,17 @@ answer ids did. Reject any verdict whose id is not in that batch's answer set,
 them. Tell the judge explicitly not to pad, and tell the answerer to count the
 lines in its file — but verify anyway, because instructions are not guarantees.
 
+**Pin the verdict format and the denominator, or two careful people produce
+different bookkeeping from the same run.** The judge's output schema is
+`correct` (boolean) and `reason` (string), both required — that is the schema
+in `judge.py`, and every per-dataset judge prompt family embeds the same
+contract. A subagent replying in prose instead of that shape is a **parse
+failure, not a verdict**: reject it exactly as you reject a fabricated id.
+AMB's accuracy is `correct / len(results)`, so a query whose verdict was
+rejected is **still in the denominator** — re-run it if you can, and if you
+cannot, score it incorrect and say how many were scored that way. Silently
+dropping it inflates the result.
+
 Then read a sample of graded-correct and graded-incorrect pairs. A judge that
 agrees with everything is as broken as one that agrees with nothing, and the
 only way to see either is to look.
@@ -294,6 +409,13 @@ Report per category and overall, and state plainly:
   chunk size;
 * the ingest shape, because per-turn and per-session drawers are different
   systems under test;
+* the **declared deviations**, in one place: batched answering (AMB answers one
+  query per call), the retrieval budget against whichever baseline is being
+  compared (`k=10` here vs the hybrid-search baseline's 50), and the prompt
+  path — LoCoMo's builder substitutes a provider's raw-response JSON for the
+  context string when one exists, so a provider returning none (ours) is
+  answering from the `## Memory` context that bm25-style baselines produce,
+  not the JSON that qdrant-style rows produced;
 * that the numbers are **not comparable** to AMB's published rows, because the
   models differ — and not comparable to any of our earlier runs that used a
   different answering model, judge, `k`, or ingest granularity.
