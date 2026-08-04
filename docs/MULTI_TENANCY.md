@@ -47,25 +47,60 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 |---|---|
 | `POST /v1/vaults` | create a vault (`sealed` or `hmac-only`; optional `external:<name>@<dim>` embedder identity) |
 | `GET /v1/vaults` | list vault ids (bearer-gated; disabled under per-vault assertions) |
-| `DELETE /v1/vaults/{id}` | delete a vault |
-| `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup) |
-| `POST /v1/vaults/{id}/search` | hybrid search (cosine + BM25, optional reranker) |
-| `DELETE /v1/vaults/{id}/drawers/{drawer_id}` | delete a drawer |
-| `GET /v1/vaults/{id}/stats` · `.../stats/history` | stats (records, wings, rooms, kg, tunnels, db size, chain head) + sample ring |
-| `GET /v1/vaults/{id}/drawers` · `GET`/`PUT .../drawers/{drawer_id}` | paged browse, full drawer, verbatim content replace |
+| `DELETE /v1/vaults/{id}` | delete a vault (409 for the vault the same process serves over `/mcp`) |
+| `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup). **Admission-screened on every arm**; on the default arm a diverted save answers **202** with `quarantined: true` and the id the drawer actually landed under (see §5 for the dedup/external reporting gap) |
+| `POST /v1/vaults/{id}/search` | hybrid search (cosine + BM25, optional reranker); declared read-time parameters (`language`, `calendar`, `date_order`, `wing`, `room`, `kind`, `min_trust`, `offset`, `ranked_at`) |
+| `DELETE /v1/vaults/{id}/drawers/{drawer_id}` | delete a drawer (refused for quarantine-pending evidence — ruling on it is `admission allow`/`deny`) |
+| `GET /v1/vaults/{id}/stats` · `.../stats/history` | stats (records, wings, rooms, kg, tunnels, db size, chain head, codebook generations) + sample ring |
+| `GET /v1/vaults/{id}/drawers` · `GET`/`PUT .../drawers/{drawer_id}` | paged browse, full drawer, verbatim content replace. The browse excludes the quarantine wing unless the request names it; the replace is screened on the **updating** surface and answers a typed outcome |
 | `GET /v1/vaults/{id}/taxonomy` | wing → room tree with counts |
+| `GET /v1/vaults/{id}/supersessions` | receipted drawer supersession chain + its verdicts |
 | `GET /v1/vaults/{id}/kg/stats` · `.../kg/entities` · `.../kg/query` · `.../kg/timeline` · `.../kg/receipts` · `.../kg/canonical/{key}` | read-only knowledge-graph browse |
-| `POST /v1/vaults/{id}/kg/authority` | the one KG **mutation** on this surface: place a fact on the authority tier (closed vocabulary, audited, HMAC-covered). Refused 403 on a read-only server like every other mutation |
-| `POST /v1/vaults/{id}/verify` · `POST .../rotate` | integrity report · key rotation (sole-writer contract — 409 for the vault the same process serves over `/mcp`) |
-| `GET /v1/vaults/{id}/kg/stats` · `.../kg/entities` · `.../kg/query` · `.../kg/timeline` | read-only knowledge-graph browse (mutations stay on CLI/MCP) |
+| `POST /v1/vaults/{id}/kg/authority` | the one KG **mutation** on this surface: place a fact on the authority tier (closed vocabulary, audited, HMAC-covered) |
+| `POST /v1/vaults/{id}/refine` | LLM distillation of a drawer into KG facts (`UNDERCROFT_LLM_*`; nothing is contacted unless a URL is set) |
 | `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting |
-| `POST /v1/vaults/{id}/verify` · `POST .../rotate` | integrity report · key rotation (sole-writer contract) |
-| `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair |
+| `POST /v1/vaults/{id}/verify` · `POST .../rotate` | integrity report · key rotation (sole-writer contract — 409 for the vault the same process serves over `/mcp`) |
+| `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair. Export is **chain-audited unconditionally** (one `egress/export` record binding surface, counts and the export's own manifest digest); import re-stamps `added_by` and screens every record |
 | `GET /ui` | vault admin console (static page, every build) |
 
 Stores are opened on demand and cached in a `HashMap` — the `tiny_http`
 request loop is sequential (single-threaded), so the cache needs no locking
 (`Tenancy` in `tenant.rs`).
+
+### `--read-only` is a posture on the process, not a filter on one port
+
+`serve-http --read-only` used to mean "the `/v1` handlers refuse writes",
+and both halves of that were false. The `/mcp` store on the same process
+opened read-write, so the `--vault` vault could get a full embedder
+migration at start-up and a chain record per `/mcp` search under
+`UNDERCROFT_READ_AUDIT=chain`; and on the `/v1` side there were thirteen
+per-handler guards for fourteen mutating routes — `POST …/kg/authority`
+had simply never been given one, so a read-only replica rewrote
+HMAC-covered authority columns and appended to the audit chain while
+answering 200.
+
+What it means now:
+
+- **Both stores are opened read-only** (`Posture` is a required argument
+  to the open, not a defaulted flag): no embedder migration runs, and
+  read auditing is force-disabled with a warning rather than silently
+  dropped.
+- **The gate sits in front of dispatch and fails closed.** A request
+  mutates unless it is a `GET` or one of two named `POST`s, so a route
+  added later is refused until someone classifies it deliberately —
+  the opposite of a forgotten guard, which is a silent write door.
+- **The two `POST` exceptions are POST for cost, not for effect**:
+  `search` reads (its optional read-audit record is already suppressed
+  by the read-only open) and `verify` walks HMACs and replays the chain.
+  `GET .../export` is a read here too — the egress chain record it would
+  otherwise write is skipped, and the server **warns and serves** rather
+  than refusing the export.
+- **Recorded residual, not dressed up**: open-time writes still happen
+  (schema creation, rotation reconcile, chain init), and a read-only
+  store running `UNDERCROFT_RETRIEVAL=pq` still writes, because the PQ
+  tier builds its index on first search. Closing that means "load, never
+  build" at each prefilter entry; refusing `set_pq` instead would drop a
+  replica onto a full scan.
 
 ## Mapping an external multi-tenant design onto Undercroft
 
@@ -132,6 +167,23 @@ Create / delete / stats / export / import are all `/v1` routes (table
 above). Export/import is a **lossless** decrypt-then-verified-reimport pair
 for migrating a vault between instances.
 
+Two properties of that pair are worth stating, because both were learned
+the hard way. **Import screens.** Every `/v1` export line carries a
+`vector`, and a caller-supplied vector used to route straight to the raw
+writer — so the ordinary backup-restore round trip *and* the
+orchestrator's tenant migration re-admitted whole corpora past admission
+control. Screening now lives at the store's single write choke point
+behind a required argument, so the import path cannot skip it by
+construction; the response carries an additive `quarantined` count beside
+`imported`. **Import re-stamps `added_by`** with the surface identity
+`import`, because that field is the key the trusted-source auto-admit
+rides: a bundle whose records claimed `added_by: "cli"` would otherwise
+admit itself past the screen under
+`UNDERCROFT_ADMIT_TRUSTED_SOURCES=cli`. `import` is deliberately its own
+identity rather than `cli`/`rest` — accepting someone else's bytes
+wholesale is a distinct act from writing your own, and declaring a save
+surface trusted must not silently extend that trust to bundle contents.
+
 ### §5 — Cosine dedup-refresh on the write path — deliberately NOT the default
 
 The reference makes an automatic cosine-≥0.95 dedup-refresh part of the
@@ -158,7 +210,17 @@ What Undercroft does instead:
   `dedup_threshold` per request; then `save_with_dedup` scans the same
   wing+room for the closest existing drawer ≥ threshold and, if found,
   **refreshes it as an ordinary audited update** (re-tagged, chain advanced)
-  — explicitly *not* a silent overwrite. Off by default.
+  — explicitly *not* a silent overwrite. Off by default. It is also
+  **screened like every other write**: for a while `dedup_threshold` in the
+  save body was one of three ways to route around admission control, since
+  the dedup path reached the raw writer. Both the refresh and the fresh
+  insert now go through the same choke point, so declaring a dedup
+  threshold changes what a write *collapses*, never what it is allowed to
+  say. Recorded gap, stated rather than smoothed over: the dedup path
+  screens but does not yet *report* the verdict — `save_with_dedup_vec`
+  discards the write's landing, so a diverted dedup save answers 200 with
+  `quarantined: false` and the aimed-at id. The content is contained; the
+  caller is not told.
 - **Non-destructive near-dup handling** for distinct records: a
   `check-dup`-style report (keyed HMAC fingerprints, `manage.rs`) surfaces
   candidates, and a **KG-supersede** merge (`kg_supersede`, `kg.rs`) appends
@@ -171,6 +233,18 @@ A vault can record an external-embedding identity (`external:<name>@<dim>`)
 at create time (`create_vault` in `tenant.rs`); subsequent opens enforce
 that identity so a silent model swap is refused. Callers supply the vector
 per request for external vaults.
+
+Two guards ride on that path, both closing holes that a caller-supplied
+vector opened. **Non-finite components are refused at the door**: an
+`external:` vector containing `NaN`/`Inf` escaped L2 normalization
+entirely (`NaN/x = NaN`), and normalization is what bounds a poisoner to
+buying influence with *count* rather than *magnitude* — every in-process
+embedder is finite by construction, so the caller-supplied path was the
+one door. And **an external save is screened at all**; it previously
+reached the raw writer with no screen, which was the third of the three
+admission bypasses on this surface. Same recorded gap as the dedup arm:
+`upsert_external` returns only "was the id new", so a diverted external
+save is contained but answers 200 with `quarantined: false`.
 
 ## Cross-vault isolation
 
@@ -197,11 +271,17 @@ single shared model:
   open; each call clones a handle onto the one shared model.
 - `Tenancy::with_reranker()` attaches the shared reranker to every store as
   it opens; `None` ⇒ first-pass ranking only (the default).
-- `main.rs` loads one `OnnxReranker` when `UNDERCROFT_RERANKER=onnx` (off by
-  default; bails without the `onnx` feature) and wires it at the `serve`
-  call site. Worst case is two loads — the single MCP store plus the shared
-  tenant factory — mirroring how the embedder factory already handles the
-  single store's embedder.
+- `main.rs::reranker_factory` loads the model once: `UNDERCROFT_RERANKER=onnx`
+  gives one `OnnxReranker` (tract), `=ort` one ONNX Runtime reranker whose
+  **session pool is shared across every tenant vault**. Both bail without
+  their feature; unset ⇒ `None`. Worst case is two loads — the single MCP
+  store plus the shared tenant factory — mirroring how the embedder factory
+  already handles the single store's embedder.
+- `colbert` / `colbert-ort` are **refused on the multi-tenant server** with
+  an error naming the alternatives. The late-interaction stage is per-store
+  state (token matrices, a token-PQ codebook, a query encoder bound to the
+  vault's own artifacts), not a stateless model handle, so there is nothing
+  honest to share; serve a single vault for it.
 
 Reranking is CPU-bound and single-threaded (tract), so on a single instance
 it bounds throughput; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds
@@ -325,7 +405,10 @@ the source (the v0.18 artifact-carrying NDJSON, so token matrices restore
 by copy, not re-encode) → import on the target → **count-verified** →
 mapping flip → source vault delete (`keep_source` opts out). Any failure
 before the flip leaves the source authoritative and removes the partial
-copy. The e2e suite (`tests/e2e-orchestrator.sh`, 44 checks,
+copy. The import half is admission-screened like any other write — a
+migration used to be a re-admission of the whole corpus past the screen,
+because every export line carries a `vector` and a caller-supplied vector
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 44 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the
@@ -395,8 +478,11 @@ writer's rotations.
 The single-threaded `/v1` loop with reranking has a throughput ceiling
 (~1 reranked query/sec/core). The two scaling levers stack:
 
-- **Per-query parallelism** (rayon over the rerank/verify loop) cuts
-  *single-instance* latency.
+- **Per-query parallelism** cuts *single-instance* latency: rayon over the
+  rerank forwards, and — since the phase trace found the real hotspot in
+  `fuse` rather than in hydration where everyone assumed it was —
+  over candidate hydration, the stage-2 exact-cosine decrypts and BM25's
+  per-candidate tf rows, order-preserving and byte-identical.
 - **Orchestrator instance-pool + dedicated-store provisioning** gives
   *multi-tenant throughput* and blast-radius isolation — one tenant's load
   or a poisoned store can't stall another.

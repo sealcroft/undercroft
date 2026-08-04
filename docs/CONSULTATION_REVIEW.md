@@ -25,7 +25,17 @@ directions survived contact with evidence.
 ## 1. The gap table, verified against the code
 
 The consultation's central table proposed six additions. Verified state
-(2026-07-31, branch at the per-wing/pagination work):
+(2026-07-31, branch at the per-wing/pagination work). **This table is a
+dated snapshot, deliberately left as it was** — it is the evidence the
+adopted track in §7 was decided from, and rewriting it would erase the
+reason those four items were chosen. Since then: **memory types**,
+**temporal truth** and **golden values** are fully closed;
+**provenance** closed on extractor identity, review state and trust class
+but not on a multi-edge `derived_from` graph; **sovereign portability**
+closed on sender attestation and the scope/trust/expiry manifest but not
+on capability-scoped exchange, federation, or the meta-rows export gap;
+**retrieval** profiles remain refused on measurement, not missing (§2).
+§7 carries the per-item status.
 
 | Area | What the code has (verified) | What is genuinely absent |
 |---|---|---|
@@ -85,9 +95,22 @@ position on both is deliberate:
   tenants, writes parallelize across vaults. If a shared-Postgres mode ever
   exists it is a *different, weaker trust tier* and must be named as such.
 - **Forgetting/pruning policies.** "We don't get rid of data" is a product
-  principle. Expiry as **metadata** (a validity window that demotes
-  authority at read time) is compatible; deletion workflows are not.
-  Deletes exist, are explicit, and leave tombstones in the chain.
+  principle, and it survived — but the position moved, and the direction
+  it moved in is worth recording. Expiry as **metadata** (a validity
+  window that demotes authority at read time) was and is compatible. What
+  this review rejected was *deletion workflows*; what C3.2 shipped instead
+  is **attested** destruction: `forget` / `verify-forgetting` produce a
+  chain-attested receipt (heads + tombstone interval + unkeyed content
+  fingerprints) that the vault verifies by keyed replay and a third party
+  verifies through the operator's Ed25519 signature. Retention policies
+  exist too, per wing/room on the wing-trust pattern — operator-only,
+  HMAC-tagged, audited — but enforcement is an **explicit sweep** through
+  the same receipted path: nothing expires on a timer, every sweep leaves
+  a receipt, and the quarantine wing is refused. The clock is the
+  HMAC-covered `meta.filed_at`, tag-verified per drawer, never the clear
+  column — otherwise flipping a column could launder a deletion through a
+  keyed sweep. The principle that held is not "never delete"; it is
+  **never delete silently**.
 
 ## 4. Trust granularity: what vault-level actually buys, and the poisoning question
 
@@ -111,11 +134,27 @@ The precise answer, now recorded:
   suppress, or reorder other drawers, and cannot forge anything at rest.
 - **What poison can do — three channels**: (1) win slots on its own merits;
   (2) **crowd** — many distinct poisoned drawers displace legitimate top-k
-  entries, the open *density* channel whose named instrument (a per-source
-  cap) is unbuilt, plus bounded vault-global IDF drift; (3) **reach the
+  entries, plus bounded vault-global IDF drift; (3) **reach the
   reader** — retrieval returns verbatim text into an agent's context, and
   prompt injection is the reader's vulnerability. The engine's contribution
-  there is provenance good enough to gate on, which is the trust-class gap.
+  there is provenance good enough to gate on, which was the trust-class gap.
+- **The density channel is closed at the draw (2026-08-03).** The named
+  instrument this review recorded as unbuilt now exists:
+  `keyed_sample_capped` bounds any single wing to
+  `1/UNDERCROFT_TRAIN_SOURCE_CAP` (default 4) of every global codebook
+  training sample, with a soft refill so the sample never shrinks, and
+  within-quota corpora train byte-identically. It caps per **wing** (the
+  adversarial bound, since a wing is a boundary a writer cannot cross by
+  declaration) and additionally per **`meta.agent` claim** (the accident
+  bound — a runaway agent flooding several wings). Claim-less rows are
+  deliberately exempt: "no claim" must not collapse into one giant
+  pseudo-agent. Below the sampling threshold the cap is inert, because
+  there the per-wing codebook tier *is* the isolation. **Which** rows train
+  is also no longer a stride: `stratified_keyed` draws one row per equal
+  block of insertion order by a per-vault HKDF `sample` subkey —
+  unguessable to a bulk writer, and immune to the periodic-corpus collapse
+  a systematic sample suffers (measured R@5 83.0% vs 99.7% on a corpus
+  whose period shared a factor with the stride).
 - **What the per-wing tier changed (2026-07-31).** Wing-scoped queries now
   draw candidates from the wing's own index and codebook only. Poison in
   another wing can no longer crowd a scoped query's candidate set at all,
@@ -123,12 +162,21 @@ The precise answer, now recorded:
   filter over globally generated candidates; post-tier, **the wing is an
   enforceable trust zone for scoped retrieval**. Unscoped queries remain
   exposed to crowding and IDF drift — inherent to "search everything".
-- **Posture until the defense cluster lands**: differently-trusted
-  principals → different vaults; untrusted *sources* within one principal's
-  world → designated wings, agents query scoped. KG facts are ahead of
-  drawers: grounding already refuses a "fact" whose source does not contain
-  its words, and receipt verification flags a changed source (pinned by
-  test).
+- **Posture, now that the defense cluster has landed** (C3.3, 2026-08-04):
+  differently-trusted principals still → different vaults, and untrusted
+  *sources* within one principal's world still → designated wings queried
+  scoped — but the wing is no longer only a convention. Trust classes are
+  **deployment-assigned** on a closed vocabulary (operator only, never over
+  MCP), HMAC-tagged and audited so a column flip fails verification, and
+  consumed as a candidate-set *floor* resolved before candidates are drawn,
+  so a low-trust wing can neither crowd nor starve a floored query.
+  Write-path admission screening diverts flagged content into a reserved
+  `quarantine-pending` wing that is hard-excluded from `search`, `recent`
+  and `list_drawers`, and that MCP refuses to read or destroy at all — an
+  agent must not rule on the queue that contains it. KG facts remain ahead
+  of drawers: grounding already refuses a "fact" whose source does not
+  contain its words, and receipt verification flags a changed source
+  (pinned by test).
 
 ## 5. Where the repo already leads the consultation
 
@@ -141,9 +189,11 @@ Claims it made as market gaps that this repo already answers:
 - **Source freshness revalidation** — exists cryptographically (receipt
   fingerprints flag changed sources); only a scheduled sweep is missing.
 - **Retrieval gate vs action gate** — separated by construction: the engine
-  retrieves and never acts; `serve --read-only`, MCP write-tool rejection
-  and per-vault assertions are the engine-side enforcement points; action
-  gating belongs to the agent harness.
+  retrieves and never acts; `serve-http --read-only` (a posture on the
+  whole process, gated in front of dispatch and failing closed), MCP
+  write-tool rejection, the MCP quarantine fence, and per-vault assertions
+  are the engine-side enforcement points; action gating belongs to the
+  agent harness.
 - **The five-part memory model** maps nearly one-to-one: drawers =
   episodic/verbatim, KG = semantic, diaries = per-agent episodic, the
   wake-up L0 identity file = identity; working memory is the agent's
@@ -161,9 +211,26 @@ Claims it made as market gaps that this repo already answers:
 
 Confirmed real, most already tracked, now with external confirmation:
 
-- **Read-path auditing.** The chain covers writes; reads and exports are
-  observability events, not tamper-evident records. A sovereign/compliance
-  deployment would want chained read/export audit. New item.
+- **Read-path auditing — CLOSED 2026-08-04.** The finding was correct: the
+  chain covered writes, while reads and exports were observability events
+  rather than tamper-evident records. Both halves now append chain records,
+  and the split between them is the interesting part.
+  **Exports are audited unconditionally, on every surface** (`audit_export`):
+  one `egress/export` record binding the surface, the recipient, the record
+  counts and the export's own manifest digest. Egress is rare and
+  high-value, so it needs no declaration to be worth its cost.
+  **Reads are audited under a declaration** (`UNDERCROFT_READ_AUDIT=chain`;
+  unset = off): `audit_read` at the `search_inner` and remote tails covers
+  every retrieval path with one record per search carrying a **keyed
+  fingerprint of the query — never its text** (pinned by a db+WAL byte
+  scan), the declared scope and the hit count. A chain append per query is
+  a durability cost a sovereign deployment chooses, not one the default
+  imposes; garbage in the declaration refuses to open rather than falling
+  back, and a read-only open warns and disables (the replica precedent).
+  The boundary is stated rather than hidden: read records run behind
+  `&self` via `unchecked_transaction` and deliberately do **not** anchor
+  the manifest, so they anchor at the next store open — until then a
+  stripped unanchored tail is indistinguishable from a crash.
 - **Entity resolution.** `kg_entities` is name-unique; no aliasing or merge.
   Upstream of multi-hop quality.
 - **Multi-hop retrieval depth.** Measured weakest category (AMB: multi-hop
@@ -182,32 +249,62 @@ Confirmed real, most already tracked, now with external confirmation:
 
 ## 7. The adopted track
 
-Four items survived every filter above. They are ordered so each proves the
-pattern the next depends on, and each passes the existing governors (the
-metadata-exposure test — every new clear-text field is a deliberate,
-inventoried leak; footprint pricing; AGENTS.md surface sync):
+Four items survived every filter above. They were ordered so each proves
+the pattern the next depends on, and each passes the existing governors
+(the metadata-exposure test — every new clear-text field is a deliberate,
+inventoried leak; footprint pricing; AGENTS.md surface sync). **All four
+have now shipped**; the status line beside each is what the code says, not
+what the plan said.
 
-1. **Authority tier on KG facts** — `authority_class`, `review_state`,
-   optional `canonical_key`; exact-authority route (`/v1` + MCP
-   `lookup_canonical`) consulted before semantic recall for exact or
-   high-risk asks. Completes the long-queued predicate-lookup item; extends
-   the poison-positive philosophy (declared, HMAC-covered truth outranking
-   learned similarity).
-2. **Extractor identity + generalized supersession** — record which model
-   extracted each fact (the embedder-identity pattern, one level up); a
-   receipted `supersedes_id` on drawers so update/dedup chains become
-   queryable rather than only audited.
-3. **Bundle manifests** — sender signature (Ed25519 beside the existing
-   X25519 recipient flow) plus a signed manifest carrying scope, trust
-   class, expiry, and provenance summary; close the meta-rows export gap at
-   the same time. Federation, if ever, starts here — it is meaningless
-   without sender attestation.
-4. **Typed `kind` + `review_state` on promoted records** — the widest
-   schema surface, last, after 1–3 prove the pattern.
+1. **Authority tier on KG facts — shipped.** `authority_class`,
+   `review_state`, optional `canonical_key`, declared on closed
+   vocabularies and covered by the fact's HMAC through a canonical
+   extension on the `support` precedent, so untouched facts keep
+   byte-identical canonicals and a column flip without the vault key fails
+   verification. `lookup_canonical` is the indexed exact door (`/v1
+   .../kg/canonical/{key}` + the MCP tool), at most one active approved
+   fact per key, promotion superseding the previous holder under audit.
+   Completed the long-queued predicate-lookup item and extended the
+   poison-positive philosophy: declared, HMAC-covered truth outranking
+   learned similarity.
+2. **Extractor identity + generalized supersession — shipped.** Which
+   model claimed each distilled fact now lives inside the fact's HMAC via
+   a third canonical extension (0x1d, the same precedent), so a flipped
+   attribution fails verification. Drawer supersession is receipted:
+   `meta.supersedes` under the drawer HMAC, a mirror column, and a keyed
+   receipt over the superseded content's unkeyed fingerprint in separate
+   columns (the kg `source_fp`/`receipt_tag` shape one level up, re-keyed
+   on rotation). Five verdicts via `verify_supersessions`, browsable at
+   `GET /v1/vaults/{id}/supersessions` — and superseding never deletes.
+3. **Bundle manifests — shipped; one half of the item is still open.**
+   Ed25519 sender attestation now sits beside the recipient flow
+   (encryption says who may READ, the signature says who WROTE), carrying
+   scope, trust claim, expiry, counts and provenance plus an
+   unconditionally-checked payload digest; legacy payloads import
+   unattested and say so. A sender-declared trust label is a CLAIM, never
+   a boundary (docs/LABELS.md). The recipient half went further than
+   planned and is now **hybrid post-quantum** (X25519 + ML-KEM-768,
+   docs/PQ.md). **Still open**: the meta-rows export gap — export/import
+   is per-drawer and copies no `meta` rows, so a migrated vault reports
+   codebook generation 0, which reads as "never trained" rather than
+   "unknown".
+4. **Typed `kind` — shipped**, on the closed vocabulary
+   `undercroft_core::KIND_VOCAB`, validated at the single write choke point
+   (rejected, never coerced) and absent by default, because absence is
+   data and every pre-existing drawer is forever valid without one. It
+   lives inside `meta_json` under the drawer HMAC, mirrors to an indexed
+   column for the filter, and never enters the drawer id. Its value was
+   **measured before it was claimed** (`undercroft-bench tagvalue`): on a
+   corpus built to favour it the filter bought *no* recall lift — the
+   measured value is latency (90.6 → 13.7 ms/q) and the guarantee class
+   (starvation-free scoping, honest empties, a count of unlabeled rows the
+   filter excluded). Recorded as the measurement it is rather than the
+   recall lever it was assumed to be.
 
 The poisoning-defense cluster (ingest-time trust labels → retrieval
-filters, the per-source cap, quarantine-wing enforcement) is tracked with
-C3.3 and now carries the R1 property from §4.
+filters, the per-source cap, quarantine-wing enforcement) landed as C3.3
+and carries the R1 property from §4; the per-source cap is the density
+instrument described there.
 
 Retrieval profiles are **not** on the adopted track; they re-enter only as
 declared parameters with per-recipe negative controls (§2).

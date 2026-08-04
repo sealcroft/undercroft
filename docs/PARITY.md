@@ -1,7 +1,7 @@
 # Parity with upstream MemPalace
 
 Feature-by-feature comparison against `MemPalace/mempalace` (the Python
-original this repo was forked from), updated 2026-07-13.
+original this repo was forked from), updated 2026-08-05.
 
 ## Ported (Rust equivalent exists)
 
@@ -10,8 +10,8 @@ original this repo was forked from), updated 2026-07-13.
 | Palace model (wings/rooms/drawers, verbatim) | `undercroft-core` (same metadata fields, deterministic ids) |
 | `sqlite_exact` backend | `undercroft-store` (SQLite system of record) |
 | Chroma/Qdrant/pgvector server backends | `undercroft-index` — **sealed client-side** (upstream sent plaintext) |
-| Embedder + identity tracking (RFC 001) | `Embedder` trait + per-vault identity enforcement |
-| Model embeddings (sentence-transformers) | `undercroft-embed-onnx` (tract, feature-gated, user-supplied model) |
+| Embedder + identity tracking (RFC 001) | `Embedder` trait + per-vault identity enforcement (a swap is refused, not silently ranked; only hash→hash migrates automatically) |
+| Model embeddings (sentence-transformers) | four postures — `undercroft-embed-onnx` (tract, pure Rust), `undercroft-embed-ort` (ONNX Runtime, ~2.5×/forward + int8), `http` (any served model, TLS-or-loopback enforced), or caller-supplied `external:<name>@<dim>`. Models are user-supplied throughout; see [EMBEDDERS.md](EMBEDDERS.md) |
 | File miner | `mine --mode files` |
 | Conversation miner (`--mode convos`) | `mine --mode convos` |
 | Sweep (per-message drawers) | `sweep` (idempotent via keyed fingerprints) |
@@ -25,8 +25,8 @@ original this repo was forked from), updated 2026-07-13.
 | Backups | `backup create/list/restore` (verifies before snapshot) |
 | Repair | `repair` (fingerprint backfill, re-embed, vacuum, verify) |
 | Export / migrate | `export` (JSONL) + `import` (undercroft & mempalace formats) |
-| MCP stdio server (~35 tools) | 34 tools (daemon/sync/session tools inapplicable — process management moved to the OS) |
-| MCP HTTP team server (`serve`) | `serve-http` (bearer token enforced, `--read-only`) |
+| MCP stdio server (~35 tools) | 34 tools (daemon/sync/session tools inapplicable — process management moved to the OS). The count is not maintained by hand: `crates/undercroft-cli/src/parity.rs` holds the inventory and the code is counted against it **in both directions**, so a tool added without a line fails the build and a line naming a tool that no longer exists fails too |
+| MCP HTTP team server (`serve`) | `serve-http` (bearer token enforced; `--read-only` is a posture on the whole process — both stores opened read-only, the route gate in front of dispatch, failing closed) |
 | Daemon / jobs / start / stop / wait | `daemon run` + systemd/compose units (`deploy/`) — process management belongs to the OS |
 | `tools/render_jsonl.py` | `transcript render` |
 | Auto-save hooks (Claude Code/Codex/Cursor) | `hooks/`, `.claude-plugin/hooks/`, `undercroft hooks claude-code` |
@@ -37,7 +37,7 @@ original this repo was forked from), updated 2026-07-13.
 | Deploy (compose server, systemd) | `deploy/` |
 | Docs / examples | `docs/`, `examples/` |
 
-## What exists only here (updated for v0.33.0)
+## What exists only here (updated for v0.46.0)
 
 Everything below has **no upstream equivalent** — it is original work of
 this project, which is why the two codebases share concepts but not code
@@ -65,10 +65,45 @@ this project, which is why the two codebases share concepts but not code
   blob re-encrypted byte-exact and every tag/chain re-keyed in one
   transaction; crash-safe at any instant via a two-phase manifest swap.
 - **Recipient-encrypted export bundles** (`bundle keygen`,
-  `export --to`): X25519 ephemeral-static → HKDF → XChaCha20-Poly1305 —
-  a backup never exists in plaintext.
+  `export --to`) — a backup never exists in plaintext, and since C3.4 the
+  key exchange is **hybrid post-quantum**: `keygen` mints X25519 +
+  ML-KEM-768 (`pq1` identities) and a v2 bundle derives its file key from
+  **both** shared secrets, closing harvest-now-decrypt-later on the one
+  asymmetric exchange in the codebase. Legacy bare-hex X25519 identities
+  still parse and still receive openable v1 bundles, and a hybrid identity
+  opens old v1 backups with its curve half — but a hybrid recipient never
+  silently downgrades, and an X25519-only secret gets a typed refusal on a
+  v2 bundle (pinned by test). Posture page: [PQ.md](PQ.md).
+- **Signed bundle manifests** — Ed25519 sender attestation beside the
+  recipient flow: encryption says who may READ, the signature says who
+  WROTE. Scope, trust claim, expiry, counts, provenance, and an
+  unconditionally-checked payload digest. A sender-declared trust label is
+  a **claim, never a boundary** ([LABELS.md](LABELS.md)); legacy payloads
+  import unattested and say so.
+- **Write-path admission control** — a deterministic tier-1 screen over a
+  closed signal vocabulary (offsets, never content) plus attack-fixture
+  similarity and an optional declared per-writer rate screen; flagged
+  writes divert into a reserved quarantine wing that retrieval, `recent`
+  and `list_drawers` all exclude and that MCP cannot read or destroy at
+  all. Rulings are chain-audited, a deny is receipted, and the whole thing
+  is default-off (a byte-identical write contract until a deployment
+  declares it). Screening lives at the store's single write choke point
+  behind a required argument, so a new write path does not compile until
+  its author decides.
+- **Provable forgetting and retention** — chain-attested destruction with
+  heads, tombstone interval and unkeyed content fingerprints: the vault
+  verifies by keyed replay, third parties verify the operator's Ed25519
+  signature. Retention policies per wing/room are operator-only, HMAC
+  tagged and audited, and enforce through an **explicit sweep** on the
+  HMAC-covered clock — nothing expires on a timer.
+- **Deployment-assigned wing trust** — a closed vocabulary the operator
+  assigns (never MCP), HMAC-tagged so a flip fails verification, consumed
+  as a candidate-set floor resolved before candidates are drawn.
+- **Read and egress auditing** — exports are chain-audited unconditionally
+  on every surface; reads are audited under `UNDERCROFT_READ_AUDIT=chain`
+  with a **keyed fingerprint of the query, never its text**.
 - Keyed duplicate fingerprints, token-mandatory non-loopback HTTP bind,
-  per-vault request assertions, read-only serving mode.
+  per-vault request assertions, read-only serving posture.
 
 **Retrieval stack beyond upstream's cosine search:**
 
@@ -80,9 +115,21 @@ this project, which is why the two codebases share concepts but not code
   (PQ-compressed ~16 B/token), one query forward + MaxSim at search
   (~96.5–96.8% at a flat ~70–93 ms/q independent of core count).
 - Bounded-RAM candidate tiers: PQ/IVF prefilter (~48 B/vector, recall
-  flat in corpus size, sealed-vault-capable) and MUVERA FDE token-aware
+  flat in corpus size, sealed at rest with a decrypt-once slab cache, with
+  an optional per-wing codebook/IVF tier) and MUVERA FDE token-aware
   candidates (recall measured identical to fusion at −25% latency, rows
   PQ-compressed 32×).
+- **Starvation-free scoping**: every declared filter (wing, room, kind,
+  trust floor, quarantine fence) is resolved into a scope *before*
+  candidates are drawn, and pools are sized by the scope — a filter over
+  globally generated candidates can otherwise come back empty while the
+  scope holds the answer.
+- **Measured to 10⁶ drawers**: shipped defaults hold **R@5 100.0%** at
+  every checkpoint from 131k to 1M — unscoped, wing-scoped, room-scoped
+  and wing+room — at 20.4–112.7 ms/q unscoped and ~13–32 ms/q flat when
+  scoped. Both the two-stage candidate pool and the scope-sized pools
+  exist because instruments filed recall defects against the previous
+  fixed pool and the gate was not declared met until they closed.
 - Every number above is measured and reproduced in
   [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md)
   and [RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
@@ -91,7 +138,11 @@ this project, which is why the two codebases share concepts but not code
 
 - Versioned `/v1` REST engine: per-vault assertions, external
   embeddings, dedup-refresh, lossless export/import (vectors + token
-  artifacts ride along — restore is a copy, not a re-embed).
+  artifacts ride along — restore is a copy, not a re-embed), and
+  operator-plane routes (wing trust, admission review, retention +
+  sweep, attested forgetting) that are deliberately absent from MCP.
+  Import re-stamps the writing surface and is admission-screened, so a
+  restore or a tenant migration is not a route around the screen.
 - `undercroft-orchestrator`: a separate control plane (instance registry
   with sealed credentials, HMAC-only tenant tokens shown once, routing
   proxy with subpath allowlist, token rotation, per-tenant rate limits,
@@ -140,10 +191,25 @@ the bundled SQLite store and the in-memory embedding cache respectively.
   above ~2k drawers, an FTS5 BM25 prefilter (tunable via
   `UNDERCROFT_FTS_PREFILTER_MIN`, `off` to disable) that narrows the
   candidate scan without changing final scoring.
-- Remote backends receive sealed content; upstream uploaded plaintext.
+- Remote backends receive sealed content; upstream uploaded plaintext. A
+  mirror is an accelerator, not a different policy: remote search takes
+  its trust floor, quarantine fence and closed vocabularies from the same
+  resolver the local path uses.
 - Benchmark numbers with the default hash embedder are not comparable to
-  upstream's published model-based numbers — use `--features onnx` with a
-  MiniLM-class model for like-for-like conditions.
+  upstream's published model-based numbers — use a model posture with a
+  MiniLM-class model for like-for-like conditions. Measured here, the
+  choice matters more than this repo used to say: hash → *any* modern
+  model is **+3.2 to +4.2pp** turn all-gold on LoCoMo, while four modern
+  models span ≤1.0pp among themselves. (The old "a semantic embedder is
+  not the biggest lever" conclusion rested on MiniLM's +0.3pp, and was a
+  fact about MiniLM.)
+- The default embedder is **single-language by construction**: feature
+  hashing over surface forms matches only shared literal tokens and
+  trigrams, so `car`/`automobile` do not meet and a translation pair
+  scores below an unrelated sentence. Cross-lingual retrieval needs a
+  multilingual model — and, since the script-disjoint fusion reweight,
+  that one condition suffices even across scripts (FLORES-200
+  cross-script pairs 36–44% → **95–100% R@5 at default weights**).
 
 ## License lineage
 

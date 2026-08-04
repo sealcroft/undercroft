@@ -42,14 +42,22 @@ score noise.
 
 ```sh
 docker compose up -d embeddings embeddings-tls
-docker compose run --rm embed-pull            # once: fetch the model
-# then run cli/bench with (project-prefixed volume name):
+# Once: fetch the model. `embed-pull` reads the SAME variable the client
+# does (default nomic-embed-text) — asking the client for a model nobody
+# pulled is the way this recipe fails.
+UNDERCROFT_EMBED_MODEL=bge-m3 docker compose run --rm embed-pull
+# then run cli/bench with (project-prefixed volume name — a bare
+# `undercroft-embed-tls` mounts a fresh empty volume silently):
 #   -v undercroft_undercroft-embed-tls:/tls:ro
 UNDERCROFT_EMBEDDER=http
 UNDERCROFT_EMBED_URL=https://embeddings-tls
 UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt
 UNDERCROFT_EMBED_MODEL=bge-m3
 ```
+
+Optional: `UNDERCROFT_EMBED_API` picks the endpoint shape when probing
+cannot, `_KEY` carries a bearer, `_DIM` overrides the dimension the
+engine otherwise **probes from the endpoint** rather than assuming.
 
 The convenience tier: no export, no feature build, any Ollama /
 llama.cpp / LM Studio / vLLM / TEI endpoint. Two rules are enforced, not
@@ -118,6 +126,69 @@ optimum-cli onnxruntime quantize --onnx_model ./bge-m3-onnx --avx512 -o ./bge-m3
 Check the model's own license before use; the engine records the name
 you declare (`UNDERCROFT_ONNX_NAME`) as the vault's embedder identity and
 refuses a silent swap.
+
+## What a vault remembers about its embedder
+
+A vault records the identity of the space its vectors live in, and a
+mismatch is refused rather than ranked. (A remote mirror records the
+identity it was pushed with for the same reason: ranking a v2 query
+against v1 vectors returned an empty result with no error at all.) Two
+consequences, both of which bite when you *change* a posture rather than
+when you pick one:
+
+* **A model swap is manual, in both directions.** `hash` is
+  `undercroft-hash-v3`; `onnx`/`ort` record `UNDERCROFT_ONNX_NAME`; `http`
+  records `http:<model>`, so the same refusal covers a served model too.
+  Changing any of them means `UNDERCROFT_FORCE_EMBEDDER=1` + `repair` —
+  potentially hours of inference, so it stays a decision you make out
+  loud.
+* **The one automatic migration is hash-to-hash.** A user who merely
+  upgraded the binary did not choose a new vector space, so a vault on a
+  known predecessor of the built-in hash embedder (`v1` or `v2`) is
+  walked to `v3` at open: batched, idempotent, recording the new identity
+  last so a crash just repeats it, dropping the PQ/IVF tables whose
+  codebook quantizes vectors that no longer exist, and skipping
+  unreadable rows rather than aborting an open that `verify` and `repair`
+  also need. Embeddings are not HMAC-covered, so a re-embed touches no
+  drawer tag and no audit chain — which is exactly why this is not a
+  rotation. A read-only open warns instead of writing.
+
+## The gate and the floor move with the model — and they are measured
+
+Two constants used to be baked in for every embedder, and installing a
+modern model silently retired both. They are now properties of the vector
+space in hand:
+
+* **The semantic admission gate** — the cosine below which a hit with no
+  lexical evidence is dropped — is `Embedder::semantic_admission_gate`,
+  measured from 14 known-unrelated probe pairs (worst + a 0.06 margin),
+  half of them same-language on purpose, because a cross-lingual-only
+  probe set under-estimates the floor. `HashEmbedder` declares the
+  shipped 0.56 rather than re-deriving it, so the default vault does not
+  move; `ExternalEmbedder` refuses semantic-only admission outright,
+  since its vectors come from a model this process has never seen; a
+  probe that embeds to zero is an inference *failure*, not a floor, and
+  also refuses. Resolved once per open, never per hit — a calibrating
+  embedder costs forward passes.
+* **The semantic floor** — where unrelated text actually sits in this
+  space — calibrates the cosine→score map. The shipped `(cos+1)/2` sends
+  cosine 0 to 0.5, correct for hash, whose unrelated floor *is* ~0. A
+  served model puts unrelated text near cosine 0.5, so its whole semantic
+  range compressed into the top quarter of the scale while BM25 spanned
+  all of it — measured, that made same-language function-word overlap
+  beat a cross-lingual gold at every fusion weight. Calibrated, the
+  measured floor becomes the map's neutral; hash declares floor 0 and
+  reproduces the shipped expression bit-for-bit.
+
+`UNDERCROFT_SEMANTIC_GATE` declares the gate (a cosine in `[0.0, 1.0]`;
+`off` refuses semantic-only admission outright, i.e. lexical channels
+only) and `UNDERCROFT_SEMANTIC_FLOOR` the floor (a cosine in `[0.0, 0.98]`;
+`off` = 0, the shipped hash map). Both are for an operator who has
+measured their own corpus, which beats a 14-pair probe set. Garbage in
+either falls back to the embedder rather than failing the open — the
+fallback is the safe direction, and bricking a server on a typo'd
+variable is worse than ignoring it (the floor also says so at warning
+level).
 
 ## Cross-lingual honesty, in one paragraph
 
