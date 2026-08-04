@@ -297,6 +297,18 @@ impl PalaceStore {
         self.forget_with_proof(&[id.to_string()])
     }
 
+    /// Append a ruling record without acting on it — the crash-window
+    /// tests' way of reproducing "the ruling committed, the effect did
+    /// not", which is exactly the partial state a crash mid-deny leaves.
+    #[cfg(test)]
+    pub(crate) fn admission_ruling_for_test(
+        &mut self,
+        id: &str,
+        verdict: &str,
+    ) -> Result<(), StoreError> {
+        self.admission_ruling(id, verdict, None)
+    }
+
     /// Fetch + verify a drawer and require it to be quarantine-resident.
     fn quarantined(&self, id: &str) -> Result<Drawer, StoreError> {
         let d = self

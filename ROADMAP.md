@@ -1537,6 +1537,15 @@ release with the usual battery + measured gates.
     attack-fixture corpus quarantined at a target rate with a bounded
     false-positive rate on clean LoCoMo ingest; crash-window tests for
     the state machine; e2e scripted-attacker run over `/v1`.
+    **GATE MET IN FULL (2026-08-04)**: the detector clause measured
+    0/5,882 clean-corpus false positives with 18/18 fixtures tripping
+    (`screenfp`); the crash-window clause pins all four partial states
+    of the allow/deny machine converging with the chain green; the
+    scripted-attacker clause runs over `/v1` end to end — and found two
+    honesty defects on the way, both fixed in the same unit (save
+    surfaces reported `created: true` with the aimed-at id while the
+    content sat in quarantine; the reserved-wing refusal answered 500
+    "corrupt row" for what is a 400-class input error).
   - *Effort*: ~2 releases (provenance + deterministic gate first;
     classifier tier and posture policy second).
 - **C3.4 Post-quantum posture — BUILT (2026-08-04), all three items.**
