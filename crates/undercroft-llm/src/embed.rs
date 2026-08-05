@@ -288,26 +288,36 @@ pub(crate) fn is_loopback(base: &str) -> bool {
         Some(i) => &base[i + 3..],
         None => base,
     };
-    let authority = after_scheme.split('/').next().unwrap_or("");
-    // Userinfo comes BEFORE the host (RFC 3986 `user:pass@host`), so it must
-    // be discarded first. Without this, `http://127.0.0.1:8080@evil.com/v1`
-    // read as loopback — `split(':').next()` returned `127.0.0.1`, which is
-    // the USERNAME — while ureq/`url` resolve the same string to host
-    // `evil.com`. That inverted the whole gate: the "TLS or loopback,
-    // nothing else, no override" refusal passed, drawer text went cleartext
-    // to an attacker-chosen host, and the "the ENDPOINT reads your text in
-    // plaintext" warning was suppressed along with it. Split on the LAST
-    // `@`, since userinfo may itself contain one.
-    let host_port = match authority.rsplit_once('@') {
-        Some((_userinfo, host)) => host,
-        None => authority,
+    let _ = after_scheme;
+    // Ask the SAME parser the transport will use, rather than re-deriving the
+    // host by hand. Hand-parsing this string is how the predicate came to
+    // disagree with ureq twice:
+    //
+    //   `http://127.0.0.1:8080@evil.com/v1` — splitting the authority on `:`
+    //   returned the USERNAME `127.0.0.1`, and
+    //   `http://evil.com\@127.0.0.1/v1`     — for a special scheme the WHATWG
+    //   parser treats `\` as a path separator, so the host is `evil.com`
+    //   while an `@`-split reads `127.0.0.1`.
+    //
+    // Each time the gate inverted: "TLS or loopback, nothing else, no
+    // override" passed, drawer text went cleartext to an attacker-chosen
+    // host, and the plaintext-endpoint warning was suppressed with it. The
+    // first fix enumerated the spellings, which tests the enumeration; this
+    // one cannot disagree with the transport, because it is the transport's
+    // own parser (`url`, which ureq resolves every request target through).
+    //
+    // An unparseable URL is NOT loopback — the safe direction, since the
+    // caller uses this both to refuse cleartext and to decide whether to warn
+    // that the endpoint reads drawer text in the clear.
+    let Ok(parsed) = url::Url::parse(base) else {
+        return false;
     };
-    let host = match host_port.strip_prefix('[') {
-        // IPv6 literal, `[::1]:8080`
-        Some(rest) => rest.split(']').next().unwrap_or(""),
-        None => host_port.split(':').next().unwrap_or(""),
-    };
-    host == "localhost" || host == "127.0.0.1" || host == "::1"
+    match parsed.host() {
+        Some(url::Host::Domain(d)) => d == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
 }
 
 impl Embedder for HttpEmbedder {
@@ -541,6 +551,11 @@ tYFnY6i2f/1ZwO5egz39EHpuFql2+6WqpB9saUk=\n\
             "http://user@127.0.0.1.evil.com/v1",
             // userinfo containing its own `@` — the split must take the last
             "http://a@b:127.0.0.1@evil.com/v1",
+            // For a special scheme the WHATWG parser treats a backslash as a
+            // path separator, so the host here is evil.com. The first fix
+            // enumerated userinfo spellings and missed this one entirely,
+            // which is why the predicate now asks the transport's own parser.
+            r"http://evil.com\@127.0.0.1/v1",
         ] {
             assert!(
                 !is_loopback(spoof),
@@ -553,5 +568,12 @@ tYFnY6i2f/1ZwO5egz39EHpuFql2+6WqpB9saUk=\n\
         assert!(is_loopback("http://user:pass@127.0.0.1:11434/v1"));
         assert!(is_loopback("http://user@localhost:1234/v1"));
         assert!(is_loopback("http://user@[::1]:8080/v1"));
+        // And the mirror of the backslash case, which the FIRST draft of this
+        // test got wrong: here the backslash ends the authority at
+        // , so  is PATH and the request really does go
+        // to loopback. Asserting it the other way would have pinned a false
+        // expectation into the suite — the parser is right and the hand
+        // reasoning was wrong, which is the whole argument for using it.
+        assert!(is_loopback(r"http://localhost\@evil.com/v1"));
     }
 }

@@ -748,13 +748,28 @@ pub(crate) fn migrate_tenant(
     // count mismatch already takes — and name the remedy, because the
     // operator's fix is a real decision (rule on the queue, or migrate with
     // `keep_source`), not a retry.
-    if got.quarantined > 0 {
+    // Consulted only when the source is about to be DROPPED. The first
+    // version of this guard fired unconditionally and then named two
+    // remedies, neither of which worked: it deleted the destination vault one
+    // line before telling the operator to "rule on the queue there", and it
+    // ran ahead of `keep_source`, so "re-run with keep_source" reached the
+    // identical refusal. With a rate screen declared on the destination —
+    // where a migration is by definition a burst from one writer identity —
+    // that made migration permanently impossible with no escape hatch.
+    //
+    // With `keep_source`, nothing is lost: the mapping flips, the source
+    // stays, and the response carries the count so the operator can rule on
+    // the destination's queue at their leisure. Without it, refuse and remove
+    // the partial copy so the retry is clean, and name the remedy that
+    // actually exists.
+    if got.quarantined > 0 && !keep_source {
         let _ = engine::delete_vault(&dst, &tenant.vault);
         return Err(format!(
-            "destination screened {} of {} drawer(s) into quarantine-pending — \
-             source left authoritative and the partial copy removed. Rule on the \
-             queue there (`admission list`/`allow`), or re-run with keep_source \
-             and reconcile before dropping the source",
+            "destination screened {} of {} drawer(s) into quarantine-pending, so \
+             the copy is not faithful and the source must not be dropped. The \
+             partial copy was removed so this can be retried: re-run with \
+             keep_source=true, rule on the destination's queue (`admission \
+             list`/`allow`), then drop the source yourself once it is clean",
             got.quarantined, got.drawers
         ));
     }
@@ -784,6 +799,13 @@ pub(crate) fn migrate_tenant(
         "from": tenant.instance,
         "to": to,
         "records": imported,
+        // Counted in `records` (they were written) but NOT filed where the
+        // payload aimed them — the destination's own screen diverted them.
+        // Reachable only with `keep_source`, since the branch above refuses
+        // to drop a source when the copy is unfaithful. Always 0 when the
+        // destination does not screen, so the response shape is unchanged
+        // for every deployment that does not.
+        "quarantined": got.quarantined,
         "source_deleted": source_deleted,
     }))
 }

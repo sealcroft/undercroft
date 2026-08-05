@@ -29,7 +29,6 @@ const WRITE_TOOLS: &[&str] = &[
     "undercroft_kg_add",
     "undercroft_kg_invalidate",
     "undercroft_kg_supersede",
-    "undercroft_kg_set_authority",
     "undercroft_diary_write",
     "undercroft_dedup",
 ];

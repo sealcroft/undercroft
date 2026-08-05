@@ -1203,7 +1203,16 @@ impl PalaceStore {
             dates.sort();
             let span = match (dates.first(), dates.last()) {
                 (Some(a), Some(b)) => {
-                    format!("{}..{}", &a[..10.min(a.len())], &b[..10.min(b.len())])
+                    // `filed_at` is caller-settable on import, and a BYTE
+                    // slice at 10 panics on a multi-byte character there.
+                    // This is reached by `undercroft_get_closet_index` over
+                    // MCP — a session-start context loader — and the server
+                    // is a single-threaded loop with no panic hook, so one
+                    // imported drawer killed the process for every tenant,
+                    // on every retry, permanently. `.chars().take(..)` is
+                    // the idiom `list_drawers` already uses in this file.
+                    let day = |s: &str| s.chars().take(10).collect::<String>();
+                    format!("{}..{}", day(a), day(b))
                 }
                 _ => String::new(),
             };

@@ -192,5 +192,28 @@ mod tests {
                 );
             }
         }
+        // And the OTHER direction, which this test did not have: every name in
+        // `WRITE_TOOLS` must be a tool that still exists. Without it the list
+        // rots exactly as a doc table does — removing
+        // `undercroft_kg_set_authority` from the surface left its entry behind,
+        // and nothing failed. That is the rot this module's header claims to
+        // prevent in BOTH directions; it was true of `MCP_TOOLS` only.
+        for line in write_list.lines() {
+            let Some(name) = line.trim().strip_prefix('"') else {
+                continue;
+            };
+            let Some(name) = name.split('"').next() else {
+                continue;
+            };
+            if !name.starts_with("undercroft_") {
+                continue;
+            }
+            assert!(
+                MCP_TOOLS.contains(&name),
+                "WRITE_TOOLS lists {name}, which is not an advertised tool — a \
+                 stale entry here reads as a boundary that is being enforced \
+                 and is not"
+            );
+        }
     }
 }

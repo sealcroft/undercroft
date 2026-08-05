@@ -1786,8 +1786,11 @@ fn main() -> Result<()> {
                 "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
                  {}… and {}…, nothing else changed{}",
                 att.drawers.len(),
-                &att.head_before[..12.min(att.head_before.len())],
-                &att.head_after[..12.min(att.head_after.len())],
+                // Attestation fields come from a caller-supplied JSON file;
+                // byte-slicing them panics on a multi-byte boundary, and
+                // this line runs while printing "ATTESTATION VERIFIED".
+                att.head_before.chars().take(12).collect::<String>(),
+                att.head_after.chars().take(12).collect::<String>(),
                 if att.sig.is_some() {
                     "; sender signature verified"
                 } else {
@@ -2155,7 +2158,10 @@ fn main() -> Result<()> {
                         match (&m.sender, &m.sig) {
                             (Some(s), Some(_)) => format!(
                                 " signed-by={}{}",
-                                &s[..16.min(s.len())],
+                                // Payload-supplied sender: byte-slicing it
+                                // panics (exit 101) on any import of a file
+                                // an attacker authored, before any write.
+                                s.chars().take(16).collect::<String>(),
                                 if sender.is_some() {
                                     " (verified)"
                                 } else {
