@@ -148,6 +148,67 @@ body_has "rotated token serves" 'gigawatts' -- -X POST "${AUTH_ACME2[@]}" \
   -d '{"query":"flux capacitor power"}' "$O/t/search"
 code_is  "rotate unknown tenant is 404" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/ffffffffffffffff/rotate"
 
+echo "== Operator plane: every ops route, positively (C9/C15) =="
+# Ten routes landed on the admin plane on the argument that they "were
+# reachable from nowhere in a fleet" — and then this suite drove NONE of
+# them, so what was proved was the refusals and never the capability. Each
+# one is exercised here through the admin plane AND through the CLI alias,
+# because docs/MULTI_TENANCY.md says the CLI mirrors this plane and it had
+# no subcommand at all until 2026-08-05.
+OPS_T="$(curl -s -X POST "${ADMIN[@]}" -d '{"name":"opsy"}' "$O/admin/tenants")"
+OPS_ID="$(grep -o '"id":"[0-9a-f]*"' <<<"$OPS_T" | head -1 | cut -d'"' -f4)"
+OPS_TOKEN="$(grep -o '"token":"[0-9a-f]*"' <<<"$OPS_T" | head -1 | cut -d'"' -f4)"
+curl -s -X POST -H "Authorization: Bearer $OPS_TOKEN"   -d '{"text":"the ops tenant filed a drawer about turbines","wing":"w","room":"r"}'   "$O/t/drawers" >/dev/null
+
+body_has "ops verify"        '"ok":true'   -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/verify"
+body_has "ops anchor"        '"anchored"'  -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/anchor"
+body_has "ops supersessions" 'supersessions' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/supersessions"
+body_has "ops admission list" 'pending'    -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/admission"
+body_has "ops trust list"    'assignments' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/trust"
+body_has "ops trust assign"  '"trust":"trusted"' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","trust":"trusted"}' "$O/admin/tenants/$OPS_ID/ops/trust"
+body_has "ops retention list" 'policies'   -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/retention"
+body_has "ops retention set" '"days":3650' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","days":3650}' "$O/admin/tenants/$OPS_ID/ops/retention"
+body_has "ops retention sweep" 'destroyed' -- -X POST "${ADMIN[@]}"   -d '{}' "$O/admin/tenants/$OPS_ID/ops/retention/sweep"
+# A route that is NOT on the plane stays off it, so the block above is not
+# passing because everything is forwarded.
+code_is  "ops refuses key rotation" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/rotate"
+code_is  "ops refuses drawer reads" 404 -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/drawers"
+
+# The CLI mirrors it — the half docs promised and nothing shipped.
+if "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify 2>&1 | grep -q '"ok":true'; then
+  ok "orchestrator CLI ops verify"
+else
+  fail "orchestrator CLI ops verify"
+fi
+if "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" trust 2>&1 | grep -q 'assignments'; then
+  ok "orchestrator CLI ops trust"
+else
+  fail "orchestrator CLI ops trust"
+fi
+# Captured rather than piped: `set -o pipefail` makes an `if cmd | grep`
+# see the FAILING command's status, so a refusal that greps correctly still
+# reads as a failed check — which is what this one did on its first run.
+OPS_ERR="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" frobnicate 2>&1)"
+if grep -q 'unknown operation' <<<"$OPS_ERR"; then
+  ok "orchestrator CLI ops refuses an unknown operation"
+else
+  fail "orchestrator CLI ops refuses an unknown operation" "$OPS_ERR"
+fi
+
+echo "== Data-plane quarantine fence (C15) =="
+# The fence had ZERO occurrences in this suite: the reading half of the
+# boundary OPS_ROUTES draws for the ruling half, tested only in a unit test.
+# It refuses BEFORE any engine call, so naming the reserved wing on any
+# data-plane route is refused whether or not the tenant has anything in it.
+OPS_AUTH=(-H "Authorization: Bearer $OPS_TOKEN")
+body_has "fence: search naming the wing"  'quarantine' -- -X POST "${OPS_AUTH[@]}"   -d '{"query":"x","wing":"quarantine-pending"}' "$O/t/search"
+body_has "fence: drawers?wing="           'quarantine' -- "${OPS_AUTH[@]}"   "$O/t/drawers?wing=quarantine-pending"
+body_has "fence: save aimed at the wing"  'quarantine' -- -X POST "${OPS_AUTH[@]}"   -d '{"text":"forged","wing":"quarantine-pending"}' "$O/t/drawers"
+code_is  "fence: refuses with 404"    404 -- "${OPS_AUTH[@]}"   "$O/t/drawers?wing=quarantine-pending"
+# Premise: the same routes serve an ordinary wing, so the refusals above
+# are about the wing and not about the routes.
+body_has "premise: ordinary wing serves" 'turbines' -- -X POST "${OPS_AUTH[@]}"   -d '{"query":"turbines","wing":"w"}' "$O/t/search"
+
 echo "== Data-plane boundary: traversal, replica writes, query forwarding =="
 # A DEDICATED tenant, for two reasons the first draft of this block learned
 # the hard way: acme's token was deliberately rotated out above (so it answers

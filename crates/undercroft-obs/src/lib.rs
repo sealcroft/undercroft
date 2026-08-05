@@ -79,6 +79,13 @@ macro_rules! diag_error {
 pub enum WriteOutcome {
     Created,
     Deduped,
+    /// The admission screen diverted the write. Its own label rather than
+    /// `created`, because `drawer_writes_total{outcome="created"}` counted
+    /// diverted writes as created on every write arm — a positively
+    /// misleading durable signal, not merely a missing one, and the exact
+    /// counterpart of the `drawer-saved` frame that used to travel beside
+    /// the honest `drawer-quarantined` one (ROADMAP C11/R5).
+    Quarantined,
 }
 
 impl WriteOutcome {
@@ -87,6 +94,7 @@ impl WriteOutcome {
         match self {
             WriteOutcome::Created => "created",
             WriteOutcome::Deduped => "deduped",
+            WriteOutcome::Quarantined => "quarantined",
         }
     }
 }

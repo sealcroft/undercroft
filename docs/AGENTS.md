@@ -177,11 +177,17 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   `POST .../verify`, so a route added later is refused until it is
   deliberately classified. (`POST .../verify` is classified as a read because
   it only walks HMACs and replays the chain — it takes `&self` and writes
-  nothing. What a read-only process *does* still write happens at **open**,
-  not per request: schema creation, chain initialisation, and the
-  reconciliation that fast-forwards a lagging manifest anchor or finishes an
-  interrupted rotation. "Read-only" is a posture about the request surface,
-  not a claim that the file is never touched.) On `/mcp` the
+  nothing. Since v0.47.0 the **open** is a read too: the connection is
+  `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema is checked
+  rather than created, a lagging manifest anchor is reported rather than
+  fast-forwarded, and an interrupted rotation is honoured in memory with its
+  `vault.json.next` left exactly where it is. Whatever the open declined to
+  repair is warned at start-up and readable afterwards as `unhealed` on
+  `undercroft stats`, `undercroft_status` and `GET /v1/vaults/{id}/stats`.
+  Two conditions **refuse** instead, both 409: a manifest whose `palace.db`
+  is absent — "empty" is not "absent", and this one is an integrity verdict
+  (exit 2) — and a schema this build would have had to migrate, which needs
+  one writable open first.) On `/mcp` the
   refusal is at the **call**, not in the catalogue: `tools/list` still
   advertises the write tools, so a client is told *why* a call was refused
   instead of finding a tool silently missing.
@@ -246,7 +252,12 @@ Two options worth knowing:
   near-duplicate in place (audited update) instead of piling up copies. The
   refreshed drawer takes the incoming text and date, and keeps the one it
   displaced in `occurrences`, so collapsing a repeat never erases the day it
-  first appeared. Search hits carry the full chronology.
+  first appeared. Search hits carry the full chronology. If the admission
+  screen diverts that save, **the refresh did not happen**: the response is
+  `202 {"deduped": false, "quarantined": true}` with the quarantine id, and
+  the matched drawer still holds its previous text. It answered
+  `200 {"deduped": true}` against the matched id until v0.47.0 — a claim
+  about a write to a drawer nothing had touched.
 
 Export lines carry vectors and ColBERT token artifacts, so
 export→import is a **lossless migration primitive** — restore is a copy,
@@ -682,6 +693,38 @@ undercroft import palace.bundle --identity ops.key --sender <sender-hex>
 
 ## 8. Reference — MCP tools (33)
 
+**What is deliberately NOT here, and why** (added 2026-08-05: each of these
+was an absence with nothing written down, and this project's own rule is
+that a capability missing from one surface is either a boundary or a drift —
+and which one has to be stated). All of them are entries in `OPERATOR_ONLY`,
+asserted absent by the same test that counts the tool surface, so the
+boundary and the inventory can never disagree:
+
+- **`export`, `import`, `refine`** — export moves a whole corpus out in one
+  call (the egress act, chain-audited wherever it exists); import writes
+  records the agent did not compose, with caller-chosen ids, wings,
+  provenance claims and a `filed_at` that IS the retention clock; refine
+  spends an LLM budget and distils drawer text into facts the next agent
+  reads as knowledge.
+- **admission rulings, wing trust, retention, forgetting, key rotation,
+  anchor tightening, and the authority tier** — an agent must not rule on
+  the queue that exists to contain it, assign the class that decides what it
+  may retrieve, shorten the life of what it wrote, or move the
+  out-of-database evidence a rollback is detected against.
+
+**Two more absences that are structural rather than policy**, stated here
+because nothing stated them:
+
+- **MCP has ONE error class.** Tools answer a JSON-RPC error with a message;
+  there is no equivalent of `/v1`'s 400/404/409 split. And the store is
+  opened *before* dispatch, so an open-time integrity verdict — the 409 case
+  on `/v1`, exit 2 on the CLI — never reaches the tool layer at all: the
+  server fails to start instead. Defensible (a tamper verdict is not a
+  per-call condition) and previously unwritten.
+- **`/v1` has no KG *write* routes** except `POST …/kg/authority`. The KG is
+  written by the CLI, by MCP (`undercroft_kg_add`) and by import; the REST
+  surface browses it. That is a present-tense boundary, not a future item.
+
 Write tools (marked **W**) are refused when the server runs `--read-only`.
 There are 12 of them, and the list is not maintained by hand: the code is
 counted against an inventory (`crates/undercroft-cli/src/parity.rs`) in both
@@ -752,7 +795,7 @@ classifies it deliberately:
 | GET | `/v1/vaults/{id}/stats/history` | the recent stats sample ring buffer (aggregate counts only, `?window=N` ≤ 300) so a fresh stream client can backfill its chart. **`telemetry` builds only** — a default build answers 501 |
 | POST | `/v1/vaults/{id}/drawers` | save (`text` — **max 100,000 bytes**, the engine's bound, enforced at the store write choke point on every surface since 2026-08-04; `wing`/`room` go through the same name guard on every write path including import — opt `kind` — closed vocabulary, 400 if unknown — opt `supersedes` — a receipted update link to the drawer this save replaces; the old drawer stays — opt `vector`, `dedup_threshold`, `content_date`, and the provenance claims `agent`/`channel`/`session`). **202 + `{"quarantined": true}` when the admission screen diverts the write**, with `id` naming where the drawer actually landed rather than where you aimed it; 200 otherwise. Every variant of this call — with a `vector`, with a `dedup_threshold`, on an external-embedding vault — goes through the same screen. Aiming a save at the reserved `quarantine-pending` wing is **400**, not a 500 "corrupt row": a signal-less write there is a caller forging "pending review", or a typo |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`); the quarantine wing is excluded unless you name it, as on `search` and `recent` |
-| GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
+| GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. **A quarantine-pending drawer needs the reviewer's door declared**: `?wing=quarantine-pending`, because an id names nothing and reading pending evidence is the reviewer's act — 403 without it, and 403 *with* it under per-vault assertions (an assertion authorizes one vault; it does not make the caller this deployment's reviewer). The three surfaces differ here **on purpose**: MCP refuses outright (the quarantine fence), `/v1` requires the door, and the CLI operator seat reads it by id with no door at all — `undercroft drawer get <id>` is the way to read the text you are about to rule on, and it is the local operator's own terminal. `undercroft admission list` prints ids, wings, signal codes and timestamps and **no content**. Verbatim otherwise: `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`); screened like a save when admission is on — a flagged update answers 202 `{quarantined: true}` and the drawer keeps its previous content. The update re-stamps `added_by` with the updating surface first, so an untrusted surface cannot ride the original writer's standing; quarantine-pending drawers are not editable |
 | POST | `/v1/vaults/{id}/search` | search (`query`, `limit` — **default 5**, one page size for every surface; it was 10 here until v0.47.0, so a client relying on ten hits must now say `limit: 10` — opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `min_trust`, and the four reading conventions of §5; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer. **404 when the id is not here** — it answered 200 `{"deleted": false}` until 2026-08-04, so a client checking only the status was told a typo'd or stale id had been deleted. "That record is not here" is 404 on every route now, including `forget` and `admission`, which used to raise it as 400. A quarantine-pending drawer is **400, not deleted**: rule on it with `…/admission` instead |
@@ -776,6 +819,7 @@ classifies it deliberately:
 | POST | `/v1/vaults/{id}/retention/sweep` | destroy what aged out through the attested-forgetting path (`{dry_run: true}` previews); the response carries the sweep report + receipt. Nothing runs automatically — a sweep happens when the operator asks |
 | POST | `/v1/vaults/{id}/trust` | assign a wing's trust class (`wing`, `trust` ∈ `quarantined`\|`standard`\|`trusted`; 400 if unknown). The receiving principal's declaration — an OPERATOR surface, deliberately absent from MCP; audited, tamper-evident |
 | GET | `/v1/vaults/{id}/trust` | every assigned wing trust class (absent wings read as `standard`) |
+| POST | `/v1/vaults/{id}/anchor` | fast-forward the manifest rollback anchor onto the committed audit-chain head, and report how far behind it was (`behind_by`). **The surface this capability exists for**: `store_for` caches its handle, so a long-lived server never re-opens and never reconciles by itself, while `POST …/verify` is a genuine read and does not anchor (ROADMAP A31/R3). A write — refused 403 on a `--read-only` server, and deliberately absent from MCP (`OPERATOR_ONLY`), because it moves the out-of-database evidence a rollback is detected against |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract — **409** for the vault this same process also serves over `/mcp`, i.e. the one named by `--vault`: rotating retires the keys under that second live handle, which then reports every read as TAMPERED and re-anchors the manifest from its stale cache. Stop the server and run `undercroft vault rotate <name>`, which holds the only handle) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON: a manifest first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (receipts travel and re-key at import) and tunnels — the whole palace |
 | POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present. The response carries `quarantined` beside `imported` — how many records the admission screen diverted (0 while screening is off). Every imported record's `added_by` is **re-stamped `import`**, overwriting whatever the payload claimed: that field is the key the trusted-source auto-admit rides, so a bundle claiming `added_by: "cli"` must not inherit a save surface's standing. Declare `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import` to trust the import act itself |
@@ -901,7 +945,12 @@ chain append is a real durability cost, so it is declared; garbage
 refuses to open; a read-only open warns and serves unaudited. One
 boundary, stated rather than hidden: read records deliberately do **not**
 advance the manifest anchor, so they anchor at the next store open and a
-stripped unanchored tail is indistinguishable from a crash until then.
+stripped unanchored tail is indistinguishable from a crash until then. A
+long-lived server never re-opens — `store_for` caches the handle — so
+close the window explicitly with `POST /v1/vaults/{id}/anchor` (or
+`undercroft vault anchor <name>`) on a cadence of your own. **Not**
+`POST …/verify`: it is a genuine read and does not anchor, and this
+paragraph told you otherwise until v0.47.0.
 Exports are chain-audited unconditionally — one `egress/export` record
 binding surface, recipient, counts and the export's own manifest digest —
 with no variable to set) ·

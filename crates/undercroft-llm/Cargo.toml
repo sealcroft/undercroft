@@ -8,6 +8,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+undercroft-net = { path = "../undercroft-net" }
 undercroft-core = { path = "../undercroft-core" }
 undercroft-obs = { path = "../undercroft-obs" }
 serde = { workspace = true }

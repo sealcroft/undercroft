@@ -103,6 +103,10 @@ pub struct Tenant {
     pub instance: String,
     pub vault: String,
     pub created_at: String,
+    /// The security level this tenant's vault was created at (`sealed` |
+    /// `hmac-only`). Recorded because a migration has to recreate the vault
+    /// on the destination and had no way to ask (ROADMAP C3).
+    pub level: String,
 }
 
 pub struct Orch {
@@ -155,6 +159,18 @@ impl Orch {
                  v TEXT NOT NULL
              );",
         )?;
+        // The security level the tenant's vault was created at. It lived
+        // NOWHERE — not on `Tenant`, not in this table — while both creation
+        // surfaces offer `hmac-only`, so `migrate_tenant` hard-coded
+        // `"sealed"` and silently converted an hmac-only tenant on the way
+        // across (ROADMAP C3). SQLite has no ADD COLUMN IF NOT EXISTS; a
+        // duplicate-column error just means the migration already ran.
+        // Existing rows default to `sealed`, which is what the engine's own
+        // create defaults to and what every migration produced until now.
+        let _ = conn.execute(
+            "ALTER TABLE tenants ADD COLUMN level TEXT NOT NULL DEFAULT 'sealed'",
+            [],
+        );
         Ok(Self {
             conn,
             key: Zeroizing::new(key),
@@ -399,6 +415,7 @@ impl Orch {
         &self,
         name: &str,
         instance: &str,
+        level: &str,
     ) -> Result<(Tenant, String), StateError> {
         self.require_writable()?;
         let mut id_bytes = [0u8; 8];
@@ -414,17 +431,19 @@ impl Orch {
             instance: instance.to_string(),
             vault,
             created_at: now_rfc3339(),
+            level: level.to_string(),
         };
         self.conn.execute(
-            "INSERT INTO tenants (id, name, instance, vault, token_mac, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO tenants (id, name, instance, vault, token_mac, created_at, level)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 t.id,
                 t.name,
                 t.instance,
                 t.vault,
                 self.token_mac(&token),
-                t.created_at
+                t.created_at,
+                t.level
             ],
         )?;
         self.touch_last_write()?;
@@ -438,7 +457,7 @@ impl Orch {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, instance, vault, created_at FROM tenants WHERE token_mac = ?1",
+                "SELECT id, name, instance, vault, created_at, level FROM tenants WHERE token_mac = ?1",
                 params![mac],
                 |r| {
                     Ok(Tenant {
@@ -447,6 +466,7 @@ impl Orch {
                         instance: r.get(2)?,
                         vault: r.get(3)?,
                         created_at: r.get(4)?,
+                        level: r.get(5)?,
                     })
                 },
             )
@@ -457,7 +477,7 @@ impl Orch {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, instance, vault, created_at FROM tenants WHERE id = ?1",
+                "SELECT id, name, instance, vault, created_at, level FROM tenants WHERE id = ?1",
                 params![id],
                 |r| {
                     Ok(Tenant {
@@ -466,6 +486,7 @@ impl Orch {
                         instance: r.get(2)?,
                         vault: r.get(3)?,
                         created_at: r.get(4)?,
+                        level: r.get(5)?,
                     })
                 },
             )
@@ -474,7 +495,7 @@ impl Orch {
 
     pub fn tenant_list(&self) -> Result<Vec<Tenant>, StateError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, instance, vault, created_at FROM tenants ORDER BY created_at, id",
+            "SELECT id, name, instance, vault, created_at, level FROM tenants ORDER BY created_at, id",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -484,6 +505,7 @@ impl Orch {
                     instance: r.get(2)?,
                     vault: r.get(3)?,
                     created_at: r.get(4)?,
+                    level: r.get(5)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -617,7 +639,7 @@ mod tests {
     fn tokens_resolve_by_mac_and_never_store_plaintext() {
         let (_d, o) = orch();
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, token) = o.tenant_create("acme", "alpha").unwrap();
+        let (t, token) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         assert_eq!(t.vault, format!("tenant-{}", t.id));
         let hit = o.tenant_by_token(&token).unwrap().expect("token resolves");
         assert_eq!(hit.id, t.id);
@@ -634,11 +656,62 @@ mod tests {
         assert_eq!(count, 0);
     }
 
+    /// C3: the vault's security level is STATE, and it survives every read
+    /// path — because `migrate_tenant` recreates the vault on the
+    /// destination and had nothing to ask, so it hard-coded `"sealed"` and
+    /// silently converted an hmac-only tenant on the way across.
+    #[test]
+    fn a_tenants_security_level_is_recorded_and_read_back_everywhere() {
+        let (_d, o) = orch();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let (sealed, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
+        let (plain, token) = o.tenant_create("globex", "alpha", "hmac-only").unwrap();
+        assert_eq!(sealed.level, "sealed");
+        assert_eq!(plain.level, "hmac-only");
+        // All three reads, because a migration reaches the tenant through
+        // `tenant_get` and the console through `tenant_list`.
+        assert_eq!(o.tenant_get(&plain.id).unwrap().unwrap().level, "hmac-only");
+        assert_eq!(
+            o.tenant_by_token(&token).unwrap().unwrap().level,
+            "hmac-only"
+        );
+        assert_eq!(
+            o.tenant_list()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == plain.id)
+                .unwrap()
+                .level,
+            "hmac-only"
+        );
+    }
+
+    /// A state database written before the column existed still opens, and
+    /// its rows read as `sealed` — which is what every migration produced
+    /// and what the engine's own create defaults to.
+    #[test]
+    fn a_pre_level_state_database_migrates_and_defaults_to_sealed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("orch.db");
+        {
+            let o = Orch::open(&path, KEY).unwrap();
+            o.instance_add("alpha", "http://a", "b", "s").unwrap();
+            o.tenant_create("acme", "alpha", "hmac-only").unwrap();
+            // Put the schema back the way it was before the column.
+            o.conn
+                .execute_batch("ALTER TABLE tenants DROP COLUMN level;")
+                .unwrap();
+        }
+        let o = Orch::open(&path, KEY).unwrap();
+        let t = &o.tenant_list().unwrap()[0];
+        assert_eq!(t.level, "sealed", "the migrated default");
+    }
+
     #[test]
     fn token_rotation_revokes_the_old_token_immediately() {
         let (_d, o) = orch();
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, old) = o.tenant_create("acme", "alpha").unwrap();
+        let (t, old) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         let new = o.tenant_rotate_token(&t.id).unwrap();
         assert_ne!(old, new);
         assert!(o.tenant_by_token(&old).unwrap().is_none(), "old token dead");
@@ -656,7 +729,7 @@ mod tests {
         let path = dir.path().join("orch.db");
         let writer = Orch::open(&path, KEY).unwrap();
         writer.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, token) = writer.tenant_create("acme", "alpha").unwrap();
+        let (t, token) = writer.tenant_create("acme", "alpha", "sealed").unwrap();
 
         let replica = Orch::open_read_only(&path, KEY).unwrap();
         assert_eq!(replica.tenant_by_token(&token).unwrap().unwrap().id, t.id);
@@ -664,7 +737,10 @@ mod tests {
         assert!(replica.last_write().unwrap().is_some());
         for err in [
             replica.instance_add("x", "http://x", "b", "s").unwrap_err(),
-            replica.tenant_create("x", "alpha").map(|_| ()).unwrap_err(),
+            replica
+                .tenant_create("x", "alpha", "sealed")
+                .map(|_| ())
+                .unwrap_err(),
             replica.tenant_rotate_token(&t.id).map(|_| ()).unwrap_err(),
             replica.tenant_delete(&t.id).map(|_| ()).unwrap_err(),
             replica.instance_remove("alpha").map(|_| ()).unwrap_err(),
@@ -704,7 +780,7 @@ mod tests {
         // right class, end to end.
         let (_d, o) = orch();
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, _) = o.tenant_create("acme", "alpha").unwrap();
+        let (t, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         // `.err()`, never `unwrap_err()`: `InstanceCreds` is deliberately
         // not `Debug` — it carries key material.
         assert_eq!(o.instance_creds("nope").err().unwrap().status(), 404);
@@ -739,7 +815,7 @@ mod tests {
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
         o.instance_add("beta", "http://b", "b", "s").unwrap();
         assert_eq!(o.instance_least_loaded().unwrap().as_deref(), Some("alpha"));
-        let (t1, _) = o.tenant_create("one", "alpha").unwrap();
+        let (t1, _) = o.tenant_create("one", "alpha", "sealed").unwrap();
         assert_eq!(o.instance_least_loaded().unwrap().as_deref(), Some("beta"));
         // An instance hosting tenants refuses removal.
         assert!(o.instance_remove("alpha").is_err());

@@ -64,6 +64,15 @@ pub struct PalaceStats {
     /// in this struct can tell you (see
     /// `PalaceStore::codebook_generation_bump`).
     pub codebooks: Vec<(String, u64)>,
+    /// Whether this handle was opened for a role that must not write.
+    pub read_only: bool,
+    /// Repairs the OPEN found and declined to make, in the operator's words
+    /// (R4). Always empty on a writable open, which heals each of them
+    /// instead. It is on `stats` rather than only in a start-up log line
+    /// because a long-lived read-only server's start-up was hours ago, and
+    /// "the anchor is N behind" and "a writer's staging manifest is still
+    /// there" are exactly the facts an operator goes looking for later.
+    pub unhealed: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -738,10 +747,11 @@ impl PalaceStore {
         entry: &str,
         via: &str,
     ) -> Result<SaveOutcome, StoreError> {
-        undercroft_core::validate_name(agent, "agent").map_err(|e| StoreError::CorruptRow {
-            id: agent.into(),
-            reason: e.to_string(),
-        })?;
+        // Caller input, so `Invalid` (→ 400), not `CorruptRow` (→ 500):
+        // an agent name that fails the guard is a bad argument, not a
+        // damaged vault (ROADMAP C13/E7).
+        undercroft_core::validate_name(agent, "agent")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
         let wing = format!("agent-{agent}");
         let normalized = undercroft_core::normalize_content(entry);
         let idx = self.next_append_index()? as u32;
@@ -803,6 +813,8 @@ impl PalaceStore {
             level: self.vault.level().to_string(),
             db_bytes,
             codebooks: self.codebook_generations(),
+            read_only: self.is_read_only(),
+            unhealed: self.unhealed().to_vec(),
         })
     }
 
@@ -1049,15 +1061,38 @@ impl PalaceStore {
     }
 
     /// Follow a tunnel: recent drawers from the destination wing.
+    ///
+    /// The row is HMAC-verified before its `to_wing` is used, like its
+    /// neighbour [`list_tunnels`](Self::list_tunnels) and like every other
+    /// read in this crate — *"every read must verify the record HMAC before
+    /// returning data"* is a project invariant, and this call reached the
+    /// column with a bare `SELECT` until 2026-08-05 (ROADMAP C7). The
+    /// reserved-wing refusal below is not a substitute: it is one value,
+    /// and the invariant is about the column. An offline edit of `to_wing`
+    /// pointed this at any wing it liked, from an id an agent may pass over
+    /// MCP.
     pub fn follow_tunnel(&self, id: &str, limit: usize) -> Result<Vec<Drawer>, StoreError> {
-        let to: Option<String> = self
+        let row: Option<(String, String, String, Vec<u8>, String)> = self
             .conn
             .query_row(
-                "SELECT to_wing FROM tunnels WHERE id = ?1",
+                "SELECT from_wing, to_wing, label, tag, created_at FROM tunnels WHERE id = ?1",
                 params![id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional()?;
+        let to = match row {
+            None => None,
+            Some((from, to, label, tag, created)) => {
+                self.vault
+                    .verify_tag(&tunnel_canonical(id, &from, &to, &label, &created), &tag)
+                    .map_err(|_| {
+                        undercroft_obs::hmac_verify_failed("tunnel");
+                        undercroft_obs::event_hmac_fail(self.vault.id(), "tunnel");
+                        StoreError::Integrity(format!("tunnel/{id}"))
+                    })?;
+                Some(to)
+            }
+        };
         match to {
             // Refused again at READ time, not only at creation: rows written
             // before the endpoint guard existed are still in the table, and
@@ -1276,6 +1311,78 @@ mod tests {
 
     fn drawer(wing: &str, room: &str, content: &str, idx: u32) -> Drawer {
         Drawer::new(wing, room, content.into(), Some("s.md".into()), idx, "test")
+    }
+
+    /// C7: `follow_tunnel` verifies the row it reads a wing out of, and
+    /// refuses a legacy row aimed at the review queue.
+    ///
+    /// Both arms are planted by raw INSERT, because `create_tunnel` now
+    /// refuses to make either — which is exactly why the read-time checks
+    /// have to exist: rows written before those guards are still in the
+    /// table, and an offline editor can write any row it likes.
+    #[test]
+    fn following_a_tunnel_verifies_the_row_and_refuses_the_review_queue() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("notes", "r", "an ordinary drawer", 0))
+            .unwrap();
+        let good = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert!(
+            s.follow_tunnel(&good, 5).is_ok(),
+            "premise: an honest tunnel follows"
+        );
+
+        // (a) A legacy row pointing at the reserved wing. `create_tunnel`
+        // refuses this now, so the only way in is the way an old vault got
+        // one, or an offline edit.
+        assert!(
+            s.create_tunnel("notes", crate::admission::QUARANTINE_WING, "x")
+                .is_err(),
+            "premise: the create guard refuses it"
+        );
+        // Correctly TAGGED, so it passes the HMAC and reaches the
+        // reserved-wing refusal — which is the arm that exists for it. A
+        // badly tagged one is covered by (b) below.
+        {
+            let created = now_rfc3339();
+            let tag = s.vault.tag(&tunnel_canonical(
+                "legacy",
+                "notes",
+                crate::admission::QUARANTINE_WING,
+                "x",
+                &created,
+            ));
+            s.conn
+                .execute(
+                    "INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at) \
+                     VALUES ('legacy', 'notes', ?1, 'x', ?2, ?3)",
+                    params![crate::admission::QUARANTINE_WING, tag.as_slice(), created],
+                )
+                .unwrap();
+        }
+        assert!(
+            matches!(s.follow_tunnel("legacy", 5), Err(StoreError::Invalid(_))),
+            "a tunnel into the review queue must be refused at read time"
+        );
+
+        // (b) An offline flip of `to_wing` on an otherwise valid row. The
+        // reserved-wing refusal above cannot see this — it is one value, and
+        // the invariant is about the column.
+        s.conn
+            .execute(
+                "UPDATE tunnels SET to_wing = 'elsewhere' WHERE id = ?1",
+                params![good],
+            )
+            .unwrap();
+        assert!(
+            matches!(s.follow_tunnel(&good, 5), Err(StoreError::Integrity(_))),
+            "a flipped to_wing must fail its HMAC, not be followed"
+        );
+        // And the neighbour that always verified agrees, which is the point:
+        // the two reads of one table now answer the same way.
+        assert!(matches!(
+            s.list_tunnels(None),
+            Err(StoreError::Integrity(_))
+        ));
     }
 
     /// The receipted supersession chain, end to end through every verdict:

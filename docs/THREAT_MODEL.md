@@ -220,14 +220,26 @@ while the identical capability over `/mcp` in the same process answered
 "server is read-only". One forgotten call is a silent write door, so
 the decision moved to the one place every request passes through.
 
+`--read-only` bounds the **open** as well as the request surface, since
+v0.47.0 (ROADMAP R4; this paragraph used to record the opposite). The
+connection is `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON` — so a
+write that was *missed* fails loudly instead of happening quietly — and the
+schema is checked rather than created, a lagging manifest anchor is reported
+rather than fast-forwarded, an interrupted rotation is honoured in memory
+with its `vault.json.next` left in place, and a prefilter loads an index but
+never builds one. That last operation is the one the incident runbook's own
+"freeze writes" step used to perform: a read-only open could **delete** a
+writer's staging manifest (A32). What the open declined to repair is warned
+and then readable as `unhealed` on every stats surface.
+
 **Residual**: TLS termination is deliberately delegated to the
 operator's proxy (documented deployment guidance); the engine does not
-ship its own certificate machinery. And `--read-only` bounds the
-*request* surface, not every byte written: opening a palace still
-creates schema, reconciles an interrupted rotation and initializes the
-chain, and with `UNDERCROFT_RETRIEVAL=pq` a search may still build or
-retrain a missing PQ/IVF index. The first three are open-time and
-accepted; the index build is a recorded gap, not a decision.
+ship its own certificate machinery. And a read-only connection still
+materialises SQLite's WAL scaffolding — the `-shm` wal-index and a
+zero-length `-wal` — where the directory is writable. Neither carries
+database content and both are reconstructible; where the directory is not
+writable the open escalates to `immutable=1` and says so, which is what
+makes a write-protected mount or a snapshot readable at all.
 
 ### A5 — Untrusted accelerator (remote vector indexes)
 
@@ -395,7 +407,13 @@ egress went unaudited, and it disables read auditing with a warning at
 open — the replica precedent: warn and serve, never silently pretend.
 And read records are appended **without advancing the manifest anchor**;
 they anchor at the next store open, so a stripped unanchored tail is
-indistinguishable from a crash until then.
+indistinguishable from a crash until then. A long-lived server never
+re-opens, so since v0.47.0 the window has an explicit closer —
+`POST /v1/vaults/{id}/anchor`, a write, refused on a read-only handle
+(ROADMAP R3). It is deliberately **not** an MCP tool: it fsyncs the
+out-of-database manifest a rollback is detected against, and the surface
+an agent drives must not move that onto whatever the database currently
+says.
 
 ## 6. Verbatim storage as a security property
 

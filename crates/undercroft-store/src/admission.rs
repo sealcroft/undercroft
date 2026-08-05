@@ -69,6 +69,16 @@ pub(crate) enum SaveEvent<'a> {
     },
 }
 
+/// Did this row land in the review queue?
+///
+/// The one predicate [`save_event`] keys on, named so the write choke point
+/// can ask it without restating the comparison. Two copies of "is this
+/// quarantined" that can drift is the shape this module spends its time
+/// removing.
+pub(crate) fn landed_in_quarantine(drawer: &Drawer) -> bool {
+    drawer.meta.wing == QUARANTINE_WING
+}
+
 /// Classify a written drawer by WHERE IT LANDED, not by which call site
 /// wrote it.
 ///
@@ -80,7 +90,7 @@ pub(crate) enum SaveEvent<'a> {
 /// `remember`), while the bulk paths emitted an ordinary `drawer-saved`
 /// whose only tell was a wing named `quarantine-pending`.
 pub(crate) fn save_event(drawer: &Drawer) -> SaveEvent<'_> {
-    if drawer.meta.wing != QUARANTINE_WING {
+    if !landed_in_quarantine(drawer) {
         return SaveEvent::Saved;
     }
     SaveEvent::Quarantined {

@@ -715,16 +715,17 @@ impl PalaceStore {
         extractor: Option<&str>,
     ) -> Result<String, StoreError> {
         let _span = undercroft_obs::scope("kg", self.vault.id());
-        undercroft_core::validate_name(subject, "subject").map_err(|e| StoreError::CorruptRow {
-            id: subject.into(),
-            reason: e.to_string(),
-        })?;
-        undercroft_core::validate_name(predicate, "predicate").map_err(|e| {
-            StoreError::CorruptRow {
-                id: predicate.into(),
-                reason: e.to_string(),
-            }
-        })?;
+        // `Invalid`, not `CorruptRow`: nothing here is corrupt — a caller
+        // handed us a name the guard does not accept, and that owes a 400.
+        // As `CorruptRow` it fell through `store_err`'s `_ => 500` and told
+        // an operator restoring a backup that their VAULT was corrupt
+        // (ROADMAP C13/E7). Eight sites moved together, because splitting
+        // one function's arguments across two status classes is the drift
+        // this project spends its time closing.
+        undercroft_core::validate_name(subject, "subject")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
+        undercroft_core::validate_name(predicate, "predicate")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
         // The object is content and reaches the agent verbatim — screened
         // and bounded here, at the graph's one write path.
         self.screen_kg_object(subject, predicate, object)?;
@@ -946,18 +947,10 @@ impl PalaceStore {
     /// row, in both directions.
     pub fn kg_import(&mut self, exp: &TripleExport) -> Result<String, StoreError> {
         let t = &exp.triple;
-        undercroft_core::validate_name(&t.subject, "subject").map_err(|e| {
-            StoreError::CorruptRow {
-                id: t.subject.clone(),
-                reason: e.to_string(),
-            }
-        })?;
-        undercroft_core::validate_name(&t.predicate, "predicate").map_err(|e| {
-            StoreError::CorruptRow {
-                id: t.predicate.clone(),
-                reason: e.to_string(),
-            }
-        })?;
+        undercroft_core::validate_name(&t.subject, "subject")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
+        undercroft_core::validate_name(&t.predicate, "predicate")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
         // An import is a write, so it meets the same screen and the same
         // size bound a local `kg_add` meets — the drawer precedent, where
         // `import_record` states `Screen::Apply` for exactly this reason.
@@ -1047,10 +1040,8 @@ impl PalaceStore {
             .as_deref()
             .map(hex::decode)
             .transpose()
-            .map_err(|e| StoreError::CorruptRow {
-                id: id.clone(),
-                reason: format!("source_fp is not hex: {e}"),
-            })?;
+            // Caller input on an import payload, so 400, not 500.
+            .map_err(|e| StoreError::Invalid(format!("source_fp is not hex: {e}")))?;
         let receipt_tag = source_fp
             .as_ref()
             .zip(t.source_drawer_id.as_deref())
@@ -1118,10 +1109,8 @@ impl PalaceStore {
     /// canonical, so it is exactly as tamper-covered as the name and
     /// exactly as owed to the chain.
     pub fn kg_import_entity(&mut self, name: &str, etype: &str) -> Result<(), StoreError> {
-        undercroft_core::validate_name(name, "entity").map_err(|e| StoreError::CorruptRow {
-            id: name.into(),
-            reason: e.to_string(),
-        })?;
+        undercroft_core::validate_name(name, "entity")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
         // `etype` arrived unvalidated while `name` beside it did not: free
         // text, unbounded, HMAC-covered, in the clear on a sealed vault and
         // echoed by `/v1`. Worse, it is the ONE field in `entity_canonical`
@@ -1138,18 +1127,12 @@ impl PalaceStore {
         // today would be a one-value list that refuses a future vault's
         // richer types. That decision is open, and open is what it is.
         //
-        // `CorruptRow` (→ 500) rather than `Invalid` (→ 400) only to match
-        // the `name` arm one line up. Caller input owes a 400 — the argument
-        // `kg_set_authority` makes about its own vocabulary — but splitting
-        // the two arguments of ONE function across two status classes is the
-        // drift this project spends its time closing. Both arms move
-        // together or neither does; recorded, not absorbed.
-        undercroft_core::validate_name(etype, "entity type").map_err(|e| {
-            StoreError::CorruptRow {
-                id: name.into(),
-                reason: e.to_string(),
-            }
-        })?;
+        // BOTH arms are `Invalid` (→ 400) since 2026-08-05. They were
+        // `CorruptRow` (→ 500) — "corrupt row <name>: …" for an entity name
+        // a caller sent — and the note here said the two had to move
+        // together or not at all. They moved together (ROADMAP C13).
+        undercroft_core::validate_name(etype, "entity type")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
         // Anchoring takes the LAST chain state; `records` counts what to
@@ -3351,8 +3334,11 @@ mod tests {
             ),
             ("a path separator", "../../etc/passwd"),
         ] {
+            // `Invalid` (→ 400) since 2026-08-05, not `CorruptRow` (→ 500):
+            // an etype a caller sent is a bad argument, not a damaged vault,
+            // and BOTH arms of this function moved together (ROADMAP C13).
             match s.kg_import_entity("bob", etype) {
-                Err(StoreError::CorruptRow { .. }) => {}
+                Err(StoreError::Invalid(_)) => {}
                 other => panic!("{what}: expected a refusal, got {other:?}"),
             }
         }

@@ -2,6 +2,303 @@
 
 ## Unreleased
 
+### the completeness residuals, closed (C1–C15)
+
+Fifteen items the 38-agent per-surface audit left open. The recurring shape
+it named — *a fix landed on the engine and its only first-party client was
+not updated* — accounts for the first four, and the rest are the same
+question asked of a different pair of surfaces.
+
+- **The console could not open the drawer it had just listed** (C1), and
+  **reported success for writes that were diverted or unattested** (C2). It
+  is a `/v1` client with no capability of its own, which is why the drift
+  rule gives it no column — but a fix that lands on the route and not on the
+  page is still a defect the operator meets. `openDrawer` carries the
+  reviewer's `?wing=`; `saveEdit` reads `quarantined` off the 202 instead of
+  toasting "updated" for an update that did not happen; `runImport` reads the
+  diverted count and the manifest verdict. Two riders: the 403 body named
+  `undercroft admission list`, which prints ids, wings, signal codes and no
+  content — it names `undercroft drawer get <id>` now — and the by-id review
+  door, documented on zero surfaces, is in the `/v1` route table with the
+  three surfaces' deliberate differences spelled out.
+- **A migration silently converted an hmac-only tenant to sealed** (C3),
+  because the level lived nowhere — not on `Tenant`, not in the `tenants`
+  table — so `migrate_tenant` hard-coded `"sealed"`, the only literal among
+  three `create_vault` call sites. It is state now, migrated in place with
+  `sealed` as the default (what every migration produced until now), and the
+  export manifest's own `level` is used as a **cross-check that refuses on
+  disagreement** rather than as the source: taking it would make the
+  destination's posture a function of bytes the source engine produced.
+  **A failed migration left an orphan destination vault** (C4) — the
+  import-failure branch returned early where both siblings cleaned up.
+- **CLI import verified a signature only when `--sender` was passed** (C5).
+  There was no `else`. Since the payload digest IS checked unconditionally,
+  an attacker swapping a signed bundle's records had to break the signature
+  but could keep the trusted sender's key — and the CLI printed that
+  sender's prefix above attacker content. `/v1` verified unconditionally the
+  whole time, so this was the drift shape this branch closes elsewhere: one
+  capability, two surfaces, one weaker. The decision moved into
+  `undercroft-vault::bundle::attest`, which both call.
+- **An imported ColBERT matrix was sealed under the id the payload aimed at**
+  (C6), not the one the row landed under — the default path for a payload
+  with quarantined rows against a non-screening destination. And
+  `import_token_artifact` took its id unvalidated while `is_drawer_id`'s one
+  call site claimed "the shape closes it for every write path at once": a
+  caller could post `id: "fde/<32 hex>"` and get a blob sealed under another
+  drawer's FDE domain, which is the property the AAD exists to provide.
+- **`follow_tunnel` returned data from a column it never verified** (C7),
+  while its neighbour `list_tunnels` raised `Integrity` on the same table.
+  The reserved-wing refusal beside it is not a substitute: that is one
+  value, and the invariant is about the column.
+- **`sealed_b64` said "Never plaintext" and nothing checked the level** (C8)
+  — see the transport section below, which is the larger half.
+- **The fleet's operator plane was reachable only by curl** (C9): ten routes
+  landed on the admin plane on the argument that they "were reachable from
+  nowhere in a fleet", and then the console had no element for any of them
+  and the CLI no subcommand, while `docs/MULTI_TENANCY.md` said the CLI
+  mirrors the plane. `undercroft-orchestrator ops <tenant> <op>` now does,
+  over a closed alias vocabulary gated against `OPS_ROUTES` **in both
+  directions** — an alias that is not an allowed route fails, and an allowed
+  route with no alias fails too.
+- **Import named the failing record on neither surface** (C10) for the six
+  store-guard refusal classes this branch added, over bodies that can hold a
+  million records. `/v1` commits per record and names the record; the CLI
+  commits per 256-record transaction and names the range, saying which
+  records were already written.
+- **`supersedes` walked past the MCP quarantine fence** (C12) — a drawer id
+  under a name that is neither `id` nor `*_id`, which is precisely the "a
+  checklist goes stale the moment a tool adds an argument" failure the
+  fence's own doc claims to have removed.
+- **Caller input answered 500 "corrupt row" at eight sites** (C13/E7): an
+  entity name, an entity type, a KG subject or predicate, a non-hex
+  `source_fp`, a drawer superseding itself. An operator restoring a backup
+  with a slash in an entity name was told their vault was corrupt, and an
+  SDK keyed on the class retried forever. All eight are `Invalid` → **400**,
+  including both arms of `kg_import_entity` — whose own comment said the two
+  had to move together or not at all.
+- **Undocumented boundaries** (C14) are written down, and the three that are
+  MCP *absences* — `export`, `import`, `refine` — are entries in
+  `OPERATOR_ONLY`, so the same test that counts the tool surface now asserts
+  them. Also stated for the first time: MCP has one error class and opens
+  the store before dispatch (so an integrity verdict cannot reach the tool
+  layer — the server fails to start instead); `/v1` has no KG write routes
+  but `kg/authority`; no orchestrator plane forwards `refine`, and why; the
+  data-plane quarantine fence and the fact that its 200-branch is dead
+  against a same-version engine; and that the console is a `/v1` client
+  rather than a fourth surface, which several boundaries rested on.
+- **Coverage** (C15): the ten ops routes get positive requests and a
+  negative control, the orchestrator CLI is driven for the first time, the
+  data-plane quarantine fence is exercised (it had zero occurrences in that
+  suite), KG object screening is driven on MCP, and the non-finite-vector
+  refusal is driven through **all four** caller-vector doors rather than the
+  one its own comment says was never the only one — so a re-narrowing to
+  that call site can no longer pass green.
+
+### the remote index gets the transport policy the rest of the product has (C8)
+
+`IndexRecord::sealed_b64` was documented "Never plaintext" on six surfaces
+and the CLI printed "Pushed N sealed record(s)" — over a push that base64'd
+`content_at_rest`, which for an `hmac-only` vault IS the plaintext. And no
+backend applied a scheme check, a loopback predicate or a CA pin; pgvector
+was wired `NoTls`, so for that backend **no TLS-compliant configuration
+existed at all**.
+
+- **The plaintext half is a required argument**, not a flag with a default:
+  `index_push` takes `PlaintextPush::{Refuse, Allow}` and every shipped
+  surface says `Refuse`. `undercroft index push --allow-plaintext` is the
+  operator saying otherwise, and the CLI prints `PLAINTEXT` rather than
+  `sealed` when that is what went.
+- **The transport half is the engine's existing rule, applied here**: TLS or
+  loopback, nothing else, no override. It moved into a new crate,
+  `undercroft-net`, because it was implemented once in `undercroft-llm` for
+  the embedder and LLM clients and two copies of one rule is two places for
+  it to drift. The argument for applying it at all: every push carries
+  **embeddings**, and an embedding is plaintext-derived — the sealed-vault
+  invariant seals vectors at rest for exactly that reason, so shipping them
+  in clear over a network is the same exposure one hop out.
+- **pgvector has a real connector.** rustls rather than native-tls, so one
+  set of trust roots and one pin format cover the whole product. Worth
+  knowing: `tokio-postgres` parses only `disable`/`prefer`/`require`, so
+  `sslmode=require` is the accepted spelling — and unlike libpq's `require`,
+  which encrypts without verifying, the rustls connector always verifies the
+  chain and the hostname.
+- **`UNDERCROFT_INDEX_CA` pins a self-signed root**, replacing the public
+  roots rather than adding to them, and a file that pins nothing refuses
+  rather than falling back.
+- **The e2e suite moved onto TLS end to end**, which is what makes the
+  refusal real rather than untested: `deploy/backends-tls/` is a Caddy
+  terminator with one site block per backend (four network aliases on one
+  container), and pgvector terminates TLS itself from a generated
+  CA-plus-server chain. The suite concatenates both roots into one pinned
+  PEM — a declared CA replaces the public roots, and the PEM reader takes
+  every certificate in the file, which is what lets one declaration cover
+  two authorities. **57 checks, up from 47**, including a per-backend
+  assertion that pointing the same backend at cleartext beyond loopback
+  refuses before a byte moves.
+
+### the anchor-lag window has a closer you can actually call (R3, A31)
+
+`verify` does not fast-forward the manifest anchor — it takes `&self` and
+contains no mutating call — and five statements across the codebase, the
+CHANGELOG, `CLAUDE.md`, `docs/THREAT_MODEL.md` and the published incident
+runbook said it did. Those were corrected. What was **not** corrected is that
+the advice they were part of had no true version: the read-audit boundary
+tells a deployment worried about an unanchored tail to "run writes or
+`verify` on its own cadence", and there was no callable heal anywhere outside
+`open`. On the CLI the advice worked by accident, through the open's own
+reconciliation. On a long-lived server it did not work at all — `store_for`
+caches the handle, so nothing re-opens — and the only reachable substitutes
+were manufacturing a write or `GET …/export`: polluting data or exfiltrating
+it to move a counter.
+
+- **`PalaceStore::tighten_anchor`**, reachable as `undercroft vault anchor
+  <name>`, `POST /v1/vaults/{id}/anchor`, and `POST
+  /admin/tenants/{id}/ops/anchor` on the fleet. It answers an `AnchorState`,
+  so the response names how far behind the anchor was rather than being a
+  bare success.
+- **Classified a write everywhere.** The `/v1` gate fails closed on every
+  non-GET that is not named, so a `--read-only` server refused the new route
+  without anything being added to a list — which is the property that gate
+  was rebuilt for, now demonstrated on a route added afterwards. It is
+  refused explicitly on a read-only *handle* too, because `anchor_manifest`
+  writes a FILE and SQLite's `query_only` would not have stopped it. And it
+  is in `OPERATOR_ONLY` beside `rotate`: it moves the out-of-database
+  evidence a rollback is detected against, so the surface an agent drives
+  must not be able to point it at whatever the database currently says.
+- **On the CLI it reports what the OPEN did.** `open_store` reconciles before
+  any command can ask, so a naive implementation would truthfully answer
+  "already current" about a lag it never got to see. The handle now remembers
+  `anchor_at_open` and the command says which one closed the window.
+- **One implementation of the reconciliation.** `init_chain`, the read-only
+  open's report and the call all go through `reconcile_chain(heal)`. There
+  were briefly two copies — R4 added the read-only verdict as its own
+  function — and the arithmetic *is* the tamper detection (a manifest ahead
+  of a chain the audit rows never produced is the rollback alarm), so a
+  second copy is a second place for that alarm to be subtly wrong.
+- **The gate manufactures the lag the way production does**: three read-audit
+  records, which advance `chain_meta` and deliberately do not anchor. The
+  same test asserts `verify` does **not** close the window, which turns A31
+  from a corrected sentence into a pinned behaviour.
+- Also fixed in passing, since the surface was open: `undercroft vault status`
+  was still reading `Vault::writes()` and `Vault::chain_head_hex()` — the two
+  calls `CLAUDE.md` names as the ones a reporting surface must not make, and
+  the last survivors of A21. It reads `chain_state()` now, like every other
+  reporting surface.
+
+### every save arm now says when it diverted a write (R5, C11)
+
+The screen has always applied on every arm — they all funnel through the
+write choke point. What some of them could not do was **say so**.
+`upsert_external` returned a bare `Result<bool>` ("was the id new"), and
+`save_with_dedup_vec` hard-coded `quarantined: false` on both branches, so a
+diverted save through `/v1`'s `dedup_threshold` or an external-vault body
+answered `200 created` under the id the caller aimed at while the drawer sat
+in quarantine under another one. `/v1`'s handler compounded it by rebuilding
+a `SaveOutcome` by hand around the bool.
+
+- **The dedup-refresh branch was the worst of it**, and it is fixed as its
+  own case rather than by setting a flag: when the screen diverts a refresh,
+  **the refresh did not happen**. The matched drawer still holds its old
+  text and the incoming content is in quarantine under a different id, so
+  reporting `deduped: true` against the matched id described a write to a
+  drawer nobody touched. It now answers `deduped: false, quarantined: true`
+  with the landed id, and a test asserts the matched drawer still holds its
+  original content.
+- **C11, the same defect one field over.** `drawer_writes_total` counted a
+  diverted write as `outcome="created"` on all five write arms — the count
+  ran one line *before* the branch that decided the live frame, so the
+  monitor showed `drawer-quarantined` while the counter climbed as
+  `created`. A durable signal that is wrong is worse than one that is
+  missing. There is now a `quarantined` label, and the counter and the frame
+  are emitted from **one function** off one `save_event` classification, so
+  they cannot be classified differently again.
+- **The gate for that half is a source count**, not a save. The counter is a
+  no-op without the `telemetry` feature, so no test that merely writes a
+  drawer could ever have caught it — `write_telemetry_has_exactly_one_emitter`
+  counts emission sites in the crate's own sources, the shape
+  `admission_divert_has_exactly_one_caller` uses beside it.
+- **Driven per arm, and through the route.** Four arms plus a screen-off
+  premise in the store; both previously-dishonest arms through `POST
+  /v1/…/drawers` itself, asserting 202, `quarantined: true`, and that the
+  answered id is one the reviewer can actually `GET`; and three e2e checks
+  on the live scripted-attacker server's `dedup_threshold` arm, with a clean
+  body first so the 202 is about the diversion and not about the route.
+
+### the read-only open is finally a read (R4, A32, A33)
+
+`--read-only` bounded what *requests* could do and never bounded the **open**,
+and the open ran on the first request of any kind against a cold handle. The
+enumeration was eleven items long and two of them were filesystem operations
+on a writer's in-flight key rotation — `fs::rename(vault.json.next →
+vault.json)` or `fs::remove_file(vault.json.next)` — reached on the exact path
+`website/src/runbook.md` tells an incident responder to take in order to
+*avoid* touching a suspected-compromise vault. The vault crate had grown the
+right primitives (`Access`, `Unhealed`, `RotationVerdict`, `unlock_as`,
+`reconcile_read_only`) and **nothing outside that crate called them**.
+
+- **The connection is `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`.**
+  The flag is the boundary; the pragma is the belt over it, so a write path
+  nobody thought of fails loudly instead of happening quietly. Gone with it:
+  `SQLITE_OPEN_CREATE`, `PRAGMA journal_mode=WAL`, `CREATE TABLE IF NOT
+  EXISTS`, twelve `ALTER TABLE … ADD COLUMN`, the `chain_meta` seed, the
+  anchor fast-forward, the FTS rebuild, and `CREATE INDEX
+  idx_drawers_filed_at`.
+- **The posture reaches the UNLOCK, not only the store open.** `unlock`
+  deletes a `vault.json.next` it cannot authenticate — and that file is not
+  necessarily garbage; it is what a rotation being written *right now* looks
+  like from outside. Both callers now state the posture
+  (`open_store_as`, `Tenancy::store_for`), so the deletion cannot happen
+  before the store gets a chance to decline it.
+- **Detect and report, never heal.** A lagging manifest anchor names how far
+  behind it is; a staged rotation is honoured *in memory* (the database is
+  already sealed under the staged keys, so a reader that kept the old ones
+  would read the whole vault as corrupt) with the file left alone. What was
+  declined is warned once at open and readable afterwards as `unhealed`
+  beside `read_only` on `PalaceStats` — MCP serializes the struct, and the
+  CLI and `/v1` projections were updated by hand, which is the trap that
+  struct's own doc records.
+- **Two conditions refuse instead, both 409.** `DatabaseMissing` (A33):
+  `VaultManager::exists` answers about `vault.json` while the database is
+  `palace.db`, so a half-copied backup or a snapshot taken mid-write opened
+  "successfully" against a fabricated empty vault and answered every read
+  empty with no error at all. "Empty" is not "absent"; this is an integrity
+  verdict and exits 2. `ReadOnlyUnmigrated`: migrating is a write, so a
+  schema this build would have had to migrate is named rather than served one
+  failing query at a time — exit 1, because the vault is intact and only the
+  posture is wrong for it. Neither is a crash a replica must survive: a vault
+  whose writer died mid-rotation still opens, which is the argument that made
+  reporting the rule everywhere else.
+- **The tamper verdicts are unchanged**, deliberately. A rolled-back database
+  is a rolled-back database whoever opened it; an open that merely declined to
+  write would have turned an alarm into silence
+  (`a_read_only_open_still_raises_the_rollback_verdict`).
+- **R4's first item was half wrong, and it is settled by execution now.** The
+  claim was that this path "cannot open a read-only mount or an immutable
+  snapshot at all". A cleanly-closed WAL vault has no `-shm` and opens fine —
+  SQLite makes one where the directory is writable. Where it is not, the open
+  escalates to `immutable=1` and *says so*, because that is a promise about
+  the file and not only about us. The test forces the escalation by putting a
+  **directory** where the `-shm` would go rather than by `chmod`: the test
+  container runs as root, permission bits do not bind root, and the
+  permissions version of that test would have passed without ever engaging
+  the path it claims to cover.
+- **Gates.** Six unit tests, each asserting its own premise — the byte
+  comparison runs over a vault deliberately left *unreconciled* (a lagging
+  anchor), because a settled vault would pass even for an open that heals
+  everything it sees, and the writable arm proves the state was healable.
+  Four e2e checks drive `serve-http --read-only` end to end: it serves reads,
+  it refuses writes, it leaves the vault byte-identical with a staging
+  manifest planted, and it names what it did not heal — with the writable
+  `stats` proving the line is not always printed. Residue, stated: a
+  read-only connection materialises SQLite's WAL scaffolding (`-shm`, and a
+  zero-length `-wal`); the byte gate excludes exactly those two and nothing
+  else, so a `-wal` carrying a frame still fails it.
+- Governance: `CLAUDE.md`, `docs/AGENTS.md`, `docs/MULTI_TENANCY.md`,
+  `docs/THREAT_MODEL.md`, `architecture/index.html` and
+  `website/src/runbook.md` all carried the old claim in the present tense and
+  all six are corrected. The runbook's "freeze writes" step is rewritten
+  around what the open now does, what it reports, and the two refusals.
+
 ### the completeness audit: what a 38-agent per-surface pass found in the fix itself
 
 The fix below was audited the way the code is: one agent per surface, then an

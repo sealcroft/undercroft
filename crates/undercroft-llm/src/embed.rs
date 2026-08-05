@@ -252,73 +252,16 @@ fn parse_embedding(resp: &Value) -> Option<Vec<f32>> {
         .or_else(|| floats(Some(resp)))
 }
 
-/// Build the pinned TLS configuration a declared `UNDERCROFT_EMBED_CA`
-/// resolves to: the PEM's certificates become the ONLY trust roots — the
-/// bundled public roots are deliberately absent, because a declaration is a
-/// pin. Errors (empty file, no parseable certificate, a root rustls
-/// rejects) are construction refusals at the caller, never fallbacks.
-pub(crate) fn pinned_roots_from_pem(
-    pem: &[u8],
-) -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
-    let certs: Vec<_> = rustls_pemfile::certs(&mut &pem[..])
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("not parseable as PEM certificates: {e}"))?;
-    if certs.is_empty() {
-        return Err("holds no certificate — a declared trust root that pins nothing".into());
-    }
-    let mut roots = rustls::RootCertStore::empty();
-    for c in certs {
-        roots
-            .add(c)
-            .map_err(|e| format!("certificate rejected as a trust root: {e}"))?;
-    }
-    Ok(std::sync::Arc::new(
-        rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    ))
-}
-
-/// Whether a base URL points at this machine. Deliberately conservative: an
-/// unparseable or unusual host counts as NOT loopback, so the warning errs
-/// toward telling the operator their text is leaving.
-pub(crate) fn is_loopback(base: &str) -> bool {
-    // scheme → host:port/path → host
-    let after_scheme = match base.find("://") {
-        Some(i) => &base[i + 3..],
-        None => base,
-    };
-    let _ = after_scheme;
-    // Ask the SAME parser the transport will use, rather than re-deriving the
-    // host by hand. Hand-parsing this string is how the predicate came to
-    // disagree with ureq twice:
-    //
-    //   `http://127.0.0.1:8080@evil.com/v1` — splitting the authority on `:`
-    //   returned the USERNAME `127.0.0.1`, and
-    //   `http://evil.com\@127.0.0.1/v1`     — for a special scheme the WHATWG
-    //   parser treats `\` as a path separator, so the host is `evil.com`
-    //   while an `@`-split reads `127.0.0.1`.
-    //
-    // Each time the gate inverted: "TLS or loopback, nothing else, no
-    // override" passed, drawer text went cleartext to an attacker-chosen
-    // host, and the plaintext-endpoint warning was suppressed with it. The
-    // first fix enumerated the spellings, which tests the enumeration; this
-    // one cannot disagree with the transport, because it is the transport's
-    // own parser (`url`, which ureq resolves every request target through).
-    //
-    // An unparseable URL is NOT loopback — the safe direction, since the
-    // caller uses this both to refuse cleartext and to decide whether to warn
-    // that the endpoint reads drawer text in the clear.
-    let Ok(parsed) = url::Url::parse(base) else {
-        return false;
-    };
-    match parsed.host() {
-        Some(url::Host::Domain(d)) => d == "localhost",
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    }
-}
+// The transport policy — the loopback predicate and the CA pin — lives in
+// `undercroft-net` since 2026-08-05 and is re-exported here so this module's
+// callers and tests are unchanged. It moved because the remote INDEX
+// backends had no transport policy at all (ROADMAP C8) while every push
+// carries embeddings, which are plaintext-derived: two copies of one rule
+// is two places for it to drift, which is the defect class this branch is
+// closing. Nothing about the behaviour changed in the move; the tests below
+// still exercise it through these names.
+pub(crate) use undercroft_net::is_loopback;
+pub(crate) use undercroft_net::pinned_roots as pinned_roots_from_pem;
 
 impl Embedder for HttpEmbedder {
     fn model_name(&self) -> &str {

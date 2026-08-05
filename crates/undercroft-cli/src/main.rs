@@ -638,10 +638,16 @@ enum TranscriptAction {
 
 #[derive(Subcommand)]
 enum IndexAction {
-    /// Upload every drawer (sealed content + embedding) to a remote index
+    /// Upload every drawer (at-rest content + embedding) to a remote index
     Push {
         /// qdrant | chroma | pgvector
         backend: String,
+        /// Push an **hmac-only** vault, whose at-rest content is the
+        /// PLAINTEXT. Refused without this: a remote index is an untrusted
+        /// accelerator in another trust domain, and every document about
+        /// this feature says "sealed content only".
+        #[arg(long)]
+        allow_plaintext: bool,
     },
     /// Show a remote index's record count for this vault
     Status {
@@ -686,6 +692,14 @@ enum VaultAction {
     /// vault was pushed to a remote index (remote copies hold old-key
     /// ciphertext). Do not rotate a vault another process is serving.
     Rotate { name: String },
+    /// Fast-forward the manifest's rollback anchor onto the committed
+    /// audit-chain head. A **write** (it fsyncs a new manifest), and the
+    /// only way to close the anchor-lag window without manufacturing one:
+    /// `verify` does not anchor, and a long-lived server caches its handle
+    /// so it never re-opens either. Reports how far behind the anchor was;
+    /// a rolled-back database is still an integrity verdict here (exit 2),
+    /// because declining to heal is not declining to look.
+    Anchor { name: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -878,8 +892,22 @@ fn upsert_batched(
     drawers: &[Drawer],
 ) -> Result<undercroft_store::BulkOutcome> {
     let mut total = undercroft_store::BulkOutcome::default();
-    for chunk in drawers.chunks(INGEST_BATCH) {
-        let out = store.upsert_many(chunk)?;
+    for (c, chunk) in drawers.chunks(INGEST_BATCH).enumerate() {
+        // Name the batch a store-guard refusal came from, the way a parse
+        // error already names its line. Six refusal classes reached this
+        // path with this branch and every one of them reported the reason
+        // and no position, over a file that can hold a million records
+        // (ROADMAP C10). A batch is a transaction, so the failing RECORD is
+        // not individually identifiable here — what is honest is the range,
+        // and saying so is better than saying nothing. `/v1` commits per
+        // record and names the record; both surfaces say where now.
+        let out = store.upsert_many(chunk).with_context(|| {
+            let first = c * INGEST_BATCH + 1;
+            let last = first + chunk.len() - 1;
+            format!(
+                "importing records {first}-{last} (this batch is one transaction, so none of                  it was written; records before it were)"
+            )
+        })?;
         total.created += out.created;
         total.quarantined += out.quarantined;
     }
@@ -947,7 +975,15 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
 
 fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
     let mgr = manager(cli)?;
-    let v = mgr.unlock(vault)?;
+    // The posture reaches the UNLOCK, not only the store open. Unlocking is
+    // not passive: it deletes a `vault.json.next` it cannot authenticate, so
+    // a read-only process that stated its posture only one call later had
+    // already destroyed a concurrent writer's staging manifest by the time
+    // the store could decline to (ROADMAP A32/R4).
+    let v = match posture {
+        Posture::ReadOnly => mgr.unlock_as(vault, undercroft_vault::Access::ReadOnly)?,
+        Posture::ReadWrite => mgr.unlock(vault)?,
+    };
     // One place decides what the posture means, so every embedder reaches the
     // same two opens. `open_read_only` declines the embedder migration (warn
     // and serve, the replica precedent) and force-disables read auditing.
@@ -1338,6 +1374,12 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                 s,
                 S::Integrity(_)
                     | S::Attestation(_)
+                    // A manifest that describes a database which is not
+                    // there is stored evidence contradicting itself, and
+                    // retrying only re-detects it (R4/A33). Its neighbour
+                    // `ReadOnlyUnmigrated` is deliberately NOT here: the
+                    // vault is intact, the posture is simply wrong for it.
+                    | S::DatabaseMissing { .. }
                     | S::Vault(V::ManifestTampered | V::CorruptManifest(_))
             );
         }
@@ -1492,13 +1534,57 @@ fn run(cli: Cli) -> Result<()> {
             }
             VaultAction::Status { name } => {
                 let store = open_store(&cli, name)?;
+                // The DATABASE's chain clock, never the handle's cached
+                // manifest fields (`Vault::writes`/`chain_head_hex`).
+                // CLAUDE.md names those two calls as the ones a reporting
+                // surface must not make — they are loaded once at unlock and
+                // never reloaded, so under `serve-http`'s two handles the
+                // one that did not write reports a frozen height beside a
+                // climbing live count. This surface was still making them
+                // (ROADMAP A21).
+                let (chain_head, writes) = store.chain_state()?;
                 let v = store.vault();
                 println!("vault:      {}", v.id());
                 println!("level:      {}", v.level());
                 println!("records:    {}", store.count()?);
-                println!("writes:     {}", v.writes());
-                println!("chain head: {}", v.chain_head_hex());
+                println!("writes:     {writes}");
+                println!("chain head: {chain_head}");
                 println!("db:         {}", v.db_path().display());
+            }
+            VaultAction::Anchor { name } => {
+                use undercroft_store::AnchorState;
+                let mut store = open_store(&cli, name)?;
+                // What the OPEN found, because on this surface the open has
+                // already healed it: `open_store` runs the same
+                // reconciliation, so by the time this command can ask, the
+                // answer is "current" and the lag it closed would go
+                // unreported. The route on a long-lived server is the case
+                // where the CALL does the work — there the handle is cached
+                // and never re-opens (A31).
+                let at_open = store.anchor_at_open();
+                match (store.tighten_anchor()?, at_open) {
+                    (AnchorState::Unseeded, _) => {
+                        println!(
+                            "Vault '{name}' has no committed chain head yet; nothing to anchor."
+                        );
+                    }
+                    (_, AnchorState::Healed { behind_by }) => {
+                        println!(
+                            "Anchored '{name}': the manifest was {behind_by} record(s) behind \
+                             the committed chain head and now names it (the open did the \
+                             fast-forward — on this surface it always gets there first)."
+                        );
+                    }
+                    (AnchorState::Healed { behind_by }, _) => {
+                        println!(
+                            "Anchored '{name}': the manifest was {behind_by} record(s) behind \
+                             and now names the committed chain head."
+                        );
+                    }
+                    (AnchorState::Current, _) => {
+                        println!("Anchor for '{name}' already names the committed chain head.");
+                    }
+                }
             }
             VaultAction::Rotate { name } => {
                 let mgr = manager(&cli)?;
@@ -1525,7 +1611,10 @@ fn run(cli: Cli) -> Result<()> {
                     "  chain re-keyed over: {} audit entries",
                     report.audit_entries
                 );
-                println!("  new chain head:      {}", store.vault().chain_head_hex());
+                // The DATABASE's head, not the handle's cached manifest
+                // field — the third and last A21 caller.
+                let (chain_head, _) = store.chain_state()?;
+                println!("  new chain head:      {chain_head}");
                 println!(
                     "If this vault was pushed to a remote index, re-run: undercroft index push"
                 );
@@ -2226,57 +2315,61 @@ fn run(cli: Cli) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("bundle manifest: {e}"))?;
             let text = String::from_utf8(record_bytes.to_vec())
                 .context("bundle records are not UTF-8 JSONL")?;
-            match &manifest {
-                Some(m) => {
-                    let now = time::OffsetDateTime::now_utc()
-                        .format(&time::format_description::well_known::Rfc3339)?;
-                    if m.expired_at(&now) {
-                        bail!(
-                            "bundle expired at {} — the sender bounded its validity, refusing",
-                            m.expires.as_deref().unwrap_or("(unparseable expiry)")
-                        );
-                    }
-                    if let Some(expected) = sender.as_deref() {
-                        m.verify_against(expected).map_err(|e| {
-                            anyhow::anyhow!(
-                                "manifest attestation failed against the pinned sender: {e}"
-                            )
-                        })?;
-                    }
-                    println!(
-                        "manifest: vault={} level={} created={}{}{}{}",
-                        m.vault,
-                        m.level,
-                        m.created_at,
-                        m.trust
-                            .as_deref()
-                            .map(|t| format!(" trust={t} (sender's claim, not a boundary)"))
-                            .unwrap_or_default(),
-                        match (&m.sender, &m.sig) {
-                            (Some(s), Some(_)) => format!(
-                                " signed-by={}{}",
-                                // Payload-supplied sender: byte-slicing it
-                                // panics (exit 101) on any import of a file
-                                // an attacker authored, before any write.
-                                s.chars().take(16).collect::<String>(),
-                                if sender.is_some() {
-                                    " (verified)"
-                                } else {
-                                    " (unverified — pass --sender to enforce)"
-                                }
-                            ),
-                            _ => " unsigned".to_string(),
-                        },
-                        m.embedder
-                            .as_deref()
-                            .map(|e| format!(" embedder={e}"))
-                            .unwrap_or_default(),
+            // The attestation decision is `BundleManifest::attest`, the same
+            // call `/v1` makes (ROADMAP C5). This surface used to make its
+            // own, and it had no `else`: with no `--sender` it printed
+            // `signed-by=<16 hex> (unverified — pass --sender to enforce)`
+            // and imported. The digest is checked unconditionally, so an
+            // attacker swapping a signed bundle's payload had to break the
+            // signature but could keep the trusted sender's key — and this
+            // command then printed that sender's prefix above attacker
+            // content. Provenance-display laundering, on the surface every
+            // operator backup restore uses.
+            if let Some(m) = &manifest {
+                let now = time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)?;
+                if m.expired_at(&now) {
+                    bail!(
+                        "bundle expired at {} — the sender bounded its validity, refusing",
+                        m.expires.as_deref().unwrap_or("(unparseable expiry)")
                     );
                 }
-                None if sender.is_some() => {
-                    bail!("--sender was pinned but the payload carries no manifest to verify")
-                }
-                None => {}
+            }
+            let attested = undercroft_vault::bundle::BundleManifest::attest(
+                manifest.as_ref(),
+                sender.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!("manifest attestation failed: {e}"))?;
+            if let Some(m) = &manifest {
+                println!(
+                    "manifest: vault={} level={} created={}{}{}{}",
+                    m.vault,
+                    m.level,
+                    m.created_at,
+                    m.trust
+                        .as_deref()
+                        .map(|t| format!(" trust={t} (sender's claim, not a boundary)"))
+                        .unwrap_or_default(),
+                    match attested.verified_sender() {
+                        // Char-wise, never `&s[..16]`: this string is
+                        // attacker-authored, and byte-slicing it panicked
+                        // (exit 101) before any write.
+                        Some(s) => format!(
+                            " signed-by={} (verified){}",
+                            s.chars().take(16).collect::<String>(),
+                            if sender.is_some() {
+                                ""
+                            } else {
+                                " — the signature checks out; pass --sender to pin WHO"
+                            }
+                        ),
+                        None => " unsigned".to_string(),
+                    },
+                    m.embedder
+                        .as_deref()
+                        .map(|e| format!(" embedder={e}"))
+                        .unwrap_or_default(),
+                );
             }
             let mut skipped = 0usize;
             let mut kg_facts = 0usize;
@@ -2816,6 +2909,12 @@ fn run(cli: Cli) -> Result<()> {
             if !trained.is_empty() {
                 println!("codebooks: {}", trained.join(", "));
             }
+            // R4: a read-only open detects instead of healing, and this is
+            // where it says what it left. Nothing prints on a writable
+            // open, where the list is empty by construction.
+            for note in &st.unhealed {
+                println!("unhealed: {note}");
+            }
             println!("wings:");
             for (w, n) in st.wings {
                 println!("  {w:<24} {n}");
@@ -2940,11 +3039,27 @@ fn run(cli: Cli) -> Result<()> {
         Command::Index { action, vault } => {
             let store = open_store(&cli, vault)?;
             match action {
-                IndexAction::Push { backend } => {
+                IndexAction::Push {
+                    backend,
+                    allow_plaintext,
+                } => {
                     let mut index = open_index(backend)?;
-                    let n = store.index_push(index.as_mut())?;
+                    let plaintext = if *allow_plaintext {
+                        undercroft_store::PlaintextPush::Allow
+                    } else {
+                        undercroft_store::PlaintextPush::Refuse
+                    };
+                    let n = store.index_push(index.as_mut(), plaintext)?;
+                    // "sealed" only when it IS sealed. The old line said it
+                    // unconditionally, over a push that had base64'd the
+                    // plaintext column for an hmac-only vault (ROADMAP C8).
+                    let kind = if store.vault().level() == undercroft_vault::SecurityLevel::Sealed {
+                        "sealed"
+                    } else {
+                        "PLAINTEXT"
+                    };
                     println!(
-                        "Pushed {n} sealed record(s) from vault '{vault}' to {backend} \
+                        "Pushed {n} {kind} record(s) from vault '{vault}' to {backend} \
                          (collection {})",
                         store.index_collection()
                     );

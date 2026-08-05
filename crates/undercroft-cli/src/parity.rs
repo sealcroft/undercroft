@@ -82,6 +82,34 @@ pub const OPERATOR_ONLY: &[&str] = &[
     // reason trust assignment is operator-only, which LABELS.md states in
     // as many words while the authority tier shipped on MCP anyway.
     "authority",
+    // Tightening the manifest rollback anchor (R3). It fsyncs a new
+    // manifest, and the manifest is the out-of-database evidence a rollback
+    // is detected against — so the surface an agent drives must not be able
+    // to move it onto whatever the database currently says. Same shape as
+    // `rotate`: an operation ON the integrity machinery, not through it.
+    "anchor",
+    // ---- absences that were absences, not boundaries, until they were
+    // ---- written down (ROADMAP C14) --------------------------------------
+    //
+    // Each of the three below was simply MISSING from MCP with nothing
+    // recorded, which under this project's own rule is the finding: "a
+    // capability missing from one surface is a boundary or a drift, and
+    // which one has to be written down". They are boundaries, and they are
+    // asserted by the same test as the rest of this list.
+    //
+    // `export` moves the whole corpus out of the vault in the clear. It is
+    // the egress act — chain-audited on every surface that has it — and an
+    // agent that could call it could exfiltrate a palace in one tool call,
+    // which no amount of per-drawer fencing would bound.
+    "export",
+    // `import` writes records the agent did not compose, carrying
+    // caller-chosen ids, wings, provenance claims and a `filed_at` that is
+    // the retention clock. It is the operator's restore path.
+    "import",
+    // `refine` spends an LLM budget and distils drawer text into facts the
+    // NEXT agent reads as knowledge. An agent that could drive it could
+    // launder its own text into the graph through a model.
+    "refine",
 ];
 
 #[cfg(test)]

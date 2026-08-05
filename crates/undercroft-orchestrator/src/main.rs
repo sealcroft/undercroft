@@ -80,6 +80,31 @@ enum Command {
     /// Rotate a tenant's token (the old one dies immediately; the new one
     /// prints once)
     TenantRotate { id: String },
+    /// Reach one tenant's engine OPERATOR plane: verify, admission review
+    /// and rulings, wing trust, retention, attested forgetting, anchor
+    /// tightening, supersession receipts.
+    ///
+    /// These ten routes landed on the admin plane on the argument that they
+    /// "were reachable from nowhere in a fleet", and then WERE reachable
+    /// from nowhere but `curl`: the console has no element for any of them
+    /// and this CLI had no subcommand, while docs/MULTI_TENANCY.md said the
+    /// CLI "mirrors the admin plane for scripted use" (ROADMAP C9).
+    ///
+    /// A closed vocabulary of `(method, subpath)` pairs, checked here
+    /// against the same list the proxy enforces, so this cannot become a
+    /// second, wider door.
+    Ops {
+        /// Tenant id
+        id: String,
+        /// One of: verify, anchor, supersessions, admission, admission-rule,
+        /// trust, trust-set, retention, retention-set, retention-sweep,
+        /// forget
+        op: String,
+        /// JSON body for the operations that take one (rulings, trust and
+        /// retention assignment, forget)
+        #[arg(long)]
+        body: Option<String>,
+    },
     /// Migrate a tenant's vault to another instance (export → import →
     /// count-verified → mapping flip → source delete)
     Migrate {
@@ -174,7 +199,7 @@ fn main() -> Result<()> {
                     .context("no instances registered")?,
             };
             let creds = orch.instance_creds(&instance)?;
-            let (tenant, token) = orch.tenant_create(&name, &instance)?;
+            let (tenant, token) = orch.tenant_create(&name, &instance, &level)?;
             if let Err(e) = engine::create_vault(&creds, &tenant.vault, &level) {
                 let _ = orch.tenant_delete(&tenant.id);
                 bail!("engine vault create failed: {e}");
@@ -212,6 +237,33 @@ fn main() -> Result<()> {
             let token = orch.tenant_rotate_token(&id)?;
             println!("token   {token}");
             println!("(the old token is revoked; this one is shown once)");
+            Ok(())
+        }
+        Command::Ops { id, op, body } => {
+            let orch = Orch::open(&cli.db, &orch_key()?)?;
+            let (method, subpath) =
+                proxy::ops_alias(&op).with_context(|| format!("unknown operation {op:?}"))?;
+            let tenant = orch
+                .tenant_get(&id)?
+                .with_context(|| format!("unknown tenant {id}"))?;
+            let creds = orch.instance_creds(&tenant.instance)?;
+            let payload = body.unwrap_or_default();
+            let r = engine::vault_request(
+                &creds,
+                &tenant.vault,
+                method,
+                subpath,
+                "",
+                "application/json",
+                payload.as_bytes(),
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            // The engine's own body, verbatim — the admin plane relays it
+            // rather than re-summarising, and so does this.
+            println!("{}", String::from_utf8_lossy(&r.body));
+            if r.status >= 400 {
+                bail!("engine answered {}", r.status);
+            }
             Ok(())
         }
         Command::Migrate {

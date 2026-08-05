@@ -362,7 +362,36 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "retention/sweep"),
     ("GET", "trust"),
     ("POST", "trust"),
+    // Tightening the manifest rollback anchor (engine R3). Unlike the vault
+    // KEY rotation two lines of prose up, this one is safe while the engine
+    // is serving: it fsyncs a manifest that names the head the database
+    // already committed, and the engine refuses it on a read-only handle.
+    ("POST", "anchor"),
 ];
+
+/// The operator-plane vocabulary as NAMES, for the CLI (ROADMAP C9).
+///
+/// Each alias resolves to a pair that must also be in [`OPS_ROUTES`] —
+/// asserted by test — so the scripted door and the HTTP door are the same
+/// door. A name rather than a raw `<METHOD> <subpath>` passthrough on
+/// purpose: a passthrough would be a second, wider vocabulary the moment
+/// someone typed a subpath the proxy does not allow.
+pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
+    Some(match op {
+        "verify" => ("POST", "verify"),
+        "anchor" => ("POST", "anchor"),
+        "supersessions" => ("GET", "supersessions"),
+        "admission" => ("GET", "admission"),
+        "admission-rule" => ("POST", "admission"),
+        "trust" => ("GET", "trust"),
+        "trust-set" => ("POST", "trust"),
+        "retention" => ("GET", "retention"),
+        "retention-set" => ("POST", "retention"),
+        "retention-sweep" => ("POST", "retention/sweep"),
+        "forget" => ("POST", "forget"),
+        _ => return None,
+    })
+}
 
 fn ops_route_ok(method: &str, subpath: &str) -> bool {
     OPS_ROUTES
@@ -858,7 +887,7 @@ fn create_tenant(
     };
     // Record the mapping first (so a crash can't leave an unmapped vault
     // holding data), then create the vault; roll the row back on failure.
-    let (tenant, token) = match orch.tenant_create(name, instance) {
+    let (tenant, token) = match orch.tenant_create(name, instance, level) {
         Ok(x) => x,
         Err(e) => return state_error_response(&e),
     };
@@ -1056,8 +1085,35 @@ pub(crate) fn migrate_tenant(
             0,
         ),
     };
-    engine::create_vault(&dst, &tenant.vault, "sealed").map_err(engine_err)?;
-    let got = engine::import_vault(&dst, &tenant.vault, &ndjson).map_err(engine_err)?;
+    // The tenant's OWN level, not a literal. This was the only hard-coded
+    // one of the three `create_vault` call sites, and since no surface can
+    // change a vault's level afterwards, migrating an `hmac-only` tenant
+    // silently and permanently converted it (ROADMAP C3). It fails toward
+    // the stronger level, so this was a contract defect and not a security
+    // one — which is exactly why nothing noticed.
+    //
+    // The export manifest declares a level too, and it is used as a
+    // CROSS-CHECK that refuses on disagreement, never as the source: taking
+    // it would make the destination's posture a function of bytes the
+    // source engine produced, which docs/LABELS.md forbids.
+    let declared = manifest
+        .as_ref()
+        .and_then(|m| m["level"].as_str())
+        .unwrap_or(tenant.level.as_str());
+    if declared != tenant.level {
+        return Err(MigrateError::Unfaithful(format!(
+            "the source vault exports level {declared:?} while the control plane has this              tenant recorded as {:?} — refusing rather than choosing one. Reconcile the              record before migrating",
+            tenant.level
+        )));
+    }
+    engine::create_vault(&dst, &tenant.vault, &tenant.level).map_err(engine_err)?;
+    // C4: the import-failure branch returned early with no cleanup where
+    // both sibling branches below call `delete_vault`, so a retry answered
+    // 409 "already exists" with a cause that named nothing.
+    let got = engine::import_vault(&dst, &tenant.vault, &ndjson).map_err(|e| {
+        let _ = engine::delete_vault(&dst, &tenant.vault);
+        engine_err(e)
+    })?;
     // A diverted drawer is COUNTED in `imported` but is not filed where the
     // payload aimed it: it sits in `quarantine-pending`, excluded from
     // search, recent and listing. So an equal count is not a faithful copy,
@@ -1117,6 +1173,9 @@ pub(crate) fn migrate_tenant(
         "from": tenant.instance,
         "to": to,
         "records": imported,
+        // Echoed so an operator can see the destination was created at the
+        // tenant's own level rather than at whatever the code defaulted to.
+        "level": tenant.level,
         // Counted in `records` (they were written) but NOT filed where the
         // payload aimed them — the destination's own screen diverted them.
         // Reachable only with `keep_source`, since the branch above refuses
@@ -1131,6 +1190,49 @@ pub(crate) fn migrate_tenant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C9: the scripted door and the HTTP door are the SAME door.
+    ///
+    /// Every CLI alias must resolve to a pair the proxy already allows, and
+    /// every allowed pair must have an alias — otherwise the CLI is either
+    /// wider than the plane it mirrors, or it "mirrors" it while leaving
+    /// routes reachable by curl alone, which is the finding.
+    #[test]
+    fn every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias() {
+        let aliases = [
+            "verify",
+            "anchor",
+            "supersessions",
+            "admission",
+            "admission-rule",
+            "trust",
+            "trust-set",
+            "retention",
+            "retention-set",
+            "retention-sweep",
+            "forget",
+        ];
+        let mut resolved = Vec::new();
+        for a in aliases {
+            let pair = ops_alias(a).unwrap_or_else(|| panic!("{a} has no alias"));
+            assert!(
+                ops_route_ok(pair.0, pair.1),
+                "{a} resolves to {pair:?}, which the proxy does not allow"
+            );
+            resolved.push(pair);
+        }
+        for (m, sp) in OPS_ROUTES {
+            assert!(
+                resolved.contains(&(*m, *sp)),
+                "{m} {sp} is on the admin plane with no CLI alias — reachable by curl alone"
+            );
+        }
+        assert!(
+            ops_alias("rotate").is_none(),
+            "key rotation is not an ops route"
+        );
+        assert!(ops_alias("drawers").is_none());
+    }
 
     #[test]
     fn data_subpath_allowlist_blocks_vault_lifecycle() {
@@ -1444,7 +1546,7 @@ mod tests {
         );
         // The guard that already worked keeps its class.
         o.instance_add("beta", "http://b", "b", "s").unwrap();
-        o.tenant_create("acme", "beta").unwrap();
+        o.tenant_create("acme", "beta", "sealed").unwrap();
         assert_eq!(admin_status(&o, "DELETE", "/admin/instances/beta", ""), 409);
     }
 
@@ -1456,7 +1558,7 @@ mod tests {
     fn a_migration_failure_carries_its_own_class() {
         let (_d, o) = orch_for_tests();
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, _) = o.tenant_create("acme", "alpha").unwrap();
+        let (t, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
 
         // Unknown tenant: a missing resource in the path.
         assert_eq!(

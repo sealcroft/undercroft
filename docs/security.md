@@ -115,12 +115,19 @@ stateDiagram-v2
   not, and a client that filters its own UI off the catalogue would show
   buttons that cannot fire.) On `/v1` the gate sits in front of dispatch
   and **fails closed**: every non-GET is refused unless named, and the two
-  named reads are `POST …/search` and `POST …/verify`. What is *not*
-  covered, stated rather than implied: **the open itself writes** —
-  schema creation, chain init, and a rotation reconcile that can promote
-  or delete a staged `vault.json.next`. A read-only process is not a
-  byte-frozen vault; take a copy first if that is what you need (ROADMAP
-  R4, and the incident runbook's step 1).
+  named reads are `POST …/search` and `POST …/verify`. **The open is
+  covered too since v0.47.0** (ROADMAP R4): this line used to say the open
+  itself writes — schema creation, chain init, and a rotation reconcile
+  that could promote or delete a staged `vault.json.next`. The connection
+  is now `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema
+  is checked rather than created, a lagging anchor is reported rather than
+  healed, and a staged rotation is left on disk; what was declined is
+  readable as `unhealed` on every stats surface. An absent `palace.db`
+  under a present manifest and an unmigrated schema both refuse with 409
+  rather than being papered over. Residue: SQLite's WAL scaffolding
+  (`-shm`, a zero-length `-wal`) is still materialised where the directory
+  is writable, so if you need a byte-frozen vault, stop the server rather
+  than restarting it read-only, and take the incident runbook's step-1 copy.
 
 ## Server auth model (two layers)
 

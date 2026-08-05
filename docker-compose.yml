@@ -45,18 +45,30 @@ services:
     volumes:
       - ./tests/e2e-orchestrator.sh:/src/tests/e2e-orchestrator.sh:ro
 
+  # Every backend is reached over TLS, because the engine refuses cleartext
+  # http to a non-loopback host with no override (ROADMAP C8): a push
+  # carries embeddings, and an embedding is plaintext-derived. The four
+  # HTTP backends terminate at the `backends-tls` Caddy; pgvector speaks
+  # its own protocol and terminates TLS in the server itself. The suite
+  # concatenates BOTH roots into one PEM and pins it — a declared CA
+  # replaces the public roots, and `rustls_pemfile::certs` reads every
+  # certificate in the file, which is what lets one declaration cover two
+  # authorities.
   backends-e2e:
     build:
       context: .
       target: builder
     entrypoint: ["bash", "/src/tests/e2e-backends.sh"]
     environment:
-      UNDERCROFT_QDRANT_URL: http://qdrant:6333
-      UNDERCROFT_CHROMA_URL: http://chroma:8000
-      UNDERCROFT_PGVECTOR_DSN: postgresql://undercroft:undercroft@pgvector:5432/undercroft
-      UNDERCROFT_MILVUS_URL: http://milvus:19530
-      UNDERCROFT_WEAVIATE_URL: http://weaviate:8080
+      UNDERCROFT_QDRANT_URL: https://qdrant-tls
+      UNDERCROFT_CHROMA_URL: https://chroma-tls
+      UNDERCROFT_PGVECTOR_DSN: postgresql://undercroft:undercroft@pgvector:5432/undercroft?sslmode=require
+      UNDERCROFT_MILVUS_URL: https://milvus-tls
+      UNDERCROFT_WEAVIATE_URL: https://weaviate-tls
+      # Written by the suite itself from the two mounted roots.
+      UNDERCROFT_INDEX_CA: /tmp/backends-roots.pem
     depends_on:
+      - backends-tls
       - qdrant
       - chroma
       - pgvector
@@ -64,6 +76,63 @@ services:
       - weaviate
     volumes:
       - ./tests/e2e-backends.sh:/src/tests/e2e-backends.sh:ro
+      - undercroft-backends-tls:/tls:ro
+      - undercroft-pgvector-tls:/pgtls:ro
+
+  # TLS in front of the four HTTP backends. One Caddy, one site block per
+  # backend — each on its own hostname rather than a path prefix, because
+  # the backends' APIs own their paths.
+  backends-tls:
+    image: caddy:2.8
+    depends_on:
+      - qdrant
+      - chroma
+      - milvus
+      - weaviate
+    volumes:
+      - ./deploy/backends-tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - undercroft-backends-tls:/data
+    # One container answering four names. Compose only resolves the SERVICE
+    # name, so each virtual host needs an alias or the client cannot reach
+    # it — and a per-backend hostname is what lets each site block proxy to
+    # its own upstream without rewriting paths.
+    networks:
+      default:
+        aliases:
+          - qdrant-tls
+          - chroma-tls
+          - milvus-tls
+          - weaviate-tls
+
+  # A self-signed certificate for the pgvector server, generated once into
+  # a shared volume. Self-signed means the certificate is its own trust
+  # root, which is exactly what `sslmode=verify-full` + a pinned root
+  # needs — and the SAN has to be the compose hostname or verification
+  # fails on the name rather than on the chain, which reads as a config
+  # bug instead of the check working.
+  pgvector-certs:
+    image: alpine:3.20
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -s /certs/server.key ]; then
+          apk add --no-cache openssl >/dev/null
+          # A real two-certificate chain, not a self-signed leaf: rustls
+          # validates a server certificate against a trust ANCHOR, and a
+          # leaf that is its own anchor is not a chain it will build. The
+          # suite pins ca.crt; the server presents server.crt.
+          openssl req -x509 -newkey rsa:2048 -nodes -days 3650             -keyout /certs/ca.key -out /certs/ca.crt             -subj "/CN=undercroft-pgvector-ca"
+          openssl req -newkey rsa:2048 -nodes             -keyout /certs/server.key -out /certs/server.csr             -subj "/CN=pgvector"
+          { echo "subjectAltName=DNS:pgvector"; echo "extendedKeyUsage=serverAuth"; } > /certs/ext.cnf
+          openssl x509 -req -in /certs/server.csr -CA /certs/ca.crt -CAkey /certs/ca.key             -CAcreateserial -out /certs/server.crt -days 3650 -extfile /certs/ext.cnf
+        fi
+        # Postgres refuses a key any other user can read, and runs as uid
+        # 999 in this image.
+        chmod 600 /certs/server.key
+        chown 999:999 /certs/server.key /certs/server.crt
+    volumes:
+      - undercroft-pgvector-tls:/certs
 
   onnx-build:
     build:
@@ -173,10 +242,25 @@ services:
 
   pgvector:
     image: pgvector/pgvector:pg16
+    depends_on:
+      pgvector-certs:
+        condition: service_completed_successfully
     environment:
       POSTGRES_USER: undercroft
       POSTGRES_PASSWORD: undercroft
       POSTGRES_DB: undercroft
+    # TLS in the server, not in a proxy: Postgres speaks its own protocol,
+    # so there is nothing for the HTTP terminator to front.
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/server.crt
+      - -c
+      - ssl_key_file=/certs/server.key
+    volumes:
+      - undercroft-pgvector-tls:/certs:ro
 
   milvus:
     image: milvusdb/milvus:v2.4.15
@@ -245,4 +329,8 @@ volumes:
   undercroft-models:
   # The embeddings-tls terminator's CA material — clients mount this
   # read-only and pin the root via UNDERCROFT_EMBED_CA.
+  # The backends terminator's CA material, and the pgvector server's own
+  # self-signed certificate. The suite pins BOTH.
+  undercroft-backends-tls:
+  undercroft-pgvector-tls:
   undercroft-embed-tls:

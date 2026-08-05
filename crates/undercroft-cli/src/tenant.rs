@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use tiny_http::{Header, Request, Response};
 
 use undercroft_core::{normalize_content, validate_name, Drawer};
-use undercroft_store::{PalaceStore, SaveOutcome, SearchOptions, StoreError};
+use undercroft_store::{PalaceStore, SearchOptions, StoreError};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 use crate::assertion::{self, AssertionError};
@@ -355,6 +355,7 @@ impl Tenancy {
             ("POST", &["v1", "vaults", id, "refine"]) => self.refine(id, req, body, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
+            ("POST", &["v1", "vaults", id, "anchor"]) => self.anchor(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
             ("POST", &["v1", "vaults", id, "import"]) => self.import(id, req, body, now),
             _ => Err(RestError::new(404, "no such route")),
@@ -478,6 +479,12 @@ impl Tenancy {
                         "generation": generation,
                     }))
                     .collect::<Vec<_>>(),
+                // What a read-only open found and declined to repair (R4).
+                // Empty on every writable server, so a client can treat a
+                // non-empty array as "this replica is serving a vault its
+                // writer has not finished with".
+                "read_only": full.read_only,
+                "unhealed": full.unhealed,
             })),
         ))
     }
@@ -628,19 +635,16 @@ impl Tenancy {
         let out = if store.is_external() {
             let v =
                 vector.ok_or_else(|| RestError::new(400, "external vault requires 'vector'"))?;
+            // Both external arms carry the screen's verdict now. This one
+            // used to rebuild a `SaveOutcome` by hand around a bare bool,
+            // hard-coding `quarantined: false` and echoing the aimed-at id —
+            // so a diverted save on an external vault answered 200 clean,
+            // which is the one thing the typed outcome exists to prevent.
             match dedup {
                 Some(t) => store
                     .save_with_dedup_vec(&drawer, v, t)
                     .map_err(store_err)?,
-                None => {
-                    let created = store.upsert_external(&drawer, v).map_err(store_err)?;
-                    SaveOutcome {
-                        id: drawer.id.clone(),
-                        created,
-                        deduped: false,
-                        quarantined: false,
-                    }
-                }
+                None => store.upsert_external(&drawer, v).map_err(store_err)?,
             }
         } else {
             match dedup {
@@ -1017,6 +1021,44 @@ impl Tenancy {
     /// answered green on a vault with a tampered link. The counts are the
     /// same breakdown `GET …/supersessions` returns, so an alert can stay
     /// on this one route.
+    /// `POST /v1/vaults/{id}/anchor` — fast-forward the manifest rollback
+    /// anchor onto the committed chain head (ROADMAP R3).
+    ///
+    /// **This is the surface the capability exists for.** On the CLI the
+    /// open already reconciles, so a command can only report what the open
+    /// did; here the handle is CACHED (`store_for` opens once and keeps
+    /// it), so nothing re-opens and the anchor-lag window a read-audit tail
+    /// leaves open stays open for the life of the process. The advice on
+    /// file was "run writes or `verify` on its own cadence" — but `verify`
+    /// does not anchor (A31), so the only reachable substitutes were
+    /// manufacturing a write or `GET …/export`.
+    ///
+    /// A **write**, and classified as one: `mutates` fails closed on every
+    /// non-GET that is not named, so a `--read-only` server refuses this
+    /// route without anything being added to a list.
+    fn anchor(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let state = store.tighten_anchor().map_err(store_err)?;
+        // `behind_by` is what an operator is actually asking about — how
+        // much of the chain the out-of-database rollback anchor could not
+        // have vouched for a moment ago.
+        let behind_by = match state {
+            undercroft_store::AnchorState::Healed { behind_by } => behind_by,
+            _ => 0,
+        };
+        let (chain_head, writes) = store.chain_state().map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "anchored": !matches!(state, undercroft_store::AnchorState::Unseeded),
+                "behind_by": behind_by,
+                "chain_head": chain_head,
+                "writes": writes,
+            })),
+        ))
+    }
+
     fn verify(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
@@ -1073,13 +1115,20 @@ impl Tenancy {
         let candidate = self.manager.rotation_candidate(id).map_err(vault_err)?;
         let store = self.store_for(id)?;
         let report = store.rotate_keys(candidate).map_err(store_err)?;
+        // The DATABASE's head, never `Vault::chain_head_hex()` — the
+        // handle's cached manifest field, loaded once at unlock and never
+        // reloaded, which CLAUDE.md names as forbidden for a reporting
+        // surface. This route and `vault status` were the last two callers
+        // (ROADMAP A21). They agreed with the truth only because a rotation
+        // re-anchors on its way out.
+        let (chain_head, _) = store.chain_state().map_err(store_err)?;
         Ok((
             200,
             Body::Json(json!({
                 "id": id,
                 "rotated": true,
                 "report": serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
-                "chain_head": store.vault().chain_head_hex(),
+                "chain_head": chain_head,
                 "note": "remote index copies are stale; re-run `undercroft index push` if used",
             })),
         ))
@@ -1755,23 +1804,46 @@ impl Tenancy {
         let store = self.store_for(id)?;
         let mut imported = 0u64;
         let mut quarantined = 0u64;
-        for (drawer, vector, tok) in &records {
+        // Every store-guard refusal below names WHICH record failed, the
+        // way a parse error already named its line. Six refusal classes
+        // arrived on this path with this branch (reserved wing, bad kind,
+        // bad name, self-supersession, non-finite vector, forged artifact
+        // id) and every one of them answered with the reason and no
+        // position, over a body that can hold a million records (ROADMAP
+        // C10). `at` counts records, not lines, because the manifest line
+        // and the typed KG/tunnel records make those two different numbers.
+        let at = |n: usize, e: RestError| RestError {
+            code: e.code,
+            message: format!(
+                "record {} ({}): {}",
+                n + 1,
+                drawer_label(&records[n].0),
+                e.message
+            ),
+        };
+        for (n, (drawer, vector, tok)) in records.iter().enumerate() {
             // `import_record` re-stamps `added_by` with the importing
             // surface: the payload's own value is the key the admission
             // screen's trusted-source auto-admit rides, and a caller must
             // not be able to set it.
             let out = store
                 .import_record(drawer, vector.clone(), undercroft_store::IMPORT_SURFACE)
-                .map_err(store_err)?;
+                .map_err(|e| at(n, store_err(e)))?;
             if out.quarantined {
                 quarantined += 1;
             }
             if let Some((model, packed)) = tok {
                 // Re-sealed under this vault's key; restore skips the
-                // per-drawer encode forward.
+                // per-drawer encode forward. Filed under the id the row
+                // ACTUALLY landed under, not the one the payload aimed at —
+                // the two differ whenever the screen re-derives it, which is
+                // the default path for a payload containing quarantined rows
+                // against a non-screening destination. Under the aimed-at id
+                // the restored drawer silently lost its ColBERT matrix and an
+                // orphan row stayed behind (ROADMAP C6).
                 store
-                    .import_token_artifact(&drawer.id, model, packed)
-                    .map_err(store_err)?;
+                    .import_token_artifact(&out.id, model, packed)
+                    .map_err(|e| at(n, store_err(e)))?;
             }
             imported += 1;
         }
@@ -1840,7 +1912,17 @@ impl Tenancy {
             // the class saw an internal error and hammered a tampered
             // vault. Behaviour-neutral for everything else: both mappers
             // fall through to 500.
-            let vault = self.manager.unlock(vault_id).map_err(vault_err)?;
+            // The posture reaches the unlock too: unlocking removes a
+            // `vault.json.next` it cannot authenticate, and a `--read-only`
+            // server is exactly the role the incident runbook starts while a
+            // writer may be mid-rotation (ROADMAP A32/R4).
+            let vault = if self.read_only {
+                self.manager
+                    .unlock_as(vault_id, undercroft_vault::Access::ReadOnly)
+            } else {
+                self.manager.unlock(vault_id)
+            }
+            .map_err(vault_err)?;
             let embedder =
                 (self.factory)(&vault).map_err(|e| RestError::new(500, e.to_string()))?;
             // A read-only server must not rewrite the vault it is serving —
@@ -2090,8 +2172,11 @@ fn mutates(method: &str, segs: &[&str]) -> bool {
 /// `GET /v1/vaults` already makes ("vault listing is disabled under
 /// per-vault assertions"). So under assertions the door is closed, and the
 /// cost is stated rather than hidden: on such a deployment the pending TEXT
-/// is readable only from the operator seat (`undercroft admission list` on
-/// the host), while the queue and both rulings stay on `/v1`.
+/// is readable only from the operator seat (`undercroft drawer get <id>` on
+/// the host — NOT `admission list`, which prints ids, wings, signal codes
+/// and timestamps and no content at all; `PendingAdmission` has no content
+/// field, and this error named that command until 2026-08-05), while the
+/// queue and both rulings stay on `/v1`.
 ///
 /// Two residues, both deliberate:
 /// * `GET …/export` still carries quarantined rows. Excluding them here
@@ -2133,7 +2218,7 @@ fn review_door(under_assertions: bool, named_wing: Option<&str>) -> Result<(), R
                  reviewer. The queue itself (signals + offsets, no content) is \
                  `GET /v1/vaults/<id>/admission` and both rulings are \
                  `POST /v1/vaults/<id>/admission`; the pending text is readable from the \
-                 operator seat with `undercroft admission list`",
+                 operator seat with `undercroft drawer get <drawer-id>`",
                 undercroft_store::QUARANTINE_WING
             ),
         ));
@@ -2161,97 +2246,24 @@ fn refuse_unhonourable_vector(supplied: bool, external: bool) -> Result<(), Rest
     Ok(())
 }
 
-/// What an import payload's attestation was found to be — *found*, not
-/// declared. Every variant here is the result of a check that ran.
-enum Attested {
-    /// No manifest line (a legacy payload), and none was demanded.
-    None,
-    /// A manifest carrying no signature at all. Recorded as such; an
-    /// unattested import is a fact, never an error (the `/v1` export itself
-    /// produces unsigned manifests — the signing key is an operator file,
-    /// not a server secret).
-    Unsigned,
-    /// The Ed25519 signature verified over the canonical manifest bytes,
-    /// which cover the payload digest. `sender` is therefore proven.
-    Verified { sender: String },
-}
-
-impl Attested {
-    /// The wire word for `signature`. Says what was checked.
-    fn wire_status(&self) -> &'static str {
-        match self {
-            Attested::None | Attested::Unsigned => "unsigned",
-            Attested::Verified { .. } => "verified",
-        }
-    }
-
-    /// The sender key, only when it was proven.
-    fn verified_sender(&self) -> Option<&str> {
-        match self {
-            Attested::Verified { sender } => Some(sender.as_str()),
-            _ => None,
-        }
-    }
-}
-
-/// Check an import bundle's manifest attestation before anything is written.
+/// `/v1`'s wrapper around the ONE attestation decision, which lives in
+/// `undercroft_vault::bundle::BundleManifest::attest` (ROADMAP C5).
 ///
-/// Two rules, and the difference between them is the whole point:
+/// All this adds is the status class. 400, not 409: nothing is stored yet
+/// — the payload is this request's own input, the same class as the digest
+/// mismatch and the expiry check that already answer 400 on this route.
+/// 409 is reserved for verdicts about evidence the vault already holds.
 ///
-/// * a manifest that CARRIES an attestation is verified unconditionally —
-///   admitting a signature known not to verify and calling it "unverified"
-///   would be admitting evidence already found false;
-/// * `?sender=<hex>` additionally pins WHO, the CLI's `--sender`. An
-///   embedded key alone proves the manifest is self-consistent, not that it
-///   came from anyone in particular, so pinning is the only form that is an
-///   authorization decision.
-///
-/// 400, not 409: nothing is stored yet — the payload is this request's own
-/// input, the same class as the digest mismatch and the expiry check that
-/// already answer 400 on this route. 409 is reserved for verdicts about
-/// evidence the vault already holds.
+/// It used to hold the decision itself, and the CLI held a different one:
+/// that route verified unconditionally while `undercroft import` verified
+/// only when `--sender` was passed. Two implementations of one security
+/// decision is the shape this branch spends its time removing.
 fn verify_attestation(
     manifest: Option<&undercroft_vault::bundle::BundleManifest>,
     pinned: Option<&str>,
-) -> Result<Attested, RestError> {
-    let Some(m) = manifest else {
-        // The CLI's rule, verbatim: a pin with nothing to check is a
-        // refusal, because answering "imported, unverified" to a caller who
-        // demanded a sender is precisely the claim this route used to make.
-        if pinned.is_some() {
-            return Err(RestError::new(
-                400,
-                "sender was pinned but the payload carries no manifest to verify",
-            ));
-        }
-        return Ok(Attested::None);
-    };
-    // Half-signed counts as signed for this decision: a manifest with a
-    // sender and no signature (or the reverse) is malformed, and `verify`
-    // says so — reporting it as merely "unsigned" would launder it.
-    if m.sig.is_none() && m.sender.is_none() {
-        if pinned.is_some() {
-            return Err(RestError::new(
-                400,
-                "sender was pinned but the payload's manifest is unsigned",
-            ));
-        }
-        return Ok(Attested::Unsigned);
-    }
-    match pinned {
-        Some(expected) => m.verify_against(expected).map_err(|e| {
-            RestError::new(
-                400,
-                format!("manifest attestation failed against the pinned sender: {e}"),
-            )
-        })?,
-        None => m
-            .verify()
-            .map_err(|e| RestError::new(400, format!("manifest signature does not verify: {e}")))?,
-    }
-    Ok(Attested::Verified {
-        sender: m.sender.clone().unwrap_or_default(),
-    })
+) -> Result<undercroft_vault::bundle::Attestation, RestError> {
+    undercroft_vault::bundle::BundleManifest::attest(manifest, pinned)
+        .map_err(|e| RestError::new(400, format!("manifest attestation failed: {e}")))
 }
 
 /// Vault-manager failures, classed like every other error on this API.
@@ -2301,6 +2313,14 @@ fn store_err(e: StoreError) -> RestError {
             undercroft_vault::VaultError::ManifestTampered
             | undercroft_vault::VaultError::CorruptManifest(_),
         ) => 409,
+        // Two more verdicts about the vault's own state rather than about
+        // the request, and neither is transient: a manifest whose database
+        // is absent (R4/A33 — "empty" is not "absent"), and a schema a
+        // read-only role would have had to migrate. 409 is the class that
+        // says a retry only re-detects it; the remedy is in the message.
+        // Only the first is an INTEGRITY verdict — the vault contradicts
+        // itself — so only the first exits 2 on the CLI.
+        StoreError::DatabaseMissing { .. } | StoreError::ReadOnlyUnmigrated { .. } => 409,
         // "That record is not here" has ONE status class across every
         // route: `forget` and `admission` used to answer 400 for it while
         // GET/PUT on the same id answered 404, so a client could not key
@@ -2309,6 +2329,15 @@ fn store_err(e: StoreError) -> RestError {
         _ => 500,
     };
     RestError::new(code, e.to_string())
+}
+
+/// How a failing import record is NAMED in an error.
+///
+/// Wing/room/id, not content: the message travels to a caller who may not
+/// be the writer, and the id is derived rather than declared, so it is the
+/// one handle that identifies the record without quoting it.
+fn drawer_label(d: &Drawer) -> String {
+    format!("{}/{} id={}", d.meta.wing, d.meta.room, d.id)
 }
 
 fn err500(e: StoreError) -> RestError {
@@ -2630,6 +2659,263 @@ mod tests {
             Some(r#"{"query":"planning"}"#),
         );
         assert_eq!(code, 200, "premise: {body}");
+    }
+
+    /// R5: `/v1` answers 202 with the LANDED id on every save arm, not
+    /// only the plain one.
+    ///
+    /// The two arms driven here are the two that were dishonest until
+    /// 2026-08-05, and they are driven through the ROUTE rather than
+    /// through the store, because the store returning the right thing is
+    /// only half of it: this handler used to rebuild a `SaveOutcome` by
+    /// hand around `upsert_external`'s bare bool, hard-coding
+    /// `quarantined: false` and echoing the id the caller aimed at.
+    ///
+    /// The store is seeded into the cache with the screen already on rather
+    /// than declared through the environment, because `UNDERCROFT_ADMISSION`
+    /// is read once at open and these tests run in parallel.
+    #[test]
+    fn a_diverted_save_answers_202_with_the_landed_id_on_every_v1_arm() {
+        // --- the `dedup_threshold` arm ------------------------------------
+        {
+            let mut s = surface(false);
+            let mut store = PalaceStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
+            store.set_admission(true);
+            s.tenancy.stores.insert("acme".to_string(), store);
+
+            // Premise: the same body without the threshold is already known
+            // to divert, and a CLEAN body with the threshold answers 200.
+            let (code, body) = s.call(
+                "POST",
+                "/v1/vaults/acme/drawers",
+                Some(r#"{"text":"the estuary survey moved to may","wing":"ops","dedup_threshold":0.95}"#),
+            );
+            assert_eq!(code, 200, "premise: a clean dedup save is a 200: {body}");
+
+            let poison = format!(
+                r#"{{"text":{},"wing":"ops","dedup_threshold":0.95}}"#,
+                serde_json::to_string(POISON).unwrap()
+            );
+            let (code, body) = s.call("POST", "/v1/vaults/acme/drawers", Some(&poison));
+            assert_eq!(
+                code, 202,
+                "a diverted dedup save must not answer 200: {body}"
+            );
+            let v: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(v["quarantined"], json!(true), "{body}");
+            assert_eq!(
+                v["deduped"],
+                json!(false),
+                "a diverted refresh is no refresh: {body}"
+            );
+            // The id must be one the reviewer can actually fetch.
+            let landed = v["id"].as_str().unwrap().to_string();
+            let (code, _) = s.call(
+                "GET",
+                &format!("/v1/vaults/acme/drawers/{landed}?wing=quarantine-pending"),
+                None,
+            );
+            assert_eq!(code, 200, "the answered id must be the landed one");
+        }
+        // --- the external-vault arm ---------------------------------------
+        {
+            let mut s = surface(false);
+            // Its own vault: `acme` has already recorded the hash identity,
+            // and an embedder swap is refused (correctly) rather than
+            // silently accepted.
+            let vault = s
+                .tenancy
+                .manager
+                .create("ext", SecurityLevel::Sealed)
+                .unwrap();
+            let mut store = PalaceStore::open_with_embedder(
+                vault,
+                Box::new(undercroft_core::ExternalEmbedder::new("acme-embed", 8)),
+            )
+            .unwrap();
+            store.set_admission(true);
+            s.tenancy.stores.insert("ext".to_string(), store);
+
+            let clean = r#"{"text":"the estuary survey moved to may","wing":"ops","vector":[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]}"#;
+            let (code, body) = s.call("POST", "/v1/vaults/ext/drawers", Some(clean));
+            assert_eq!(code, 200, "premise: a clean external save is a 200: {body}");
+
+            let poison = format!(
+                r#"{{"text":{},"wing":"ops","vector":[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]}}"#,
+                serde_json::to_string(POISON).unwrap()
+            );
+            let (code, body) = s.call("POST", "/v1/vaults/ext/drawers", Some(&poison));
+            assert_eq!(
+                code, 202,
+                "a diverted external save answered 200 clean until R5: {body}"
+            );
+            let v: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(v["quarantined"], json!(true), "{body}");
+            let landed = v["id"].as_str().unwrap().to_string();
+            let (code, _) = s.call(
+                "GET",
+                &format!("/v1/vaults/ext/drawers/{landed}?wing=quarantine-pending"),
+                None,
+            );
+            assert_eq!(code, 200, "the answered id must be the landed one");
+        }
+    }
+
+    /// C13/E7: caller input answers **400**, never a 500 saying the vault
+    /// is corrupt.
+    ///
+    /// Eight sites raised `CorruptRow` for values a caller sent — an entity
+    /// name, an entity type, a KG subject or predicate, a non-hex
+    /// `source_fp`, a drawer that supersedes itself — and every one landed
+    /// on `store_err`'s `_ => 500`. An operator restoring a backup with a
+    /// slash in an entity name was told their vault was corrupt, and an SDK
+    /// keyed on the class retried a multi-gigabyte import forever.
+    #[test]
+    fn caller_input_on_the_kg_and_import_paths_is_400_not_a_corrupt_vault() {
+        let mut s = surface(false);
+        // Each line is a whole import payload, so each names ONE bad value.
+        let cases = [
+            (
+                "entity name",
+                r#"{"entity":{"name":"../../etc/passwd","etype":"unknown"}}"#,
+            ),
+            (
+                "entity type",
+                r#"{"entity":{"name":"bob","etype":"../../etc/passwd"}}"#,
+            ),
+            (
+                "triple subject",
+                r#"{"triple":{"triple":{"id":"x","subject":"../../etc","predicate":"p","object":"o","confidence":1.0,"extracted_at":"2026-01-01T00:00:00Z"}}}"#,
+            ),
+            (
+                "triple predicate",
+                r#"{"triple":{"triple":{"id":"x","subject":"s","predicate":"../../etc","object":"o","confidence":1.0,"extracted_at":"2026-01-01T00:00:00Z"}}}"#,
+            ),
+        ];
+        for (what, line) in cases {
+            let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&format!("{line}\n")));
+            assert_eq!(code, 400, "{what}: {body}");
+            assert!(
+                !body.contains("corrupt row"),
+                "{what} must not tell the operator their vault is corrupt: {body}"
+            );
+        }
+
+        // C10: a store-guard refusal on a DRAWER record names which record
+        // it was. Parse errors already reported a line number; the six
+        // refusal classes this branch added reported the reason and no
+        // position, over a body that can hold a million records.
+        let ok = Drawer::new("ops", "r", "an ordinary note".into(), None, 1, "export");
+        let bad = Drawer::new("ops", "r", "poison".into(), None, 2, "export")
+            .with_kind(Some("not-a-kind".into()));
+        let (code, body) = s.call(
+            "POST",
+            "/v1/vaults/acme/import",
+            Some(&format!(
+                "{}\n{}\n",
+                json!({ "drawer": ok }),
+                json!({ "drawer": bad })
+            )),
+        );
+        assert_eq!(code, 400, "{body}");
+        assert!(body.contains("record 2"), "names which record: {body}");
+        assert!(body.contains(&bad.id), "and identifies it: {body}");
+        // Premise: the same route accepts the same shapes when the values
+        // are ordinary, so the 400s above are about the values.
+        let (code, body) = s.call(
+            "POST",
+            "/v1/vaults/acme/import",
+            Some("{\"entity\":{\"name\":\"bob\",\"etype\":\"person\"}}\n"),
+        );
+        assert_eq!(code, 200, "{body}");
+    }
+
+    /// C6: an imported token artifact is filed under the id the row LANDED
+    /// under, and an id that is not a drawer id is refused outright.
+    ///
+    /// The existing round-trip test runs with screening off, where the two
+    /// ids coincide — which is exactly why it could not fail for this.
+    #[test]
+    fn an_imported_token_artifact_follows_the_row_and_refuses_a_forged_id() {
+        let mut s = surface(false);
+        let mut store = PalaceStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
+        store.set_admission(true);
+        s.tenancy.stores.insert("acme".to_string(), store);
+
+        // One drawer whose text trips the screen, carrying a token matrix.
+        // 4 rows × 8 dims, in the v1 packed shape the importer parses.
+        let dim = 8usize;
+        let packed = undercroft_core::late::quantize_tokens(&vec![0.5f32; dim * 4], dim);
+        // Built by `Drawer::new`, so the id recipe and every serde-required
+        // field come from the type rather than from a hand-written literal.
+        let d = Drawer::new("ops", "r", POISON.into(), None, 7, "export");
+        let aimed = d.id.clone();
+        let line = serde_json::json!({
+            "drawer": d,
+            "tok": { "model": "test-colbert", "b64": b64encode(&packed) },
+        });
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&format!("{line}\n")));
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["quarantined"], json!(1), "premise: the row was diverted");
+
+        let store = s
+            .tenancy
+            .stores
+            .get_mut("acme")
+            .expect("cached by the import");
+        // `surface()` plants one quarantined drawer of its own, so the row
+        // this import diverted is the one that was not there before.
+        let landed = {
+            let pending = store.admission_pending().unwrap();
+            pending
+                .iter()
+                .find(|p| p.id != s.quarantined_id)
+                .expect("the imported row is in the queue")
+                .id
+                .clone()
+        };
+        assert!(
+            store.has_token_artifact(&landed),
+            "the matrix must follow the row to where it landed"
+        );
+        assert!(
+            !store.has_token_artifact(&aimed),
+            "and must leave no orphan under the id the payload aimed at"
+        );
+    }
+
+    /// R3: the anchor heal is reachable on the surface it exists for, and
+    /// it is classified as the write it is.
+    ///
+    /// `mutates` fails closed on every non-GET that is not named, so the
+    /// read-only refusal below needed no list entry — which is the property
+    /// the gate was rebuilt for, and this asserts it holds for a route
+    /// added afterwards.
+    #[test]
+    fn the_anchor_route_is_reachable_and_classified_as_a_write() {
+        let mut s = surface(false);
+        let (code, body) = s.call("POST", "/v1/vaults/acme/anchor", None);
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["anchored"], json!(true), "{body}");
+        assert!(v["chain_head"].as_str().is_some(), "{body}");
+        assert!(v["behind_by"].as_u64().is_some(), "{body}");
+
+        // Unknown vault takes the same class as its neighbours.
+        let (code, _) = s.call("POST", "/v1/vaults/nope/anchor", None);
+        assert_eq!(code, 404);
+
+        // And a read-only server refuses it without anything being added
+        // to a list of mutating routes.
+        let mut ro = surface(false);
+        ro.tenancy.read_only = true;
+        let (code, body) = ro.call("POST", "/v1/vaults/acme/anchor", None);
+        assert_eq!(code, 403, "{body}");
+        assert!(body.contains("read-only"), "{body}");
+        // Premise: the same server still serves the two named reads.
+        let (code, _) = ro.call("POST", "/v1/vaults/acme/verify", None);
+        assert_eq!(code, 200);
     }
 
     // ---- A22: rotate's error classes ----------------------------------

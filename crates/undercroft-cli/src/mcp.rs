@@ -75,7 +75,17 @@ fn quarantine_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()>
         // Only id-shaped arguments get the row lookup: a primary-key probe
         // per argument is cheap, but running one over every free-text field
         // (a `content` body, a search `query`) is noise, not safety.
-        if (key == "id" || key.ends_with("_id")) && store.is_quarantine_pending(s)? {
+        //
+        // `supersedes` is named explicitly because it is an id and matches
+        // neither test (ROADMAP C12) — which is exactly the "a checklist
+        // goes stale the moment a tool adds an argument" failure this
+        // function's own doc claims to have removed. The shape test stays
+        // the rule; this is the one argument that carries a drawer id under
+        // a name that does not say so, and adding it here is cheaper than
+        // pretending the rule covered it.
+        if (key == "id" || key.ends_with("_id") || key == "supersedes")
+            && store.is_quarantine_pending(s)?
+        {
             anyhow::bail!(
                 "{tool}: {s} is quarantine-pending — pending review evidence \
                  is operator-only; rule on it with `admission allow`/`deny`"
@@ -1038,6 +1048,46 @@ mod tests {
             json!({ "content": poison }),
         );
         assert!(!err && text == "not filed", "duplicate oracle: {text}");
+
+        // C12: `supersedes` is a drawer id under a name that is neither
+        // `id` nor `*_id`, so it walked past the fence's shape test and the
+        // write bound the receipt with no wing predicate — an existence
+        // oracle on the queue from the surface that is supposed to have
+        // none.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_add_drawer",
+            json!({ "content": "a harmless note", "supersedes": qid }),
+        );
+        assert!(err, "supersedes must not walk past the fence: {text}");
+        assert!(text.contains(&qid), "and it names the drawer: {text}");
+        // Premise: the same call against an ordinary drawer is allowed, so
+        // the refusal is about quarantine and not about the argument.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_add_drawer",
+            json!({ "content": "a harmless note", "supersedes": clean.id }),
+        );
+        assert!(!err, "superseding an ordinary drawer still works: {text}");
+
+        // C15: the KG is the second content path to the agent, and its
+        // object screening was store-level only — driven on no surface.
+        // A flagged object is REFUSED rather than diverted (a fact has no
+        // wing to divert to), so the agent whose save was quarantined
+        // cannot put the same text in a fact instead.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_kg_add",
+            json!({ "subject": "team", "predicate": "note", "object": poison }),
+        );
+        assert!(err, "a flagged KG object must be refused: {text}");
+        // Premise: an ordinary object still writes.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_kg_add",
+            json!({ "subject": "team", "predicate": "note", "object": "standup at nine" }),
+        );
+        assert!(!err, "an ordinary fact still writes: {text}");
 
         // Nothing above disturbed the queue.
         assert_eq!(h.store.admission_pending().unwrap().len(), 1);

@@ -94,6 +94,40 @@ pub enum BundleError {
     Expired(String),
 }
 
+/// What [`BundleManifest::attest`] concluded about a payload's provenance.
+///
+/// A **result**, never a field: the key it replaces on the wire was
+/// `signed`, computed from `sig.is_some()` — presence reported as though it
+/// were verification. Nothing here is reachable without a signature check
+/// having actually run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attestation {
+    /// No manifest at all — a legacy or hand-built payload.
+    NoManifest,
+    /// A manifest carrying neither sender nor signature.
+    Unsigned,
+    /// A signature that verified. `sender` is proven, not claimed.
+    Verified { sender: String },
+}
+
+impl Attestation {
+    /// The one-word status for a wire response or a terminal line.
+    pub fn wire_status(&self) -> &'static str {
+        match self {
+            Attestation::NoManifest | Attestation::Unsigned => "unsigned",
+            Attestation::Verified { .. } => "verified",
+        }
+    }
+
+    /// The sender key, only when it was proven.
+    pub fn verified_sender(&self) -> Option<&str> {
+        match self {
+            Attestation::Verified { sender } => Some(sender.as_str()),
+            _ => None,
+        }
+    }
+}
+
 /// A parsed recipient: who a bundle can be addressed to.
 enum Recipient {
     X25519(PublicKey),
@@ -432,6 +466,73 @@ impl BundleManifest {
             return Err(BundleError::BadSignature);
         }
         self.verify()
+    }
+
+    /// The whole attestation decision an importer has to make, in one
+    /// place, for every surface (ROADMAP C5).
+    ///
+    /// Three rules, and the differences between them are the point:
+    ///
+    /// * a manifest that CARRIES an attestation is verified
+    ///   **unconditionally** — admitting a signature known not to verify
+    ///   and calling it "unverified" is admitting evidence already found
+    ///   false;
+    /// * a `pinned` sender additionally pins WHO. An embedded key alone
+    ///   proves the manifest is self-consistent, not that it came from
+    ///   anyone in particular, so pinning is the only form of this that is
+    ///   an authorization decision;
+    /// * a pin with nothing to check is a **refusal**, never a shrug.
+    ///
+    /// It lives here because the two importers disagreed. `/v1` verified
+    /// unconditionally; the CLI — the surface every operator backup restore
+    /// uses — had no `else` branch and verified only when `--sender` was
+    /// passed, printing `signed-by=<16 hex> (unverified …)` and importing.
+    /// Since the payload digest IS checked unconditionally, an attacker
+    /// swapping a signed bundle's payload had to break the signature but
+    /// could keep the trusted sender's key, and the CLI then printed that
+    /// sender's prefix beside attacker content: provenance-display
+    /// laundering. A second per-surface guard would have been the same
+    /// mistake one layer up; this is the choke point instead.
+    pub fn attest(
+        manifest: Option<&BundleManifest>,
+        pinned: Option<&str>,
+    ) -> Result<Attestation, BundleError> {
+        let Some(m) = manifest else {
+            if pinned.is_some() {
+                return Err(BundleError::BadManifest(
+                    "sender was pinned but the payload carries no manifest to verify".into(),
+                ));
+            }
+            return Ok(Attestation::NoManifest);
+        };
+        // Half-signed counts as signed for this decision: a manifest with a
+        // sender and no signature (or the reverse) is malformed, and
+        // `verify` says so — reporting it as merely "unsigned" would
+        // launder it.
+        if m.sig.is_none() && m.sender.is_none() {
+            if pinned.is_some() {
+                return Err(BundleError::BadManifest(
+                    "sender was pinned but the payload's manifest is unsigned".into(),
+                ));
+            }
+            return Ok(Attestation::Unsigned);
+        }
+        // The pin is checked first and separately so the two failures stay
+        // distinguishable: "signed by somebody else" is an authorization
+        // answer, "the signature does not verify" is an integrity one, and
+        // collapsing them into one `BadSignature` tells a caller which
+        // question it asked but not which one failed.
+        if let Some(expected) = pinned {
+            if m.sender.as_deref() != Some(expected.trim()) {
+                return Err(BundleError::BadManifest(
+                    "the payload was signed by a key other than the pinned sender".into(),
+                ));
+            }
+        }
+        m.verify()?;
+        Ok(Attestation::Verified {
+            sender: m.sender.clone().unwrap_or_default(),
+        })
     }
 
     /// Whether the bundle has expired as of `now` (RFC 3339). A manifest

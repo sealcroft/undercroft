@@ -261,6 +261,93 @@ fn signed_bundle_migrates_a_palace_with_its_knowledge_graph() {
         .stderr(predicate::str::contains("attestation failed"));
 }
 
+/// C5: the CLI verifies an attestation it was given, whether or not a
+/// sender was pinned.
+///
+/// It had no `else`: with no `--sender` it printed
+/// `signed-by=<16 hex> (unverified — pass --sender to enforce)` and
+/// imported. The payload digest IS checked unconditionally, so an attacker
+/// swapping a signed export's records had to break the signature but could
+/// keep the trusted sender's key — and this command then printed that
+/// sender's prefix above attacker content. `/v1` verified unconditionally
+/// the whole time, so this was also the exact drift shape the branch is
+/// closing elsewhere: one capability, two surfaces, one of them weaker.
+#[test]
+fn cli_import_refuses_a_broken_signature_even_with_no_sender_pinned() {
+    let home = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&dst).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the deploy window moved to Tuesday mornings"])
+        .assert()
+        .success();
+    // A signed NDJSON payload built the way an export builds one. Made
+    // here rather than by `export --to`, because that seals the bytes and
+    // the point is to hand the importer a payload whose signature is wrong
+    // while its DIGEST is right — the shape an attacker produces by
+    // swapping the records under a trusted sender's key.
+    use undercroft_vault::bundle::{payload_digest, BundleManifest, ManifestCounts};
+    let (secret, _sender) = undercroft_vault::bundle::sign_keygen();
+    // The records are a REAL export's, taken from the source palace, so
+    // this test cannot drift out of the record shape the importer accepts.
+    let out = cmd(&home).args(["export"]).assert().success();
+    let exported = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let records = format!("{}\n", exported.split_once('\n').unwrap().1.trim_end());
+    let mut manifest = BundleManifest {
+        version: 1,
+        vault: "default".into(),
+        level: "sealed".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        counts: ManifestCounts::default(),
+        embedder: None,
+        chain_head: None,
+        trust: None,
+        expires: None,
+        sender: None,
+        payload_sha256: payload_digest(records.as_bytes()),
+        sig: None,
+    };
+    manifest.sign(&secret).unwrap();
+    // Framed by the library, so the manifest line key cannot drift out of
+    // this test the way a hand-written one would.
+    let frame = |m: &BundleManifest| undercroft_vault::bundle::frame_payload(m, records.as_bytes());
+    let good = work.path().join("signed.ndjson");
+    std::fs::write(&good, frame(&manifest)).unwrap();
+
+    // Premise: the honest payload imports with no pin, and says verified.
+    cmd(&dst)
+        .args(["import", good.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(verified)"));
+
+    // Now break the signature and nothing else. The digest still matches —
+    // it covers the records, which are untouched — so the ONLY thing that
+    // can refuse this is the signature check.
+    let sig = manifest.sig.clone().unwrap();
+    let mut flipped = sig.into_bytes();
+    flipped[0] = if flipped[0] == b'a' { b'b' } else { b'a' };
+    manifest.sig = Some(String::from_utf8(flipped).unwrap());
+    let forged = work.path().join("forged.ndjson");
+    std::fs::write(&forged, frame(&manifest)).unwrap();
+
+    let dst2 = TempDir::new().unwrap();
+    cmd(&dst2).args(["init"]).assert().success();
+    cmd(&dst2)
+        .args(["import", forged.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("attestation failed"));
+    // And nothing was written: the check runs before the first record.
+    cmd(&dst2)
+        .args(["search", "deploy window"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No memories matched"));
+}
+
 #[test]
 fn verify_passes_clean_and_fails_after_tampering() {
     let home = TempDir::new().unwrap();

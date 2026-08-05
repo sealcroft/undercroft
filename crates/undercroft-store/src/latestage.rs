@@ -455,12 +455,45 @@ impl PalaceStore {
     /// still HMAC-verified — a wrong or malicious artifact can only
     /// mis-rank, never forge content. Restore therefore skips the
     /// per-drawer encode forward entirely.
+    /// Whether a ColBERT token matrix is filed under `id`.
+    ///
+    /// A read, for the callers that need to tell "this drawer has no matrix"
+    /// from "this drawer's matrix is filed under a different id" — which is
+    /// exactly the difference C6 was: the artifact was sealed under the id
+    /// the payload aimed at rather than the one the row landed under.
+    pub fn has_token_artifact(&self, id: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM drawer_tok WHERE id = ?1",
+                params![id],
+                |_| Ok(()),
+            )
+            .optional()
+            .unwrap_or(None)
+            .is_some()
+    }
+
     pub fn import_token_artifact(
         &mut self,
         id: &str,
         model: &str,
         packed: &[u8],
     ) -> Result<(), StoreError> {
+        // A drawer id is DERIVED, never declared, and it is an AEAD
+        // associated-data component: content seals under `{id}`, the
+        // embedding under `{id}/emb`, token matrices under `{id}/tok`, FDE
+        // rows under `fde/{id}`. `is_drawer_id` was called at exactly one
+        // site — inside `write_drawer`, whose comment claims "the shape
+        // closes it for every write path at once" — and this is not a
+        // `write_drawer` path. A caller could post `id: "fde/<32 hex>"`
+        // with a valid `tok` and get a blob sealed under another drawer's
+        // FDE domain, which is the property the AAD exists to provide
+        // (ROADMAP C6).
+        if !crate::is_drawer_id(id) {
+            return Err(StoreError::Invalid(format!(
+                "token artifact id {id:?} is not a drawer id (32 lowercase hex): a drawer id                  is derived, and it is an AEAD associated-data component"
+            )));
+        }
         if dequantize_tokens(packed).is_none() {
             return Err(StoreError::CorruptRow {
                 id: id.to_string(),

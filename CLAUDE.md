@@ -7,7 +7,7 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 ## Layout
 
-- `Cargo.toml` — workspace root (11 crates; `undercroft-embed-onnx` and
+- `Cargo.toml` — workspace root (12 crates; `undercroft-embed-onnx` and
   `undercroft-embed-ort` excluded from default-members — heavy ML deps,
   built explicitly)
 - `crates/undercroft-core` — domain model, chunking, ids, normalization
@@ -388,11 +388,16 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   already shared, both paths classifying through `admission::save_event`).
   `import_record` reports the `Landing` it receives — a diverted import
   answers `quarantined` with the id the row actually landed under, on
-  every branch. Still open on the same theme, R5's unit: `upsert_external`
-  returns a bare bool and `save_with_dedup_vec` hard-codes
-  `quarantined: false` on both its branches, so a diverted save on those
-  arms — `/v1`'s `dedup_threshold` and external-vault save bodies — still
-  reports clean under the aimed-at id. No
+  every branch. **Every save arm does now (R5 closed 2026-08-05)**:
+  `upsert_external` returns a `SaveOutcome` instead of a bare bool,
+  `save_with_dedup_vec` takes `quarantined` and the landed id from its
+  `Landing` on both branches, and `/v1` stopped rebuilding an outcome by
+  hand around either — so the last place a surface could assert
+  `quarantined: false` on its own authority is gone. The dedup-REFRESH
+  branch is its own case and the worst one: a diverted refresh is not a
+  refresh, so it answers `deduped: false` with the quarantine id, because
+  the matched drawer kept its old text and describing it as updated was a
+  claim about a write that never happened. No
   assertion about the reserved wing at the choke point: a CALLER may
   legitimately aim a write at it (a forgery attempt) and must reach the
   reserved-wing guard and be refused as invalid input, not trip an
@@ -494,13 +499,36 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `unchecked_transaction` and deliberately does NOT anchor — the
   anchor-lag boundary is stated: read records anchor at the next store
   open, and a stripped unanchored tail is crash-indistinguishable until
-  then; garbage declaration refuses to open, read-only open warns and
-  disables),
+  then. **A long-lived server never re-opens**, so R3 shipped the
+  explicit closer the advice always assumed: `tighten_anchor` →
+  `undercroft vault anchor` and `POST /v1/…/anchor` (an ops route on the
+  orchestrator too), classified a WRITE everywhere and refused on a
+  read-only handle — `anchor_manifest` writes a FILE, so `query_only`
+  would not have stopped it. Operator-only, in `OPERATOR_ONLY` beside
+  `rotate` and for the same reason: it moves the out-of-database
+  evidence a rollback is detected against. One implementation
+  (`reconcile_chain(heal)`) serves the open, the read-only report and
+  the call, because the arithmetic IS the tamper detection and a second
+  copy is a second place for the alarm to be subtly wrong; garbage
+  declaration refuses to open, read-only open warns and disables),
   in-place key rotation
   (rotate.rs: one-transaction re-seal of every artifact + chain re-key
   over preserved audit bytes, crash-reconciled at open), bulk ingest
   (`upsert_many`: one transaction + one manifest anchor per batch —
   advisory encode paths must never BEGIN or batching breaks)
+- `crates/undercroft-net` — the outbound transport policy, in ONE place:
+  **TLS or loopback, nothing else, no override** (refused at construction,
+  before a byte moves) plus CA pinning, where a declared root REPLACES the
+  public roots rather than adding to them and a file that pins nothing
+  refuses instead of falling back. It is its own crate because it was
+  implemented once in `undercroft-llm` for the embedder and LLM clients
+  while the remote **index** backends had no transport policy at all
+  (ROADMAP C8) — and every index push carries EMBEDDINGS, which are
+  plaintext-derived, so the sealed-vault invariant's own reasoning applies
+  one hop out. `is_loopback` delegates to the transport's own `url` parser
+  rather than re-deriving the host, because a hand-rolled predicate
+  inverted this gate twice (`http://127.0.0.1:8080@evil.com/` read as
+  loopback)
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
   OTLP traces (metadata-only spans), and the live SSE broker. Two contracts
@@ -516,11 +544,17 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   since they are not names (a sealed frame suppresses the names), and
   offsets and content never travel. `monitor.html` dispatches on
   `drawer-quarantined`; `website/src/observability.md` documents it.
-  Residue, R5's unit (ROADMAP): `upsert_external` and `save_with_dedup_vec`
-  still emit `drawer-saved` with the aimed-at wing and report
-  `quarantined: false` even when the choke point diverted the row — one
-  honest frame and one lying one on the same write; the typed-outcome fix
-  that reached `upsert_screened` and `import_record` is owed on those arms
+  **The counter travels with the frame since 2026-08-05 (C11/R5)**: both
+  are emitted by ONE function (`PalaceStore::emit_write_event`) off ONE
+  `save_event` classification, and `drawer_writes_total` gained a third
+  label, `quarantined`. It used to be a hard-coded
+  `WriteOutcome::Created` one line above the branch that decided the
+  frame, on all five write arms, so the monitor showed
+  `drawer-quarantined` while the counter climbed as `created` — a durable
+  signal that was *wrong* rather than missing. Gated by a SOURCE count
+  (`write_telemetry_has_exactly_one_emitter`), because the counter is a
+  no-op without the telemetry feature and no test that merely drives a
+  save could ever have seen it
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
@@ -611,11 +645,37 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   manifest anchor: only a store open does (`init_chain`), so the
   read-audit boundary's old "run writes or `verify`" advice was wrong on
   exactly the deployment it was written for, a server that caches its
-  handle (A31). Two
-  boundaries stated rather than hidden: opening still writes (schema
-  creation, rotation reconcile, chain init), and `open_read_only`'s own
-  doc records that with `UNDERCROFT_RETRIEVAL=pq` a search may still
-  build or retrain a missing index — a gap, not a decision;
+  handle (A31). **The OPEN is a read too since 2026-08-05 (R4)** — this
+  line used to record the opposite as a stated gap, and both halves of it
+  are now closed: `open_read_only` takes a `SQLITE_OPEN_READ_ONLY`
+  connection under `PRAGMA query_only=ON` (so a write we MISSED fails
+  loudly rather than happening quietly), does not create the database,
+  does not run `journal_mode=WAL`, creates and alters no table, seeds no
+  `chain_meta`, fast-forwards no anchor, rebuilds no FTS index, and does
+  not promote or delete a writer's `vault.json.next` — the operation
+  A32 called evidence destruction on the incident runbook's own path. It
+  reaches the UNLOCK as well (`unlock_as(Access::ReadOnly)`), because
+  unlocking deletes a staging manifest it cannot authenticate and stating
+  the posture one call later was already too late. Each of those is
+  DETECTED and REPORTED instead, on `PalaceStats.unhealed` (all three
+  surfaces) and as a warning at open. Two conditions refuse rather than
+  report, both 409: an absent `palace.db` under a present manifest
+  (`DatabaseMissing`, A33 — "empty" is not "absent", and it is an
+  integrity verdict, so exit 2), and a schema a read-only role would have
+  had to migrate (`ReadOnlyUnmigrated`, exit 1 — the vault is intact, the
+  posture is simply wrong for it). A vault whose writer crashed
+  mid-rotation still opens, which is the case that made reporting the
+  right rule. The prefilter half (R1) was already closed: a tier loads an
+  existing index and never builds one. Residue, stated: a read-only
+  connection materialises SQLite's WAL scaffolding (`-shm`, and a
+  zero-length `-wal`) when the directory is writable — no database
+  content, reconstructible, and the price of reading a WAL database at
+  all; where the directory is NOT writable the open escalates to
+  `immutable=1` and says so, which is what makes a write-protected mount
+  or a snapshot readable (R4's first item, settled by execution — the
+  test blocks the `-shm` with a directory rather than with `chmod`,
+  because the test container runs as root and permission bits do not bind
+  root);
   ui.html: the vault admin console (incl. live MONITOR +
   KNOWLEDGE tabs), `include_str!`'d and served at `GET /ui` on every
   build; monitor.html: the Palace Monitor
@@ -740,8 +800,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (615 run,
-                                      # 4 #[ignore]d = 619 declared. Counted from
+docker compose run --rm test          # cargo unit + integration tests (639 run,
+                                      # 4 #[ignore]d = 643 declared. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -755,10 +815,10 @@ docker compose run --rm test          # cargo unit + integration tests (615 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (224 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (57 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (238 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (76 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
-docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
+docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
 docker compose run --rm onnx-build    # compile-check the ONNX embedder+reranker feature
