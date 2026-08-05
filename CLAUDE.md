@@ -740,8 +740,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (603 run,
-                                      # 4 #[ignore]d = 607 declared. Counted from
+docker compose run --rm test          # cargo unit + integration tests (615 run,
+                                      # 4 #[ignore]d = 619 declared. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1049,10 +1049,17 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   centroid is a mean of in-ball points, so "at most the diameter" bounds
   nothing). The **NaN/Inf** channel (a non-finite vector from an
   `external:` embedder escaped normalization entirely — NaN/x = NaN)
-  is CLOSED at the door (2026-08-04): `upsert_external` refuses any
-  vector with a non-finite component; every internal embedder is
-  finite by construction, so the caller-supplied path was the one
-  door. The
+  is CLOSED at the **write choke point** (`write_drawer_stmts`,
+  2026-08-05): every write path inherits the refusal, including the
+  batch that owns its own transaction. It was closed at
+  `upsert_external` alone on 2026-08-04, and **this line's own claim
+  that "the caller-supplied path was the one door" is what made that
+  look sufficient** — there were three: `save_with_dedup_vec` (reached
+  by a `dedup_threshold` in a `/v1` save body) and BOTH arms of
+  `import_record` (every backup restore, and the orchestrator's tenant
+  migration), the non-external arm of which means an ordinary hash
+  vault was reachable. `1e39` is an unremarkable finite JSON number and
+  `1e39_f64 as f32` is infinity. The
   **density** channel (owning fraction *f* bought ≈*f* of any uniform
   sample) is CLOSED at the draw (2026-08-03): `keyed_sample_capped`
   bounds any wing at `1/UNDERCROFT_TRAIN_SOURCE_CAP` (default 4) of every

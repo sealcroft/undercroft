@@ -609,15 +609,29 @@ undercroft verify           # HMAC every record + replay the audit chain
 undercroft backup create    # verified snapshot, keeps last 10
 ```
 
-**Exit 2 means an integrity verdict**, on every command that can reach one:
-`verify` (a bad record, a broken chain or a tampered supersession link),
-`repair` (same, after backfilling), `backup create` (it refuses to archive a
-palace that failed verification) and `verify-forgetting` (the attestation does
-not describe what this vault did — a forged signature, a tombstone tag that is
-not this vault's, or something other than a tombstone inside the attested
-interval). Exit 1 stays what it always was: the run itself failed — bad
-arguments, a missing file, an unreadable vault. A compliance script may retry
-exit 1; retrying exit 2 only re-detects the tampering.
+**Exit 2 means an integrity verdict**, on **every** command — not only the
+ones that check on purpose. `verify` (a bad record, a broken chain or a
+tampered supersession link), `repair` (same, after backfilling), `backup
+create` (it refuses to archive a palace that failed verification) and
+`verify-forgetting` (the attestation does not describe what this vault did —
+a forged signature, a tombstone tag that is not this vault's, or something
+other than a tombstone inside the attested interval) each reach the verdict
+through their own checking. But a rolled-back database, or a manifest edited
+offline, is detected **when the vault opens** — before any command's own
+checks begin — so `search`, `stats`, `recent` and `drawer get` reach it too,
+and since v0.47.0 they exit 2 as well. They used to exit 1, i.e. the same
+code as "no such vault", which a compliance script retries forever against a
+palace whose answer will never change. Exit 1 stays what it always was: the
+run itself failed — bad arguments, a missing file, an unreadable vault. A
+compliance script may retry exit 1; retrying exit 2 only re-detects the
+tampering. The classes are exactly the ones `/v1` answers **409** for, so the
+two surfaces cannot state different doctrines about the same bytes — and on
+`/v1` that now includes `GET …/stats`, `POST …/search` and `POST …/verify`,
+which answered 500 "possible tampering" while `POST …/rotate` answered 409 on
+the identical verdict. *Stated cost*: a wrong `UNDERCROFT_PASSPHRASE` derives
+a different manifest key, the MAC fails, and that is reported as an integrity
+verdict — the engine has no evidence separating the two, which is what a MAC
+is, and the message has always said "possible tampering".
 
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record

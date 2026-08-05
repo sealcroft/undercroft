@@ -2,6 +2,130 @@
 
 ## Unreleased
 
+### the completeness audit: what a 38-agent per-surface pass found in the fix itself
+
+The fix below was audited the way the code is: one agent per surface, then an
+adversarial verifier per claim. It found one blocking defect, one **regression
+a merge had introduced**, and a dozen residuals — and its most useful output
+was not a defect at all but a calibration: of thirty claims that reached
+cross-check, one was refuted outright and twenty-five were downgraded, every
+one of them for the same reason — the *mechanism* was read correctly and the
+*comparison half* was not. "Present here, absent there" was graded high
+without asking whether the other surface has it either, or whether the failure
+is loud.
+
+- **`undercroft_kg_add` reached the authority tier's outcomes, and the fence
+  could not see it.** The MCP authority fence keys on tool NAMES
+  (`kg_invalidate`, `kg_supersede`) and argued its own exhaustiveness on that
+  axis. But `triple_id` is a pure function of (subject, predicate, object,
+  `valid_from`), the insert is a fourteen-column **upsert**, and
+  `kg_query`/`lookup_canonical` hand an agent every component — so replaying
+  those four with a `valid_to` closed the golden value's window and emptied
+  the exact-authority door without writing a single authority field. Two more
+  consequences rode on the same replay: the tag was recomputed with the
+  authority extension hard-coded `None` while the authority columns *survived*
+  the SET list, so the row failed its own canonical on the next read and
+  `all_triples` — which collects into a `Result` — broke `kg_query`,
+  `kg_timeline`, `kg_invalidate` and `/v1`'s KG routes for the whole vault,
+  unrecoverably, since `kg_set_authority` verifies before rewriting; and the
+  same replay on an ordinary fact NULLed `support`, `extractor` and the
+  receipt with a tag recomputed to match, so `verify` stayed green while
+  HMAC-covered grounding and extractor attribution were gone. Closed by
+  keying on the **outcome** and putting it in the **store**
+  (`refuse_rewriting_a_canonical_holder`), so `kg_add`, `kg_import` and
+  `kg_invalidate` all inherit it and every surface does — a name list in a
+  handler is a per-surface guard. `kg_import` stays idempotent by fact id: a
+  re-import that leaves the tier placement and the window exactly as they were
+  is allowed, because a restore must not start failing on the operator's own
+  promoted facts. **The doc comment that said "re-adding the same (s, p, o,
+  valid_from) is idempotent" was wrong from the port, and is plausibly what
+  let the fence reason about names** — an add that cannot change anything
+  obviously cannot close a window.
+- **`undercroft refine` was a second distillation implementation again — a
+  merge had reverted the fix while its documentation survived.** `abe5167`
+  pointed the CLI at the shared `refine::refine`; the seven-cluster
+  integration merge `45f3daa` took the old loop back and kept the CHANGELOG
+  bullet. Four governance surfaces then stated the opposite of the tree, and
+  the battery could not tell: the only e2e check on `refine` asserts that it
+  demands an LLM URL, which **both** implementations satisfied. Restored, with
+  `--room`/`--fact-room` reaching the CLI for the first time — and the
+  quarantine refusal moved out of `/v1`'s handler and **into `refine::refine`**,
+  because the CLI had no such refusal at all and `recent` opts back into the
+  reserved wing the moment a wing is named, so `undercroft refine --wing
+  quarantine-pending` lifted pending review evidence into the graph where
+  `undercroft_kg_query` serves it. The gate against a third round is
+  `distillation_has_exactly_one_implementation`, which counts the extractor
+  calls in the CLI crate's own sources — the shape
+  `admission_divert_has_exactly_one_caller` uses one crate down. This is the
+  "union is right for prose and wrong for code" hazard one level worse, and
+  the lesson is that a *count over the source* is the only check a merge
+  cannot satisfy by accident.
+- **An integrity verdict on a READ path exited 1.** `verify`, `repair`,
+  `backup create` and `verify-forgetting` each called `process::exit(2)`
+  themselves, so the doctrine looked implemented. But a rolled-back or
+  offline-edited palace is detected inside `open_store`, *before* any of those
+  commands does its own checking — so `search`, `stats`, `recent` and
+  `drawer get` bubbled the verdict out through `?` and exited **1**, the code
+  the agents guide reserves for "the run failed, retry it". A compliance
+  script that retries exit 1 retried tampering forever. `main` is now `run`
+  behind one classifier over the whole anyhow chain (context layers are what
+  `open_store`'s callers add, so walking only the head would have missed it),
+  and the classes are deliberately the same set `/v1` answers 409 for. Stated
+  cost, unchanged from what the message always said: a wrong passphrase
+  derives a different manifest key, the MAC fails, and that reads as an
+  integrity verdict — the engine has no evidence separating the two.
+- **`/v1` answered 500 "possible tampering" on every store-backed route.**
+  `store_for` — the door every one of them walks through — hard-coded
+  `RestError::new(500, …)` on both its fallible steps, so `unlock`'s
+  `ManifestTampered` reached `stats`, `search` and `verify` as an internal
+  error while `rotate` answered 409 off the identical verdict, purely because
+  it reaches `rotation_candidate` first. Routed through `vault_err` and
+  `store_err`; behaviour-neutral for every other error, both mappers falling
+  through to 500. This is also what made `store_err`'s wrapped-manifest arm
+  reachable **at all** — it spent a release written, unit-tested and dead,
+  which is the exact shape a function-level test cannot see, so the new test
+  drives HTTP.
+- **PQ codebooks and IVF centroids were written outside the row
+  transaction, on both tiers.** The rule is stated generally in `one_rewrite`
+  and was applied to FDE and ColBERT, not to PQ: all four `pq_meta_put` calls
+  ran in autocommit under `synchronous=FULL`, so a crash left fresh centroids
+  over rows carrying the old list assignment — and the load path reads that
+  split state as coherent (`matched == count && ivf_ok`) and probes the wrong
+  lists, with `widen` not firing because the wrong lists still hold enough
+  rows. Silent partial recall loss, invisible to `verify` by design. The
+  global tier self-healed at the next writable open; **the per-wing tier did
+  not**, and the global one stayed broken on a read-only replica. The bytes
+  are now buffered and applied inside the transaction that already exists;
+  the training call is deliberately still outside it, since wrapping k-means
+  would hold the write lock across it.
+- **`kg_supersede` could leave a half-completed state**, and
+  `kg_import_entity` validated `name` and nothing beside it. The supersede
+  screened its replacement *after* `kg_invalidate` had committed and anchored,
+  so an oversized or flagged new object closed the old fact's window and then
+  reported the write failed — the same dishonesty `update_drawer`'s typed
+  outcome fixed one level up. Screen hoisted above the close. `etype` was
+  free-form, unbounded, HMAC-covered, in the clear on a sealed vault, and the
+  **one** field in `entity_canonical` able to carry the `\x1f` separator that
+  structure is built from, which made those canonical bytes non-injective.
+  Now shape-validated like its neighbour. A closed vocabulary is deliberately
+  *not* built and is recorded as an open decision in ROADMAP, together with
+  the `CorruptRow` → 500 it inherits from the `name` arm it matches.
+
+**Counts, integrated.** Unit battery **615 run / 4 ignored / 619 declared**
+(621 static over default members − 2 telemetry-gated − 4 ignored; a bare
+`grep -c '#[test]'` reads 625 because it counts the two excluded ONNX crates).
+e2e 224, orchestrator-e2e 57, e2e-telemetry 24, backends-e2e 47. Counted from
+a battery run at the integrated tree — never a delta added to a remembered
+total, which is how 556 got written for a tree that held 601.
+
+**What this audit did NOT close is filed as work**, not absorbed: fifteen
+residuals under "Completeness-audit residuals — OPEN" in ROADMAP, each
+re-verified against the integrated tree before being written down. The
+recurring shape is worth naming — *a fix landed on the engine and its only
+first-party client was not updated*: the admin console cannot open a
+quarantined drawer it just listed, and it reports success for writes the
+engine answered 202 `quarantined:true` on.
+
 ### security boundaries: what an 8-agent audit fleet found, and what re-auditing the fix found
 
 The parity work below asked *"is this capability on every surface?"*. This
@@ -156,8 +280,9 @@ scope had been deliberately rotated out earlier in the suite, so requests
 `UNDERCROFT_ORCH_RATE_LIMIT=3`, so anything after it answers 429. The
 premise assertion — "plain search still serves" — is what exposed the last
 two, by failing loudly where the traversal checks would have passed
-quietly. Unit battery 551 → **601**, e2e 222 → **224**, orchestrator e2e
-44 → **57**, telemetry e2e 24 unchanged. The unit figure is the one that
+quietly. Unit battery 551 → **601** (and → **615** once the completeness
+audit's own tests landed — see that section), e2e 222 → **224**, orchestrator
+e2e 44 → **57**, telemetry e2e 24 unchanged. The unit figure is the one that
 needed integrating to be true: each fleet member counted 551 plus its own
 additions, so the first number written here was **556** — correct for one
 worktree and wrong for the tree. Sum the `test result:` lines of a full
@@ -663,6 +788,23 @@ field).
   honest-exclusion count reached the CLI and `/v1` and not the surface an
   agent uses, so an agent that set a floor could not tell its own floor's
   thin answer from a thin corpus.
+- **The lexical channels reach the CLI and MCP** (ROADMAP R2). The store
+  keeps `lexical_exact` ("the drawer said your word") apart from
+  `lexical_morph` ("it holds a word built on yours") apart from `semantic`
+  precisely so a surprising hit — or a surprising *miss* — is reproducible
+  rather than a matter of opinion, and `/v1` was the only surface that could
+  see any of it. `search::evidence` renders **all four**, not the three the
+  residual named: `lexical` is the one that RANKS (approximate evidence at
+  half weight, capped per query slot) while the other two ADMIT, and a hit
+  carrying neither of those was admitted by the cosine alone — the one
+  reading a reproduction needs and the one `score` cannot show. Printed
+  unconditionally rather than behind a verbosity flag: evidence a caller has
+  to know to ask for reproduces the asymmetry this closes, and four
+  fixed-width numbers are a rounding error beside the page of verbatim
+  drawer text both surfaces already print. Pinned by
+  `every_text_surface_renders_the_channels_through_one_function`, a source
+  count — a second hand-rolled `format!` in a handler is invisible to any
+  test that only exercises the helper.
 - **The MCP `language` schema is generated from the parser's vocabulary**
   (`MorphLang::CODES`). It described two values over a handler that mapped
   thirteen, so an agent reading its own contract never declared `de` on a

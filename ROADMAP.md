@@ -4,15 +4,64 @@ Undercroft is the Rust conversion of MemPalace with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
 
-## Residuals R1-R5 — ALL FIVE CLOSED (2026-08-05)
+## Residuals R1-R5 — R1, R2 CLOSED · R3, R4 and half of R5 STILL OPEN
 
-**None of these is outstanding.** All five are implemented on
-`fix/audit-security-boundaries`; R3 was closed by being CORRECTED rather than
-built, because the defect it described did not exist (see its entry). The
-entries stay because each records what was wrong, what it cost, and why the fix
-took the shape it did — and because R3 is the standing example of a residual
-written from a plausible reading of a symptom and never checked against the
-function it named.
+**CORRECTED 2026-08-05 by the integrator, third pass, by reading the code
+rather than the heading.** This heading said **ALL FIVE CLOSED** and three of
+the five were not. That is the most expensive artifact this project produces:
+the next sweep reads the heading and stops, which is precisely how R3 sat here
+as work for a session and how the "CLOSED in the same unit" heading below had
+to be corrected twice. Status per entry, each verified against the integrated
+tree:
+
+- **R1 · CLOSED.** Every prefilter entry point loads an existing index and
+  never builds one under a read-only posture, falls back to the exact scan,
+  and says so once per tier. Gated by
+  `a_read_only_search_with_the_prefilter_on_writes_nothing`.
+- **R2 · CLOSED.** `crates/undercroft-cli/src/search.rs::evidence` renders all
+  four channels on the CLI and MCP, called from `main.rs` and `mcp.rs`, gated
+  by `every_text_surface_renders_the_channels_through_one_function` — a
+  source count, because a second hand-rolled `format!` in a handler is
+  invisible to a test that only exercises the helper. (The CHANGELOG bullet
+  it shipped without now exists, under "one search contract, three
+  surfaces".)
+- **R3 · The correction is recorded; the WORK it re-scoped is not done.**
+  `verify` does not anchor — that much is settled and every one of the five
+  false statements was corrected. But the second correction re-scoped this
+  residual to *"there is no callable heal anywhere outside `open`"*, and
+  there still is none: `anchor_manifest` is reached only from write paths and
+  `init_chain`. A long-lived server still has no way to tighten its anchor
+  short of a restart, and the only reachable substitutes remain manufacturing
+  a write or `GET …/export`. **Open.**
+- **R4 · OPEN, and the vault half is built while nothing adopts it.** The
+  vault crate gained `Access`/`Unhealed`/`RotationVerdict`/`unlock_as`/
+  `reconcile_read_only`, coherent and well-tested in-crate. `unlock_as` has
+  **zero callers outside `undercroft-vault`**: `PalaceStore::open_read_only`
+  still runs `open_inner` first, so `Connection::open` (with
+  `SQLITE_OPEN_CREATE`), `PRAGMA journal_mode=WAL`, the `ALTER TABLE` loops,
+  the chain seed and the rotation reconcile all still happen on a read-only
+  open. The store's own doc says so in as many words — *"What still writes on
+  this path is the OPEN itself … and that is a separate residual (ROADMAP
+  R4), stated rather than implied."* Two of the enumerated items are the ones
+  A32 calls evidence destruction. Adoption by the store and the CLI/tenant
+  callers is the remaining unit.
+- **R5 · The choke point shipped; the typed-outcome half did not.**
+  `admission::screen_and_divert` is the one screen-and-divert step both write
+  paths call, and `admission_divert_has_exactly_one_caller` is the source
+  count that forbids a second. But the scope this entry grew on 2026-08-05 is
+  untouched: `upsert_external` still returns a bare `Result<bool>` and
+  `save_with_dedup_vec` still hard-codes `quarantined: false` on both its
+  branches, so a diverted save on `/v1`'s `dedup_threshold` or external-vault
+  bodies still answers clean under the aimed-at id and still emits a
+  `drawer-saved` frame beside the choke point's honest `drawer-quarantined`.
+  C11 in the completeness-audit section is the same defect one field over —
+  `drawer_writes_total{outcome="created"}` counts diverted writes as created
+  — and belongs to this unit.
+
+The entries below stay in their original form because each records what was
+wrong, what it cost, and why the fix took the shape it did — and because R3 is
+the standing example of a residual written from a plausible reading of a
+symptom and never checked against the function it named.
 
 Original framing, kept:
 
@@ -212,12 +261,17 @@ sweep cannot see a boundary. Both stay.
 rows), 33 `/v1` routes / 14 mutating, 35 CLI commands, 11 crates,
 11 diagrams, 9 i18n languages, 58 control rows in 10 sets, 144 roots
 × 20 patterns, 18 attack fixtures, 14 probe pairs, `TRUST_VOCAB` 3, and every
-numeric env default. Test count reconciles as **607 static − 2
-telemetry-gated − 4 ignored = 601 run** — record the reconciliation, because
-a naive `grep -c '#[test]'` is wrong by two in one direction and four in the
-other, and because it must be counted over the *integrated* tree: each
-member of this session's fleet added its own delta to the last known total
-and every one of them got a different wrong answer.
+numeric env default. Test count reconciles as **621 static − 2
+telemetry-gated − 4 ignored = 615 run** (counted at the integrated tree,
+2026-08-05, after the completeness fleet: a bare `grep -c '#[test]'` over
+`crates/` reads 625 because it also counts `undercroft-embed-onnx`'s 3 and
+`undercroft-embed-ort`'s 1, and neither is a default member). The e2e
+counts moved with it: **e2e 224, orchestrator-e2e 57, e2e-telemetry 24,
+backends-e2e 47.** Record the reconciliation, because a naive
+`grep -c '#[test]'` is wrong in both directions, and because it must be
+counted over the *integrated* tree: each member of this session's fleet
+added its own delta to the last known total and every one of them got a
+different wrong answer.
 
 The MCP tool count moved and is **33, not the 34 this line carried**:
 removing `undercroft_kg_set_authority` from the agent surface (A-series, the
@@ -274,22 +328,52 @@ counted by hand, which is precisely what an inventory cannot do for you.
 
 ### CLOSED in the same unit (2026-08-05) — kept as the record of what was found
 
-**CORRECTED 2026-08-05, second pass.** An earlier edit in this same session
-marked this whole section closed. That was wrong and is exactly the failure the
-section documents: **A22 is NOT implemented** — open-time integrity verdicts
-still exit 1 on the CLI and answer 500 on `/v1` (`main.rs:942`+`:1290`,
-`tenant.rs:1834`/`:1845`), so `store_err`'s 409 arm is unreachable from any
-route. **H1 is a REGRESSION**: `undercroft refine` was converted to the shared
-implementation in `abe5167` and the seven-cluster merge `45f3daa` reverted the
-code while keeping the CHANGELOG bullet — the union-merge hazard CLAUDE.md
-records, one level worse. Treat every implemented claim below as needing the
-same check.
+**CORRECTED 2026-08-05, second pass**, then **RESOLVED 2026-08-05, third
+pass** (below). An earlier edit in this same session marked this whole section
+closed. That was wrong and is exactly the failure the section documents: **A22
+was NOT implemented** — open-time integrity verdicts exited 1 on the CLI and
+answered 500 on `/v1`, so `store_err`'s 409 arm was unreachable from any
+route — and **H1 was a REGRESSION**: `undercroft refine` was converted to the
+shared implementation in `abe5167` and the seven-cluster merge `45f3daa`
+reverted the code while keeping the CHANGELOG bullet, the union-merge hazard
+CLAUDE.md records, one level worse.
 
-**Most items below are implemented on `fix/audit-security-boundaries`.** They are
-retained rather than deleted because the finding, its reach and its fix shape are
-the useful part: a future sweep that rediscovers one of these should be able to
-see it was already reasoned about, and what the reasoning was. Nothing here is
-outstanding work.
+**Both are now closed, and the rest of the list is NOT.** Verified at the
+integrated tree, 2026-08-05, by reading the code rather than the heading:
+
+- **A22's integrity-verdict half is implemented on both surfaces.** The CLI's
+  `main` became `run` behind one classifier (`integrity_verdict` in
+  `main.rs`): every command returns through it, so a rolled-back or
+  offline-edited palace exits **2** from `search`/`stats`/`recent` and not
+  only from the four commands that called `process::exit(2)` themselves. On
+  `/v1`, `store_for` — the door every store-backed route walks through — now
+  routes its `unlock` through `vault_err` and its open through `store_err`,
+  which is what made `store_err`'s 409 arm reachable at all. Both are driven
+  end to end (`an_integrity_verdict_exits_2_where_an_ordinary_failure_stays_1`,
+  `a_tampered_manifest_is_409_on_every_store_backed_route`), each asserting
+  its own premise on an untampered vault first.
+- **A22's OTHER clauses are still open** and must not ride the same tick:
+  the orchestrator **CLI** `instance-remove` still exits 0 printing
+  `not found` for a name never registered while the admin plane 404s
+  (`crates/undercroft-orchestrator/src/main.rs`), and `engine_err`
+  (`proxy.rs`) still collapses a migration failure to **502** unless the
+  engine's message text happens to carry a parenthesised 4xx.
+- **H1 is closed and gated.** `Command::Refine` calls `refine::refine`, and
+  the quarantine refusal moved OUT of `tenant.rs`'s handler and INTO
+  `refine::refine`, so the two surfaces cannot drift again the way the
+  handler-level guard let them. The gate is
+  `distillation_has_exactly_one_implementation`, which counts the extractor
+  calls in the CLI crate's own sources — the shape
+  `admission_divert_has_exactly_one_caller` uses one crate down, chosen
+  because the only e2e check on `refine` passes against BOTH implementations
+  and therefore could not see the revert.
+
+**Most items below are implemented on `fix/audit-security-boundaries`** —
+retained rather than deleted because the finding, its reach and its fix shape
+are the useful part. **But "most" is not "all", and this heading has now been
+wrong twice.** What remains open from the 38-agent completeness audit is filed
+below as its own section rather than absorbed into this one; do not read this
+heading and stop.
 
 - **A10 · Sealed vaults write content-derived words in CLEAR to the KG.**
   `kg_entities.name` and `kg_triples.subject`/`predicate`/`canonical_key` are
@@ -458,6 +542,181 @@ outstanding work.
   orchestrator's own `Orch::open_read_only` gets this right and says why in
   its error: "a read replica never creates one". R4's item list should carry
   this as its own entry.
+
+## Completeness-audit residuals — OPEN (2026-08-05, 38-agent per-surface audit)
+
+**These are gaps, not decisions.** Each was found by the per-surface
+completeness audit that followed the fixes above, each was adversarially
+cross-checked, and each was **re-verified against the integrated tree by the
+integrator** before being written here — so an item in this list is open in the
+code as it stands, not merely open in a report. Nothing in it is
+release-blocking on the security axis; the two that were (B1, the
+`undercroft_kg_add` replay that could brick the KG read surface, and H1) are
+closed above.
+
+The recurring shape, worth naming once: **a fix landed on the engine and its
+only first-party client was not updated.** Three of the first four below are
+that.
+
+- **C1 · The admin console cannot open a quarantined drawer it just listed.**
+  `review_door` landed in the `/v1` handler; `ui.html`'s `openDrawer` sends no
+  query string, so the browse tab renders the reserved wing as clickable
+  (taxonomy is unfiltered), lists it, and then 403s the operator with an
+  instruction to declare a parameter the tab has no code path for. *Fix*: one
+  `?wing=` on that fetch — inert for ordinary drawers, since `review_door` is
+  reached only when the drawer is quarantine-pending. **Two riders in the same
+  unit**: the 403 body names `undercroft admission list` as the way to read
+  pending text, and that command prints id/wing/room/codes/timestamp and no
+  content (`PendingAdmission` has no content field) — the working command is
+  `undercroft drawer get <id>`; and the by-id review door is documented on
+  **zero** surfaces while its neighbours in the same tables state their own
+  quarantine behaviour (`docs/AGENTS.md`, `docs/remote-server.md`,
+  `docs/MULTI_TENANCY.md`).
+- **C2 · The console reports success for writes that were diverted or
+  unattested.** `runImport` reads only `r.imported` while the engine returns
+  `quarantined` and the manifest verdict on the same body; `saveEdit` toasts
+  "updated" against a route that answers **202 `{updated:false,
+  quarantined:true}`**, i.e. it reports an update that did not happen while
+  the drawer keeps its previous content. `api()` treats 202 as success, so no
+  2xx diversion is visible anywhere on the page. The orchestrator's own
+  console already renders its whole migration body. *Fix*: both call sites,
+  additive, over fields already on the wire.
+- **C3 · Migration silently converts an hmac-only tenant to sealed.**
+  `proxy.rs`'s `migrate_tenant` hard-codes `"sealed"` — the only literal among
+  the three `create_vault` call sites — while both creation surfaces offer
+  `hmac-only`, the level is on neither `Tenant` nor the `tenants` table, and
+  no surface can change a level afterwards. It fails toward the stronger
+  level, so this is a contract defect and not a security one. *Fix*: a `level`
+  column written at create (both surfaces already hold the value) and passed
+  here, echoed in the response; use the export manifest's `level` only as a
+  **cross-check that refuses on disagreement** — taking it as the source would
+  make the destination's posture a function of bytes the source engine
+  produced, which `docs/LABELS.md` forbids.
+- **C4 · A failed migration leaves an orphan destination vault.** The
+  import-failure branch returns early with no cleanup where its two sibling
+  branches call `delete_vault`, so the retry 409s with a cause that names
+  nothing. One line, and it should ship with C3 since it is the same function.
+- **C5 · CLI import verifies a signature only when `--sender` is passed.**
+  There is no `else`: with no pin it prints `signed-by=<16 hex> (unverified …)`
+  and imports. `/v1` calls `m.verify()` unconditionally and the orchestrator
+  inherits that, so the CLI — the surface every operator backup restore uses —
+  is the only weak one. Because the payload digest is checked unconditionally,
+  an attacker swapping a signed bundle's payload must break the signature but
+  may keep the trusted sender's key, and the CLI then prints that sender's
+  prefix and imports attacker content: provenance-display laundering, not an
+  authorization bypass. *Fix*: lift `verify_attestation` out of `tenant.rs`
+  into `undercroft-vault::bundle` and have both surfaces call it — the
+  choke-point mechanism, not a second per-surface guard. (A24 above is scoped
+  to `/v1` only; this is its CLI half.)
+- **C6 · `/v1` import seals the token artifact under the payload id, not the
+  landed id.** The two differ whenever the screened import re-derives the id,
+  which is the default path for a payload containing quarantined rows against
+  a non-screening destination — so the restored drawer silently loses its
+  ColBERT matrix and an orphan row remains. Ranking-only and recoverable by
+  `late_backfill`. The half that matters more: `is_drawer_id` is called at
+  exactly one site, inside `write_drawer`, whose comment claims "the shape
+  closes it for every write path at once" —
+  `import_token_artifact` is not a `write_drawer` path and takes the id
+  unvalidated, so a caller can post `id: "fde/<32 hex>"` with a valid `tok`
+  and get a blob sealed under another drawer's FDE AAD domain.
+  Defence-in-depth break, not a live exploit. *Fix*: the landed id at the call
+  site, plus an `is_drawer_id` gate inside `import_token_artifact`.
+- **C7 · `follow_tunnel` returns data from a column it never HMAC-verifies.**
+  It resolves `to_wing` with a bare `SELECT` and no `verify_tag`, while its
+  neighbour `list_tunnels` verifies and raises `Integrity`. Against *"every
+  read must verify the record HMAC before returning data"*, the read-time
+  quarantine refusal beside it is not defence-in-depth for legacy rows — it is
+  the **only** check between an unverified `to_wing` and `recent(Some(wing))`,
+  which opts back into the reserved wing. That branch has no test anywhere.
+  *Gate*: plant a `notes → quarantine-pending` row by raw INSERT (the create
+  guard now refuses it) and assert `StoreError::Invalid`.
+- **C8 · `sealed_b64` is plaintext for hmac-only vaults, and index backends
+  have no transport policy.** `IndexRecord::sealed_b64` says "Never
+  plaintext"; `content_at_rest` returns the plaintext for `HmacOnly`,
+  `index_push` base64s the raw column with no level gate, and the CLI prints
+  `Pushed N sealed record(s)`. This is not an undocumented boundary — it is a
+  **documented boundary whose premise the code does not enforce**, repeated on
+  six surfaces (`architecture/index.html`, `README.md`, `docs/AGENTS.md`,
+  `docs/THREAT_MODEL.md`, `CHANGELOG.md`). No backend applies `is_loopback`, a
+  scheme check or a CA pin, and pgvector is wired `NoTls`, so for that backend
+  **no TLS-compliant configuration exists at all**. *Fix, two units*: (a)
+  cheap and first — correct the four comments, the CLI string and the six
+  documents, and gate or refuse an hmac-only `index push`; (b) larger — extend
+  `undercroft-llm`'s shared `is_loopback`/`pinned_roots_from_pem` policy to the
+  index crate, noting that `tests/e2e-backends.sh` runs entirely against
+  non-loopback `http://` container hosts and would need TLS terminators the
+  way `deploy/embeddings-tls/` was built for the embedder.
+- **C9 · The fleet's operator plane is reachable only by curl.** Ten routes
+  landed on the admin plane on the stated argument that they "were reachable
+  from nowhere in a fleet"; the orchestrator console has no element for any of
+  them and the orchestrator CLI has no ops subcommand, though
+  `docs/MULTI_TENANCY.md` says the CLI "mirrors the admin plane for scripted
+  use". The engine console makes exactly this argument against itself, one
+  plane down, in the same unit. Not a dead end — the operator supplied the
+  engine bearer at registration and the orchestrator never took it away — but
+  a worse workflow than the one being replaced.
+- **C10 · Import is non-atomic across records on both surfaces**, and neither
+  names the failing record for store-guard refusals. `/v1` commits per record,
+  the CLI per 256-drawer chunk; both report line numbers for parse errors only,
+  and this branch added six refusal causes on paths that were previously
+  parse-only. Record it under item 6 below (`vault restore` with mandatory
+  verify + count check) with a gate. **Do not** add context to one surface
+  alone — that creates the drift it was meant to close. Rider: `ui.html` still
+  tells operators "Parsed fully before anything is written — a malformed file
+  imports nothing", which is now false for the new refusal classes.
+- **C11 · `drawer_writes_total{outcome="created"}` counts diverted writes as
+  created.** The count runs one line *before* the branch on
+  `landed.diverted_to`, on all five write arms — a positively misleading
+  durable signal, not merely a missing one. Belongs to R5, which already owns
+  "one honest frame and one lying one".
+- **C12 · `supersedes` escapes the MCP quarantine fence.** The fence tests
+  `key == "id" || key.ends_with("_id")` and `supersedes` matches neither,
+  while the write binds the receipt with no wing predicate. Low, because
+  `undercroft_get_drawer` already grants a strictly stronger test-pinned
+  oracle in one call and the fence's own doc scopes it to content and
+  lifecycle rather than existence — but it is precisely the "a checklist goes
+  stale the moment a tool adds an argument" failure the fence claims to have
+  removed.
+- **C13 · `kg_import_entity` validates `etype` for shape but not vocabulary.**
+  Now bounded (control characters and path separators out, 128 bytes), which
+  closes the non-injective `entity_canonical` hazard. A closed
+  `ENTITY_TYPE_VOCAB` beside `KIND_VOCAB` is what `docs/LABELS.md` asks of a
+  clear label and is deliberately NOT built: nothing in this engine writes an
+  etype other than `unknown`, so a vocabulary today would be a one-value list
+  refusing a future vault's richer types. **Open as a decision, and recorded
+  as one**, together with its sibling: that arm raises `CorruptRow` → 500
+  where caller input owes a 400, matched to the `name` arm beside it on
+  purpose, because splitting the two arguments of one function across two
+  status classes is the drift this project spends its time closing. Both arms
+  move together or neither does.
+- **C14 · Undocumented boundaries.** Each is a capability deliberately absent
+  from a surface with nothing written down; per the rule being enforced, the
+  silence is the finding. MCP has no `import`/`export`/`refine` tool and
+  `OPERATOR_ONLY` carries no entry or reason for those three (it should, so
+  the same test asserts them); `/v1` has no KG write routes, recorded only as
+  a future item and never as a present-tense boundary; no orchestrator plane
+  forwards `refine`, while `docs/MULTI_TENANCY.md` lists it in the engine
+  table with no note; the orchestrator's data-plane quarantine fence appears
+  in no governance surface, and its 200-branch is dead against a same-version
+  engine, so what remains is defence against an OLDER engine — an intent
+  likewise unwritten; the CLI operator seat may read quarantined drawers by id
+  while `/v1` requires the door and MCP refuses (the *wing-scope* exemption is
+  documented in four places, the by-id path in none); MCP has one error class
+  and opens the store before dispatch, so integrity verdicts cannot reach the
+  tool layer — structural, defensible, unwritten; and **the console is a `/v1`
+  client, not a surface** under the drift rule, which is the premise several
+  items above rest on and is stated nowhere.
+- **C15 · Coverage gaps — no test on the surface a user drives.** The
+  orchestrator quarantine fence has **zero** occurrences in
+  `tests/e2e-orchestrator.sh` and nothing anywhere drives `data_plane` or
+  `route`; the ten `OPS_ROUTES` get no positive request (including `forget`
+  and `retention/sweep`); the orchestrator CLI has no tests at all, which is
+  why an A22 fix landing on two of three surfaces went unnoticed; KG object
+  screening is store-level only, on no surface; the non-finite refusal is
+  driven only through `upsert_external`, the one path its own comment says was
+  never the only door, so a re-narrowing would pass green; and console DOM
+  behaviour is covered by string-presence greps only, which is how C1 and C2
+  coexist with a green battery.
 
 ## Process: the drift check is part of the work now
 

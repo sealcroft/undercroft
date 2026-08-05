@@ -1828,10 +1828,19 @@ impl Tenancy {
             if !self.manager.exists(vault_id) {
                 return Err(RestError::new(404, "no such vault"));
             }
-            let vault = self
-                .manager
-                .unlock(vault_id)
-                .map_err(|e| RestError::new(500, e.to_string()))?;
+            // The classifiers, not a bare 500. This is the door EVERY
+            // store-backed route walks through, and it was the one place
+            // that did not class its errors: `unlock` returns
+            // `ManifestTampered` for a manifest that fails its own MAC, so
+            // `GET …/stats`, `POST …/search` and `POST …/verify` all
+            // answered 500 "possible tampering" — the one class that tells
+            // an operator to retry and page someone — while `POST …/rotate`
+            // answered 409 off the very same verdict, because it happened
+            // to reach `rotation_candidate` first. A retry layer keyed on
+            // the class saw an internal error and hammered a tampered
+            // vault. Behaviour-neutral for everything else: both mappers
+            // fall through to 500.
+            let vault = self.manager.unlock(vault_id).map_err(vault_err)?;
             let embedder =
                 (self.factory)(&vault).map_err(|e| RestError::new(500, e.to_string()))?;
             // A read-only server must not rewrite the vault it is serving —
@@ -1842,7 +1851,17 @@ impl Tenancy {
             } else {
                 PalaceStore::open_with_embedder(vault, embedder)
             };
-            let mut store = opened.map_err(|e| RestError::new(500, e.to_string()))?;
+            // `store_err`'s wrapped-manifest arm was DEAD CODE until this
+            // line: `StoreError::Vault(ManifestTampered)` is raised in
+            // exactly one place — `init_chain`, where a manifest anchor
+            // that is NOT an ancestor of the committed head means the
+            // database was rolled back under a still-valid manifest — and
+            // it reaches a caller only through this open. The arm was
+            // written, tested as a function, and unreachable from any
+            // route. `init_chain`'s neighbouring verdict, `Integrity` for a
+            // head that disagrees with its own audit rows, arrives here too
+            // and takes the same 409.
+            let mut store = opened.map_err(store_err)?;
             if let Some(make_reranker) = &self.reranker {
                 store.set_reranker(Some(make_reranker()));
             }
@@ -2274,6 +2293,10 @@ fn store_err(e: StoreError) -> RestError {
         // manifest reached every store-backed route as a 500 "internal
         // error" — the one class that tells an operator to retry and page
         // someone, when what the engine actually detected was tampering.
+        // This arm is only reachable because `store_for` routes the open
+        // through here; it spent a release written, unit-tested and dead
+        // because that one `map_err` said `RestError::new(500, …)`. If you
+        // are tempted to simplify that call site, this arm goes with it.
         StoreError::Vault(
             undercroft_vault::VaultError::ManifestTampered
             | undercroft_vault::VaultError::CorruptManifest(_),
@@ -2645,6 +2668,57 @@ mod tests {
         // Unrelated vault failures stay 5xx — the class must not widen.
         let io = StoreError::Vault(undercroft_vault::VaultError::Io(std::io::Error::other("x")));
         assert_eq!(store_err(io).code, 500);
+    }
+
+    /// **The mapper above passed for a release while every route answered
+    /// 500.** `store_for` — the door every store-backed route walks through —
+    /// hard-coded `RestError::new(500, …)` on both its fallible steps, so
+    /// `unlock`'s `ManifestTampered` arrived as "internal error, retry and
+    /// page someone" on `stats`, `search` and `verify`, while `rotate`
+    /// answered 409 off the identical verdict purely because it reaches
+    /// `rotation_candidate` before the store. That is the exact shape a
+    /// function-level test cannot see, which is why this one drives HTTP.
+    #[test]
+    fn a_tampered_manifest_is_409_on_every_store_backed_route() {
+        let mut s = surface(false);
+        let probes: [(&str, &str, Option<&str>); 3] = [
+            ("GET", "/v1/vaults/acme/stats", None),
+            (
+                "POST",
+                "/v1/vaults/acme/search",
+                Some(r#"{"query":"release"}"#),
+            ),
+            ("POST", "/v1/vaults/acme/verify", None),
+        ];
+
+        // Premise: all three answer 200 on the untampered vault, so what
+        // changes below is the verdict and not a broken route.
+        for (m, p, b) in probes {
+            let (code, body) = s.call(m, p, b);
+            assert_eq!(code, 200, "premise {m} {p}: {body}");
+        }
+
+        // The edit happens offline, while the process is down — which is the
+        // realistic shape and also the reason for the line after it: a live
+        // `Tenancy` caches an already-opened store, so the tamper is only
+        // read at the next open. Dropping the handle IS the restart.
+        let mpath = s.dir.path().join("vaults/acme/vault.json");
+        let text = std::fs::read_to_string(&mpath)
+            .unwrap()
+            .replace("sealed", "hmac-only");
+        std::fs::write(&mpath, text).unwrap();
+        s.tenancy.stores.remove("acme");
+
+        for (m, p, b) in probes {
+            let (code, body) = s.call(m, p, b);
+            assert_eq!(code, 409, "{m} {p} answered {code}: {body}");
+            assert!(body.contains("tampering"), "{m} {p}: {body}");
+        }
+
+        // And the neighbour that already classed correctly still does, so the
+        // whole surface now states one verdict for one set of bytes.
+        let (code, body) = s.call("POST", "/v1/vaults/acme/rotate", None);
+        assert_eq!(code, 409, "rotate: {body}");
     }
 
     // ---- A24: the import attestation ----------------------------------

@@ -235,12 +235,19 @@ that identity so a silent model swap is refused. Callers supply the vector
 per request for external vaults.
 
 Two guards ride on that path, both closing holes that a caller-supplied
-vector opened. **Non-finite components are refused at the door**: an
+vector opened. **Non-finite components are refused at the write choke
+point** (`write_drawer_stmts`, so every write path inherits it): an
 `external:` vector containing `NaN`/`Inf` escaped L2 normalization
 entirely (`NaN/x = NaN`), and normalization is what bounds a poisoner to
-buying influence with *count* rather than *magnitude* — every in-process
-embedder is finite by construction, so the caller-supplied path was the
-one door. And **an external save is screened at all**; it previously
+buying influence with *count* rather than *magnitude*. This paragraph
+used to say the caller-supplied path was "the one door", and the refusal
+sat on `upsert_external` accordingly. **There were three.** The other two
+matter here in particular: both arms of `import_record` — which is what
+`POST /v1/vaults/{id}/import` and this orchestrator's own tenant
+migration drive — took a payload vector unchecked, and the non-external
+arm means an ordinary hash vault was reachable. `1e39` is an
+unremarkable finite JSON number, and `1e39_f64 as f32` is infinity.
+And **an external save is screened at all**; it previously
 reached the raw writer with no screen, which was the third of the three
 admission bypasses on this surface. Same recorded gap as the dedup arm:
 `upsert_external` returns only "was the id new", so a diverted external

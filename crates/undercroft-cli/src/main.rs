@@ -391,6 +391,14 @@ enum Command {
         vault: String,
         #[arg(long)]
         wing: Option<String>,
+        /// Only distil drawers in this room (default: every room but
+        /// --fact-room, so a re-run never distils its own output)
+        #[arg(long)]
+        room: Option<String>,
+        /// Room the searchable fact-drawers land in, inside their source
+        /// drawer's wing — the same default as `/v1 …/refine`
+        #[arg(long, default_value = "facts")]
+        fact_room: String,
         /// Refine at most N drawers (0 = all)
         #[arg(long, default_value_t = 0)]
         limit: usize,
@@ -1287,11 +1295,82 @@ impl undercroft_core::rerank::Reranker for SharedReranker {
     }
 }
 
-fn main() -> Result<()> {
+/// Exit 2 — an INTEGRITY VERDICT: the engine detected that stored evidence
+/// does not verify. Reserved for that and nothing else, because a compliance
+/// script keys its retry logic on the class.
+const EXIT_INTEGRITY: u8 = 2;
+/// Exit 1 — the run itself failed: bad arguments, a missing file, an
+/// unreadable vault. Retryable in the sense that a retry might succeed.
+const EXIT_FAILURE: u8 = 1;
+
+/// Is this error an integrity verdict, or an ordinary run failure?
+///
+/// **`verify`, `repair`, `backup create` and `verify-forgetting` each decided
+/// this for themselves, by calling `std::process::exit(2)` at the point they
+/// printed their own verdict — and every OTHER route to the same verdict
+/// exited 1.** A vault rolled back under a still-valid manifest, or a manifest
+/// edited offline, is detected inside `open_store`, before any command's own
+/// checking begins: `undercroft search`, `undercroft recent`, `undercroft stats`
+/// on a tampered palace all bubbled that up through `?` as an anyhow error and
+/// exited 1 — the code docs/AGENTS.md promises means "the run failed, retry
+/// it". A compliance script did exactly that, forever, against a vault whose
+/// answer will never change.
+///
+/// So the decision moves to the one place every command returns through. The
+/// classes are deliberately the SAME SET `/v1` answers 409 for
+/// (`tenant::store_err` / `tenant::vault_err`), so the two surfaces cannot
+/// state different doctrines about the same bytes.
+///
+/// **The stated cost**: a wrong `UNDERCROFT_PASSPHRASE` derives a different
+/// manifest key, so the MAC fails and this reports an integrity verdict for
+/// what is really operator error. That is not a classification bug — it is
+/// what a MAC *is*, the engine has no evidence separating the two, and the
+/// message it already printed ("possible tampering") has always said so. The
+/// exit code now agrees with the message instead of contradicting it.
+fn integrity_verdict(e: &anyhow::Error) -> bool {
+    use undercroft_store::StoreError as S;
+    use undercroft_vault::VaultError as V;
+    // Walk the whole chain: `open_store` and friends add `.with_context`, and
+    // the verdict is then several links down from the anyhow head.
+    e.chain().any(|link| {
+        if let Some(s) = link.downcast_ref::<S>() {
+            return matches!(
+                s,
+                S::Integrity(_)
+                    | S::Attestation(_)
+                    | S::Vault(V::ManifestTampered | V::CorruptManifest(_))
+            );
+        }
+        if let Some(v) = link.downcast_ref::<V>() {
+            return matches!(v, V::ManifestTampered | V::CorruptManifest(_));
+        }
+        false
+    })
+}
+
+fn main() -> std::process::ExitCode {
     // Telemetry is a no-op unless built with `--features telemetry`. The
-    // guard flushes providers on any return path (including `?`).
+    // guard flushes providers on any return path (including `?` out of `run`).
     let _telemetry = undercroft_obs::init();
-    let cli = Cli::parse();
+    // `fn main() -> Result<()>` let the std `Termination` impl choose the
+    // code, and it only knows one failure: 1. Everything this CLI wants to
+    // say about a failure has to be said here.
+    match run(Cli::parse()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            // Byte-for-byte what `Termination` printed before, so no
+            // operator's grep changes meaning along with the exit code.
+            eprintln!("Error: {e:?}");
+            std::process::ExitCode::from(if integrity_verdict(&e) {
+                EXIT_INTEGRITY
+            } else {
+                EXIT_FAILURE
+            })
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     match &cli.command {
         Command::Init { level } => {
             let mgr = manager(&cli)?;
@@ -1747,7 +1826,7 @@ fn main() -> Result<()> {
                 println!("{}", tr("verify-ok"));
             } else {
                 println!("{}", tr("verify-failed"));
-                std::process::exit(2);
+                std::process::exit(EXIT_INTEGRITY.into());
             }
         }
         Command::Forget {
@@ -1795,7 +1874,7 @@ fn main() -> Result<()> {
                 match e {
                     undercroft_store::StoreError::Attestation(why) => {
                         println!("ATTESTATION FAILED: {why}");
-                        std::process::exit(2);
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                     other => return Err(other.into()),
                 }
@@ -2490,7 +2569,7 @@ fn main() -> Result<()> {
                     }
                     None => {
                         println!("No drawer with id {id}");
-                        std::process::exit(1);
+                        std::process::exit(EXIT_FAILURE.into());
                     }
                 },
                 DrawerAction::List {
@@ -2634,69 +2713,67 @@ fn main() -> Result<()> {
         Command::Refine {
             vault,
             wing,
+            room,
+            fact_room,
             limit,
             dry_run,
         } => {
             let llm = undercroft_llm::LlmClient::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
+            undercroft_core::validate_name(fact_room, "fact_room")?;
             let mut store = open_store(&cli, vault)?;
-            let drawers =
-                store.recent(wing.as_deref(), if *limit == 0 { 100_000 } else { *limit })?;
-            if drawers.is_empty() {
+            // One implementation, shared with `POST /v1/vaults/{id}/refine`
+            // (crate::refine): the same UNDERCROFT_LLM_* configuration used to
+            // build two different vaults from this command depending on which
+            // surface ran it — no validity window, no `Support` verdict
+            // (which means "no check was run", not "unsupported"), no date
+            // resolved from the note's own words, no searchable mirror, and a
+            // second extractor call per drawer whose answer was counted and
+            // thrown away. That was fixed once and a merge took it back; the
+            // gate against a third round is `refine.rs`'s
+            // `distillation_has_exactly_one_implementation`.
+            //
+            // The quarantine refusal lives inside `refine::refine` too, so it
+            // cannot go missing here the way it did. One ordering note: the
+            // LLM client is built first, so an operator with no
+            // UNDERCROFT_LLM_URL is told that before being told the wing is
+            // refused. Nothing is read either way.
+            let opts = refine::RefineOptions {
+                wing: wing.as_deref(),
+                room: room.as_deref(),
+                fact_room,
+                limit: if *limit == 0 { 100_000 } else { *limit },
+                dry_run: *dry_run,
+            };
+            let rep = refine::refine(&mut store, &llm, &opts)?;
+            if rep.sources == 0 {
                 bail!("no drawers to refine");
             }
-            println!(
-                "Refining {} drawer(s) with {} …",
-                drawers.len(),
-                llm.model()
-            );
-            let mut entities_added = 0usize;
-            let mut facts_added = 0usize;
-            for d in &drawers {
-                match llm.extract_triples(&d.content) {
-                    Ok(triples) => {
-                        for t in triples {
-                            if undercroft_core::validate_name(&t.subject, "subject").is_err()
-                                || undercroft_core::validate_name(&t.predicate, "predicate").is_err()
-                            {
-                                continue;
-                            }
-                            if *dry_run {
-                                println!(
-                                    "  would add: {} --{}--> {}",
-                                    t.subject, t.predicate, t.object
-                                );
-                            } else {
-                                // Distilled facts carry a receipt: an
-                                // HMAC-covered citation to the verbatim drawer
-                                // they were derived from, checkable later via
-                                // `undercroft kg receipts`.
-                                store.kg_add_receipted(
-                                    &t.subject.to_lowercase(),
-                                    &t.predicate.to_lowercase(),
-                                    &t.object,
-                                    None,
-                                    None,
-                                    0.8, // model-extracted: below human-asserted confidence
-                                    (&d.id, &d.content),
-                                    Some(llm.model()),
-                                )?;
-                            }
-                            facts_added += 1;
-                        }
-                    }
-                    Err(e) => undercroft_obs::diag_error!("  triples failed for {}: {e}", d.id),
-                }
-                match llm.extract_entities(&d.content) {
-                    Ok(ents) => entities_added += ents.len(),
-                    Err(e) => undercroft_obs::diag_error!("  entities failed for {}: {e}", d.id),
-                }
+            println!("Refined {} drawer(s) with {} …", rep.sources, llm.model());
+            for (s, p, o) in &rep.preview {
+                println!("  would add: {s} --{p}--> {o}");
             }
             println!(
-                "Refinement {}: {} fact(s) into the knowledge graph, {} entit(ies) seen",
+                "Refinement {}: {} fact(s) into the knowledge graph",
                 if *dry_run { "dry run" } else { "complete" },
-                facts_added,
-                entities_added
+                rep.facts
             );
+            if !*dry_run {
+                // The same counts /v1 answers with, because it is the same
+                // run. `stated` vs background is which facts the notes' own
+                // words support; `dated_from_text` is how often the extractor
+                // pointed at a real span instead of the note's date. Both are
+                // how you tell a working extractor from one that is inventing.
+                println!(
+                    "  mirrored into room '{}' · {} stated / {} background",
+                    fact_room,
+                    rep.stated,
+                    rep.facts.saturating_sub(rep.stated)
+                );
+                println!(
+                    "  {} dated from the text · {} duplicate(s), {} skipped, {} failed",
+                    rep.dated_from_text, rep.duplicates, rep.skipped, rep.failed
+                );
+            }
         }
         Command::Hallways { wing, top, vault } => {
             let store = open_store(&cli, vault)?;
@@ -2793,7 +2870,7 @@ fn main() -> Result<()> {
                 }
             );
             if !report.ok() {
-                std::process::exit(2);
+                std::process::exit(EXIT_INTEGRITY.into());
             }
         }
         Command::Backup { action } => {
@@ -2811,7 +2888,7 @@ fn main() -> Result<()> {
                             "refusing to back up vault '{vault}': integrity verification \
                              failed (run `undercroft verify --vault {vault}` for the detail)"
                         );
-                        std::process::exit(2);
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                     drop(store);
                     let stamp = time::OffsetDateTime::now_utc()
@@ -3268,6 +3345,102 @@ fn collect_files(path: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    /// **An integrity verdict on a READ path exited 1**, the code
+    /// docs/AGENTS.md reserves for "the run failed, retry it".
+    ///
+    /// `verify`, `repair`, `backup create` and `verify-forgetting` each call
+    /// `process::exit(2)` themselves, so the doctrine looked implemented and
+    /// ROADMAP A22 was filed closed. But a rolled-back or offline-edited
+    /// palace is detected in `open_store`, before any of those commands does
+    /// its own checking — and every command that merely READS it (`search`,
+    /// `stats`, `recent`, `drawer get` …) bubbled that verdict out through
+    /// `?` and exited 1, indistinguishable from "no such vault". A compliance
+    /// script that retries exit 1 retried tampering forever.
+    ///
+    /// This drives `run` — the whole dispatch every subcommand goes through —
+    /// over a real palace on disk, not a hand-built error, and it asserts
+    /// BOTH directions: the verdict must be 2, and an ordinary run failure
+    /// must stay 1, or a classifier that answered 2 for everything would pass.
+    #[test]
+    fn an_integrity_verdict_exits_2_where_an_ordinary_failure_stays_1() {
+        let home = TempDir::new().unwrap();
+        let mgr = VaultManager::open(home.path(), None).unwrap();
+        mgr.create("acme", SecurityLevel::Sealed).unwrap();
+        let root = home.path().to_str().unwrap().to_string();
+        let argv = |args: &[&str]| {
+            let mut v = vec!["undercroft", "--data-dir", root.as_str()];
+            v.extend_from_slice(args);
+            Cli::try_parse_from(v).unwrap()
+        };
+
+        // Premise: the palace reads clean, so what fails below is the
+        // tampering and not the fixture.
+        run(argv(&["search", "anything", "--vault", "acme"])).unwrap();
+
+        // Premise, the other way: a run failure the operator can fix by
+        // fixing the command. Exit 1, and it must stay 1.
+        let e = run(argv(&["search", "x", "--vault", "nope"])).unwrap_err();
+        assert!(
+            !integrity_verdict(&e),
+            "a missing vault is not a tamper verdict: {e:?}"
+        );
+
+        // Edit the manifest offline. `level` is covered by the manifest MAC,
+        // so this is exactly the downgrade the MAC exists to catch.
+        let mpath = home.path().join("vaults/acme/vault.json");
+        let text = std::fs::read_to_string(&mpath)
+            .unwrap()
+            .replace("sealed", "hmac-only");
+        std::fs::write(&mpath, text).unwrap();
+
+        // Was exit 1 — the same code as the missing vault two lines up.
+        let e = run(argv(&["search", "anything", "--vault", "acme"])).unwrap_err();
+        assert!(integrity_verdict(&e), "search on a tampered palace: {e:?}");
+        // A second command, because this is a property of the palace and not
+        // of `search`: one command classifying correctly is how the four
+        // `process::exit(2)` call sites made the gap invisible.
+        let e = run(argv(&["stats", "--vault", "acme"])).unwrap_err();
+        assert!(integrity_verdict(&e), "stats on a tampered palace: {e:?}");
+    }
+
+    /// The classes are the ones `/v1` answers 409 for, and no others.
+    ///
+    /// Stated as its own test because the *set* is the decision: widen it and
+    /// exit 2 stops meaning "tampering"; narrow it and a verdict goes back to
+    /// looking retryable. Both directions asserted.
+    #[test]
+    fn the_integrity_classes_are_exactly_the_ones_v1_answers_409_for() {
+        use undercroft_store::StoreError as S;
+        use undercroft_vault::VaultError as V;
+        for e in [
+            anyhow::Error::from(S::Integrity("record".into())),
+            anyhow::Error::from(S::Attestation("forged signature".into())),
+            anyhow::Error::from(S::Vault(V::ManifestTampered)),
+            anyhow::Error::from(S::Vault(V::CorruptManifest("truncated".into()))),
+            anyhow::Error::from(V::ManifestTampered),
+            anyhow::Error::from(V::CorruptManifest("truncated".into())),
+        ] {
+            assert!(integrity_verdict(&e), "must be a verdict: {e:?}");
+        }
+        for e in [
+            anyhow::Error::from(V::NotFound("acme".into())),
+            anyhow::Error::from(S::Invalid("unknown kind".into())),
+            anyhow::Error::from(S::NotFound("drawer".into())),
+            anyhow::Error::from(V::Io(std::io::Error::other("disk"))),
+            anyhow::anyhow!("plain failure"),
+        ] {
+            assert!(!integrity_verdict(&e), "must stay exit 1: {e:?}");
+        }
+        // Context layers are what `open_store`'s callers add, and the anyhow
+        // head is then the context string. Walking only the head would have
+        // classed this as an ordinary failure.
+        let wrapped = anyhow::Error::from(V::ManifestTampered)
+            .context("opening palace at /tmp/x")
+            .context("undercroft search");
+        assert!(integrity_verdict(&wrapped), "{wrapped:?}");
+    }
 
     /// A search preview never panics on text whose lowercase is longer than
     /// itself.
