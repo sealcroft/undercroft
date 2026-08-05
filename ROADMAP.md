@@ -65,8 +65,29 @@ error ("verify fast-forwards the manifest anchor and is classified a read").
 
 **What is actually owed here**: delete the false claim from CLAUDE.md, keep
 `POST …/verify` classified as a read (it is one), and let R4 carry the real
-write. Nothing about the verdict/heal split needs building, because they were
-never one operation.
+write.
+
+**Corrected again 2026-08-05 by an adversarial re-audit — the first correction
+overreached.** It closed with "nothing about the verdict/heal split needs
+building, because they were never one operation". True as archaeology, false as
+work accounting, and it contradicted A31 five sections down in this same file.
+The split IS still owed, **inverted from how R3 filed it**: the problem is not
+that a heal is welded into `verify`, it is that **there is no callable heal
+anywhere outside `open`** — and four operator-facing documents tell operators
+that one exists and that `verify` is it. A long-lived server has no way to
+tighten its anchor short of a restart; the only reachable substitutes today are
+manufacturing a write, or `GET …/export` (which anchors at `lib.rs:3797`) —
+i.e. polluting data or exfiltrating it to move a counter.
+
+**Also worth keeping: the reasoning used to reach the right answer was too
+glib.** "`&self`, therefore no write" proves only that `verify` cannot call
+`anchor_manifest` (`vault: Vault` is a plain field and `anchor_manifest` takes
+`&mut self`). It proves nothing about DATABASE writes, and this crate contains
+the counterexample on its own search path: `pq_candidates_in(&self, …)` calls
+`pq_build(&self)`, which runs `DELETE FROM drawer_pq` inside
+`self.conn.unchecked_transaction()` (`pqidx.rs:1388`) with a comment saying so.
+The conclusion survives only because the full call graph was walked; the
+signature argument must not be reused.
 
 *Kept as a numbered entry rather than deleted, because the lesson is the
 point: a residual filed from a plausible reading of a symptom, never checked
@@ -98,10 +119,17 @@ and an argument for *reporting*, not for writing.
 **The list above was materially incomplete** (enumerated exhaustively
 2026-08-05). A read-only open ALSO:
 
-1. opens the connection with **read-write flags** and `PRAGMA journal_mode=WAL`,
-   which rewrites the header on a non-WAL file and creates `-shm`/`-wal` —
+1. runs `PRAGMA journal_mode=WAL`, which must rewrite the header on a non-WAL
+   file, and on an already-WAL file must create and attach a writable `-shm` —
    so `open_read_only` **cannot open a read-only mount or an immutable
-   snapshot at all**;
+   snapshot**. *(Mechanism corrected 2026-08-05: an earlier draft blamed the
+   read-write open FLAGS. SQLite documents `SQLITE_OPEN_READWRITE` as falling
+   back to read-only when the file is OS-write-protected, so `Connection::open`
+   itself would likely succeed; the pragma and the `-shm` are the operative
+   blockers, and no `immutable=1` URI is passed. **The conclusion is unverified
+   by execution** — settle it by `chmod -R a-w` on a vault dir in the test
+   container, calling `open_read_only`, and repeating with `palace.db` pre-set
+   to `journal_mode=delete`, recording which call fails and its SQLite code.)*
 2. runs **`promote_manifest()`** — `fs::rename(vault.json.next → vault.json)`
    plus a directory sync — i.e. a read-only open ADOPTS a new key generation;
 3. runs **`discard_pending_file()`** — `fs::remove_file` plus a directory sync
@@ -111,8 +139,12 @@ and an argument for *reporting*, not for writing.
    undercounts it as one line) and 5 × `ALTER TABLE drawers ADD COLUMN`;
 5. `INSERT`s into `chain_meta` on a legacy or fresh vault — a database write
    distinct from the anchor fast-forward;
-6. rebuilds the **entire FTS index** when it looks stale (see A20);
-7. creates `idx_drawers_filed_at` when a rate screen is declared.
+6. rebuilds the **entire FTS index** when it looks stale (see A20) — inert
+   on a SEALED vault, since `init_fts_schema` returns early for those, so this
+   item applies to hmac-only vaults only;
+7. creates `idx_drawers_filed_at` when a rate screen is declared;
+8. **CREATES an empty `palace.db` when the database is missing** and reports
+   success — see A33.
 
 **The shape of the fix already exists in this repo**: `Orch::open_read_only`
 uses `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=ON` + an explicit refusal
@@ -324,11 +356,17 @@ gives 557 and is wrong by two.
   write?"). `PalaceStore::verify` takes `&self` and contains no mutating call,
   so it *cannot* anchor — `anchor_manifest` needs `&mut`. It is a pure read,
   which is the correct design and the correct classification. But three
-  surfaces say otherwise, and one of them is operational advice:
-  `crates/undercroft-store/src/lib.rs:3737` ("or `verify`, which anchors"),
-  `CHANGELOG.md:598` and `CLAUDE.md:588` ("verify fast-forwards the manifest
+  surfaces say otherwise — **five, not three** (the first pass found three; an
+  adversarial re-audit found two more, both PUBLISHED to the site):
+  `crates/undercroft-store/src/lib.rs:3738` ("or `verify`, which anchors"),
+  `CHANGELOG.md:599`, `CLAUDE.md:588` ("verify fast-forwards the manifest
   anchor and is classified a read" — the classification is right, the reason
-  given is false).
+  given is false), **`docs/THREAT_MODEL.md:170`** ("which **only**
+  fast-forwards the manifest anchor" — doubly wrong: it does not anchor, and
+  "only" erases the whole-corpus HMAC walk that is verify's actual job; live
+  at `website/book/threat-model.html`), and **`website/src/runbook.md:78`**,
+  which is inside the *"Freeze writes"* step of the incident-response runbook.
+  Correct all five and rebuild the site, since two are published.
   **The consequence is real, not cosmetic.** The read-audit boundary tells a
   deployment worried about unanchored read records to "run writes or `verify`
   on its own cadence". On the CLI that happens to work — but through
@@ -339,6 +377,38 @@ gives 557 and is wrong by two.
   it exists to close stays open. *Fix*: correct all three statements, and
   either give the operator a real anchor-tightening call or say plainly that
   only a write closes the window.
+
+- **A32 · THE INCIDENT RUNBOOK POINTS AT EVIDENCE DESTRUCTION.** The most
+  serious thing the re-audit found, and the first pass had the risk exactly
+  backwards. `website/src/runbook.md:78` tells a responder handling a
+  suspected compromise to restart `--read-only` to *freeze writes*, and
+  reassures them that `POST …/verify` is safe because it "fast-forwards the
+  manifest anchor". The reassurance is about a write that never happens. The
+  write that DOES happen is worse and is unmentioned: `reconcile_rotation`
+  runs at `lib.rs:1547`, **before** the read-only/read-write split, so
+  `open_read_only` gets it too — and on the **first request of any kind**
+  against a cold handle it calls either `promote_manifest()`
+  (`fs::rename(vault.json.next → vault.json)` + dir sync) or
+  **`discard_pending_file()` (`fs::remove_file` + dir sync)**.
+  So the documented forensic procedure can adopt a new key generation, or
+  **delete a writer's staging manifest**, on the read-only path chosen
+  precisely to avoid touching the vault. R4 lists both operations; nothing
+  connected them to the runbook. *Fix*: this is the strongest argument for
+  R4's "detect and report, never heal" — until then the runbook must say
+  that the first request on a cold read-only handle reconciles a pending
+  rotation, and that a forensic copy must be taken before the process starts.
+- **A33 · `open_read_only` CREATES an empty database and reports success.**
+  `Connection::open` carries `SQLITE_OPEN_CREATE`, and `VaultManager::exists`
+  tests `vault.json` while the database is `palace.db` — so a half-copied
+  backup, an interrupted `rsync`, or a snapshot taken mid-write opens
+  "successfully" against a **fabricated empty vault**. `search`, `recent` and
+  `list` then answer empty with no error, and `init_chain` seeds `chain_meta`
+  from the manifest head, writing a chain seed to disk that was not there
+  before. `verify` does eventually report `chain_ok: false`, so it is not
+  wholly silent — but nothing at open says the database was missing. The
+  orchestrator's own `Orch::open_read_only` gets this right and says why in
+  its error: "a read replica never creates one". R4's item list should carry
+  this as its own entry.
 
 ## Process: the drift check is part of the work now
 
