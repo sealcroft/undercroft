@@ -938,6 +938,35 @@ impl PalaceStore {
         to_wing: &str,
         label: &str,
     ) -> Result<String, StoreError> {
+        // Wing names go through the traversal guard here, at the tunnel's own
+        // choke point — CLAUDE.md states that as an invariant and this path
+        // honoured none of it, on any surface (`/v1` import, CLI import and
+        // CLI `tunnel create` all called straight through from payload
+        // strings).
+        undercroft_core::validate_name(from_wing, "from_wing")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
+        undercroft_core::validate_name(to_wing, "to_wing")
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
+        // And the reserved wing is not a tunnel destination. `follow_tunnel`
+        // resolves a destination out of this table and calls `recent(Some(w))`,
+        // which opts BACK IN to the quarantine wing when a wing is named (by
+        // design, for the reviewer). The MCP fence inspects ARGUMENTS, and a
+        // tunnel id is not the wing string — `is_quarantine_pending` looks an
+        // id up in `drawers`, where a tunnel id never appears — so both fence
+        // checks passed and `undercroft_follow_tunnel` handed an agent the
+        // whole review queue verbatim. Refusing the destination removes the
+        // precondition; `follow_tunnel` refuses it again at read time, because
+        // rows predating this guard already exist.
+        if to_wing == crate::admission::QUARANTINE_WING
+            || from_wing == crate::admission::QUARANTINE_WING
+        {
+            return Err(StoreError::Invalid(format!(
+                "{} is the admission review queue and cannot be a tunnel \
+                 endpoint — it is reached through `admission list`, never by \
+                 navigation",
+                crate::admission::QUARANTINE_WING
+            )));
+        }
         let id = hex::encode(
             &sha2::Sha256::digest(format!("{from_wing}\x1f{to_wing}\x1f{label}").as_bytes())[..12],
         );
@@ -1030,6 +1059,16 @@ impl PalaceStore {
             )
             .optional()?;
         match to {
+            // Refused again at READ time, not only at creation: rows written
+            // before the endpoint guard existed are still in the table, and
+            // this is the call that turns one into a quarantine reader.
+            Some(wing) if wing == crate::admission::QUARANTINE_WING => {
+                Err(StoreError::Invalid(format!(
+                    "this tunnel points at {}, the admission review queue — \
+                     rule on it with `admission allow`/`deny` instead",
+                    crate::admission::QUARANTINE_WING
+                )))
+            }
             Some(wing) => self.recent(Some(&wing), limit),
             None => Ok(Vec::new()),
         }
