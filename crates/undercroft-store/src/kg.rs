@@ -674,6 +674,32 @@ impl PalaceStore {
             .as_ref()
             .zip(source_drawer_id)
             .map(|(fp, did)| self.vault.tag(&receipt_canonical(&id, did, fp)));
+        // An approved canonical fact is an OPERATOR object, and this is an
+        // agent-reachable path. `triple_id` is a pure function of (subject,
+        // predicate, object, valid_from), and every component is handed back
+        // by `kg_query`/`lookup_canonical` — so replaying one with a
+        // `valid_to` closed the golden value's window through the upsert,
+        // and `lookup_canonical` filters `valid_to IS NULL`. The MCP
+        // authority fence could not see it: the fence keys on tool NAMES
+        // (`kg_invalidate`, `kg_supersede`) and this reaches the same
+        // outcome without touching either. Keyed on the OUTCOME instead, in
+        // the store, so every surface inherits it — the same reason the
+        // retention refusal lives here rather than in a handler.
+        if let Some((cls, review)) = self
+            .conn
+            .query_row(
+                "SELECT authority_class, review_state FROM kg_triples WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?
+        {
+            if cls.as_deref() == Some("canonical") && review.as_deref() == Some("approved") {
+                return Err(StoreError::Invalid(format!(
+                    "fact {id} is the approved canonical holder of its key — it is an                      operator object and cannot be rewritten by an ordinary add. Take it                      off the tier first with `kg authority {id} --class stated --review                      rejected` (or POST /v1/vaults/<id>/kg/authority)"
+                )));
+            }
+        }
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
         // The entity the fact is ABOUT is created in the same transaction as
@@ -694,6 +720,20 @@ impl PalaceStore {
                  source_fp = excluded.source_fp,
                  receipt_tag = excluded.receipt_tag,
                  support = excluded.support,
+                 -- The authority columns MUST be in this list. They were not,
+                 -- while `tag = excluded.tag` was — and the tag is computed
+                 -- with the authority extension set to None. So re-adding an
+                 -- existing fact left the old authority columns beside a tag
+                 -- that no longer covered them, `TripleRow::canonical()`
+                 -- recomputed over the survivors, and the row failed its own
+                 -- verify. `all_triples` collects into a Result, so ONE such
+                 -- row broke kg_query, kg_timeline, kg_invalidate and the
+                 -- authority fence itself — and `kg_set_authority` verifies
+                 -- before rewriting, so it was not operator-repairable.
+                 -- `kg_import`'s upsert 240 lines down always had them.
+                 authority_class = excluded.authority_class,
+                 review_state = excluded.review_state,
+                 canonical_key = excluded.canonical_key,
                  extractor = excluded.extractor",
             params![
                 id,
@@ -2752,4 +2792,61 @@ mod tests {
             report.bad_records
         );
     }
+
+    /// **`kg_add` cannot reach the authority tier's outcomes.**
+    ///
+    /// The MCP authority fence keys on tool NAMES — `kg_invalidate` and
+    /// `kg_supersede` — and argued exhaustiveness on the wrong axis. `kg_add`
+    /// reaches the same outcomes without touching either, because `triple_id`
+    /// is a pure function of (subject, predicate, object, valid_from) and the
+    /// insert is an upsert. Every component is handed to an agent by
+    /// `kg_query`/`lookup_canonical`.
+    ///
+    /// Two distinct failures, both pinned here: closing the golden value's
+    /// window (denial), and leaving a tag that no longer covers the surviving
+    /// authority columns (an unrecoverable KG-wide integrity break, since
+    /// `all_triples` collects into a Result and `kg_set_authority` verifies
+    /// before rewriting).
+    #[test]
+    fn kg_add_cannot_close_or_corrupt_an_approved_canonical() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let id = s
+            .kg_add("payroll", "account", "IBAN-REAL", None, None, 0.9, None)
+            .unwrap();
+        s.kg_set_authority(&id, "canonical", "approved", Some("payroll-account"))
+            .unwrap();
+        assert!(s.lookup_canonical("payroll-account").unwrap().is_some());
+
+        // The replay: same four id components, now carrying a valid_to.
+        let replay = s.kg_add(
+            "payroll",
+            "account",
+            "IBAN-REAL",
+            None,
+            Some("2020-01-01T00:00:00Z"),
+            0.9,
+            None,
+        );
+        assert!(
+            matches!(replay, Err(StoreError::Invalid(_))),
+            "an ordinary add must not rewrite the approved canonical holder"
+        );
+        assert!(
+            s.lookup_canonical("payroll-account").unwrap().is_some(),
+            "the golden value must still answer the exact-authority door"
+        );
+        assert!(s.verify().unwrap().ok(), "and the graph stays verifiable");
+
+        // Premise: an ordinary fact is still freely re-addable, so the
+        // refusal is about the authority tier and not about upserts.
+        let plain = s
+            .kg_add("acme", "ships", "widgets", None, None, 0.9, None)
+            .unwrap();
+        assert!(s
+            .kg_add("acme", "ships", "widgets", None, Some("2021-01-01T00:00:00Z"), 0.9, None)
+            .is_ok());
+        assert_eq!(plain, s.kg_add("acme", "ships", "widgets", None, None, 0.9, None).unwrap());
+        assert!(s.verify().unwrap().ok(), "a re-added ordinary fact stays verifiable");
+    }
+
 }

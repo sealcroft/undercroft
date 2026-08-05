@@ -274,7 +274,18 @@ counted by hand, which is precisely what an inventory cannot do for you.
 
 ### CLOSED in the same unit (2026-08-05) — kept as the record of what was found
 
-**Every item below is implemented on `fix/audit-security-boundaries`.** They are
+**CORRECTED 2026-08-05, second pass.** An earlier edit in this same session
+marked this whole section closed. That was wrong and is exactly the failure the
+section documents: **A22 is NOT implemented** — open-time integrity verdicts
+still exit 1 on the CLI and answer 500 on `/v1` (`main.rs:942`+`:1290`,
+`tenant.rs:1834`/`:1845`), so `store_err`'s 409 arm is unreachable from any
+route. **H1 is a REGRESSION**: `undercroft refine` was converted to the shared
+implementation in `abe5167` and the seven-cluster merge `45f3daa` reverted the
+code while keeping the CHANGELOG bullet — the union-merge hazard CLAUDE.md
+records, one level worse. Treat every implemented claim below as needing the
+same check.
+
+**Most items below are implemented on `fix/audit-security-boundaries`.** They are
 retained rather than deleted because the finding, its reach and its fix shape are
 the useful part: a future sweep that rediscovers one of these should be able to
 see it was already reasoned about, and what the reasoning was. Nothing here is
