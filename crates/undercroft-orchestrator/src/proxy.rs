@@ -266,7 +266,10 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
         // other engine query parameter live here, and splitting them off
         // without forwarding them meant a paginating tenant got page one
         // forever at HTTP 200.
-        let query = url.split_once('?').map(|(_, q)| q.to_string()).unwrap_or_default();
+        let query = url
+            .split_once('?')
+            .map(|(_, q)| q.to_string())
+            .unwrap_or_default();
         let mut body = Vec::new();
         use std::io::Read;
         let _ = request
@@ -274,12 +277,24 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
             .take(256 * 1024 * 1024)
             .read_to_end(&mut body);
 
-        let response = route(
-            orch, &role, &limiter, &request, &method, &path, &query, &body,
-        );
+        let target = Target {
+            path: &path,
+            query: &query,
+        };
+        let response = route(orch, &role, &limiter, &request, &method, target, &body);
         let _ = request.respond(response);
     }
     Ok(())
+}
+
+/// One request's target: the path the router matches on and the query the
+/// data plane must forward. Bundled because they always travel together —
+/// splitting the query off and forwarding only the path is exactly the
+/// defect this pair exists to prevent.
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    path: &'a str,
+    query: &'a str,
 }
 
 fn route(
@@ -288,10 +303,10 @@ fn route(
     limiter: &RateLimiter,
     request: &tiny_http::Request,
     method: &Method,
-    path: &str,
-    query: &str,
+    target: Target<'_>,
     body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
+    let Target { path, query } = target;
     // Unauthenticated liveness, mirroring the engine. `mode` + `last_write`
     // let an operator diff a replica against the writer to read the lag.
     if method == &Method::Get && path == "/healthz" {

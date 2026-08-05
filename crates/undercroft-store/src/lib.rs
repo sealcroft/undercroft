@@ -2646,15 +2646,14 @@ impl PalaceStore {
         for ((drawer, embedding), was_diverted) in
             drawers.iter().zip(embeddings).zip(diverted.iter().copied())
         {
-            let (is_new, head, writes) = match self
-                .write_drawer_stmts(drawer, &embedding, was_diverted)
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = self.conn.execute_batch("ROLLBACK");
-                    return Err(e);
-                }
-            };
+            let (is_new, head, writes) =
+                match self.write_drawer_stmts(drawer, &embedding, was_diverted) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = self.conn.execute_batch("ROLLBACK");
+                        return Err(e);
+                    }
+                };
             if is_new {
                 created += 1;
             }
