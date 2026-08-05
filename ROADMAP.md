@@ -319,6 +319,27 @@ gives 557 and is wrong by two.
   194 pairs, not "~110"; this section's own heading said FOUR residuals with
   five present; and the release history below stops eleven releases back.
 
+- **A31 · The anchor-tightening advice depends on a write `verify` does not
+  make** (found 2026-08-05 by the maintainer asking "is `verify()` supposed to
+  write?"). `PalaceStore::verify` takes `&self` and contains no mutating call,
+  so it *cannot* anchor — `anchor_manifest` needs `&mut`. It is a pure read,
+  which is the correct design and the correct classification. But three
+  surfaces say otherwise, and one of them is operational advice:
+  `crates/undercroft-store/src/lib.rs:3737` ("or `verify`, which anchors"),
+  `CHANGELOG.md:598` and `CLAUDE.md:588` ("verify fast-forwards the manifest
+  anchor and is classified a read" — the classification is right, the reason
+  given is false).
+  **The consequence is real, not cosmetic.** The read-audit boundary tells a
+  deployment worried about unanchored read records to "run writes or `verify`
+  on its own cadence". On the CLI that happens to work — but through
+  `open_store` → `init_chain`, not through `verify()`. On a long-lived
+  server it does NOT: `store_for` caches the handle, so a repeated
+  `POST /v1/…/verify` never re-opens and never re-anchors. The advice fails
+  precisely on the deployment it was written for, and the anchor-lag window
+  it exists to close stays open. *Fix*: correct all three statements, and
+  either give the operator a real anchor-tightening call or say plainly that
+  only a write closes the window.
+
 ## Process: the drift check is part of the work now
 
 The surface-parity audit that found 65 drifts is not a one-off. It is a
