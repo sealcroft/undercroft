@@ -4,14 +4,17 @@ Undercroft is the Rust conversion of MemPalace with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
 
-## Open residuals — ALL FOUR ARE WORK, none are accepted
+## Open residuals — ALL FIVE ARE WORK, none are accepted
 
 Recorded 2026-08-05 after the surface-drift program. **Maintainer's rule:
 nothing broken or half-baked stays as a gap.** An earlier draft of this
 section marked two of these "accepted" — that was settling, not deciding, and
 it is exactly the habit that let a bypassable screen ship behind a gate that
-said "met in full". Each of the four below is a unit of work with the shape of
+said "met in full". Each of the five below is a unit of work with the shape of
 its fix stated. None ships as a permanent exception.
+
+(The heading said FOUR while five were present — R5 was appended without
+updating it. Counted, not remembered.)
 
 ### R1 · A read-only store with `UNDERCROFT_RETRIEVAL=pq` still WRITES
 
@@ -25,7 +28,10 @@ point — the index becomes a read-time *artifact* rather than something a searc
 may create. A read-only store that finds no usable index falls back to the
 exact scan it already has for below-floor scopes, and **says so** rather than
 silently degrading. Do NOT close it by refusing `set_pq`: that drops a replica
-onto the full scan (913 ms/query at 10⁶), which trades a correctness bug for a
+onto the full scan (913 **s**/query at 10⁶ — seconds, not milliseconds; every other
+surface says so and this line said ms, which made a full scan look survivable
+and quietly retired the motive for the whole PQ program), which trades a
+correctness bug for a
 performance cliff. **Gate**: a read-only open, then a search, leaves the
 database bytes byte-identical — asserted, with its own premise proved by
 showing a writable open does change them.
@@ -45,7 +51,29 @@ structured field on the MCP hit object where budget is the caller's problem
 rather than ours. **Gate**: the same query on all three surfaces reports the
 same three channel values.
 
-### R3 · `POST /v1/…/verify` is served on a read-only server and writes
+### R3 · CORRECTED 2026-08-05 — `verify` does NOT write; this was the wrong function
+
+**The residual as originally written is false, and the correction matters more
+than the claim.** `PalaceStore::verify` reads `vault.chain_head_hex()`,
+replays the audit rows and reports `chain_ok`. There is no `anchor_manifest`
+call anywhere in it — confirmed independently twice.
+
+The fast-forward blamed on `verify` is `init_chain`'s, i.e. **R4's third
+item**, reached by `store_for(id)` on the first touch of ANY route. So R3 was
+a duplicate of R4 filed against the wrong function, and CLAUDE.md repeats the
+error ("verify fast-forwards the manifest anchor and is classified a read").
+
+**What is actually owed here**: delete the false claim from CLAUDE.md, keep
+`POST …/verify` classified as a read (it is one), and let R4 carry the real
+write. Nothing about the verdict/heal split needs building, because they were
+never one operation.
+
+*Kept as a numbered entry rather than deleted, because the lesson is the
+point: a residual filed from a plausible reading of a symptom, never checked
+against the function it named, sat here as work for a session — which is the
+same failure mode as a gate clause that tests one route of a capability.*
+
+<details><summary>The original, wrong text</summary>
 
 It fast-forwards the manifest anchor — the same healing write `open` performs.
 The verdict is a read; the heal is a write; today they are one operation, so
@@ -58,12 +86,38 @@ keeps verify-on-a-replica working — the use case that made this look
 unavoidable — while making the read-only promise true. **Gate**: a read-only
 verify leaves the manifest untouched and its output names the un-healed lag.
 
+</details>
+
 ### R4 · Open-time writes survive a read-only open
 
 Schema creation (`CREATE TABLE IF NOT EXISTS`), the rotation keycheck seed, and
 the chain anchor fast-forward all still run. The justification was that
 refusing leaves a replica unable to open a vault whose writer crashed — true,
 and an argument for *reporting*, not for writing.
+
+**The list above was materially incomplete** (enumerated exhaustively
+2026-08-05). A read-only open ALSO:
+
+1. opens the connection with **read-write flags** and `PRAGMA journal_mode=WAL`,
+   which rewrites the header on a non-WAL file and creates `-shm`/`-wal` —
+   so `open_read_only` **cannot open a read-only mount or an immutable
+   snapshot at all**;
+2. runs **`promote_manifest()`** — `fs::rename(vault.json.next → vault.json)`
+   plus a directory sync — i.e. a read-only open ADOPTS a new key generation;
+3. runs **`discard_pending_file()`** — `fs::remove_file` plus a directory sync
+   — so **a replica opened while a writer is mid-rotation destroys that
+   writer's staging manifest**;
+4. executes 7 × `ALTER TABLE kg_triples ADD COLUMN` (a loop, so grep
+   undercounts it as one line) and 5 × `ALTER TABLE drawers ADD COLUMN`;
+5. `INSERT`s into `chain_meta` on a legacy or fresh vault — a database write
+   distinct from the anchor fast-forward;
+6. rebuilds the **entire FTS index** when it looks stale (see A20);
+7. creates `idx_drawers_filed_at` when a rate screen is declared.
+
+**The shape of the fix already exists in this repo**: `Orch::open_read_only`
+uses `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=ON` + an explicit refusal
+when the file is absent ("a read replica never creates one"). The engine's
+version opens read-write and relies on discipline.
 
 **Fix**: a read-only open **detects and reports** instead of healing. Missing
 schema on a read-only open is not something to create — it means a vault that
@@ -103,6 +157,167 @@ it: a flagged refresh reports `deduped: true` for a refresh that never
 happened (the content went to quarantine; the matched drawer kept its old
 text). Additional gate: a diverted save reports `quarantined` with the landed
 id and emits exactly one frame, on every save arm — asserted per arm.
+
+## Audit fleet findings — 2026-08-05 (8 Opus 5 finders; every item verified by reading the code)
+
+The drift check the release flow now requires, run as a fan-out. It found
+**more than the 14-agent parity fleet did**, and the two mechanisms caught
+disjoint sets — a parity inventory cannot see a behavioural drift, and a doc
+sweep cannot see a boundary. Both stay.
+
+**Verified clean, so a future sweep does not re-litigate them**: 76
+`UNDERCROFT_*` (and the architecture page's 61-full + 15-abbreviated across 57
+rows), 34 MCP tools, 33 `/v1` routes / 14 mutating, 35 CLI commands, 11
+crates, 11 diagrams, 9 i18n languages, 58 control rows in 10 sets, 144 roots
+× 20 patterns, 18 attack fixtures, 14 probe pairs, `TRUST_VOCAB` 3, and every
+numeric env default. Test count reconciles as **557 static − 2
+telemetry-gated − 4 ignored = 551 run** (555 with this session's
+regressions) — record the reconciliation, because a naive `grep -c '#[test]'`
+gives 557 and is wrong by two.
+
+### FIXED in this unit
+
+- **A1 · The tenant data plane reached every operator route, and another
+  tenant's vault.** `data_subpath_ok` matched only the first path segment
+  while the engine URL is built by interpolation, so ureq's `url` parse
+  collapsed `..`. Proven live: asking for `/drawers/../admission` puts
+  `POST /v1/vaults/<t>/admission` on the wire. It reached admission rulings,
+  trust assignment, retention sweeps, forgetting, **key rotation** (absent
+  even from the admin plane), `kg/authority` and vault deletion; climbing two
+  levels reached another tenant, bounded only by an assertion MAC that
+  `assert_or_401` skips when no secret is declared.
+- **A2 · Read replicas proxied writes.** `/t/*` dispatched before the
+  writer-only role check and `data_plane` took no role, so
+  `require_writable()` was unreachable over HTTP in either role.
+- **A3 · The proxy dropped every query string**, so a paginating tenant got
+  page one forever at HTTP 200 and every declared filter was discarded.
+- **A4 · Migration deleted the source vault** while the destination held part
+  of the corpus in quarantine — `imported` counts diverted rows and
+  `ImportCounts` had no `quarantined` field, so the count check matched.
+  Reachable by configuration, not attack: a migration is a burst from one
+  writer identity, which is exactly what a declared rate screen diverts.
+- **A5 · The non-finite-vector door was open on two of three paths**,
+  including `import_record`'s non-external arm — i.e. ordinary hash vaults.
+  `1e39` is a finite JSON number and `1e39_f64 as f32` is infinity; one
+  component makes the whole row NaN at rest, and NaN centroids collapse
+  retrieval corpus-wide. CLAUDE.md claimed this closed.
+- **A6 · `is_loopback` was spoofable by userinfo** —
+  `http://127.0.0.1:8080@evil.com/` read as loopback, so "TLS or loopback, no
+  override" passed and drawer text went cleartext to an attacker-chosen host
+  with the plaintext-endpoint warning suppressed too.
+- **A7 · The authority tier was writable from MCP**, and **`parity.rs`
+  structurally could not express the boundary**: `OPERATOR_ONLY` matched
+  `tool("undercroft_{cap}` as a PREFIX while the tool was
+  `undercroft_kg_set_authority`, so the check passed on zero matches. A list
+  that cannot state a boundary is worse than no list, because it reads as
+  though it did.
+- **A8 · An import could FORGE pending review evidence.** The reserved-wing
+  guard refused only signal-LESS writes and the signal fields are
+  `serde(default)`, so a forged row was never screened, appeared in
+  `admission list` as genuine detector output, and one operator "allow" wrote
+  it unscreened into the attacker's chosen wing.
+- **A9 · A tunnel was a route into the review queue.** `follow_tunnel`
+  dereferences an id to a wing and the MCP fence inspects arguments, so
+  neither check fired; `create_tunnel` validated nothing at all.
+
+### OPEN — carried as work, each with the shape of its fix
+
+- **A10 · Sealed vaults write content-derived words in CLEAR to the KG.**
+  `kg_entities.name` and `kg_triples.subject`/`predicate`/`canonical_key` are
+  clear TEXT **with two indexes over them**, no security-level gate, and
+  `refine` lifts those words out of encrypted drawer text. The module calls it
+  "the same trade-off as plaintext wing/room names", which is false in kind:
+  wing/room are declared taxonomy, an extracted subject is CONTENT — exactly
+  the distinction `meta_at_rest` is built on, which clears `entities` for this
+  reason. It is outside the pinned inventory because the exposure test never
+  writes a KG fact. **Fix**: seal or blind-index those columns (the keyed-HMAC
+  shape `fingerprint()` already uses for SQL equality), and extend
+  `a_sealed_vault_exposes_metadata_but_never_content` to write a fact so the
+  inventory fails in both directions.
+- **A11 · The KG is a second, unscreened content path to the agent.**
+  `kg_add_inner` takes `object` with no `Screen` and no
+  `validate_content_len`; `undercroft_kg_add` is on MCP and
+  `undercroft_kg_query` reads it back. An agent whose save is diverted can put
+  the same text in a KG object. Undecided rather than decided-against.
+- **A12 · `kg_import` is a second implementation of the authority
+  declaration**, skipping all four of `kg_set_authority`'s guards. Reachable
+  from the tenant data plane with no traversal. R5's shape, one tier over.
+- **A13 · The tenant data plane hands a tenant the reviewer's view** of the
+  queue that screened its own writes, via `/t/search`, `/t/drawers` and
+  `/t/export`. The ruling half moved to the admin plane; the reading half did
+  not.
+- **A14 · `meta.filed_at` is caller-settable on import and IS the retention
+  clock.** A payload dating itself 2099 is permanently exempt from a declared
+  policy and never appears in a sweep report; 1970 is destroyed by the next
+  sweep and receipted as legitimately expired. The HMAC proves the value has
+  not changed since the write, never that it was ever true.
+- **A15 · Mempalace import derives ids from payload fields that all default**,
+  so two different documents collapse onto one drawer through
+  `ON CONFLICT DO UPDATE` while the report prints the input count. Its native
+  sibling takes the payload's `id` verbatim with no recipe check.
+- **A16 · Export does not exclude the quarantine wing**, against "every read
+  that returns content". Preserving quarantine THROUGH a migration is
+  defensible; a plaintext export writing injected text beside legitimate
+  drawers is not. Needs a decision, then a test either way.
+- **A17 · `offset` unbounds the bounded prefilter** — uncapped on `/v1` and
+  MCP, `hydrate_k` saturates to `usize::MAX`, and `k as i64` is **−1**, which
+  SQLite reads as no limit.
+- **A18 · Entity rows are written with no chain record**, and outside the
+  transaction of the fact they exist for — the one persisted, HMAC-tagged
+  class that appends nothing, so an INSERTION is undetectable.
+- **A19 · A key rotation appends no chain record**: the largest single
+  mutation the engine can perform leaves no evidence of itself.
+- **A20 · `rebuild_fts` has no transaction** (its doc says it does), runs on a
+  read-only open, and shows a concurrent reader a SHORT index — which
+  `seq IN (...)` turns into silently missing results. Four more rebuild loops
+  still autocommit per row, the defect CLAUDE.md records as fixed.
+- **A21 · `chain_commits_total` over-counts ~2× under two handles**, taking
+  its delta against the handle's own manifest cache — the exact field
+  CLAUDE.md forbids reporting from. `vault status` and the rotate response
+  read those forbidden fields directly.
+- **A22 · The control plane never received the engine's error-class fixes**:
+  `DELETE` on a missing instance answers `200 {"removed": false}`;
+  `delete_tenant` swallows a credential failure and reports success (an
+  erasure that retained the data and destroyed the mapping); every migration
+  failure is 502; open-time integrity verdicts exit 1 / answer 500 instead of
+  2 / 409; caller input still raises `CorruptRow` → 500 at eight sites.
+- **A23 · An attacker-authored bundle panics `undercroft import`** (exit 101):
+  `&s[..16.min(s.len())]` bounds the length but not the char boundary.
+- **A24 · `/v1` import never verifies the Ed25519 signature** and reports
+  `signed: true` from field presence.
+- **A25 · Drawer ids are caller-controlled on import and are an AAD
+  component**, so `id = "fde/<hex>"` collides with another drawer's FDE
+  domain — the property the AAD exists to provide, broken by unvalidated
+  input.
+- **A26 · BM25's IDF is pool-shaped, not global** as CLAUDE.md states, so a
+  drawer that merely enters the candidate pool changes every other
+  candidate's score — coupling in scoring, which the invariant classifies as
+  an integrity risk.
+- **A27 · The token codebook has no density bound** — the one global trained
+  artifact calling the raw primitive, and it decides SCORE, not candidates.
+- **A28 · The training draw groups on unverified clear columns**: `verify`
+  never cross-checks the `wing` mirror against `meta.wing`, and wing-splitting
+  defeats the quota outright since MCP takes the wing from the caller.
+- **A29 · Doc claims that are false about BEHAVIOUR**, not stale digits:
+  THREAT_MODEL and SECURITY_COMPARISON say a sealed vault yields "record
+  counts and sizes, nothing else" while the project's own test pins seven
+  exposed metadata fields; `docs/security.md` says `--read-only` "strips all
+  mutating tools" (the refusal is at the call, not the catalogue) and still
+  documents bundles as X25519-only after C3.4 made them hybrid, while
+  THREAT_MODEL designates it "the mechanism reference"; THREAT_MODEL rests the
+  memory→agent boundary on an AGENTS.md section that does not exist;
+  `docs/remote-server.md` omits the entire operator plane and misstates the
+  read-only rule; AGENTS.md says the meta-rows gap "is closed" where
+  CONSULTATION_REVIEW says it is open.
+- **A30 · Stale figures**: README's benchmark paragraph is pre-BM25 on four
+  numbers and contradicts both RESULTS.md (which it cites) and the landing
+  page; the landing "honest reading" deltas are computed from the retired
+  values and argue against its own bars; **R1 below says "913 ms/query" where
+  every other surface says 913 s** — three orders of magnitude, and as ms it
+  retires the motive for the whole PQ program; the superseded ~85 ms/q scoped
+  figure survives in CLAUDE.md 23 lines from the current one; `IRREGULAR` is
+  194 pairs, not "~110"; this section's own heading said FOUR residuals with
+  five present; and the release history below stops eleven releases back.
 
 ## Process: the drift check is part of the work now
 
