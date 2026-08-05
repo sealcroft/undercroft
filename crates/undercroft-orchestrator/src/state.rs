@@ -26,14 +26,59 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
+/// What went wrong in the control-plane state, **as a class**.
+///
+/// The class used to live at the CALL SITE instead of in the type: there
+/// was one `Invalid(String)` for every refusal, so `proxy.rs` decided the
+/// HTTP status by which line raised it — `instance_add` said 400,
+/// `tenant_rotate_token` said 404, `instance_remove` said 409. A
+/// `SQLITE_BUSY` (this database runs WAL + `synchronous=FULL` and does get
+/// contended) therefore answered "bad request", "not found" or "conflict"
+/// depending on where it hit, and a client could not tell a retryable
+/// failure from a permanent one anywhere. The variants below carry the
+/// class themselves and [`StateError::status`] reads it once.
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
     #[error("sqlite: {0}")]
     Sql(#[from] rusqlite::Error),
+    /// The caller handed us a value the state layer cannot use (a key that
+    /// is not hex, an instance name outside the shape). 400.
     #[error("{0}")]
     Invalid(String),
+    /// The named row is not here. 404 — distinct from `Invalid`, because
+    /// "you asked for something that does not exist" and "what you sent is
+    /// malformed" are different instructions to the caller.
+    #[error("{0}")]
+    NotFound(String),
+    /// Well-formed, addressed at something real, and refused by the state's
+    /// current shape (an instance that still hosts tenants). 409.
+    #[error("{0}")]
+    Conflict(String),
+    /// A mutation reached a read-only (replica) handle. 403.
+    #[error("state database is open read-only (read replica) — mutations belong to the writer")]
+    ReadOnly,
     #[error("credential blob failed to open (wrong UNDERCROFT_ORCH_KEY, or tampered state)")]
     Unsealable,
+}
+
+impl StateError {
+    /// The HTTP status this class means. **One place**, so a new call site
+    /// inherits the mapping instead of inventing one — the defect this
+    /// replaces was entirely a per-call-site decision.
+    ///
+    /// `Unsealable` is 409 rather than 500 or 502: a blob that will not
+    /// open under the declared key is a tamper verdict or a wrong key,
+    /// never a transient condition, and 5xx is what retry layers hammer.
+    pub fn status(&self) -> u16 {
+        match self {
+            StateError::Sql(_) => 500,
+            StateError::Invalid(_) => 400,
+            StateError::NotFound(_) => 404,
+            StateError::Conflict(_) => 409,
+            StateError::ReadOnly => 403,
+            StateError::Unsealable => 409,
+        }
+    }
 }
 
 /// One registered engine instance (credentials stay sealed until asked for).
@@ -149,10 +194,7 @@ impl Orch {
 
     fn require_writable(&self) -> Result<(), StateError> {
         if self.read_only {
-            return Err(StateError::Invalid(
-                "state database is open read-only (read replica) — mutations belong to the writer"
-                    .into(),
-            ));
+            return Err(StateError::ReadOnly);
         }
         Ok(())
     }
@@ -292,7 +334,7 @@ impl Orch {
             )
             .optional()?;
         let Some((url, blob)) = row else {
-            return Err(StateError::Invalid(format!("unknown instance {name:?}")));
+            return Err(StateError::NotFound(format!("unknown instance {name:?}")));
         };
         let plain = self.open_sealed(&format!("orch/instance/{name}"), &blob)?;
         let v: serde_json::Value =
@@ -320,7 +362,7 @@ impl Orch {
             |r| r.get(0),
         )?;
         if tenants > 0 {
-            return Err(StateError::Invalid(format!(
+            return Err(StateError::Conflict(format!(
                 "instance {name:?} still hosts {tenants} tenant(s) — migrate them first"
             )));
         }
@@ -462,7 +504,7 @@ impl Orch {
             params![self.token_mac(&token), id],
         )?;
         if n == 0 {
-            return Err(StateError::Invalid(format!("unknown tenant {id:?}")));
+            return Err(StateError::NotFound(format!("unknown tenant {id:?}")));
         }
         self.touch_last_write()?;
         Ok(token)
@@ -475,7 +517,7 @@ impl Orch {
             params![instance, id],
         )?;
         if n == 0 {
-            return Err(StateError::Invalid(format!("unknown tenant {id:?}")));
+            return Err(StateError::NotFound(format!("unknown tenant {id:?}")));
         }
         self.touch_last_write()
     }
@@ -636,6 +678,59 @@ mod tests {
         assert_eq!(replica.tenant_by_token(&fresh).unwrap().unwrap().id, t.id);
         // A replica never creates state.
         assert!(Orch::open_read_only(&dir.path().join("absent.db"), KEY).is_err());
+    }
+
+    /// The class is a property of WHAT HAPPENED, not of which line raised
+    /// it. Every refusal used to be `Invalid(String)`, so the caller's
+    /// status came from the call site — and a sqlite failure inherited
+    /// whatever that site had picked (400, 404 or 409 depending on where
+    /// it hit), i.e. a contended database reported "bad request".
+    #[test]
+    fn every_state_error_carries_its_own_status() {
+        assert_eq!(StateError::Invalid("x".into()).status(), 400);
+        assert_eq!(StateError::NotFound("x".into()).status(), 404);
+        assert_eq!(StateError::Conflict("x".into()).status(), 409);
+        assert_eq!(StateError::ReadOnly.status(), 403);
+        // A tamper verdict, never a retry.
+        assert_eq!(StateError::Unsealable.status(), 409);
+        // Ours, not the caller's — and the one that used to masquerade as
+        // caller error at three different statuses.
+        assert_eq!(
+            StateError::Sql(rusqlite::Error::QueryReturnedNoRows).status(),
+            500
+        );
+
+        // And the refusals the state layer actually raises land on the
+        // right class, end to end.
+        let (_d, o) = orch();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let (t, _) = o.tenant_create("acme", "alpha").unwrap();
+        // `.err()`, never `unwrap_err()`: `InstanceCreds` is deliberately
+        // not `Debug` — it carries key material.
+        assert_eq!(o.instance_creds("nope").err().unwrap().status(), 404);
+        assert_eq!(o.instance_remove("alpha").unwrap_err().status(), 409);
+        assert_eq!(o.tenant_rotate_token("nope").unwrap_err().status(), 404);
+        assert_eq!(
+            o.tenant_set_instance("nope", "alpha").unwrap_err().status(),
+            404
+        );
+        // Premise: the same calls succeed when they are legitimate, so this
+        // cannot pass by refusing everything.
+        assert!(o.instance_creds("alpha").is_ok());
+        assert!(o.tenant_rotate_token(&t.id).is_ok());
+    }
+
+    /// `DELETE /admin/instances/{name}` answering 200 `{"removed": false}`
+    /// starts here: removal of a name that is not registered is reported as
+    /// `false`, and the proxy is what must turn that into a 404. Pinned so
+    /// the two halves cannot drift.
+    #[test]
+    fn removing_an_unregistered_instance_is_not_a_removal() {
+        let (_d, o) = orch();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        assert!(o.instance_remove("alpha").unwrap(), "premise: a real one");
+        assert!(!o.instance_remove("alpha").unwrap(), "already gone");
+        assert!(!o.instance_remove("never-registered").unwrap());
     }
 
     #[test]

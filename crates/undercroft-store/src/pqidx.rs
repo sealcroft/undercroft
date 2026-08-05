@@ -659,7 +659,22 @@ impl PalaceStore {
         // N=50k, the per-search join was costing more than the probed ADC
         // scan it was guarding.
         let mut just_verified = false;
-        if !self.pq_verified.get() || self.pq.borrow().is_none() {
+        // R1: a read-only store LOADS an index and never builds one. The
+        // verification below is not a read — `pq_schema` creates tables and
+        // drops others, `pq_build` trains and re-encodes every row, and the
+        // repack/compact arms rewrite the on-disk format — so on a replica
+        // the first search after open silently wrote to the vault the flag
+        // promised it would not touch. `just_verified` is set so the growth
+        // re-check below cannot recurse into a retrain either: whatever the
+        // load found is what this store has.
+        if self.read_only {
+            let stale = !self.pq_verified.get() || self.pq.borrow().is_none();
+            if stale && !self.pq_load_only()? {
+                self.ro_prefilter_fallback("PQ");
+                return Ok(None);
+            }
+            just_verified = true;
+        } else if !self.pq_verified.get() || self.pq.borrow().is_none() {
             just_verified = true;
             self.pq_schema()?;
             let drawers: i64 = self
@@ -1050,6 +1065,51 @@ impl PalaceStore {
         }
     }
 
+    /// Run one derived-index rewrite as a single durable unit.
+    ///
+    /// Two defects share this shape and both are closed here (ROADMAP A20).
+    /// **Cost**: under `synchronous=FULL` an autocommit `UPDATE` per row is
+    /// one fsync per row — measured at 7.8–8.3 ms/row when `pq_build` had it,
+    /// i.e. ~95% of a "build cost" that was disk syncs rather than
+    /// computation. **Correctness**: a codebook is written *before* the rows
+    /// it recodes, so an interruption between them leaves a v2 codebook
+    /// beside v1 rows; that survived only because the readers accept both
+    /// formats, which is luck, not design. One transaction makes the pair
+    /// atomic and a crash roll back to the previous coherent state.
+    ///
+    /// `pq_build` takes the transaction directly. These paths cannot, because
+    /// they are also reachable from inside a caller's transaction — the
+    /// advisory-encode rule ("never BEGIN, or batching breaks": `upsert_many`
+    /// owns one transaction across a whole batch and calls into the encode
+    /// paths). `is_autocommit` is what lets one function honour both: at the
+    /// top level it opens a transaction, inside someone else's it does
+    /// nothing and the writes are atomic with the enclosing one anyway.
+    /// A `BEGIN` there would fail outright, which is why the un-transacted
+    /// loops could not simply be wrapped.
+    ///
+    /// The trade is stated, not hidden: a rebuild now holds the write lock
+    /// for its whole duration, encode arithmetic included, where before it
+    /// released between rows. `pq_build` made the same trade first and for
+    /// the same reason — the alternative is a partial table, and a rebuild
+    /// that fsyncs per row is slow enough to hold the lock roughly as long
+    /// anyway. Where a rewrite is genuinely full-corpus and concurrent
+    /// readers must keep serving (`rebuild_fts`), the answer is a shadow
+    /// table and a swap, not a longer lock.
+    pub(crate) fn one_rewrite<T>(
+        &self,
+        f: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        if !self.conn.is_autocommit() {
+            return f();
+        }
+        // `unchecked_transaction` because these run behind `&self` on the
+        // search path, exactly as `pq_build`'s does.
+        let tx = self.conn.unchecked_transaction()?;
+        let out = f()?;
+        tx.commit()?;
+        Ok(out)
+    }
+
     /// Indices of the keyed training sample over `items`, each identified by
     /// `ident` — the draw described on [`stratified_keyed`]. `label` separates
     /// one artifact's draw from another's, so two codebooks trained from the
@@ -1239,11 +1299,89 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Load an existing PQ index into the session caches, building nothing —
+    /// the read-only posture (R1). `false` means there is nothing usable to
+    /// load and the caller must fall back to the exact scan.
+    ///
+    /// Deliberately does NOT call `pq_schema()`: creating those tables is a
+    /// write, and their absence is precisely the answer "this vault has no
+    /// index". Deliberately does not repack or compact either — both rewrite
+    /// the on-disk format, and a replica must leave the format its writer
+    /// chose exactly as it found it.
+    fn pq_load_only(&self) -> Result<bool, StoreError> {
+        if !self.table_exists("drawer_pq")? || !self.table_exists("pq_meta")? {
+            return Ok(false);
+        }
+        if self.pq.borrow().is_none() {
+            let Some(pq) = self
+                .pq_meta_get("codebook")?
+                .and_then(|b| ProductQuantizer::from_bytes(&b))
+            else {
+                return Ok(false);
+            };
+            *self.pq.borrow_mut() = Some(pq);
+        }
+        if self.ivf.borrow().is_none() {
+            self.ivf_load()?;
+        }
+        let drawers: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+        if drawers == 0 {
+            return Ok(false);
+        }
+        // The coverage boundary, stated rather than hidden: a writable open
+        // self-heals a short index by rebuilding it, and this one cannot, so
+        // drawers written after the index was last built are invisible to
+        // the prefilter. That is a RECALL cost, never a wrong answer — the
+        // candidates it does return are hydrated and scored exactly as
+        // always — but it is the kind of degradation a replica operator has
+        // to be told about rather than discover in a recall number.
+        let tail_matched: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
+            [],
+            |r| r.get(0),
+        )?;
+        let matched = if self.pq_pages_present()? {
+            let live = self
+                .pq_count_get("rowcount")?
+                .saturating_sub(self.pq_count_get("deleted")?);
+            tail_matched + live as i64
+        } else {
+            tail_matched
+        };
+        if matched != drawers {
+            undercroft_obs::diag_warn!(
+                "read-only open: the PQ index covers {matched} of {drawers} drawers and \
+                 cannot be rebuilt here; the uncovered rows are not offered as candidates \
+                 until a writable open heals it"
+            );
+        }
+        self.pq_live.set(drawers);
+        self.pq_verified.set(true);
+        Ok(true)
+    }
+
+    /// Whether a table exists, without creating it — the read-only tiers ask
+    /// before they read, because the `CREATE TABLE IF NOT EXISTS` they would
+    /// otherwise ride on is a write.
+    pub(crate) fn table_exists(&self, name: &str) -> Result<bool, StoreError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Load-or-train the codebook and (re)encode every drawer; train (or
     /// retrain) the IVF partitions when the corpus warrants them, drop them
     /// when it doesn't. Returns `false` when the corpus can't be quantized
     /// (empty, or dimension not divisible into subspaces) — the caller falls
     /// back to the full scan.
+    ///
+    /// Writes throughout, so a read-only store never reaches it — see
+    /// [`Self::pq_load_only`], which is what that posture calls instead.
     fn pq_build(&self) -> Result<bool, StoreError> {
         // (seq, id, sealed embedding, wing, agent claim)
         type EmbeddingRow = (i64, String, Vec<u8>, String, Option<String>);
@@ -1622,13 +1760,16 @@ impl PalaceStore {
         // Growth re-check on the fast path (cheap, in-RAM counters): a wing
         // that crossed the IVF threshold, or doubled past its partitions'
         // training size, rebuilds once rather than silently degrading.
-        let outgrown = match self.wing_pq.borrow().get(wing) {
-            Some(Some(st)) => match st.ivf.as_ref() {
-                Some(cq) => !ivf_fresh(st.live as u64, cq.trained_n()),
-                None => st.live as usize >= self.ivf_min,
-            },
-            _ => false,
-        };
+        // A read-only store may not rebuild (R1) — it keeps the index its
+        // writer left, which is a recall cost and not a wrong answer.
+        let outgrown = self.may_build_indexes()
+            && match self.wing_pq.borrow().get(wing) {
+                Some(Some(st)) => match st.ivf.as_ref() {
+                    Some(cq) => !ivf_fresh(st.live as u64, cq.trained_n()),
+                    None => st.live as usize >= self.ivf_min,
+                },
+                _ => false,
+            };
         if outgrown {
             let rebuilt = self.wing_pq_build(wing)?;
             self.wing_pq.borrow_mut().insert(wing.to_string(), rebuilt);
@@ -1692,7 +1833,15 @@ impl PalaceStore {
     /// full-scan; the `None` is cached in the session map so the check runs
     /// once, invalidated by any write to that wing.
     fn wing_pq_build(&self, wing: &str) -> Result<Option<WingPq>, StoreError> {
-        self.pq_schema()?;
+        // R1: on a read-only store this function may only take its
+        // coherent-LOAD path below. Creating the schema is a write, and the
+        // tables' absence already means "no index here".
+        if self.may_build_indexes() {
+            self.pq_schema()?;
+        } else if !self.table_exists("drawer_pq_wing")? || !self.table_exists("pq_meta")? {
+            self.ro_prefilter_fallback("per-wing PQ");
+            return Ok(None);
+        }
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM drawers WHERE wing = ?1",
             params![wing],
@@ -1701,13 +1850,18 @@ impl PalaceStore {
         if (count as usize) < self.wing_pq_min {
             // A wing that shrank below the floor sheds its artifacts —
             // a stale codebook silently kept is the exact failure class the
-            // generation counters exist to make visible elsewhere.
-            self.conn
-                .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
-            self.conn.execute(
-                "DELETE FROM pq_meta WHERE key IN (?1, ?2)",
-                params![format!("codebook/{wing}"), format!("ivf/{wing}")],
-            )?;
+            // generation counters exist to make visible elsewhere. Shedding
+            // is a write, so a read-only store leaves the stale artifacts
+            // alone and simply declines the tier: the wing full-scans, which
+            // is what a below-floor wing does anyway.
+            if self.may_build_indexes() {
+                self.conn
+                    .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
+                self.conn.execute(
+                    "DELETE FROM pq_meta WHERE key IN (?1, ?2)",
+                    params![format!("codebook/{wing}"), format!("ivf/{wing}")],
+                )?;
+            }
             return Ok(None);
         }
 
@@ -1795,6 +1949,14 @@ impl PalaceStore {
             }
         }
 
+        // Everything below rebuilds, and a read-only store may not (R1):
+        // the wing's scoped query rides the exact scan instead, which is the
+        // same path a wing below the tier floor already takes — bounded,
+        // exact, and starvation-free.
+        if !self.may_build_indexes() {
+            self.ro_prefilter_fallback("per-wing PQ");
+            return Ok(None);
+        }
         // Rebuild. The codebook is reused when stored (a rebuild is not a
         // retrain and must not advance the generation); trained fresh
         // otherwise, on a keyed sample whose label carries the wing — every
@@ -2110,6 +2272,79 @@ impl PalaceStore {
 #[cfg(test)]
 mod tests {
     use super::{stratified_keyed, PqCache};
+    use crate::{PalaceStore, StoreError};
+    use undercroft_vault::{SecurityLevel, VaultManager};
+
+    fn store() -> (tempfile::TempDir, PalaceStore) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
+        (dir, PalaceStore::open(vault).unwrap())
+    }
+
+    /// A20. `one_rewrite` exists because the derived-index rebuild loops
+    /// could not simply take a transaction: they are reachable both from the
+    /// top of the search path and from inside a caller's transaction, where a
+    /// `BEGIN` fails outright (the advisory-encode rule `upsert_many` rests
+    /// on). All three behaviours are asserted, because a helper that quietly
+    /// did nothing would pass a test for any one of them.
+    #[test]
+    fn one_rewrite_opens_a_transaction_only_at_the_top_level() {
+        let (_d, s) = store();
+        s.conn
+            .execute("CREATE TABLE t (k INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        let count = || -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        // Premise: at the top level the connection is in autocommit, which
+        // is exactly the state the un-transacted loops ran every row in.
+        assert!(s.conn.is_autocommit());
+        s.one_rewrite(|| {
+            assert!(
+                !s.conn.is_autocommit(),
+                "the rewrite must run inside a transaction"
+            );
+            s.conn.execute("INSERT INTO t (k) VALUES (1)", [])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count(), 1);
+
+        // An error rolls the WHOLE rewrite back — the property the codebook
+        // and the rows it recodes need, and the one per-row autocommit could
+        // not provide at any price.
+        let failed = s.one_rewrite(|| {
+            s.conn.execute("INSERT INTO t (k) VALUES (2)", [])?;
+            s.conn.execute("INSERT INTO t (k) VALUES (3)", [])?;
+            Err::<(), _>(StoreError::CorruptRow {
+                id: "-".into(),
+                reason: "interrupted".into(),
+            })
+        });
+        assert!(failed.is_err());
+        assert_eq!(count(), 1, "a failed rewrite must leave nothing behind");
+
+        // Inside a caller's transaction it must NOT begin one: a nested
+        // BEGIN is an error, so this call failing at all is the regression.
+        let outer = s.conn.unchecked_transaction().unwrap();
+        s.one_rewrite(|| {
+            assert!(!s.conn.is_autocommit());
+            s.conn.execute("INSERT INTO t (k) VALUES (4)", [])?;
+            Ok(())
+        })
+        .expect("must not BEGIN inside a caller's transaction");
+        assert_eq!(count(), 2, "the write is visible inside the outer tx");
+        outer.rollback().unwrap();
+        assert_eq!(
+            count(),
+            1,
+            "and it is atomic WITH the outer tx, not committed behind its back"
+        );
+    }
 
     /// The selection half of the keyed draw, and both of its properties: the
     /// **strata** (measured worth 1.4pp of R@1 on `synth --n 20000`) and the

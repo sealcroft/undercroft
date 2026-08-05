@@ -232,7 +232,11 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   is the reachable half of morphology — nearly-a-prefix, ≥7 shared chars,
   tail ≤3, which excludes the `-tive`/`-tion` class at exactly 6 and cannot
   reach Russian case or Arabic broken plurals at all. `suffix_family` +
-  `IRREGULAR` (~110 forms) admit on `lexical_morph`: SHAPE not length, which is
+  `IRREGULAR` (**201 pairs** — counted, not remembered; the table grew from
+  ~110 across several language passes and this line did not follow. A line
+  regex answers 194 and is WRONG: rustfmt wraps the Cyrillic, Greek, Persian
+  and Korean entries across three lines each, so count `),` terminators or
+  quoted strings ÷ 2) admit on `lexical_morph`: SHAPE not length, which is
   what makes a 3-char stem safe here when floor-3 containment measured 33.3
   (en) / 68.5 (de) mean links and this measures 1.08 / 0.98, capped at 5. Both
   are PAIRWISE — a stemmer builds an equivalence class one false friend
@@ -312,15 +316,24 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   hydration ≥ `min(scope, 1024)`, floors measured by scopescale — the
   corpus divisors collapse to the fixed 256 floor exactly at wing sizes,
   which read R@5 89.6% until the scope-sized policy closed it at 100.0%
-  gate-verified 131k→1M; scoped queries pay ~85 ms/q for it, flat). Rejected deliberately: retry-on-empty
+  gate-verified 131k→1M; scoped queries pay for it in latency that is
+  **flat across 8× corpus growth**, which is the property scoping is for —
+  wing ~32 ms/q, room ~14, wing+room ~13 — the same scopescale figures
+  quoted a few lines up in this bullet. The "~85 ms/q" this line carried is the
+  PRE-parallel-fuse number and was superseded on the same day it was
+  written; it survives only as the "before" column in
+  website/src/retrieval.md). Rejected deliberately: retry-on-empty
   (masks legitimate empties) and post-ranking filters (spend the pool on
   excluded rows — the defect restated). `idx_drawers_room` serves
   room-only resolution; the composite index is leftmost-prefix. A wing's population is MORE
   homogeneous than the vault's, so its codebook fits better, and
   derived-structure scope matches the isolation unit (wing) rather than
   the crypto unit (vault) — a writer in one wing no longer shapes the
-  codebook scoring another. Stated honestly: BM25's IDF stays global, so
-  the wing isolates candidates, not scores; per-wing generation counters
+  codebook scoring another. Stated honestly: the wing isolates candidates,
+  not scores — BM25's IDF is **pool-shaped**, computed inside `bm25_raw`
+  over `cands` (`n = cands.len()`, `df` counted across the same slice), so
+  it never described the vault to begin with and does not describe the wing
+  either; per-wing generation counters
   are dynamic artifacts `<wing>/pq-codebook` on the same stats surface,
   deliberately NOT per-wing gauges — cardinality), MUVERA FDE
   token-aware candidates (fdeidx.rs; core fde.rs construction; sealed
@@ -550,12 +563,18 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `serve-http --read-only` opens BOTH its stores read-only; the two opens
   had drifted apart, and which port path opened the vault decided whether
   a `--read-only` server re-embedded every drawer at start-up and appended
-  a read-audit record per `/mcp` search; mcp.rs: MCP stdio, `WRITE_TOOLS`
-  + the quarantine fence over raw arguments;
+  a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **33 tools, 12
+  of them writes** — `WRITE_TOOLS`
+  + the quarantine fence and the authority fence over raw arguments;
   parity.rs: the surface inventory the code is COUNTED AGAINST in both
   directions — a tool advertised without a line fails the build, a line
-  naming a dead tool fails it too, and `OPERATOR_ONLY`
-  (admission/trust/retention/forget/rotate) asserts those never reach MCP,
+  naming a dead tool fails it too (that second half was written but never
+  RUN: the check went `MCP_TOOLS → WRITE_TOOLS` only, so `WRITE_TOOLS` kept
+  naming the removed authority tool and passed), and `OPERATOR_ONLY`
+  (admission/trust/retention/forget/rotate/**authority** — promotion closes
+  the previous canonical holder's window, so an agent that could write it
+  could make its own fact the one answer `lookup_canonical` returns)
+  asserts those never reach MCP,
   so a boundary is enforced by the same mechanism as the parity instead of
   living in a doc table that rots; search.rs: what a search DECLARES and
   what it OWES back, once for all three surfaces — `SearchOptions`, the
@@ -585,8 +604,14 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   canonical holder and appended to the chain while answering 200 — while
   the identical capability over `/mcp` in the same process refused. It
   fails CLOSED (anything not GET is a write unless named), and the two
-  named exceptions are `POST …/search` and `POST …/verify` — verify
-  fast-forwards the manifest anchor and is classified a read. Two
+  named exceptions are `POST …/search` and `POST …/verify` — both POST
+  for cost, not for effect: search reads, and verify walks every record's
+  HMAC and replays the chain. Verify is a read in the strict sense —
+  `&self`, no mutating call — which also means it does **not** tighten the
+  manifest anchor: only a store open does (`init_chain`), so the
+  read-audit boundary's old "run writes or `verify`" advice was wrong on
+  exactly the deployment it was written for, a server that caches its
+  handle (A31). Two
   boundaries stated rather than hidden: opening still writes (schema
   creation, rotation reconcile, chain init), and `open_read_only`'s own
   doc records that with `UNDERCROFT_RETRIEVAL=pq` a search may still
@@ -715,11 +740,20 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (551 run,
-                                      # 4 #[ignore]d = 555 declared. Counted from
-                                      # a battery run, never inherited — the
-                                      # doc sweep that set this line first wrote
-                                      # 554/+1 from a different counting method)
+docker compose run --rm test          # cargo unit + integration tests (601 run,
+                                      # 4 #[ignore]d = 605 declared. Counted from
+                                      # a battery run at the INTEGRATED tree,
+                                      # never inherited and never from one
+                                      # agent's own slice — a fleet member wrote
+                                      # 556 here from its own worktree, which was
+                                      # 551 plus the five tests it had added and
+                                      # blind to the forty-five its seven
+                                      # neighbours were adding in parallel. Sum
+                                      # the `test result:` lines of a full run.
+                                      # The 4 ignored are 3 measurements needing
+                                      # testdata/*_50k.txt plus one in lib.rs; the
+                                      # onnx crate's own ignored test is outside
+                                      # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (224 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (57 checks)
@@ -863,8 +897,13 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   — `Drawer::meta_at_rest()` empties `time_mentions[].text` and `entities`
   before a row is written, keeping only resolutions (offsets + ISO dates,
   which are not content). What metadata still leaks is measured and pinned by
-  `a_sealed_vault_exposes_metadata_but_never_content`: wing, room,
-  source_file, added_by, hall, content_date, resolved dates. That test fails
+  `a_sealed_vault_exposes_metadata_but_never_content` — **twelve** fields,
+  counted from the test's own list, not seven as this line said until
+  2026-08-05: wing, room, source_file, added_by, hall, content_date,
+  resolved dates, declared `kind`, the `supersedes` link, and the
+  writer's `agent`/`channel`/`session` claims (plus the clear `filed_at`/
+  `updated_at` columns and per-record ciphertext sizes, which the pricing
+  test's column inventory covers). That test fails
   in **both** directions, so shrinking the exposure forces the inventory to
   be updated. Closing the rest = keyed blind index (truncated HMAC, as
   `fingerprint()` already does) for fields needing SQL equality, sealed blob
@@ -984,7 +1023,24 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   the same rule `undercroft-index` applies to remote backends. Coupling in
   candidate generation risks *availability* (a legitimate drawer is not
   offered); coupling in scoring risks *integrity* and moves what decides the
-  answer outside HMAC coverage. Codebook k-means is bounded only because
+  answer outside HMAC coverage.
+  **BM25's IDF is the one place this rule is not held, and it is not held
+  in the direction people assume.** This file used to say the IDF "stays
+  global". It does not: `bm25_raw` computes `n = cands.len()` and counts
+  `df` across that same candidate slice, so both IDF and `avgdl` describe
+  the **retrieved pool**, not the corpus — a drawer that merely enters the
+  pool changes every other candidate's score. Do not "fix" this by making
+  it global: a corpus-wide `df` is *more* coupling, not less, and would put
+  a genuinely vault-wide, unauthenticated quantity into the scoring path
+  the invariant exists to keep narrow. State the real cost instead —
+  **pool-shaping makes df-flooding cheaper by roughly corpus/pool.** To
+  suppress a rare term's IDF an attacker must raise its `df`; against a
+  corpus-wide count that means flooding a corpus-sized fraction, against a
+  `max(256, depth·32)` pool it means only landing enough drawers *in that
+  pool*, which the same query's own selection does for them. The damage is
+  bounded to rank order within one answer and never reaches HMAC-covered
+  bytes, but it is a real lever and it is written down rather than
+  described as isolation it never provided. Codebook k-means is bounded only because
   vectors are L2-normalized before both training and encoding (`pq.rs`): on
   the unit sphere an attacker cannot buy influence with **magnitude**, only
   with **count**, which is what makes an unbounded breakdown point bounded at

@@ -774,6 +774,29 @@ pub struct SaveOutcome {
 /// See [`PalaceStore::import_stamp`].
 pub const IMPORT_SURFACE: &str = "import";
 
+/// How far ahead of this host's clock a declared `meta.filed_at` may sit
+/// before the write choke point refuses it.
+///
+/// This is a tolerance for CLOCK SKEW between two machines, not a licence
+/// to date a record forward: a restore from a host whose clock runs fast
+/// must not fail mid-batch. The cost is bounded and stated — a payload can
+/// buy at most one day of apparent youth against a retention policy, where
+/// before it could buy a permanent exemption by writing 2099.
+const FILED_AT_MAX_SKEW: time::Duration = time::Duration::hours(24);
+
+/// Whether `id` has the shape [`undercroft_core::ids::drawer_id`] produces:
+/// 32 lowercase hex characters, and nothing else.
+///
+/// A drawer id is derived, never declared, and it is an AEAD
+/// associated-data component — see the guard in `write_drawer_stmts` for
+/// what a declared one could seal itself over.
+fn is_drawer_id(id: &str) -> bool {
+    id.len() == 32
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Result of [`PalaceStore::upsert_many`] — the bulk half of
 /// [`SaveOutcome`]'s honesty contract.
 ///
@@ -1075,6 +1098,21 @@ pub struct PalaceStore {
     /// generation and consumed by the MaxSim rescore — the query forward is
     /// the expensive part of both stages, and one search must pay it once.
     qmatrix_cache: std::cell::RefCell<Option<EncodedQuery>>,
+    /// This store was opened for a role that must not write
+    /// ([`PalaceStore::open_read_only`]).
+    ///
+    /// Read by the derived-index tiers (R1): a prefilter LOADS an existing
+    /// index and never builds one, because building an index is a write and
+    /// the flag exists to promise there are none. A store that finds no
+    /// usable index falls back to the exact scan it already runs for
+    /// below-floor scopes — and says so, once per tier, because a silent
+    /// degradation from a prefiltered search to a full scan is a
+    /// performance cliff a replica operator must be told about.
+    read_only: bool,
+    /// Which prefilter tiers have already announced their read-only
+    /// fallback this session. The condition is per-store, not per-query, so
+    /// warning per search would bury the one line that matters.
+    ro_prefilter_warned: std::cell::RefCell<std::collections::HashSet<&'static str>>,
 }
 
 /// A query's encoded token matrix, keyed by the query text it encodes.
@@ -1112,15 +1150,25 @@ impl PalaceStore {
     ///
     /// Both stores `serve-http --read-only` opens take this path — the `/mcp`
     /// one as well as each `/v1` tenant vault — so the flag means the same
-    /// thing whichever port answered. What it does NOT yet cover is the
-    /// derived-index tier: with `UNDERCROFT_RETRIEVAL=pq` a search may still
-    /// build or retrain a missing PQ/IVF index, which is a write. Recorded
-    /// gap, not a decision.
+    /// thing whichever port answered.
+    ///
+    /// The derived-index tier is covered too since 2026-08-05 (R1): with
+    /// `UNDERCROFT_RETRIEVAL=pq` (or `fde`, or a late-interaction rescore) a
+    /// search used to BUILD the missing index on its first query, so the
+    /// flag that promises "this process does not write to your vault" did
+    /// not hold the moment a prefilter was enabled. Each prefilter entry
+    /// point now loads an existing index and never builds one, falls back
+    /// to the exact scan when there is none, and says so once per tier.
+    ///
+    /// What still writes on this path is the OPEN itself — schema creation,
+    /// rotation reconcile, chain init — and that is a separate residual
+    /// (ROADMAP R4), stated rather than implied.
     pub fn open_read_only(
         vault: Vault,
         embedder: Box<dyn Embedder + Send>,
     ) -> Result<Self, StoreError> {
         let mut store = Self::open_inner(vault, embedder)?;
+        store.read_only = true;
         store.enforce_embedder_identity(false)?;
         // A read-only role must not write, and a read-audit record is a
         // write. The replica precedent (embedder identity above) is warn
@@ -1134,6 +1182,30 @@ impl PalaceStore {
             store.read_audit = false;
         }
         Ok(store)
+    }
+
+    /// Whether this store may write derived structure (R1). A prefilter
+    /// asks this before it builds, trains, repacks or compacts anything.
+    pub(crate) fn may_build_indexes(&self) -> bool {
+        !self.read_only
+    }
+
+    /// Announce, once per tier per session, that a read-only store found no
+    /// usable index and is answering by exact scan instead.
+    ///
+    /// Saying so is half the fix. The alternative considered and rejected
+    /// was refusing `set_pq` outright, which drops a replica onto the full
+    /// scan with no warning at all — trading a correctness bug for a silent
+    /// performance cliff. A replica that degrades must degrade out loud.
+    pub(crate) fn ro_prefilter_fallback(&self, tier: &'static str) {
+        if !self.ro_prefilter_warned.borrow_mut().insert(tier) {
+            return;
+        }
+        undercroft_obs::diag_warn!(
+            "{tier} prefilter has no usable index on this read-only open; building one \
+             is a write, so searches are answered by exact scan until a writable open \
+             builds it"
+        );
     }
 
     fn enforce_embedder_identity(&mut self, may_migrate: bool) -> Result<(), StoreError> {
@@ -1683,6 +1755,10 @@ impl PalaceStore {
                 .ok()
                 .and_then(|v| v.parse().ok()),
             qmatrix_cache: std::cell::RefCell::new(None),
+            // Writable unless a caller states otherwise: `open_read_only`
+            // sets it, and every other door is a write role.
+            read_only: false,
+            ro_prefilter_warned: std::cell::RefCell::new(std::collections::HashSet::new()),
         };
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
@@ -2217,21 +2293,13 @@ impl PalaceStore {
                 expected: dim,
                 got: vector.len(),
             }),
-            // The one channel that escaped the codebook-poisoning bound:
-            // L2 normalization bounds a training vector's influence only
-            // when the arithmetic is finite — a NaN/Inf component rides
-            // through normalization (NaN/x = NaN, Inf/Inf = NaN) straight
-            // into k-means means and cosine sums, where one poisoned
-            // vector corrupts every centroid it touches. Every internal
-            // embedder produces finite floats by construction; the
-            // caller-supplied path is the only door, and it closes here.
-            Some(_) if vector.iter().any(|x| !x.is_finite()) => Err(StoreError::Invalid(format!(
-                "external vector for {:?} contains a non-finite component \
-                     (NaN or infinity) — refused: non-finite arithmetic escapes \
-                     the normalization bound that keeps one vector from \
-                     corrupting shared index structures",
-                drawer.id
-            ))),
+            // The non-finite refusal used to be repeated here, on the
+            // reasoning that this was "the one door". It was not — three
+            // other paths take a caller's vector — and a second copy of one
+            // security decision is exactly what R5 exists to remove. It now
+            // lives at the write choke point (`write_drawer_stmts`), which
+            // this path funnels through like every other, and still answers
+            // `StoreError::Invalid`.
             Some(_) => {
                 let created = self.write_drawer(drawer, vector, Screen::Apply)?.is_new;
                 undercroft_obs::drawer_write(undercroft_obs::WriteOutcome::Created);
@@ -2273,64 +2341,31 @@ impl PalaceStore {
         // reach the reserved-wing guard below and be refused as invalid
         // input — not trip an assertion. `admission_divert` already returns
         // None for a quarantine-resident drawer, so Apply is a no-op there.
-        // The non-finite door, closed HERE rather than at one caller.
         //
-        // It was closed at `upsert_external` alone, on the reasoning that
-        // "the caller-supplied path was the one door". There are three:
-        // `save_with_dedup_vec` (reached by a `dedup_threshold` in a `/v1`
-        // save body) and BOTH arms of `import_record` (reached by every
-        // backup restore and the orchestrator's tenant migration) took a
-        // caller's vector with no finiteness check — and `import_record`'s
-        // non-external arm means an ORDINARY hash vault is reachable.
-        //
-        // `1e39` is an unremarkable finite JSON number, and `1e39_f64 as f32`
-        // is `f32::INFINITY` (float→float `as` overflows to infinity;
-        // saturation is a float→int rule). One such component poisons the
-        // whole row at rest: `quantize_embedding` takes `max_abs = inf` ⇒
-        // `scale = inf` ⇒ every `v/scale` is NaN ⇒ every byte quantizes to 0,
-        // and dequantize returns `0.0 * inf` = NaN for EVERY component. That
-        // row then joins the training draw, and NaN centroids make every
-        // drawer encode to the same code — corpus-wide retrieval collapse
-        // from a single record, which is precisely the bound L2 normalization
-        // is documented to provide and cannot, because NaN/x is NaN.
-        //
-        // Stated precisely: this is `write_drawer`, not `write_drawer_stmts`,
-        // so `upsert_many` — which owns its transaction and reaches the
-        // statements directly — does NOT inherit it. That is sound today only
-        // because the bulk path embeds locally and takes no caller vector; it
-        // is the same one-function-too-high shape R5 describes for screening,
-        // and it moves down with R5.
-        if let Some(bad) = embedding.iter().position(|x| !x.is_finite()) {
-            return Err(StoreError::Invalid(format!(
-                "embedding for {:?} has a non-finite component at index {bad} \
-                 (NaN or infinity) — refused: non-finite arithmetic escapes the \
-                 normalization bound that keeps one vector from corrupting the \
-                 shared index structures every other drawer is scored against",
-                drawer.id
-            )));
-        }
-        if let Screen::Apply = screen {
-            if let Some(diverted) = self.admission_divert(drawer) {
-                let emb = if self.external_dim.is_some() {
-                    embedding.clone()
-                } else {
-                    self.embedder.embed(&diverted.content)
-                };
-                let id = diverted.id.clone();
-                let landed = self.write_drawer(
-                    &diverted,
-                    emb,
-                    Screen::Bypass(BypassReason::AlreadyDiverted),
-                )?;
-                // Report the diversion UP rather than making the caller
-                // re-run the screen to discover it — a second screen means a
-                // second advisor call, which costs a forward pass and lets a
-                // nondeterministic advisor disagree with itself.
-                return Ok(Landing {
-                    is_new: landed.is_new,
-                    diverted_to: Some(id),
-                });
-            }
+        // The decision itself lives in `screen_and_divert`, which the bulk
+        // path calls too (R5): a batch owns its transaction and cannot reach
+        // this function, and for a while that meant two implementations of
+        // one security decision guarding on two different conditions.
+        if let Some(diverted) = self.screen_and_divert(drawer, screen) {
+            let emb = if self.external_dim.is_some() {
+                embedding.clone()
+            } else {
+                self.embedder.embed(&diverted.content)
+            };
+            let id = diverted.id.clone();
+            let landed = self.write_drawer(
+                &diverted,
+                emb,
+                Screen::Bypass(BypassReason::AlreadyDiverted),
+            )?;
+            // Report the diversion UP rather than making the caller
+            // re-run the screen to discover it — a second screen means a
+            // second advisor call, which costs a forward pass and lets a
+            // nondeterministic advisor disagree with itself.
+            return Ok(Landing {
+                is_new: landed.is_new,
+                diverted_to: Some(id),
+            });
         }
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let diverted_by_screen = matches!(screen, Screen::Bypass(BypassReason::AlreadyDiverted));
@@ -2409,6 +2444,122 @@ impl PalaceStore {
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
         undercroft_core::validate_name(&drawer.meta.room, "room")
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
+        // The non-finite door, closed HERE rather than at one caller.
+        //
+        // It was closed at `upsert_external` alone, on the reasoning that
+        // "the caller-supplied path was the one door". There are three:
+        // `save_with_dedup_vec` (reached by a `dedup_threshold` in a `/v1`
+        // save body) and BOTH arms of `import_record` (reached by every
+        // backup restore and the orchestrator's tenant migration) took a
+        // caller's vector with no finiteness check — and `import_record`'s
+        // non-external arm means an ORDINARY hash vault is reachable.
+        //
+        // `1e39` is an unremarkable finite JSON number, and `1e39_f64 as f32`
+        // is `f32::INFINITY` (float→float `as` overflows to infinity;
+        // saturation is a float→int rule). One such component poisons the
+        // whole row at rest: `quantize_embedding` takes `max_abs = inf` ⇒
+        // `scale = inf` ⇒ every `v/scale` is NaN ⇒ every byte quantizes to 0,
+        // and dequantize returns `0.0 * inf` = NaN for EVERY component. That
+        // row then joins the training draw, and NaN centroids make every
+        // drawer encode to the same code — corpus-wide retrieval collapse
+        // from a single record, which is precisely the bound L2 normalization
+        // is documented to provide and cannot, because NaN/x is NaN.
+        //
+        // It sat in `write_drawer` until 2026-08-05, one function above the
+        // statements, and its own comment admitted `upsert_many` did not
+        // inherit it — sound only for as long as the bulk path never took a
+        // caller's vector, i.e. a property of today's callers rather than of
+        // the vault. Here every write path inherits it, including the batch
+        // that owns its own transaction.
+        if let Some(bad) = embedding.iter().position(|x| !x.is_finite()) {
+            return Err(StoreError::Invalid(format!(
+                "embedding for {:?} has a non-finite component at index {bad} \
+                 (NaN or infinity) — refused: non-finite arithmetic escapes the \
+                 normalization bound that keeps one vector from corrupting the \
+                 shared index structures every other drawer is scored against",
+                drawer.id
+            )));
+        }
+        // What a caller may DECLARE about a drawer, decided at the same
+        // choke point as the names above — because both import surfaces
+        // deserialize a whole `Drawer` out of a payload, so every field in
+        // one is a claim until something checks it.
+        //
+        // The id first. A drawer id is DERIVED
+        // ([`undercroft_core::ids::drawer_id`] — 32 hex characters), never
+        // declared, and it is an AAD COMPONENT: content seals under `{id}`,
+        // the embedding under `{id}/emb`, token matrices under `{id}/tok`,
+        // FDE rows under `fde/{id}/tok`. The native import branch took the
+        // payload's id verbatim, so a record filed as `id = "fde/<hex>"` had
+        // its token matrix sealed under exactly another drawer's FDE domain
+        // — the cross-artifact separation the AAD exists to provide, broken
+        // by unvalidated input. No legitimate id contains a `/`, or anything
+        // but lowercase hex, so the shape closes it for every write path at
+        // once instead of at the surface someone remembers.
+        //
+        // Deliberately a SHAPE check and not a recipe check
+        // (`id == drawer_id(wing, room, source, chunk_index)`): a
+        // dedup-refreshed drawer legitimately keeps the MATCHED drawer's id
+        // while taking the incoming drawer's metadata, so a stored id need
+        // not re-derive from its own meta, and a recipe check would refuse
+        // to re-import any vault that had ever deduped. What remains open
+        // and is stated rather than hidden: a well-formed id may still name
+        // an existing drawer, and an import replacing that row wholesale is
+        // what a restore IS.
+        if !is_drawer_id(&drawer.id) {
+            return Err(StoreError::Invalid(format!(
+                "drawer id {:?} is not a derived drawer id (32 lowercase hex \
+                 characters) — refused: the id is an AEAD associated-data \
+                 component, so a declared one can seal a drawer's bytes under \
+                 another drawer's artifact domain",
+                drawer.id
+            )));
+        }
+        // `meta.filed_at` is under the drawer HMAC and is the RETENTION clock
+        // (`retention::expired_in` dates every drawer off it, deliberately
+        // reading the covered copy rather than the clear column) and the
+        // recency clock (`recency_boost`). The HMAC proves the value has not
+        // changed SINCE the write; it says nothing about whether it was ever
+        // true, and both import surfaces let the payload choose it. A record
+        // dating itself 2099 was therefore permanently exempt from every
+        // declared retention policy and never appeared in a sweep report,
+        // while `recency_boost` clamps at zero so it also ranked at maximum
+        // recency forever. An unparseable value was worse than either: it
+        // fails `expired_in`, so ONE imported record disabled the whole
+        // vault's retention sweep.
+        //
+        // The honest rule is not to clear it — a migration must carry when a
+        // drawer was filed, or every restore silently resets its own
+        // retention clock and a policy can be laundered by exporting and
+        // importing. It is that a drawer cannot have been filed at a time
+        // that has not happened. A past value travels verbatim; a future one
+        // is refused, because no path can honour it.
+        //
+        // The tolerance is for clock skew between two hosts, not for
+        // declarations: a restore from a machine whose clock runs a little
+        // fast must not fail mid-batch. Its cost is stated and bounded — a
+        // payload buys at most one day of youth, against the unbounded
+        // exemption it could buy before.
+        match OffsetDateTime::parse(&drawer.meta.filed_at, &Rfc3339) {
+            Err(e) => {
+                return Err(StoreError::Invalid(format!(
+                    "filed_at {:?} on {:?} is not an RFC3339 timestamp ({e}) — \
+                     refused: it is the retention clock, and a drawer that cannot \
+                     be dated can neither be swept nor reported as exempt",
+                    drawer.meta.filed_at, drawer.id
+                )));
+            }
+            Ok(t) if t - OffsetDateTime::now_utc() > FILED_AT_MAX_SKEW => {
+                return Err(StoreError::Invalid(format!(
+                    "filed_at {:?} on {:?} is in the future — refused: a drawer \
+                     cannot have been filed at a time that has not happened, and \
+                     filed_at is the retention clock, so a future one is a \
+                     permanent exemption from every declared policy",
+                    drawer.meta.filed_at, drawer.id
+                )));
+            }
+            Ok(_) => {}
+        }
         // Same reasoning for the size bound: it was enforced only by
         // `undercroft remember`, so the declared maximum was a property of
         // one entry point rather than of the vault.
@@ -2647,11 +2798,18 @@ impl PalaceStore {
         // been unwrapped above and re-screened, so the local detector — never
         // the payload — decides what is pending review.
         let mut diverted: Vec<bool>;
+        // `Screen::Apply`, stated — through the same `screen_and_divert` the
+        // choke point calls (R5). The bulk path used to test
+        // `admission_quarantine` directly, so the required `Screen` argument
+        // that exists to make a write path DECLARE its decision never
+        // reached the one path that cannot route through the choke point.
+        // The outer `if` is the zero-cost guard, not the decision: with
+        // screening off nothing is cloned and nothing is scanned.
         let drawers: &[Drawer] = if self.admission_quarantine {
             diverted = Vec::with_capacity(drawers.len());
             screened = drawers
                 .iter()
-                .map(|d| match self.admission_divert(d) {
+                .map(|d| match self.screen_and_divert(d, Screen::Apply) {
                     Some(d) => {
                         quarantined += 1;
                         diverted.push(true);
@@ -3037,6 +3195,16 @@ impl PalaceStore {
     /// destination, and a claim that cannot be checked must not sit in the
     /// field policy keys on; the exporting vault's own audit chain is
     /// where that history is authoritative.
+    ///
+    /// **This is the stamp, not the whole rule.** It re-stamped exactly one
+    /// field on a struct with ~20 caller-settable ones, and two more turned
+    /// out to be claims rather than data: the `id` (derived, and an AEAD
+    /// associated-data component) and `meta.filed_at` (the retention and
+    /// recency clock). Both are enforced at the write choke point in
+    /// `write_drawer_stmts` rather than here, so the CLI's bulk import — which
+    /// reaches `upsert_many` and never touches `import_record` — inherits
+    /// them too. Adding a rule at this function would have covered one import
+    /// surface and not the other, which is the drift shape itself.
     pub fn import_stamp(drawer: &Drawer, via: &str) -> Drawer {
         if drawer.meta.added_by == via {
             return drawer.clone();
@@ -3867,8 +4035,19 @@ impl PalaceStore {
     /// file write access could strip that unanchored tail undetected
     /// until the next anchored write covers it. Write records never
     /// stretch that window beyond the single in-flight record; read
-    /// records can, and a deployment that needs the anchor tight runs
-    /// writes (or `verify`, which anchors) on its own cadence.
+    /// records can, and a deployment that needs the anchor tight must run
+    /// an actual WRITE on its own cadence.
+    ///
+    /// **Not `verify`** — this said "or `verify`, which anchors" and that
+    /// was false: `verify` takes `&self` and so cannot reach
+    /// `anchor_manifest`, which needs `&mut`. The fast-forward blamed on it
+    /// belongs to `init_chain`, and only a store OPEN reaches that. On the
+    /// CLI the advice worked by accident (a fresh `undercroft verify`
+    /// process opens the store); on a long-lived server `store_for` caches
+    /// the handle, so a repeated `POST /v1/…/verify` never re-opens and
+    /// never re-anchors. The advice failed precisely on the deployment it
+    /// was written for. There is still no callable anchor-tightening
+    /// operation outside `open` (ROADMAP A31).
     fn audit_read(
         &self,
         kind: &str,
@@ -9430,6 +9609,279 @@ mod tests {
         // Exactly at the bound is fine — the check is `>`, not `>=`.
         let at = "x".repeat(undercroft_core::MAX_CONTENT_BYTES);
         assert!(s.upsert(&drawer("w", "r", &at, 3)).is_ok());
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// R5's gate: the screen-and-divert decision must exist ONCE.
+    ///
+    /// `write_drawer` screened behind the required `Screen` argument while
+    /// `upsert_many` — which owns its transaction and so cannot reach the
+    /// choke point — ran its own `admission_divert` loop. Both were correct,
+    /// and two implementations of one security decision is the shape every
+    /// drift in the surface audit had. Worse, they did not even guard on the
+    /// same condition: one read the `Screen`, the other read
+    /// `admission_quarantine` directly, so the argument whose whole job is
+    /// to force a write path to DECLARE never reached the bulk path.
+    ///
+    /// Counted over the crate's own source in both directions, the way
+    /// `parity.rs` counts the tool surface. Rust's visibility is the first
+    /// lock (`admission_divert` is private to `admission.rs`); this is the
+    /// second, so widening that visibility and adding a caller fails loudly
+    /// instead of quietly making the decision two again.
+    #[test]
+    fn admission_divert_has_exactly_one_caller() {
+        // Split so this line is not itself a match — the first run of this
+        // gate counted its own needle and reported two callers.
+        let needle = concat!(".admission", "_divert(");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut callers: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&src).expect("the crate's own sources are readable") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (i, line) in text.lines().enumerate() {
+                // Prose naming the function is not a call to it.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains(needle) {
+                    callers.push(format!(
+                        "{}:{}",
+                        path.file_name().unwrap().to_string_lossy(),
+                        i + 1
+                    ));
+                }
+            }
+        }
+        assert_eq!(
+            callers.len(),
+            1,
+            "the screening decision must exist once; callers found: {callers:?}"
+        );
+        assert!(
+            callers[0].starts_with("admission.rs:"),
+            "the one caller is `screen_and_divert`, beside the detector it \
+             drives; found {callers:?}"
+        );
+    }
+
+    /// A25, and the native half of A15: an import took the payload's `id`
+    /// verbatim, and a drawer id is an AEAD associated-data component —
+    /// content seals under `{id}`, the embedding under `{id}/emb`, token
+    /// matrices under `{id}/tok`, FDE rows under `fde/{id}/tok`. So a record
+    /// filed as `fde/<hex>` had its bytes sealed under exactly another
+    /// drawer's artifact domain: the cross-artifact separation the AAD
+    /// exists to provide, broken by unvalidated input.
+    ///
+    /// Asserted on BOTH import surfaces, because they share no function:
+    /// `/v1` goes through `import_record`, the CLI's bulk restore through
+    /// `upsert_many`.
+    #[test]
+    fn a_declared_drawer_id_is_refused_on_every_import_surface() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let victim = drawer(
+            "w",
+            "r",
+            "the drawer whose artifact domain is the target",
+            0,
+        );
+        s.upsert(&victim).unwrap();
+
+        let mut forged = drawer("w", "r", "a record aimed at another drawer's FDE domain", 1);
+        forged.id = format!("fde/{}", victim.id);
+        assert!(matches!(
+            s.import_record(&forged, None, crate::IMPORT_SURFACE),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.upsert_many(std::slice::from_ref(&forged)),
+            Err(StoreError::Invalid(_))
+        ));
+        // Shape, not merely the slash: an uppercased id and a truncated one
+        // are equally not what `drawer_id` produces.
+        for bad in [victim.id.to_uppercase(), victim.id[..31].to_string()] {
+            let mut d = drawer("w", "r", "another shape that is not a drawer id", 2);
+            d.id = bad.clone();
+            assert!(
+                matches!(
+                    s.import_record(&d, None, crate::IMPORT_SURFACE),
+                    Err(StoreError::Invalid(_))
+                ),
+                "{bad:?} is not a derived drawer id"
+            );
+        }
+        // Premise: the identical record under its DERIVED id imports fine, so
+        // the refusal is about the declaration and not about the payload.
+        let honest = drawer("w", "r", "a record aimed at another drawer's FDE domain", 1);
+        assert!(s
+            .import_record(&honest, None, crate::IMPORT_SURFACE)
+            .is_ok());
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// R1's gate: a read-only open, then a search with the prefilter
+    /// enabled, leaves the database bytes byte-identical.
+    ///
+    /// `pq_candidates_in` used to call `pq_schema()`, `pq_build()` and the
+    /// repack/compact arms on the first search after open, so
+    /// `UNDERCROFT_RETRIEVAL=pq` turned the flag that promises "this process
+    /// does not write to your vault" into a promise the vault-writing search
+    /// path immediately broke. A read-only store now LOADS an index and
+    /// never builds one; with none to load it answers by exact scan and
+    /// says so.
+    ///
+    /// The premise is asserted in the same test, because "the bytes did not
+    /// change" is a claim that passes for free if the search never ran or
+    /// the prefilter was never engaged: the identical sequence on a WRITABLE
+    /// open does change them, and both searches return the same answer.
+    #[test]
+    fn a_read_only_search_with_the_prefilter_on_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("vaults/test/palace.db");
+        let query = "why did we switch to graphql";
+        {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
+            let mut s = PalaceStore::open(vault).unwrap();
+            for i in 0..120 {
+                s.upsert(&drawer("w", "r", &format!("routine note number {i}"), i))
+                    .unwrap();
+            }
+            s.upsert(&drawer(
+                "w",
+                "api",
+                "we switched to graphql because rest was chatty",
+                500,
+            ))
+            .unwrap();
+        }
+        // One read-only open with no search, so the OPEN's own writes
+        // (schema creation, chain init — ROADMAP R4, a separate residual)
+        // are already done and this test measures the SEARCH.
+        {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            drop(
+                PalaceStore::open_read_only(mgr.unlock("test").unwrap(), Box::new(HashEmbedder))
+                    .unwrap(),
+            );
+        }
+        let before = std::fs::read(&db).unwrap();
+
+        let ro_hits = {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let mut s =
+                PalaceStore::open_read_only(mgr.unlock("test").unwrap(), Box::new(HashEmbedder))
+                    .unwrap();
+            s.set_pq(true);
+            s.search(query, &SearchOptions::default()).unwrap()
+        };
+        assert_eq!(
+            std::fs::read(&db).unwrap(),
+            before,
+            "a read-only search must not build an index into the vault"
+        );
+        assert!(
+            !ro_hits.is_empty(),
+            "the exact-scan fallback still has to answer the query"
+        );
+
+        // Premise: the identical sequence on a writable open DOES change the
+        // bytes — so the assertion above is about the posture and not about
+        // a search that never engaged the tier.
+        {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+            s.set_pq(true);
+            let hits = s.search(query, &SearchOptions::default()).unwrap();
+            assert_eq!(
+                hits[0].drawer.id, ro_hits[0].drawer.id,
+                "the read-only fallback and the prefiltered search agree on the answer"
+            );
+        }
+        assert_ne!(
+            std::fs::read(&db).unwrap(),
+            before,
+            "premise: a writable search with the prefilter on builds the index"
+        );
+
+        // And once an index EXISTS, the read-only store loads it and still
+        // writes nothing — the other half of "load, never build".
+        let with_index = std::fs::read(&db).unwrap();
+        {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let mut s =
+                PalaceStore::open_read_only(mgr.unlock("test").unwrap(), Box::new(HashEmbedder))
+                    .unwrap();
+            s.set_pq(true);
+            assert!(!s
+                .search(query, &SearchOptions::default())
+                .unwrap()
+                .is_empty());
+        }
+        assert_eq!(
+            std::fs::read(&db).unwrap(),
+            with_index,
+            "loading an existing index is a read"
+        );
+    }
+
+    /// A14: `meta.filed_at` is the RETENTION clock (`expired_in` dates every
+    /// drawer off the HMAC-covered copy, deliberately, so a flipped column
+    /// cannot launder a deletion) and the recency clock — and both import
+    /// surfaces let the payload choose it. A record dating itself 2099 was
+    /// permanently exempt from every declared policy, never appeared in a
+    /// sweep report, and ranked at maximum recency forever. An unparseable
+    /// value was worse: `expired_in` fails on it, so ONE imported record
+    /// disabled retention vault-wide.
+    ///
+    /// The honest rule is not "clear it" — a migration must carry when a
+    /// drawer was filed, or every restore silently resets its own retention
+    /// clock — but "a drawer cannot have been filed at a time that has not
+    /// happened". Both halves are asserted, on both import surfaces.
+    #[test]
+    fn an_import_carries_filed_at_but_cannot_date_itself_into_the_future() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+
+        // The migration property first: a PAST filed_at survives verbatim.
+        let mut old = drawer("w", "r", "a drawer filed years ago", 0);
+        old.meta.filed_at = "2020-01-01T00:00:00Z".into();
+        s.import_record(&old, None, crate::IMPORT_SURFACE).unwrap();
+        assert_eq!(
+            s.get(&old.id).unwrap().unwrap().meta.filed_at,
+            "2020-01-01T00:00:00Z",
+            "a restore must keep the drawer's own filing date"
+        );
+
+        for bad in ["2099-01-01T00:00:00Z", "whenever", ""] {
+            let mut forged = drawer("w", "r", "a drawer that dates itself", 1);
+            forged.meta.filed_at = bad.into();
+            assert!(
+                matches!(
+                    s.import_record(&forged, None, crate::IMPORT_SURFACE),
+                    Err(StoreError::Invalid(_))
+                ),
+                "filed_at {bad:?} must be refused on the /v1 import surface"
+            );
+            assert!(
+                matches!(
+                    s.upsert_many(std::slice::from_ref(&forged)),
+                    Err(StoreError::Invalid(_))
+                ),
+                "filed_at {bad:?} must be refused on the bulk import surface too"
+            );
+        }
+
+        // And the consequence the refusal buys: under a declared policy the
+        // honestly-dated drawer IS swept, which is exactly what a 2099 record
+        // bought its way out of.
+        s.set_retention("w", None, 30).unwrap();
+        let sweep = s.retention_sweep(true).unwrap();
+        assert!(
+            sweep.policies[0].expired.contains(&old.id),
+            "a drawer filed in 2020 is past a 30-day policy"
+        );
         assert!(s.verify().unwrap().ok());
     }
 

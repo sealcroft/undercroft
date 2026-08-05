@@ -2,6 +2,275 @@
 
 ## Unreleased
 
+### security boundaries: what an 8-agent audit fleet found, and what re-auditing the fix found
+
+The parity work below asked *"is this capability on every surface?"*. This
+unit asked *"can a caller cross a boundary?"* — an 8-agent read-only audit
+fleet over the engine, the control plane and the audit chain, then an
+adversarial fleet re-checking the fixes, then a 26-agent conformance pass
+over the result. Every finding was verified by reading the code; the
+traversal was proven with a live probe.
+
+**The control plane never received any of the engine's class fixes.**
+
+- **A tenant data-plane token reached every operator route, and another
+  tenant's vault.** `data_subpath_ok` validated only the first path
+  segment, and the engine URL is built by interpolation — so `ureq`'s
+  WHATWG parse collapsed `..` and put `POST /v1/vaults/<t>/admission` on
+  the wire from a request for `…/drawers/../admission`. A tenant could
+  rule on the admission queue that screened its own writes, assign its own
+  trust class, sweep retention, forget, **rotate keys** (a capability
+  absent even from the admin plane), delete the vault — and by climbing
+  two levels, read and write a *different* tenant's vault. Replaced with a
+  whole-subpath match over a closed vocabulary plus per-segment shape
+  checks, so nothing that could normalize ever reaches the match.
+- **Read replicas proxied writes.** `/t/*` dispatched before the
+  writer-only role check and `data_plane` never took a role, so
+  `require_writable()` was unreachable over HTTP in either role. The role
+  decision moved in front of dispatch and fails closed, with
+  `POST …/search` the one named read — the same shape as the engine's own
+  `--read-only` gate.
+- **Query strings were dropped entirely** by the proxy, so a paginating
+  tenant got page one forever at HTTP 200 and every declared filter was
+  silently discarded. `vault_request` now takes `query` as a **required**
+  argument rather than an optional one someone forgets.
+- **Migration could delete a source vault whose corpus was partly in
+  quarantine at the destination**: `imported` counted diverted rows and
+  `ImportCounts` had no `quarantined` field, so the count check matched. A
+  migration is a burst from one writer identity — exactly what a declared
+  rate screen diverts — so this was reachable by configuration, not by
+  attack. The guard now fires only when the source is about to be dropped,
+  and reports the count on the `keep_source` path instead of refusing it.
+
+**The engine.**
+
+- **A forged import could become pending review evidence.** The
+  reserved-wing guard tested `admission_signals.is_empty()`, so it refused
+  only a signal-*less* forgery. Those fields are `#[serde(default)]` and
+  both import surfaces deserialize a whole `Drawer`, so a record could
+  arrive already in the quarantine wing carrying fabricated detector
+  output — `admission_divert` returns `None` for anything already there,
+  so `Screen::Apply` was a no-op. It then appeared in `admission list` as
+  genuine detector output, and one operator `allow` wrote unscreened
+  content into the attacker's chosen wing under the legitimate
+  `Screen::Bypass(OperatorRuling)`. The guard now keys on **how the row
+  was produced**, not on what it claims: `write_drawer_stmts` takes
+  `diverted_by_screen`, derived from the bypass reason on one path and
+  from the divert loop on the other. A caller controls the fields; it
+  cannot control the reason.
+- **`undercroft_follow_tunnel` walked the MCP quarantine fence.** The fence
+  inspects *arguments*, and a tunnel id is not a wing string — but it
+  **dereferences** to one: `follow_tunnel` resolves a destination and calls
+  `recent(Some(wing))`, which deliberately opts back in to the reserved
+  wing when a wing is named (for the reviewer). So an agent whose write had
+  just been quarantined could read the whole review queue back verbatim.
+  `create_tunnel` also validated nothing — no `validate_name` on either
+  endpoint, against a stated invariant — so any import could plant the
+  tunnel. Both wings are validated now, the reserved wing is refused as an
+  endpoint, and `follow_tunnel` refuses it again at read time for rows that
+  predate the guard.
+- **`undercroft_kg_set_authority` was on the agent surface**, and `kg_import`
+  was a second, unvalidated implementation of the same declaration. Both
+  closed; the authority tier is operator-only, enforced by `parity.rs`.
+  The MCP surface is therefore **33 tools, 12 of them writes** (was 34/13)
+  — corrected in README, `docs/AGENTS.md`, `docs/PARITY.md`,
+  `docs/integrations.md` and `architecture/diagrams/layers.svg`, all five of
+  which still said 34. `parity.rs` fails the build on a stale inventory
+  entry; it cannot reach a number written in prose, which is why five
+  places had to be counted by hand.
+- **A non-finite vector from a caller-supplied embedding space** escaped
+  normalization entirely (`NaN/x = NaN`), and the door was closed at
+  `upsert_external` alone. Closed at every door a caller vector reaches.
+- **A stored, self-rearming denial of service.** `meta.filed_at` is
+  caller-settable on import and `closet_index` byte-sliced it —
+  `&a[..10.min(len)]` bounds the *length*, not the char boundary. One
+  imported drawer panics `undercroft_get_closet_index`, a session-start
+  context loader; with no panic hook on a single-threaded server that kills
+  the process for every tenant, on every retry. Fixed as a **class**: all
+  three byte-slice truncations of caller-supplied strings now use
+  `.chars().take(n)`, the idiom already in use three functions away.
+- **`offset` was uncapped on every surface**, and `saturating_add` hid it
+  rather than fixing it: `depth` reached `usize::MAX`, so `k as i64` became
+  `-1`, which SQLite reads as **`LIMIT NONE`** (verified by running it).
+  Clamped at the boundary where the meaning inverts — not by bounding
+  `depth`, which would silently empty a legitimate deep page and tell the
+  caller the corpus had run out. `an_offset_past_the_end_is_empty_not_an_error`
+  is a decision this project already made, and the first attempt at this
+  fix overrode it.
+
+**Re-auditing the fixes found three defects the fixes introduced**, which is
+what the re-audit was for:
+
+- **The forged-evidence fix broke restore.** Refusing any caller-supplied
+  drawer in the reserved wing looked right, but `export_all` has no wing
+  predicate — so *any* export from a vault that had ever quarantined a
+  drawer produced a payload its own importer rejected, and because
+  `INGEST_BATCH` commits per chunk, a large restore committed the earlier
+  chunks and then aborted, leaving a **partial palace with none of its KG,
+  entity or tunnel records**. The forgery test passed throughout, because
+  refusing everything satisfies it. Import now *unwraps* a reserved-wing
+  claim and re-screens the content where it was headed: the destination's
+  detector decides. A forger cannot fabricate detector output because the
+  detector runs.
+- **The same fix missed the bulk path.** `import_unwrap_screened` was added
+  to `import_record`, whose only non-test caller is `/v1`; CLI `import` —
+  and therefore every sealed-bundle restore — goes through
+  `upsert_batched` → `upsert_many` and never reached it. Fixed *inside*
+  `upsert_many` rather than at the call site, because a call-site fix is
+  precisely the per-call-site pattern the required `Screen` argument exists
+  to abolish. **Why CI could not see it**: e2e's export/import round trip
+  runs *after* the admission allow/deny checks have emptied that vault's
+  queue, and the only vault with unruled rows is never exported — it passed
+  by accident of test ordering. The new checks build a vault with a row
+  still pending and assert the clean drawer survives.
+- **The migration guard named two remedies, neither of which worked**: it
+  deleted the destination vault one line before telling the operator to
+  "rule on the queue there", and it ran ahead of `keep_source` so "retry
+  with keep_source" hit the identical refusal — making migration
+  permanently impossible on any destination with a rate screen.
+- **The loopback fix was incomplete**: `http://evil.com\@127.0.0.1/v1` still
+  spoofed, because for a special scheme the WHATWG parser treats a
+  backslash as a path separator. Enumerating spoofs only tests the
+  enumeration, so the predicate now asks `url::Url::parse` — the parser
+  `ureq` resolves every request target with — and therefore cannot disagree
+  with the transport. Writing that test also proved the author's reasoning
+  wrong once more: `http://localhost\@evil.com` **is** loopback.
+- **`parity.rs` only ran one direction.** `WRITE_TOOLS` still listed the
+  removed authority tool and the check went `MCP_TOOLS → WRITE_TOOLS` only,
+  so a line naming a dead tool passed — exactly the rot the module claims
+  to prevent in *both* directions. The reverse check now exists and caught
+  the stale entry immediately.
+
+**Tests.** Every fix carries a test that would have failed before it, and
+the orchestrator e2e suite grew from 44 to 57 checks — eight traversal
+shapes reaching the operator plane, the percent-encoded spelling, a
+cross-tenant climb, a replica refusing data-plane writes while still
+serving `POST search`, and the query string actually reaching the engine.
+Counterfactual run with the fix reverted: **11 of the 13 new checks fail**,
+so they catch the defect rather than passing for an unrelated reason. Three
+ways an orchestrator e2e check can pass while proving nothing, all found by
+running it and all worth knowing: `curl` squashes `../` client-side without
+`--path-as-is`, so the orchestrator never sees a traversal; the token in
+scope had been deliberately rotated out earlier in the suite, so requests
+401'd before the route was consulted; and a second orchestrator starts with
+`UNDERCROFT_ORCH_RATE_LIMIT=3`, so anything after it answers 429. The
+premise assertion — "plain search still serves" — is what exposed the last
+two, by failing loudly where the traversal checks would have passed
+quietly. Unit battery 551 → **601**, e2e 222 → **224**, orchestrator e2e
+44 → **57**, telemetry e2e 24 unchanged. The unit figure is the one that
+needed integrating to be true: each fleet member counted 551 plus its own
+additions, so the first number written here was **556** — correct for one
+worktree and wrong for the tree. Sum the `test result:` lines of a full
+battery run; never add a delta to a remembered total.
+
+### documentation: five claims that were false about behaviour, not merely stale
+
+Found by the same fleet and fixed here. These are not out-of-date digits;
+each one told a reader something the code does not do.
+
+- **"Running `verify` tightens the manifest anchor" — it does not, and five
+  places said so** (`CLAUDE.md`, `CHANGELOG.md`, `docs/THREAT_MODEL.md`,
+  `website/src/runbook.md`, and a doc comment in `store/src/lib.rs`; two of
+  them published). `PalaceStore::verify` takes `&self` and contains no
+  mutating call — `anchor_manifest` needs `&mut`. It is a pure read, which
+  is the correct design and the correct classification on the read-only
+  gate; the *reason* given for that classification was false. The
+  fast-forward belongs to `init_chain`, which only a store **open** reaches.
+  The consequence was real: the read-audit boundary tells a deployment
+  worried about unanchored read records to "run writes or `verify` on its
+  own cadence". On the CLI that worked by accident (a fresh process opens
+  the store). On a long-lived server `store_for` caches the handle, so a
+  repeated `POST /v1/…/verify` never re-opens and never re-anchors — the
+  advice failed on precisely the deployment it was written for. All five
+  corrected; there is still no callable anchor-tightening operation outside
+  `open`, and that is now recorded as work rather than implied to exist.
+- **The incident runbook pointed at evidence destruction.** The "freeze
+  writes" step reassured a responder that `POST …/verify` is safe because
+  it anchors. The write it names never happens; the write that *does* is
+  unmentioned and worse. `reconcile_rotation` runs **before** the
+  read-only/read-write split, so `open_read_only` gets it too — and on the
+  **first request of any kind** against a cold handle it either promotes
+  `vault.json.next` over `vault.json` (adopting a new key generation) or
+  **deletes it** (`fs::remove_file` + dir sync). The documented forensic
+  procedure could therefore destroy a writer's staging manifest on the
+  read-only path chosen precisely to avoid touching the vault. The runbook
+  now says so, and step 1 names `vault.json.next` in the evidence copy.
+- **"A sealed vault yields record counts and sizes, nothing else"** —
+  `docs/THREAT_MODEL.md` and `docs/SECURITY_COMPARISON.md` both said this
+  while the project's own test
+  (`a_sealed_vault_exposes_metadata_but_never_content`) pinned **twelve**
+  readable metadata fields: wing, room, `source_file`, `added_by`, hall,
+  `content_date`, the dates resolved out of the content, the declared
+  `kind`, the `supersedes` link, and the writer's `agent` / `channel` /
+  `session` claims — plus the clear `filed_at` / `updated_at` columns.
+  THREAT_MODEL now carries the full inventory as a table with the reason
+  each field is there and the instruction that follows from it (*do not put
+  the secret in a wing or room name*). CLAUDE.md, `docs/AGENTS.md` and the
+  architecture page each carried the same list at **seven** fields and are
+  corrected to twelve, counted from the test rather than remembered.
+- **"`--read-only` strips all mutating tools"** (`docs/security.md`, which
+  THREAT_MODEL designates *the mechanism reference*). It does not:
+  `tools/list` advertises the full catalogue and the refusal happens at the
+  **call**. A client filtering its UI off the catalogue would render buttons
+  that cannot fire. The same page still documented export bundles as
+  X25519-only, months after C3.4 made them hybrid X25519 + ML-KEM-768, and
+  did not mention signed manifests at all; both sections rewritten.
+- **THREAT_MODEL rested the memory→agent boundary on an AGENTS.md section
+  that did not exist**, and described a provenance envelope retrieval does
+  not deliver. A *search* result on either surface carries the id, wing,
+  room, `content_date`, `filed_at`, occurrences, resolved time mentions and
+  scores — and **none** of `added_by`, `source_file`, `agent`, `channel` or
+  `session`; those travel only on a per-drawer fetch. `docs/AGENTS.md §7.1`
+  was written to be the section that was being cited: the spotlighting
+  assembly pattern, one delimited block per hit, never in the instruction
+  region, wings as the enforceable trust unit — and an explicit note about
+  which provenance requires that second call.
+- **`docs/remote-server.md` listed 18 of 33 `/v1` routes**, omitting the
+  entire operator plane (trust, admission review, retention, forgetting)
+  and the golden-values tier, and stated the read-only rule as "only reads
+  (stats, search, export) are served" — under-listing the reads and missing
+  `verify` entirely. The table is now complete, grouped, and counted
+  against `route()`.
+- **`docs/AGENTS.md` claimed "the meta-rows gap is closed"** where
+  `docs/CONSULTATION_REVIEW.md` says it is open. Two different gaps had
+  been given one name: the *KG* rows now travel in a bundle (they did not,
+  and a migrated palace silently lost its whole knowledge graph), while the
+  vault-level `meta` state still does not. Stated plainly now, with the
+  operational consequence: a migrated vault arrives with **no trust floor
+  and no retention policy**, and reports codebook generation 0.
+
+**Numbers corrected by counting, never carried forward:**
+
+- **`IRREGULAR` is 201 pairs**, not "~110". A line regex answers **194** and
+  is wrong — rustfmt wraps the Cyrillic, Greek, Persian and Korean entries
+  across three lines each. Count `),` terminators, or quoted strings ÷ 2.
+- **README's benchmark paragraph was pre-BM25 on all four figures** (93.8 /
+  97.4 / 92.7 / 90.4 — the retired `legacy` fusion), contradicting the
+  `benchmarks/RESULTS.md` the same sentence links to. Under the shipped
+  default: MiniLM **94.6** LoCoMo / **99.4** LongMemEval-S, hash **94.6** /
+  **95.0**. The landing page's "honest reading" deltas were computed from
+  the retired values and **argued against its own bars** — it claimed "+0.8
+  over upstream raw" and that "their tuned hybrid still holds 98.4" beside a
+  bar reading 99.4. Now +2.8 over raw, +1.0 over the tuned hybrid, +5.7 on
+  LoCoMo — and honest about the split: the zero-model hash row beats
+  upstream's best on LoCoMo and sits *below* their raw on LongMemEval.
+- **The superseded "~85 ms/q" scoped figure** survived in CLAUDE.md 23 lines
+  from the current one. Scoped latency is wing ~32 ms/q, room ~14,
+  wing+room ~13, flat across 8× corpus growth (`scopescale`).
+- **"BM25's IDF stays global"** was stated in five places and is false in a
+  direction that matters. `bm25_raw` computes `n = cands.len()` and counts
+  `df` across the same candidate slice, so IDF and `avgdl` describe the
+  **retrieved pool**. The per-wing tier's conclusion is unchanged — the wing
+  isolates candidates, not scores — but the reason given for it was wrong.
+  **This is not a bug to fix by making IDF corpus-wide**: that would *add*
+  the cross-drawer coupling the poison-resistance invariant forbids. The
+  honest accounting is the cost, and it is now written down beside the
+  invariant: pool-shaping makes df-flooding cheaper than a corpus-wide count
+  by roughly **corpus/pool**, since suppressing a rare term's IDF requires
+  only landing enough drawers in a `max(256, depth·32)` pool rather than in
+  the corpus. Bounded to rank order within one answer; never reaches
+  HMAC-covered bytes.
+
 ### surface parity: 65 drifts closed, and the mechanism that stops the next one
 
 - **A 14-agent surface-parity audit found 65 confirmed drifts** between the
@@ -596,7 +865,11 @@ field).
   file access could strip a tail of read records undetected until the
   next open covers them; write records never stretch that window beyond
   the single in-flight record. A deployment that needs the anchor tight
-  runs writes or `verify` on its own cadence.
+  runs writes on its own cadence. *[Corrected 2026-08-05 — this said "runs
+  writes or `verify`". `verify` takes `&self` and anchors nothing; the
+  fast-forward is `init_chain`'s, reached only by a store open, so on a
+  server that caches its handle a repeated `POST …/verify` never
+  re-anchors. See A31.]*
 - test 517 → 520, e2e 209 → 214 (export appends exactly one record,
   default search appends nothing, declared read audit appends and
   verifies, garbage refuses). The default contracts — read and write —
@@ -1965,10 +2238,14 @@ against.
   and bumps its own generation counter — dynamic artifacts on the same
   `stats`/`/v1/…/stats` surface, deliberately *not* per-wing gauges (the
   gauge allowlist stays static because per-wing cardinality is unbounded).
-  Stated honestly, both ways: BM25's IDF stays global — the wing is an
-  isolation unit for **candidates**, not for scores — and the hmac-level FTS
+  Stated honestly, both ways: the wing is an isolation unit for
+  **candidates**, not for scores — and the hmac-level FTS
   prefilter keeps the same starvation shape for scoped queries (recorded gap;
-  its fallback-on-empty softens but does not close it).
+  its fallback-on-empty softens but does not close it). *[Corrected
+  2026-08-05 — the reason given here was "BM25's IDF stays global". It is
+  not global and never was: `bm25_raw` counts `df` over the candidate
+  slice, so IDF is pool-shaped. The conclusion holds; the reason was
+  false. See A26.]*
 - **Every coherence path knows the new artifacts.** Writes encode into the
   wing's index in place (or arm its re-verify); deletes purge surgically;
   `invalidate_embedding_space` drops the wing table with the rest; key

@@ -722,10 +722,14 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
       <div class="bench-note">
         <h3>Honest reading</h3>
-        <p>Matched-model rows are the fair comparison: <b>+0.8 over upstream raw</b> on
-           LongMemEval-S (their tuned hybrid still holds 98.4) and <b>+4.9 over their best</b>
-           on LoCoMo. Upstream numbers come from their own harness; ours from the commands
-           below, reproducible on any machine with Docker.</p>
+        <p>Matched-model rows are the fair comparison: <b>+2.8 over upstream raw</b> on
+           LongMemEval-S and <b>+1.0 over their tuned hybrid</b> (99.4 vs 98.4), and
+           <b>+5.7 over their best</b> on LoCoMo (94.6 vs 88.9). Upstream numbers come from
+           their own harness; ours from the commands below, reproducible on any machine
+           with Docker. The zero-model hash rows are the honest floor, and honestly split:
+           94.6 on LoCoMo is above upstream's best (88.9) with no model to download, while
+           95.0 on LongMemEval-S sits below their raw 96.6 — that suite is where the model
+           still earns its keep.</p>
       </div>
     </div>
 
@@ -828,7 +832,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
       <div class="feat" data-glyph="Σ">
         <h3>Agent-native</h3>
-        <p>34 MCP tools over stdio or team HTTP (bearer-enforced; <code>--read-only</code> is a
+        <p>33 MCP tools over stdio or team HTTP (bearer-enforced; <code>--read-only</code> is a
            posture on the whole process, not a filter on one port), auto-save hooks, per-agent
            diaries, transcript sweeps — memory that survives the crossing between sessions. The
            tool list is an inventory the build counts itself against, in both directions.</p>
@@ -1215,7 +1219,7 @@ document.body.classList.add('js');
     { t: 'Ask it', p: 'Hybrid semantic + lexical + recency search returns your exact words (one typo tolerated). wake-up loads a session’s worth of identity and recent essentials.',
       c: 'undercroft search "why did we pick graphql"\nundercroft wake-up                    # L0 identity + L1 essential story\nundercroft kg query alice --as-of 2024-06-15',
       l: [['docs/retrieval.html','retrieval & scaling →']] },
-    { t: 'Wire an agent', p: 'The MCP stdio server exposes 34 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
+    { t: 'Wire an agent', p: 'The MCP stdio server exposes 33 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation, and placing a fact on the authority tier) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
       c: '# claude_desktop_config.json / .mcp.json\n{ "mcpServers": { "undercroft": {\n    "command": "undercroft", "args": ["serve-mcp"] } } }\n\nundercroft hooks claude-code          # auto-save hook snippet',
       l: [['docs/integrations.html','integrations →'],['docs/agents.html','agents guide →']] },
     { t: 'Share it', p: 'One server, a whole team — or a whole product. Bearer beyond loopback, per-vault assertions (enforced on /mcp as well as /v1), a process-wide read-only posture, and an orchestrator for fleets.',

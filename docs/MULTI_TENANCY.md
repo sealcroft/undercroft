@@ -408,11 +408,16 @@ before the flip leaves the source authoritative and removes the partial
 copy. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 44 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 57 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the
-writer's rotations.
+writer's rotations. The 13 checks added 2026-08-05 are the boundary ones:
+eight path-traversal shapes reaching the operator plane through the data
+plane (plus the percent-encoded spelling), a cross-tenant climb into
+another tenant's vault, a replica refusing data-plane writes while still
+serving `POST search`, and the query string actually arriving at the
+engine.
 
 ### Deploying the orchestrator (hardening)
 

@@ -63,7 +63,43 @@ pub(crate) fn unpack_v2(data: &[u8], code_len: usize) -> Option<(usize, usize, &
     Some((dim, rows, codes))
 }
 
+/// Ident bytes for one token row in the codebook draws: the drawer's id
+/// followed by the row index as LE u32. **Frozen** — the draw is keyed on
+/// these bytes, so changing them moves every existing vault's training
+/// sample for no gain.
+fn tok_row_ident(id: &str, row: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(id.len() + 4);
+    out.extend_from_slice(id.as_bytes());
+    out.extend(row.to_le_bytes());
+    out
+}
+
 impl PalaceStore {
+    /// The token codebook's training draw over the flattened `(drawer, row)`
+    /// walk: keyed, stratified, and **capped per source** — the quota
+    /// grouping by the DRAWER's wing and agent claim, because that is where
+    /// a token row came from.
+    ///
+    /// Extracted from the training pass so the density bound can be measured
+    /// directly (`the_token_codebook_draw_is_capped_per_wing`): the effect is
+    /// a property of the DRAW, and asserting it through a trained codebook's
+    /// reconstruction error would measure k-means, not the quota.
+    pub(crate) fn tok_training_draw(
+        &self,
+        ids: &[String],
+        flat: &[(u32, u32)],
+        source_of: &[(String, Option<String>)],
+        want: usize,
+    ) -> Vec<usize> {
+        self.keyed_sample_capped(
+            CODEBOOK_TOK,
+            flat,
+            want,
+            |(d, r)| tok_row_ident(&ids[*d as usize], *r),
+            |(d, _)| source_of[*d as usize].clone(),
+        )
+    }
+
     /// Attach (or clear) the late-interaction encoder. With one set, writes
     /// store per-token matrices and searches re-score the fusion top-N by
     /// MaxSim. If a cross-encoder reranker is also set, the reranker wins
@@ -114,7 +150,15 @@ impl PalaceStore {
             return false;
         }
         self.tok_pq_checked.set(true);
-        if self.late_schema().is_err() {
+        // R1 again: the schema call is a write. A read-only store reads the
+        // stored codebook if the table is there and trains nothing — v1
+        // int8 matrices rescore without a codebook, so the stage degrades to
+        // arithmetic rather than to nothing.
+        if self.may_build_indexes() {
+            if self.late_schema().is_err() {
+                return false;
+            }
+        } else if !matches!(self.table_exists("tok_meta"), Ok(true)) {
             return false;
         }
         // Stored codebook?
@@ -147,7 +191,12 @@ impl PalaceStore {
                 return true;
             }
         }
-        // Train when the corpus warrants it.
+        // Train when the corpus warrants it — never on a read-only store
+        // (R1): training the codebook also REPACKS every stored matrix from
+        // v1 to v2, so this is the largest write a search could trigger.
+        if !self.may_build_indexes() {
+            return false;
+        }
         let rows: i64 = match self.conn.query_row(
             "SELECT COUNT(*) FROM drawer_tok WHERE model = ?1",
             params![model],
@@ -187,47 +236,49 @@ impl PalaceStore {
         if total_rows == 0 {
             return Ok(false);
         }
-        // Rank every token row under the vault's sample key and keep the
-        // lowest — the same draw the PQ codebooks use, per (drawer, row), so a
-        // bulk writer cannot predict which of their tokens shape the codebook
-        // every other drawer's tokens are then coded against.
-        // Rank every token row twice in one walk: once for the training draw,
-        // once for an independent probe used to check the trained codebook.
-        // The flattened walk order is the stratification axis, so row `i`
-        // keeps its position in both. Below the cap neither is needed — the
-        // whole corpus trains and a probe would sit inside the sample.
-        let (chosen, ranks_probe): (Vec<usize>, Vec<u64>) = if TOK_PQ_SAMPLE >= total_rows {
-            ((0..total_rows).collect(), Vec::new())
-        } else {
-            let mut ranks: Vec<u64> = Vec::with_capacity(total_rows);
-            let mut probe: Vec<u64> = Vec::with_capacity(total_rows);
-            for (id, matrix, dim) in &v1 {
-                let mut ident = Vec::with_capacity(id.len() + 4);
-                for r in 0..matrix.len() / (*dim).max(1) {
-                    ident.clear();
-                    ident.extend_from_slice(id.as_bytes());
-                    ident.extend((r as u32).to_le_bytes());
-                    ranks.push(self.vault.sample_rank(CODEBOOK_TOK, &ident));
-                    probe.push(self.vault.sample_rank("tok-fit-probe", &ident));
-                }
-            }
-            (
-                crate::pqidx::stratified_keyed(total_rows, TOK_PQ_SAMPLE, |i| ranks[i]),
-                probe,
-            )
+        // The draw is over token ROWS, keyed per (drawer, row) under the
+        // vault's sample key, so a bulk writer cannot predict which of their
+        // tokens shape the codebook every other drawer's tokens are then
+        // coded against. `flat` is that flattened walk, and its order is the
+        // stratification axis.
+        //
+        // **Capped per source since 2026-08-05 (ROADMAP A27).** This was the
+        // one trained artifact still calling the raw primitive while
+        // CLAUDE.md's density paragraph read as though every site were
+        // covered: owning fraction *f* of the corpus bought ≈*f* of this
+        // sample. It matters more here than anywhere, not less — the token
+        // codebook decides SCORE (every drawer's tokens are quantized
+        // against it and MaxSim reads the result), and the poison-resistance
+        // invariant classifies coupling in scoring as integrity, where
+        // coupling in candidate generation is only availability. The quota
+        // groups by the DRAWER's wing and agent claim, because that is where
+        // a token row came from: a flooding wing's tokens are its wing's.
+        // A corpus whose wings sit inside their quotas trains on exactly the
+        // rows it did before — the cap only truncates a group that exceeded
+        // its share.
+        let flat: Vec<(u32, u32)> = v1
+            .iter()
+            .enumerate()
+            .flat_map(|(d, (_, matrix, dim))| {
+                (0..(matrix.len() / (*dim).max(1)) as u32).map(move |r| (d as u32, r))
+            })
+            .collect();
+        let ids: Vec<String> = v1.iter().map(|(id, _, _)| id.clone()).collect();
+        let source_by_id = self.source_by_drawer_id()?;
+        let source_of: Vec<(String, Option<String>)> = ids
+            .iter()
+            .map(|id| source_by_id.get(id).cloned().unwrap_or_default())
+            .collect();
+        let row_at = |i: usize| -> Vec<f32> {
+            let (d, r) = flat[i];
+            let (_, matrix, dim) = &v1[d as usize];
+            matrix[r as usize * dim..(r as usize + 1) * dim].to_vec()
         };
-        let mut sample: Vec<Vec<f32>> = Vec::with_capacity(chosen.len());
-        let mut next = chosen.iter().peekable();
-        let mut i = 0usize;
-        for (_, matrix, dim) in &v1 {
-            for row in matrix.chunks_exact(*dim) {
-                if next.peek() == Some(&&i) {
-                    sample.push(row.to_vec());
-                    next.next();
-                }
-                i += 1;
-            }
-        }
+        let sample: Vec<Vec<f32>> = self
+            .tok_training_draw(&ids, &flat, &source_of, TOK_PQ_SAMPLE)
+            .into_iter()
+            .map(row_at)
+            .collect();
         let dim = v1[0].2;
         let Some(m) = [8usize, 4]
             .iter()
@@ -242,48 +293,53 @@ impl PalaceStore {
         // Check the fresh codebook against rows it did not train on — a second
         // keyed draw over the same walk, so it is not the training sample.
         // Only meaningful above the cap, where a sample was actually drawn.
+        // Deliberately UNCAPPED, like the PQ tier's probe: it represents the
+        // corpus as it is, so a capped sample facing a skewed corpus can
+        // legitimately warn — that skew being visible is information.
         if total_rows > TOK_PQ_SAMPLE {
-            let probe_at =
-                crate::pqidx::stratified_keyed(total_rows, crate::pqidx::PQ_FIT_PROBE, |i| {
-                    ranks_probe[i]
-                });
-            let mut probe: Vec<Vec<f32>> = Vec::with_capacity(probe_at.len());
-            let mut next = probe_at.iter().peekable();
-            let mut i = 0usize;
-            for (_, matrix, dim) in &v1 {
-                for row in matrix.chunks_exact(*dim) {
-                    if next.peek() == Some(&&i) {
-                        probe.push(row.to_vec());
-                        next.next();
-                    }
-                    i += 1;
-                }
-            }
+            let probe: Vec<Vec<f32>> = self
+                .keyed_sample(
+                    "tok-fit-probe",
+                    &flat,
+                    crate::pqidx::PQ_FIT_PROBE,
+                    |(d, r)| tok_row_ident(&ids[*d as usize], *r),
+                )
+                .into_iter()
+                .map(row_at)
+                .collect();
             self.warn_unrepresentative(CODEBOOK_TOK, &pq, &sample, &probe);
         }
-        // Persist (sealed on sealed vaults), then repack every v1 row.
+        // Persist (sealed on sealed vaults), then repack every v1 row —
+        // **as one transaction** (ROADMAP A20). The codebook used to be
+        // written first and each repacked row to autocommit after it, so an
+        // interruption left a v2 codebook beside v1 rows and every row cost
+        // its own fsync under `synchronous=FULL`. The first was survivable
+        // only because the readers accept both packings, i.e. by luck.
         let blob = self.vault.tokens_at_rest("tok/codebook", &pq.to_bytes());
-        self.conn.execute(
-            "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook', ?1)",
-            params![blob],
-        )?;
-        self.conn.execute(
-            "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook_model', ?1)",
-            params![model.as_bytes()],
-        )?;
-        self.codebook_generation_bump(CODEBOOK_TOK);
-        for (id, matrix, dim) in &v1 {
-            let rows = matrix.len() / dim;
-            let mut codes = Vec::with_capacity(rows * pq.code_len());
-            for row in matrix.chunks_exact(*dim) {
-                codes.extend(pq.encode(row));
-            }
-            let blob = self.vault.tokens_at_rest(id, &pack_v2(*dim, rows, &codes));
+        self.one_rewrite(|| {
             self.conn.execute(
-                "UPDATE drawer_tok SET tok = ?1 WHERE id = ?2",
-                params![blob, id],
+                "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook', ?1)",
+                params![blob],
             )?;
-        }
+            self.conn.execute(
+                "INSERT OR REPLACE INTO tok_meta (key, value) VALUES ('codebook_model', ?1)",
+                params![model.as_bytes()],
+            )?;
+            self.codebook_generation_bump(CODEBOOK_TOK);
+            for (id, matrix, dim) in &v1 {
+                let rows = matrix.len() / dim;
+                let mut codes = Vec::with_capacity(rows * pq.code_len());
+                for row in matrix.chunks_exact(*dim) {
+                    codes.extend(pq.encode(row));
+                }
+                let blob = self.vault.tokens_at_rest(id, &pack_v2(*dim, rows, &codes));
+                self.conn.execute(
+                    "UPDATE drawer_tok SET tok = ?1 WHERE id = ?2",
+                    params![blob, id],
+                )?;
+            }
+            Ok(())
+        })?;
         *self.tok_pq.borrow_mut() = Some(pq);
         Ok(true)
     }
@@ -476,7 +532,17 @@ impl PalaceStore {
         let Some(late) = &self.late else {
             return;
         };
-        if self.late_schema().is_err() {
+        // R1: `late_schema` is `CREATE TABLE IF NOT EXISTS`, i.e. a write on
+        // any vault that has never stored a token matrix — and a rescore
+        // stage riding on it turned a read-only search into one. A read-only
+        // store asks whether the table is there instead; if it is not, there
+        // are no matrices to rescore against and the fusion ranking stands.
+        if self.may_build_indexes() {
+            if self.late_schema().is_err() {
+                return;
+            }
+        } else if !matches!(self.table_exists("drawer_tok"), Ok(true)) {
+            self.ro_prefilter_fallback("late-interaction rescore");
             return;
         }
         // Reuse the query matrix FDE candidate generation already encoded
@@ -578,5 +644,127 @@ impl PalaceStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::PalaceStore;
+    use undercroft_vault::{SecurityLevel, VaultManager};
+
+    fn store() -> (tempfile::TempDir, PalaceStore) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
+        (dir, PalaceStore::open(vault).unwrap())
+    }
+
+    /// One wing floods the corpus; a second holds a handful of drawers. The
+    /// draw is over TOKEN ROWS, so the flooder's share of the sample is its
+    /// share of the tokens — which is what the density channel buys.
+    fn flooded_corpus(flood: usize, rest: usize, rows_each: u32) -> Corpus {
+        let mut ids = Vec::new();
+        let mut source_of = Vec::new();
+        for i in 0..flood + rest {
+            ids.push(format!("drawer-{i}"));
+            let wing = if i < flood { "flood" } else { "quiet" };
+            source_of.push((wing.to_string(), None));
+        }
+        let flat: Vec<(u32, u32)> = (0..ids.len() as u32)
+            .flat_map(|d| (0..rows_each).map(move |r| (d, r)))
+            .collect();
+        Corpus {
+            ids,
+            flat,
+            source_of,
+        }
+    }
+
+    struct Corpus {
+        ids: Vec<String>,
+        flat: Vec<(u32, u32)>,
+        source_of: Vec<(String, Option<String>)>,
+    }
+
+    /// A27: the token codebook was the one trained artifact whose draw called
+    /// the raw primitive, so owning fraction *f* of the corpus bought ≈*f* of
+    /// the sample — on the artifact that decides SCORE (every drawer's tokens
+    /// are quantized against it), which the poison-resistance invariant
+    /// classifies as integrity rather than availability.
+    ///
+    /// The counterfactual arm is the whole point: with the cap disabled the
+    /// flooder takes essentially the sample, which is what this draw did
+    /// before the fix, so the test cannot pass for the wrong reason.
+    #[test]
+    fn the_token_codebook_draw_is_capped_per_wing() {
+        let (_d, mut s) = store();
+        let c = flooded_corpus(950, 50, 8);
+        let want = 200usize;
+        let flooders = |chosen: &[usize]| -> usize {
+            chosen
+                .iter()
+                .filter(|&&i| c.source_of[c.flat[i].0 as usize].0 == "flood")
+                .count()
+        };
+
+        // Premise: uncapped, the flooder owns 95% of the rows and takes ~95%
+        // of the draw.
+        s.train_source_cap = usize::MAX;
+        let uncapped = s.tok_training_draw(&c.ids, &c.flat, &c.source_of, want);
+        assert_eq!(uncapped.len(), want);
+        assert!(
+            flooders(&uncapped) * 100 / want >= 90,
+            "premise: an uncapped draw is bought by density ({} of {want})",
+            flooders(&uncapped)
+        );
+
+        // Capped (the shipped default divisor, 4): two wings, so the quota is
+        // an even split and the flooder cannot exceed half the sample.
+        s.train_source_cap = 4;
+        let capped = s.tok_training_draw(&c.ids, &c.flat, &c.source_of, want);
+        assert_eq!(
+            capped.len(),
+            want,
+            "soft cap: the sample must never shrink — a smaller training set \
+             is a quality cost every wing pays"
+        );
+        assert!(
+            flooders(&capped) <= want.div_ceil(2),
+            "the flooding wing took {} of {want}, above its quota",
+            flooders(&capped)
+        );
+    }
+
+    /// The other half of the cap's contract, and the one a regression would
+    /// break silently: a corpus inside its quota must train on **exactly**
+    /// the rows it trained on before, or every existing vault's codebook
+    /// moves for no reason.
+    #[test]
+    fn a_within_quota_corpus_draws_exactly_what_it_always_did() {
+        let (_d, mut s) = store();
+        // One wing, no agent claims — the ordinary vault, where the cap has
+        // nothing to bound.
+        let c = flooded_corpus(200, 0, 8);
+        let want = 100usize;
+        s.train_source_cap = 4;
+        let capped = s.tok_training_draw(&c.ids, &c.flat, &c.source_of, want);
+        s.train_source_cap = usize::MAX;
+        let uncapped = s.tok_training_draw(&c.ids, &c.flat, &c.source_of, want);
+        assert_eq!(capped, uncapped);
+        assert!(
+            capped.windows(2).all(|w| w[0] < w[1]),
+            "and it is still the ascending stratified draw"
+        );
+    }
+
+    /// Below the sampling cap the whole corpus trains, capped or not — the
+    /// draw has nothing to bias and truncating would only shrink it.
+    #[test]
+    fn below_the_sample_cap_every_token_row_trains() {
+        let (_d, mut s) = store();
+        let c = flooded_corpus(90, 10, 4);
+        s.train_source_cap = 4;
+        let chosen = s.tok_training_draw(&c.ids, &c.flat, &c.source_of, c.flat.len() + 1);
+        assert_eq!(chosen, (0..c.flat.len()).collect::<Vec<_>>());
     }
 }

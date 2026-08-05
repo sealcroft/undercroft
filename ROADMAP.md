@@ -199,13 +199,23 @@ sweep cannot see a boundary. Both stay.
 
 **Verified clean, so a future sweep does not re-litigate them**: 76
 `UNDERCROFT_*` (and the architecture page's 61-full + 15-abbreviated across 57
-rows), 34 MCP tools, 33 `/v1` routes / 14 mutating, 35 CLI commands, 11
-crates, 11 diagrams, 9 i18n languages, 58 control rows in 10 sets, 144 roots
+rows), 33 `/v1` routes / 14 mutating, 35 CLI commands, 11 crates,
+11 diagrams, 9 i18n languages, 58 control rows in 10 sets, 144 roots
 × 20 patterns, 18 attack fixtures, 14 probe pairs, `TRUST_VOCAB` 3, and every
-numeric env default. Test count reconciles as **557 static − 2
-telemetry-gated − 4 ignored = 551 run** (555 with this session's
-regressions) — record the reconciliation, because a naive `grep -c '#[test]'`
-gives 557 and is wrong by two.
+numeric env default. Test count reconciles as **607 static − 2
+telemetry-gated − 4 ignored = 601 run** — record the reconciliation, because
+a naive `grep -c '#[test]'` is wrong by two in one direction and four in the
+other, and because it must be counted over the *integrated* tree: each
+member of this session's fleet added its own delta to the last known total
+and every one of them got a different wrong answer.
+
+The MCP tool count moved and is **33, not the 34 this line carried**:
+removing `undercroft_kg_set_authority` from the agent surface (A-series, the
+authority tier is operator-only) took the surface to 33 tools / 12 writes.
+`parity.rs` enforces that against the code; the five prose copies of the
+number in README, `docs/AGENTS.md`, `docs/PARITY.md`,
+`docs/integrations.md` and `architecture/diagrams/layers.svg` had to be
+counted by hand, which is precisely what an inventory cannot do for you.
 
 ### FIXED in this unit
 

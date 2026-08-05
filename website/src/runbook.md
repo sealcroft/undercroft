@@ -58,9 +58,12 @@ forge the chain MAC).
 ## 3. Mitigate now (stop the bleeding)
 
 1. **Preserve evidence first.** Copy the vault directory *before* anything else
-   touches it — the DB, its `-wal`/`-shm`, and `vault.json`. This comes before
-   the restart on purpose: opening a store is not a pure read (schema creation,
-   a rotation reconcile, chain init), so the copy must predate the next open:
+   touches it — the DB, its `-wal`/`-shm`, `vault.json`, and `vault.json.next`
+   if one is there. This comes before the restart on purpose: opening a store
+   is not a pure read (schema creation, a rotation reconcile, chain init), and
+   the rotation reconcile can **delete** `vault.json.next` or promote it over
+   `vault.json`. The copy must predate the next open of any kind, read-only
+   included — see step 2:
    ```bash
    cp -a "$UNDERCROFT_HOME/vaults/<vault>" "/tmp/<vault>.evidence.$(date +%s)"
    ```
@@ -74,11 +77,28 @@ forge the chain MAC).
    dispatch and **fails closed** (everything is a mutation unless explicitly
    named otherwise), and the read-audit record and the embedder migration —
    both writes — are suppressed. Two exceptions are deliberate and worth
-   knowing here: `POST …/verify` is allowed, because verification
-   fast-forwards the manifest anchor and is classified as a read; and with
-   `UNDERCROFT_RETRIEVAL=pq` a search may still build a missing PQ/IVF index,
-   which is a write (a recorded gap, not a decision). If your incident needs
-   a byte-frozen vault, stop the server rather than restarting it.
+   knowing here: `POST …/verify` is allowed, because it only walks HMACs and
+   replays the chain — it takes `&self` and writes nothing (it does **not**
+   fast-forward the manifest anchor; an earlier version of this step said it
+   did); and with `UNDERCROFT_RETRIEVAL=pq` a search may still build a missing
+   PQ/IVF index, which is a write (a recorded gap, not a decision).
+
+   > **The write that does happen, and why step 1 is not optional.**
+   > `--read-only` bounds what *requests* may do. It does not make the
+   > **open** a read, and the open runs on the first request of any kind
+   > against a cold handle. Rotation reconciliation runs before the
+   > read-only/read-write split, so if a key rotation was in flight when the
+   > incident began, that first request either **promotes** the staged
+   > `vault.json.next` over `vault.json` — adopting a new key generation —
+   > or **deletes** it outright, both with an fsync. On a suspected
+   > compromise that is potential evidence destruction on the very path
+   > chosen to avoid touching the vault. Take the step-1 copy (including
+   > `vault.json.next` if present) **before** any process opens the vault.
+   > Tracked as ROADMAP R4/A32: a read-only open should detect and report
+   > pending rotation state, never heal it.
+
+   If your incident needs a byte-frozen vault, stop the server rather than
+   restarting it.
 3. **Isolate.** If this is a multi-tenant server, the vault id in the alert
    scopes the blast radius — other vaults have independent HKDF-derived keys, so
    one vault falling tells an attacker nothing about its siblings.

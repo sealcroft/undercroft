@@ -14,7 +14,7 @@
 //! to re-implement it — and the ones that read JSON (`/v1` bodies and MCP tool
 //! arguments use the same key names) share the identical function.
 
-use undercroft_store::{PalaceStore, SearchOptions, StoreError};
+use undercroft_store::{PalaceStore, SearchHit, SearchOptions, StoreError};
 use serde_json::Value;
 
 /// How many hits a search returns when the caller does not say.
@@ -100,6 +100,36 @@ pub fn morph_lang_from(body: &Value) -> undercroft_store::MorphLang {
 /// One line of prose per declarable value, for a tool schema or `--help`.
 pub fn language_codes() -> String {
     undercroft_store::MorphLang::CODES.join(", ")
+}
+
+/// Why this hit is here, in the channels that decided it.
+///
+/// `/v1` has returned `semantic`, `lexical`, `lexical_exact` and
+/// `lexical_morph` per hit since the channels were split apart; the CLI and
+/// MCP returned one blended `score` and nothing else. The store keeps the
+/// channels separate precisely so a caller can tell "the drawer said your
+/// word" from "the drawer holds a word built on yours" from "the vectors
+/// agreed" — i.e. so a surprising hit, or a surprising miss, is
+/// *reproducible* rather than a matter of opinion. Two of the three surfaces
+/// could not see the evidence that reproduces it.
+///
+/// All four channels, not the three the residual named: rendering three would
+/// leave `/v1` reporting one field its neighbours do not, which is this
+/// residual's own complaint one field over. `lexical` is the one that RANKS
+/// (approximate evidence at half weight, capped per query slot); the other
+/// two are the ones that ADMIT, and a hit carrying neither of them was
+/// admitted by the cosine alone — which is exactly the reading a reproduction
+/// needs and which `score` cannot show.
+///
+/// Printed unconditionally rather than behind a verbosity flag. Evidence a
+/// caller has to know to ask for reproduces the asymmetry this closes, and
+/// four fixed-width numbers are a rounding error beside the page of verbatim
+/// drawer text both surfaces already print.
+pub fn evidence(hit: &SearchHit) -> String {
+    format!(
+        "evidence: exact {:.3} · morph {:.3} · lexical {:.3} · semantic {:.3}",
+        hit.lexical_exact, hit.lexical_morph, hit.lexical, hit.semantic
+    )
 }
 
 /// What a filter kept OUT of the competition, counted.
@@ -286,6 +316,49 @@ mod tests {
                 "advertised code {code:?} must parse"
             );
             assert!(language_codes().contains(code));
+        }
+    }
+
+    /// Every channel is rendered, in its own place, with its own value.
+    ///
+    /// Four distinct values, because a "contains 0.000" assertion passes just
+    /// as happily on a rendering that transposed two fields — and transposing
+    /// `lexical_exact` with `lexical_morph` is the one mistake that would make
+    /// the evidence say the opposite of what happened.
+    #[test]
+    fn the_evidence_line_names_every_channel_and_keeps_them_apart() {
+        let hit = SearchHit {
+            drawer: undercroft_core::Drawer::new("w", "r", "text".into(), None, 0, "test"),
+            score: 0.5,
+            semantic: 0.61,
+            lexical: 0.77,
+            lexical_exact: 0.82,
+            lexical_morph: 0.25,
+        };
+        assert_eq!(
+            evidence(&hit),
+            "evidence: exact 0.820 · morph 0.250 · lexical 0.770 · semantic 0.610"
+        );
+    }
+
+    /// Both text surfaces render the channels through the ONE function above.
+    ///
+    /// The same mechanism `parity.rs` uses, for the same reason: this whole
+    /// module exists because three handlers each built the declaration by hand
+    /// and each forgot a different piece. A second hand-rolled rendering is
+    /// how the fourth omission gets born, and a `format!` in a handler is
+    /// invisible to every test that only checks the helper.
+    #[test]
+    fn every_text_surface_renders_the_channels_through_one_function() {
+        for (surface, src) in [
+            ("the CLI", include_str!("main.rs")),
+            ("MCP", include_str!("mcp.rs")),
+        ] {
+            assert!(
+                src.contains("search::evidence("),
+                "{surface} renders search hits without calling search::evidence — \
+                 the lexical channels were `/v1`-only once already"
+            );
         }
     }
 

@@ -108,6 +108,77 @@ impl Manifest {
     }
 }
 
+/// What a caller intends to do with the vault it is unlocking.
+///
+/// Unlocking is not a passive act: it reconciles the filesystem side of a key
+/// rotation, and it removes a `vault.json.next` it cannot authenticate. Both
+/// are writes, and both used to happen whatever the caller's posture was —
+/// so a replica started to *freeze* writes during incident response could
+/// delete a writer's staging manifest on the way up (ROADMAP A32). Stating
+/// the posture is how a read-only caller gets detection instead of healing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// The caller may write. Reconciliation heals, as it always has.
+    ReadWrite,
+    /// The caller must not write. Nothing on disk is touched; what would
+    /// have been healed is recorded on [`Vault::unhealed`] instead.
+    ReadOnly,
+}
+
+/// Something a read-only unlock found and deliberately did **not** repair.
+///
+/// A refusal would be worse than a report: a vault whose writer crashed
+/// mid-rotation must stay openable for `verify` and `repair`, which is the
+/// argument for reporting rather than refusing. So the vault opens, serves
+/// reads, and says exactly what it left alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unhealed {
+    /// A `vault.json.next` that is unreadable, belongs to another vault, or
+    /// fails its MAC — a torn leftover a writable unlock deletes.
+    TornStagingManifest,
+    /// A rotation whose re-seal COMMITTED: its keys were adopted in memory
+    /// so this process can read the database, but `vault.json.next` was not
+    /// renamed over `vault.json`.
+    RotationPromotionDeferred,
+    /// A rotation that never committed: its staging file is still on disk.
+    RotationDiscardDeferred,
+}
+
+impl std::fmt::Display for Unhealed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unhealed::TornStagingManifest => f.write_str(
+                "a torn vault.json.next was left in place (removing it is a write); \
+                 a writable open will discard it",
+            ),
+            Unhealed::RotationPromotionDeferred => f.write_str(
+                "a committed key rotation was adopted in memory only — vault.json.next \
+                 was NOT promoted (the rename is a write); the manifest on disk still \
+                 names the previous key generation until a writable open promotes it",
+            ),
+            Unhealed::RotationDiscardDeferred => f.write_str(
+                "an uncommitted key rotation left vault.json.next on disk and it was \
+                 kept (removing it is a write); a writable open will discard it",
+            ),
+        }
+    }
+}
+
+/// What a staged rotation manifest means, decided against the database's
+/// committed `keycheck` marker. Pure — deciding is not doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotationVerdict {
+    /// No staging manifest is attached; nothing to reconcile.
+    Settled,
+    /// The marker names the STAGED generation: the re-seal transaction
+    /// committed and only the manifest rename was lost. Everything at rest
+    /// is sealed under the staged keys, so a reader must adopt them.
+    Committed,
+    /// The marker still names the current generation: the rotation never
+    /// committed and the staging file is a leftover.
+    Abandoned,
+}
+
 /// An unlocked vault: derived keys + manifest state.
 pub struct Vault {
     id: String,
@@ -127,6 +198,9 @@ pub struct Vault {
     /// against the database's keycheck: rotation committed ⇒ promote,
     /// not committed ⇒ discard.
     pending: Option<Box<Vault>>,
+    /// Filesystem repairs this unlock declined to make because the caller
+    /// declared [`Access::ReadOnly`]. Empty on every writable open.
+    unhealed: Vec<Unhealed>,
 }
 
 impl Vault {
@@ -141,6 +215,25 @@ impl Vault {
     /// Path of this vault's SQLite database.
     pub fn db_path(&self) -> PathBuf {
         self.dir.join("palace.db")
+    }
+
+    /// Whether this vault's database file is actually there.
+    ///
+    /// [`VaultManager::exists`] answers about `vault.json`, which is a
+    /// different file: a half-copied backup, an interrupted `rsync` or a
+    /// snapshot taken mid-write can carry the manifest and not the database.
+    /// `Connection::open` then CREATES the database and the vault answers
+    /// every read empty with no error at all (ROADMAP A33). A caller that
+    /// must not write has to be able to tell "empty" from "absent" before it
+    /// opens anything, and this is that question.
+    pub fn database_exists(&self) -> bool {
+        self.db_path().exists()
+    }
+
+    /// Filesystem repairs a read-only unlock found and declined to make.
+    /// Empty on a writable open, which heals them instead.
+    pub fn unhealed(&self) -> &[Unhealed] {
+        &self.unhealed
     }
 
     pub fn level(&self) -> SecurityLevel {
@@ -407,6 +500,61 @@ impl Vault {
         self.pending.take()
     }
 
+    /// Whether a staging manifest from a key rotation is attached.
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// What a staged rotation means, given the database's committed
+    /// `keycheck` marker — **decided without doing anything**.
+    ///
+    /// Split out from the store's `reconcile_rotation` for the same reason
+    /// [`chain_next_hex`](Self::chain_next_hex) is split from
+    /// [`anchor_manifest`](Self::anchor_manifest): the arithmetic is pure and
+    /// the effect is not, so a caller that must not write can still learn the
+    /// verdict and report it.
+    pub fn rotation_verdict(&self, db_keycheck: Option<&str>) -> RotationVerdict {
+        match &self.pending {
+            None => RotationVerdict::Settled,
+            Some(pending) if db_keycheck == Some(pending.keycheck_hex().as_str()) => {
+                RotationVerdict::Committed
+            }
+            Some(_) => RotationVerdict::Abandoned,
+        }
+    }
+
+    /// Reconcile a staged rotation **without touching the filesystem**.
+    ///
+    /// The writable path promotes or discards `vault.json.next`; both are
+    /// writes, and doing them from a read-only open is how the documented
+    /// incident-response procedure — restart `--read-only` to freeze writes —
+    /// could adopt a key generation or delete a writer's staging manifest
+    /// (ROADMAP A32). Here the file is left exactly as found.
+    ///
+    /// A committed rotation still has to be *honoured in memory*: the
+    /// database is already sealed under the staged keys, so a reader that
+    /// kept the old ones would fail every AEAD open and read the vault as
+    /// corrupt. Adopting them costs nothing on disk and is what keeps
+    /// "detect and report" from meaning "serve garbage".
+    pub fn reconcile_read_only(&mut self, db_keycheck: Option<&str>) -> RotationVerdict {
+        let verdict = self.rotation_verdict(db_keycheck);
+        match verdict {
+            RotationVerdict::Settled => {}
+            RotationVerdict::Committed => {
+                let pending = self.pending.take().expect("verdict saw a pending twin");
+                let notes = std::mem::take(&mut self.unhealed);
+                *self = *pending;
+                self.unhealed = notes;
+                self.unhealed.push(Unhealed::RotationPromotionDeferred);
+            }
+            RotationVerdict::Abandoned => {
+                self.pending = None;
+                self.unhealed.push(Unhealed::RotationDiscardDeferred);
+            }
+        }
+        verdict
+    }
+
     fn pending_path(&self) -> PathBuf {
         self.dir.join("vault.json.next")
     }
@@ -433,6 +581,9 @@ impl Vault {
     }
 
     /// Promote a committed rotation: `vault.json.next` becomes the manifest.
+    ///
+    /// A **write** (rename + directory sync). A caller that promised not to
+    /// write calls [`reconcile_read_only`](Self::reconcile_read_only) instead.
     pub fn promote_manifest(&self) -> Result<(), VaultError> {
         fs::rename(self.pending_path(), self.dir.join("vault.json"))?;
         keys::sync_dir(&self.dir)?;
@@ -440,6 +591,10 @@ impl Vault {
     }
 
     /// Remove a staging manifest from a rotation that never committed.
+    ///
+    /// A **write** (unlink + directory sync), and the one that destroys a
+    /// concurrent writer's in-flight rotation if it runs from the wrong
+    /// posture. See [`reconcile_read_only`](Self::reconcile_read_only).
     pub fn discard_pending_file(&self) -> Result<(), VaultError> {
         let p = self.pending_path();
         if p.exists() {
@@ -567,7 +722,22 @@ impl VaultManager {
     }
 
     /// Unlock an existing vault: derive its keys and verify the manifest MAC.
+    ///
+    /// Writable posture — the one every write role wants. A caller that must
+    /// not write states so through [`unlock_as`](Self::unlock_as).
     pub fn unlock(&self, id: &str) -> Result<Vault, VaultError> {
+        self.unlock_as(id, Access::ReadWrite)
+    }
+
+    /// [`unlock`](Self::unlock) with the caller's posture stated.
+    ///
+    /// Under [`Access::ReadOnly`] the one filesystem repair unlock performs —
+    /// deleting a `vault.json.next` that does not authenticate — is skipped
+    /// and recorded on [`Vault::unhealed`] instead. That file is unreadable
+    /// *to us*; it is not necessarily garbage to the process that is writing
+    /// it right now, and a replica is exactly the role most likely to meet
+    /// one mid-rotation.
+    pub fn unlock_as(&self, id: &str, access: Access) -> Result<Vault, VaultError> {
         let dir = self.vault_dir(id);
         let manifest_path = dir.join("vault.json");
         if !manifest_path.exists() {
@@ -608,7 +778,12 @@ impl VaultManager {
                 })
                 .map(Box::new);
             if vault.pending.is_none() {
-                let _ = fs::remove_file(&pending_path);
+                match access {
+                    Access::ReadWrite => {
+                        let _ = fs::remove_file(&pending_path);
+                    }
+                    Access::ReadOnly => vault.unhealed.push(Unhealed::TornStagingManifest),
+                }
             }
         }
         Ok(vault)
@@ -631,6 +806,7 @@ impl VaultManager {
             dir,
             manifest,
             pending: None,
+            unhealed: Vec::new(),
         })
     }
 
@@ -892,6 +1068,151 @@ mod tests {
             legacy.extend_from_slice(&x.to_le_bytes());
         }
         assert_eq!(super::dequantize_embedding(&legacy), v);
+    }
+
+    /// R4/A33: a caller that must not write has to be able to tell an EMPTY
+    /// vault from an ABSENT database before it opens anything — the store's
+    /// `Connection::open` carries `SQLITE_OPEN_CREATE`, so by the time it has
+    /// a connection the difference is gone and a half-copied backup answers
+    /// every read empty with no error.
+    #[test]
+    fn a_missing_database_is_distinguishable_from_an_empty_one() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("half-copied", SecurityLevel::Sealed).unwrap();
+        // The manifest is what `VaultManager::exists` tests, and it is there.
+        assert!(mgr.exists("half-copied"));
+        assert!(
+            !v.database_exists(),
+            "a freshly created vault has no database yet — this is the state a \
+             half-copied backup is in, and it must be visible"
+        );
+        std::fs::write(v.db_path(), b"").unwrap();
+        assert!(v.database_exists());
+    }
+
+    /// R4: unlocking is not passive. A staging manifest that does not
+    /// authenticate is deleted by a writable unlock — correct there, and a
+    /// filesystem write a read-only caller must not perform, because the file
+    /// it cannot authenticate may be one a writer is in the middle of staging.
+    ///
+    /// Both arms run so the test cannot pass by the removal simply never
+    /// happening.
+    #[test]
+    fn a_read_only_unlock_leaves_a_torn_staging_manifest_alone() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("t", SecurityLevel::Sealed).unwrap();
+        let staging = dir.path().join("vaults/t/vault.json.next");
+
+        std::fs::write(&staging, b"not a manifest").unwrap();
+        let v = mgr.unlock_as("t", Access::ReadOnly).unwrap();
+        assert!(
+            staging.exists(),
+            "a read-only unlock must not remove a staging manifest"
+        );
+        assert_eq!(v.unhealed(), [Unhealed::TornStagingManifest].as_slice());
+        assert!(!v.has_pending());
+
+        // Counterfactual: the writable posture still heals it.
+        let v = mgr.unlock_as("t", Access::ReadWrite).unwrap();
+        assert!(!staging.exists(), "a writable unlock discards a torn file");
+        assert!(v.unhealed().is_empty());
+        // ...and the default door is the writable one.
+        assert!(mgr.unlock("t").unwrap().unhealed().is_empty());
+    }
+
+    /// A32: a rotation whose re-seal COMMITTED but whose manifest rename was
+    /// lost. The writable path renames `vault.json.next` over `vault.json`; a
+    /// read-only open must adopt the staged keys **in memory only** — it has
+    /// to adopt them, because the database is already sealed under them, and
+    /// it must not rename, because that adopts a key generation on the
+    /// posture chosen to touch nothing.
+    #[test]
+    fn a_read_only_reconcile_adopts_committed_keys_without_touching_disk() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("r", SecurityLevel::Sealed).unwrap();
+        let vdir = dir.path().join("vaults/r");
+        let (live, staging) = (vdir.join("vault.json"), vdir.join("vault.json.next"));
+
+        let mut next = mgr.rotation_candidate("r").unwrap();
+        let next_keycheck = next.keycheck_hex();
+        next.save_manifest_pending(&Vault::chain_genesis_hex(), 0)
+            .unwrap();
+        let before = std::fs::read(&live).unwrap();
+        assert!(staging.exists(), "premise: a staging manifest is on disk");
+
+        let mut v = mgr.unlock_as("r", Access::ReadOnly).unwrap();
+        assert!(v.has_pending(), "premise: the staging twin attached");
+        // The database's committed marker names the staged generation.
+        assert_eq!(
+            v.rotation_verdict(Some(&next_keycheck)),
+            RotationVerdict::Committed
+        );
+        assert_eq!(
+            v.reconcile_read_only(Some(&next_keycheck)),
+            RotationVerdict::Committed
+        );
+
+        assert_eq!(
+            v.keycheck_hex(),
+            next_keycheck,
+            "the staged keys must be adopted in memory or every sealed read fails"
+        );
+        assert!(staging.exists(), "vault.json.next must not be promoted");
+        assert_eq!(
+            std::fs::read(&live).unwrap(),
+            before,
+            "the live manifest must be byte-identical"
+        );
+        assert_eq!(
+            v.unhealed(),
+            [Unhealed::RotationPromotionDeferred].as_slice()
+        );
+    }
+
+    /// The other verdict: a rotation that never committed. The writable path
+    /// unlinks the staging file — which is precisely the operation that
+    /// destroys a *concurrent* writer's in-flight rotation when it runs from
+    /// a replica (A32). Read-only keeps the file and says so.
+    #[test]
+    fn a_read_only_reconcile_keeps_an_abandoned_rotations_staging_file() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let current = mgr.create("r", SecurityLevel::Sealed).unwrap();
+        let current_keycheck = current.keycheck_hex();
+        let staging = dir.path().join("vaults/r/vault.json.next");
+
+        let mut next = mgr.rotation_candidate("r").unwrap();
+        next.save_manifest_pending(&Vault::chain_genesis_hex(), 0)
+            .unwrap();
+        assert!(staging.exists(), "premise: a staging manifest is on disk");
+
+        let mut v = mgr.unlock_as("r", Access::ReadOnly).unwrap();
+        assert_eq!(
+            v.reconcile_read_only(Some(&current_keycheck)),
+            RotationVerdict::Abandoned
+        );
+        assert!(
+            staging.exists(),
+            "a read-only open must never unlink a writer's staging manifest"
+        );
+        assert_eq!(
+            v.keycheck_hex(),
+            current_keycheck,
+            "an uncommitted rotation must not move the keys in use"
+        );
+        assert_eq!(v.unhealed(), [Unhealed::RotationDiscardDeferred].as_slice());
+
+        // No staging manifest at all is the ordinary case and heals nothing.
+        let mut v = mgr.unlock_as("r", Access::ReadOnly).unwrap();
+        v.take_pending();
+        assert_eq!(
+            v.reconcile_read_only(Some(&current_keycheck)),
+            RotationVerdict::Settled
+        );
+        assert!(v.unhealed().is_empty());
     }
 
     #[test]

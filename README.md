@@ -343,7 +343,7 @@ undercroft bundle sign-keygen|sender  # Ed25519 sender-attestation identities (e
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
-undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
+undercroft serve-mcp [--vault]        # MCP stdio server (33 tools)
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
                                      # --read-only is a posture on the whole
                                      # process: both stores open read-only and
@@ -390,21 +390,23 @@ lag is observable. Design + surface:
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
-## MCP tools (34)
+## MCP tools (33)
 
 | Category | Tools |
 |---|---|
 | Palace core | `save`, `search`, `wake_up`, `verify`, `status`, `get_closet_index` |
 | Drawers | `get_drawer`, `add_drawer`, `update_drawer`, `delete_drawer`, `list_drawers`, `delete_by_source`, `check_duplicate` |
 | Navigation | `list_wings`, `list_rooms`, `get_taxonomy`, `create_tunnel`, `list_tunnels`, `follow_tunnel`, `delete_tunnel`, `traverse`, `list_hallways` |
-| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical`, `kg_set_authority` |
+| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical` |
 | Agent diaries | `diary_write`, `diary_read`, `list_agents` |
 | Maintenance | `dedup` |
 
 Deliberately **absent** from MCP: admission rulings, wing trust, retention,
-forgetting, and key rotation — operator surfaces (CLI + `/v1`) only, because
-an agent must not rule on its own quarantined writes, raise its own
-standing, or shorten the life of the memory it reads. Both halves of that
+forgetting, key rotation, and **placing a fact on the authority tier** —
+operator surfaces (CLI + `/v1`) only, because an agent must not rule on its
+own quarantined writes, raise its own standing, shorten the life of the
+memory it reads, or make its own fact the single answer `lookup_canonical`
+returns. Both halves of that
 sentence are enforced by a test rather than by this table: the tool list
 above is inventoried in code and counted against the server in **both**
 directions (a tool without an entry fails the build, an entry without a tool
@@ -482,11 +484,18 @@ that role).
 ## Benchmarks (measured, not inherited)
 
 Full methodology and reproduce commands: [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md).
+All figures below are under the **shipped default** (`bm25` fusion).
 Matched-model conditions (all-MiniLM-L6-v2, the class upstream used):
-**LoCoMo session R@10 93.8%** (upstream: 60.3% raw / 88.9% hybrid) and
-**LongMemEval-S R@5 97.4%** on the full 500 (upstream raw: 96.6%; their
-tuned hybrid: 98.4%). The zero-model hash embedder — no download, ~95x
-faster — holds 92.7% / 90.4% respectively.
+**LoCoMo session R@10 94.6%** (upstream: 60.3% raw / 88.9% hybrid) and
+**LongMemEval-S R@5 99.4%** on the full 500 — clearing not just upstream's
+raw 96.6% but their tuned hybrid 98.4%. The zero-model hash embedder — no
+download, ~95x faster — holds **94.6% / 95.0%** respectively, converging
+with the model on LoCoMo. An optional cross-encoder reranker lifts LoCoMo
+to 97.68% (1936/1982).
+
+*(Until 2026-08-05 this paragraph quoted 93.8 / 97.4 / 92.7 / 90.4 — the
+pre-BM25 `legacy`-fusion numbers, which had not been the default for
+several releases and contradicted the RESULTS.md this sentence links to.)*
 
 ## Storage that doesn't balloon
 

@@ -86,7 +86,7 @@
 <text x="42" y="570" class="f s dim">Measured against the actual bytes, not asserted. meta_json is stored unsealed so it can be filtered in SQL, and these fields sit inside it:</text>
 
 <rect x="42" y="582" width="816" height="30" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-red,#b5453a)" stroke-width="1.1"/>
-<text x="56" y="602" class="f mono" fill="var(--d-red-ink,#993a30)">wing · room · source_file · added_by · hall · content_date · the dates resolved out of the content</text>
+<text x="56" y="602" class="f mono" fill="var(--d-red-ink,#993a30)">wing · room · source_file · added_by · hall · kind · content_date · resolved dates · supersedes · agent/channel/session</text>
 
 <text x="42" y="632" class="f s dim">They read <tspan class="f s" fill="var(--d-green-ink,#22603c)">no word of the content itself</tspan>. But in practice a wing is a person or a case, a room is a topic, and a source path carries a username</text>
 <text x="42" y="647" class="f s dim">and a project — so until this closes, treat those names as public labels and keep the secret out of the name.</text>

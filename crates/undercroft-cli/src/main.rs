@@ -1632,6 +1632,17 @@ fn main() -> Result<()> {
             for note in search::Exclusions::measure(&store, &opts)?.notes() {
                 println!("{note}");
             }
+            // The remote path has no `lexical_morph` channel at all:
+            // `lexical_score`'s exact leg counts whole-word containment as
+            // EXACT evidence there. So a `morph 0.000` on a remote hit means
+            // "not computed on this path", not "no morphological relation" —
+            // said once, because the evidence lines below otherwise read
+            // exactly as the local ones do.
+            if backend != "local" && !hits.is_empty() {
+                println!(
+                    "(remote backend: morphological evidence is folded into the exact channel)"
+                );
+            }
             for (i, hit) in hits.iter().enumerate() {
                 println!(
                     "{}. [{:.3}] {}/{} — {} ({})",
@@ -1654,6 +1665,13 @@ fn main() -> Result<()> {
                     "   id {} — undercroft drawer get {}",
                     hit.drawer.id, hit.drawer.id
                 );
+                // Why this hit is here, in the channels that decided it —
+                // rendered by the one function `/v1`'s neighbours use. A
+                // blended score alone cannot say whether the drawer SAID the
+                // word, holds a word built on it, or merely embedded near it,
+                // so a surprising hit was reproducible on `/v1` and nowhere
+                // else. See `search::evidence`.
+                println!("   {}", search::evidence(hit));
             }
             // A full page may have more below it; say exactly how to continue,
             // clock included. A short page means the ranking is exhausted and
@@ -3166,6 +3184,29 @@ fn snippet(content: &str, query: &str, max: usize) -> String {
     match hit {
         None | Some(0) => first_line(&flat, max),
         Some(pos) => {
+            // `pos` is a byte offset into the LOWERCASED copy, and lowercasing
+            // is not length-preserving: `İ` (2 bytes) folds to `i` + U+0307 (3),
+            // Turkish `I` to `ı` (1 → 2). So past any such character the offset
+            // runs ahead of `flat` and can land mid-character or past the end —
+            // `flat[start..pos]` then panics with "byte index is not a char
+            // boundary" on an ordinary `undercroft search` over ordinary stored
+            // text. Same class as the attacker-authored bundle sender that
+            // panicked `import`; this one needs no attacker.
+            //
+            // Clamp and walk back to a boundary rather than rebuilding the fold
+            // with an offset map: `str::to_lowercase` is contextual (Greek final
+            // sigma) and a per-character map would quietly change what matches.
+            // The residual is stated: when a fold did change length the preview
+            // window opens a character or two early. It is a 100-character
+            // preview of text the id line leads to verbatim — a display cost,
+            // where the alternative was exit 101.
+            let mut pos = pos.min(flat.len());
+            while !flat.is_char_boundary(pos) {
+                pos -= 1;
+            }
+            if pos == 0 {
+                return first_line(&flat, max);
+            }
             // Back up to a word boundary a bit before the match.
             let mut start = pos.saturating_sub(max / 3);
             while !flat.is_char_boundary(start) {
@@ -3222,4 +3263,56 @@ fn collect_files(path: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A search preview never panics on text whose lowercase is longer than
+    /// itself.
+    ///
+    /// `snippet` located the query inside a lowercased COPY and then sliced the
+    /// ORIGINAL with that offset. Lowercasing is not length-preserving — `İ`
+    /// (2 bytes) folds to `i`+U+0307 (3), Turkish `I` (1) to `ı` (2) — so past
+    /// one of those the offset runs ahead of the original, and it then lands
+    /// either mid-character or past the end. Both are a panic: exit 101 out of
+    /// an ordinary `undercroft search`, over stored text nobody had to craft.
+    /// Same class as the attacker-authored bundle sender that panicked
+    /// `import`, with no attacker in it.
+    ///
+    /// Every non-ASCII row here panicked before the clamp; the ASCII rows are
+    /// the premise, proving the window still opens where it always did.
+    #[test]
+    fn a_snippet_survives_text_whose_lowercase_is_longer_than_itself() {
+        // Five `İ` push the offset five bytes on, landing inside the 3-byte
+        // `本` that follows the match. Before: "byte index is not a char
+        // boundary".
+        let mid = "İİİİİ abc 日本語テキスト tail";
+        assert!(
+            snippet(mid, "abc", 100).contains("abc"),
+            "the window must still open on the match"
+        );
+
+        // Turkish dotless-i, the other growing fold, same shape.
+        let turkish = "IIIIIIII kod 日本語テキスト son";
+        assert!(snippet(turkish, "kod", 100).contains("kod"));
+
+        // A match at the very end: the drifted offset exceeds the original's
+        // length outright, which was a slice-out-of-range rather than a
+        // boundary panic.
+        assert!(snippet("İİİİİİİİ tail", "tail", 100).contains("tail"));
+
+        // Premise: the ordinary ASCII paths are unchanged.
+        assert_eq!(
+            snippet("alpha beta gamma", "alpha", 100),
+            "alpha beta gamma"
+        );
+        let long = "one two three four five six seven eight nine ten eleven twelve";
+        let windowed = snippet(long, "twelve", 20);
+        assert!(
+            windowed.starts_with('…') && windowed.contains("twelve"),
+            "a deep match is still windowed with an ellipsis: {windowed}"
+        );
+    }
 }

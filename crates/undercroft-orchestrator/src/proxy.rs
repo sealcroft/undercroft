@@ -35,7 +35,7 @@
 //! engine's assertion handling.
 
 use crate::engine;
-use crate::state::Orch;
+use crate::state::{Orch, StateError};
 use subtle_ct::ct_eq;
 use tiny_http::{Header, Method, Response, Server};
 
@@ -183,6 +183,156 @@ fn data_subpath_ok(subpath: &str) -> bool {
     )
 }
 
+// -- the quarantine fence, one plane up --------------------------------------
+
+/// The engine's reserved admission-review wing.
+///
+/// Spelled out here rather than imported: this crate links no engine crate
+/// — `engine::mint_assertion` recomputes the assertion header format for
+/// exactly the same reason — so the wing name travels as part of the
+/// documented `/v1` contract. Renaming it in the engine means renaming it
+/// here; nothing in this crate can notice, which is the price of staying a
+/// replaceable client.
+const QUARANTINE_WING: &str = "quarantine-pending";
+
+/// What the data plane says when the fence fires. Names the surface that
+/// *does* hold the capability, like the ops-route refusal next to it — a
+/// bare "no" is what made these capabilities look absent from the product.
+const QUARANTINE_REFUSAL: &str = "quarantine-pending is the admission review queue — pending \
+     review evidence is not readable with a tenant token. It is an operator \
+     surface: GET/POST /admin/tenants/{id}/ops/admission on the writer";
+
+/// Minimal percent-decoding (`%XX`, `+` as space), so a query value is
+/// compared as what the ENGINE will read rather than as what was typed.
+/// The engine hands most query values on raw but `pct_decode`s some, and a
+/// fence that only recognises one spelling of a name is not a fence.
+fn pct_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                match u8::from_str_radix(
+                    std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("zz"),
+                    16,
+                ) {
+                    Ok(b) => {
+                        out.push(b);
+                        i += 2;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn json_names_reserved_wing(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::String(s) => s == QUARANTINE_WING,
+        serde_json::Value::Array(a) => a.iter().any(json_names_reserved_wing),
+        serde_json::Value::Object(o) => o.values().any(json_names_reserved_wing),
+        _ => false,
+    }
+}
+
+/// **The quarantine fence, one plane up.** The engine deliberately serves
+/// the review queue to a request that NAMES the reserved wing — that is
+/// the reviewer's view (`resolve_search_policy` returns early, `recent`
+/// and `list_drawers` only exclude when no wing is named). On `/v1` that
+/// is right, because `/v1` is the operator's surface. Through `/t/*` it is
+/// not: the token belongs to the tenant whose own writes the screen
+/// diverted, so `POST /t/search {"wing":"quarantine-pending"}` handed an
+/// agent back the injected text it was quarantined for, verbatim and with
+/// no traversal. The ruling half of that boundary moved to the admin plane
+/// when [`OPS_ROUTES`] was written; the READING half did not.
+///
+/// The rule is the MCP fence's, applied to a request instead of to a tool
+/// call: no value a tenant sends may be the reserved wing's name — in the
+/// subpath, in a query value, or anywhere in the body. Deliberately not a
+/// key allowlist (`wing`, `from_wing`, …): a checklist of argument names
+/// goes stale the moment a route grows one, which is the failure mode the
+/// fence exists to remove.
+///
+/// Its price is pinned rather than hidden, exactly as MCP's is: the match
+/// is on the VALUE, so saving a drawer whose entire text is the literal
+/// string `quarantine-pending` is refused too, and the refusal says what
+/// happened. The walk is recursive where MCP's is one level, because `/v1`
+/// bodies nest — an import record declares its wing at
+/// `drawer.meta.wing`, not at the top.
+fn request_names_reserved_wing(subpath: &str, query: &str, body: &[u8]) -> bool {
+    if subpath.split('/').any(|s| s == QUARANTINE_WING) {
+        return true;
+    }
+    if query.split('&').any(|kv| {
+        let v = kv.split_once('=').map(|(_, v)| v).unwrap_or(kv);
+        v == QUARANTINE_WING || pct_decode(v) == QUARANTINE_WING
+    }) {
+        return true;
+    }
+    if body.is_empty() {
+        return false;
+    }
+    match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => json_names_reserved_wing(&v),
+        // NDJSON (`import`) — the whole body is not one value. A line that
+        // is not JSON declares nothing the engine will read either.
+        Err(_) => body.split(|b| *b == b'\n').any(|line| {
+            serde_json::from_slice::<serde_json::Value>(line)
+                .map(|v| json_names_reserved_wing(&v))
+                .unwrap_or(false)
+        }),
+    }
+}
+
+/// Does an engine `GET drawers/{id}` body describe a drawer in the
+/// reserved wing? Field-precise (`drawer.meta.wing`), not the blunt value
+/// walk above: this reads the ENGINE's own answer, where a drawer whose
+/// content merely says `quarantine-pending` is a legitimate row and
+/// refusing it would be a false positive on a read the tenant owns.
+fn drawer_body_is_quarantined(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.pointer("/drawer/meta/wing")
+                .and_then(serde_json::Value::as_str)
+                .map(|w| w == QUARANTINE_WING)
+        })
+        .unwrap_or(false)
+}
+
+/// Does an export payload carry review evidence? Same field-precise test,
+/// per NDJSON record.
+fn export_carries_reserved_wing(body: &[u8]) -> bool {
+    body.split(|b| *b == b'\n').any(|line| {
+        serde_json::from_slice::<serde_json::Value>(line)
+            .ok()
+            .and_then(|v| {
+                v.pointer("/drawer/meta/wing")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|w| w == QUARANTINE_WING)
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// `drawers/{id}` — the one data-plane shape that DEREFERENCES to a wing
+/// without naming one, which is why the name fence alone cannot cover it.
+/// MCP closes the same indirection by probing `is_quarantine_pending` on
+/// every id-shaped argument; this crate has no store, so the probe is a
+/// `/v1` read.
+fn single_drawer_route(subpath: &str) -> bool {
+    matches!(
+        subpath.split('/').collect::<Vec<_>>().as_slice(),
+        ["drawers", _]
+    )
+}
+
 /// The operator capabilities the admin plane forwards to an engine, as
 /// `(method, subpath)` — a **closed vocabulary**, so extending the operator
 /// surface is a deliberate edit here rather than a wildcard proxy that
@@ -237,6 +387,20 @@ fn json_response(status: u16, body: &serde_json::Value) -> Response<std::io::Cur
 
 fn err_response(status: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     json_response(status, &serde_json::json!({ "error": msg }))
+}
+
+/// Answer a control-plane state failure with the class the error itself
+/// carries. **One place**, because the previous arrangement mapped per
+/// CALL SITE: `instance_add` answered 400, `tenant_rotate_token` 404,
+/// `instance_remove` 409, and every `instance_creds` failure a flat 502
+/// "instance unavailable" — so the status described which line raised the
+/// error rather than what happened, and a contended SQLite (`SQLITE_BUSY`;
+/// this database runs WAL + `synchronous=FULL`) was reported to the
+/// operator as a bad request, a missing tenant or a conflict depending on
+/// where it landed. The message is the error's own, so `Unsealable` —
+/// which names its remedy — survives instead of being flattened.
+fn state_error_response(e: &StateError) -> Response<std::io::Cursor<Vec<u8>>> {
+    err_response(e.status(), &e.to_string())
 }
 
 /// What this process is allowed to serve: the single writer (full admin
@@ -430,9 +594,20 @@ fn data_plane(
         }
         return err_response(404, "unknown route");
     }
+    // The reading half of the boundary [`OPS_ROUTES`] already draws for the
+    // ruling half.
+    if request_names_reserved_wing(subpath, query, body) {
+        return err_response(404, QUARANTINE_REFUSAL);
+    }
     let creds = match orch.instance_creds(&tenant.instance) {
         Ok(c) => c,
-        Err(_) => return err_response(502, "instance unavailable"),
+        // Was a flat 502 "instance unavailable", which is a claim about the
+        // ENGINE — and `instance_creds` performs no network I/O at all. A
+        // wrong `UNDERCROFT_ORCH_KEY` or a tampered credential blob is a
+        // permanent, operator-fixable condition whose message names the
+        // remedy; 502 threw the message away and told every retry layer the
+        // condition was transient.
+        Err(e) => return state_error_response(&e),
     };
     let content_type = request
         .headers()
@@ -440,6 +615,32 @@ fn data_plane(
         .find(|h| h.field.equiv("Content-Type"))
         .map(|h| h.value.as_str().to_string())
         .unwrap_or_else(|| "application/json".to_string());
+    // A single-drawer request resolves its wing at the engine before it is
+    // allowed to act. For a GET the probe IS the answer — it is the same
+    // request — so a read costs no extra round trip and only a write pays a
+    // lookup, which is what the fence is worth.
+    if single_drawer_route(subpath) {
+        let probe = engine::vault_request(
+            &creds,
+            &tenant.vault,
+            "GET",
+            subpath,
+            if method == &Method::Get { query } else { "" },
+            "application/json",
+            &[],
+        );
+        match probe {
+            Ok(r) => {
+                if r.status == 200 && drawer_body_is_quarantined(&r.body) {
+                    return err_response(404, QUARANTINE_REFUSAL);
+                }
+                if method == &Method::Get {
+                    return relay(r);
+                }
+            }
+            Err(e) => return err_response(502, &e),
+        }
+    }
     match engine::vault_request(
         &creds,
         &tenant.vault,
@@ -449,15 +650,43 @@ fn data_plane(
         &content_type,
         body,
     ) {
-        Ok(r) => Response::from_data(r.body)
-            .with_status_code(r.status)
-            .with_header(
-                Header::from_bytes("Content-Type", r.content_type.as_bytes()).unwrap_or_else(
-                    |_| Header::from_bytes("Content-Type", "application/json").unwrap(),
-                ),
-            ),
+        Ok(r) => {
+            // An export names no wing and carries every row, so neither the
+            // name fence nor the drawer probe can see it. It is REFUSED
+            // rather than filtered: the manifest's `payload_sha256` covers
+            // the payload, so dropping records here would hand the tenant an
+            // artifact its own re-import rejects — a silent corruption in
+            // place of a leak. Refusing and naming the remedy is the branch
+            // `migrate_tenant` already takes when a copy is unfaithful.
+            // Inert wherever the screen is off (default), since nothing
+            // lands in the wing.
+            if subpath == "export" && r.status == 200 && export_carries_reserved_wing(&r.body) {
+                return err_response(
+                    409,
+                    "export carries drawer(s) in quarantine-pending, and the manifest \
+                     digest covers the payload, so they cannot be filtered out of it \
+                     without invalidating the artifact. Rule on the queue first \
+                     (GET/POST /admin/tenants/{id}/ops/admission on the writer), then \
+                     export",
+                );
+            }
+            relay(r)
+        }
         Err(e) => err_response(502, &e),
     }
+}
+
+/// Relay one engine response verbatim — status, body, and its own
+/// content type (falling back to JSON when the engine sent something the
+/// header codec refuses).
+fn relay(r: engine::EngineResponse) -> Response<std::io::Cursor<Vec<u8>>> {
+    Response::from_data(r.body)
+        .with_status_code(r.status)
+        .with_header(
+            Header::from_bytes("Content-Type", r.content_type.as_bytes()).unwrap_or_else(|_| {
+                Header::from_bytes("Content-Type", "application/json").unwrap()
+            }),
+        )
 }
 
 // -- admin plane ------------------------------------------------------------
@@ -490,23 +719,31 @@ fn admin_plane(
             };
             match orch.instance_add(&name, &url, &bearer, &secret) {
                 Ok(()) => json_response(200, &serde_json::json!({ "added": name })),
-                Err(e) => err_response(400, &e.to_string()),
+                Err(e) => state_error_response(&e),
             }
         }
         ("GET", ["admin", "instances"]) => match orch.instance_list() {
             Ok(list) => json_response(200, &serde_json::json!({ "instances": list })),
-            Err(e) => err_response(500, &e.to_string()),
+            Err(e) => state_error_response(&e),
         },
         ("GET", ["admin", "instances", name, "health"]) => match orch.instance_creds(name) {
             Ok(c) => json_response(
                 200,
                 &serde_json::json!({ "name": name, "healthy": engine::health(&c.url) }),
             ),
-            Err(e) => err_response(404, &e.to_string()),
+            Err(e) => state_error_response(&e),
         },
+        // A delete of a name that is not registered is NOT a success. This
+        // answered `200 {"removed": false}` — verbatim the anti-pattern the
+        // engine eradicated on `DELETE /v1/…/drawers/{id}` — and `ui.html`
+        // toasts "removed <name>" on any 2xx, so a decommission script and
+        // a human were both told the teardown worked while the instance
+        // stayed registered and routing. `removed` stays for the callers
+        // that read it, and is now always `true` on a 200.
         ("DELETE", ["admin", "instances", name]) => match orch.instance_remove(name) {
-            Ok(removed) => json_response(200, &serde_json::json!({ "removed": removed })),
-            Err(e) => err_response(409, &e.to_string()),
+            Ok(true) => json_response(200, &serde_json::json!({ "removed": true })),
+            Ok(false) => err_response(404, &format!("no instance {name:?}")),
+            Err(e) => state_error_response(&e),
         },
         ("POST", ["admin", "tenants"]) => {
             let v = body_json();
@@ -519,14 +756,14 @@ fn admin_plane(
                 None => match orch.instance_least_loaded() {
                     Ok(Some(i)) => i,
                     Ok(None) => return err_response(409, "no instances registered"),
-                    Err(e) => return err_response(500, &e.to_string()),
+                    Err(e) => return state_error_response(&e),
                 },
             };
             create_tenant(orch, &name, &instance, &level)
         }
         ("GET", ["admin", "tenants"]) => match orch.tenant_list() {
             Ok(list) => json_response(200, &serde_json::json!({ "tenants": list })),
-            Err(e) => err_response(500, &e.to_string()),
+            Err(e) => state_error_response(&e),
         },
         ("GET", ["admin", "tenants", id, "stats"]) => tenant_stats(orch, id),
         ("DELETE", ["admin", "tenants", id]) => delete_tenant(orch, id),
@@ -534,7 +771,7 @@ fn admin_plane(
             // The fresh token appears in this response and nowhere else;
             // the old one is already dead.
             Ok(token) => json_response(200, &serde_json::json!({ "tenant": id, "token": token })),
-            Err(e) => err_response(404, &e.to_string()),
+            Err(e) => state_error_response(&e),
         },
         ("POST", ["admin", "tenants", id, "migrate"]) => {
             let v = body_json();
@@ -544,7 +781,7 @@ fn admin_plane(
             let keep = v.get("keep_source").and_then(serde_json::Value::as_bool) == Some(true);
             match migrate_tenant(orch, id, &to, keep) {
                 Ok(summary) => json_response(200, &summary),
-                Err(e) => err_response(502, &e),
+                Err(e) => err_response(e.status(), &e.to_string()),
             }
         }
         (m, ["admin", "tenants", id, "ops", rest @ ..]) => {
@@ -585,12 +822,16 @@ fn tenant_ops(
     let tenant = match orch.tenant_get(tenant_id) {
         Ok(Some(t)) => t,
         Ok(None) => return err_response(404, "unknown tenant"),
-        Err(e) => return err_response(500, &e.to_string()),
+        Err(e) => return state_error_response(&e),
     };
     let creds = match orch.instance_creds(&tenant.instance) {
         Ok(c) => c,
-        Err(_) => return err_response(502, "instance unavailable"),
+        Err(e) => return state_error_response(&e),
     };
+    // No quarantine fence here, deliberately: this IS the operator plane,
+    // and `GET/POST …/ops/admission` — the reviewer's own view of the queue
+    // — is one of the routes it exists to carry. The fence belongs to the
+    // tenant token, not to the capability.
     match engine::vault_request(
         &creds,
         &tenant.vault,
@@ -600,13 +841,7 @@ fn tenant_ops(
         "application/json",
         body,
     ) {
-        Ok(r) => Response::from_data(r.body)
-            .with_status_code(r.status)
-            .with_header(
-                Header::from_bytes("Content-Type", r.content_type.as_bytes()).unwrap_or_else(
-                    |_| Header::from_bytes("Content-Type", "application/json").unwrap(),
-                ),
-            ),
+        Ok(r) => relay(r),
         Err(e) => err_response(502, &e),
     }
 }
@@ -619,13 +854,13 @@ fn create_tenant(
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let creds = match orch.instance_creds(instance) {
         Ok(c) => c,
-        Err(e) => return err_response(404, &e.to_string()),
+        Err(e) => return state_error_response(&e),
     };
     // Record the mapping first (so a crash can't leave an unmapped vault
     // holding data), then create the vault; roll the row back on failure.
     let (tenant, token) = match orch.tenant_create(name, instance) {
         Ok(x) => x,
-        Err(e) => return err_response(500, &e.to_string()),
+        Err(e) => return state_error_response(&e),
     };
     if let Err(e) = engine::create_vault(&creds, &tenant.vault, level) {
         let _ = orch.tenant_delete(&tenant.id);
@@ -646,11 +881,11 @@ fn tenant_stats(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let tenant = match orch.tenant_get(id) {
         Ok(Some(t)) => t,
         Ok(None) => return err_response(404, "unknown tenant"),
-        Err(e) => return err_response(500, &e.to_string()),
+        Err(e) => return state_error_response(&e),
     };
     let creds = match orch.instance_creds(&tenant.instance) {
         Ok(c) => c,
-        Err(_) => return err_response(502, "instance unavailable"),
+        Err(e) => return state_error_response(&e),
     };
     match engine::vault_request(
         &creds,
@@ -674,17 +909,101 @@ fn delete_tenant(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let tenant = match orch.tenant_get(id) {
         Ok(Some(t)) => t,
         Ok(None) => return err_response(404, "unknown tenant"),
-        Err(e) => return err_response(500, &e.to_string()),
+        Err(e) => return state_error_response(&e),
     };
-    if let Ok(creds) = orch.instance_creds(&tenant.instance) {
-        if let Err(e) = engine::delete_vault(&creds, &tenant.vault) {
-            return err_response(502, &e);
-        }
+    // This was `if let Ok(creds) = …` with **no else**: a credential
+    // failure — a tampered blob, a wrong `UNDERCROFT_ORCH_KEY`, an unknown
+    // instance, a sqlite error — skipped the vault deletion in silence and
+    // then deleted the mapping row anyway, answering `200 {"deleted": id}`.
+    // So an erasure request was reported as done while the engine still
+    // held every drawer AND the only record of which vault belonged to that
+    // tenant was gone: the data both retained and unattributable. The CLI
+    // path has always used `?` and aborted; this is that, on the surface a
+    // compliance workflow actually drives.
+    let creds = match orch.instance_creds(&tenant.instance) {
+        Ok(c) => c,
+        Err(e) => return state_error_response(&e),
+    };
+    if let Err(e) = engine::delete_vault(&creds, &tenant.vault) {
+        return err_response(502, &e);
     }
     match orch.tenant_delete(id) {
-        Ok(_) => json_response(200, &serde_json::json!({ "deleted": id })),
-        Err(e) => err_response(500, &e.to_string()),
+        Ok(true) => json_response(200, &serde_json::json!({ "deleted": id })),
+        // The row went away between the lookup and here (a concurrent
+        // delete). The vault is gone either way; say so honestly rather
+        // than claiming this call performed the erasure.
+        Ok(false) => err_response(404, "unknown tenant"),
+        Err(e) => state_error_response(&e),
     }
+}
+
+/// How a migration failed, **as a class**.
+///
+/// `migrate_tenant` used to return `Result<Value, String>` and the handler
+/// answered **502 for every one of them**: an unknown tenant, a caller
+/// naming a destination that is not registered, a tenant already on the
+/// target, an integrity verdict from the count check, and a genuinely
+/// unreachable engine were one undifferentiated failure. 502 is the status
+/// retry layers treat as transient, so the four that can never succeed on
+/// a retry were hammered forever while the operator was told the engine
+/// was down.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MigrateError {
+    #[error("{0}")]
+    State(#[from] StateError),
+    #[error("unknown tenant {0:?}")]
+    UnknownTenant(String),
+    /// The destination is a value the CALLER supplied in the body, so an
+    /// unregistered one is malformed input (400) — not a missing resource
+    /// (404), which is what the tenant in the path would be.
+    #[error("unknown destination instance {0:?} — register it first")]
+    UnknownDestination(String),
+    #[error("tenant is already on that instance")]
+    AlreadyThere,
+    /// The engine answered and its answer was a refusal; the relayed status
+    /// rides along so an engine 409 stays a 409.
+    #[error("{1}")]
+    Engine(u16, String),
+    /// The copy is not faithful, or the source must not be dropped. The
+    /// source is left authoritative and the remedy is a real decision, not
+    /// a retry.
+    #[error("{0}")]
+    Unfaithful(String),
+}
+
+impl MigrateError {
+    pub(crate) fn status(&self) -> u16 {
+        match self {
+            MigrateError::State(e) => e.status(),
+            MigrateError::UnknownTenant(_) => 404,
+            MigrateError::UnknownDestination(_) => 400,
+            MigrateError::AlreadyThere => 409,
+            MigrateError::Engine(status, _) => *status,
+            MigrateError::Unfaithful(_) => 409,
+        }
+    }
+}
+
+/// Turn one of `engine.rs`'s stringified failures back into a class.
+///
+/// `engine.rs` renders a relayed refusal with the status in parentheses
+/// (`engine import failed (409): …`), so recovering it here is a coupling
+/// to that formatting — deliberate, and stated: the alternative is a typed
+/// engine client, which is the right fix and a much larger one. A 4xx is
+/// the ENGINE's verdict on the request and is kept verbatim; anything else
+/// (a transport failure, an engine 5xx) is what 502 actually means.
+fn engine_err(msg: String) -> MigrateError {
+    let b = msg.as_bytes();
+    for i in 0..b.len().saturating_sub(4) {
+        if b[i] == b'(' && b[i + 4] == b')' && b[i + 1..i + 4].iter().all(u8::is_ascii_digit) {
+            if let Ok(code) = msg[i + 1..i + 4].parse::<u16>() {
+                if (400..500).contains(&code) {
+                    return MigrateError::Engine(code, msg);
+                }
+            }
+        }
+    }
+    MigrateError::Engine(502, msg)
 }
 
 /// Migration: export (artifact-carrying, v0.18) → import on the target →
@@ -696,20 +1015,20 @@ pub(crate) fn migrate_tenant(
     id: &str,
     to: &str,
     keep_source: bool,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, MigrateError> {
     let tenant = orch
-        .tenant_get(id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("unknown tenant {id:?}"))?;
+        .tenant_get(id)?
+        .ok_or_else(|| MigrateError::UnknownTenant(id.to_string()))?;
     if tenant.instance == to {
-        return Err("tenant is already on that instance".into());
+        return Err(MigrateError::AlreadyThere);
     }
-    let src = orch
-        .instance_creds(&tenant.instance)
-        .map_err(|e| e.to_string())?;
-    let dst = orch.instance_creds(to).map_err(|e| e.to_string())?;
+    let src = orch.instance_creds(&tenant.instance)?;
+    let dst = orch.instance_creds(to).map_err(|e| match e {
+        StateError::NotFound(_) => MigrateError::UnknownDestination(to.to_string()),
+        other => MigrateError::State(other),
+    })?;
 
-    let ndjson = engine::export_vault(&src, &tenant.vault)?;
+    let ndjson = engine::export_vault(&src, &tenant.vault).map_err(engine_err)?;
     // The export leads with a manifest line since 0.43.0, and it DECLARES
     // the record counts — the count-verify below checks against that
     // declaration rather than a raw line count, which the manifest line
@@ -737,8 +1056,8 @@ pub(crate) fn migrate_tenant(
             0,
         ),
     };
-    engine::create_vault(&dst, &tenant.vault, "sealed")?;
-    let got = engine::import_vault(&dst, &tenant.vault, &ndjson)?;
+    engine::create_vault(&dst, &tenant.vault, "sealed").map_err(engine_err)?;
+    let got = engine::import_vault(&dst, &tenant.vault, &ndjson).map_err(engine_err)?;
     // A diverted drawer is COUNTED in `imported` but is not filed where the
     // payload aimed it: it sits in `quarantine-pending`, excluded from
     // search, recent and listing. So an equal count is not a faithful copy,
@@ -764,14 +1083,14 @@ pub(crate) fn migrate_tenant(
     // actually exists.
     if got.quarantined > 0 && !keep_source {
         let _ = engine::delete_vault(&dst, &tenant.vault);
-        return Err(format!(
+        return Err(MigrateError::Unfaithful(format!(
             "destination screened {} of {} drawer(s) into quarantine-pending, so \
              the copy is not faithful and the source must not be dropped. The \
              partial copy was removed so this can be retried: re-run with \
              keep_source=true, rule on the destination's queue (`admission \
              list`/`allow`), then drop the source yourself once it is clean",
             got.quarantined, got.drawers
-        ));
+        )));
     }
     let counts_match = got.drawers == expected.0
         && (manifest.is_none()
@@ -781,14 +1100,13 @@ pub(crate) fn migrate_tenant(
     if !counts_match {
         // Leave the source authoritative; remove the partial copy.
         let _ = engine::delete_vault(&dst, &tenant.vault);
-        return Err(format!(
+        return Err(MigrateError::Unfaithful(format!(
             "import count mismatch (drawers {} of {}, kg {} of {}) — source left authoritative",
             got.drawers, expected.0, got.kg_triples, expected.1
-        ));
+        )));
     }
     let imported = got.drawers;
-    orch.tenant_set_instance(id, to)
-        .map_err(|e| e.to_string())?;
+    orch.tenant_set_instance(id, to)?;
     let source_deleted = if keep_source {
         false
     } else {
@@ -901,6 +1219,162 @@ mod tests {
         assert!(!data_subpath_ok("rotate"));
     }
 
+    // -- the quarantine fence ------------------------------------------
+
+    /// `POST /t/search {"wing":"quarantine-pending"}` returned the tenant's
+    /// own quarantined content verbatim — no traversal needed. The engine
+    /// serves the reviewer's view to any request that NAMES the wing, which
+    /// is right on `/v1` (an operator surface) and wrong through a tenant
+    /// token, whose writes are what the screen diverted.
+    ///
+    /// Every string below passed before the fence existed.
+    #[test]
+    fn a_tenant_token_cannot_name_the_reserved_wing() {
+        // Premise: an ordinary wing declaration is untouched, on every
+        // carrier the fence inspects — so this cannot pass by refusing
+        // everything.
+        assert!(!request_names_reserved_wing(
+            "search",
+            "",
+            br#"{"query":"q","wing":"legal"}"#
+        ));
+        assert!(!request_names_reserved_wing(
+            "drawers",
+            "wing=legal&limit=50",
+            b""
+        ));
+        assert!(!request_names_reserved_wing("drawers/a1b2c3", "", b""));
+        assert!(!request_names_reserved_wing("export", "", b""));
+
+        // The reviewer's view, asked for by name.
+        assert!(request_names_reserved_wing(
+            "search",
+            "",
+            br#"{"query":"","wing":"quarantine-pending"}"#
+        ));
+        assert!(request_names_reserved_wing(
+            "drawers",
+            "wing=quarantine-pending&limit=500",
+            b""
+        ));
+        // The engine `pct_decode`s some query values, so one spelling is
+        // not the name.
+        assert!(request_names_reserved_wing(
+            "drawers",
+            "wing=quarantine%2Dpending",
+            b""
+        ));
+        // Nested: an import record declares its wing at drawer.meta.wing,
+        // never at the top level, and NDJSON is not one JSON value.
+        assert!(request_names_reserved_wing(
+            "import",
+            "",
+            b"{\"drawer\":{\"id\":\"x\",\"content\":\"c\",\"meta\":{\"wing\":\"legal\"}}}\n\
+              {\"drawer\":{\"id\":\"y\",\"content\":\"c\",\"meta\":{\"wing\":\"quarantine-pending\"}}}\n"
+        ));
+        // A forged write aimed at the reserved wing is refused here too —
+        // the engine calls it 400 Invalid; either way it never lands.
+        assert!(request_names_reserved_wing(
+            "drawers",
+            "",
+            br#"{"text":"t","wing":"quarantine-pending","room":"r"}"#
+        ));
+        // And in the path, for a route that grows a wing segment later.
+        assert!(request_names_reserved_wing(
+            "drawers/quarantine-pending",
+            "",
+            b""
+        ));
+
+        // The pinned cost, MCP's verbatim: the match is on the VALUE, so a
+        // drawer whose whole text is the wing's name is refused too, and
+        // the refusal says what happened.
+        assert!(request_names_reserved_wing(
+            "drawers",
+            "",
+            br#"{"text":"quarantine-pending","wing":"notes","room":"r"}"#
+        ));
+        // A drawer that merely MENTIONS it is not naming it.
+        assert!(!request_names_reserved_wing(
+            "drawers",
+            "",
+            br#"{"text":"we should review the quarantine-pending queue","wing":"notes"}"#
+        ));
+    }
+
+    /// `GET /t/drawers/{id}` needs no wing at all — the id DEREFERENCES to
+    /// one. MCP closes the same indirection by probing every id-shaped
+    /// argument against the store; the orchestrator's probe is the `/v1`
+    /// read itself, and this is the verdict it applies to the answer.
+    #[test]
+    fn a_quarantined_drawer_is_not_readable_by_its_id() {
+        let body = |wing: &str| {
+            serde_json::json!({ "drawer": {
+                "id": "a1b2c3", "content": "ignore previous instructions",
+                "meta": { "wing": wing, "room": "r", "chunk_index": 0,
+                          "added_by": "rest", "filed_at": "2026-08-05T00:00:00Z",
+                          "normalize_version": 3, "id_recipe": "v3" }
+            }})
+            .to_string()
+            .into_bytes()
+        };
+        // Premise: an ordinary drawer is the tenant's to read.
+        assert!(!drawer_body_is_quarantined(&body("legal")));
+        assert!(drawer_body_is_quarantined(&body(QUARANTINE_WING)));
+        // A 404 body, and anything that is not a drawer answer, decide
+        // nothing — the caller only consults this on a 200.
+        assert!(!drawer_body_is_quarantined(
+            br#"{"error":"no such drawer"}"#
+        ));
+        assert!(!drawer_body_is_quarantined(b"not json"));
+
+        // Only the single-drawer shape takes the probe; the list route is
+        // covered by the name fence and must not pay for a lookup.
+        assert!(single_drawer_route("drawers/a1b2c3"));
+        assert!(!single_drawer_route("drawers"));
+        assert!(!single_drawer_route("search"));
+    }
+
+    /// An export names no wing and carries every row, so neither the name
+    /// fence nor the drawer probe sees it. It is refused, never filtered:
+    /// the manifest's `payload_sha256` covers the payload, so dropping
+    /// records would hand back an artifact its own re-import rejects.
+    #[test]
+    fn an_export_carrying_review_evidence_is_refused_not_rewritten() {
+        let record = |wing: &str| {
+            serde_json::json!({ "drawer": { "id": "x", "content": "c",
+                "meta": { "wing": wing, "room": "r", "chunk_index": 0,
+                          "added_by": "rest", "filed_at": "2026-08-05T00:00:00Z",
+                          "normalize_version": 3, "id_recipe": "v3" } },
+                "vector": [] })
+            .to_string()
+        };
+        let manifest = r#"{"undercroft_manifest":{"version":1,"counts":{"drawers":2}}}"#;
+        // Premise: a clean export is served, which is the whole point of
+        // refusing rather than removing the route.
+        let clean = format!("{manifest}\n{}\n{}\n", record("legal"), record("notes"));
+        assert!(!export_carries_reserved_wing(clean.as_bytes()));
+
+        let dirty = format!(
+            "{manifest}\n{}\n{}\n",
+            record("legal"),
+            record(QUARANTINE_WING)
+        );
+        assert!(export_carries_reserved_wing(dirty.as_bytes()));
+    }
+
+    /// The fence belongs to the TENANT TOKEN, not to the capability: the
+    /// operator's route to the same queue must keep working, and it is on
+    /// the plane that never consults the fence.
+    #[test]
+    fn the_operator_route_to_the_queue_is_untouched() {
+        assert!(ops_route_ok("GET", "admission"));
+        assert!(ops_route_ok("POST", "admission"));
+        // …and it was never reachable with a tenant token in the first
+        // place, which is the boundary the fence completes.
+        assert!(!data_subpath_ok("admission"));
+    }
+
     #[test]
     fn ct_eq_behaves() {
         assert!(ct_eq("abc", "abc"));
@@ -923,6 +1397,198 @@ mod tests {
         for _ in 0..100 {
             assert!(off.allow_at("acme", 100));
         }
+    }
+
+    // -- error classes on the control plane ----------------------------
+
+    fn orch_for_tests() -> (tempfile::TempDir, Orch) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let o = Orch::open(
+            &dir.path().join("orch.db"),
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        )
+        .unwrap();
+        (dir, o)
+    }
+
+    /// Drive one admin route and read back its status. The admin plane is
+    /// a pure function of (method, path, body, state) for every branch
+    /// that does not reach an engine, so the surface itself is testable
+    /// rather than only the helpers under it.
+    fn admin_status(orch: &Orch, method: &str, path: &str, body: &str) -> u16 {
+        let m: Method = method.parse().expect("method");
+        admin_plane(orch, &m, path, body.as_bytes()).status_code().0
+    }
+
+    /// A delete of a name that is not registered answered `200
+    /// {"removed": false}` — the anti-pattern the engine eradicated on
+    /// `DELETE /v1/…/drawers/{id}` — and the console toasts on any 2xx, so
+    /// a decommission script tore down a VM that was still registered and
+    /// routing while a human read "removed".
+    #[test]
+    fn deleting_an_unregistered_instance_is_404_not_a_cheerful_200() {
+        let (_d, o) = orch_for_tests();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        // Premise: a real removal is still a 200, and still says so.
+        assert_eq!(
+            admin_status(&o, "DELETE", "/admin/instances/alpha", ""),
+            200
+        );
+        assert_eq!(
+            admin_status(&o, "DELETE", "/admin/instances/alpha", ""),
+            404
+        );
+        assert_eq!(
+            admin_status(&o, "DELETE", "/admin/instances/never-registered", ""),
+            404
+        );
+        // The guard that already worked keeps its class.
+        o.instance_add("beta", "http://b", "b", "s").unwrap();
+        o.tenant_create("acme", "beta").unwrap();
+        assert_eq!(admin_status(&o, "DELETE", "/admin/instances/beta", ""), 409);
+    }
+
+    /// Every migration failure was a 502 — the status retry layers treat
+    /// as transient — so the four that can never succeed on a retry were
+    /// hammered forever while the operator was told the engine was down.
+    /// None of these branches reaches an engine.
+    #[test]
+    fn a_migration_failure_carries_its_own_class() {
+        let (_d, o) = orch_for_tests();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let (t, _) = o.tenant_create("acme", "alpha").unwrap();
+
+        // Unknown tenant: a missing resource in the path.
+        assert_eq!(
+            migrate_tenant(&o, "nope", "alpha", false)
+                .unwrap_err()
+                .status(),
+            404
+        );
+        // Already there: well-formed, addressed at something real, refused
+        // by the state's shape.
+        assert_eq!(
+            migrate_tenant(&o, &t.id, "alpha", false)
+                .unwrap_err()
+                .status(),
+            409
+        );
+        // Unknown destination: a value the CALLER supplied in the body.
+        assert_eq!(
+            migrate_tenant(&o, &t.id, "ghost", false)
+                .unwrap_err()
+                .status(),
+            400
+        );
+        // …and the same three through the route that answered 502 for all
+        // of them.
+        assert_eq!(
+            admin_status(
+                &o,
+                "POST",
+                &format!("/admin/tenants/{}/migrate", t.id),
+                r#"{"to":"alpha"}"#
+            ),
+            409
+        );
+        assert_eq!(
+            admin_status(
+                &o,
+                "POST",
+                "/admin/tenants/nope/migrate",
+                r#"{"to":"alpha"}"#
+            ),
+            404
+        );
+        assert_eq!(
+            admin_status(
+                &o,
+                "POST",
+                &format!("/admin/tenants/{}/migrate", t.id),
+                r#"{"to":"ghost"}"#
+            ),
+            400
+        );
+        // A missing `to` was already caller error and stays one.
+        assert_eq!(
+            admin_status(
+                &o,
+                "POST",
+                &format!("/admin/tenants/{}/migrate", t.id),
+                "{}"
+            ),
+            400
+        );
+    }
+
+    /// A refusal the ENGINE issued keeps the engine's class; anything else
+    /// is a transport failure, which is what 502 means.
+    #[test]
+    fn a_relayed_engine_refusal_keeps_its_status() {
+        // The shapes engine.rs actually formats.
+        assert_eq!(
+            engine_err("engine import failed (409): vault already exists".into()).status(),
+            409
+        );
+        assert_eq!(
+            engine_err("engine refused vault create (400): bad level".into()).status(),
+            400
+        );
+        // An engine 5xx is not the caller's fault and is not the engine's
+        // verdict on the request — 502, as before.
+        assert_eq!(
+            engine_err("engine export failed (500): corrupt row".into()).status(),
+            502
+        );
+        assert_eq!(
+            engine_err("engine unreachable: connection refused".into()).status(),
+            502
+        );
+        // The message survives either way — it is the operator's only
+        // account of what the engine said.
+        let e = engine_err("engine import failed (409): vault already exists".into());
+        assert!(e.to_string().contains("vault already exists"));
+    }
+
+    /// A `StateError` reaching the wire is classified once, by the error,
+    /// not by whichever handler happened to catch it.
+    #[test]
+    fn state_failures_are_classified_by_the_error_not_the_call_site() {
+        let (dir, o) = orch_for_tests();
+        // Not registered: 404 on every route that resolves an instance,
+        // where `health` said 404 and the data/ops planes said 502.
+        assert_eq!(
+            admin_status(&o, "GET", "/admin/instances/ghost/health", ""),
+            404
+        );
+        // Caller input the state layer refuses: 400, unchanged.
+        assert_eq!(
+            admin_status(
+                &o,
+                "POST",
+                "/admin/instances",
+                r#"{"name":"bad name!","url":"http://a","bearer":"b","assertion_secret":"s"}"#
+            ),
+            400
+        );
+        // A tampered credential blob is a tamper verdict (409), and its
+        // message — which names the remedy — survives instead of being
+        // flattened into "instance unavailable".
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let other = Orch::open(
+            &dir.path().join("orch.db"),
+            "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+        )
+        .unwrap();
+        let resp = admin_plane(&other, &Method::Get, "/admin/instances/alpha/health", b"");
+        assert_eq!(resp.status_code().0, 409);
+        let mut said = String::new();
+        use std::io::Read;
+        resp.into_reader().read_to_string(&mut said).unwrap();
+        assert!(
+            said.contains("UNDERCROFT_ORCH_KEY"),
+            "the refusal names the remedy: {said}"
+        );
     }
 
     #[test]

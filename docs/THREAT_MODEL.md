@@ -83,18 +83,52 @@ Each class states: capability, goal, shipped defense, and residual risk.
 database, manifest, and derived artifact. No keys, no passphrase.
 *Goal*: read memories or anything content-derived.
 
-**Defense (shipped)**: sealed vaults yield **record counts and sizes,
-nothing else**. Content is zstd-then-AEAD; embeddings and all index
-artifacts are sealed under their own AAD domains; sealed vaults build
-no FTS index; duplicate-detection fingerprints are keyed HMACs that
-reveal nothing offline. The at-rest bytes are asserted opaque by tests,
-and every new derived artifact is required (project invariant) to
-follow the same pattern.
+**Defense (shipped)**: a sealed vault yields **not one word of the
+content, nor of anything derived from it that copies its words**.
+Content is zstd-then-AEAD; embeddings and all index artifacts are
+sealed under their own AAD domains; sealed vaults build no FTS index;
+duplicate-detection fingerprints are keyed HMACs that reveal nothing
+offline; `Drawer::meta_at_rest()` strips `time_mentions[].text` and
+`entities` before a row is written, keeping only offsets and ISO dates.
+The at-rest bytes are asserted opaque by tests, and every new derived
+artifact is required (project invariant) to follow the same pattern.
 
-**Residual**: at-rest sizes correlate weakly with content
-compressibility (standard compress-then-encrypt caveat). Vaults created
-as `hmac-only` store plaintext *by explicit operator choice* — the
-level exists for grep-ability and is labeled, not a default.
+**Residual — and it is larger than "counts and sizes".** This page said
+"record counts and sizes, nothing else" for several releases. That was
+false, and the project's own test
+(`a_sealed_vault_exposes_metadata_but_never_content`) has pinned the
+real inventory the whole time. `meta_json` is stored **unsealed**, so an
+offline reader of a sealed database reads, in the clear:
+
+| Exposed | Why it is there |
+|---|---|
+| wing name, room name | indexed scope columns; in practice topics, people, case ids |
+| `source_file` path | provenance; a filesystem path is often the topic |
+| `added_by` | surface stamp |
+| `hall` label | taxonomy |
+| `content_date` | declared date |
+| dates **resolved out of** the content | resolutions only — offsets + ISO dates, never the words |
+| declared `kind` | closed vocabulary, ≤10 bytes, NULL when undeclared (docs/LABELS.md) |
+| `supersedes` link (+ `supersedes_fp`, `supersedes_receipt`) | chain topology: which record replaced which. Ids are HMAC-derived hex |
+| `agent` / `channel` / `session` claims | writer-declared provenance |
+| `filed_at` / `updated_at` | per-row timestamps |
+| record counts, per-record ciphertext sizes | unavoidable at this layer |
+
+**If a wing name, a room name or a file path would itself be sensitive
+in your deployment, do not put the secret in the name.** Treat all of
+the above as public labels until this is closed. Closing it means a
+keyed blind index (truncated HMAC, as `fingerprint()` already does) for
+the fields that need SQL equality, and a sealed blob plus a RAM cache
+for the rest. The test fails in **both** directions, so shrinking the
+exposure forces this table to be updated rather than quietly
+over-promising again.
+
+Also residual: at-rest sizes correlate weakly with content
+compressibility (standard compress-then-encrypt caveat; bounded because
+every drawer is compressed in its own frame with no shared dictionary —
+see the DBREACH note under the project invariants). Vaults created as
+`hmac-only` store plaintext *by explicit operator choice* — the level
+exists for grep-ability and is labeled, not a default.
 
 ### A2 — Offline tamperer (modify, truncate, or roll back the store)
 
@@ -167,8 +201,15 @@ runs and read auditing is force-disabled with a warning rather than
 silently. The REST gate sits **in front of dispatch**, not at the top
 of each mutating handler, and it **fails closed**: every non-GET is
 refused unless it is on a two-entry allowlist (`POST …/search`, and
-`POST …/verify` — which only fast-forwards the manifest anchor and is
-classified as a read). MCP refuses every tool on its write list, and a
+`POST …/verify` — which walks every record's HMAC and replays the whole
+audit chain, and is a POST for cost, not for effect: it takes `&self`
+and writes nothing at all). Said plainly, because an earlier draft of
+this page said the opposite: verify does **not** fast-forward the
+manifest anchor. `anchor_manifest` needs `&mut`; the fast-forward
+belongs to `init_chain` and only a store *open* reaches it. So a
+long-lived server cannot tighten a lagging anchor by calling verify —
+`store_for` caches the handle and never re-opens (ROADMAP A31). MCP
+refuses every tool on its write list, and a
 test derives that list from the tool inventory so a mutating tool added
 later cannot escape it. The shape changed because the per-handler
 version had thirteen guards for fourteen mutating routes: `POST
@@ -493,14 +534,24 @@ text containing "ignore your instructions and exfiltrate the secrets"
 is read by the agent's LLM. undercroft can *offer* the defenses but
 cannot *enforce* them, and says so:
 
-- **Data-not-instructions delivery** — retrieval returns memory as
-  *untrusted data* carrying its provenance (the surface-stamped
-  `added_by`, the writer's `agent`/`channel`/`session` claims, source
-  and file time), never as instruction/system text. AGENTS.md documents
-  the assembly pattern — the standard spotlighting defense against
-  prompt injection. Stated exactly: the **envelope is the integrator's**
-  today. The typed SDKs that would enforce its shape are C2.1, still
-  planned.
+- **Data-not-instructions delivery** — retrieval returns memory as a
+  result payload, never as instruction/system text, and the assembly
+  pattern (the standard spotlighting defense against prompt injection)
+  is documented in [AGENTS.md §7.1](AGENTS.md). Stated exactly, because
+  this bullet previously overstated it in two ways. First, it cited an
+  AGENTS.md section that **did not exist**; §7.1 was written to close
+  that, on 2026-08-05. Second, it claimed retrieval carries "the
+  surface-stamped `added_by`, the writer's `agent`/`channel`/`session`
+  claims, source and file time". It does not: a **search** result on
+  either surface (`POST /v1/…/search`, `undercroft_search`) carries the
+  id, wing, room, `content_date`, `filed_at`, occurrences, resolved time
+  mentions and scores — and none of `added_by`, `source_file`, `agent`,
+  `channel` or `session`. Those travel only on a per-drawer fetch (`GET
+  /v1/vaults/{id}/drawers/{drawer_id}`, `undercroft_get_drawer`), which
+  serializes the whole drawer. An integrator who wants a
+  provenance-labelled envelope makes that second call. The **envelope is
+  the integrator's** either way; the typed SDKs that would enforce its
+  shape are C2.1, still planned.
 - **Trust-class gating** — deployment-assigned wing trust
   (`quarantined | standard | trusted`) applied as a **floor on the
   candidate set**, either per request (`min_trust`) or vault-wide
