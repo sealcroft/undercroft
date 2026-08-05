@@ -142,9 +142,44 @@ impl RateLimiter {
 /// DELETE endpoint) is refused: vault lifecycle belongs to the admin
 /// plane, not to a data token.
 fn data_subpath_ok(subpath: &str) -> bool {
+    // The WHOLE subpath, never its first segment — because an approved
+    // prefix used to authorize an arbitrary suffix. `drawers/../admission`
+    // passed this gate (first segment `drawers`), and the engine URL is
+    // built by interpolation, so `ureq`'s `url` parse collapsed the `..`
+    // per the WHATWG path rules and the engine received
+    // `/v1/vaults/<t>/admission` — a tenant token ruling on the admission
+    // queue that screened its own writes, assigning its own trust, running
+    // retention sweeps, forgetting, ROTATING KEYS (a capability deliberately
+    // absent even from the admin plane) and deleting the vault. Worse, the
+    // suffix can climb past the vault: `search/../../other/search` reached
+    // ANOTHER TENANT'S vault, bounded only by the assertion MAC — which
+    // `Tenancy::assert_or_401` skips entirely when no secret is declared.
+    //
+    // Two independent barriers, because one silent misconfiguration must not
+    // remove the only one: every segment is shape-checked (so nothing that
+    // could normalize reaches the match), and the match is exhaustive over a
+    // closed vocabulary of whole shapes, exactly as `OPS_ROUTES` already is.
+    let segs: Vec<&str> = subpath.split('/').collect();
+    let segment_is_safe = |s: &&str| {
+        !s.is_empty()
+            // `.` and `..` (and any dots-only spelling) are the traversal;
+            // `%` catches the encoded forms (`%2e`) that `url` also decodes.
+            && !s.bytes().all(|b| b == b'.')
+            && !s.contains('%')
+            && !s.contains('\\')
+    };
+    if !segs.iter().all(segment_is_safe) {
+        return false;
+    }
     matches!(
-        subpath.split('/').next(),
-        Some("drawers") | Some("search") | Some("stats") | Some("export") | Some("import")
+        segs.as_slice(),
+        ["drawers"]
+            | ["drawers", _]
+            | ["search"]
+            | ["stats"]
+            | ["stats", "history"]
+            | ["export"]
+            | ["import"]
     )
 }
 
@@ -227,6 +262,11 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
         let method = request.method().clone();
         let url = request.url().to_string();
         let path = url.split('?').next().unwrap_or("").to_string();
+        // Kept, not discarded: `limit`, `offset`, `wing`, `room` and every
+        // other engine query parameter live here, and splitting them off
+        // without forwarding them meant a paginating tenant got page one
+        // forever at HTTP 200.
+        let query = url.split_once('?').map(|(_, q)| q.to_string()).unwrap_or_default();
         let mut body = Vec::new();
         use std::io::Read;
         let _ = request
@@ -234,7 +274,9 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
             .take(256 * 1024 * 1024)
             .read_to_end(&mut body);
 
-        let response = route(orch, &role, &limiter, &request, &method, &path, &body);
+        let response = route(
+            orch, &role, &limiter, &request, &method, &path, &query, &body,
+        );
         let _ = request.respond(response);
     }
     Ok(())
@@ -247,6 +289,7 @@ fn route(
     request: &tiny_http::Request,
     method: &Method,
     path: &str,
+    query: &str,
     body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     // Unauthenticated liveness, mirroring the engine. `mode` + `last_write`
@@ -264,7 +307,31 @@ fn route(
     }
 
     if let Some(sub) = path.strip_prefix("/t/") {
-        return data_plane(orch, limiter, request, method, sub, body);
+        // A read replica serves READS. The data plane dispatched before the
+        // writer-only check below, and `data_plane` never took a role, so
+        // `POST /t/drawers` and `DELETE /t/drawers/{id}` were proxied to the
+        // engine and answered 200 — while `require_writable()`, the only code
+        // that says "mutations belong to the writer", was reachable only from
+        // the replica's own state writes, which the data plane never performs.
+        // It was therefore unreachable over HTTP in either role.
+        //
+        // Decided in FRONT of dispatch and failing CLOSED, exactly as the
+        // engine's `mutates()` does: anything that is not a GET is a write
+        // unless named, so a data-plane route added later is refused on a
+        // replica until someone classifies it deliberately. `POST …/search`
+        // is the one named read, matching the engine's own exception list.
+        if matches!(role, Role::ReadReplica) {
+            let sub_path = sub.split('?').next().unwrap_or("");
+            let is_read = method == &Method::Get || sub_path == "search";
+            if !is_read {
+                return err_response(
+                    403,
+                    "read replica: writes belong to the writer — point mutations at \
+                     the writer's /t/ endpoint",
+                );
+            }
+        }
+        return data_plane(orch, limiter, request, method, sub, query, body);
     }
     if path == "/t" || path == "/t/" {
         return err_response(404, "missing subpath");
@@ -317,6 +384,7 @@ fn data_plane(
     request: &tiny_http::Request,
     method: &Method,
     subpath: &str,
+    query: &str,
     body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let Some(token) = bearer(request) else {
@@ -362,6 +430,7 @@ fn data_plane(
         &tenant.vault,
         method.as_str(),
         subpath,
+        query,
         &content_type,
         body,
     ) {
@@ -512,6 +581,7 @@ fn tenant_ops(
         &tenant.vault,
         method,
         subpath,
+        "",
         "application/json",
         body,
     ) {
@@ -572,6 +642,7 @@ fn tenant_stats(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
         &tenant.vault,
         "GET",
         "stats",
+        "",
         "application/json",
         &[],
     ) {
@@ -653,6 +724,25 @@ pub(crate) fn migrate_tenant(
     };
     engine::create_vault(&dst, &tenant.vault, "sealed")?;
     let got = engine::import_vault(&dst, &tenant.vault, &ndjson)?;
+    // A diverted drawer is COUNTED in `imported` but is not filed where the
+    // payload aimed it: it sits in `quarantine-pending`, excluded from
+    // search, recent and listing. So an equal count is not a faithful copy,
+    // and treating it as one is how this deleted the source vault while the
+    // destination held part of the corpus in quarantine. Refuse before the
+    // mapping flip — the same "leave the source authoritative" branch a
+    // count mismatch already takes — and name the remedy, because the
+    // operator's fix is a real decision (rule on the queue, or migrate with
+    // `keep_source`), not a retry.
+    if got.quarantined > 0 {
+        let _ = engine::delete_vault(&dst, &tenant.vault);
+        return Err(format!(
+            "destination screened {} of {} drawer(s) into quarantine-pending — \
+             source left authoritative and the partial copy removed. Rule on the \
+             queue there (`admission list`/`allow`), or re-run with keep_source \
+             and reconcile before dropping the source",
+            got.quarantined, got.drawers
+        ));
+    }
     let counts_match = got.drawers == expected.0
         && (manifest.is_none()
             || (got.kg_triples == expected.1
@@ -698,6 +788,80 @@ mod tests {
         assert!(!data_subpath_ok(""));
         assert!(!data_subpath_ok("delete"));
         assert!(!data_subpath_ok("../vaults"));
+    }
+
+    /// An approved FIRST SEGMENT must not authorize an arbitrary suffix.
+    ///
+    /// This gate used to be `subpath.split('/').next()`, so every string
+    /// below passed it. The engine URL is built by interpolation and `ureq`
+    /// parses it with the `url` crate, which collapses `..` per the WHATWG
+    /// path rules — verified live: a client asking for
+    /// `/v1/vaults/t/drawers/../admission` puts
+    /// `POST /v1/vaults/t/admission` on the wire. So a tenant data token
+    /// reached the operator plane (admission rulings, trust assignment,
+    /// retention sweeps, forgetting, KEY ROTATION, vault deletion) and, by
+    /// climbing two levels, ANOTHER TENANT'S vault.
+    ///
+    /// The premise is asserted first: the legitimate shapes these traversals
+    /// are built from must still be allowed, so this cannot pass by refusing
+    /// everything.
+    #[test]
+    fn an_approved_first_segment_does_not_authorize_the_rest_of_the_path() {
+        // Premise: the prefixes the escapes are built on are legitimate.
+        assert!(data_subpath_ok("drawers"));
+        assert!(data_subpath_ok("search"));
+        assert!(data_subpath_ok("drawers/a1b2c3"));
+
+        // Operator plane, reached from an approved prefix.
+        for escape in [
+            "drawers/../admission",
+            "drawers/../trust",
+            "drawers/../retention",
+            "drawers/../retention/sweep",
+            "drawers/../forget",
+            "drawers/../rotate",
+            "drawers/../kg/authority",
+            "search/../verify",
+            "drawers/..",
+        ] {
+            assert!(
+                !data_subpath_ok(escape),
+                "{escape} must not pass the data-plane allowlist"
+            );
+        }
+
+        // Cross-tenant: climbing past the vault segment entirely.
+        for escape in [
+            "search/../../globex/search",
+            "drawers/../../globex/export",
+            "import/../../globex/import",
+        ] {
+            assert!(
+                !data_subpath_ok(escape),
+                "{escape} must not reach another tenant's vault"
+            );
+        }
+
+        // The percent-encoded spellings `url` also decodes.
+        for escape in [
+            "drawers/%2e%2e/admission",
+            "drawers/%2E%2E/rotate",
+            "drawers/%2e%2e%2f%2e%2e/globex/search",
+        ] {
+            assert!(!data_subpath_ok(escape), "{escape} must not pass encoded");
+        }
+
+        // Dot-only segments in every spelling, and backslash separators.
+        assert!(!data_subpath_ok("drawers/./admission"));
+        assert!(!data_subpath_ok("drawers/.../admission"));
+        assert!(!data_subpath_ok("drawers//admission"));
+        assert!(!data_subpath_ok("drawers\\..\\admission"));
+
+        // And the shapes that are genuinely two segments stay refused for
+        // the ordinary reason: they are not in the vocabulary.
+        assert!(!data_subpath_ok("drawers/a1b2/extra"));
+        assert!(!data_subpath_ok("admission"));
+        assert!(!data_subpath_ok("rotate"));
     }
 
     #[test]

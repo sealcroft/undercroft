@@ -61,7 +61,6 @@ pub const MCP_TOOLS: &[&str] = &[
     "undercroft_kg_invalidate",
     "undercroft_kg_supersede",
     "undercroft_kg_stats",
-    "undercroft_kg_set_authority",
     "undercroft_lookup_canonical",
 ];
 
@@ -75,6 +74,14 @@ pub const OPERATOR_ONLY: &[&str] = &[
     "retention", // retention policy declaration and sweeps
     "forget",    // attested destruction
     "rotate",    // key rotation
+    // The golden-values authority tier. `lookup_canonical` is the door
+    // docs/LABELS.md positions ABOVE semantic recall for exact and
+    // high-risk asks, and promoting a fact to canonical/approved closes
+    // the previous holder's validity window. An agent that could write it
+    // could make its own fact the one answer that door returns — the same
+    // reason trust assignment is operator-only, which LABELS.md states in
+    // as many words while the authority tier shipped on MCP anyway.
+    "authority",
 ];
 
 #[cfg(test)]
@@ -132,6 +139,19 @@ mod tests {
     fn operator_only_capabilities_never_reach_mcp() {
         let src = include_str!("mcp.rs");
         for cap in OPERATOR_ONLY {
+            // The capability ANYWHERE in a tool name, not only as a prefix.
+            // `tool("undercroft_{cap}` could not express "no MCP tool may
+            // write the authority tier", because the tool was called
+            // `undercroft_kg_set_authority` — so the boundary was
+            // inexpressible in this list and the check silently passed on
+            // zero matches. A list that cannot state a boundary is worse
+            // than no list, because it reads as though it did.
+            for advertised in MCP_TOOLS {
+                assert!(
+                    !advertised.contains(cap),
+                    "{advertised} carries the operator-only capability                      {cap:?}. An agent must not rule on the queue that                      contains it, assign the trust class that decides what                      it may retrieve, or write the authority tier its own                      lookups read. If deliberate, that is a threat-model                      change, not a test change."
+                );
+            }
             let tool = format!("tool(\"undercroft_{cap}");
             assert!(
                 !src.contains(&tool),

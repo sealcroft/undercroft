@@ -288,7 +288,20 @@ pub(crate) fn is_loopback(base: &str) -> bool {
         Some(i) => &base[i + 3..],
         None => base,
     };
-    let host_port = after_scheme.split('/').next().unwrap_or("");
+    let authority = after_scheme.split('/').next().unwrap_or("");
+    // Userinfo comes BEFORE the host (RFC 3986 `user:pass@host`), so it must
+    // be discarded first. Without this, `http://127.0.0.1:8080@evil.com/v1`
+    // read as loopback — `split(':').next()` returned `127.0.0.1`, which is
+    // the USERNAME — while ureq/`url` resolve the same string to host
+    // `evil.com`. That inverted the whole gate: the "TLS or loopback,
+    // nothing else, no override" refusal passed, drawer text went cleartext
+    // to an attacker-chosen host, and the "the ENDPOINT reads your text in
+    // plaintext" warning was suppressed along with it. Split on the LAST
+    // `@`, since userinfo may itself contain one.
+    let host_port = match authority.rsplit_once('@') {
+        Some((_userinfo, host)) => host,
+        None => authority,
+    };
     let host = match host_port.strip_prefix('[') {
         // IPv6 literal, `[::1]:8080`
         Some(rest) => rest.split(']').next().unwrap_or(""),
@@ -508,5 +521,37 @@ tYFnY6i2f/1ZwO5egz39EHpuFql2+6WqpB9saUk=\n\
         ] {
             assert!(!is_loopback(remote), "{remote} is not this machine");
         }
+    }
+
+    /// A loopback-looking USERINFO must not make a remote host local.
+    ///
+    /// `http://127.0.0.1:8080@evil.com/v1` has username `127.0.0.1`, password
+    /// `8080` and host `evil.com` (RFC 3986), which is how ureq resolves it —
+    /// but this predicate split the authority on `:` and read `127.0.0.1`.
+    /// The gate then passed, so "TLS or loopback, nothing else, no override"
+    /// shipped drawer text in cleartext to an attacker-chosen host AND
+    /// suppressed the plaintext-endpoint warning.
+    #[test]
+    fn userinfo_cannot_impersonate_loopback() {
+        for spoof in [
+            "http://127.0.0.1:8080@evil.com/v1",
+            "http://localhost@evil.com/v1",
+            "http://localhost:11434@evil.com",
+            "http://[::1]:8080@evil.com/v1",
+            "http://user@127.0.0.1.evil.com/v1",
+            // userinfo containing its own `@` — the split must take the last
+            "http://a@b:127.0.0.1@evil.com/v1",
+        ] {
+            assert!(
+                !is_loopback(spoof),
+                "{spoof} resolves to a REMOTE host and must not read as loopback"
+            );
+        }
+        // Premise, so this cannot pass by breaking loopback detection: real
+        // loopback URLs still read as loopback, including with real userinfo.
+        assert!(is_loopback("http://127.0.0.1:11434"));
+        assert!(is_loopback("http://user:pass@127.0.0.1:11434/v1"));
+        assert!(is_loopback("http://user@localhost:1234/v1"));
+        assert!(is_loopback("http://user@[::1]:8080/v1"));
     }
 }

@@ -306,10 +306,6 @@ fn tool_definitions() -> Value {
         tool("undercroft_kg_stats", "Knowledge-graph counts.", json!({}), &[]),
         tool("undercroft_lookup_canonical", "The exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks — an empty answer means no declared truth exists, never a guess.",
             json!({ "key": s("canonical key") }), &["key"]),
-        tool("undercroft_kg_set_authority", "Place a fact on the authority tier or take it off. authority_class stated|canonical, review_state unreviewed|approved|rejected; canonical_key required for canonical (promoting approved onto an occupied key supersedes the old holder, audited).",
-            json!({ "triple_id": s("fact id"), "authority_class": s("stated|canonical"),
-                    "review_state": s("unreviewed|approved|rejected"), "canonical_key": s("exact-lookup key") }),
-            &["triple_id", "authority_class", "review_state"]),
         // --- agent diaries ---
         tool("undercroft_diary_write", "Append a diary entry for an agent.",
             json!({ "agent": s("agent name"), "entry": s("diary text") }), &["agent", "entry"]),
@@ -800,18 +796,6 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 // not fall back to guessing on this key's behalf.
                 None => Ok(format!("no approved canonical fact holds key {key:?}")),
             }
-        }
-        "undercroft_kg_set_authority" => {
-            store.kg_set_authority(
-                req_str(args, "triple_id")?,
-                req_str(args, "authority_class")?,
-                req_str(args, "review_state")?,
-                opt_str(args, "canonical_key"),
-            )?;
-            Ok(format!(
-                "authority set on fact {}",
-                req_str(args, "triple_id")?
-            ))
         }
         "undercroft_diary_write" => {
             let agent = req_str(args, "agent")?;

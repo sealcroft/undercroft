@@ -2273,6 +2273,37 @@ impl PalaceStore {
         // reach the reserved-wing guard below and be refused as invalid
         // input — not trip an assertion. `admission_divert` already returns
         // None for a quarantine-resident drawer, so Apply is a no-op there.
+        // The non-finite door, closed HERE rather than at one caller.
+        //
+        // It was closed at `upsert_external` alone, on the reasoning that
+        // "the caller-supplied path was the one door". There are three:
+        // `save_with_dedup_vec` (reached by a `dedup_threshold` in a `/v1`
+        // save body) and BOTH arms of `import_record` (reached by every
+        // backup restore and the orchestrator's tenant migration) took a
+        // caller's vector with no finiteness check — and `import_record`'s
+        // non-external arm means an ORDINARY hash vault is reachable.
+        //
+        // `1e39` is an unremarkable finite JSON number, and `1e39_f64 as f32`
+        // is `f32::INFINITY` (float→float `as` overflows to infinity;
+        // saturation is a float→int rule). One such component poisons the
+        // whole row at rest: `quantize_embedding` takes `max_abs = inf` ⇒
+        // `scale = inf` ⇒ every `v/scale` is NaN ⇒ every byte quantizes to 0,
+        // and dequantize returns `0.0 * inf` = NaN for EVERY component. That
+        // row then joins the training draw, and NaN centroids make every
+        // drawer encode to the same code — corpus-wide retrieval collapse
+        // from a single record, which is precisely the bound L2 normalization
+        // is documented to provide and cannot, because NaN/x is NaN.
+        //
+        // At the choke point it cannot be forgotten by the next write path.
+        if let Some(bad) = embedding.iter().position(|x| !x.is_finite()) {
+            return Err(StoreError::Invalid(format!(
+                "embedding for {:?} has a non-finite component at index {bad} \
+                 (NaN or infinity) — refused: non-finite arithmetic escapes the \
+                 normalization bound that keeps one vector from corrupting the \
+                 shared index structures every other drawer is scored against",
+                drawer.id
+            )));
+        }
         if let Screen::Apply = screen {
             if let Some(diverted) = self.admission_divert(drawer) {
                 let emb = if self.external_dim.is_some() {
