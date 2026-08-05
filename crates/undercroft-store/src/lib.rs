@@ -2294,7 +2294,12 @@ impl PalaceStore {
         // from a single record, which is precisely the bound L2 normalization
         // is documented to provide and cannot, because NaN/x is NaN.
         //
-        // At the choke point it cannot be forgotten by the next write path.
+        // Stated precisely: this is `write_drawer`, not `write_drawer_stmts`,
+        // so `upsert_many` — which owns its transaction and reaches the
+        // statements directly — does NOT inherit it. That is sound today only
+        // because the bulk path embeds locally and takes no caller vector; it
+        // is the same one-function-too-high shape R5 describes for screening,
+        // and it moves down with R5.
         if let Some(bad) = embedding.iter().position(|x| !x.is_finite()) {
             return Err(StoreError::Invalid(format!(
                 "embedding for {:?} has a non-finite component at index {bad} \
@@ -3272,8 +3277,25 @@ impl PalaceStore {
         // `limit` hits and callers are told to follow `next_offset`); past
         // it, the honest answer is that a scan this deep is a scoped query's
         // job, not a page's.
-        const MAX_SEARCH_DEPTH: usize = 10_000;
-        let depth = opts.offset.saturating_add(limit).min(MAX_SEARCH_DEPTH);
+        // Left saturating, DELIBERATELY. Two other shapes were tried against
+        // this line and both contradicted a decision the project had already
+        // made and pinned in `an_offset_past_the_end_is_empty_not_an_error`:
+        // an extreme offset must return an EXHAUSTED page, not an error, and
+        // must not overflow.
+        //
+        //   * Clamping `depth` silently empties a legitimate deep page, so a
+        //     caller is told the ranking ran out when it did not — the silent
+        //     wrong answer this project refuses.
+        //   * Refusing past a ceiling overrides that pinned contract outright.
+        //
+        // What was genuinely broken was one line at the SQL boundary, where
+        // `k as i64` wrapped NEGATIVE and SQLite reads a negative LIMIT as no
+        // limit; that is clamped where the cast happens. The residue is a
+        // cost, not a wrong answer: a very deep offset makes one request pay
+        // a full scan. That is corpus-bounded — the same price a below-floor
+        // scope already pays by design — and is recorded as A17 rather than
+        // closed by breaking the contract.
+        let depth = opts.offset.saturating_add(limit);
         // Declared by the caller, never read off the text: German and English
         // share a script, so nothing in the bytes says which endings are legal.
         let lang = opts.morph_lang;
