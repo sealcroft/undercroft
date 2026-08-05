@@ -348,7 +348,25 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `lookup_canonical` = indexed exact door, at most one active approved
   fact per key, promotion supersedes the previous holder audited; a
   column flip without the vault key fails verification — see
-  docs/LABELS.md for the label doctrine it instantiates),
+  docs/LABELS.md for the label doctrine it instantiates.
+  **On a sealed vault the graph's WORDS are not on disk (A10, 2026-08-05)**:
+  `kg_triples.subject`/`predicate` and `kg_entities.name` hold a truncated
+  keyed HMAC — SQL equality, so every lookup stays indexed — and the words
+  live in sealed blobs (`terms`, `name_rest`) covered by the fact's tag
+  through a FOURTH canonical extension (0x1c), so nothing written earlier is
+  re-tagged. `triple_id`/`entity_id` are keyed too, and that is not optional:
+  they were unkeyed SHA-256 of the same words, so blinding the columns alone
+  leaves a confirmation oracle for anyone with a candidate list — and a
+  substring gate cannot see it, which is how this would have closed green.
+  **The key is a STORED secret, never a vault key**: rotation re-derives
+  vault keys, so keyed ids would move on every rotation, orphaning the audit
+  records written under `kg/{id}` and breaking deterministic-id idempotency.
+  32 random bytes sealed in `meta`, re-sealed by rotation, never
+  regenerated. Legacy vaults migrate once at the next writable open
+  (tamper-failing rows SKIPPED, not laundered) and **the migration ends in a
+  VACUUM** — an in-place UPDATE leaves the old row images in freed pages, so
+  the words were still in the FILE until it did; any future at-rest
+  migration needs the same, and a gate that reads bytes rather than rows),
   extractor identity (which model claimed each distilled fact, inside the
   fact's HMAC via the third canonical extension — 0x1d, the
   support/authority precedent, so untouched facts keep byte-identical
@@ -712,9 +730,9 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   stack (see its README.md + RUNBOOK.md)
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all **76**
-  `UNDERCROFT_*` variables the engine honours — 61 written out in full
-  across the env table's 57 rows, plus 15 siblings abbreviated to a
+  which inlines them and documents every layer plus all **77**
+  `UNDERCROFT_*` variables the engine honours — 62 written out in full
+  across the env table's 58 rows, plus 15 siblings abbreviated to a
   suffix inside the row that owns them (`_TOKENIZER` three times, one
   per model role), which is why grepping the page for full names
   undercounts it. Count the truth, never a number in prose:
@@ -800,8 +818,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (639 run,
-                                      # 4 #[ignore]d = 643 declared. Counted from
+docker compose run --rm test          # cargo unit + integration tests (641 run,
+                                      # 4 #[ignore]d = 645 declared. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

@@ -19,6 +19,17 @@ use time::OffsetDateTime;
 
 use crate::{chain_append, PalaceStore, StoreError};
 
+/// The blind-index migration this build expects a sealed graph to be at
+/// (A10). Bumped only if the at-rest shape changes again.
+const KG_BLIND_VERSION: &str = "v1";
+
+/// Fill `buf` from the OS CSPRNG. Named rather than inlined so the one
+/// place this crate draws randomness is greppable.
+fn getrandom_bytes(buf: &mut [u8]) {
+    use rand::RngCore;
+    rand::thread_rng().fill_bytes(buf);
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Triple {
     pub id: String,
@@ -81,13 +92,152 @@ fn temporal_key(value: &str) -> String {
     }
 }
 
-fn triple_id(subject: &str, predicate: &str, object: &str, valid_from: Option<&str>) -> String {
-    let mut h = Sha256::new();
-    for part in [subject, predicate, object, valid_from.unwrap_or("")] {
-        h.update(part.as_bytes());
-        h.update([0x1f]);
+/// The blind index for one knowledge-graph TERM — a subject, a predicate,
+/// or an entity name (A10).
+///
+/// `HMAC(mac_key, "kgterm" ‖ kind ‖ term)`, truncated and hexed, so the
+/// column stays TEXT, its index keeps working, and every lookup in this
+/// module stays an indexed equality. The shape is `fingerprint`'s, one
+/// table over, for the same reason: deterministic for equality, useless
+/// without the vault key.
+///
+/// **Sealed vaults only.** An hmac-only vault stores drawer content in
+/// clear by the operator's explicit choice — blinding its graph would buy
+/// nothing and cost the inspectability that level exists for.
+///
+/// `kind` is a domain separator, so a subject and a predicate spelling the
+/// same word do not produce the same index entry — and length-prefixed
+/// rather than delimited, because a term may contain any byte the
+/// `validate_name` guard admits and a delimiter is only injective while no
+/// input contains it.
+fn kg_term_at_rest(
+    vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
+    kind: &str,
+    term: &str,
+) -> String {
+    if !matches!(vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+        return term.to_string();
     }
-    hex::encode(&h.finalize()[..16])
+    let mut buf = Vec::with_capacity(term.len() + kind.len() + 24);
+    buf.extend_from_slice(b"kgterm");
+    buf.extend_from_slice(&(kind.len() as u64).to_le_bytes());
+    buf.extend_from_slice(kind.as_bytes());
+    buf.extend_from_slice(&(term.len() as u64).to_le_bytes());
+    buf.extend_from_slice(term.as_bytes());
+    hex::encode(&keyed(secret, &buf)[..16])
+}
+
+/// HMAC-SHA256 under the KG blind secret.
+fn keyed(secret: &[u8; 32], msg: &[u8]) -> [u8; 32] {
+    use hmac::Mac;
+    let mut mac = <hmac::Hmac<Sha256> as hmac::Mac>::new_from_slice(secret)
+        .expect("hmac accepts any key length");
+    mac.update(msg);
+    mac.finalize().into_bytes().into()
+}
+
+/// A fact's id.
+///
+/// **Keyed since 2026-08-05 on sealed vaults (A10), and that is the whole
+/// point of it.** This was `sha256(subject ‖ predicate ‖ object ‖
+/// valid_from)[..16]` — an UNKEYED digest of the content, sitting in a
+/// clear column. Blinding `subject` and `predicate` while leaving it would
+/// have closed nothing: an offline reader with a candidate word list
+/// confirms a guess by recomputing the digest, which is exactly the
+/// capability the clear columns handed them. The ROADMAP entry that scoped
+/// this work did not name it, and the gate it proposed — a literal scan
+/// for the word — could never have caught it, because a hex digest is not
+/// the word.
+///
+/// The recipe is otherwise unchanged, so the id is still deterministic over
+/// the same four components: re-adding a fact still lands on the same row,
+/// and `kg_import` still re-derives rather than trusting the wire.
+fn triple_id(
+    vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    valid_from: Option<&str>,
+) -> String {
+    if !matches!(vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+        let mut h = Sha256::new();
+        for part in [subject, predicate, object, valid_from.unwrap_or("")] {
+            h.update(part.as_bytes());
+            h.update([0x1f]);
+        }
+        return hex::encode(&h.finalize()[..16]);
+    }
+    let mut buf = Vec::with_capacity(subject.len() + predicate.len() + object.len() + 64);
+    buf.extend_from_slice(b"kgtriple");
+    for part in [subject, predicate, object, valid_from.unwrap_or("")] {
+        buf.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        buf.extend_from_slice(part.as_bytes());
+    }
+    hex::encode(&keyed(secret, &buf)[..16])
+}
+
+/// The sealed (subject, predicate) pair — where the WORDS live once the
+/// columns hold a blind index. `None` on an hmac-only vault, whose columns
+/// hold the words already.
+fn kg_terms_at_rest(
+    vault: &undercroft_vault::Vault,
+    id: &str,
+    subject: &str,
+    predicate: &str,
+) -> Option<Vec<u8>> {
+    if !matches!(vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+        return None;
+    }
+    let mut plain = Vec::with_capacity(subject.len() + predicate.len() + 16);
+    plain.extend_from_slice(&(subject.len() as u64).to_le_bytes());
+    plain.extend_from_slice(subject.as_bytes());
+    plain.extend_from_slice(predicate.as_bytes());
+    Some(vault.content_at_rest(&format!("kgterms/{id}"), &plain))
+}
+
+/// Recover (subject, predicate) from the sealed blob.
+fn kg_terms_from_rest(
+    vault: &undercroft_vault::Vault,
+    id: &str,
+    blob: &[u8],
+) -> Result<(String, String), StoreError> {
+    let plain = vault
+        .content_from_rest(&format!("kgterms/{id}"), blob)
+        .map_err(|e| StoreError::CorruptRow {
+            id: id.to_string(),
+            reason: format!("kg terms: {e}"),
+        })?;
+    let bad = || StoreError::CorruptRow {
+        id: id.to_string(),
+        reason: "kg terms are malformed".into(),
+    };
+    let n = usize::try_from(u64::from_le_bytes(
+        plain
+            .get(..8)
+            .ok_or_else(bad)?
+            .try_into()
+            .map_err(|_| bad())?,
+    ))
+    .map_err(|_| bad())?;
+    let subject =
+        String::from_utf8(plain.get(8..8 + n).ok_or_else(bad)?.to_vec()).map_err(|_| bad())?;
+    let predicate =
+        String::from_utf8(plain.get(8 + n..).ok_or_else(bad)?.to_vec()).map_err(|_| bad())?;
+    Ok((subject, predicate))
+}
+
+/// Canonical bytes of the sealed terms blob, as a fourth extension on the
+/// `support`/`authority`/`extractor` precedent: appended only when the blob
+/// exists, so every fact written before A10 keeps byte-identical canonical
+/// bytes and is not re-tagged by the mere existence of this feature.
+///
+/// It is inside the tag because the blind columns alone are not enough: an
+/// offline attacker who could swap one fact's sealed terms for another's
+/// would move a fact's meaning without touching a column the tag covers.
+pub(crate) fn terms_ext(terms: Option<&[u8]>) -> Option<Vec<u8>> {
+    terms.map(|t| t.to_vec())
 }
 
 fn now_rfc3339() -> String {
@@ -111,6 +261,7 @@ pub(crate) fn triple_canonical(
     support_at_rest: Option<&[u8]>,
     authority: Option<&[u8]>,
     extractor: Option<&[u8]>,
+    terms: Option<&[u8]>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
     for part in [
@@ -148,6 +299,17 @@ pub(crate) fn triple_canonical(
     if let Some(ext) = extractor {
         out.push(0x1d);
         out.extend_from_slice(ext);
+    }
+    // Sealed subject/predicate take the FOURTH separator (0x1c), same
+    // precedent and the same rule: a fact whose columns hold the words
+    // (an hmac-only vault, or any fact written before A10 and not yet
+    // migrated) has no blob here and keeps byte-identical canonical bytes.
+    // It is covered because the blind columns alone are not enough — an
+    // attacker who swapped one fact's sealed terms for another's would move
+    // a fact's meaning without touching a column the tag covers.
+    if let Some(terms) = terms {
+        out.push(0x1c);
+        out.extend_from_slice(terms);
     }
     out
 }
@@ -205,8 +367,58 @@ fn entity_canonical(id: &str, name: &str, etype: &str, created_at: &str) -> Stri
     format!("{id}\x1f{name}\x1f{etype}\x1f{created_at}")
 }
 
-fn entity_id(name: &str) -> String {
-    hex::encode(&Sha256::digest(name.as_bytes())[..16])
+/// An entity's id.
+///
+/// **Keyed on sealed vaults since 2026-08-05 (A10)**, for the same reason
+/// [`triple_id`] is: this was `sha256(name)[..16]`, an unkeyed digest of a
+/// content-derived word sitting in a clear column. Blinding `kg_entities.
+/// name` and leaving it would have left an offline reader confirming a
+/// guessed name by recomputing the digest — the exact capability the clear
+/// column gave them.
+fn entity_id(vault: &undercroft_vault::Vault, secret: &[u8; 32], name: &str) -> String {
+    if !matches!(vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+        return hex::encode(&Sha256::digest(name.as_bytes())[..16]);
+    }
+    let mut buf = Vec::with_capacity(name.len() + 24);
+    buf.extend_from_slice(b"kgentity");
+    buf.extend_from_slice(&(name.len() as u64).to_le_bytes());
+    buf.extend_from_slice(name.as_bytes());
+    hex::encode(&keyed(secret, &buf)[..16])
+}
+
+/// The entity NAME as it goes to disk, and the sealed copy that holds the
+/// word. Mirrors [`kg_term_at_rest`] / [`kg_terms_at_rest`] one table over.
+fn entity_name_at_rest(
+    vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
+    name: &str,
+) -> (String, Option<Vec<u8>>) {
+    let blind = kg_term_at_rest(vault, secret, "e", name);
+    let sealed = matches!(vault.level(), undercroft_vault::SecurityLevel::Sealed)
+        .then(|| vault.content_at_rest(&format!("kgname/{blind}"), name.as_bytes()));
+    (blind, sealed)
+}
+
+/// Recover an entity name from its sealed copy, falling back to the column
+/// for an hmac-only vault and for rows written before A10.
+fn entity_name_from_rest(
+    vault: &undercroft_vault::Vault,
+    blind: &str,
+    sealed: Option<&[u8]>,
+) -> Result<String, StoreError> {
+    let Some(blob) = sealed else {
+        return Ok(blind.to_string());
+    };
+    let raw = vault
+        .content_from_rest(&format!("kgname/{blind}"), blob)
+        .map_err(|e| StoreError::CorruptRow {
+            id: blind.to_string(),
+            reason: format!("kg entity name: {e}"),
+        })?;
+    String::from_utf8(raw).map_err(|e| StoreError::CorruptRow {
+        id: blind.to_string(),
+        reason: e.to_string(),
+    })
 }
 
 /// Create the entity row for `name` when it does not exist yet — inside
@@ -228,25 +440,32 @@ fn entity_id(name: &str) -> String {
 fn ensure_entity_in(
     tx: &rusqlite::Transaction<'_>,
     vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
     name: &str,
     at: &str,
 ) -> Result<Option<(String, u64)>, StoreError> {
+    // The lookup is by the AT-REST name, which on a sealed vault is the
+    // blind index — an indexed equality either way (A10).
+    let (name_at_rest, name_rest) = entity_name_at_rest(vault, secret, name);
     let exists: Option<String> = tx
         .query_row(
             "SELECT id FROM kg_entities WHERE name = ?1",
-            params![name],
+            params![name_at_rest],
             |r| r.get(0),
         )
         .optional()?;
     if exists.is_some() {
         return Ok(None);
     }
-    let id = entity_id(name);
-    let canonical = entity_canonical(&id, name, "unknown", at);
+    let id = entity_id(vault, secret, name);
+    // The canonical covers what is AT REST, so a flipped column still fails
+    // verification — and on a sealed vault that is the blind value, which
+    // is what the column holds.
+    let canonical = entity_canonical(&id, &name_at_rest, "unknown", at);
     let tag = vault.tag(canonical.as_bytes());
     tx.execute(
-        "INSERT INTO kg_entities (id, name, etype, tag, created_at) VALUES (?1, ?2, 'unknown', ?3, ?4)",
-        params![id, name, tag.as_slice(), at],
+        "INSERT INTO kg_entities (id, name, etype, tag, created_at, name_rest)          VALUES (?1, ?2, 'unknown', ?3, ?4, ?5)",
+        params![id, name_at_rest, tag.as_slice(), at, name_rest],
     )?;
     let state = chain_append(tx, vault, &format!("kg-entity/{id}"), &tag, at)?;
     Ok(Some(state))
@@ -386,6 +605,94 @@ pub struct TripleExport {
 }
 
 impl PalaceStore {
+    /// The per-vault secret the knowledge graph's blind index and its ids
+    /// are keyed with — generated once, sealed in `meta`, and **never
+    /// regenerated**.
+    ///
+    /// Deliberately NOT the vault's MAC key, and this is the load-bearing
+    /// decision of A10. A key rotation re-derives every vault key from a
+    /// fresh salt; if ids were keyed with one of those, every id in the
+    /// graph would change on every rotation — and an id is not private
+    /// state here. `chain_append` records a fact under `kg/{id}`, and
+    /// rotation's contract is to re-key over PRESERVED audit bytes, so a
+    /// moving id would orphan every audit record the graph ever wrote. It
+    /// would also break the deterministic-id idempotency the whole module
+    /// rests on: re-adding the same fact after a rotation would insert a
+    /// second row instead of landing on the first.
+    ///
+    /// So the secret is a stable random 32 bytes, sealed at rest under the
+    /// vault's encryption key like any other artifact. Rotation RE-SEALS it
+    /// and leaves the value alone — the same treatment the PQ codebooks
+    /// get, and for the same reason: re-sealing changes what an offline
+    /// reader sees, re-deriving would change what the vault means.
+    ///
+    /// Decrypt-once: the value is cached for the life of the store, on the
+    /// pattern the PQ code cache already uses.
+    pub(crate) fn kg_secret(&self) -> Result<[u8; 32], StoreError> {
+        if let Some(s) = *self.kg_secret.borrow() {
+            return Ok(s);
+        }
+        let stored: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'kg_blind_secret'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let secret: [u8; 32] = match stored {
+            Some(blob) => self
+                .vault
+                .content_from_rest("kg/blind-secret", &blob)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: "kg_blind_secret".into(),
+                    reason: e.to_string(),
+                })?
+                .try_into()
+                .map_err(|_| StoreError::CorruptRow {
+                    id: "kg_blind_secret".into(),
+                    reason: "kg blind secret is not 32 bytes".into(),
+                })?,
+            None => {
+                // First use. A read-only store cannot create one — and does
+                // not need to: with no secret there are no blinded rows, so
+                // every read falls through to the columns.
+                let mut fresh = [0u8; 32];
+                getrandom_bytes(&mut fresh);
+                if !self.read_only {
+                    let sealed = self.vault.content_at_rest("kg/blind-secret", &fresh);
+                    self.conn.execute(
+                        "INSERT INTO meta (key, value) VALUES ('kg_blind_secret', ?1)                          ON CONFLICT(key) DO NOTHING",
+                        params![sealed],
+                    )?;
+                    // Re-read: a concurrent writer may have won the insert,
+                    // and two different secrets over one graph would blind
+                    // the same word two ways.
+                    let blob: Vec<u8> = self.conn.query_row(
+                        "SELECT value FROM meta WHERE key = 'kg_blind_secret'",
+                        [],
+                        |r| r.get(0),
+                    )?;
+                    fresh = self
+                        .vault
+                        .content_from_rest("kg/blind-secret", &blob)
+                        .map_err(|e| StoreError::CorruptRow {
+                            id: "kg_blind_secret".into(),
+                            reason: e.to_string(),
+                        })?
+                        .try_into()
+                        .map_err(|_| StoreError::CorruptRow {
+                            id: "kg_blind_secret".into(),
+                            reason: "kg blind secret is not 32 bytes".into(),
+                        })?;
+                }
+                fresh
+            }
+        };
+        *self.kg_secret.borrow_mut() = Some(secret);
+        Ok(secret)
+    }
+
     pub(crate) fn init_kg_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS kg_entities (
@@ -443,11 +750,22 @@ impl PalaceStore {
             "review_state TEXT",
             "canonical_key TEXT",
             "extractor TEXT",
+            // The subject and predicate SEALED, on a sealed vault (A10).
+            // Those two columns hold a blind index there — a truncated
+            // keyed HMAC, so SQL equality still works and an offline reader
+            // gets no word — and this is where the words themselves live.
+            // NULL on an hmac-only vault, whose columns hold the words
+            // because that level keeps plaintext content by choice.
+            "terms BLOB",
         ] {
             let _ = self
                 .conn
                 .execute(&format!("ALTER TABLE kg_triples ADD COLUMN {col}"), []);
         }
+        // The entity name, same shape one table over.
+        let _ = self
+            .conn
+            .execute("ALTER TABLE kg_entities ADD COLUMN name_rest BLOB", []);
         // After the columns exist (fresh table or migration): the exact-
         // authority door is an INDEXED equality — `lookup_canonical` must
         // never ride an O(graph) `all_triples` decode.
@@ -455,6 +773,241 @@ impl PalaceStore {
             "CREATE INDEX IF NOT EXISTS idx_kg_triples_canonical ON kg_triples(canonical_key)",
             [],
         )?;
+        self.blind_existing_kg_rows()?;
+        Ok(())
+    }
+
+    /// Move a pre-A10 sealed graph onto the blind index, once.
+    ///
+    /// A vault written before this change holds subjects, predicates and
+    /// entity names as CLEAR TEXT, and ids that are unkeyed SHA-256 digests
+    /// of the same words. Shipping the new write path without this would be
+    /// worse than not shipping it: the old rows keep their oracle, and
+    /// `ensure_entity_in` — which now looks up by the blind value — would
+    /// miss every existing entity and insert a duplicate beside it.
+    ///
+    /// Per row: seal the words, blind the columns, re-derive the id under
+    /// the vault's KG secret, re-seal the object and grounding blobs (their
+    /// AAD is the id), re-tag over the new at-rest bytes, and re-key the
+    /// receipt (which binds the id). **Ids move here, once**, and that is
+    /// the price of closing the oracle — stated rather than hidden. Nothing
+    /// outside the vault depends on them: an export carries ids but
+    /// `kg_import` re-derives, and the audit records written under the old
+    /// `kg/{id}` are left exactly as they are, because rotation's rule
+    /// applies here too — historical audit bytes are evidence, not state to
+    /// rewrite.
+    ///
+    /// **A row whose tag does not verify is SKIPPED, not migrated and not
+    /// fatal.** Migrating it would launder a tampered row into a freshly
+    /// tagged one; aborting would leave the vault unopenable for `verify`
+    /// and `repair`, which is the argument the embedder migration already
+    /// settled one module over. It warns, leaves the row alone, and
+    /// `verify` still reports it.
+    ///
+    /// Idempotent and crash-safe: the marker is written LAST, inside the
+    /// same transaction as the rows, so a crash mid-walk simply repeats it.
+    fn blind_existing_kg_rows(&self) -> Result<(), StoreError> {
+        if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+            return Ok(());
+        }
+        let done: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'kg_blind_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if done.as_deref() == Some(KG_BLIND_VERSION) {
+            return Ok(());
+        }
+        // A read-only open cannot migrate, and does not have to: every read
+        // path falls back to the columns when `terms`/`name_rest` is NULL,
+        // so a legacy graph still answers. It says what it did not do,
+        // which is R4's rule.
+        if self.read_only {
+            undercroft_obs::diag_warn!(
+                "this vault's knowledge graph predates the blind index (A10) and was NOT \
+                 migrated: migrating is a write. Its subjects, predicates and entity names \
+                 stay readable at rest until a writable open migrates it"
+            );
+            return Ok(());
+        }
+        let secret = self.kg_secret()?;
+        let tx = self.conn.unchecked_transaction()?;
+        let mut skipped = 0usize;
+
+        // ---- triples ------------------------------------------------------
+        let sql = format!("SELECT {TRIPLE_COLUMNS}, source_fp, receipt_tag FROM kg_triples");
+        type LegacyRow = (TripleRow, Option<Vec<u8>>, Option<Vec<u8>>);
+        let rows: Vec<LegacyRow> = tx
+            .prepare(&sql)?
+            .query_map([], |r| {
+                Ok((TripleRow::from_row(r)?, r.get(16)?, r.get(17)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        for (row, src_fp, receipt) in rows {
+            if row.terms.is_some() {
+                continue;
+            }
+            if self.vault.verify_tag(&row.canonical(), &row.tag).is_err() {
+                skipped += 1;
+                continue;
+            }
+            // The columns still hold the WORDS on a legacy row.
+            let (subject, predicate) = (row.subject.clone(), row.predicate.clone());
+            let object = self
+                .vault
+                .content_from_rest(&format!("kg/{}", row.id), &row.object)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: row.id.clone(),
+                    reason: e.to_string(),
+                })?;
+            let object = String::from_utf8(object).map_err(|e| StoreError::CorruptRow {
+                id: row.id.clone(),
+                reason: e.to_string(),
+            })?;
+            let new_id = triple_id(
+                &self.vault,
+                &secret,
+                &subject,
+                &predicate,
+                &object,
+                row.valid_from.as_deref(),
+            );
+            let new_object = self
+                .vault
+                .content_at_rest(&format!("kg/{new_id}"), object.as_bytes());
+            let new_support = row
+                .support
+                .as_deref()
+                .map(|sealed| {
+                    self.vault
+                        .content_from_rest(&format!("kg/{}/support", row.id), sealed)
+                        .map(|plain| {
+                            self.vault
+                                .content_at_rest(&format!("kg/{new_id}/support"), &plain)
+                        })
+                })
+                .transpose()
+                .map_err(|e| StoreError::CorruptRow {
+                    id: row.id.clone(),
+                    reason: e.to_string(),
+                })?;
+            let subj_at_rest = kg_term_at_rest(&self.vault, &secret, "s", &subject);
+            let pred_at_rest = kg_term_at_rest(&self.vault, &secret, "p", &predicate);
+            let terms = kg_terms_at_rest(&self.vault, &new_id, &subject, &predicate);
+            let auth = authority_ext(
+                row.authority_class.as_deref(),
+                row.review_state.as_deref(),
+                row.canonical_key.as_deref(),
+            );
+            let ext = extractor_ext(row.extractor.as_deref());
+            let tag = self.vault.tag(&triple_canonical(
+                &new_id,
+                &subj_at_rest,
+                &pred_at_rest,
+                &new_object,
+                &row.valid_from,
+                &row.valid_to,
+                row.confidence,
+                new_support.as_deref(),
+                auth.as_deref(),
+                ext.as_deref(),
+                terms_ext(terms.as_deref()).as_deref(),
+            ));
+            let new_receipt = match (&receipt, &row.source_drawer_id, &src_fp) {
+                (Some(_), Some(did), Some(fp)) => Some(
+                    self.vault
+                        .tag(&receipt_canonical(&new_id, did, fp))
+                        .to_vec(),
+                ),
+                _ => None,
+            };
+            tx.execute(
+                "UPDATE kg_triples SET id = ?1, subject = ?2, predicate = ?3, object = ?4, \
+                        support = ?5, tag = ?6, receipt_tag = ?7, terms = ?8 WHERE id = ?9",
+                params![
+                    new_id,
+                    subj_at_rest,
+                    pred_at_rest,
+                    new_object,
+                    new_support,
+                    tag.as_slice(),
+                    new_receipt,
+                    terms,
+                    row.id
+                ],
+            )?;
+        }
+
+        // ---- entities -----------------------------------------------------
+        type LegacyEntity = (String, String, String, Vec<u8>, String);
+        let ents: Vec<LegacyEntity> = tx
+            .prepare(
+                "SELECT id, name, etype, tag, created_at FROM kg_entities \
+                 WHERE name_rest IS NULL",
+            )?
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        for (id, name, etype, tag, created) in ents {
+            if self
+                .vault
+                .verify_tag(
+                    entity_canonical(&id, &name, &etype, &created).as_bytes(),
+                    &tag,
+                )
+                .is_err()
+            {
+                skipped += 1;
+                continue;
+            }
+            let new_id = entity_id(&self.vault, &secret, &name);
+            let (blind, sealed) = entity_name_at_rest(&self.vault, &secret, &name);
+            let new_tag = self
+                .vault
+                .tag(entity_canonical(&new_id, &blind, &etype, &created).as_bytes());
+            tx.execute(
+                "UPDATE kg_entities SET id = ?1, name = ?2, tag = ?3, name_rest = ?4 \
+                 WHERE id = ?5",
+                params![new_id, blind, new_tag.as_slice(), sealed, id],
+            )?;
+        }
+
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('kg_blind_version', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![KG_BLIND_VERSION],
+        )?;
+        tx.commit()?;
+        // **The UPDATEs are not enough, and this is the part that is easy to
+        // get wrong.** An in-place UPDATE leaves the old row image in a
+        // freed page, so the words this migration exists to remove were
+        // still sitting in the database FILE afterwards — found by the gate
+        // reading the bytes rather than by reasoning about the rows, which
+        // is the only way that class of mistake gets caught. `VACUUM`
+        // rewrites the database and drops the free list, so the old images
+        // go with it.
+        //
+        // Outside the transaction because SQLite forbids it inside one, and
+        // unconditional because a migration that half-closed an oracle would
+        // be worse than one that never ran: an operator would believe it.
+        // The cost is a one-time full rewrite of the vault, paid once per
+        // vault, on the open that migrates it.
+        //
+        // Residue, stated: a COPY of the database taken before this ran
+        // still holds the words, and so may an un-checkpointed `-wal` from
+        // before it. Neither is something this code can reach.
+        self.conn.execute_batch("VACUUM")?;
+        if skipped > 0 {
+            undercroft_obs::diag_warn!(
+                "{skipped} knowledge-graph row(s) failed their own HMAC and were left \
+                 unmigrated rather than re-tagged — migrating one would launder a tampered \
+                 row. Run `undercroft verify` to see them"
+            );
+        }
         Ok(())
     }
 
@@ -715,6 +1268,7 @@ impl PalaceStore {
         extractor: Option<&str>,
     ) -> Result<String, StoreError> {
         let _span = undercroft_obs::scope("kg", self.vault.id());
+        let secret = self.kg_secret()?;
         // `Invalid`, not `CorruptRow`: nothing here is corrupt — a caller
         // handed us a name the guard does not accept, and that owes a 400.
         // As `CorruptRow` it fell through `store_err`'s `_ => 500` and told
@@ -729,7 +1283,13 @@ impl PalaceStore {
         // The object is content and reaches the agent verbatim — screened
         // and bounded here, at the graph's one write path.
         self.screen_kg_object(subject, predicate, object)?;
-        let id = triple_id(subject, predicate, object, valid_from);
+        let id = triple_id(&self.vault, &secret, subject, predicate, object, valid_from);
+        // The columns hold a BLIND INDEX on a sealed vault and the words
+        // live in `terms`, sealed under their own AAD domain (A10). Both
+        // are computed once here and carried to the insert.
+        let subj_at_rest = kg_term_at_rest(&self.vault, &secret, "s", subject);
+        let pred_at_rest = kg_term_at_rest(&self.vault, &secret, "p", predicate);
+        let terms = kg_terms_at_rest(&self.vault, &id, subject, predicate);
         // An ordinary add declares no tier, so this refuses whenever the id
         // it derived names an approved canonical holder — before any sealing
         // work, and long before the transaction. See the guard's own doc for
@@ -752,8 +1312,8 @@ impl PalaceStore {
         let ext = extractor_ext(extractor);
         let tag = self.vault.tag(&triple_canonical(
             &id,
-            subject,
-            predicate,
+            &subj_at_rest,
+            &pred_at_rest,
             &object_rest,
             &vf,
             &vt,
@@ -763,6 +1323,7 @@ impl PalaceStore {
             // a separate, audited declaration (`kg_set_authority`).
             None,
             ext.as_deref(),
+            terms_ext(terms.as_deref()).as_deref(),
         ));
         // Receipt: a separate keyed tag over (triple id, citation, source
         // fingerprint). Kept distinct from the triple tag so it composes
@@ -777,12 +1338,12 @@ impl PalaceStore {
         // The entity the fact is ABOUT is created in the same transaction as
         // the fact: it used to be written first on the bare connection, so a
         // triple insert that failed left an orphan entity behind.
-        let entity = ensure_entity_in(&tx, &self.vault, subject, &now)?;
+        let entity = ensure_entity_in(&tx, &self.vault, &secret, subject, &now)?;
         tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
                                      confidence, source_drawer_id, tag, extracted_at,
-                                     source_fp, receipt_tag, support, extractor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                                     source_fp, receipt_tag, support, extractor, terms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(id) DO UPDATE SET
                  object = excluded.object,
                  valid_to = excluded.valid_to,
@@ -806,11 +1367,17 @@ impl PalaceStore {
                  authority_class = excluded.authority_class,
                  review_state = excluded.review_state,
                  canonical_key = excluded.canonical_key,
-                 extractor = excluded.extractor",
+                 extractor = excluded.extractor,
+                 -- Same rule as the authority columns above: `terms` is
+                 -- inside the canonical the new tag covers, so leaving it
+                 -- out of the SET list would leave the old blob beside a
+                 -- tag computed over the new one and the row would fail
+                 -- its own verify.
+                 terms = excluded.terms",
             params![
                 id,
-                subject,
-                predicate,
+                subj_at_rest,
+                pred_at_rest,
                 object_rest,
                 vf,
                 vt,
@@ -822,6 +1389,7 @@ impl PalaceStore {
                 receipt_tag.as_ref().map(|t| t.as_slice()),
                 support_rest.as_deref(),
                 extractor,
+                terms.as_deref(),
             ],
         )?;
         let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
@@ -897,7 +1465,7 @@ impl PalaceStore {
         type ExportRow = (TripleRow, Option<Vec<u8>>, Option<Vec<u8>>);
         let rows: Vec<ExportRow> = stmt
             .query_map([], |r| {
-                Ok((TripleRow::from_row(r)?, r.get(15)?, r.get(16)?))
+                Ok((TripleRow::from_row(r)?, r.get(16)?, r.get(17)?))
             })?
             .collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(rows.len());
@@ -917,19 +1485,35 @@ impl PalaceStore {
     pub fn kg_export_entities(&self) -> Result<Vec<(String, String)>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, etype, tag, created_at FROM kg_entities ORDER BY name")?;
-        let rows: Vec<(String, String, String, Vec<u8>, String)> = stmt
+            .prepare(
+                "SELECT id, name, etype, tag, created_at, name_rest FROM kg_entities                  ORDER BY name",
+            )?;
+        type EntityRow = (String, String, String, Vec<u8>, String, Option<Vec<u8>>);
+        let rows: Vec<EntityRow> = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?
             .collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(rows.len());
-        for (id, name, etype, tag, created) in rows {
+        for (id, name, etype, tag, created, name_rest) in rows {
+            // The canonical covers what is AT REST, which on a sealed vault
+            // is the blind index — verify against that, then decrypt the
+            // word for the caller (A10).
             let canonical = entity_canonical(&id, &name, &etype, &created);
             self.vault
                 .verify_tag(canonical.as_bytes(), &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
-            out.push((name, etype));
+            out.push((
+                entity_name_from_rest(&self.vault, &name, name_rest.as_deref())?,
+                etype,
+            ));
         }
         Ok(out)
     }
@@ -946,6 +1530,7 @@ impl PalaceStore {
     /// record over such a holder is refused — `kg_set_authority` owns that
     /// row, in both directions.
     pub fn kg_import(&mut self, exp: &TripleExport) -> Result<String, StoreError> {
+        let secret = self.kg_secret()?;
         let t = &exp.triple;
         undercroft_core::validate_name(&t.subject, "subject")
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
@@ -971,7 +1556,19 @@ impl PalaceStore {
         })?;
         // The id is re-derived, never trusted from the wire: the same
         // deterministic recipe every locally-written fact gets.
-        let id = triple_id(&t.subject, &t.predicate, &t.object, t.valid_from.as_deref());
+        let id = triple_id(
+            &self.vault,
+            &secret,
+            &t.subject,
+            &t.predicate,
+            &t.object,
+            t.valid_from.as_deref(),
+        );
+        // The payload carries WORDS; the columns take the blind index and
+        // the sealed blob takes the words (A10).
+        let subj_at_rest = kg_term_at_rest(&self.vault, &secret, "s", &t.subject);
+        let pred_at_rest = kg_term_at_rest(&self.vault, &secret, "p", &t.predicate);
+        let terms = kg_terms_at_rest(&self.vault, &id, &t.subject, &t.predicate);
         // The fifth guard, and the one `kg_add` and this path share: the id
         // may already name an approved canonical holder HERE, and this upsert
         // rewrites every column of it. A payload replaying a local golden
@@ -1025,8 +1622,8 @@ impl PalaceStore {
         let ext = extractor_ext(t.extractor.as_deref());
         let tag = self.vault.tag(&triple_canonical(
             &id,
-            &t.subject,
-            &t.predicate,
+            &subj_at_rest,
+            &pred_at_rest,
             &object_rest,
             &t.valid_from,
             &t.valid_to,
@@ -1034,6 +1631,7 @@ impl PalaceStore {
             support_rest.as_deref(),
             auth.as_deref(),
             ext.as_deref(),
+            terms_ext(terms.as_deref()).as_deref(),
         ));
         let source_fp = exp
             .source_fp
@@ -1048,13 +1646,15 @@ impl PalaceStore {
             .map(|(fp, did)| self.vault.tag(&receipt_canonical(&id, did, fp)));
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
-        let entity = ensure_entity_in(&tx, &self.vault, &t.subject, &now)?;
+        let entity = ensure_entity_in(&tx, &self.vault, &secret, &t.subject, &now)?;
         tx.execute(
             "INSERT INTO kg_triples (id, subject, predicate, object, valid_from, valid_to,
                                      confidence, source_drawer_id, tag, extracted_at,
                                      source_fp, receipt_tag, support,
-                                     authority_class, review_state, canonical_key, extractor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                                     authority_class, review_state, canonical_key, extractor,
+                                     terms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                     ?18)
              ON CONFLICT(id) DO UPDATE SET
                  object = excluded.object,
                  valid_to = excluded.valid_to,
@@ -1067,11 +1667,12 @@ impl PalaceStore {
                  authority_class = excluded.authority_class,
                  review_state = excluded.review_state,
                  canonical_key = excluded.canonical_key,
-                 extractor = excluded.extractor",
+                 extractor = excluded.extractor,
+                 terms = excluded.terms",
             params![
                 id,
-                t.subject,
-                t.predicate,
+                subj_at_rest,
+                pred_at_rest,
                 object_rest,
                 t.valid_from,
                 t.valid_to,
@@ -1087,6 +1688,7 @@ impl PalaceStore {
                 t.review_state,
                 t.canonical_key,
                 t.extractor,
+                terms.as_deref(),
             ],
         )?;
         let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
@@ -1109,6 +1711,7 @@ impl PalaceStore {
     /// canonical, so it is exactly as tamper-covered as the name and
     /// exactly as owed to the chain.
     pub fn kg_import_entity(&mut self, name: &str, etype: &str) -> Result<(), StoreError> {
+        let secret = self.kg_secret()?;
         undercroft_core::validate_name(name, "entity")
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
         // `etype` arrived unvalidated while `name` beside it did not: free
@@ -1137,19 +1740,25 @@ impl PalaceStore {
         let tx = self.conn.transaction()?;
         // Anchoring takes the LAST chain state; `records` counts what to
         // report, since one call can both create and refine.
-        let mut anchor = ensure_entity_in(&tx, &self.vault, name, &now)?;
+        let mut anchor = ensure_entity_in(&tx, &self.vault, &secret, name, &now)?;
         let mut records = usize::from(anchor.is_some());
         if etype != "unknown" {
+            // By the AT-REST name, which on a sealed vault is the blind
+            // index — the same value `ensure_entity_in` just inserted under
+            // (A10). Looking it up by the WORD found nothing there, so
+            // every import re-created the row instead of refining it.
+            let name_at_rest = kg_term_at_rest(&self.vault, &secret, "e", name);
             let existing: Option<(String, String, String)> = tx
                 .query_row(
                     "SELECT id, etype, created_at FROM kg_entities WHERE name = ?1",
-                    params![name],
+                    params![name_at_rest],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
             if let Some((id, cur, created)) = existing {
                 if cur == "unknown" {
-                    let canonical = entity_canonical(&id, name, etype, &created);
+                    // The canonical covers what is at rest.
+                    let canonical = entity_canonical(&id, &name_at_rest, etype, &created);
                     let tag = self.vault.tag(canonical.as_bytes());
                     tx.execute(
                         "UPDATE kg_entities SET etype = ?1, tag = ?2 WHERE id = ?3",
@@ -1220,6 +1829,10 @@ impl PalaceStore {
                 held.canonical_key.as_deref(),
             );
             let ext = extractor_ext(held.extractor.as_deref());
+            // `held.subject`/`predicate` are already the AT-REST values and
+            // `held.terms` the sealed words: both ride through untouched,
+            // exactly like `support` and the authority fields. Closing a
+            // window does not change what a fact is about.
             let tag = self.vault.tag(&triple_canonical(
                 &held.id,
                 &held.subject,
@@ -1231,6 +1844,7 @@ impl PalaceStore {
                 held.support.as_deref(),
                 auth.as_deref(),
                 ext.as_deref(),
+                terms_ext(held.terms.as_deref()).as_deref(),
             ));
             let tx = self.conn.transaction()?;
             tx.execute(
@@ -1312,6 +1926,7 @@ impl PalaceStore {
             row.support.as_deref(),
             auth.as_deref(),
             ext.as_deref(),
+            terms_ext(row.terms.as_deref()).as_deref(),
         ));
         let now = now_rfc3339();
         let tx = self.conn.transaction()?;
@@ -1394,14 +2009,18 @@ impl PalaceStore {
                     .map(|bytes| serde_json::from_slice(&bytes).unwrap_or_default())
             })
             .transpose()?;
+        // The WORDS, which on a sealed vault are in the sealed blob and not
+        // in the columns (A10). Every read reaches a `Triple` through here,
+        // so this is the one place that has to know.
+        let (subject, predicate) = row.terms(&self.vault)?;
         Ok(Triple {
             object: String::from_utf8(object).map_err(|e| StoreError::CorruptRow {
                 id: row.id.clone(),
                 reason: e.to_string(),
             })?,
             id: row.id,
-            subject: row.subject,
-            predicate: row.predicate,
+            subject,
+            predicate,
             valid_from: row.valid_from,
             valid_to: row.valid_to,
             confidence: row.confidence,
@@ -1474,6 +2093,7 @@ impl PalaceStore {
         object: Option<&str>,
         ended: Option<&str>,
     ) -> Result<u64, StoreError> {
+        let secret = self.kg_secret()?;
         let ended = ended.map(str::to_string).unwrap_or_else(now_rfc3339);
         let matches: Vec<Triple> = self
             .all_triples()?
@@ -1545,10 +2165,19 @@ impl PalaceStore {
                 t.canonical_key.as_deref(),
             );
             let ext = extractor_ext(t.extractor.as_deref());
+            // `t` is a decoded Triple, so these are the WORDS — they have to
+            // go back through the blind index before they can reach a
+            // canonical, or the tag would cover something the column does
+            // not hold. Deterministic, so the columns themselves do not
+            // move; the sealed terms are re-sealed (AEAD is nonced) and
+            // written in the same statement as the tag that covers them.
+            let subj_at_rest = kg_term_at_rest(&self.vault, &secret, "s", &t.subject);
+            let pred_at_rest = kg_term_at_rest(&self.vault, &secret, "p", &t.predicate);
+            let terms = kg_terms_at_rest(&self.vault, &t.id, &t.subject, &t.predicate);
             let tag = self.vault.tag(&triple_canonical(
                 &t.id,
-                &t.subject,
-                &t.predicate,
+                &subj_at_rest,
+                &pred_at_rest,
                 &object_rest,
                 &t.valid_from,
                 &vt,
@@ -1556,12 +2185,21 @@ impl PalaceStore {
                 support_rest.as_deref(),
                 auth.as_deref(),
                 ext.as_deref(),
+                terms_ext(terms.as_deref()).as_deref(),
             ));
             let tx = self.conn.transaction()?;
             tx.execute(
-                "UPDATE kg_triples SET object = ?1, valid_to = ?2, tag = ?3, support = ?4
+                "UPDATE kg_triples SET object = ?1, valid_to = ?2, tag = ?3, support = ?4,
+                        terms = ?6
                  WHERE id = ?5",
-                params![object_rest, ended, tag.as_slice(), support_rest, t.id],
+                params![
+                    object_rest,
+                    ended,
+                    tag.as_slice(),
+                    support_rest,
+                    t.id,
+                    terms.as_deref()
+                ],
             )?;
             let (head, writes) = chain_append(
                 &tx,
@@ -1647,21 +2285,36 @@ impl PalaceStore {
         offset: usize,
     ) -> Result<Vec<(String, String, String)>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, etype, tag, created_at FROM kg_entities \
+            "SELECT id, name, etype, tag, created_at, name_rest FROM kg_entities \
              ORDER BY name LIMIT ?1 OFFSET ?2",
         )?;
-        let rows: Vec<(String, String, String, Vec<u8>, String)> = stmt
+        type EntityRow = (String, String, String, Vec<u8>, String, Option<Vec<u8>>);
+        let rows: Vec<EntityRow> = stmt
             .query_map(params![limit as i64, offset as i64], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?
             .collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(rows.len());
-        for (id, name, etype, tag, created) in rows {
+        for (id, name, etype, tag, created, name_rest) in rows {
+            // The canonical covers what is AT REST — on a sealed vault the
+            // blind index — so verification runs against the column and the
+            // WORD is decrypted afterwards for the caller (A10).
             let canonical = entity_canonical(&id, &name, &etype, &created);
             self.vault
                 .verify_tag(canonical.as_bytes(), &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
-            out.push((name, etype, created));
+            out.push((
+                entity_name_from_rest(&self.vault, &name, name_rest.as_deref())?,
+                etype,
+                created,
+            ));
         }
         Ok(out)
     }
@@ -1773,6 +2426,15 @@ struct TripleRow {
     /// extension) whenever set, same warning as `support`: drop it from a
     /// re-tag and every attributed fact reads as tampered.
     extractor: Option<String>,
+    /// Sealed (subject, predicate) on a sealed vault; `None` on an
+    /// hmac-only one and on any fact written before A10. Inside the
+    /// canonical via the terms extension whenever present, so it carries
+    /// the same warning as `support`: drop it from a re-tag and every
+    /// blinded fact reads as tampered.
+    ///
+    /// When it is `Some`, `subject` and `predicate` above are the BLIND
+    /// INDEX and not the words — read them for equality, never for display.
+    terms: Option<Vec<u8>>,
 }
 
 /// Columns every triple read needs, in the order `TripleRow::from_row`
@@ -1780,7 +2442,7 @@ struct TripleRow {
 /// miss another — the failure mode there is a false tamper alarm.
 const TRIPLE_COLUMNS: &str = "id, subject, predicate, object, valid_from, valid_to, confidence, \
                               source_drawer_id, tag, extracted_at, support, \
-                              authority_class, review_state, canonical_key, extractor";
+                              authority_class, review_state, canonical_key, extractor, terms";
 
 impl TripleRow {
     fn from_row(r: &rusqlite::Row<'_>) -> Result<Self, rusqlite::Error> {
@@ -1800,6 +2462,7 @@ impl TripleRow {
             review_state: r.get(12)?,
             canonical_key: r.get(13)?,
             extractor: r.get(14)?,
+            terms: r.get(15)?,
         })
     }
 
@@ -1823,8 +2486,32 @@ impl TripleRow {
             self.support.as_deref(),
             auth.as_deref(),
             ext.as_deref(),
+            self.terms.as_deref(),
         )
     }
+
+    /// The WORDS this row is about.
+    ///
+    /// On a sealed vault since A10 the `subject`/`predicate` columns hold a
+    /// blind index, so every path that renders or compares a fact by its
+    /// words goes through here. On an hmac-only vault, and on any fact
+    /// written before A10 and not yet migrated, the columns are the words
+    /// and this is the identity.
+    fn terms(&self, vault: &undercroft_vault::Vault) -> Result<(String, String), StoreError> {
+        match &self.terms {
+            Some(blob) => kg_terms_from_rest(vault, &self.id, blob),
+            None => Ok((self.subject.clone(), self.predicate.clone())),
+        }
+    }
+}
+
+/// An entity id exactly as every build before A10 derived it: an UNKEYED
+/// SHA-256 of the name. Test-only, and named rather than inlined because
+/// two tests plant pre-A10 rows and both must plant the same shape — the
+/// shape whose oracle A10 exists to close.
+#[cfg(test)]
+fn legacy_entity_id(name: &str) -> String {
+    hex::encode(&Sha256::digest(name.as_bytes())[..16])
 }
 
 fn valid_at(t: &Triple, as_of_key: Option<&str>) -> bool {
@@ -2060,25 +2747,211 @@ mod tests {
         assert_eq!(active[0].object, "rust");
     }
 
+    /// A10's migration: a graph written BEFORE the blind index is moved
+    /// onto it at the next writable open, and the facts still read back.
+    ///
+    /// Without this, shipping the new write path would have been worse than
+    /// not shipping it — existing rows keep their oracle, and
+    /// `ensure_entity_in` (which now looks up by the blind value) would
+    /// miss every existing entity and insert a duplicate beside it. The
+    /// legacy state is produced by writing the rows the way every build
+    /// before A10 wrote them, not by mocking the migration's own inputs.
     #[test]
-    fn sealed_kg_object_not_plaintext_on_disk() {
+    fn a_pre_blind_index_graph_is_migrated_and_stops_leaking() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let db = dir.path().join("vaults/kg-test/palace.db");
+        {
+            // Write two facts, then put the rows back into their pre-A10
+            // shape: clear subject/predicate, clear entity name, ids that
+            // are unkeyed SHA-256, and no sealed terms. The tags are
+            // recomputed over that shape, so the rows verify as a genuine
+            // legacy vault's would.
+            let mut s =
+                PalaceStore::open(mgr.create("kg-test", SecurityLevel::Sealed).unwrap()).unwrap();
+            s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+                .unwrap();
+            s.kg_add("alice", "reports_to", "bob", None, None, 1.0, None)
+                .unwrap();
+            let rows: Vec<(String, String, String, Vec<u8>)> = s
+                .conn
+                .prepare("SELECT id, subject, predicate, object FROM kg_triples")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            for (id, _, _, _) in &rows {
+                let row = s.triple_row(id).unwrap().unwrap();
+                let (subject, predicate) = row.terms(&s.vault).unwrap();
+                let object = String::from_utf8(
+                    s.vault
+                        .content_from_rest(&format!("kg/{id}"), &row.object)
+                        .unwrap(),
+                )
+                .unwrap();
+                // The pre-A10 recipe, verbatim: unkeyed SHA-256 over the
+                // four components, first 16 bytes, hex.
+                let legacy_id = {
+                    let mut h = <super::Sha256 as super::Digest>::new();
+                    for part in [subject.as_str(), predicate.as_str(), object.as_str(), ""] {
+                        super::Digest::update(&mut h, part.as_bytes());
+                        super::Digest::update(&mut h, [0x1f]);
+                    }
+                    hex::encode(&super::Digest::finalize(h)[..16])
+                };
+                let legacy_object = s
+                    .vault
+                    .content_at_rest(&format!("kg/{legacy_id}"), object.as_bytes());
+                let tag = s.vault.tag(&super::triple_canonical(
+                    &legacy_id,
+                    &subject,
+                    &predicate,
+                    &legacy_object,
+                    &row.valid_from,
+                    &row.valid_to,
+                    row.confidence,
+                    None,
+                    None,
+                    None,
+                    None,
+                ));
+                s.conn
+                    .execute(
+                        "UPDATE kg_triples SET id = ?1, subject = ?2, predicate = ?3, \
+                                object = ?4, tag = ?5, terms = NULL WHERE id = ?6",
+                        rusqlite::params![
+                            legacy_id,
+                            subject,
+                            predicate,
+                            legacy_object,
+                            tag.as_slice(),
+                            id
+                        ],
+                    )
+                    .unwrap();
+            }
+            // The entity row, in its pre-A10 shape.
+            let created = "2020-01-01T00:00:00Z";
+            let eid = super::legacy_entity_id("alice");
+            let etag = s
+                .vault
+                .tag(super::entity_canonical(&eid, "alice", "unknown", created).as_bytes());
+            s.conn.execute("DELETE FROM kg_entities", []).unwrap();
+            s.conn
+                .execute(
+                    "INSERT INTO kg_entities (id, name, etype, tag, created_at) \
+                     VALUES (?1, 'alice', 'unknown', ?2, ?3)",
+                    rusqlite::params![eid, etag.as_slice(), created],
+                )
+                .unwrap();
+            s.conn
+                .execute("DELETE FROM meta WHERE key = 'kg_blind_version'", [])
+                .unwrap();
+        }
+        // Premise: the legacy vault really does leak, so the assertions
+        // after the migration are about the migration.
+        let legacy = std::fs::read(&db).unwrap();
+        assert!(
+            legacy.windows(5).any(|w| w == b"alice"),
+            "premise: a pre-A10 graph keeps its subject in clear"
+        );
+
+        // The next writable open migrates it.
+        let mut s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let facts = s.kg_query_entity("alice", None, "outgoing").unwrap();
+        assert_eq!(facts.len(), 2, "both facts still read back: {facts:?}");
+        assert!(facts.iter().any(|t| t.object == "acme"));
+        assert!(s
+            .kg_entities(10, 0)
+            .unwrap()
+            .iter()
+            .any(|(n, _, _)| n == "alice"));
+        // Re-adding an existing fact still lands on the same row, and does
+        // not resurrect a duplicate entity — the failure mode the missing
+        // migration would have produced.
+        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
+        assert_eq!(s.kg_stats().unwrap().triples, 2);
+        assert_eq!(s.kg_stats().unwrap().entities, 1);
+        assert!(s.verify().unwrap().ok(), "and the vault still verifies");
+        drop(s);
+
+        let after = std::fs::read(&db).unwrap();
+        for w in ["alice", "works_at", "acme", "reports_to", "bob"] {
+            assert!(
+                !after.windows(w.len()).any(|win| win == w.as_bytes()),
+                "{w:?} survived the migration in clear"
+            );
+            let digest = super::legacy_entity_id(w);
+            assert!(
+                !after
+                    .windows(digest.len())
+                    .any(|win| win == digest.as_bytes()),
+                "an unkeyed digest of {w:?} survived the migration"
+            );
+        }
+    }
+
+    /// A10: **not one word** of a fact reaches the disk in clear on a
+    /// sealed vault — and neither does any unkeyed digest of one.
+    ///
+    /// This test asserted the opposite until 2026-08-05: `assert!(db
+    /// .windows(5).any(|w| w == b"alice"))`, with the comment "Subject
+    /// stays queryable structure". The subject of an extracted fact is
+    /// CONTENT — `refine` lifts it out of sealed drawer text — and the
+    /// module called it "the same trade-off as plaintext wing/room names",
+    /// which is false in kind: wing and room are declared taxonomy.
+    ///
+    /// The digest half is the reason this test is shaped this way. Blinding
+    /// the columns while leaving `triple_id`/`entity_id` as unkeyed SHA-256
+    /// of the same words would have closed nothing — an offline reader with
+    /// a candidate list confirms a guess by recomputing the digest — and a
+    /// literal-substring scan, which is what the ROADMAP entry proposed,
+    /// can never catch that: a hex digest is not the word.
+    #[test]
+    fn a_sealed_vault_leaks_neither_a_facts_words_nor_a_digest_of_them() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
-        s.kg_add(
-            "alice",
-            "secret_project",
-            "operation-blue-heron-77",
-            None,
-            None,
-            1.0,
-            None,
-        )
-        .unwrap();
+        let words = ["alice", "secret_project", "operation-blue-heron-77"];
+        s.kg_add(words[0], words[1], words[2], None, None, 1.0, None)
+            .unwrap();
+        // A second fact, so the entity refine path and a second subject are
+        // on disk too.
+        s.kg_add("alice", "reports_to", "bob", None, None, 1.0, None)
+            .unwrap();
         drop(s);
         let db = std::fs::read(dir.path().join("vaults/kg-test/palace.db")).unwrap();
-        let needle = b"operation-blue-heron-77";
-        assert!(!db.windows(needle.len()).any(|w| w == needle));
-        // Subject stays queryable structure.
-        assert!(db.windows(5).any(|w| w == b"alice"));
+
+        for w in words.iter().chain(["bob", "reports_to"].iter()) {
+            assert!(
+                !db.windows(w.len()).any(|win| win == w.as_bytes()),
+                "the word {w:?} is on disk in clear"
+            );
+            // And the unkeyed digest of it, in the exact shape the two ids
+            // used before A10 — which is what `legacy_entity_id` is: the
+            // pre-A10 recipe, kept so this test cannot drift away from the
+            // thing it is asserting the absence of.
+            let digest = super::legacy_entity_id(w);
+            assert!(
+                !db.windows(digest.len())
+                    .any(|win| win == digest.as_bytes()),
+                "an unkeyed digest of {w:?} is on disk — a confirmation                  oracle for anyone with a candidate word list"
+            );
+        }
+
+        // Premise, both halves. An hmac-only vault DOES keep the words —
+        // that level stores plaintext by the operator's explicit choice, so
+        // a passing assertion above has to mean the sealing and not an
+        // empty database.
+        let (dir2, mut s2) = store(SecurityLevel::HmacOnly);
+        s2.kg_add(words[0], words[1], words[2], None, None, 1.0, None)
+            .unwrap();
+        drop(s2);
+        let db2 = std::fs::read(dir2.path().join("vaults/kg-test/palace.db")).unwrap();
+        assert!(
+            db2.windows(5).any(|w| w == b"alice"),
+            "premise: an hmac-only vault keeps the subject readable"
+        );
     }
 
     #[test]
@@ -2740,7 +3613,7 @@ mod tests {
         s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
             .unwrap();
         // A pre-upgrade entity: tagged, in the table, with no audit record.
-        let id = super::entity_id("legacy");
+        let id = super::legacy_entity_id("legacy");
         let created = "2020-01-01T00:00:00Z";
         let tag = s
             .vault
@@ -2920,7 +3793,7 @@ mod tests {
         // Exactly how the pre-A18 code wrote an entity: tag over
         // `{id}{name}{etype}{created}`, inserted directly, with
         // no `chain_append` anywhere.
-        let id = super::entity_id("legacy-corp");
+        let id = super::legacy_entity_id("legacy-corp");
         let created = "2020-01-01T00:00:00Z";
         let canonical = format!("{id}legacy-corpunknown{created}");
         let tag = s.vault().tag(canonical.as_bytes());

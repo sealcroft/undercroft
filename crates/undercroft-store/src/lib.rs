@@ -1172,6 +1172,10 @@ pub struct PalaceStore {
     /// a long-lived read-only server can put the same sentences on a status
     /// surface rather than only in a log line nobody kept.
     unhealed: Vec<String>,
+    /// The knowledge graph's blind-index secret, decrypted once (A10).
+    /// See [`PalaceStore::kg_secret`] for why it is a stable stored value
+    /// rather than a derived vault key.
+    kg_secret: std::cell::RefCell<Option<[u8; 32]>>,
     /// What the OPEN found the manifest anchor to be.
     ///
     /// Kept because the open already acted on it: a writable open
@@ -2238,6 +2242,7 @@ impl PalaceStore {
             read_only,
             ro_prefilter_warned: std::cell::RefCell::new(std::collections::HashSet::new()),
             unhealed: Vec::new(),
+            kg_secret: std::cell::RefCell::new(None),
             anchor_at_open: AnchorState::Current,
         };
         Ok(store)
@@ -8443,14 +8448,52 @@ mod tests {
         d.meta.channel = Some("channelprobeclass".into());
         d.meta.session = Some("sessionprobeid".into());
         s.upsert(&d).unwrap();
+        // **A KG fact, because this test never wrote one** — which is the
+        // whole reason `kg_entities.name` and `kg_triples.subject`/
+        // `predicate` sat outside this inventory in the clear for as long as
+        // they did (A10). A distilled subject is CONTENT: `refine` lifts it
+        // out of sealed drawer text. It belongs to the guarantee above, not
+        // to the inventory below.
+        s.kg_add(
+            "Zerlindaentity",
+            "signedacquisition",
+            "Genevaoffice",
+            None,
+            None,
+            1.0,
+            None,
+        )
+        .unwrap();
         drop(s);
         let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
         let has = |n: &str| db.windows(n.len()).any(|w| w == n.as_bytes());
 
         // The guarantee: not one word of the content, nor anything derived
         // from it that copies its words.
-        for secret in ["Zerlinda", "zerlinda", "Geneva", "three weeks ago"] {
+        for secret in [
+            "Zerlinda",
+            "zerlinda",
+            "Geneva",
+            "three weeks ago",
+            // The graph's words are content too.
+            "Zerlindaentity",
+            "signedacquisition",
+            "Genevaoffice",
+        ] {
             assert!(!has(secret), "content leaked into a sealed vault: {secret}");
+            // And no UNKEYED digest of one, in the shape the KG's two ids
+            // used before A10 — a substring scan cannot see that, and it is
+            // the same confirmation oracle the clear column was.
+            let digest = {
+                use sha2::Digest as _;
+                let mut h = sha2::Sha256::new();
+                h.update(secret.as_bytes());
+                hex::encode(&h.finalize()[..16])
+            };
+            assert!(
+                !has(&digest),
+                "an unkeyed digest of {secret:?} leaked into a sealed vault"
+            );
         }
 
         // The inventory: readable today, and each one is a thing to fix.

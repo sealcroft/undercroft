@@ -62,9 +62,14 @@ stored **verbatim** in per-namespace **vaults**. Each vault derives its
 own encryption/MAC/manifest keys via HKDF-SHA256 from a master key that
 never leaves the machine. In a `sealed` vault (the default), content and
 **every plaintext-derived artifact** — embeddings, PQ code rows and
-pages, codebooks, ColBERT token matrices, FDE vectors, KG objects — are
+pages, codebooks, ColBERT token matrices, FDE vectors, and the knowledge
+graph's objects **and its subjects, predicates and entity names** — are
 encrypted with XChaCha20-Poly1305 before touching disk, each under an
-AAD that binds the vault id and the artifact's identity. Every record
+AAD that binds the vault id and the artifact's identity. Those last three
+were clear TEXT until v0.47.0 (ROADMAP A10): the columns now hold a
+truncated keyed HMAC so SQL equality still works, the words are sealed
+beside them, and the graph's two ids — previously unkeyed SHA-256 digests
+of the same words — are keyed as well. Every record
 carries an HMAC-SHA256 tag verified **before** content is returned, and
 every write advances a hash-chained audit log inside the same database
 transaction as the data. The mechanism reference with diagrams is the
@@ -119,9 +124,16 @@ in your deployment, do not put the secret in the name.** Treat all of
 the above as public labels until this is closed. Closing it means a
 keyed blind index (truncated HMAC, as `fingerprint()` already does) for
 the fields that need SQL equality, and a sealed blob plus a RAM cache
-for the rest. The test fails in **both** directions, so shrinking the
-exposure forces this table to be updated rather than quietly
-over-promising again.
+for the rest — which is exactly what the knowledge graph's subjects,
+predicates and entity names got in v0.47.0 (ROADMAP A10, unit 1 of 3),
+and the pattern the remaining two units follow. **Note what that unit had
+to include beyond the columns**: the graph's two ids were unkeyed SHA-256
+digests of the same words, so they were a confirmation oracle on their own
+— blinding only the columns would have closed nothing, and a
+literal-substring gate could not have seen it. Ask that question of
+anything derived from a field in this table. The test fails in **both**
+directions, so shrinking the exposure forces this table to be updated
+rather than quietly over-promising again.
 
 Also residual: at-rest sizes correlate weakly with content
 compressibility (standard compress-then-encrypt caveat; bounded because

@@ -315,13 +315,13 @@ The drift check the release flow now requires, run as a fan-out. It found
 disjoint sets — a parity inventory cannot see a behavioural drift, and a doc
 sweep cannot see a boundary. Both stay.
 
-**Verified clean, so a future sweep does not re-litigate them**: 76
-`UNDERCROFT_*` (and the architecture page's 61-full + 15-abbreviated across 57
+**Verified clean, so a future sweep does not re-litigate them**: 77
+`UNDERCROFT_*` (and the architecture page's 62-full + 15-abbreviated across 58
 rows), 34 `/v1` routes / 15 mutating, 35 CLI commands, 12 crates,
 11 diagrams, 9 i18n languages, 58 control rows in 10 sets, 144 roots
 × 20 patterns, 18 attack fixtures, 14 probe pairs, `TRUST_VOCAB` 3, and every
-numeric env default. Test count reconciles as **645 static − 2
-telemetry-gated − 4 ignored = 639 run** (counted at the integrated tree,
+numeric env default. Test count reconciles as **647 static − 2
+telemetry-gated − 4 ignored = 641 run** (counted at the integrated tree,
 2026-08-05, after the completeness fleet: a bare `grep -c '#[test]'` over
 `crates/` reads 625 because it also counts `undercroft-embed-onnx`'s 3 and
 `undercroft-embed-ort`'s 1, and neither is a default member). The e2e
@@ -478,10 +478,55 @@ heading and stop.
   grammar-constrained, the "a convention is declared" side of the doctrine,
   and `docs/LABELS.md` already governs it.
 
-  **Not started.** The three units this became (KG columns, then the names
-  `wing`/`room`/`source_file`, then the dates `content_date`/`filed_at` —
-  all three chosen by the maintainer on 2026-08-05) are the outstanding work
-  on this branch. Sizing, so the next session does not under-plan it: the
+  **Unit 1 (the KG columns) is CLOSED, 2026-08-05.** On a sealed vault
+  `kg_triples.subject`/`predicate` and `kg_entities.name` hold a truncated
+  keyed HMAC — SQL equality, so every lookup stays an indexed one — and the
+  words live in sealed blobs (`terms`, `name_rest`) under their own AAD
+  domains, covered by the fact's tag through a fourth canonical extension
+  (0x1c) on the `support`/authority/extractor precedent, so nothing written
+  before A10 is re-tagged by the feature merely existing. `triple_id` and
+  `entity_id` are keyed too — the correction above, without which the unit
+  would have been theatre.
+
+  **The key those are keyed with is the load-bearing decision, and it is
+  NOT a vault key.** A rotation re-derives every vault key from a fresh
+  salt; ids keyed with one would move on every rotation, orphaning the
+  audit records written under `kg/{id}` (rotation re-keys over PRESERVED
+  audit bytes) and breaking the deterministic-id idempotency the module
+  rests on — re-adding a fact after a rotation would insert a second row.
+  So it is a stable random 32 bytes, sealed in `meta`, which rotation
+  RE-SEALS and never regenerates. Found by implementing the rotation pass,
+  not by planning it.
+
+  **Two findings to carry into units 2 and 3:**
+
+  1. **An in-place UPDATE does not remove the old bytes.** The migration
+     rewrote every row and the words were still in the database FILE, in
+     freed pages. The gate caught it only because it reads the file rather
+     than the rows. The migration now ends in a `VACUUM`, and anything that
+     rewrites at-rest bytes to close an exposure needs the same treatment
+     and the same kind of gate.
+  2. **A copy taken before the migration still holds the words**, and so may
+     an un-checkpointed `-wal`. Neither is reachable from this code; both
+     are stated rather than implied.
+
+  Gates: `a_sealed_vault_leaks_neither_a_facts_words_nor_a_digest_of_them`
+  (words AND unkeyed digests, with an hmac-only premise arm proving the
+  database is not simply empty — that test asserted the OPPOSITE until now,
+  "Subject stays queryable structure"),
+  `a_pre_blind_index_graph_is_migrated_and_stops_leaking` (a genuine pre-A10
+  vault, built by writing rows the way every build before A10 wrote them:
+  after migration the facts read back, re-adding one lands on the same row,
+  no duplicate entity appears, `verify` passes, and neither words nor
+  digests survive in the file), and
+  `a_sealed_vault_exposes_metadata_but_never_content` now WRITES A KG FACT
+  — the ROADMAP's own ask — and is digest-aware, so the pinned inventory
+  fails in both directions over the graph as well as the drawer.
+
+  **Units 2 and 3 are NOT started**: the names (`wing`/`room`/
+  `source_file`) and the dates (`content_date`/`filed_at`), both chosen by
+  the maintainer on 2026-08-05. Sizing, so the next session does not
+  under-plan it: the
   names unit alone reaches the scope machinery (`scope_seqs`, every
   `*_candidates_in`), the per-wing PQ meta keys (`codebook/<wing>`,
   `ivf/<wing>`), telemetry frames, the taxonomy and hallway surfaces and

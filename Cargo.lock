@@ -1799,11 +1799,13 @@ version = "0.46.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
+ "hmac 0.12.1",
  "instant-distance",
  "undercroft-core",
  "undercroft-index",
  "undercroft-obs",
  "undercroft-vault",
+ "rand 0.8.7",
  "rayon",
  "rusqlite",
  "serde",

@@ -159,24 +159,46 @@ impl PalaceStore {
         }
         report.drawers = drawer_upds.len();
 
-        // kg entities: tag over the stored fields.
-        let mut entity_upds: Vec<(String, Vec<u8>)> = Vec::new();
+        // kg entities: tag over the stored fields, and the sealed NAME
+        // re-sealed like every other blob.
+        //
+        // That second half was missing for one commit and the e2e caught
+        // it, not the unit tests: `name_rest` is sealed under the enc key,
+        // rotation replaces the enc key, and nothing re-sealed it — so the
+        // first rotation after A10 left every entity name undecryptable and
+        // `export`, `kg entities` and `kg query` all failed on the row. The
+        // triples' `terms` blob one block down had been handled; its
+        // neighbour had not. Any future sealed column needs a line here,
+        // which is exactly why rotation's contract is byte-exact reseal of
+        // *every* artifact rather than most of them.
+        let mut entity_upds: Vec<(String, Vec<u8>, Option<Vec<u8>>)> = Vec::new();
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT id, name, etype, created_at FROM kg_entities")?;
+                .prepare("SELECT id, name, etype, created_at, name_rest FROM kg_entities")?;
             let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
+                    r.get::<_, Option<Vec<u8>>>(4)?,
                 ))
             })?;
             for row in rows {
-                let (id, name, etype, created) = row?;
+                let (id, name, etype, created, name_rest) = row?;
                 let can = format!("{id}\x1f{name}\x1f{etype}\x1f{created}");
-                entity_upds.push((id, next.tag(can.as_bytes()).to_vec()));
+                // The AAD domain is `kgname/{blind}`, and the blind value
+                // is keyed with the KG secret — which rotation re-seals
+                // rather than re-derives — so the domain is unchanged and
+                // only the enc key moves.
+                let new_name_rest = name_rest
+                    .map(|sealed| {
+                        self.vault
+                            .reseal_at_rest(&next, &format!("kgname/{name}"), &sealed)
+                    })
+                    .transpose()?;
+                entity_upds.push((id, next.tag(can.as_bytes()).to_vec(), new_name_rest));
             }
         }
         report.kg_entities = entity_upds.len();
@@ -193,12 +215,13 @@ impl PalaceStore {
             Vec<u8>,
             Option<Vec<u8>>,
             Option<Vec<u8>>,
+            Option<Vec<u8>>,
         )> = Vec::new();
         {
             let mut stmt = self.conn.prepare(
                 "SELECT id, subject, predicate, object, valid_from, valid_to, confidence, \
                         source_drawer_id, source_fp, receipt_tag, support, \
-                        authority_class, review_state, canonical_key, extractor \
+                        authority_class, review_state, canonical_key, extractor, terms \
                  FROM kg_triples",
             )?;
             let rows = stmt.query_map([], |r| {
@@ -220,11 +243,25 @@ impl PalaceStore {
                         r.get::<_, Option<String>>(13)?,
                         r.get::<_, Option<String>>(14)?,
                     ),
+                    r.get::<_, Option<Vec<u8>>>(15)?,
                 ))
             })?;
             for row in rows {
-                let (id, s, p, object, vf, vt, conf, src_id, src_fp, receipt_tag, support, auth4) =
-                    row?;
+                let (
+                    id,
+                    s,
+                    p,
+                    object,
+                    vf,
+                    vt,
+                    conf,
+                    src_id,
+                    src_fp,
+                    receipt_tag,
+                    support,
+                    auth4,
+                    terms,
+                ) = row?;
                 let new_object = self
                     .vault
                     .reseal_at_rest(&next, &format!("kg/{id}"), &object)?;
@@ -253,6 +290,27 @@ impl PalaceStore {
                 // tag unchanged — dropping it would mark every attributed
                 // fact tampered after the first rotation.
                 let ext = crate::kg::extractor_ext(x_id.as_deref());
+                // The sealed subject/predicate (A10) are re-sealed like the
+                // object and the grounding blob, and the NEW bytes are what
+                // the new tag covers — they are inside the canonical via the
+                // terms extension.
+                //
+                // The blind COLUMNS and the ids are deliberately untouched.
+                // They are keyed with the vault's KG blind secret, which is
+                // a stored value rotation RE-SEALS rather than a derived key
+                // rotation replaces — and that is the whole reason it is a
+                // stored secret. Re-deriving them here would change every id
+                // in the graph on every rotation, orphaning the audit
+                // records written under `kg/{id}` (rotation re-keys over
+                // PRESERVED audit bytes) and breaking the deterministic-id
+                // idempotency the module rests on: re-adding the same fact
+                // after a rotation would insert a second row.
+                let new_terms = terms
+                    .map(|sealed| {
+                        self.vault
+                            .reseal_at_rest(&next, &format!("kgterms/{id}"), &sealed)
+                    })
+                    .transpose()?;
                 let tag = next
                     .tag(&crate::kg::triple_canonical(
                         &id,
@@ -265,6 +323,7 @@ impl PalaceStore {
                         new_support.as_deref(),
                         auth.as_deref(),
                         ext.as_deref(),
+                        crate::kg::terms_ext(new_terms.as_deref()).as_deref(),
                     ))
                     .to_vec();
                 // Re-key the receipt binding when present (unchanged
@@ -276,7 +335,7 @@ impl PalaceStore {
                     ),
                     _ => None,
                 };
-                triple_upds.push((id, new_object, tag, new_receipt, new_support));
+                triple_upds.push((id, new_object, tag, new_receipt, new_support, new_terms));
             }
         }
         report.kg_triples = triple_upds.len();
@@ -401,6 +460,14 @@ impl PalaceStore {
             }
             // Sealed meta artifacts, each under its exact seal-layer domain.
             for (table, key, domain) in [
+                // The knowledge graph's blind-index secret (A10). It is a
+                // STORED value rotation must re-seal and must NOT
+                // regenerate: the graph's ids and blind columns are keyed
+                // with it, so a fresh one would orphan every audit record
+                // written under `kg/{id}` and make every existing lookup
+                // miss. `reseal_at_rest` is exactly that — open under the
+                // old key, seal under the new, same bytes.
+                ("meta", "kg_blind_secret", "kg/blind-secret"),
                 ("tok_meta", "codebook", "tok/codebook/tok"),
                 ("pq_meta", "codebook", "pq/codebook/pq"),
                 ("pq_meta", "ivf", "pq/ivf/pq"),
@@ -490,16 +557,18 @@ impl PalaceStore {
                 for d in &drawer_upds {
                     up.execute(params![d.seq, d.content, d.emb, d.tag, d.fp, d.sup_receipt])?;
                 }
-                let mut up = tx.prepare("UPDATE kg_entities SET tag = ?2 WHERE id = ?1")?;
-                for (id, tag) in &entity_upds {
-                    up.execute(params![id, tag])?;
+                let mut up =
+                    tx.prepare("UPDATE kg_entities SET tag = ?2, name_rest = ?3 WHERE id = ?1")?;
+                for (id, tag, name_rest) in &entity_upds {
+                    up.execute(params![id, tag, name_rest])?;
                 }
                 let mut up = tx.prepare(
-                    "UPDATE kg_triples SET object = ?2, tag = ?3, receipt_tag = ?4, support = ?5
+                    "UPDATE kg_triples SET object = ?2, tag = ?3, receipt_tag = ?4, support = ?5,
+                            terms = ?6
                      WHERE id = ?1",
                 )?;
-                for (id, object, tag, receipt_tag, support) in &triple_upds {
-                    up.execute(params![id, object, tag, receipt_tag, support])?;
+                for (id, object, tag, receipt_tag, support, terms) in &triple_upds {
+                    up.execute(params![id, object, tag, receipt_tag, support, terms])?;
                 }
                 let mut up = tx.prepare("UPDATE tunnels SET tag = ?2 WHERE id = ?1")?;
                 for (id, tag) in &tunnel_upds {
@@ -627,6 +696,64 @@ mod tests {
     fn reopen(dir: &TempDir) -> PalaceStore {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         PalaceStore::open(mgr.unlock("r").unwrap()).unwrap()
+    }
+
+    /// A10: the graph's SEALED words survive a rotation, on every surface
+    /// that reads them.
+    ///
+    /// This is the test that was missing when `terms` was re-sealed and its
+    /// neighbour `name_rest` was not: the unit suite passed, and the e2e
+    /// failed on `export`, `kg entities` and `kg query` at once, because a
+    /// blob sealed under the OLD enc key cannot be opened under the new
+    /// one. Rotation's contract is byte-exact reseal of *every* artifact,
+    /// and a sealed column with no line in that pass is simply lost.
+    ///
+    /// Driven through the public readers rather than the columns, because
+    /// that is where the failure showed: `all_triples` collects into a
+    /// `Result`, so one unreadable row takes out every KG read at once.
+    #[test]
+    fn rotation_keeps_the_sealed_graph_readable() {
+        let (dir, mut store) = seeded(SecurityLevel::Sealed);
+        store
+            .kg_add("heron", "feeds-on", "small fish", None, None, 0.8, None)
+            .unwrap();
+        let before = store.kg_query_entity("heron", None, "outgoing").unwrap();
+        assert_eq!(before.len(), 2, "premise: two facts before rotating");
+
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let next = mgr.rotation_candidate("r").unwrap();
+        store.rotate_keys(next).unwrap();
+
+        for (what, mut s) in [("in-place", store), ("reopened", reopen(&dir))] {
+            let facts = s.kg_query_entity("heron", None, "outgoing").unwrap();
+            assert_eq!(facts.len(), 2, "{what}: facts lost");
+            assert!(
+                facts.iter().any(|t| t.object == "the reeds"),
+                "{what}: objects lost"
+            );
+            assert!(
+                facts.iter().all(|t| t.subject == "heron"),
+                "{what}: the sealed SUBJECT did not survive: {facts:?}"
+            );
+            assert!(
+                s.kg_entities(10, 0)
+                    .unwrap()
+                    .iter()
+                    .any(|(n, _, _)| n == "heron"),
+                "{what}: the sealed entity NAME did not survive"
+            );
+            // Export decodes every row, so it fails on the first bad one —
+            // the shape the e2e hit.
+            assert_eq!(s.kg_export().unwrap().len(), 2, "{what}: export");
+            assert!(!s.kg_export_entities().unwrap().is_empty(), "{what}");
+            assert!(s.verify().unwrap().ok(), "{what}: verify");
+            // And a fact re-added after the rotation still lands on the
+            // same row: ids are keyed with the KG secret, which rotation
+            // re-seals rather than re-derives.
+            s.kg_add("heron", "feeds-on", "small fish", None, None, 0.8, None)
+                .unwrap();
+            assert_eq!(s.kg_stats().unwrap().triples, 2, "{what}: id stability");
+        }
     }
 
     #[test]

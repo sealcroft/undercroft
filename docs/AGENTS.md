@@ -1010,6 +1010,19 @@ runtimes take none, and an empty key sends no header at all. Set it only
 to reach a runtime behind an authenticating gateway, which unlike the
 local default means drawer text leaves the machine).
 
+`UNDERCROFT_INDEX_CA` (PEM whose certificates become the ONLY trust roots
+for every remote vector-index connection — the same pin, one more client
+over; one file may carry several roots). The index backends obey the same
+transport rule as of v0.47.0: **TLS or loopback, no override**, refused at
+construction. It applies there because every push carries **embeddings**,
+and an embedding is plaintext-derived — the sealed-vault invariant seals
+vectors at rest for exactly that reason. `UNDERCROFT_PGVECTOR_DSN` must
+therefore say `sslmode=require` for a non-loopback host; unlike libpq's
+`require`, the connector is rustls and always verifies the chain and the
+hostname. An **hmac-only** vault, whose at-rest content IS the plaintext,
+is refused by `index push` unless the operator passes
+`--allow-plaintext`.
+
 Telemetry builds: `UNDERCROFT_LOG` · `UNDERCROFT_LOG_FORMAT` (`json`) ·
 `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process) ·
 `UNDERCROFT_OTLP_HEADERS` (comma-separated `key=value` export headers,

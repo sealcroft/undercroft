@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+### the knowledge graph stops writing content in clear (A10, unit 1 of 3)
+
+A sealed vault sealed every drawer artifact and then wrote
+`kg_entities.name` and `kg_triples.subject`/`predicate` as clear TEXT, with
+two indexes over them. The module called it "the same trade-off as plaintext
+wing/room names", which is false in kind: wing and room are declared
+taxonomy, while an extracted subject is CONTENT — `refine` lifts those words
+straight out of encrypted drawer text. It sat outside the pinned exposure
+inventory for one reason: that test never wrote a fact.
+
+- **The columns are a blind index**: a truncated keyed HMAC, so `kg_query`,
+  `ensure_entity`, the entity join and the authority door stay indexed
+  equalities with no RAM map, and the words move into sealed blobs under
+  their own AAD domains. The blob is covered by the fact's tag through a
+  FOURTH canonical extension (0x1c) on the `support`/authority/extractor
+  precedent — a fact written before A10 keeps byte-identical canonical
+  bytes and is not re-tagged by the feature existing.
+- **`triple_id` and `entity_id` are keyed now, and that is the half the
+  filed scope missed.** They were unkeyed SHA-256 of the same words.
+  Blinding the columns and leaving them closes nothing: an offline reader
+  with a candidate word list confirms a guess by recomputing a digest. The
+  gate the ROADMAP proposed — scan the at-rest bytes for the word — could
+  never have caught it, because a hex digest is not the word, so **this
+  would have closed green with the oracle intact**. Both gates here assert
+  the absence of `sha256(word)[..16]` as well as the word.
+- **The key is a stored secret, not a vault key**, and that is the
+  load-bearing decision. A rotation re-derives every vault key from a fresh
+  salt; ids keyed with one would move on every rotation — orphaning the
+  audit records written under `kg/{id}`, which rotation deliberately
+  preserves, and breaking the deterministic-id idempotency the module rests
+  on, so re-adding a fact after a rotation would insert a second row. It is
+  32 random bytes sealed in `meta`; rotation re-seals it and never
+  regenerates it. Found by writing the rotation pass, not by planning.
+- **Existing sealed vaults migrate at the next writable open**, once:
+  words sealed, columns blinded, ids re-derived, object and grounding blobs
+  re-sealed under the new id, receipts re-keyed. A row whose tag does not
+  verify is **skipped, not migrated and not fatal** — migrating it would
+  launder a tampered row into a freshly tagged one, and aborting would
+  leave the vault unopenable for `verify` and `repair`, which is the
+  argument the embedder migration already settled. Ids move here, once, and
+  that is stated: nothing outside the vault depends on them, since exports
+  carry ids but `kg_import` re-derives.
+- **The migration ends in a `VACUUM`, and it has to.** Rewriting every row
+  left the old row images in freed pages, so the words this exists to
+  remove were still in the database FILE afterwards. The gate caught it
+  only because it reads the file rather than the rows — the same shape of
+  mistake that "closes green". Residue stated: a copy taken before the
+  migration still holds the words, and so may an un-checkpointed `-wal`.
+- **The pinned inventory now covers the graph.**
+  `a_sealed_vault_exposes_metadata_but_never_content` writes a KG fact and
+  is digest-aware, so it fails in both directions over the graph as well as
+  the drawer — and
+  `sealed_kg_object_not_plaintext_on_disk` (which asserted the subject *was*
+  readable, commented "Subject stays queryable structure") is replaced by
+  one that asserts the opposite, with an hmac-only premise arm so a pass
+  cannot mean an empty database.
+
+Units 2 and 3 of A10 — the names (`wing`/`room`/`source_file`) and the
+dates (`content_date`/`filed_at`) — are **not** in this release; see ROADMAP
+for their sizing and the two findings above that they inherit.
+
 ### the completeness residuals, closed (C1–C15)
 
 Fifteen items the 38-agent per-surface audit left open. The recurring shape
