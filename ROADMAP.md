@@ -4,7 +4,17 @@ Undercroft is the Rust conversion of MemPalace with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
 
-## Open residuals — ALL FIVE ARE WORK, none are accepted
+## Residuals R1-R5 — ALL FIVE CLOSED (2026-08-05)
+
+**None of these is outstanding.** All five are implemented on
+`fix/audit-security-boundaries`; R3 was closed by being CORRECTED rather than
+built, because the defect it described did not exist (see its entry). The
+entries stay because each records what was wrong, what it cost, and why the fix
+took the shape it did — and because R3 is the standing example of a residual
+written from a plausible reading of a symptom and never checked against the
+function it named.
+
+Original framing, kept:
 
 Recorded 2026-08-05 after the surface-drift program. **Maintainer's rule:
 nothing broken or half-baked stays as a gap.** An earlier draft of this
@@ -262,7 +272,13 @@ counted by hand, which is precisely what an inventory cannot do for you.
   dereferences an id to a wing and the MCP fence inspects arguments, so
   neither check fired; `create_tunnel` validated nothing at all.
 
-### OPEN — carried as work, each with the shape of its fix
+### CLOSED in the same unit (2026-08-05) — kept as the record of what was found
+
+**Every item below is implemented on `fix/audit-security-boundaries`.** They are
+retained rather than deleted because the finding, its reach and its fix shape are
+the useful part: a future sweep that rediscovers one of these should be able to
+see it was already reasoned about, and what the reasoning was. Nothing here is
+outstanding work.
 
 - **A10 · Sealed vaults write content-derived words in CLEAR to the KG.**
   `kg_entities.name` and `kg_triples.subject`/`predicate`/`canonical_key` are
