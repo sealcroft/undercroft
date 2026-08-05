@@ -2611,13 +2611,41 @@ impl PalaceStore {
         // Admission screening applies per drawer, bulk path included — a
         // bulk ingest is exactly where a poisoned corpus arrives. Zero
         // cost (no clone, no scan) while admission is off.
+        // A reserved-wing claim is unwrapped HERE too, before screening.
+        //
+        // `import_record` already did this, and that was exactly half a fix:
+        // its only caller is `/v1`, while CLI `import` — and therefore every
+        // sealed-bundle restore — goes through `upsert_batched` into this
+        // function and never touched it. So an export from any vault that had
+        // ever quarantined a drawer was refused by its own importer, and
+        // because `INGEST_BATCH` commits per chunk the restore committed the
+        // earlier chunks and then aborted, leaving a silently partial palace
+        // with none of the KG, entity or tunnel records applied.
+        //
+        // Fixed in the bulk path itself rather than at the call site in
+        // `main.rs`: a call-site fix is the per-call-site pattern the required
+        // `Screen` argument exists to abolish, and the next bulk caller would
+        // have to remember. The scan is cheap and keeps the documented
+        // zero-cost property when nothing claims the wing.
+        let unwrapped: Vec<Drawer>;
+        let drawers: &[Drawer] = if drawers
+            .iter()
+            .any(|d| d.meta.wing == crate::admission::QUARANTINE_WING)
+        {
+            unwrapped = drawers
+                .iter()
+                .map(Self::import_unwrap_screened)
+                .collect::<Result<Vec<_>, _>>()?;
+            &unwrapped
+        } else {
+            drawers
+        };
         let screened: Vec<Drawer>;
         let mut quarantined = 0usize;
         // Which rows THIS screen diverted. Only these may write the reserved
-        // wing; a payload that merely arrives already claiming that wing is
-        // refused at the choke point, because a forged pending-review row
-        // becomes an unscreened write into any wing the moment a reviewer
-        // allows it.
+        // wing; a payload that merely arrives already claiming that wing has
+        // been unwrapped above and re-screened, so the local detector — never
+        // the payload — decides what is pending review.
         let mut diverted: Vec<bool>;
         let drawers: &[Drawer] = if self.admission_quarantine {
             diverted = Vec::with_capacity(drawers.len());
@@ -8366,18 +8394,24 @@ mod tests {
             offset: 0,
         }];
 
-        // The SAVE paths refuse outright: nothing legitimately arrives there
-        // already wearing the reserved wing.
-        for outcome in [
-            s.upsert_screened(&forged).err(),
-            s.upsert_many(std::slice::from_ref(&forged)).err(),
-        ] {
-            assert!(
-                matches!(outcome, Some(StoreError::Invalid(_))),
-                "a save claiming the reserved wing must be refused as invalid \
-                 input, whatever signals it carries"
-            );
-        }
+        // The single-SAVE path refuses outright: nothing legitimately arrives
+        // there already wearing the reserved wing.
+        assert!(
+            matches!(s.upsert_screened(&forged), Err(StoreError::Invalid(_))),
+            "a save claiming the reserved wing must be refused as invalid \
+             input, whatever signals it carries"
+        );
+        // The BULK path is an import path (CLI `import`, sealed-bundle
+        // restore), so it unwraps and re-screens exactly as `import_record`
+        // does — refusing there broke every restore. The forgery is defeated
+        // the same way: the payload's signals are discarded and this vault's
+        // detector rules, so "attacker payload" is filed where the record
+        // said it was headed and manufactures no queue entry.
+        let bulk = s.upsert_many(std::slice::from_ref(&forged)).unwrap();
+        assert_eq!(
+            bulk.quarantined, 0,
+            "fabricated signals are not evidence on the bulk path either"
+        );
 
         // IMPORT unwraps and re-screens instead of refusing — refusing broke
         // every restore, since exports carry quarantined rows. The forgery is
@@ -8446,6 +8480,28 @@ mod tests {
             dst.admission_pending().unwrap().len(),
             1,
             "the queue entry survives the round trip"
+        );
+
+        // THE BULK PATH TOO — this is the half the first fix missed.
+        // `import_record` is `/v1` only; CLI `import` and every sealed-bundle
+        // restore go through `upsert_many`, which refused the same row and,
+        // because ingest commits per batch, left a partially restored palace.
+        let (_db, mut bulk) = store(SecurityLevel::Sealed);
+        bulk.set_admission(true);
+        let out = bulk.upsert_many(std::slice::from_ref(row)).unwrap();
+        assert_eq!(out.quarantined, 1, "the bulk path re-screens, not refuses");
+        assert_eq!(bulk.admission_pending().unwrap().len(), 1);
+        // And with screening off it lands where it was headed, same as the
+        // single-record path — the two must not disagree about one payload.
+        let (_db2, mut bulk_open) = store(SecurityLevel::Sealed);
+        bulk_open.upsert_many(std::slice::from_ref(row)).unwrap();
+        assert!(
+            bulk_open
+                .list_drawers(Some("notes"), None, 10, 0)
+                .unwrap()
+                .len()
+                == 1,
+            "an unscreened bulk restore files it where it was headed"
         );
 
         // Destination WITHOUT screening: the same payload is filed where it

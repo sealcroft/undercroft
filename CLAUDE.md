@@ -721,7 +721,7 @@ docker compose run --rm test          # cargo unit + integration tests (551 run,
                                       # doc sweep that set this line first wrote
                                       # 554/+1 from a different counting method)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (222 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (224 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (57 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs (47 checks; weaviate
