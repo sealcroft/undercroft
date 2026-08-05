@@ -1682,6 +1682,7 @@ mod tests {
 
     /// The three states have to survive a round trip through sealing and the
     /// tamper tag, because that is where the distinction actually lives.
+
     #[test]
     fn grounding_survives_a_round_trip() {
         use undercroft_core::support::Grounding;
@@ -2694,5 +2695,61 @@ mod tests {
             .unwrap()
             .expect("the door still answers after rotation");
         assert_eq!(hit.object, "Europe/Berlin");
+    }
+    /// **A vault written by an OLDER binary still verifies.**
+    ///
+    /// A18 gave entity rows a chain record and taught `verify` to walk
+    /// `kg_entities`. Both are additive, but that is an assertion until it is
+    /// tested: if the entity CANONICAL had changed, every entity row written
+    /// before the upgrade would fail its tag and an untouched vault would
+    /// report TAMPERED on first open with the new binary.
+    ///
+    /// This reproduces the pre-A18 on-disk state exactly — the row inserted
+    /// with the canonical `main` used and NO chain record, which is what an
+    /// old binary left behind — and requires the new `verify` to pass. The
+    /// premise is asserted both ways: the same row with one byte changed must
+    /// still be caught, so this cannot pass by verifying nothing.
+    #[test]
+    fn entity_rows_from_before_the_chain_record_still_verify() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.kg_add("acme", "ships", "widgets", None, None, 0.9, None)
+            .unwrap();
+
+        // Exactly how the pre-A18 code wrote an entity: tag over
+        // `{id}{name}{etype}{created}`, inserted directly, with
+        // no `chain_append` anywhere.
+        let id = super::entity_id("legacy-corp");
+        let created = "2020-01-01T00:00:00Z";
+        let canonical = format!("{id}legacy-corpunknown{created}");
+        let tag = s.vault().tag(canonical.as_bytes());
+        s.conn
+            .execute(
+                "INSERT INTO kg_entities (id, name, etype, tag, created_at)
+                 VALUES (?1, 'legacy-corp', 'unknown', ?2, ?3)",
+                rusqlite::params![id, tag.as_slice(), created],
+            )
+            .unwrap();
+
+        let report = s.verify().unwrap();
+        assert!(
+            report.ok(),
+            "an entity row predating the chain record must still verify: {:?}",
+            report.bad_records
+        );
+
+        // Premise: the walk really is looking at this row. Flip one byte of
+        // the stored name and it must be caught.
+        s.conn
+            .execute(
+                "UPDATE kg_entities SET name = 'legacy-c0rp' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        let report = s.verify().unwrap();
+        assert!(
+            !report.ok() && report.bad_records.iter().any(|b| b.contains(&id)),
+            "a tampered legacy entity row must be caught: {:?}",
+            report.bad_records
+        );
     }
 }

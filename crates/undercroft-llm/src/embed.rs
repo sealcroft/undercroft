@@ -576,4 +576,34 @@ tYFnY6i2f/1ZwO5egz39EHpuFql2+6WqpB9saUk=\n\
         // reasoning was wrong, which is the whole argument for using it.
         assert!(is_loopback(r"http://localhost\@evil.com/v1"));
     }
+    /// What the parser change did to the EDGES, pinned so it is a decision
+    /// rather than a side effect.
+    ///
+    /// The old predicate compared the host string to three literals, so only
+    /// `127.0.0.1` counted. `Ipv4Addr::is_loopback` covers all of 127/8,
+    /// which is what RFC 1122 actually says — a widening, and a correct one:
+    /// `127.0.0.2` is this machine, and cleartext to it never leaves it.
+    ///
+    /// The other edges must NOT widen, and this is where a parser swap could
+    /// have quietly cost something: an IPv4-mapped IPv6 address, a bare
+    /// wildcard, and a hostname that merely resolves to loopback are all
+    /// still NOT loopback — the last one deliberately, because resolution is
+    /// not something this predicate can see and guessing would be inference.
+    #[test]
+    fn loopback_edges_are_decided_not_incidental() {
+        // Widened, correctly: the whole 127/8 block is this machine.
+        assert!(is_loopback("http://127.0.0.2:8080/v1"));
+        assert!(is_loopback("http://127.255.255.254/v1"));
+
+        // NOT widened. Each of these would be a cleartext leak if it were.
+        for remote in [
+            "http://0.0.0.0:8080/v1",       // wildcard bind, not a destination
+            "http://[::ffff:127.0.0.1]/v1", // IPv4-mapped IPv6 is not ::1
+            "http://127.0.0.1.evil.com/v1", // a domain that merely starts with it
+            "http://localhost.evil.com/v1",
+            "http://169.254.169.254/latest", // cloud metadata, a classic SSRF target
+        ] {
+            assert!(!is_loopback(remote), "{remote} must not read as loopback");
+        }
+    }
 }
