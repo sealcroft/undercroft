@@ -27,14 +27,25 @@ inventory for one reason: that test never wrote a fact.
   never have caught it, because a hex digest is not the word, so **this
   would have closed green with the oracle intact**. Both gates here assert
   the absence of `sha256(word)[..16]` as well as the word.
-- **The key is a stored secret, not a vault key**, and that is the
-  load-bearing decision. A rotation re-derives every vault key from a fresh
-  salt; ids keyed with one would move on every rotation — orphaning the
-  audit records written under `kg/{id}`, which rotation deliberately
-  preserves, and breaking the deterministic-id idempotency the module rests
-  on, so re-adding a fact after a rotation would insert a second row. It is
-  32 random bytes sealed in `meta`; rotation re-seals it and never
-  regenerates it. Found by writing the rotation pass, not by planning.
+- **The key is a stored secret, not a vault key — and the first attempt got
+  that wrong.** It used the rotating MAC key. Had it shipped, every fact and
+  entity id would have moved on every key rotation: orphaning the audit
+  records written under `kg/{id}` and `kg-entity/{id}` (rotation's contract
+  is to re-key over *preserved* audit bytes, so those references have to
+  keep resolving), breaking every receipt, breaking deterministic-id
+  idempotency so re-adding a fact would insert a duplicate, and
+  invalidating any id held by an export or by an agent across sessions —
+  stored memory losing its traceability. It is 32 random bytes sealed in
+  `meta` now; rotation re-seals and never regenerates it.
+
+  Recorded as a **process failure, not a discovery**: the rule was already
+  written three functions away — `content_fp` and `supersedes_fp` are
+  unkeyed *specifically so they survive rotation*, `drawer_id` and the
+  tunnel id are unkeyed deterministic digests — and the compiler, not the
+  design, is what caught it. CLAUDE.md now carries it as a first-class
+  invariant: **an identifier is never derived from rotatable key material,
+  and neither is a blind-index key**, with the reference-lifetime
+  enumeration named as the analysis that has to run first.
 - **Existing sealed vaults migrate at the next writable open**, once:
   words sealed, columns blinded, ids re-derived, object and grounding blobs
   re-sealed under the new id, receipts re-keyed. A row whose tag does not

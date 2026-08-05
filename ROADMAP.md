@@ -488,17 +488,41 @@ heading and stop.
   `entity_id` are keyed too — the correction above, without which the unit
   would have been theatre.
 
-  **The key those are keyed with is the load-bearing decision, and it is
-  NOT a vault key.** A rotation re-derives every vault key from a fresh
-  salt; ids keyed with one would move on every rotation, orphaning the
-  audit records written under `kg/{id}` (rotation re-keys over PRESERVED
-  audit bytes) and breaking the deterministic-id idempotency the module
-  rests on — re-adding a fact after a rotation would insert a second row.
-  So it is a stable random 32 bytes, sealed in `meta`, which rotation
-  RE-SEALS and never regenerates. Found by implementing the rotation pass,
-  not by planning it.
+  **The key those are keyed with is NOT a vault key — and the first
+  implementation got that wrong, which is the most important thing in this
+  entry.** It used `Vault::tag`, the rotating MAC key. Had that shipped,
+  every fact and entity id would have MOVED on every key rotation:
+  orphaning the audit records written under `kg/{id}` and
+  `kg-entity/{id}` — while rotation's own contract is to re-key over
+  **preserved** audit bytes, so those references must still resolve —
+  breaking every receipt (`receipt_canonical` binds the triple id),
+  breaking deterministic-id idempotency so re-adding a fact after a
+  rotation would insert a duplicate, and invalidating any id held by an
+  export or by an **agent across sessions**. That is stored memory losing
+  its traceability, which is the product. High impact, and not a subtle
+  case.
 
-  **Two findings to carry into units 2 and 3:**
+  **It was caught by the rotation pass failing, not by design, and that is
+  a process failure worth naming.** The rule was already written in this
+  tree, three functions from the code being changed: `content_fp` and
+  `supersedes_fp` are unkeyed *specifically so they survive rotation*, each
+  with a comment saying so; `drawer_id` and the tunnel id are unkeyed
+  deterministic digests; `fingerprint()` is keyed but is a lookup key
+  rotation recomputes, never an identifier; `sample_rank` is keyed and
+  deliberately rotation-sensitive precisely because nothing holds a
+  reference to it. The convention was legible and was not read. The correct
+  construction — an identity/index secret whose lifecycle is separate from
+  the rotatable data key — is also the standard one in searchable
+  encryption, because re-keying a blind index means re-indexing the corpus.
+
+  What shipped: a stable random 32 bytes, sealed in `meta`, which rotation
+  RE-SEALS and never regenerates. The invariant is now first-class in
+  CLAUDE.md — *an identifier is never derived from rotatable key material,
+  and neither is a blind-index key* — with the analysis that catches it
+  named: enumerate what holds a reference to the id and state that
+  reference's lifetime, BEFORE changing the recipe.
+
+  **Two more findings to carry into units 2 and 3:**
 
   1. **An in-place UPDATE does not remove the old bytes.** The migration
      rewrote every row and the words were still in the database FILE, in

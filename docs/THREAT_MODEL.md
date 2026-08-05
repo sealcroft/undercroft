@@ -126,7 +126,15 @@ keyed blind index (truncated HMAC, as `fingerprint()` already does) for
 the fields that need SQL equality, and a sealed blob plus a RAM cache
 for the rest — which is exactly what the knowledge graph's subjects,
 predicates and entity names got in v0.47.0 (ROADMAP A10, unit 1 of 3),
-and the pattern the remaining two units follow. **Note what that unit had
+and the pattern the remaining two units follow. **The blind-index key is
+long-lived and separate from the vault's rotatable keys**, which is the
+standard searchable-encryption separation and is not optional here: the
+graph's ids are derived from it, and an identifier that moves on key
+rotation orphans the audit records that reference it, breaks every receipt
+bound to it, and invalidates any id an export or an agent still holds.
+Re-keying a blind index also means re-indexing the corpus. So it is a
+per-vault secret stored sealed, which rotation re-seals and never
+regenerates. **Note what that unit had
 to include beyond the columns**: the graph's two ids were unkeyed SHA-256
 digests of the same words, so they were a confirmation oracle on their own
 — blinding only the columns would have closed nothing, and a

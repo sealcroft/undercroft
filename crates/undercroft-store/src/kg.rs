@@ -609,16 +609,27 @@ impl PalaceStore {
     /// are keyed with — generated once, sealed in `meta`, and **never
     /// regenerated**.
     ///
-    /// Deliberately NOT the vault's MAC key, and this is the load-bearing
-    /// decision of A10. A key rotation re-derives every vault key from a
-    /// fresh salt; if ids were keyed with one of those, every id in the
-    /// graph would change on every rotation — and an id is not private
-    /// state here. `chain_append` records a fact under `kg/{id}`, and
-    /// rotation's contract is to re-key over PRESERVED audit bytes, so a
-    /// moving id would orphan every audit record the graph ever wrote. It
-    /// would also break the deterministic-id idempotency the whole module
-    /// rests on: re-adding the same fact after a rotation would insert a
-    /// second row instead of landing on the first.
+    /// **Deliberately NOT the vault's MAC key — and the first version of
+    /// this used the MAC key, which would have been a serious defect.**
+    /// A rotation re-derives every vault key from a fresh salt, so ids
+    /// keyed with one MOVE on every rotation. An id here is a durable
+    /// reference, not private state: `chain_append` records a fact under
+    /// `kg/{id}` and rotation's contract is to re-key over PRESERVED audit
+    /// bytes, so a moving id orphans every audit record the graph ever
+    /// wrote; `receipt_canonical` binds the triple id, so every receipt
+    /// breaks with it; deterministic-id idempotency breaks, so re-adding a
+    /// fact after a rotation inserts a duplicate; and any id held by an
+    /// export or by an AGENT across sessions stops resolving. That is the
+    /// store losing its traceability, which is the thing it exists to
+    /// provide.
+    ///
+    /// The rule is general and is now an invariant in CLAUDE.md: **an
+    /// identifier is never derived from rotatable key material, and
+    /// neither is a blind-index key** (re-keying an index means
+    /// re-indexing the corpus — the searchable-encryption reason the index
+    /// key and the data key have different lifecycles). This file already
+    /// demonstrated it: `content_fp` and `supersedes_fp` are unkeyed
+    /// *specifically so they survive rotation*.
     ///
     /// So the secret is a stable random 32 bytes, sealed at rest under the
     /// vault's encryption key like any other artifact. Rotation RE-SEALS it

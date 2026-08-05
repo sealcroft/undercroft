@@ -1199,6 +1199,38 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   on the queue that exists to contain it, nor assign the trust class that
   decides what it may retrieve), asserted by the same test as the parity,
   so the two can never disagree about what MCP is allowed to reach.
+- **An IDENTIFIER is never derived from rotatable key material. Neither is
+  a blind-index key. This is not a preference — it is the difference
+  between a memory store and a pile of unreferenceable rows.**
+  An id in this store is a durable reference held by the **audit chain**
+  (`kg/{id}`, `kg-entity/{id}`, drawer ids — and rotation's contract is to
+  re-key over PRESERVED audit bytes, so those references must still resolve
+  afterwards), by **receipts** (`receipt_canonical` binds the triple id),
+  by **supersession links**, by **exports**, and — the one easiest to
+  forget — by **agents across sessions**: an agent that learned a fact id
+  yesterday must be able to name it today. A moving id is not a rename. It
+  silently breaks every one of those at once, and an audit trail whose
+  references have moved is not an audit trail. **Traceability is the
+  product**; an id is the promise that makes it possible.
+  The **blind-index** key is long-lived for a second, independent reason:
+  re-keying it means re-indexing the whole corpus, which is why searchable
+  encryption separates the index key's lifecycle from the data key's in the
+  first place. So: no HKDF-derived vault key (`Vault::tag`, the enc key,
+  any of the four) may appear in an id recipe or a blind-index recipe.
+  Where confidentiality demands keying — an unkeyed digest over content is
+  a confirmation oracle — use a per-vault secret **stored sealed in
+  `meta`**, which rotation RE-SEALS and never regenerates.
+  The tree already said all of this and it is written here because a
+  session did it wrong anyway (A10, 2026-08-05, caught before merge):
+  `drawer_id` and the tunnel id are unkeyed deterministic digests;
+  `content_fp` and `supersedes_fp` are unkeyed **specifically so they
+  survive rotation**, each with a comment saying so; `fingerprint()` is
+  keyed but is a LOOKUP key that rotation recomputes, never an identifier;
+  `sample_rank` is keyed and deliberately rotation-sensitive because it
+  chooses a training sample and nothing holds a reference to it. Before
+  changing how any identifier is derived, **enumerate what holds a
+  reference to it and state that reference's lifetime** — the impact
+  analysis, not the compiler, is what catches this.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path
