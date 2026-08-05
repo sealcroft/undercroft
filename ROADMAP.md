@@ -291,9 +291,21 @@ gives 557 and is wrong by two.
   that returns content". Preserving quarantine THROUGH a migration is
   defensible; a plaintext export writing injected text beside legitimate
   drawers is not. Needs a decision, then a test either way.
-- **A17 · `offset` unbounds the bounded prefilter** — uncapped on `/v1` and
-  MCP, `hydrate_k` saturates to `usize::MAX`, and `k as i64` is **−1**, which
-  SQLite reads as no limit.
+- **A17 · `offset` reached the SQL boundary as a NEGATIVE limit.** Partly
+  fixed and re-scoped 2026-08-05. `hydrate_k` saturates to `usize::MAX` and
+  `k as i64` wrapped **−1**, which SQLite reads as no limit at all (verified
+  by running it, not by citation) — now clamped where the cast happens.
+  **The remaining half is a COST, not a wrong answer**: a very deep offset
+  makes one request pay a full scan. That is corpus-bounded, and it is the
+  same price a below-floor scope already pays by design.
+  **Two fixes were tried and reverted**, both because they contradicted
+  `an_offset_past_the_end_is_empty_not_an_error`, which pins that an extreme
+  offset returns an exhausted page and never an error (explicitly including
+  `offset: usize::MAX` — "the far edge must not overflow either"): clamping
+  `depth` silently empties a legitimate deep page, and refusing past a
+  ceiling overrides the pinned contract outright. Closing the cost half
+  without breaking either means bounding the WORK by the corpus — never fetch
+  more rows than exist — which costs a count per search, so measure first.
 - **A18 · Entity rows are written with no chain record**, and outside the
   transaction of the fact they exist for — the one persisted, HMAC-tagged
   class that appends nothing, so an INSERTION is undetectable.
