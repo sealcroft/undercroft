@@ -62,9 +62,14 @@ stored **verbatim** in per-namespace **vaults**. Each vault derives its
 own encryption/MAC/manifest keys via HKDF-SHA256 from a master key that
 never leaves the machine. In a `sealed` vault (the default), content and
 **every plaintext-derived artifact** — embeddings, PQ code rows and
-pages, codebooks, ColBERT token matrices, FDE vectors, KG objects — are
+pages, codebooks, ColBERT token matrices, FDE vectors, and the knowledge
+graph's objects **and its subjects, predicates and entity names** — are
 encrypted with XChaCha20-Poly1305 before touching disk, each under an
-AAD that binds the vault id and the artifact's identity. Every record
+AAD that binds the vault id and the artifact's identity. Those last three
+were clear TEXT until v0.47.0 (ROADMAP A10): the columns now hold a
+truncated keyed HMAC so SQL equality still works, the words are sealed
+beside them, and the graph's two ids — previously unkeyed SHA-256 digests
+of the same words — are keyed as well. Every record
 carries an HMAC-SHA256 tag verified **before** content is returned, and
 every write advances a hash-chained audit log inside the same database
 transaction as the data. The mechanism reference with diagrams is the
@@ -83,18 +88,85 @@ Each class states: capability, goal, shipped defense, and residual risk.
 database, manifest, and derived artifact. No keys, no passphrase.
 *Goal*: read memories or anything content-derived.
 
-**Defense (shipped)**: sealed vaults yield **record counts and sizes,
-nothing else**. Content is zstd-then-AEAD; embeddings and all index
-artifacts are sealed under their own AAD domains; sealed vaults build
-no FTS index; duplicate-detection fingerprints are keyed HMACs that
-reveal nothing offline. The at-rest bytes are asserted opaque by tests,
-and every new derived artifact is required (project invariant) to
-follow the same pattern.
+**Defense (shipped)**: a sealed vault yields **not one word of the
+content, nor of anything derived from it that copies its words**.
+Content is zstd-then-AEAD; embeddings and all index artifacts are
+sealed under their own AAD domains; sealed vaults build no FTS index;
+**every** content fingerprint is keyed — the duplicate-detection one
+with the vault mac, and since U12 the two provenance fingerprints
+(`supersedes_fp`, `kg_triples.source_fp`) with the long-lived stored
+`kg_secret`, so none of them is a confirmation oracle. What a keyed
+fingerprint still reveals is EQUALITY between rows, never content;
+`Drawer::meta_at_rest()` strips `time_mentions[].text` and
+`entities` before a row is written, keeping only offsets and ISO dates.
+The at-rest bytes are asserted opaque by tests, and every new derived
+artifact is required (project invariant) to follow the same pattern.
 
-**Residual**: at-rest sizes correlate weakly with content
-compressibility (standard compress-then-encrypt caveat). Vaults created
-as `hmac-only` store plaintext *by explicit operator choice* — the
-level exists for grep-ability and is labeled, not a default.
+**Residual — and it is larger than "counts and sizes".** This page said
+"record counts and sizes, nothing else" for several releases. That was
+false, and the project's own test
+(`a_sealed_vault_exposes_metadata_but_never_content`) has pinned the
+real inventory the whole time. `meta_json` is stored **unsealed**, so an
+offline reader of a sealed database reads, in the clear:
+
+| Exposed | Why it is there |
+|---|---|
+| wing name, room name | indexed scope columns; in practice topics, people, case ids |
+| `source_file` path | provenance; a filesystem path is often the topic |
+| `added_by` | surface stamp |
+| `hall` label | taxonomy |
+| `content_date` | declared date |
+| dates **resolved out of** the content | resolutions only — offsets + ISO dates, never the words |
+| declared `kind` | closed vocabulary, ≤10 bytes, NULL when undeclared (docs/LABELS.md) |
+| `supersedes` link (+ `supersedes_receipt`) | chain topology: which record replaced which. The link is a drawer id (an unkeyed deterministic digest of wing/room/source/chunk, not of content); the receipt is a keyed HMAC |
+| `supersedes_fp`, and `kg_triples.source_fp` | **a keyed fingerprint of a superseded / cited document's verbatim content — CLOSED as ROADMAP U12.** Both were an unkeyed SHA-256 in the clear, and this page called them "HMAC-derived hex", which was wrong twice over. They were a confirmation oracle: an offline reader holding a candidate document hashed it and matched the column, learning byte-exactly that this plaintext was filed here — bounded only by having to reproduce the text, which is weak comfort when a drawer is one line. They are now `HMAC(kg_secret, sha256(content))`, keyed with the long-lived per-vault secret that rotation re-seals and never regenerates, so they stay rotation-stable without being an oracle. What remains readable is EQUALITY: two rows citing identical content still hold identical bytes, so a reader learns that two receipts point at the same text and never what it says. Legacy vaults are migrated at the next writable open; a row whose receipt does not verify is left alone rather than laundered and is reported on `PalaceStats.unhealed` |
+| `agent` / `channel` / `session` claims | writer-declared provenance |
+| `filed_at` / `updated_at` | per-row timestamps |
+| record counts, per-record ciphertext sizes | unavoidable at this layer |
+
+**If a wing name, a room name or a file path would itself be sensitive
+in your deployment, do not put the secret in the name.** Treat all of
+the above as public labels until this is closed. Closing it means a
+keyed blind index (truncated HMAC, as `fingerprint()` already does) for
+the fields that need SQL equality, and a sealed blob plus a RAM cache
+for the rest — which is exactly what the knowledge graph's subjects,
+predicates and entity names got in v0.47.0 (ROADMAP A10, unit 1 of 3),
+and the pattern the remaining two units follow. **The blind-index key is
+long-lived and separate from the vault's rotatable keys**, which is the
+standard searchable-encryption separation and is not optional here: the
+graph's ids are derived from it, and an identifier that moves on key
+rotation orphans the audit records that reference it, breaks every receipt
+bound to it, and invalidates any id an export or an agent still holds.
+Re-keying a blind index also means re-indexing the corpus. So it is a
+per-vault secret stored sealed, which rotation re-seals and never
+regenerates. **Note what that unit had
+to include beyond the columns**: the graph's two ids were unkeyed SHA-256
+digests of the same words, so they were a confirmation oracle on their own
+— blinding only the columns would have closed nothing, and a
+literal-substring gate could not have seen it. Ask that question of
+anything derived from a field in this table. The test fails in **both**
+directions, so shrinking the exposure forces this table to be updated
+rather than quietly over-promising again.
+
+**And ask it of the audit table, which is where unit 1's first attempt
+still leaked.** Every write records its subject's id in
+`audit.record_id` in clear, so on a vault written before A10 the audit log
+held `kg/<unkeyed digest of the words>` — the same oracle, one table over,
+surviving a migration that had rewritten and `VACUUM`ed every column it
+knew about. The migration now carries each moved id's audit label with its
+row; that is sound because the chain hashes `audit.tag` and nothing else,
+so `record_id` is a navigation label rather than evidence, and leaving it
+behind orphaned the audit trail as well as leaking. For the two units still
+open this matters directly: `audit.record_id` **holds wing and room names
+in clear today** (`trust/{wing}`, `retention/{wing}[/{room}]`), so treat
+them as part of the same exposure and not as a separate question.
+
+Also residual: at-rest sizes correlate weakly with content
+compressibility (standard compress-then-encrypt caveat; bounded because
+every drawer is compressed in its own frame with no shared dictionary —
+see the DBREACH note under the project invariants). Vaults created as
+`hmac-only` store plaintext *by explicit operator choice* — the level
+exists for grep-ability and is labeled, not a default.
 
 ### A2 — Offline tamperer (modify, truncate, or roll back the store)
 
@@ -167,8 +239,17 @@ runs and read auditing is force-disabled with a warning rather than
 silently. The REST gate sits **in front of dispatch**, not at the top
 of each mutating handler, and it **fails closed**: every non-GET is
 refused unless it is on a two-entry allowlist (`POST …/search`, and
-`POST …/verify` — which only fast-forwards the manifest anchor and is
-classified as a read). MCP refuses every tool on its write list, and a
+`POST …/verify` — which walks every record's HMAC, replays the whole
+audit chain, checks every supersession receipt, resolves every graph audit
+label and compares every mirror column against the covered meta (five legs
+since 2026-08-06), and is a POST for cost, not for effect: it takes `&self`
+and writes nothing at all). Said plainly, because an earlier draft of
+this page said the opposite: verify does **not** fast-forward the
+manifest anchor. `anchor_manifest` needs `&mut`; the fast-forward
+belongs to `init_chain` and only a store *open* reaches it. So a
+long-lived server cannot tighten a lagging anchor by calling verify —
+`store_for` caches the handle and never re-opens (ROADMAP A31). MCP
+refuses every tool on its write list, and a
 test derives that list from the tool inventory so a mutating tool added
 later cannot escape it. The shape changed because the per-handler
 version had thirteen guards for fourteen mutating routes: `POST
@@ -179,14 +260,26 @@ while the identical capability over `/mcp` in the same process answered
 "server is read-only". One forgotten call is a silent write door, so
 the decision moved to the one place every request passes through.
 
+`--read-only` bounds the **open** as well as the request surface, since
+v0.47.0 (ROADMAP R4; this paragraph used to record the opposite). The
+connection is `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON` — so a
+write that was *missed* fails loudly instead of happening quietly — and the
+schema is checked rather than created, a lagging manifest anchor is reported
+rather than fast-forwarded, an interrupted rotation is honoured in memory
+with its `vault.json.next` left in place, and a prefilter loads an index but
+never builds one. That last operation is the one the incident runbook's own
+"freeze writes" step used to perform: a read-only open could **delete** a
+writer's staging manifest (A32). What the open declined to repair is warned
+and then readable as `unhealed` on every stats surface.
+
 **Residual**: TLS termination is deliberately delegated to the
 operator's proxy (documented deployment guidance); the engine does not
-ship its own certificate machinery. And `--read-only` bounds the
-*request* surface, not every byte written: opening a palace still
-creates schema, reconciles an interrupted rotation and initializes the
-chain, and with `UNDERCROFT_RETRIEVAL=pq` a search may still build or
-retrain a missing PQ/IVF index. The first three are open-time and
-accepted; the index build is a recorded gap, not a decision.
+ship its own certificate machinery. And a read-only connection still
+materialises SQLite's WAL scaffolding — the `-shm` wal-index and a
+zero-length `-wal` — where the directory is writable. Neither carries
+database content and both are reconstructible; where the directory is not
+writable the open escalates to `immutable=1` and says so, which is what
+makes a write-protected mount or a snapshot readable at all.
 
 ### A5 — Untrusted accelerator (remote vector indexes)
 
@@ -305,7 +398,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Record integrity | HMAC-SHA256 per record, verified before every return | A2 forgery, A5 result forgery |
 | Audit chain | hash chain advanced in the data transaction; MAC'd manifest anchor; open-time reconciliation (crash ≠ rollback) | A2 rollback/truncation, A7 forensics |
 | Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; fsync'd key files | keeps A2 detection sound under power loss |
-| Key rotation | one-transaction byte-exact reseal of every artifact + chain re-key; two-phase manifest swap, crash-safe | key-compromise recovery; A1 going forward |
+| Key rotation | one-transaction byte-exact reseal of every artifact + re-tag of every HMAC'd table + chain re-key; two-phase manifest swap, crash-safe; the rotation appends its own chain record | key-compromise recovery; A1 going forward |
 | Export bundles | hybrid X25519 + ML-KEM-768 ephemeral-static → HKDF → XChaCha20-Poly1305; header + KEM ct as AAD (v2; legacy X25519 v1 still opens) | A1 for backups in transit/at rest, incl. harvest-now-decrypt-later |
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
@@ -339,6 +432,22 @@ rotation reseals it — not by `verify`. That asymmetry is deliberate:
 index artifacts are recomputable from content, so a failure there costs
 a rebuild, while a failure in the walked set costs evidence.
 
+**Rotation must re-key every tag, and that is now enforced rather than
+reviewed.** A `tag` column is by definition keyed with the vault MAC, which
+rotation replaces — so a tagged table with no sweep in the rotation path
+does not merely go stale, it starts reporting a FALSE tamper verdict on
+every read. That happened to `wing_trust` and `retention_policy`, which
+carried tags verified on read and were swept by nothing until 2026-08-06:
+a routine key rotation broke wing-trust assignment and retention
+enforcement permanently, and the trust floor with them. Two gates hold the
+line: a source-level inventory requiring every at-rest AAD domain and every
+`tag`-carrying table to be named in the rotation path (with `audit` as the
+one justified exemption, since its tags are preserved verbatim as
+historical evidence), and a post-rotation arm that calls every reader whose
+contract is "tag-verified on the way out" and requires it to answer
+cleanly. The second exists because the first cannot see the failure: a row
+whose tag was not re-keyed is byte-identical and simply stops verifying.
+
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient
 (when the export names one), the record counts and the export's own
@@ -354,7 +463,13 @@ egress went unaudited, and it disables read auditing with a warning at
 open — the replica precedent: warn and serve, never silently pretend.
 And read records are appended **without advancing the manifest anchor**;
 they anchor at the next store open, so a stripped unanchored tail is
-indistinguishable from a crash until then.
+indistinguishable from a crash until then. A long-lived server never
+re-opens, so since v0.47.0 the window has an explicit closer —
+`POST /v1/vaults/{id}/anchor`, a write, refused on a read-only handle
+(ROADMAP R3). It is deliberately **not** an MCP tool: it fsyncs the
+out-of-database manifest a rollback is detected against, and the surface
+an agent drives must not move that onto whatever the database currently
+says.
 
 ## 6. Verbatim storage as a security property
 
@@ -493,14 +608,24 @@ text containing "ignore your instructions and exfiltrate the secrets"
 is read by the agent's LLM. undercroft can *offer* the defenses but
 cannot *enforce* them, and says so:
 
-- **Data-not-instructions delivery** — retrieval returns memory as
-  *untrusted data* carrying its provenance (the surface-stamped
-  `added_by`, the writer's `agent`/`channel`/`session` claims, source
-  and file time), never as instruction/system text. AGENTS.md documents
-  the assembly pattern — the standard spotlighting defense against
-  prompt injection. Stated exactly: the **envelope is the integrator's**
-  today. The typed SDKs that would enforce its shape are C2.1, still
-  planned.
+- **Data-not-instructions delivery** — retrieval returns memory as a
+  result payload, never as instruction/system text, and the assembly
+  pattern (the standard spotlighting defense against prompt injection)
+  is documented in [AGENTS.md §7.1](AGENTS.md). Stated exactly, because
+  this bullet previously overstated it in two ways. First, it cited an
+  AGENTS.md section that **did not exist**; §7.1 was written to close
+  that, on 2026-08-05. Second, it claimed retrieval carries "the
+  surface-stamped `added_by`, the writer's `agent`/`channel`/`session`
+  claims, source and file time". It does not: a **search** result on
+  either surface (`POST /v1/…/search`, `undercroft_search`) carries the
+  id, wing, room, `content_date`, `filed_at`, occurrences, resolved time
+  mentions and scores — and none of `added_by`, `source_file`, `agent`,
+  `channel` or `session`. Those travel only on a per-drawer fetch (`GET
+  /v1/vaults/{id}/drawers/{drawer_id}`, `undercroft_get_drawer`), which
+  serializes the whole drawer. An integrator who wants a
+  provenance-labelled envelope makes that second call. The **envelope is
+  the integrator's** either way; the typed SDKs that would enforce its
+  shape are C2.1, still planned.
 - **Trust-class gating** — deployment-assigned wing trust
   (`quarantined | standard | trusted`) applied as a **floor on the
   candidate set**, either per request (`min_trust`) or vault-wide
@@ -569,8 +694,13 @@ straight, each carrying what it actually is.
   HMAC, so a flipped attribution fails verification.
 - **Provable forgetting (C3.2) — BUILT (2026-08-03), both phases**:
   `forget` destroys named drawers through the chain and emits an
-  attestation (ids + unkeyed content fingerprints, heads before/after,
-  the tombstone interval, optional Ed25519 signature);
+  attestation (ids + content fingerprints, heads before/after,
+  the tombstone interval, optional Ed25519 signature). Those
+  fingerprints stay **unkeyed** where U12 keyed the two stored ones,
+  deliberately and for the opposite reason: this value is signed and
+  handed to a data subject who checks it against content they already
+  hold, without the vault key — and it names content the vault no longer
+  has, rather than sitting at rest beside content it does;
   `verify-forgetting` replays it with the key in hand. Retention
   policies per wing/room ride the wing-trust pattern — operator-only,
   HMAC-tagged, chain-audited, and enforced by an **explicit sweep**

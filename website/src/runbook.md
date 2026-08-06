@@ -58,12 +58,15 @@ forge the chain MAC).
 ## 3. Mitigate now (stop the bleeding)
 
 1. **Preserve evidence first.** Copy the vault directory *before* anything else
-   touches it — the DB, its `-wal`/`-shm`, and `vault.json`. This comes before
-   the restart on purpose: opening a store is not a pure read (schema creation,
-   a rotation reconcile, chain init), so the copy must predate the next open:
+   touches it — the DB, its `-wal`/`-shm`, `vault.json`, and `vault.json.next`
+   if one is there:
    ```bash
    cp -a "$UNDERCROFT_HOME/vaults/<vault>" "/tmp/<vault>.evidence.$(date +%s)"
    ```
+   Since v0.47.0 a read-only open no longer touches any of those (see step 2),
+   so this is no longer a race you can lose. Take the copy anyway: it is the
+   only thing that survives a *writable* process someone else starts, and a
+   forensic copy costs seconds.
 2. **Freeze writes.** Restart the server read-only so nothing new is written on
    top of a compromised store while you investigate:
    ```bash
@@ -73,12 +76,40 @@ forge the chain MAC).
    port: both stores the server opens take it, the gate sits in front of route
    dispatch and **fails closed** (everything is a mutation unless explicitly
    named otherwise), and the read-audit record and the embedder migration —
-   both writes — are suppressed. Two exceptions are deliberate and worth
-   knowing here: `POST …/verify` is allowed, because verification
-   fast-forwards the manifest anchor and is classified as a read; and with
-   `UNDERCROFT_RETRIEVAL=pq` a search may still build a missing PQ/IVF index,
-   which is a write (a recorded gap, not a decision). If your incident needs
-   a byte-frozen vault, stop the server rather than restarting it.
+   both writes — are suppressed. `POST …/verify` is allowed and is a genuine
+   read: it walks every record's HMAC and replays the chain, and it does
+   **not** fast-forward the manifest anchor (an earlier version of this step
+   said it did).
+
+   **The open is a read too, since v0.47.0.** It used to be the one write
+   `--read-only` did not bound, and the worst of it ran on the very path this
+   step recommends: rotation reconciliation happened before the
+   read-only/read-write split, so the first request against a cold handle
+   either promoted a staged `vault.json.next` over `vault.json` — adopting a
+   new key generation — or **deleted** it outright, with an fsync. That was
+   potential evidence destruction on the path chosen to avoid touching the
+   vault (ROADMAP R4/A32). Now the connection itself is opened
+   `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema is checked
+   rather than created, the anchor is reported rather than healed, a staged
+   rotation is honoured **in memory only** and its file left exactly where it
+   is, and a prefilter loads an index but never builds one. What the open
+   declined to repair is printed as a warning and readable afterwards on
+   `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
+   an incident, read it: "a torn `vault.json.next` was left in place" tells
+   you a rotation was in flight when the incident began.
+
+   Two conditions refuse instead, both **409**, because serving through them
+   would answer a question wrongly rather than partially: a manifest whose
+   `palace.db` is absent (a half-copied backup or a snapshot taken mid-write —
+   "empty" is not "absent", and this one exits **2**, an integrity verdict),
+   and a schema this build would have had to migrate (open it once with a
+   writable process, then retry).
+
+   If your incident needs a byte-frozen vault, stop the server rather than
+   restarting it. If the vault lives on a write-protected mount or a snapshot,
+   the read-only open escalates to SQLite's `immutable=1` mode and says so in a
+   warning — correct there, and wrong if anything is still writing, which is
+   why it is reached only after the ordinary open has failed.
 3. **Isolate.** If this is a multi-tenant server, the vault id in the alert
    scopes the blast radius — other vaults have independent HKDF-derived keys, so
    one vault falling tells an attacker nothing about its siblings.

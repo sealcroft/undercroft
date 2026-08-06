@@ -148,6 +148,114 @@ body_has "rotated token serves" 'gigawatts' -- -X POST "${AUTH_ACME2[@]}" \
   -d '{"query":"flux capacitor power"}' "$O/t/search"
 code_is  "rotate unknown tenant is 404" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/ffffffffffffffff/rotate"
 
+echo "== Operator plane: every ops route, positively (C9/C15) =="
+# Ten routes landed on the admin plane on the argument that they "were
+# reachable from nowhere in a fleet" — and then this suite drove NONE of
+# them, so what was proved was the refusals and never the capability. Each
+# one is exercised here through the admin plane AND through the CLI alias,
+# because docs/MULTI_TENANCY.md says the CLI mirrors this plane and it had
+# no subcommand at all until 2026-08-05.
+OPS_T="$(curl -s -X POST "${ADMIN[@]}" -d '{"name":"opsy"}' "$O/admin/tenants")"
+OPS_ID="$(grep -o '"id":"[0-9a-f]*"' <<<"$OPS_T" | head -1 | cut -d'"' -f4)"
+OPS_TOKEN="$(grep -o '"token":"[0-9a-f]*"' <<<"$OPS_T" | head -1 | cut -d'"' -f4)"
+curl -s -X POST -H "Authorization: Bearer $OPS_TOKEN"   -d '{"text":"the ops tenant filed a drawer about turbines","wing":"w","room":"r"}'   "$O/t/drawers" >/dev/null
+
+body_has "ops verify"        '"ok":true'   -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/verify"
+body_has "ops anchor"        '"anchored"'  -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/anchor"
+body_has "ops supersessions" 'supersessions' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/supersessions"
+body_has "ops admission list" 'pending'    -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/admission"
+body_has "ops trust list"    'assignments' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/trust"
+body_has "ops trust assign"  '"trust":"trusted"' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","trust":"trusted"}' "$O/admin/tenants/$OPS_ID/ops/trust"
+body_has "ops retention list" 'policies'   -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/retention"
+body_has "ops retention set" '"days":3650' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","days":3650}' "$O/admin/tenants/$OPS_ID/ops/retention"
+body_has "ops retention sweep" 'destroyed' -- -X POST "${ADMIN[@]}"   -d '{}' "$O/admin/tenants/$OPS_ID/ops/retention/sweep"
+# A route that is NOT on the plane stays off it, so the block above is not
+# passing because everything is forwarded.
+code_is  "ops refuses key rotation" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/rotate"
+code_is  "ops refuses drawer reads" 404 -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/drawers"
+
+# The CLI mirrors it — the half docs promised and nothing shipped.
+if "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify 2>&1 | grep -q '"ok":true'; then
+  ok "orchestrator CLI ops verify"
+else
+  fail "orchestrator CLI ops verify"
+fi
+if "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" trust 2>&1 | grep -q 'assignments'; then
+  ok "orchestrator CLI ops trust"
+else
+  fail "orchestrator CLI ops trust"
+fi
+# Captured rather than piped: `set -o pipefail` makes an `if cmd | grep`
+# see the FAILING command's status, so a refusal that greps correctly still
+# reads as a failed check — which is what this one did on its first run.
+OPS_ERR="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" frobnicate 2>&1)"
+if grep -q 'unknown operation' <<<"$OPS_ERR"; then
+  ok "orchestrator CLI ops refuses an unknown operation"
+else
+  fail "orchestrator CLI ops refuses an unknown operation" "$OPS_ERR"
+fi
+
+echo "== Data-plane quarantine fence (C15) =="
+# The fence had ZERO occurrences in this suite: the reading half of the
+# boundary OPS_ROUTES draws for the ruling half, tested only in a unit test.
+# It refuses BEFORE any engine call, so naming the reserved wing on any
+# data-plane route is refused whether or not the tenant has anything in it.
+OPS_AUTH=(-H "Authorization: Bearer $OPS_TOKEN")
+body_has "fence: search naming the wing"  'quarantine' -- -X POST "${OPS_AUTH[@]}"   -d '{"query":"x","wing":"quarantine-pending"}' "$O/t/search"
+body_has "fence: drawers?wing="           'quarantine' -- "${OPS_AUTH[@]}"   "$O/t/drawers?wing=quarantine-pending"
+body_has "fence: save aimed at the wing"  'quarantine' -- -X POST "${OPS_AUTH[@]}"   -d '{"text":"forged","wing":"quarantine-pending"}' "$O/t/drawers"
+code_is  "fence: refuses with 404"    404 -- "${OPS_AUTH[@]}"   "$O/t/drawers?wing=quarantine-pending"
+# Premise: the same routes serve an ordinary wing, so the refusals above
+# are about the wing and not about the routes.
+body_has "premise: ordinary wing serves" 'turbines' -- -X POST "${OPS_AUTH[@]}"   -d '{"query":"turbines","wing":"w"}' "$O/t/search"
+
+echo "== Data-plane boundary: traversal, replica writes, query forwarding =="
+# A DEDICATED tenant, for two reasons the first draft of this block learned
+# the hard way: acme's token was deliberately rotated out above (so it answers
+# 401 before the route is consulted), and acme is still inside the per-tenant
+# rate-limit window the burst check above filled (so it answers 429). Either
+# one makes a traversal check pass for a reason that has nothing to do with
+# the gate under test.
+BND="$(curl -s -X POST "${ADMIN[@]}" -d '{"name":"boundary"}' "$O/admin/tenants")"
+BND_TOKEN="$(grep -o '"token":"[0-9a-f]*"' <<<"$BND" | head -1 | cut -d'"' -f4)"
+BND_AUTH=(-H "Authorization: Bearer $BND_TOKEN")
+curl -s -X POST "${BND_AUTH[@]}"   -d '{"text":"boundary tenant first drawer gigawatts","wing":"w","room":"r"}'   "$O/t/drawers" >/dev/null
+
+# `--path-as-is` is load-bearing: curl squashes `../` in the path CLIENT-side
+# by default, so without it the orchestrator never sees a traversal and the
+# check proves nothing about our gate.
+#
+# The escalation this suite could not see. `data_subpath_ok` matched only the
+# FIRST path segment while the engine URL is built by interpolation, so ureq's
+# `url` parse collapsed `..` and the engine received an operator route. Proven
+# on the wire: asking for `/drawers/../admission` sent
+# `POST /v1/vaults/<t>/admission`. A tenant data token therefore reached
+# admission rulings, trust, retention sweeps, forget, KEY ROTATION and vault
+# deletion — and by climbing two levels, another tenant's vault.
+for escape in   "drawers/../admission"   "drawers/../trust"   "drawers/../retention"   "drawers/../forget"   "drawers/../rotate"   "search/../verify"   "drawers/%2e%2e/admission" ; do
+  code_is "traversal refused: $escape" 404 -- --path-as-is -X POST     "${BND_AUTH[@]}" -d '{}' "$O/t/$escape"
+done
+# Climbing past the vault entirely — cross-tenant read.
+code_is "traversal refused: cross-tenant" 404 -- --path-as-is -X POST   "${BND_AUTH[@]}" -d '{"query":"flux"}' "$O/t/search/../../globex/search"
+# Premise: the legitimate prefixes those escapes are built from still serve,
+# so the checks above cannot pass by refusing everything (or by 401).
+body_has "premise: plain search still serves" 'gigawatts' -- -X POST   "${BND_AUTH[@]}" -d '{"query":"boundary tenant drawer"}' "$O/t/search"
+
+# The query string was split off the request target and never forwarded, so
+# every engine parameter a tenant declared was silently dropped: a paginating
+# client got page one forever at HTTP 200.
+curl -s -X POST "${BND_AUTH[@]}"   -d '{"text":"a second drawer for paging","wing":"w","room":"r"}'   "$O/t/drawers" >/dev/null
+PAGED="$(curl -s "${BND_AUTH[@]}" "$O/t/drawers?limit=1")"
+UNPAGED="$(curl -s "${BND_AUTH[@]}" "$O/t/drawers")"
+N_PAGED="$(grep -o '"id"' <<<"$PAGED" | wc -l)"
+N_UNPAGED="$(grep -o '"id"' <<<"$UNPAGED" | wc -l)"
+if [ "$N_PAGED" -eq 1 ] && [ "$N_UNPAGED" -gt 1 ]; then
+  ok "query string reaches the engine (limit honoured)"
+else
+  fail "query string dropped" "limit=1 gave $N_PAGED id(s), unlimited gave $N_UNPAGED"
+fi
+
+
 echo "== Per-tenant rate limiting =="
 kill $ORCH_PID 2>/dev/null; wait $ORCH_PID 2>/dev/null
 UNDERCROFT_ORCH_RATE_LIMIT=3 "$ORCH" serve --addr "127.0.0.1:$PORT_O" >>/tmp/orch.log 2>&1 &
@@ -205,6 +313,15 @@ if UNDERCROFT_ORCH_DB=/tmp/definitely-absent/orch.db "$ORCH" serve \
 else
   ok "replica refuses a missing state db"
 fi
+
+echo "== Data-plane boundary: replica writes =="
+# A read replica serves reads. `/t/*` dispatched before the writer-only role
+# check and `data_plane` took no role, so `require_writable()` was unreachable
+# over HTTP in either role and a replica proxied writes at 200.
+code_is "replica refuses a data-plane write" 403 -- -X POST -H "Authorization: Bearer $ACME_TOKEN3"   -d '{"text":"written to a replica","wing":"w","room":"r"}' "$R/t/drawers"
+code_is "replica refuses a data-plane delete" 403 -- -X DELETE   -H "Authorization: Bearer $ACME_TOKEN3" "$R/t/drawers/deadbeef"
+body_has "replica still serves POST search" 'gigawatts' -- -X POST   -H "Authorization: Bearer $ACME_TOKEN3" -d '{"query":"flux capacitor power"}' "$R/t/search"
+
 
 echo ""
 echo "orchestrator e2e results: $PASS passed, $FAIL failed"

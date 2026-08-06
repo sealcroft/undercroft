@@ -33,6 +33,7 @@ website/book/
 # Session findings: measurements, verification logs, research digests.
 # Local only — the durable conclusions belong in ROADMAP/CHANGELOG/CLAUDE.md.
 findings/
+/findings.md
 
 # Session handover notes (local only — never committed)
 /HANDOVER.md
@@ -51,3 +52,4 @@ benchmarks/logs/local/
 # Promiscuity corpora, fetched not committed (hermitdave/FrequencyWords, MIT):
 #   curl -sSL https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ar/ar_50k.txt -o crates/undercroft-store/testdata/ar_50k.txt
 crates/undercroft-store/testdata/
+.battery/

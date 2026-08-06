@@ -1,0 +1,46 @@
+# The shipped TLS terminator for the remote-index backends.
+#
+# Same shape and same reason as deploy/embeddings-tls/, one layer over:
+# since 2026-08-05 `undercroft-index` refuses cleartext http to any
+# non-loopback host with no override (ROADMAP C8), because every push
+# carries EMBEDDINGS and an embedding is plaintext-derived data — the
+# sealed-vault invariant seals vectors at rest for exactly that reason, so
+# shipping them in clear over a network is the same exposure one hop out.
+#
+# Four HTTP backends terminate here. Caddy's internal CA issues every
+# certificate and the root lands on the `undercroft-backends-tls` volume at
+# /data/caddy/pki/authorities/local/root.crt; clients mount it read-only
+# and pin it with UNDERCROFT_INDEX_CA. The declaration is a PIN — it
+# REPLACES the public roots rather than adding to them.
+#
+# Postgres is not here: it speaks its own protocol, not HTTP, so pgvector
+# terminates TLS in the server itself (see the `pgvector` service, which
+# runs with `ssl=on` and the same generated key pair). The engine asks for
+# it with `sslmode=verify-full` and pins the same root.
+#
+# Each backend gets its own hostname rather than a path prefix, because the
+# backends' own APIs own their paths and a prefix would have to be stripped
+# — one more place for a request to be rewritten wrongly.
+{
+	auto_https disable_redirects
+}
+
+https://qdrant-tls {
+	tls internal
+	reverse_proxy qdrant:6333
+}
+
+https://chroma-tls {
+	tls internal
+	reverse_proxy chroma:8000
+}
+
+https://milvus-tls {
+	tls internal
+	reverse_proxy milvus:19530
+}
+
+https://weaviate-tls {
+	tls internal
+	reverse_proxy weaviate:8080
+}

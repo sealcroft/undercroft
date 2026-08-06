@@ -29,7 +29,6 @@ const WRITE_TOOLS: &[&str] = &[
     "undercroft_kg_add",
     "undercroft_kg_invalidate",
     "undercroft_kg_supersede",
-    "undercroft_kg_set_authority",
     "undercroft_diary_write",
     "undercroft_dedup",
 ];
@@ -76,12 +75,96 @@ fn quarantine_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()>
         // Only id-shaped arguments get the row lookup: a primary-key probe
         // per argument is cheap, but running one over every free-text field
         // (a `content` body, a search `query`) is noise, not safety.
-        if (key == "id" || key.ends_with("_id")) && store.is_quarantine_pending(s)? {
+        //
+        // `supersedes` is named explicitly because it is an id and matches
+        // neither test (ROADMAP C12) — which is exactly the "a checklist
+        // goes stale the moment a tool adds an argument" failure this
+        // function's own doc claims to have removed. The shape test stays
+        // the rule; this is the one argument that carries a drawer id under
+        // a name that does not say so, and adding it here is cheaper than
+        // pretending the rule covered it.
+        if (key == "id" || key.ends_with("_id") || key == "supersedes")
+            && store.is_quarantine_pending(s)?
+        {
             anyhow::bail!(
                 "{tool}: {s} is quarantine-pending — pending review evidence \
                  is operator-only; rule on it with `admission allow`/`deny`"
             );
         }
+    }
+    Ok(())
+}
+
+/// The MCP tools that CLOSE a validity window, and so can remove a fact from
+/// the exact-authority door without writing an authority field.
+///
+/// A list rather than a name heuristic, in one place, above dispatch: the two
+/// entries are the only tools that reach `kg_invalidate`, and `parity.rs`
+/// counts every `_invalidate`/`_supersede` tool against `WRITE_TOOLS`, so a
+/// third one cannot appear without an author reading that list.
+const CLOSES_A_VALIDITY_WINDOW: &[&str] = &["undercroft_kg_invalidate", "undercroft_kg_supersede"];
+
+/// **The authority fence.** `parity.rs`'s `OPERATOR_ONLY` states the rule as
+/// "an agent must not write the authority tier its own lookups read", and
+/// taking `undercroft_kg_set_authority` off the surface satisfied only its
+/// FORGERY half. The denial half stayed open one indirection out:
+/// `lookup_canonical` requires `valid_to IS NULL`, `kg_invalidate` closes that
+/// window on every active fact matching (subject, predicate) — carrying the
+/// authority fields through unchanged, deliberately, so the tag still
+/// verifies — and `kg_supersede` is the same operation with a `kg_add` after
+/// it. So an agent could empty the door docs/LABELS.md positions ABOVE
+/// semantic recall for high-risk asks, and the fact stays there tagged,
+/// audited and invisible to the lookup. Denial, not forgery, and the
+/// rationale forbids both.
+///
+/// The cut is the narrowest one that satisfies it: an agent may still close
+/// the window on its own ordinary facts — a fact going stale is what the
+/// temporal KG exists to record — and is refused only where the target is the
+/// one active approved canonical fact a `lookup_canonical` would return.
+/// Moving the two tools to the operator plane was the alternative and costs
+/// the agent a capability the authority tier has no interest in.
+///
+/// Above dispatch beside the quarantine fence, for the same reason that one
+/// is: a clause in each handler is a checklist, and the checklist is what
+/// left this half open. The cost is a full graph decode on those two tools
+/// only — which they then pay again inside `kg_invalidate`, so it is one
+/// extra walk on a write, not on any read.
+fn authority_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()> {
+    if !CLOSES_A_VALIDITY_WINDOW.contains(&tool) {
+        return Ok(());
+    }
+    // A missing argument is the handler's error to report, with its own name
+    // for the missing key — not this fence's to pre-empt.
+    let (Some(subject), Some(predicate)) = (opt_str(args, "subject"), opt_str(args, "predicate"))
+    else {
+        return Ok(());
+    };
+    // `kg_invalidate` may narrow to a single value, and a call naming a
+    // different one leaves the canonical holder standing. `kg_supersede` has
+    // no such argument (its `new_object` is the replacement, not a filter) and
+    // closes every active fact for the pair, so it is fenced unconditionally.
+    let only = opt_str(args, "object");
+    for t in store.kg_query_entity(subject, None, "outgoing")? {
+        if t.predicate != predicate
+            || t.authority_class.as_deref() != Some("canonical")
+            || t.review_state.as_deref() != Some("approved")
+        {
+            continue;
+        }
+        if only.map(|o| o != t.object).unwrap_or(false) {
+            continue;
+        }
+        anyhow::bail!(
+            "{tool}: ({subject}, {predicate}) is held by approved canonical fact \
+             {} under key {:?}. Closing its window would empty the \
+             exact-authority door `undercroft_lookup_canonical` reads, so the \
+             authority tier is an operator surface in both directions: \
+             `undercroft kg authority {} --class stated --review rejected` (or \
+             `POST /v1/vaults/<id>/kg/authority`) takes it off the tier first",
+            t.id,
+            t.canonical_key.as_deref().unwrap_or(""),
+            t.id
+        );
     }
     Ok(())
 }
@@ -147,11 +230,13 @@ impl McpHandler {
                         "server is read-only: {name} is not allowed"
                     ))
                 } else {
-                    // Both gates sit here, above dispatch, for the same
+                    // All three gates sit here, above dispatch, for the same
                     // reason: a per-tool check is a checklist someone
                     // forgets, and the delete-vs-quarantine hole was
-                    // exactly that kind of omission.
+                    // exactly that kind of omission — as was the authority
+                    // tier surviving as a DENIAL after its write tool went.
                     quarantine_fence(&self.store, &name, &args)
+                        .and_then(|()| authority_fence(&self.store, &name, &args))
                         .and_then(|()| call_tool(&mut self.store, &name, &args))
                 };
                 match result {
@@ -276,6 +361,8 @@ fn tool_definitions() -> Value {
             &["from_wing", "to_wing"]),
         tool("undercroft_list_tunnels", "List tunnels, optionally touching one wing.",
             json!({ "wing": s("filter") }), &[]),
+        tool("undercroft_history", "Audit-chain history for a memory or fact: what happened to it, when, and the tamper tag as of each write. Pass `subject` (a drawer id, fact id or entity id) to trace one record, or omit it for recent activity. Never returns content. Operator-only namespaces (review rulings, trust and retention policy, destructions, exports, read audits, rotations) are not visible here.",
+            json!({ "subject": s("drawer / fact / entity id"), "limit": i("max records"), "offset": i("skip") }), &[]),
         tool("undercroft_follow_tunnel", "Recent drawers from a tunnel's destination wing.",
             json!({ "id": s("tunnel id"), "limit": i("max drawers") }), &["id"]),
         tool("undercroft_delete_tunnel", "Remove a tunnel.",
@@ -306,10 +393,6 @@ fn tool_definitions() -> Value {
         tool("undercroft_kg_stats", "Knowledge-graph counts.", json!({}), &[]),
         tool("undercroft_lookup_canonical", "The exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks — an empty answer means no declared truth exists, never a guess.",
             json!({ "key": s("canonical key") }), &["key"]),
-        tool("undercroft_kg_set_authority", "Place a fact on the authority tier or take it off. authority_class stated|canonical, review_state unreviewed|approved|rejected; canonical_key required for canonical (promoting approved onto an occupied key supersedes the old holder, audited).",
-            json!({ "triple_id": s("fact id"), "authority_class": s("stated|canonical"),
-                    "review_state": s("unreviewed|approved|rejected"), "canonical_key": s("exact-lookup key") }),
-            &["triple_id", "authority_class", "review_state"]),
         // --- agent diaries ---
         tool("undercroft_diary_write", "Append a diary entry for an agent.",
             json!({ "agent": s("agent name"), "entry": s("diary text") }), &["agent", "entry"]),
@@ -509,8 +592,15 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                         format!("\ndates in the text: {}", resolved.join(" · "))
                     }
                 };
+                // Why this hit is here, in the channels that decided it, on its
+                // own line so an agent can read the four values as fields. The
+                // store keeps `lexical_exact` and `lexical_morph` apart so a
+                // surprising hit is reproducible, and `/v1` was the only
+                // surface that could see them — see `search::evidence`, which
+                // renders this identically for the CLI.
+                let evidence = crate::search::evidence(h);
                 out.push_str(&format!(
-                    "{}. [score {:.3}] ({}/{}, {}{}) id {}{}{}\n{}\n\n",
+                    "{}. [score {:.3}] ({}/{}, {}{}) id {}{}{}\n{evidence}\n{}\n\n",
                     // Absolute rank, not position within the page: on a later
                     // page "1." would claim a rank this hit does not hold.
                     offset + i + 1,
@@ -580,10 +670,12 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 )
             };
             Ok(format!(
-                "records checked: {}\nhmac failures: {}\naudit chain: {}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\naudit chain: {}\norphan labels: {}\nmirror drift: {}{}\nresult: {}",
                 report.records_checked,
                 report.bad_records.len(),
                 if report.chain_ok { "ok" } else { "BROKEN" },
+                report.orphan_labels.len(),
+                report.mirror_drift.len(),
                 sup_line,
                 if report.ok() {
                     "VERIFY OK"
@@ -707,6 +799,21 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let t = store.list_tunnels(opt_str(args, "wing"))?;
             Ok(serde_json::to_string_pretty(&t)?)
         }
+        // `HistoryScope::Agent`, and the scope is a REQUIRED argument so this
+        // call site had to decide. The fence is two-part and neither half is
+        // expressible in the argument fence above: operator namespaces are
+        // excluded in SQL (so paging cannot walk them), and a record whose
+        // subject sits in the reserved review wing is dropped on the way out
+        // — an agent whose write was diverted must not read the evidence back.
+        "undercroft_history" => {
+            let rows = store.history(
+                undercroft_store::manage::HistoryScope::Agent,
+                opt_str(args, "subject"),
+                opt_u64(args, "limit").unwrap_or(20) as usize,
+                opt_u64(args, "offset").unwrap_or(0) as usize,
+            )?;
+            Ok(serde_json::to_string_pretty(&rows)?)
+        }
         "undercroft_follow_tunnel" => {
             let drawers = store.follow_tunnel(
                 req_str(args, "id")?,
@@ -800,18 +907,6 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 // not fall back to guessing on this key's behalf.
                 None => Ok(format!("no approved canonical fact holds key {key:?}")),
             }
-        }
-        "undercroft_kg_set_authority" => {
-            store.kg_set_authority(
-                req_str(args, "triple_id")?,
-                req_str(args, "authority_class")?,
-                req_str(args, "review_state")?,
-                opt_str(args, "canonical_key"),
-            )?;
-            Ok(format!(
-                "authority set on fact {}",
-                req_str(args, "triple_id")?
-            ))
         }
         "undercroft_diary_write" => {
             let agent = req_str(args, "agent")?;
@@ -973,6 +1068,46 @@ mod tests {
         );
         assert!(!err && text == "not filed", "duplicate oracle: {text}");
 
+        // C12: `supersedes` is a drawer id under a name that is neither
+        // `id` nor `*_id`, so it walked past the fence's shape test and the
+        // write bound the receipt with no wing predicate — an existence
+        // oracle on the queue from the surface that is supposed to have
+        // none.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_add_drawer",
+            json!({ "content": "a harmless note", "supersedes": qid }),
+        );
+        assert!(err, "supersedes must not walk past the fence: {text}");
+        assert!(text.contains(&qid), "and it names the drawer: {text}");
+        // Premise: the same call against an ordinary drawer is allowed, so
+        // the refusal is about quarantine and not about the argument.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_add_drawer",
+            json!({ "content": "a harmless note", "supersedes": clean.id }),
+        );
+        assert!(!err, "superseding an ordinary drawer still works: {text}");
+
+        // C15: the KG is the second content path to the agent, and its
+        // object screening was store-level only — driven on no surface.
+        // A flagged object is REFUSED rather than diverted (a fact has no
+        // wing to divert to), so the agent whose save was quarantined
+        // cannot put the same text in a fact instead.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_kg_add",
+            json!({ "subject": "team", "predicate": "note", "object": poison }),
+        );
+        assert!(err, "a flagged KG object must be refused: {text}");
+        // Premise: an ordinary object still writes.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_kg_add",
+            json!({ "subject": "team", "predicate": "note", "object": "standup at nine" }),
+        );
+        assert!(!err, "an ordinary fact still writes: {text}");
+
         // Nothing above disturbed the queue.
         assert_eq!(h.store.admission_pending().unwrap().len(), 1);
     }
@@ -1065,6 +1200,130 @@ mod tests {
         assert!(
             capped.contains("team/one") && capped.contains("team/two"),
             "a per-room cap of 1 must spread across rooms:\n{capped}"
+        );
+    }
+
+    /// **An agent cannot empty the exact-authority door.**
+    ///
+    /// Taking `undercroft_kg_set_authority` off the surface closed the forgery
+    /// half of "an agent must not write the authority tier its own lookups
+    /// read" and left the denial half open: `lookup_canonical` requires
+    /// `valid_to IS NULL`, and both window-closing tools reach every active
+    /// fact for a (subject, predicate) with the authority fields riding
+    /// through unchanged. So the golden value could be deleted from the door
+    /// by an agent that never touched a tier field.
+    ///
+    /// Each refusal carries its premise: the identical call succeeds on an
+    /// ordinary fact, and a narrowed `object` that names a different value
+    /// still succeeds — so this fences the authority tier rather than the
+    /// tools.
+    #[test]
+    fn mcp_cannot_close_the_window_of_an_approved_canonical_fact() {
+        let (_d, mut h) = handler();
+        let golden = h
+            .store
+            .kg_add(
+                "acme",
+                "prod-db-host",
+                "db-1.internal",
+                None,
+                None,
+                1.0,
+                None,
+            )
+            .unwrap();
+        h.store
+            .kg_set_authority(&golden, "canonical", "approved", Some("prod-db-host"))
+            .unwrap();
+        // A second, ordinary fact on the same subject: the premise for every
+        // refusal below is that these tools still work.
+        h.store
+            .kg_add("acme", "owner", "platform-team", None, None, 1.0, None)
+            .unwrap();
+
+        for (tool, args) in [
+            (
+                "undercroft_kg_invalidate",
+                json!({"subject": "acme", "predicate": "prod-db-host"}),
+            ),
+            (
+                "undercroft_kg_supersede",
+                json!({"subject": "acme", "predicate": "prod-db-host", "new_object": "db-evil.internal"}),
+            ),
+            // Narrowed to the value the canonical fact actually holds.
+            (
+                "undercroft_kg_invalidate",
+                json!({"subject": "acme", "predicate": "prod-db-host", "object": "db-1.internal"}),
+            ),
+        ] {
+            let (err, text) = call(&mut h, tool, args);
+            assert!(err, "{tool} must refuse an approved canonical fact");
+            assert!(
+                text.contains("prod-db-host") && text.contains("operator surface"),
+                "{tool} names the key and the surface that owns it: {text}"
+            );
+        }
+
+        // The door still answers, which is the whole point of the refusal.
+        assert_eq!(
+            h.store
+                .lookup_canonical("prod-db-host")
+                .unwrap()
+                .unwrap()
+                .id,
+            golden
+        );
+
+        // Premise: an ordinary fact on the same subject is still the agent's
+        // to close — a fact going stale is what the temporal KG records.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_kg_invalidate",
+            json!({"subject": "acme", "predicate": "owner"}),
+        );
+        assert!(!err, "an ordinary fact must still be invalidable: {text}");
+        assert!(text.contains("invalidated 1"), "{text}");
+
+        // And a narrowed call naming a value the canonical fact does not hold
+        // leaves it alone rather than being refused on the pair alone.
+        let (err, text) = call(
+            &mut h,
+            "undercroft_kg_invalidate",
+            json!({"subject": "acme", "predicate": "prod-db-host", "object": "db-9.internal"}),
+        );
+        assert!(!err, "a narrowed call that misses the holder: {text}");
+    }
+
+    /// The three channels the store keeps apart reach the agent surface.
+    ///
+    /// They were `/v1`-only: MCP answered with one blended score, so an agent
+    /// could not tell "the drawer said your word" from "the vectors agreed"
+    /// and a surprising hit was reproducible on one transport out of three.
+    /// Asserted against the values the STORE returns for the same query, not
+    /// against a literal — a rendering that printed plausible numbers of its
+    /// own would pass a "contains 0." test.
+    #[test]
+    fn a_search_hit_carries_the_channels_that_admitted_it() {
+        let (_d, mut s) = plain_store();
+        call_direct(
+            &mut s,
+            "undercroft_save",
+            json!({"content": "the harbour lighthouse keeps a tide chart", "wing": "port"}),
+        );
+        let opts = SearchOptions {
+            limit: crate::search::DEFAULT_LIMIT,
+            ..Default::default()
+        };
+        let hit = &s.search("harbour tide", &opts).unwrap()[0];
+        let expected = crate::search::evidence(hit);
+        // Premise: the query really did land on the lexical channel, so this
+        // is not a line of zeroes agreeing with a line of zeroes.
+        assert!(hit.lexical_exact > 0.0, "premise: {expected}");
+
+        let out = search(&mut s, json!({"query": "harbour tide"}));
+        assert!(
+            out.contains(&expected),
+            "the hit must carry the channels that admitted it:\n{out}\nwant: {expected}"
         );
     }
 

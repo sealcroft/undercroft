@@ -356,6 +356,17 @@
         <div id="tab-ops" style="display:none">
           <div class="sect" style="border-top:none;margin-top:0;padding-top:0">
             <div class="rowflex">
+              <span class="h" style="margin:0">AUDIT CHAIN</span>
+              <span class="spacer"></span>
+              <input id="histSubject" placeholder="drawer / fact / entity id (blank = recent)" style="min-width:22rem">
+              <button class="ctl" id="histRefresh">↻ LOAD</button>
+            </div>
+            <p class="kv">Every write, in chain order. <code>#seq</code> is the row's unique id and the chain's order; <code>TAG</code> is the subject's own HMAC as of that write — the evidence the chain folds in; <code>RECORD</code> is a navigable label and is <b>not</b> authenticated, which is why <code>verify</code> reports a label naming no live record. Never content: the audit table holds none. This is OPERATOR scope — every namespace, including review rulings, trust and retention policy, destructions, exports and rotations. The agent surface sees the same capability fenced.</p>
+            <table><thead><tr><th>#SEQ</th><th>AT</th><th>RECORD</th><th>TAG</th></tr></thead><tbody id="histRows"></tbody></table>
+          </div>
+
+          <div class="sect">
+            <div class="rowflex">
               <span class="h" style="margin:0">ADMISSION REVIEW QUEUE</span>
               <span class="spacer"></span>
               <button class="ctl" id="admRefresh">↻ REFRESH</button>
@@ -425,7 +436,7 @@
           </div>
           <div class="sect">
             <div class="h">IMPORT</div>
-            <p class="kv">Upload an NDJSON export. Parsed fully before anything is written — a malformed file imports nothing. Encrypted <code>bundle</code> files need the CLI (<code>undercroft import file --identity key</code>): the recipient key must never enter a browser.</p>
+            <p class="kv">Upload an NDJSON export. Every line is <b>parsed</b> before anything is written, so a malformed file imports nothing — but a record the store itself refuses (a reserved wing, an unknown kind, a name the guard rejects, a non-finite vector) fails <b>mid-import</b>, and the records before it are already written. The error names the record. Encrypted <code>bundle</code> files need the CLI (<code>undercroft import file --identity key</code>): the recipient key must never enter a browser.</p>
             <div class="rowflex">
               <input type="file" id="importFile">
               <button class="ctl" id="importBtn">⇑ IMPORT</button>
@@ -1067,21 +1078,29 @@ async function loadDrawers() {
   try {
     const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/drawers?" + qs, { vault: v });
     const rows = (r.drawers || []).map(d =>
-      "<tr class='click' data-id='" + esc(d.id) + "'><td>" + esc(d.id.slice(0, 14)) + "…</td>" +
+      "<tr class='click' data-id='" + esc(d.id) + "' data-wing='" + esc(d.wing) + "'><td>" + esc(d.id.slice(0, 14)) + "…</td>" +
       "<td><span class='pill wing'>" + esc(d.wing) + "</span> <span class='pill room'>" + esc(d.room) + "</span></td>" +
       "<td>" + esc(d.preview) + "</td></tr>");
     $("drawerRows").innerHTML = rows.join("") || "<tr><td colspan=3 class='kv'>no drawers</td></tr>";
     $("nextBtn").disabled = (r.drawers || []).length < state.pageSize;
     $("prevBtn").disabled = state.page === 0;
     for (const tr of $("drawerRows").querySelectorAll("tr.click"))
-      tr.onclick = () => openDrawer(tr.dataset.id);
+      tr.onclick = () => openDrawer(tr.dataset.id, tr.dataset.wing);
   } catch (e) { toast("list failed — " + e.message, true); }
 }
 
-async function openDrawer(id) {
+// `wing` is the reviewer's door (ROADMAP C1). `/v1` refuses a
+// quarantine-pending drawer by id alone and asks the caller to NAME the
+// reserved wing — a deliberate boundary, and the console had no code path
+// for it: the browse tab renders the reserved wing as clickable (taxonomy
+// is unfiltered), lists it, and then 403'd the operator with an
+// instruction it could not follow. Inert for every ordinary drawer, since
+// the door is only consulted when the row is quarantine-pending.
+async function openDrawer(id, wing) {
   const v = state.vault;
+  const qs = wing ? "?wing=" + encodeURIComponent(wing) : "";
   try {
-    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/drawers/" + encodeURIComponent(id), { vault: v });
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/drawers/" + encodeURIComponent(id) + qs, { vault: v });
     const d = r.drawer;
     state.drawer = d;
     $("drawerDetail").style.display = "block";
@@ -1098,11 +1117,20 @@ async function saveEdit() {
   const v = state.vault, d = state.drawer;
   if (!d) return;
   try {
-    await api("PUT", "/v1/vaults/" + encodeURIComponent(v) + "/drawers/" + encodeURIComponent(d.id),
+    // The route answers 202 {updated:false, quarantined:true} when the
+    // admission screen diverts the new text — the drawer keeps its previous
+    // content. `api()` treats every 2xx as success, so this used to toast
+    // "updated" for an update that did not happen (ROADMAP C2).
+    const r = await api("PUT", "/v1/vaults/" + encodeURIComponent(v) + "/drawers/" + encodeURIComponent(d.id),
       { vault: v, body: { text: $("editText").value } });
-    toast("updated " + d.id.slice(0, 14) + "…");
+    if (r && r.quarantined) {
+      toast("NOT updated — the admission screen diverted this text to review; " +
+            "the drawer still holds its previous content", true);
+    } else {
+      toast("updated " + d.id.slice(0, 14) + "…");
+    }
     $("editArea").style.display = "none";
-    openDrawer(d.id);
+    openDrawer(d.id, d.meta && d.meta.wing);
     loadDrawers();
   } catch (e) { toast("update failed — " + e.message, true); }
 }
@@ -1164,7 +1192,21 @@ async function runImport() {
       return;
     }
     const r = await api("POST", "/v1/vaults/" + encodeURIComponent(v) + "/import", { vault: v, body: text, ndjson: true });
-    toast("imported " + r.imported + " record(s)");
+    // The engine returns `quarantined` and the manifest verdict on the same
+    // body; this read only `imported`, so a restore whose records were
+    // diverted — or one carrying an unattested payload — reported plain
+    // success (ROADMAP C2).
+    const m = r.manifest;
+    let msg = "imported " + r.imported + " record(s)";
+    if (r.kg_triples) msg += " · " + r.kg_triples + " fact(s)";
+    if (r.quarantined) msg += " · " + r.quarantined + " DIVERTED to review";
+    let warn = !!r.quarantined;
+    if (m) {
+      if (m.signature === "verified") msg += " · signed by " + (m.sender || "?").slice(0, 16);
+      else { msg += " · UNATTESTED payload"; warn = true; }
+      if (m.trust) msg += " · sender claims trust '" + m.trust + "' (a CLAIM, not a boundary)";
+    }
+    toast(msg, warn);
     loadOverview();
   } catch (e) { toast("import failed — " + e.message, true); }
 }
@@ -1176,7 +1218,7 @@ async function runImport() {
 // them CLI-only for anyone driving the server over HTTP.
 function opsPath(sub) { return "/v1/vaults/" + encodeURIComponent(state.vault) + "/" + sub; }
 
-async function loadOps() { loadAdmission(); loadTrust(); loadRetention(); }
+async function loadOps() { loadAdmission(); loadTrust(); loadRetention(); loadHistory(); }
 
 async function loadAdmission() {
   const v = state.vault;
@@ -1218,6 +1260,23 @@ async function ruleAdmission(drawerId, verdict) {
     toast(verdict === "allow" ? "allowed — re-filed as " + r.restored_id : "denied " + drawerId);
     loadAdmission();
   } catch (e) { toast("ruling failed — " + e.message, true); }
+}
+
+// The audit chain, readable (ROADMAP U4). `esc` on every cell: a record_id
+// is a label the vault stores, so it is data here, not markup.
+async function loadHistory() {
+  const v = state.vault;
+  const subj = $("histSubject").value.trim();
+  const q = "?limit=200" + (subj ? "&subject=" + encodeURIComponent(subj) : "");
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/history" + q, { vault: v });
+    const rows = (r.records || []).map(a =>
+      "<tr><td class='kv'>#" + esc(String(a.seq)) + "</td><td class='kv'>" + esc(a.at) +
+      "</td><td><code>" + esc(a.record_id) + "</code></td><td class='kv'>" +
+      esc(String(a.tag || "").slice(0, 16)) + "…</td></tr>");
+    $("histRows").innerHTML = rows.join("") ||
+      "<tr><td colspan=4 class='kv'>no audit records match" + (subj ? " that subject" : "") + "</td></tr>";
+  } catch (e) { toast("history failed — " + e.message, true); }
 }
 
 async function loadTrust() {
@@ -1330,6 +1389,7 @@ $("grafanaEmbedBtn").onclick = embedGrafana;
 $("grafanaBack").onclick = embedGrafana;
 $("grafanaUrl").addEventListener("keydown", e => { if (e.key === "Enter") embedGrafana(); });
 $("admRefresh").onclick = loadAdmission;
+$("histRefresh").onclick = loadHistory;
 $("trustRefresh").onclick = loadTrust;
 $("trustSet").onclick = setTrust;
 $("retRefresh").onclick = loadRetention;

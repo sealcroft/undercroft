@@ -2687,7 +2687,7 @@ fn locomo_eval(
         }
         // In remote mode, publishing to the ANN index is part of ingest.
         if let Some(idx) = index.as_mut() {
-            store.index_push(idx.as_mut())?;
+            store.index_push(idx.as_mut(), undercroft_store::PlaintextPush::Allow)?;
         }
         timing.ingest_secs += ingest_started.elapsed().as_secs_f32();
         let qa_pairs = sample

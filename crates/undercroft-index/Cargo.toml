@@ -8,8 +8,15 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+undercroft-net = { path = "../undercroft-net" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 ureq = { version = "2.10", features = ["json"] }
 postgres = "0.19"
+# pgvector was wired `NoTls`, so no TLS-compliant configuration existed for
+# that backend at all (ROADMAP C8). rustls rather than native-tls: it is the
+# stack every other client here already uses, so one set of trust roots and
+# one pin format cover the whole product.
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

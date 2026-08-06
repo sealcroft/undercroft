@@ -69,6 +69,16 @@ pub(crate) enum SaveEvent<'a> {
     },
 }
 
+/// Did this row land in the review queue?
+///
+/// The one predicate [`save_event`] keys on, named so the write choke point
+/// can ask it without restating the comparison. Two copies of "is this
+/// quarantined" that can drift is the shape this module spends its time
+/// removing.
+pub(crate) fn landed_in_quarantine(drawer: &Drawer) -> bool {
+    drawer.meta.wing == QUARANTINE_WING
+}
+
 /// Classify a written drawer by WHERE IT LANDED, not by which call site
 /// wrote it.
 ///
@@ -80,7 +90,7 @@ pub(crate) enum SaveEvent<'a> {
 /// `remember`), while the bulk paths emitted an ordinary `drawer-saved`
 /// whose only tell was a wing named `quarantine-pending`.
 pub(crate) fn save_event(drawer: &Drawer) -> SaveEvent<'_> {
-    if drawer.meta.wing != QUARANTINE_WING {
+    if !landed_in_quarantine(drawer) {
         return SaveEvent::Saved;
     }
     SaveEvent::Quarantined {
@@ -139,13 +149,50 @@ impl PalaceStore {
         self.admission_advisor = advisor;
     }
 
+    /// The screen-and-divert step, in the ONE place both write paths call.
+    ///
+    /// `write_drawer` calls it in front of its transaction; `upsert_many`
+    /// calls it inside its batch loop, because a batch owns its transaction
+    /// and so cannot route through the choke point at all. Until 2026-08-05
+    /// those were two implementations of one security decision — the shape
+    /// every drift in the surface audit had — and they did not even guard on
+    /// the same condition: the choke point tested the required [`Screen`]
+    /// argument while the bulk path tested `admission_quarantine` directly,
+    /// so the argument that exists to force a caller to decide never reached
+    /// the bulk path at all. Now both state a `Screen` and one function
+    /// reads it.
+    ///
+    /// [`Self::admission_divert`] is private to this module and has exactly
+    /// one caller — enforced by Rust's own visibility and pinned by
+    /// `admission_divert_has_exactly_one_caller`, so a third write path
+    /// cannot grow a third copy of the decision.
+    ///
+    /// [`Screen`]: crate::Screen
+    pub(crate) fn screen_and_divert(
+        &self,
+        drawer: &Drawer,
+        screen: crate::Screen,
+    ) -> Option<Drawer> {
+        match screen {
+            // A bypass is a decision already made somewhere a reviewer can
+            // grep for; the reason it carries is that justification.
+            crate::Screen::Bypass(_) => None,
+            crate::Screen::Apply => self.admission_divert(drawer),
+        }
+    }
+
     /// Screen one candidate drawer; `Some(diverted)` when it must land in
     /// quarantine instead of where it was headed. The diverted drawer
     /// keeps the verbatim content (sealed like any other), records the
     /// signal codes + offsets and the intended destination, and derives
     /// its id in the quarantine wing — deterministic, so a crashed and
     /// retried save converges on one row.
-    pub(crate) fn admission_divert(&self, drawer: &Drawer) -> Option<Drawer> {
+    ///
+    /// **Private to this module on purpose** (R5): reachable only through
+    /// [`Self::screen_and_divert`], so the screening decision exists once
+    /// and a new write path cannot re-implement it the way the bulk path
+    /// once did.
+    fn admission_divert(&self, drawer: &Drawer) -> Option<Drawer> {
         if !self.admission_quarantine {
             return None;
         }

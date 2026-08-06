@@ -48,7 +48,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `POST /v1/vaults` | create a vault (`sealed` or `hmac-only`; optional `external:<name>@<dim>` embedder identity) |
 | `GET /v1/vaults` | list vault ids (bearer-gated; disabled under per-vault assertions) |
 | `DELETE /v1/vaults/{id}` | delete a vault (409 for the vault the same process serves over `/mcp`) |
-| `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup). **Admission-screened on every arm**; on the default arm a diverted save answers **202** with `quarantined: true` and the id the drawer actually landed under (see §5 for the dedup/external reporting gap) |
+| `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup). **Admission-screened on every arm**; on the default arm a diverted save answers **202** with `quarantined: true` and the id the drawer actually landed under on **every** arm, including `dedup_threshold` and external-vault saves, which reported clean until v0.47.0 (§5) |
 | `POST /v1/vaults/{id}/search` | hybrid search (cosine + BM25, optional reranker); declared read-time parameters (`language`, `calendar`, `date_order`, `wing`, `room`, `kind`, `min_trust`, `offset`, `ranked_at`) |
 | `DELETE /v1/vaults/{id}/drawers/{drawer_id}` | delete a drawer (refused for quarantine-pending evidence — ruling on it is `admission allow`/`deny`) |
 | `GET /v1/vaults/{id}/stats` · `.../stats/history` | stats (records, wings, rooms, kg, tunnels, db size, chain head, codebook generations) + sample ring |
@@ -59,7 +59,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `POST /v1/vaults/{id}/kg/authority` | the one KG **mutation** on this surface: place a fact on the authority tier (closed vocabulary, audited, HMAC-covered) |
 | `POST /v1/vaults/{id}/refine` | LLM distillation of a drawer into KG facts (`UNDERCROFT_LLM_*`; nothing is contacted unless a URL is set) |
 | `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting |
-| `POST /v1/vaults/{id}/verify` · `POST .../rotate` | integrity report · key rotation (sole-writer contract — 409 for the vault the same process serves over `/mcp`) |
+| `POST /v1/vaults/{id}/verify` · `POST .../anchor` · `POST .../rotate` | integrity report (a read) · tighten the manifest rollback anchor onto the committed chain head (a **write**: a cached handle never re-opens, so nothing else closes that window) · key rotation (sole-writer contract — 409 for the vault the same process serves over `/mcp`) |
 | `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair. Export is **chain-audited unconditionally** (one `egress/export` record binding surface, counts and the export's own manifest digest); import re-stamps `added_by` and screens every record |
 | `GET /ui` | vault admin console (static page, every build) |
 
@@ -95,12 +95,55 @@ What it means now:
   `GET .../export` is a read here too — the egress chain record it would
   otherwise write is skipped, and the server **warns and serves** rather
   than refusing the export.
-- **Recorded residual, not dressed up**: open-time writes still happen
-  (schema creation, rotation reconcile, chain init), and a read-only
-  store running `UNDERCROFT_RETRIEVAL=pq` still writes, because the PQ
-  tier builds its index on first search. Closing that means "load, never
-  build" at each prefilter entry; refusing `set_pq` instead would drop a
-  replica onto a full scan.
+- **The open is a read too** (v0.47.0, ROADMAP R4 — this bullet used to
+  record the opposite as a residual). The connection is
+  `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`; no schema is
+  created or altered, no `chain_meta` seeded, no anchor fast-forwarded,
+  no FTS rebuilt, and no `vault.json.next` promoted or deleted. Each is
+  detected and reported instead — as a warning at open and as `unhealed`
+  on `GET /v1/vaults/{id}/stats` alongside `read_only`. A prefilter loads
+  an existing index and never builds one (R1), falling back to the exact
+  scan and saying so once per tier. Two conditions refuse rather than
+  report, both 409: an absent `palace.db` under a present manifest, and a
+  schema this build would have had to migrate.
+
+### Boundaries in the fleet, stated
+
+Three absences that were absences until 2026-08-05 (ROADMAP C14) — this
+project treats a capability missing from one surface as either a boundary or
+a drift, and requires that which one be written down:
+
+- **No plane forwards `refine`.** The engine has it and the fleet does not.
+  Distillation spends an LLM budget per tenant against a runtime the
+  orchestrator does not configure and cannot bound, so it stays an
+  engine-local operator act. Run it on the instance.
+- **The data plane has its own quarantine fence**, and it is the reading
+  half of the boundary `OPS_ROUTES` draws for the ruling half: a `/t/*`
+  request that NAMES the reserved wing — in a subpath, a query string or a
+  body — is refused 404 before any engine call, and a single-drawer request
+  resolves its wing at the engine first. It exists because `/v1` deliberately
+  opens the reviewer's door to a caller who names the wing, which is right
+  for an operator's own surface and wrong for a proxied tenant token.
+- **The audit chain is not on the data plane, and that is a boundary rather
+  than an omission.** The engine's `GET /v1/vaults/{id}/history` answers at
+  OPERATOR scope — the whole chain, including `admission/{id}/{verdict}` (the
+  reviewer's view of the queue that screened this tenant's own writes) and
+  `trust/{wing}` (the retrieval policy deciding what it may retrieve).
+  Forwarding that to a tenant token is A13 restated one capability later, so
+  `history` is absent from `data_subpath_ok`'s allowlist, which is
+  fail-closed. The agent-facing half of the capability exists —
+  `undercroft_history` on MCP, fenced by namespace and by the reserved review
+  wing — but it runs against a local vault rather than through a proxy into
+  someone else's operator surface. `stats/history` in the table above is
+  unrelated: metrics over time, not the audit chain.
+- **That fence's 200-branch is dead against a same-version engine**, which
+  refuses first. What remains is defence against an OLDER engine on the
+  other end of the proxy — an intent worth stating, because a reader
+  otherwise finds an unreachable branch and deletes it.
+- **The orchestrator CLI mirrors the admin plane** (`undercroft-orchestrator
+  ops <tenant> <op>`) over a closed vocabulary of aliases, each asserted by
+  test to resolve to a route the proxy already allows. It had no such
+  subcommand until 2026-08-05 while this document claimed it did.
 
 ## Mapping an external multi-tenant design onto Undercroft
 
@@ -216,11 +259,14 @@ What Undercroft does instead:
   the dedup path reached the raw writer. Both the refresh and the fresh
   insert now go through the same choke point, so declaring a dedup
   threshold changes what a write *collapses*, never what it is allowed to
-  say. Recorded gap, stated rather than smoothed over: the dedup path
-  screens but does not yet *report* the verdict — `save_with_dedup_vec`
-  discards the write's landing, so a diverted dedup save answers 200 with
-  `quarantined: false` and the aimed-at id. The content is contained; the
-  caller is not told.
+  say. **And it reports the verdict now** (v0.47.0, ROADMAP R5): that gap
+  stood here as "screens but does not yet report" — `save_with_dedup_vec`
+  discarded the write's landing, so a diverted dedup save answered 200
+  with `quarantined: false` and the aimed-at id, contained but unstated.
+  Both branches take `quarantined` and the landed id from the landing, and
+  the refresh branch says `deduped: false` when it was diverted, because a
+  refresh that went to quarantine did not happen: the matched drawer still
+  holds its previous text.
 - **Non-destructive near-dup handling** for distinct records: a
   `check-dup`-style report (keyed HMAC fingerprints, `manage.rs`) surfaces
   candidates, and a **KG-supersede** merge (`kg_supersede`, `kg.rs`) appends
@@ -235,12 +281,19 @@ that identity so a silent model swap is refused. Callers supply the vector
 per request for external vaults.
 
 Two guards ride on that path, both closing holes that a caller-supplied
-vector opened. **Non-finite components are refused at the door**: an
+vector opened. **Non-finite components are refused at the write choke
+point** (`write_drawer_stmts`, so every write path inherits it): an
 `external:` vector containing `NaN`/`Inf` escaped L2 normalization
 entirely (`NaN/x = NaN`), and normalization is what bounds a poisoner to
-buying influence with *count* rather than *magnitude* — every in-process
-embedder is finite by construction, so the caller-supplied path was the
-one door. And **an external save is screened at all**; it previously
+buying influence with *count* rather than *magnitude*. This paragraph
+used to say the caller-supplied path was "the one door", and the refusal
+sat on `upsert_external` accordingly. **There were three.** The other two
+matter here in particular: both arms of `import_record` — which is what
+`POST /v1/vaults/{id}/import` and this orchestrator's own tenant
+migration drive — took a payload vector unchecked, and the non-external
+arm means an ordinary hash vault was reachable. `1e39` is an
+unremarkable finite JSON number, and `1e39_f64 as f32` is infinity.
+And **an external save is screened at all**; it previously
 reached the raw writer with no screen, which was the third of the three
 admission bypasses on this surface. Same recorded gap as the dedup arm:
 `upsert_external` returns only "was the id new", so a diverted external
@@ -370,7 +423,7 @@ sequenceDiagram
 | `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
 | `GET /admin/tenants/{id}/stats` | admin | metadata-only stats relay (counts, sizes, chain head) via the stored engine creds — content stays behind the tenant's own token |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
-| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting, retention policy + sweep, wing trust, admission review, verify, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by |
+| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by |
 | `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>` |
 
 The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
@@ -408,11 +461,16 @@ before the flip leaves the source authoritative and removes the partial
 copy. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 44 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 57 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the
-writer's rotations.
+writer's rotations. The 13 checks added 2026-08-05 are the boundary ones:
+eight path-traversal shapes reaching the operator plane through the data
+plane (plus the percent-encoded spelling), a cross-tenant climb into
+another tenant's vault, a replica refusing data-plane writes while still
+serving `POST search`, and the query string actually arriving at the
+engine.
 
 ### Deploying the orchestrator (hardening)
 

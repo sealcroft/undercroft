@@ -35,9 +35,20 @@ use time::OffsetDateTime;
 use crate::{PalaceStore, StoreError};
 
 /// One destroyed drawer, as the attestation names it: the id and the
-/// unkeyed content fingerprint (the kg `source_fp` precedent — a
-/// commitment to WHAT was destroyed that survives rotation and never
-/// reveals the words).
+/// **unkeyed** content fingerprint — a commitment to WHAT was destroyed that
+/// survives rotation and never reveals the words.
+///
+/// **Deliberately the one place that stayed unkeyed when U12 keyed the two
+/// stored fingerprint columns**, and it is not an oversight: this value is
+/// signed and handed to a third party — the data subject, an auditor — whose
+/// whole verification posture (see this module's header) is checking a
+/// commitment against content they already hold, WITHOUT the vault key.
+/// Keying it destroys the property the attestation exists to provide.
+///
+/// The two situations are opposites. `kg_triples.source_fp` sat at rest in a
+/// stolen file, offering an oracle over content the vault still holds, to
+/// nobody in particular. This is a deliberate disclosure, to a named party,
+/// about content the vault no longer holds at all.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ForgottenDrawer {
     pub id: String,

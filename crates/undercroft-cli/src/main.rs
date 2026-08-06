@@ -249,6 +249,23 @@ enum Command {
         #[arg(long, global = true, default_value = "default")]
         vault: String,
     },
+    /// Audit-chain history: what happened to a record, when, and the tamper
+    /// tag as of each write. Never content — the audit table holds none.
+    /// Operator scope: every namespace, including review rulings, trust and
+    /// retention policy, destructions, exports and rotations. The agent
+    /// surface gets the same capability fenced.
+    History {
+        /// A drawer, fact or entity id — or a whole label like
+        /// `trust/legal`. Omit for recent activity across the vault.
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
     /// Deployment-assigned wing trust classes — the receiving principal's
     /// declaration (an operator surface: agents cannot assign trust over
     /// MCP, only read with a floor)
@@ -391,6 +408,14 @@ enum Command {
         vault: String,
         #[arg(long)]
         wing: Option<String>,
+        /// Only distil drawers in this room (default: every room but
+        /// --fact-room, so a re-run never distils its own output)
+        #[arg(long)]
+        room: Option<String>,
+        /// Room the searchable fact-drawers land in, inside their source
+        /// drawer's wing — the same default as `/v1 …/refine`
+        #[arg(long, default_value = "facts")]
+        fact_room: String,
         /// Refine at most N drawers (0 = all)
         #[arg(long, default_value_t = 0)]
         limit: usize,
@@ -630,10 +655,16 @@ enum TranscriptAction {
 
 #[derive(Subcommand)]
 enum IndexAction {
-    /// Upload every drawer (sealed content + embedding) to a remote index
+    /// Upload every drawer (at-rest content + embedding) to a remote index
     Push {
         /// qdrant | chroma | pgvector
         backend: String,
+        /// Push an **hmac-only** vault, whose at-rest content is the
+        /// PLAINTEXT. Refused without this: a remote index is an untrusted
+        /// accelerator in another trust domain, and every document about
+        /// this feature says "sealed content only".
+        #[arg(long)]
+        allow_plaintext: bool,
     },
     /// Show a remote index's record count for this vault
     Status {
@@ -678,6 +709,14 @@ enum VaultAction {
     /// vault was pushed to a remote index (remote copies hold old-key
     /// ciphertext). Do not rotate a vault another process is serving.
     Rotate { name: String },
+    /// Fast-forward the manifest's rollback anchor onto the committed
+    /// audit-chain head. A **write** (it fsyncs a new manifest), and the
+    /// only way to close the anchor-lag window without manufacturing one:
+    /// `verify` does not anchor, and a long-lived server caches its handle
+    /// so it never re-opens either. Reports how far behind the anchor was;
+    /// a rolled-back database is still an integrity verdict here (exit 2),
+    /// because declining to heal is not declining to look.
+    Anchor { name: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -870,8 +909,22 @@ fn upsert_batched(
     drawers: &[Drawer],
 ) -> Result<undercroft_store::BulkOutcome> {
     let mut total = undercroft_store::BulkOutcome::default();
-    for chunk in drawers.chunks(INGEST_BATCH) {
-        let out = store.upsert_many(chunk)?;
+    for (c, chunk) in drawers.chunks(INGEST_BATCH).enumerate() {
+        // Name the batch a store-guard refusal came from, the way a parse
+        // error already names its line. Six refusal classes reached this
+        // path with this branch and every one of them reported the reason
+        // and no position, over a file that can hold a million records
+        // (ROADMAP C10). A batch is a transaction, so the failing RECORD is
+        // not individually identifiable here — what is honest is the range,
+        // and saying so is better than saying nothing. `/v1` commits per
+        // record and names the record; both surfaces say where now.
+        let out = store.upsert_many(chunk).with_context(|| {
+            let first = c * INGEST_BATCH + 1;
+            let last = first + chunk.len() - 1;
+            format!(
+                "importing records {first}-{last} (this batch is one transaction, so none of                  it was written; records before it were)"
+            )
+        })?;
         total.created += out.created;
         total.quarantined += out.quarantined;
     }
@@ -939,7 +992,15 @@ fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
 
 fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
     let mgr = manager(cli)?;
-    let v = mgr.unlock(vault)?;
+    // The posture reaches the UNLOCK, not only the store open. Unlocking is
+    // not passive: it deletes a `vault.json.next` it cannot authenticate, so
+    // a read-only process that stated its posture only one call later had
+    // already destroyed a concurrent writer's staging manifest by the time
+    // the store could decline to (ROADMAP A32/R4).
+    let v = match posture {
+        Posture::ReadOnly => mgr.unlock_as(vault, undercroft_vault::Access::ReadOnly)?,
+        Posture::ReadWrite => mgr.unlock(vault)?,
+    };
     // One place decides what the posture means, so every embedder reaches the
     // same two opens. `open_read_only` declines the embedder migration (warn
     // and serve, the replica precedent) and force-disables read auditing.
@@ -1287,11 +1348,88 @@ impl undercroft_core::rerank::Reranker for SharedReranker {
     }
 }
 
-fn main() -> Result<()> {
+/// Exit 2 — an INTEGRITY VERDICT: the engine detected that stored evidence
+/// does not verify. Reserved for that and nothing else, because a compliance
+/// script keys its retry logic on the class.
+const EXIT_INTEGRITY: u8 = 2;
+/// Exit 1 — the run itself failed: bad arguments, a missing file, an
+/// unreadable vault. Retryable in the sense that a retry might succeed.
+const EXIT_FAILURE: u8 = 1;
+
+/// Is this error an integrity verdict, or an ordinary run failure?
+///
+/// **`verify`, `repair`, `backup create` and `verify-forgetting` each decided
+/// this for themselves, by calling `std::process::exit(2)` at the point they
+/// printed their own verdict — and every OTHER route to the same verdict
+/// exited 1.** A vault rolled back under a still-valid manifest, or a manifest
+/// edited offline, is detected inside `open_store`, before any command's own
+/// checking begins: `undercroft search`, `undercroft recent`, `undercroft stats`
+/// on a tampered palace all bubbled that up through `?` as an anyhow error and
+/// exited 1 — the code docs/AGENTS.md promises means "the run failed, retry
+/// it". A compliance script did exactly that, forever, against a vault whose
+/// answer will never change.
+///
+/// So the decision moves to the one place every command returns through. The
+/// classes are deliberately the SAME SET `/v1` answers 409 for
+/// (`tenant::store_err` / `tenant::vault_err`), so the two surfaces cannot
+/// state different doctrines about the same bytes.
+///
+/// **The stated cost**: a wrong `UNDERCROFT_PASSPHRASE` derives a different
+/// manifest key, so the MAC fails and this reports an integrity verdict for
+/// what is really operator error. That is not a classification bug — it is
+/// what a MAC *is*, the engine has no evidence separating the two, and the
+/// message it already printed ("possible tampering") has always said so. The
+/// exit code now agrees with the message instead of contradicting it.
+fn integrity_verdict(e: &anyhow::Error) -> bool {
+    use undercroft_store::StoreError as S;
+    use undercroft_vault::VaultError as V;
+    // Walk the whole chain: `open_store` and friends add `.with_context`, and
+    // the verdict is then several links down from the anyhow head.
+    e.chain().any(|link| {
+        if let Some(s) = link.downcast_ref::<S>() {
+            return matches!(
+                s,
+                S::Integrity(_)
+                    | S::Attestation(_)
+                    // A manifest that describes a database which is not
+                    // there is stored evidence contradicting itself, and
+                    // retrying only re-detects it (R4/A33). Its neighbour
+                    // `ReadOnlyUnmigrated` is deliberately NOT here: the
+                    // vault is intact, the posture is simply wrong for it.
+                    | S::DatabaseMissing { .. }
+                    | S::Vault(V::ManifestTampered | V::CorruptManifest(_))
+            );
+        }
+        if let Some(v) = link.downcast_ref::<V>() {
+            return matches!(v, V::ManifestTampered | V::CorruptManifest(_));
+        }
+        false
+    })
+}
+
+fn main() -> std::process::ExitCode {
     // Telemetry is a no-op unless built with `--features telemetry`. The
-    // guard flushes providers on any return path (including `?`).
+    // guard flushes providers on any return path (including `?` out of `run`).
     let _telemetry = undercroft_obs::init();
-    let cli = Cli::parse();
+    // `fn main() -> Result<()>` let the std `Termination` impl choose the
+    // code, and it only knows one failure: 1. Everything this CLI wants to
+    // say about a failure has to be said here.
+    match run(Cli::parse()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            // Byte-for-byte what `Termination` printed before, so no
+            // operator's grep changes meaning along with the exit code.
+            eprintln!("Error: {e:?}");
+            std::process::ExitCode::from(if integrity_verdict(&e) {
+                EXIT_INTEGRITY
+            } else {
+                EXIT_FAILURE
+            })
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     match &cli.command {
         Command::Init { level } => {
             let mgr = manager(&cli)?;
@@ -1413,13 +1551,57 @@ fn main() -> Result<()> {
             }
             VaultAction::Status { name } => {
                 let store = open_store(&cli, name)?;
+                // The DATABASE's chain clock, never the handle's cached
+                // manifest fields (`Vault::writes`/`chain_head_hex`).
+                // CLAUDE.md names those two calls as the ones a reporting
+                // surface must not make — they are loaded once at unlock and
+                // never reloaded, so under `serve-http`'s two handles the
+                // one that did not write reports a frozen height beside a
+                // climbing live count. This surface was still making them
+                // (ROADMAP A21).
+                let (chain_head, writes) = store.chain_state()?;
                 let v = store.vault();
                 println!("vault:      {}", v.id());
                 println!("level:      {}", v.level());
                 println!("records:    {}", store.count()?);
-                println!("writes:     {}", v.writes());
-                println!("chain head: {}", v.chain_head_hex());
+                println!("writes:     {writes}");
+                println!("chain head: {chain_head}");
                 println!("db:         {}", v.db_path().display());
+            }
+            VaultAction::Anchor { name } => {
+                use undercroft_store::AnchorState;
+                let mut store = open_store(&cli, name)?;
+                // What the OPEN found, because on this surface the open has
+                // already healed it: `open_store` runs the same
+                // reconciliation, so by the time this command can ask, the
+                // answer is "current" and the lag it closed would go
+                // unreported. The route on a long-lived server is the case
+                // where the CALL does the work — there the handle is cached
+                // and never re-opens (A31).
+                let at_open = store.anchor_at_open();
+                match (store.tighten_anchor()?, at_open) {
+                    (AnchorState::Unseeded, _) => {
+                        println!(
+                            "Vault '{name}' has no committed chain head yet; nothing to anchor."
+                        );
+                    }
+                    (_, AnchorState::Healed { behind_by }) => {
+                        println!(
+                            "Anchored '{name}': the manifest was {behind_by} record(s) behind \
+                             the committed chain head and now names it (the open did the \
+                             fast-forward — on this surface it always gets there first)."
+                        );
+                    }
+                    (AnchorState::Healed { behind_by }, _) => {
+                        println!(
+                            "Anchored '{name}': the manifest was {behind_by} record(s) behind \
+                             and now names the committed chain head."
+                        );
+                    }
+                    (AnchorState::Current, _) => {
+                        println!("Anchor for '{name}' already names the committed chain head.");
+                    }
+                }
             }
             VaultAction::Rotate { name } => {
                 let mgr = manager(&cli)?;
@@ -1433,6 +1615,19 @@ fn main() -> Result<()> {
                     report.kg_entities, report.kg_triples
                 );
                 println!("  tunnels:             {}", report.tunnels);
+                // Re-tagged, not re-sealed, and level-independent. Printed
+                // because a rotation that silently skipped these is what
+                // broke the trust floor and retention enforcement outright —
+                // an operator watching a rotation should see the two tables
+                // whose tags are verified on every read. `/v1` serializes the
+                // whole struct and got them for free; this projection is
+                // hand-written, which is the trap CLAUDE.md records and
+                // `every_hand_projected_report_field_reaches_the_cli` now
+                // fails on.
+                println!(
+                    "  policy tags re-keyed: {} wing trust, {} retention",
+                    report.wing_trusts, report.retention_policies
+                );
                 println!(
                     "  derived artifacts:   {} token, {} pq (+{} pages, +{} wing rows), {} fde, {} meta",
                     report.token_matrices,
@@ -1446,7 +1641,10 @@ fn main() -> Result<()> {
                     "  chain re-keyed over: {} audit entries",
                     report.audit_entries
                 );
-                println!("  new chain head:      {}", store.vault().chain_head_hex());
+                // The DATABASE's head, not the handle's cached manifest
+                // field — the third and last A21 caller.
+                let (chain_head, _) = store.chain_state()?;
+                println!("  new chain head:      {chain_head}");
                 println!(
                     "If this vault was pushed to a remote index, re-run: undercroft index push"
                 );
@@ -1632,6 +1830,17 @@ fn main() -> Result<()> {
             for note in search::Exclusions::measure(&store, &opts)?.notes() {
                 println!("{note}");
             }
+            // The remote path has no `lexical_morph` channel at all:
+            // `lexical_score`'s exact leg counts whole-word containment as
+            // EXACT evidence there. So a `morph 0.000` on a remote hit means
+            // "not computed on this path", not "no morphological relation" —
+            // said once, because the evidence lines below otherwise read
+            // exactly as the local ones do.
+            if backend != "local" && !hits.is_empty() {
+                println!(
+                    "(remote backend: morphological evidence is folded into the exact channel)"
+                );
+            }
             for (i, hit) in hits.iter().enumerate() {
                 println!(
                     "{}. [{:.3}] {}/{} — {} ({})",
@@ -1654,6 +1863,13 @@ fn main() -> Result<()> {
                     "   id {} — undercroft drawer get {}",
                     hit.drawer.id, hit.drawer.id
                 );
+                // Why this hit is here, in the channels that decided it —
+                // rendered by the one function `/v1`'s neighbours use. A
+                // blended score alone cannot say whether the drawer SAID the
+                // word, holds a word built on it, or merely embedded near it,
+                // so a surprising hit was reproducible on `/v1` and nowhere
+                // else. See `search::evidence`.
+                println!("   {}", search::evidence(hit));
             }
             // A full page may have more below it; say exactly how to continue,
             // clock included. A short page means the ranking is exhausted and
@@ -1703,6 +1919,20 @@ fn main() -> Result<()> {
                 "audit chain:     {}",
                 if report.chain_ok { "ok" } else { "BROKEN" }
             );
+            // The fourth leg: a graph label naming a record that is not
+            // there. `record_id` is the one part of an audit row the chain
+            // does not authenticate, so this is the only place a relabel
+            // shows up.
+            println!("orphan labels:   {}", report.orphan_labels.len());
+            for l in &report.orphan_labels {
+                println!("  ORPHANED: {l} — names no live record");
+            }
+            // A28: an indexed mirror that disagrees with the covered meta.
+            // The record is intact; the COLUMN was edited offline.
+            println!("mirror drift:    {}", report.mirror_drift.len());
+            for m in &report.mirror_drift {
+                println!("  MIRROR: {m}");
+            }
             // Drawer supersession links are part of the vault's integrity
             // story: a receipted link that fails its HMAC is tampering,
             // reported with the same severity as a bad record. The leg now
@@ -1729,7 +1959,7 @@ fn main() -> Result<()> {
                 println!("{}", tr("verify-ok"));
             } else {
                 println!("{}", tr("verify-failed"));
-                std::process::exit(2);
+                std::process::exit(EXIT_INTEGRITY.into());
             }
         }
         Command::Forget {
@@ -1777,7 +2007,7 @@ fn main() -> Result<()> {
                 match e {
                     undercroft_store::StoreError::Attestation(why) => {
                         println!("ATTESTATION FAILED: {why}");
-                        std::process::exit(2);
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                     other => return Err(other.into()),
                 }
@@ -1786,8 +2016,11 @@ fn main() -> Result<()> {
                 "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
                  {}… and {}…, nothing else changed{}",
                 att.drawers.len(),
-                &att.head_before[..12.min(att.head_before.len())],
-                &att.head_after[..12.min(att.head_after.len())],
+                // Attestation fields come from a caller-supplied JSON file;
+                // byte-slicing them panics on a multi-byte boundary, and
+                // this line runs while printing "ATTESTATION VERIFIED".
+                att.head_before.chars().take(12).collect::<String>(),
+                att.head_after.chars().take(12).collect::<String>(),
                 if att.sig.is_some() {
                     "; sender signature verified"
                 } else {
@@ -1916,6 +2149,37 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        Command::History {
+            subject,
+            limit,
+            offset,
+            vault,
+        } => {
+            let store = open_store(&cli, vault)?;
+            let rows = store.history(
+                undercroft_store::manage::HistoryScope::Operator,
+                subject.as_deref(),
+                *limit,
+                *offset,
+            )?;
+            if rows.is_empty() {
+                println!("No audit records match.");
+            }
+            for r in &rows {
+                // The tag is the evidence and the label is navigation, so the
+                // label leads and the tag is abbreviated — an operator
+                // chasing a record reads the label; one verifying it reads
+                // the full value off `/v1` or a forgetting attestation.
+                println!(
+                    "  #{:<6} {}  {:<40} {}…",
+                    r.seq,
+                    r.at,
+                    r.record_id,
+                    &r.tag[..16.min(r.tag.len())]
+                );
+            }
+            println!("{} record(s).", rows.len());
         }
         Command::Trust { action, vault } => {
             let mut store = open_store(&cli, vault)?;
@@ -2126,54 +2390,61 @@ fn main() -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("bundle manifest: {e}"))?;
             let text = String::from_utf8(record_bytes.to_vec())
                 .context("bundle records are not UTF-8 JSONL")?;
-            match &manifest {
-                Some(m) => {
-                    let now = time::OffsetDateTime::now_utc()
-                        .format(&time::format_description::well_known::Rfc3339)?;
-                    if m.expired_at(&now) {
-                        bail!(
-                            "bundle expired at {} — the sender bounded its validity, refusing",
-                            m.expires.as_deref().unwrap_or("(unparseable expiry)")
-                        );
-                    }
-                    if let Some(expected) = sender.as_deref() {
-                        m.verify_against(expected).map_err(|e| {
-                            anyhow::anyhow!(
-                                "manifest attestation failed against the pinned sender: {e}"
-                            )
-                        })?;
-                    }
-                    println!(
-                        "manifest: vault={} level={} created={}{}{}{}",
-                        m.vault,
-                        m.level,
-                        m.created_at,
-                        m.trust
-                            .as_deref()
-                            .map(|t| format!(" trust={t} (sender's claim, not a boundary)"))
-                            .unwrap_or_default(),
-                        match (&m.sender, &m.sig) {
-                            (Some(s), Some(_)) => format!(
-                                " signed-by={}{}",
-                                &s[..16.min(s.len())],
-                                if sender.is_some() {
-                                    " (verified)"
-                                } else {
-                                    " (unverified — pass --sender to enforce)"
-                                }
-                            ),
-                            _ => " unsigned".to_string(),
-                        },
-                        m.embedder
-                            .as_deref()
-                            .map(|e| format!(" embedder={e}"))
-                            .unwrap_or_default(),
+            // The attestation decision is `BundleManifest::attest`, the same
+            // call `/v1` makes (ROADMAP C5). This surface used to make its
+            // own, and it had no `else`: with no `--sender` it printed
+            // `signed-by=<16 hex> (unverified — pass --sender to enforce)`
+            // and imported. The digest is checked unconditionally, so an
+            // attacker swapping a signed bundle's payload had to break the
+            // signature but could keep the trusted sender's key — and this
+            // command then printed that sender's prefix above attacker
+            // content. Provenance-display laundering, on the surface every
+            // operator backup restore uses.
+            if let Some(m) = &manifest {
+                let now = time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)?;
+                if m.expired_at(&now) {
+                    bail!(
+                        "bundle expired at {} — the sender bounded its validity, refusing",
+                        m.expires.as_deref().unwrap_or("(unparseable expiry)")
                     );
                 }
-                None if sender.is_some() => {
-                    bail!("--sender was pinned but the payload carries no manifest to verify")
-                }
-                None => {}
+            }
+            let attested = undercroft_vault::bundle::BundleManifest::attest(
+                manifest.as_ref(),
+                sender.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!("manifest attestation failed: {e}"))?;
+            if let Some(m) = &manifest {
+                println!(
+                    "manifest: vault={} level={} created={}{}{}{}",
+                    m.vault,
+                    m.level,
+                    m.created_at,
+                    m.trust
+                        .as_deref()
+                        .map(|t| format!(" trust={t} (sender's claim, not a boundary)"))
+                        .unwrap_or_default(),
+                    match attested.verified_sender() {
+                        // Char-wise, never `&s[..16]`: this string is
+                        // attacker-authored, and byte-slicing it panicked
+                        // (exit 101) before any write.
+                        Some(s) => format!(
+                            " signed-by={} (verified){}",
+                            s.chars().take(16).collect::<String>(),
+                            if sender.is_some() {
+                                ""
+                            } else {
+                                " — the signature checks out; pass --sender to pin WHO"
+                            }
+                        ),
+                        None => " unsigned".to_string(),
+                    },
+                    m.embedder
+                        .as_deref()
+                        .map(|e| format!(" embedder={e}"))
+                        .unwrap_or_default(),
+                );
             }
             let mut skipped = 0usize;
             let mut kg_facts = 0usize;
@@ -2396,9 +2667,12 @@ fn main() -> Result<()> {
                             ReceiptVerdict::SourceChanged => ("source-changed", 1),
                             ReceiptVerdict::Dangling => ("dangling", 2),
                             ReceiptVerdict::Tampered => ("TAMPERED", 3),
-                            // Drawer supersessions only; a KG receipt is
-                            // always written with its fact. Covered so the
-                            // match stays exhaustive.
+                            // Reachable for a FACT since U12: a fact can
+                            // cite a drawer without a binding — a plain
+                            // `kg_add` with a source id, or an import whose
+                            // payload did not carry the cited drawer, since
+                            // a keyed fingerprint cannot travel. This used
+                            // to say "drawer supersessions only".
                             ReceiptVerdict::Unreceipted => ("unreceipted", 4),
                         };
                         counts[idx] += 1;
@@ -2411,9 +2685,14 @@ fn main() -> Result<()> {
                     if *problems_only && shown == 0 {
                         println!("All {} receipt(s) verified.", receipts.len());
                     }
+                    // `unreceipted` is printed, not merely counted: the
+                    // bucket was written and never read, so a fact citing a
+                    // drawer it has no binding for was tallied into a number
+                    // no surface showed. It became reachable with U12.
                     println!(
-                        "receipts: {} verified · {} source-changed · {} dangling · {} tampered",
-                        counts[0], counts[1], counts[2], counts[3]
+                        "receipts: {} verified · {} source-changed · {} dangling · \
+                         {} unreceipted · {} tampered",
+                        counts[0], counts[1], counts[2], counts[4], counts[3]
                     );
                     // A tampered receipt is a hard integrity failure.
                     if counts[3] > 0 {
@@ -2466,7 +2745,7 @@ fn main() -> Result<()> {
                     }
                     None => {
                         println!("No drawer with id {id}");
-                        std::process::exit(1);
+                        std::process::exit(EXIT_FAILURE.into());
                     }
                 },
                 DrawerAction::List {
@@ -2610,69 +2889,67 @@ fn main() -> Result<()> {
         Command::Refine {
             vault,
             wing,
+            room,
+            fact_room,
             limit,
             dry_run,
         } => {
             let llm = undercroft_llm::LlmClient::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
+            undercroft_core::validate_name(fact_room, "fact_room")?;
             let mut store = open_store(&cli, vault)?;
-            let drawers =
-                store.recent(wing.as_deref(), if *limit == 0 { 100_000 } else { *limit })?;
-            if drawers.is_empty() {
+            // One implementation, shared with `POST /v1/vaults/{id}/refine`
+            // (crate::refine): the same UNDERCROFT_LLM_* configuration used to
+            // build two different vaults from this command depending on which
+            // surface ran it — no validity window, no `Support` verdict
+            // (which means "no check was run", not "unsupported"), no date
+            // resolved from the note's own words, no searchable mirror, and a
+            // second extractor call per drawer whose answer was counted and
+            // thrown away. That was fixed once and a merge took it back; the
+            // gate against a third round is `refine.rs`'s
+            // `distillation_has_exactly_one_implementation`.
+            //
+            // The quarantine refusal lives inside `refine::refine` too, so it
+            // cannot go missing here the way it did. One ordering note: the
+            // LLM client is built first, so an operator with no
+            // UNDERCROFT_LLM_URL is told that before being told the wing is
+            // refused. Nothing is read either way.
+            let opts = refine::RefineOptions {
+                wing: wing.as_deref(),
+                room: room.as_deref(),
+                fact_room,
+                limit: if *limit == 0 { 100_000 } else { *limit },
+                dry_run: *dry_run,
+            };
+            let rep = refine::refine(&mut store, &llm, &opts)?;
+            if rep.sources == 0 {
                 bail!("no drawers to refine");
             }
-            println!(
-                "Refining {} drawer(s) with {} …",
-                drawers.len(),
-                llm.model()
-            );
-            let mut entities_added = 0usize;
-            let mut facts_added = 0usize;
-            for d in &drawers {
-                match llm.extract_triples(&d.content) {
-                    Ok(triples) => {
-                        for t in triples {
-                            if undercroft_core::validate_name(&t.subject, "subject").is_err()
-                                || undercroft_core::validate_name(&t.predicate, "predicate").is_err()
-                            {
-                                continue;
-                            }
-                            if *dry_run {
-                                println!(
-                                    "  would add: {} --{}--> {}",
-                                    t.subject, t.predicate, t.object
-                                );
-                            } else {
-                                // Distilled facts carry a receipt: an
-                                // HMAC-covered citation to the verbatim drawer
-                                // they were derived from, checkable later via
-                                // `undercroft kg receipts`.
-                                store.kg_add_receipted(
-                                    &t.subject.to_lowercase(),
-                                    &t.predicate.to_lowercase(),
-                                    &t.object,
-                                    None,
-                                    None,
-                                    0.8, // model-extracted: below human-asserted confidence
-                                    (&d.id, &d.content),
-                                    Some(llm.model()),
-                                )?;
-                            }
-                            facts_added += 1;
-                        }
-                    }
-                    Err(e) => undercroft_obs::diag_error!("  triples failed for {}: {e}", d.id),
-                }
-                match llm.extract_entities(&d.content) {
-                    Ok(ents) => entities_added += ents.len(),
-                    Err(e) => undercroft_obs::diag_error!("  entities failed for {}: {e}", d.id),
-                }
+            println!("Refined {} drawer(s) with {} …", rep.sources, llm.model());
+            for (s, p, o) in &rep.preview {
+                println!("  would add: {s} --{p}--> {o}");
             }
             println!(
-                "Refinement {}: {} fact(s) into the knowledge graph, {} entit(ies) seen",
+                "Refinement {}: {} fact(s) into the knowledge graph",
                 if *dry_run { "dry run" } else { "complete" },
-                facts_added,
-                entities_added
+                rep.facts
             );
+            if !*dry_run {
+                // The same counts /v1 answers with, because it is the same
+                // run. `stated` vs background is which facts the notes' own
+                // words support; `dated_from_text` is how often the extractor
+                // pointed at a real span instead of the note's date. Both are
+                // how you tell a working extractor from one that is inventing.
+                println!(
+                    "  mirrored into room '{}' · {} stated / {} background",
+                    fact_room,
+                    rep.stated,
+                    rep.facts.saturating_sub(rep.stated)
+                );
+                println!(
+                    "  {} dated from the text · {} duplicate(s), {} skipped, {} failed",
+                    rep.dated_from_text, rep.duplicates, rep.skipped, rep.failed
+                );
+            }
         }
         Command::Hallways { wing, top, vault } => {
             let store = open_store(&cli, vault)?;
@@ -2714,6 +2991,16 @@ fn main() -> Result<()> {
                 .collect();
             if !trained.is_empty() {
                 println!("codebooks: {}", trained.join(", "));
+            }
+            // R4: a read-only open detects instead of healing, and this is
+            // where it says what it left. **No longer empty by construction on
+            // a writable open**: since 2026-08-06 a writable open also reports
+            // knowledge-graph rows the A10 migration could not move, because
+            // their own HMAC does not verify and migrating one would launder a
+            // tampered row. That exposure is a state to READ, not a warning
+            // someone had to be watching stderr to catch.
+            for note in &st.unhealed {
+                println!("unhealed: {note}");
             }
             println!("wings:");
             for (w, n) in st.wings {
@@ -2769,7 +3056,7 @@ fn main() -> Result<()> {
                 }
             );
             if !report.ok() {
-                std::process::exit(2);
+                std::process::exit(EXIT_INTEGRITY.into());
             }
         }
         Command::Backup { action } => {
@@ -2787,7 +3074,7 @@ fn main() -> Result<()> {
                             "refusing to back up vault '{vault}': integrity verification \
                              failed (run `undercroft verify --vault {vault}` for the detail)"
                         );
-                        std::process::exit(2);
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                     drop(store);
                     let stamp = time::OffsetDateTime::now_utc()
@@ -2839,11 +3126,27 @@ fn main() -> Result<()> {
         Command::Index { action, vault } => {
             let store = open_store(&cli, vault)?;
             match action {
-                IndexAction::Push { backend } => {
+                IndexAction::Push {
+                    backend,
+                    allow_plaintext,
+                } => {
                     let mut index = open_index(backend)?;
-                    let n = store.index_push(index.as_mut())?;
+                    let plaintext = if *allow_plaintext {
+                        undercroft_store::PlaintextPush::Allow
+                    } else {
+                        undercroft_store::PlaintextPush::Refuse
+                    };
+                    let n = store.index_push(index.as_mut(), plaintext)?;
+                    // "sealed" only when it IS sealed. The old line said it
+                    // unconditionally, over a push that had base64'd the
+                    // plaintext column for an hmac-only vault (ROADMAP C8).
+                    let kind = if store.vault().level() == undercroft_vault::SecurityLevel::Sealed {
+                        "sealed"
+                    } else {
+                        "PLAINTEXT"
+                    };
                     println!(
-                        "Pushed {n} sealed record(s) from vault '{vault}' to {backend} \
+                        "Pushed {n} {kind} record(s) from vault '{vault}' to {backend} \
                          (collection {})",
                         store.index_collection()
                     );
@@ -3160,6 +3463,29 @@ fn snippet(content: &str, query: &str, max: usize) -> String {
     match hit {
         None | Some(0) => first_line(&flat, max),
         Some(pos) => {
+            // `pos` is a byte offset into the LOWERCASED copy, and lowercasing
+            // is not length-preserving: `İ` (2 bytes) folds to `i` + U+0307 (3),
+            // Turkish `I` to `ı` (1 → 2). So past any such character the offset
+            // runs ahead of `flat` and can land mid-character or past the end —
+            // `flat[start..pos]` then panics with "byte index is not a char
+            // boundary" on an ordinary `undercroft search` over ordinary stored
+            // text. Same class as the attacker-authored bundle sender that
+            // panicked `import`; this one needs no attacker.
+            //
+            // Clamp and walk back to a boundary rather than rebuilding the fold
+            // with an offset map: `str::to_lowercase` is contextual (Greek final
+            // sigma) and a per-character map would quietly change what matches.
+            // The residual is stated: when a fold did change length the preview
+            // window opens a character or two early. It is a 100-character
+            // preview of text the id line leads to verbatim — a display cost,
+            // where the alternative was exit 101.
+            let mut pos = pos.min(flat.len());
+            while !flat.is_char_boundary(pos) {
+                pos -= 1;
+            }
+            if pos == 0 {
+                return first_line(&flat, max);
+            }
             // Back up to a word boundary a bit before the match.
             let mut start = pos.saturating_sub(max / 3);
             while !flat.is_char_boundary(start) {
@@ -3216,4 +3542,152 @@ fn collect_files(path: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// **An integrity verdict on a READ path exited 1**, the code
+    /// docs/AGENTS.md reserves for "the run failed, retry it".
+    ///
+    /// `verify`, `repair`, `backup create` and `verify-forgetting` each call
+    /// `process::exit(2)` themselves, so the doctrine looked implemented and
+    /// ROADMAP A22 was filed closed. But a rolled-back or offline-edited
+    /// palace is detected in `open_store`, before any of those commands does
+    /// its own checking — and every command that merely READS it (`search`,
+    /// `stats`, `recent`, `drawer get` …) bubbled that verdict out through
+    /// `?` and exited 1, indistinguishable from "no such vault". A compliance
+    /// script that retries exit 1 retried tampering forever.
+    ///
+    /// This drives `run` — the whole dispatch every subcommand goes through —
+    /// over a real palace on disk, not a hand-built error, and it asserts
+    /// BOTH directions: the verdict must be 2, and an ordinary run failure
+    /// must stay 1, or a classifier that answered 2 for everything would pass.
+    #[test]
+    fn an_integrity_verdict_exits_2_where_an_ordinary_failure_stays_1() {
+        let home = TempDir::new().unwrap();
+        let mgr = VaultManager::open(home.path(), None).unwrap();
+        mgr.create("acme", SecurityLevel::Sealed).unwrap();
+        let root = home.path().to_str().unwrap().to_string();
+        let argv = |args: &[&str]| {
+            let mut v = vec!["undercroft", "--data-dir", root.as_str()];
+            v.extend_from_slice(args);
+            Cli::try_parse_from(v).unwrap()
+        };
+
+        // Premise: the palace reads clean, so what fails below is the
+        // tampering and not the fixture.
+        run(argv(&["search", "anything", "--vault", "acme"])).unwrap();
+
+        // Premise, the other way: a run failure the operator can fix by
+        // fixing the command. Exit 1, and it must stay 1.
+        let e = run(argv(&["search", "x", "--vault", "nope"])).unwrap_err();
+        assert!(
+            !integrity_verdict(&e),
+            "a missing vault is not a tamper verdict: {e:?}"
+        );
+
+        // Edit the manifest offline. `level` is covered by the manifest MAC,
+        // so this is exactly the downgrade the MAC exists to catch.
+        let mpath = home.path().join("vaults/acme/vault.json");
+        let text = std::fs::read_to_string(&mpath)
+            .unwrap()
+            .replace("sealed", "hmac-only");
+        std::fs::write(&mpath, text).unwrap();
+
+        // Was exit 1 — the same code as the missing vault two lines up.
+        let e = run(argv(&["search", "anything", "--vault", "acme"])).unwrap_err();
+        assert!(integrity_verdict(&e), "search on a tampered palace: {e:?}");
+        // A second command, because this is a property of the palace and not
+        // of `search`: one command classifying correctly is how the four
+        // `process::exit(2)` call sites made the gap invisible.
+        let e = run(argv(&["stats", "--vault", "acme"])).unwrap_err();
+        assert!(integrity_verdict(&e), "stats on a tampered palace: {e:?}");
+    }
+
+    /// The classes are the ones `/v1` answers 409 for, and no others.
+    ///
+    /// Stated as its own test because the *set* is the decision: widen it and
+    /// exit 2 stops meaning "tampering"; narrow it and a verdict goes back to
+    /// looking retryable. Both directions asserted.
+    #[test]
+    fn the_integrity_classes_are_exactly_the_ones_v1_answers_409_for() {
+        use undercroft_store::StoreError as S;
+        use undercroft_vault::VaultError as V;
+        for e in [
+            anyhow::Error::from(S::Integrity("record".into())),
+            anyhow::Error::from(S::Attestation("forged signature".into())),
+            anyhow::Error::from(S::Vault(V::ManifestTampered)),
+            anyhow::Error::from(S::Vault(V::CorruptManifest("truncated".into()))),
+            anyhow::Error::from(V::ManifestTampered),
+            anyhow::Error::from(V::CorruptManifest("truncated".into())),
+        ] {
+            assert!(integrity_verdict(&e), "must be a verdict: {e:?}");
+        }
+        for e in [
+            anyhow::Error::from(V::NotFound("acme".into())),
+            anyhow::Error::from(S::Invalid("unknown kind".into())),
+            anyhow::Error::from(S::NotFound("drawer".into())),
+            anyhow::Error::from(V::Io(std::io::Error::other("disk"))),
+            anyhow::anyhow!("plain failure"),
+        ] {
+            assert!(!integrity_verdict(&e), "must stay exit 1: {e:?}");
+        }
+        // Context layers are what `open_store`'s callers add, and the anyhow
+        // head is then the context string. Walking only the head would have
+        // classed this as an ordinary failure.
+        let wrapped = anyhow::Error::from(V::ManifestTampered)
+            .context("opening palace at /tmp/x")
+            .context("undercroft search");
+        assert!(integrity_verdict(&wrapped), "{wrapped:?}");
+    }
+
+    /// A search preview never panics on text whose lowercase is longer than
+    /// itself.
+    ///
+    /// `snippet` located the query inside a lowercased COPY and then sliced the
+    /// ORIGINAL with that offset. Lowercasing is not length-preserving — `İ`
+    /// (2 bytes) folds to `i`+U+0307 (3), Turkish `I` (1) to `ı` (2) — so past
+    /// one of those the offset runs ahead of the original, and it then lands
+    /// either mid-character or past the end. Both are a panic: exit 101 out of
+    /// an ordinary `undercroft search`, over stored text nobody had to craft.
+    /// Same class as the attacker-authored bundle sender that panicked
+    /// `import`, with no attacker in it.
+    ///
+    /// Every non-ASCII row here panicked before the clamp; the ASCII rows are
+    /// the premise, proving the window still opens where it always did.
+    #[test]
+    fn a_snippet_survives_text_whose_lowercase_is_longer_than_itself() {
+        // Five `İ` push the offset five bytes on, landing inside the 3-byte
+        // `本` that follows the match. Before: "byte index is not a char
+        // boundary".
+        let mid = "İİİİİ abc 日本語テキスト tail";
+        assert!(
+            snippet(mid, "abc", 100).contains("abc"),
+            "the window must still open on the match"
+        );
+
+        // Turkish dotless-i, the other growing fold, same shape.
+        let turkish = "IIIIIIII kod 日本語テキスト son";
+        assert!(snippet(turkish, "kod", 100).contains("kod"));
+
+        // A match at the very end: the drifted offset exceeds the original's
+        // length outright, which was a slice-out-of-range rather than a
+        // boundary panic.
+        assert!(snippet("İİİİİİİİ tail", "tail", 100).contains("tail"));
+
+        // Premise: the ordinary ASCII paths are unchanged.
+        assert_eq!(
+            snippet("alpha beta gamma", "alpha", 100),
+            "alpha beta gamma"
+        );
+        let long = "one two three four five six seven eight nine ten eleven twelve";
+        let windowed = snippet(long, "twelve", 20);
+        assert!(
+            windowed.starts_with('…') && windowed.contains("twelve"),
+            "a deep match is still windowed with an ellipsis: {windowed}"
+        );
+    }
 }

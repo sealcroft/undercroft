@@ -26,14 +26,59 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
+/// What went wrong in the control-plane state, **as a class**.
+///
+/// The class used to live at the CALL SITE instead of in the type: there
+/// was one `Invalid(String)` for every refusal, so `proxy.rs` decided the
+/// HTTP status by which line raised it — `instance_add` said 400,
+/// `tenant_rotate_token` said 404, `instance_remove` said 409. A
+/// `SQLITE_BUSY` (this database runs WAL + `synchronous=FULL` and does get
+/// contended) therefore answered "bad request", "not found" or "conflict"
+/// depending on where it hit, and a client could not tell a retryable
+/// failure from a permanent one anywhere. The variants below carry the
+/// class themselves and [`StateError::status`] reads it once.
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
     #[error("sqlite: {0}")]
     Sql(#[from] rusqlite::Error),
+    /// The caller handed us a value the state layer cannot use (a key that
+    /// is not hex, an instance name outside the shape). 400.
     #[error("{0}")]
     Invalid(String),
+    /// The named row is not here. 404 — distinct from `Invalid`, because
+    /// "you asked for something that does not exist" and "what you sent is
+    /// malformed" are different instructions to the caller.
+    #[error("{0}")]
+    NotFound(String),
+    /// Well-formed, addressed at something real, and refused by the state's
+    /// current shape (an instance that still hosts tenants). 409.
+    #[error("{0}")]
+    Conflict(String),
+    /// A mutation reached a read-only (replica) handle. 403.
+    #[error("state database is open read-only (read replica) — mutations belong to the writer")]
+    ReadOnly,
     #[error("credential blob failed to open (wrong UNDERCROFT_ORCH_KEY, or tampered state)")]
     Unsealable,
+}
+
+impl StateError {
+    /// The HTTP status this class means. **One place**, so a new call site
+    /// inherits the mapping instead of inventing one — the defect this
+    /// replaces was entirely a per-call-site decision.
+    ///
+    /// `Unsealable` is 409 rather than 500 or 502: a blob that will not
+    /// open under the declared key is a tamper verdict or a wrong key,
+    /// never a transient condition, and 5xx is what retry layers hammer.
+    pub fn status(&self) -> u16 {
+        match self {
+            StateError::Sql(_) => 500,
+            StateError::Invalid(_) => 400,
+            StateError::NotFound(_) => 404,
+            StateError::Conflict(_) => 409,
+            StateError::ReadOnly => 403,
+            StateError::Unsealable => 409,
+        }
+    }
 }
 
 /// One registered engine instance (credentials stay sealed until asked for).
@@ -58,6 +103,10 @@ pub struct Tenant {
     pub instance: String,
     pub vault: String,
     pub created_at: String,
+    /// The security level this tenant's vault was created at (`sealed` |
+    /// `hmac-only`). Recorded because a migration has to recreate the vault
+    /// on the destination and had no way to ask (ROADMAP C3).
+    pub level: String,
 }
 
 pub struct Orch {
@@ -110,6 +159,18 @@ impl Orch {
                  v TEXT NOT NULL
              );",
         )?;
+        // The security level the tenant's vault was created at. It lived
+        // NOWHERE — not on `Tenant`, not in this table — while both creation
+        // surfaces offer `hmac-only`, so `migrate_tenant` hard-coded
+        // `"sealed"` and silently converted an hmac-only tenant on the way
+        // across (ROADMAP C3). SQLite has no ADD COLUMN IF NOT EXISTS; a
+        // duplicate-column error just means the migration already ran.
+        // Existing rows default to `sealed`, which is what the engine's own
+        // create defaults to and what every migration produced until now.
+        let _ = conn.execute(
+            "ALTER TABLE tenants ADD COLUMN level TEXT NOT NULL DEFAULT 'sealed'",
+            [],
+        );
         Ok(Self {
             conn,
             key: Zeroizing::new(key),
@@ -149,10 +210,7 @@ impl Orch {
 
     fn require_writable(&self) -> Result<(), StateError> {
         if self.read_only {
-            return Err(StateError::Invalid(
-                "state database is open read-only (read replica) — mutations belong to the writer"
-                    .into(),
-            ));
+            return Err(StateError::ReadOnly);
         }
         Ok(())
     }
@@ -292,7 +350,7 @@ impl Orch {
             )
             .optional()?;
         let Some((url, blob)) = row else {
-            return Err(StateError::Invalid(format!("unknown instance {name:?}")));
+            return Err(StateError::NotFound(format!("unknown instance {name:?}")));
         };
         let plain = self.open_sealed(&format!("orch/instance/{name}"), &blob)?;
         let v: serde_json::Value =
@@ -320,7 +378,7 @@ impl Orch {
             |r| r.get(0),
         )?;
         if tenants > 0 {
-            return Err(StateError::Invalid(format!(
+            return Err(StateError::Conflict(format!(
                 "instance {name:?} still hosts {tenants} tenant(s) — migrate them first"
             )));
         }
@@ -357,6 +415,7 @@ impl Orch {
         &self,
         name: &str,
         instance: &str,
+        level: &str,
     ) -> Result<(Tenant, String), StateError> {
         self.require_writable()?;
         let mut id_bytes = [0u8; 8];
@@ -372,17 +431,19 @@ impl Orch {
             instance: instance.to_string(),
             vault,
             created_at: now_rfc3339(),
+            level: level.to_string(),
         };
         self.conn.execute(
-            "INSERT INTO tenants (id, name, instance, vault, token_mac, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO tenants (id, name, instance, vault, token_mac, created_at, level)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 t.id,
                 t.name,
                 t.instance,
                 t.vault,
                 self.token_mac(&token),
-                t.created_at
+                t.created_at,
+                t.level
             ],
         )?;
         self.touch_last_write()?;
@@ -396,7 +457,7 @@ impl Orch {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, instance, vault, created_at FROM tenants WHERE token_mac = ?1",
+                "SELECT id, name, instance, vault, created_at, level FROM tenants WHERE token_mac = ?1",
                 params![mac],
                 |r| {
                     Ok(Tenant {
@@ -405,6 +466,7 @@ impl Orch {
                         instance: r.get(2)?,
                         vault: r.get(3)?,
                         created_at: r.get(4)?,
+                        level: r.get(5)?,
                     })
                 },
             )
@@ -415,7 +477,7 @@ impl Orch {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, instance, vault, created_at FROM tenants WHERE id = ?1",
+                "SELECT id, name, instance, vault, created_at, level FROM tenants WHERE id = ?1",
                 params![id],
                 |r| {
                     Ok(Tenant {
@@ -424,6 +486,7 @@ impl Orch {
                         instance: r.get(2)?,
                         vault: r.get(3)?,
                         created_at: r.get(4)?,
+                        level: r.get(5)?,
                     })
                 },
             )
@@ -432,7 +495,7 @@ impl Orch {
 
     pub fn tenant_list(&self) -> Result<Vec<Tenant>, StateError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, instance, vault, created_at FROM tenants ORDER BY created_at, id",
+            "SELECT id, name, instance, vault, created_at, level FROM tenants ORDER BY created_at, id",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -442,6 +505,7 @@ impl Orch {
                     instance: r.get(2)?,
                     vault: r.get(3)?,
                     created_at: r.get(4)?,
+                    level: r.get(5)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -462,7 +526,7 @@ impl Orch {
             params![self.token_mac(&token), id],
         )?;
         if n == 0 {
-            return Err(StateError::Invalid(format!("unknown tenant {id:?}")));
+            return Err(StateError::NotFound(format!("unknown tenant {id:?}")));
         }
         self.touch_last_write()?;
         Ok(token)
@@ -475,7 +539,7 @@ impl Orch {
             params![instance, id],
         )?;
         if n == 0 {
-            return Err(StateError::Invalid(format!("unknown tenant {id:?}")));
+            return Err(StateError::NotFound(format!("unknown tenant {id:?}")));
         }
         self.touch_last_write()
     }
@@ -575,7 +639,7 @@ mod tests {
     fn tokens_resolve_by_mac_and_never_store_plaintext() {
         let (_d, o) = orch();
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, token) = o.tenant_create("acme", "alpha").unwrap();
+        let (t, token) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         assert_eq!(t.vault, format!("tenant-{}", t.id));
         let hit = o.tenant_by_token(&token).unwrap().expect("token resolves");
         assert_eq!(hit.id, t.id);
@@ -592,11 +656,62 @@ mod tests {
         assert_eq!(count, 0);
     }
 
+    /// C3: the vault's security level is STATE, and it survives every read
+    /// path — because `migrate_tenant` recreates the vault on the
+    /// destination and had nothing to ask, so it hard-coded `"sealed"` and
+    /// silently converted an hmac-only tenant on the way across.
+    #[test]
+    fn a_tenants_security_level_is_recorded_and_read_back_everywhere() {
+        let (_d, o) = orch();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let (sealed, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
+        let (plain, token) = o.tenant_create("globex", "alpha", "hmac-only").unwrap();
+        assert_eq!(sealed.level, "sealed");
+        assert_eq!(plain.level, "hmac-only");
+        // All three reads, because a migration reaches the tenant through
+        // `tenant_get` and the console through `tenant_list`.
+        assert_eq!(o.tenant_get(&plain.id).unwrap().unwrap().level, "hmac-only");
+        assert_eq!(
+            o.tenant_by_token(&token).unwrap().unwrap().level,
+            "hmac-only"
+        );
+        assert_eq!(
+            o.tenant_list()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == plain.id)
+                .unwrap()
+                .level,
+            "hmac-only"
+        );
+    }
+
+    /// A state database written before the column existed still opens, and
+    /// its rows read as `sealed` — which is what every migration produced
+    /// and what the engine's own create defaults to.
+    #[test]
+    fn a_pre_level_state_database_migrates_and_defaults_to_sealed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("orch.db");
+        {
+            let o = Orch::open(&path, KEY).unwrap();
+            o.instance_add("alpha", "http://a", "b", "s").unwrap();
+            o.tenant_create("acme", "alpha", "hmac-only").unwrap();
+            // Put the schema back the way it was before the column.
+            o.conn
+                .execute_batch("ALTER TABLE tenants DROP COLUMN level;")
+                .unwrap();
+        }
+        let o = Orch::open(&path, KEY).unwrap();
+        let t = &o.tenant_list().unwrap()[0];
+        assert_eq!(t.level, "sealed", "the migrated default");
+    }
+
     #[test]
     fn token_rotation_revokes_the_old_token_immediately() {
         let (_d, o) = orch();
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, old) = o.tenant_create("acme", "alpha").unwrap();
+        let (t, old) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         let new = o.tenant_rotate_token(&t.id).unwrap();
         assert_ne!(old, new);
         assert!(o.tenant_by_token(&old).unwrap().is_none(), "old token dead");
@@ -614,7 +729,7 @@ mod tests {
         let path = dir.path().join("orch.db");
         let writer = Orch::open(&path, KEY).unwrap();
         writer.instance_add("alpha", "http://a", "b", "s").unwrap();
-        let (t, token) = writer.tenant_create("acme", "alpha").unwrap();
+        let (t, token) = writer.tenant_create("acme", "alpha", "sealed").unwrap();
 
         let replica = Orch::open_read_only(&path, KEY).unwrap();
         assert_eq!(replica.tenant_by_token(&token).unwrap().unwrap().id, t.id);
@@ -622,7 +737,10 @@ mod tests {
         assert!(replica.last_write().unwrap().is_some());
         for err in [
             replica.instance_add("x", "http://x", "b", "s").unwrap_err(),
-            replica.tenant_create("x", "alpha").map(|_| ()).unwrap_err(),
+            replica
+                .tenant_create("x", "alpha", "sealed")
+                .map(|_| ())
+                .unwrap_err(),
             replica.tenant_rotate_token(&t.id).map(|_| ()).unwrap_err(),
             replica.tenant_delete(&t.id).map(|_| ()).unwrap_err(),
             replica.instance_remove("alpha").map(|_| ()).unwrap_err(),
@@ -638,13 +756,66 @@ mod tests {
         assert!(Orch::open_read_only(&dir.path().join("absent.db"), KEY).is_err());
     }
 
+    /// The class is a property of WHAT HAPPENED, not of which line raised
+    /// it. Every refusal used to be `Invalid(String)`, so the caller's
+    /// status came from the call site — and a sqlite failure inherited
+    /// whatever that site had picked (400, 404 or 409 depending on where
+    /// it hit), i.e. a contended database reported "bad request".
+    #[test]
+    fn every_state_error_carries_its_own_status() {
+        assert_eq!(StateError::Invalid("x".into()).status(), 400);
+        assert_eq!(StateError::NotFound("x".into()).status(), 404);
+        assert_eq!(StateError::Conflict("x".into()).status(), 409);
+        assert_eq!(StateError::ReadOnly.status(), 403);
+        // A tamper verdict, never a retry.
+        assert_eq!(StateError::Unsealable.status(), 409);
+        // Ours, not the caller's — and the one that used to masquerade as
+        // caller error at three different statuses.
+        assert_eq!(
+            StateError::Sql(rusqlite::Error::QueryReturnedNoRows).status(),
+            500
+        );
+
+        // And the refusals the state layer actually raises land on the
+        // right class, end to end.
+        let (_d, o) = orch();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        let (t, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
+        // `.err()`, never `unwrap_err()`: `InstanceCreds` is deliberately
+        // not `Debug` — it carries key material.
+        assert_eq!(o.instance_creds("nope").err().unwrap().status(), 404);
+        assert_eq!(o.instance_remove("alpha").unwrap_err().status(), 409);
+        assert_eq!(o.tenant_rotate_token("nope").unwrap_err().status(), 404);
+        assert_eq!(
+            o.tenant_set_instance("nope", "alpha").unwrap_err().status(),
+            404
+        );
+        // Premise: the same calls succeed when they are legitimate, so this
+        // cannot pass by refusing everything.
+        assert!(o.instance_creds("alpha").is_ok());
+        assert!(o.tenant_rotate_token(&t.id).is_ok());
+    }
+
+    /// `DELETE /admin/instances/{name}` answering 200 `{"removed": false}`
+    /// starts here: removal of a name that is not registered is reported as
+    /// `false`, and the proxy is what must turn that into a 404. Pinned so
+    /// the two halves cannot drift.
+    #[test]
+    fn removing_an_unregistered_instance_is_not_a_removal() {
+        let (_d, o) = orch();
+        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        assert!(o.instance_remove("alpha").unwrap(), "premise: a real one");
+        assert!(!o.instance_remove("alpha").unwrap(), "already gone");
+        assert!(!o.instance_remove("never-registered").unwrap());
+    }
+
     #[test]
     fn least_loaded_placement_and_remove_guard() {
         let (_d, o) = orch();
         o.instance_add("alpha", "http://a", "b", "s").unwrap();
         o.instance_add("beta", "http://b", "b", "s").unwrap();
         assert_eq!(o.instance_least_loaded().unwrap().as_deref(), Some("alpha"));
-        let (t1, _) = o.tenant_create("one", "alpha").unwrap();
+        let (t1, _) = o.tenant_create("one", "alpha", "sealed").unwrap();
         assert_eq!(o.instance_least_loaded().unwrap().as_deref(), Some("beta"));
         // An instance hosting tenants refuses removal.
         assert!(o.instance_remove("alpha").is_err());

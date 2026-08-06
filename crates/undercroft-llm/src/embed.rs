@@ -252,50 +252,16 @@ fn parse_embedding(resp: &Value) -> Option<Vec<f32>> {
         .or_else(|| floats(Some(resp)))
 }
 
-/// Build the pinned TLS configuration a declared `UNDERCROFT_EMBED_CA`
-/// resolves to: the PEM's certificates become the ONLY trust roots — the
-/// bundled public roots are deliberately absent, because a declaration is a
-/// pin. Errors (empty file, no parseable certificate, a root rustls
-/// rejects) are construction refusals at the caller, never fallbacks.
-pub(crate) fn pinned_roots_from_pem(
-    pem: &[u8],
-) -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
-    let certs: Vec<_> = rustls_pemfile::certs(&mut &pem[..])
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("not parseable as PEM certificates: {e}"))?;
-    if certs.is_empty() {
-        return Err("holds no certificate — a declared trust root that pins nothing".into());
-    }
-    let mut roots = rustls::RootCertStore::empty();
-    for c in certs {
-        roots
-            .add(c)
-            .map_err(|e| format!("certificate rejected as a trust root: {e}"))?;
-    }
-    Ok(std::sync::Arc::new(
-        rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    ))
-}
-
-/// Whether a base URL points at this machine. Deliberately conservative: an
-/// unparseable or unusual host counts as NOT loopback, so the warning errs
-/// toward telling the operator their text is leaving.
-pub(crate) fn is_loopback(base: &str) -> bool {
-    // scheme → host:port/path → host
-    let after_scheme = match base.find("://") {
-        Some(i) => &base[i + 3..],
-        None => base,
-    };
-    let host_port = after_scheme.split('/').next().unwrap_or("");
-    let host = match host_port.strip_prefix('[') {
-        // IPv6 literal, `[::1]:8080`
-        Some(rest) => rest.split(']').next().unwrap_or(""),
-        None => host_port.split(':').next().unwrap_or(""),
-    };
-    host == "localhost" || host == "127.0.0.1" || host == "::1"
-}
+// The transport policy — the loopback predicate and the CA pin — lives in
+// `undercroft-net` since 2026-08-05 and is re-exported here so this module's
+// callers and tests are unchanged. It moved because the remote INDEX
+// backends had no transport policy at all (ROADMAP C8) while every push
+// carries embeddings, which are plaintext-derived: two copies of one rule
+// is two places for it to drift, which is the defect class this branch is
+// closing. Nothing about the behaviour changed in the move; the tests below
+// still exercise it through these names.
+pub(crate) use undercroft_net::is_loopback;
+pub(crate) use undercroft_net::pinned_roots as pinned_roots_from_pem;
 
 impl Embedder for HttpEmbedder {
     fn model_name(&self) -> &str {
@@ -507,6 +473,80 @@ tYFnY6i2f/1ZwO5egz39EHpuFql2+6WqpB9saUk=\n\
             "http://192.168.1.10:1234",
         ] {
             assert!(!is_loopback(remote), "{remote} is not this machine");
+        }
+    }
+
+    /// A loopback-looking USERINFO must not make a remote host local.
+    ///
+    /// `http://127.0.0.1:8080@evil.com/v1` has username `127.0.0.1`, password
+    /// `8080` and host `evil.com` (RFC 3986), which is how ureq resolves it —
+    /// but this predicate split the authority on `:` and read `127.0.0.1`.
+    /// The gate then passed, so "TLS or loopback, nothing else, no override"
+    /// shipped drawer text in cleartext to an attacker-chosen host AND
+    /// suppressed the plaintext-endpoint warning.
+    #[test]
+    fn userinfo_cannot_impersonate_loopback() {
+        for spoof in [
+            "http://127.0.0.1:8080@evil.com/v1",
+            "http://localhost@evil.com/v1",
+            "http://localhost:11434@evil.com",
+            "http://[::1]:8080@evil.com/v1",
+            "http://user@127.0.0.1.evil.com/v1",
+            // userinfo containing its own `@` — the split must take the last
+            "http://a@b:127.0.0.1@evil.com/v1",
+            // For a special scheme the WHATWG parser treats a backslash as a
+            // path separator, so the host here is evil.com. The first fix
+            // enumerated userinfo spellings and missed this one entirely,
+            // which is why the predicate now asks the transport's own parser.
+            r"http://evil.com\@127.0.0.1/v1",
+        ] {
+            assert!(
+                !is_loopback(spoof),
+                "{spoof} resolves to a REMOTE host and must not read as loopback"
+            );
+        }
+        // Premise, so this cannot pass by breaking loopback detection: real
+        // loopback URLs still read as loopback, including with real userinfo.
+        assert!(is_loopback("http://127.0.0.1:11434"));
+        assert!(is_loopback("http://user:pass@127.0.0.1:11434/v1"));
+        assert!(is_loopback("http://user@localhost:1234/v1"));
+        assert!(is_loopback("http://user@[::1]:8080/v1"));
+        // And the mirror of the backslash case, which the FIRST draft of this
+        // test got wrong: here the backslash ends the authority at
+        // , so  is PATH and the request really does go
+        // to loopback. Asserting it the other way would have pinned a false
+        // expectation into the suite — the parser is right and the hand
+        // reasoning was wrong, which is the whole argument for using it.
+        assert!(is_loopback(r"http://localhost\@evil.com/v1"));
+    }
+    /// What the parser change did to the EDGES, pinned so it is a decision
+    /// rather than a side effect.
+    ///
+    /// The old predicate compared the host string to three literals, so only
+    /// `127.0.0.1` counted. `Ipv4Addr::is_loopback` covers all of 127/8,
+    /// which is what RFC 1122 actually says — a widening, and a correct one:
+    /// `127.0.0.2` is this machine, and cleartext to it never leaves it.
+    ///
+    /// The other edges must NOT widen, and this is where a parser swap could
+    /// have quietly cost something: an IPv4-mapped IPv6 address, a bare
+    /// wildcard, and a hostname that merely resolves to loopback are all
+    /// still NOT loopback — the last one deliberately, because resolution is
+    /// not something this predicate can see and guessing would be inference.
+    #[test]
+    fn loopback_edges_are_decided_not_incidental() {
+        // Widened, correctly: the whole 127/8 block is this machine.
+        assert!(is_loopback("http://127.0.0.2:8080/v1"));
+        assert!(is_loopback("http://127.255.255.254/v1"));
+
+        // NOT widened. Each of these would be a cleartext leak if it were.
+        for remote in [
+            "http://0.0.0.0:8080/v1",       // wildcard bind, not a destination
+            "http://[::ffff:127.0.0.1]/v1", // IPv4-mapped IPv6 is not ::1
+            "http://127.0.0.1.evil.com/v1", // a domain that merely starts with it
+            "http://localhost.evil.com/v1",
+            "http://169.254.169.254/latest", // cloud metadata, a classic SSRF target
+        ] {
+            assert!(!is_loopback(remote), "{remote} must not read as loopback");
         }
     }
 }

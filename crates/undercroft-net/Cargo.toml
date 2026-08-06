@@ -1,0 +1,28 @@
+[package]
+name = "undercroft-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Outbound transport policy shared by every Undercroft client: TLS or loopback, and CA pinning."
+
+[dependencies]
+thiserror.workspace = true
+ureq = { version = "2.10", features = ["json"] }
+# The same parser ureq resolves a request target with, so the loopback
+# predicate and the transport cannot disagree about what the host is.
+url.workspace = true
+# The exact rustls ureq's `tls` feature compiles (ring provider, no
+# aws-lc-rs), so a pinned root reaches the same stack the request uses.
+# Version and features must stay unified with ureq's own declaration or
+# two rustls trees end up in the binary.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+# The public trust roots a client that declared no pin falls back to — the
+# same set ureq's own `tls` feature uses, so the two clients in this crate
+# (ureq and tokio-postgres) trust the same thing.
+webpki-roots = "0.26"
+
+[dev-dependencies]
+tempfile.workspace = true

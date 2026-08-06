@@ -108,6 +108,42 @@ pub(crate) struct WingPq {
     live: i64,
 }
 
+/// What a rebuild owes `pq_meta` once its rows commit.
+///
+/// **Why this exists.** Both PQ tiers wrote a trained codebook and trained
+/// IVF centroids the moment they existed — an autocommit `INSERT` under
+/// `synchronous=FULL`, i.e. one fsync landing *ahead* of the rows those
+/// artifacts describe. A crash in that window left a codebook no stored code
+/// was encoded against, or centroids no stored row was partitioned by. The
+/// load path reads that split state as coherent (`matched == count &&
+/// ivf_ok`) and probes the wrong lists; `widen` does not fire, because the
+/// wrong lists still hold ≥ k rows. Silent partial recall loss, invisible to
+/// `verify` — derived indexes sit outside HMAC coverage by design — and
+/// invisible to the generation counter too, which is the counter's whole
+/// job: the global tier self-heals at the next writable open, the per-wing
+/// tier never does, and a read-only replica heals neither.
+///
+/// [`PalaceStore::one_rewrite`]'s doc states this rule generally and FDE
+/// (`fdeidx.rs`) and the token codebook (`latestage.rs`) already follow it.
+/// PQ did not; this is PQ catching up.
+///
+/// **Buffered rather than wrapped**, deliberately: wrapping the whole build
+/// would hold the write lock across k-means, which is the trade
+/// [`PalaceStore::one_rewrite`]'s doc already argues against. Training stays
+/// outside the transaction and only its *decision* travels in.
+enum PendingMeta {
+    /// The stored artifact is reused as-is. A rebuild is not a retrain and
+    /// must not advance a generation — pinned by
+    /// `training_a_codebook_advances_a_visible_generation`.
+    Keep,
+    /// Freshly trained: write these bytes and step the generation, both
+    /// inside the rebuild's transaction.
+    Put(Vec<u8>),
+    /// Untrainable, or the corpus fell below the tier's threshold: remove it
+    /// with the rows, so it cannot silently go stale.
+    Drop,
+}
+
 impl PqCache {
     fn new(code_len: usize) -> Self {
         Self {
@@ -659,7 +695,22 @@ impl PalaceStore {
         // N=50k, the per-search join was costing more than the probed ADC
         // scan it was guarding.
         let mut just_verified = false;
-        if !self.pq_verified.get() || self.pq.borrow().is_none() {
+        // R1: a read-only store LOADS an index and never builds one. The
+        // verification below is not a read — `pq_schema` creates tables and
+        // drops others, `pq_build` trains and re-encodes every row, and the
+        // repack/compact arms rewrite the on-disk format — so on a replica
+        // the first search after open silently wrote to the vault the flag
+        // promised it would not touch. `just_verified` is set so the growth
+        // re-check below cannot recurse into a retrain either: whatever the
+        // load found is what this store has.
+        if self.read_only {
+            let stale = !self.pq_verified.get() || self.pq.borrow().is_none();
+            if stale && !self.pq_load_only()? {
+                self.ro_prefilter_fallback("PQ");
+                return Ok(None);
+            }
+            just_verified = true;
+        } else if !self.pq_verified.get() || self.pq.borrow().is_none() {
             just_verified = true;
             self.pq_schema()?;
             let drawers: i64 = self
@@ -1005,6 +1056,39 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Apply a buffered [`PendingMeta`] decision.
+    ///
+    /// Called from INSIDE a rebuild's transaction, never beside the training
+    /// call that produced it — that placement is the whole point (see
+    /// [`PendingMeta`]). `artifact` is the generation key, which for the
+    /// per-wing tier is a dynamic `<wing>/<name>` string.
+    ///
+    /// One residue, stated: the DURABLE counter (the `meta` row every
+    /// surface reports) rolls back with the transaction, but
+    /// `codebook_generation_bump` also sets a live telemetry gauge eagerly,
+    /// and a rollback leaves that gauge one ahead until the next bump. It is
+    /// a count of training events, not integrity evidence, and the same
+    /// residue every `one_rewrite` caller already carries.
+    fn pq_meta_apply(
+        &self,
+        key: &str,
+        artifact: &str,
+        pending: &PendingMeta,
+    ) -> Result<(), StoreError> {
+        match pending {
+            PendingMeta::Keep => {}
+            PendingMeta::Put(bytes) => {
+                self.pq_meta_put(key, bytes)?;
+                self.codebook_generation_bump(artifact);
+            }
+            PendingMeta::Drop => {
+                self.conn
+                    .execute("DELETE FROM pq_meta WHERE key = ?1", params![key])?;
+            }
+        }
+        Ok(())
+    }
+
     /// Warn when a freshly trained codebook fits its own training sample much
     /// better than the corpus it will encode.
     ///
@@ -1048,6 +1132,51 @@ impl PalaceStore {
                 fit.ratio()
             );
         }
+    }
+
+    /// Run one derived-index rewrite as a single durable unit.
+    ///
+    /// Two defects share this shape and both are closed here (ROADMAP A20).
+    /// **Cost**: under `synchronous=FULL` an autocommit `UPDATE` per row is
+    /// one fsync per row — measured at 7.8–8.3 ms/row when `pq_build` had it,
+    /// i.e. ~95% of a "build cost" that was disk syncs rather than
+    /// computation. **Correctness**: a codebook is written *before* the rows
+    /// it recodes, so an interruption between them leaves a v2 codebook
+    /// beside v1 rows; that survived only because the readers accept both
+    /// formats, which is luck, not design. One transaction makes the pair
+    /// atomic and a crash roll back to the previous coherent state.
+    ///
+    /// `pq_build` takes the transaction directly. These paths cannot, because
+    /// they are also reachable from inside a caller's transaction — the
+    /// advisory-encode rule ("never BEGIN, or batching breaks": `upsert_many`
+    /// owns one transaction across a whole batch and calls into the encode
+    /// paths). `is_autocommit` is what lets one function honour both: at the
+    /// top level it opens a transaction, inside someone else's it does
+    /// nothing and the writes are atomic with the enclosing one anyway.
+    /// A `BEGIN` there would fail outright, which is why the un-transacted
+    /// loops could not simply be wrapped.
+    ///
+    /// The trade is stated, not hidden: a rebuild now holds the write lock
+    /// for its whole duration, encode arithmetic included, where before it
+    /// released between rows. `pq_build` made the same trade first and for
+    /// the same reason — the alternative is a partial table, and a rebuild
+    /// that fsyncs per row is slow enough to hold the lock roughly as long
+    /// anyway. Where a rewrite is genuinely full-corpus and concurrent
+    /// readers must keep serving (`rebuild_fts`), the answer is a shadow
+    /// table and a swap, not a longer lock.
+    pub(crate) fn one_rewrite<T>(
+        &self,
+        f: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        if !self.conn.is_autocommit() {
+            return f();
+        }
+        // `unchecked_transaction` because these run behind `&self` on the
+        // search path, exactly as `pq_build`'s does.
+        let tx = self.conn.unchecked_transaction()?;
+        let out = f()?;
+        tx.commit()?;
+        Ok(out)
     }
 
     /// Indices of the keyed training sample over `items`, each identified by
@@ -1239,11 +1368,89 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Load an existing PQ index into the session caches, building nothing —
+    /// the read-only posture (R1). `false` means there is nothing usable to
+    /// load and the caller must fall back to the exact scan.
+    ///
+    /// Deliberately does NOT call `pq_schema()`: creating those tables is a
+    /// write, and their absence is precisely the answer "this vault has no
+    /// index". Deliberately does not repack or compact either — both rewrite
+    /// the on-disk format, and a replica must leave the format its writer
+    /// chose exactly as it found it.
+    fn pq_load_only(&self) -> Result<bool, StoreError> {
+        if !self.table_exists("drawer_pq")? || !self.table_exists("pq_meta")? {
+            return Ok(false);
+        }
+        if self.pq.borrow().is_none() {
+            let Some(pq) = self
+                .pq_meta_get("codebook")?
+                .and_then(|b| ProductQuantizer::from_bytes(&b))
+            else {
+                return Ok(false);
+            };
+            *self.pq.borrow_mut() = Some(pq);
+        }
+        if self.ivf.borrow().is_none() {
+            self.ivf_load()?;
+        }
+        let drawers: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+        if drawers == 0 {
+            return Ok(false);
+        }
+        // The coverage boundary, stated rather than hidden: a writable open
+        // self-heals a short index by rebuilding it, and this one cannot, so
+        // drawers written after the index was last built are invisible to
+        // the prefilter. That is a RECALL cost, never a wrong answer — the
+        // candidates it does return are hydrated and scored exactly as
+        // always — but it is the kind of degradation a replica operator has
+        // to be told about rather than discover in a recall number.
+        let tail_matched: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM drawer_pq p JOIN drawers d ON d.seq = p.seq",
+            [],
+            |r| r.get(0),
+        )?;
+        let matched = if self.pq_pages_present()? {
+            let live = self
+                .pq_count_get("rowcount")?
+                .saturating_sub(self.pq_count_get("deleted")?);
+            tail_matched + live as i64
+        } else {
+            tail_matched
+        };
+        if matched != drawers {
+            undercroft_obs::diag_warn!(
+                "read-only open: the PQ index covers {matched} of {drawers} drawers and \
+                 cannot be rebuilt here; the uncovered rows are not offered as candidates \
+                 until a writable open heals it"
+            );
+        }
+        self.pq_live.set(drawers);
+        self.pq_verified.set(true);
+        Ok(true)
+    }
+
+    /// Whether a table exists, without creating it — the read-only tiers ask
+    /// before they read, because the `CREATE TABLE IF NOT EXISTS` they would
+    /// otherwise ride on is a write.
+    pub(crate) fn table_exists(&self, name: &str) -> Result<bool, StoreError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Load-or-train the codebook and (re)encode every drawer; train (or
     /// retrain) the IVF partitions when the corpus warrants them, drop them
     /// when it doesn't. Returns `false` when the corpus can't be quantized
     /// (empty, or dimension not divisible into subspaces) — the caller falls
     /// back to the full scan.
+    ///
+    /// Writes throughout, so a read-only store never reaches it — see
+    /// [`Self::pq_load_only`], which is what that posture calls instead.
     fn pq_build(&self) -> Result<bool, StoreError> {
         // (seq, id, sealed embedding, wing, agent claim)
         type EmbeddingRow = (i64, String, Vec<u8>, String, Option<String>);
@@ -1271,6 +1478,11 @@ impl PalaceStore {
         }
 
         let stored = self.pq_meta_get("codebook")?;
+        // A freshly trained codebook is BUFFERED, not written here — see
+        // [`PendingMeta`]. `Keep` is the reuse arm: a rebuild through the
+        // `Some(codebook)` branch re-encodes every row against the stored
+        // artifact and must not step its generation.
+        let mut codebook_write = PendingMeta::Keep;
         let pq = match stored.and_then(|b| ProductQuantizer::from_bytes(&b)) {
             Some(pq) => pq,
             None => {
@@ -1301,8 +1513,7 @@ impl PalaceStore {
                 let Some(pq) = ProductQuantizer::train(&sample, m, PQ_TRAIN_ITERS) else {
                     return Ok(false);
                 };
-                self.pq_meta_put("codebook", &pq.to_bytes())?;
-                self.codebook_generation_bump(CODEBOOK_PQ);
+                codebook_write = PendingMeta::Put(pq.to_bytes());
                 // Only meaningful when a sample was actually drawn: below the
                 // cap the sample *is* the corpus and the probe is inside it.
                 if items.len() > PQ_TRAIN_SAMPLE {
@@ -1325,13 +1536,19 @@ impl PalaceStore {
 
         // IVF partitions: (re)train whenever the corpus is IVF-sized and the
         // cached centroids are absent or outgrown; drop them below the
-        // threshold so they can't silently go stale.
+        // threshold so they can't silently go stale. Buffered like the
+        // codebook — and `self.ivf` is TAKEN rather than borrowed, so the
+        // handle is re-pointed only after the commit. Assigning lists from a
+        // RAM copy the transaction then rolled back is the same split state
+        // one level up: the next verify pass reads those centroids as fresh,
+        // skips the retrain, and commits rows partitioned by centroids no
+        // reader can load. Left empty by a failure it is harmless — the
+        // verify path calls `ivf_load` whenever it is `None`.
         let n = items.len();
+        let mut ivf_write = PendingMeta::Keep;
+        let mut ivf = self.ivf.borrow_mut().take();
         if n >= self.ivf_min {
-            let fresh = matches!(
-                self.ivf.borrow().as_ref(),
-                Some(cq) if ivf_fresh(n as u64, cq.trained_n())
-            );
+            let fresh = matches!(ivf.as_ref(), Some(cq) if ivf_fresh(n as u64, cq.trained_n()));
             if !fresh {
                 // √N lists, clamped. The upper clamp sat at 1024 until the
                 // page-level spike showed √N must keep tracking N past 10⁶
@@ -1355,21 +1572,18 @@ impl PalaceStore {
                     .collect();
                 match CoarseQuantizer::train(&sample, nlist, IVF_TRAIN_ITERS, n as u64) {
                     Some(cq) => {
-                        self.pq_meta_put("ivf", &cq.to_bytes())?;
-                        self.codebook_generation_bump(CODEBOOK_PQ_IVF);
-                        *self.ivf.borrow_mut() = Some(cq);
+                        ivf_write = PendingMeta::Put(cq.to_bytes());
+                        ivf = Some(cq);
                     }
                     None => {
-                        self.conn
-                            .execute("DELETE FROM pq_meta WHERE key = 'ivf'", [])?;
-                        *self.ivf.borrow_mut() = None;
+                        ivf_write = PendingMeta::Drop;
+                        ivf = None;
                     }
                 }
             }
         } else {
-            self.conn
-                .execute("DELETE FROM pq_meta WHERE key = 'ivf'", [])?;
-            *self.ivf.borrow_mut() = None;
+            ivf_write = PendingMeta::Drop;
+            ivf = None;
         }
 
         // A rebuild always writes the target format from scratch — it is
@@ -1385,7 +1599,13 @@ impl PalaceStore {
         // A crash mid-rebuild rolls back to the pre-rebuild state, which the
         // matched-count self-heal already handles — strictly better than
         // the partial table an interrupted per-row loop left behind.
+        //
+        // That last sentence was FALSE until the buffered writes below: the
+        // rows rolled back and the codebook/centroids did not, so the crash
+        // landed in the one state the self-heal cannot see (M2, [`PendingMeta`]).
         let tx = self.conn.unchecked_transaction()?;
+        self.pq_meta_apply("codebook", CODEBOOK_PQ, &codebook_write)?;
+        self.pq_meta_apply("ivf", CODEBOOK_PQ_IVF, &ivf_write)?;
         self.conn.execute("DELETE FROM drawer_pq", [])?;
         self.conn.execute("DELETE FROM pq_page", [])?;
         self.conn.execute(
@@ -1397,7 +1617,6 @@ impl PalaceStore {
             .prepare("INSERT OR REPLACE INTO drawer_pq (list, seq, code) VALUES (?1, ?2, ?3)")?;
         let sealed = self.pq_sealed();
         let paged = self.pq_pages_on(items.len());
-        let ivf_ref = self.ivf.borrow();
         let mut cache = PqCache::new(pq.code_len());
         let mut by_list: std::collections::HashMap<i64, Vec<(i64, Vec<u8>)>> =
             std::collections::HashMap::new();
@@ -1408,7 +1627,7 @@ impl PalaceStore {
         // AEAD seal is microseconds per 52-byte row.
         let coded: Vec<(i64, i64, Vec<u8>)> = {
             use rayon::prelude::*;
-            let cq = ivf_ref.as_ref();
+            let cq = ivf.as_ref();
             items
                 .par_iter()
                 .map(|(seq, vec, _, _)| {
@@ -1437,12 +1656,13 @@ impl PalaceStore {
             // build the cache is fully resident (`loaded = None`).
             cache.push(seq, list, code);
         }
-        drop(ivf_ref);
         drop(ins);
         if paged {
             self.pq_page_append(by_list)?;
         }
         tx.commit()?;
+        // RAM follows the commit, never precedes it.
+        *self.ivf.borrow_mut() = ivf;
         *self.pq_cache.borrow_mut() = Some(cache);
         *self.pq.borrow_mut() = Some(pq);
         Ok(true)
@@ -1622,13 +1842,16 @@ impl PalaceStore {
         // Growth re-check on the fast path (cheap, in-RAM counters): a wing
         // that crossed the IVF threshold, or doubled past its partitions'
         // training size, rebuilds once rather than silently degrading.
-        let outgrown = match self.wing_pq.borrow().get(wing) {
-            Some(Some(st)) => match st.ivf.as_ref() {
-                Some(cq) => !ivf_fresh(st.live as u64, cq.trained_n()),
-                None => st.live as usize >= self.ivf_min,
-            },
-            _ => false,
-        };
+        // A read-only store may not rebuild (R1) — it keeps the index its
+        // writer left, which is a recall cost and not a wrong answer.
+        let outgrown = self.may_build_indexes()
+            && match self.wing_pq.borrow().get(wing) {
+                Some(Some(st)) => match st.ivf.as_ref() {
+                    Some(cq) => !ivf_fresh(st.live as u64, cq.trained_n()),
+                    None => st.live as usize >= self.ivf_min,
+                },
+                _ => false,
+            };
         if outgrown {
             let rebuilt = self.wing_pq_build(wing)?;
             self.wing_pq.borrow_mut().insert(wing.to_string(), rebuilt);
@@ -1692,7 +1915,15 @@ impl PalaceStore {
     /// full-scan; the `None` is cached in the session map so the check runs
     /// once, invalidated by any write to that wing.
     fn wing_pq_build(&self, wing: &str) -> Result<Option<WingPq>, StoreError> {
-        self.pq_schema()?;
+        // R1: on a read-only store this function may only take its
+        // coherent-LOAD path below. Creating the schema is a write, and the
+        // tables' absence already means "no index here".
+        if self.may_build_indexes() {
+            self.pq_schema()?;
+        } else if !self.table_exists("drawer_pq_wing")? || !self.table_exists("pq_meta")? {
+            self.ro_prefilter_fallback("per-wing PQ");
+            return Ok(None);
+        }
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM drawers WHERE wing = ?1",
             params![wing],
@@ -1701,13 +1932,18 @@ impl PalaceStore {
         if (count as usize) < self.wing_pq_min {
             // A wing that shrank below the floor sheds its artifacts —
             // a stale codebook silently kept is the exact failure class the
-            // generation counters exist to make visible elsewhere.
-            self.conn
-                .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
-            self.conn.execute(
-                "DELETE FROM pq_meta WHERE key IN (?1, ?2)",
-                params![format!("codebook/{wing}"), format!("ivf/{wing}")],
-            )?;
+            // generation counters exist to make visible elsewhere. Shedding
+            // is a write, so a read-only store leaves the stale artifacts
+            // alone and simply declines the tier: the wing full-scans, which
+            // is what a below-floor wing does anyway.
+            if self.may_build_indexes() {
+                self.conn
+                    .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
+                self.conn.execute(
+                    "DELETE FROM pq_meta WHERE key IN (?1, ?2)",
+                    params![format!("codebook/{wing}"), format!("ivf/{wing}")],
+                )?;
+            }
             return Ok(None);
         }
 
@@ -1795,12 +2031,28 @@ impl PalaceStore {
             }
         }
 
+        // Everything below rebuilds, and a read-only store may not (R1):
+        // the wing's scoped query rides the exact scan instead, which is the
+        // same path a wing below the tier floor already takes — bounded,
+        // exact, and starvation-free.
+        if !self.may_build_indexes() {
+            self.ro_prefilter_fallback("per-wing PQ");
+            return Ok(None);
+        }
+        // One string in two roles (draw label + generation key), same as the
+        // global five — hoisted because the generation bump now happens down
+        // in the transaction rather than beside the training call.
+        let codebook_artifact = format!("{wing}/{CODEBOOK_PQ}");
+        let ivf_artifact = format!("{wing}/{CODEBOOK_PQ_IVF}");
+
         // Rebuild. The codebook is reused when stored (a rebuild is not a
         // retrain and must not advance the generation); trained fresh
         // otherwise, on a keyed sample whose label carries the wing — every
-        // wing draws independently, and the artifact string is one string
-        // in two roles (draw label + generation key), same as the global
-        // five.
+        // wing draws independently. What a fresh training decides is
+        // BUFFERED and applied inside the transaction below ([`PendingMeta`]):
+        // this tier is the one that never self-heals, so a codebook landing
+        // an fsync ahead of its rows here is permanent, not transient.
+        let mut codebook_write = PendingMeta::Keep;
         let pq = match stored {
             Some(pq) => pq,
             None => {
@@ -1812,9 +2064,8 @@ impl PalaceStore {
                 else {
                     return Ok(None);
                 };
-                let artifact = format!("{wing}/{CODEBOOK_PQ}");
                 let sample: Vec<Vec<f32>> = self
-                    .keyed_sample(&artifact, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
+                    .keyed_sample(&codebook_artifact, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
                         seq.to_le_bytes().to_vec()
                     })
                     .into_iter()
@@ -1823,8 +2074,7 @@ impl PalaceStore {
                 let Some(pq) = ProductQuantizer::train(&sample, m, PQ_TRAIN_ITERS) else {
                     return Ok(None);
                 };
-                self.pq_meta_put(&codebook_key, &pq.to_bytes())?;
-                self.codebook_generation_bump(&artifact);
+                codebook_write = PendingMeta::Put(pq.to_bytes());
                 if items.len() > PQ_TRAIN_SAMPLE {
                     let probe: Vec<Vec<f32>> = self
                         .keyed_sample(
@@ -1836,12 +2086,13 @@ impl PalaceStore {
                         .into_iter()
                         .map(|i| items[i].1.clone())
                         .collect();
-                    self.warn_unrepresentative(&artifact, &pq, &sample, &probe);
+                    self.warn_unrepresentative(&codebook_artifact, &pq, &sample, &probe);
                 }
                 pq
             }
         };
 
+        let mut ivf_write = PendingMeta::Keep;
         let ivf = if want_ivf {
             let fresh = self
                 .pq_meta_get(&ivf_key)?
@@ -1851,9 +2102,8 @@ impl PalaceStore {
                 Some(cq) => Some(cq),
                 None => {
                     let nlist = ((count as f64).sqrt() as usize).clamp(16, 4096);
-                    let artifact = format!("{wing}/{CODEBOOK_PQ_IVF}");
                     let sample: Vec<Vec<f32>> = self
-                        .keyed_sample(&artifact, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
+                        .keyed_sample(&ivf_artifact, &items, PQ_TRAIN_SAMPLE, |(seq, _)| {
                             seq.to_le_bytes().to_vec()
                         })
                         .into_iter()
@@ -1861,17 +2111,21 @@ impl PalaceStore {
                         .collect();
                     match CoarseQuantizer::train(&sample, nlist, IVF_TRAIN_ITERS, count as u64) {
                         Some(cq) => {
-                            self.pq_meta_put(&ivf_key, &cq.to_bytes())?;
-                            self.codebook_generation_bump(&artifact);
+                            ivf_write = PendingMeta::Put(cq.to_bytes());
                             Some(cq)
                         }
+                        // Untrainable: `Keep`, not `Drop` — this arm has
+                        // always left a stored centroid set in place while
+                        // encoding every row at list -1. Benign (a probe's
+                        // list set always carries -1, so the scan still sees
+                        // every row) and left exactly as it was: this unit
+                        // moves WHEN a write happens, never WHETHER.
                         None => None,
                     }
                 }
             }
         } else {
-            self.conn
-                .execute("DELETE FROM pq_meta WHERE key = ?1", params![ivf_key])?;
+            ivf_write = PendingMeta::Drop;
             None
         };
 
@@ -1879,8 +2133,11 @@ impl PalaceStore {
         // last resort for this wing, exactly like the global rebuild. One
         // transaction for the same reason as there: per-row autocommit was
         // one fsync per row (measured 3.8 ms/row — the wing "build cost"
-        // was disk syncs, not encoding).
+        // was disk syncs, not encoding) — and, since M2, the codebook and
+        // the centroids ride it too.
         let tx = self.conn.unchecked_transaction()?;
+        self.pq_meta_apply(&codebook_key, &codebook_artifact, &codebook_write)?;
+        self.pq_meta_apply(&ivf_key, &ivf_artifact, &ivf_write)?;
         self.conn
             .execute("DELETE FROM drawer_pq_wing WHERE wing = ?1", params![wing])?;
         let mut ins = self.conn.prepare(
@@ -2110,6 +2367,236 @@ impl PalaceStore {
 #[cfg(test)]
 mod tests {
     use super::{stratified_keyed, PqCache};
+    use crate::{PalaceStore, StoreError, CODEBOOK_PQ, CODEBOOK_PQ_IVF};
+    use undercroft_core::Drawer;
+    use undercroft_vault::{SecurityLevel, VaultManager};
+
+    fn store() -> (tempfile::TempDir, PalaceStore) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
+        (dir, PalaceStore::open(vault).unwrap())
+    }
+
+    /// A store holding `n` drawers in one wing, with both PQ tiers tuned so
+    /// that a corpus this small still trains a codebook AND a centroid set —
+    /// the two artifacts M2 is about.
+    fn filled(n: u32) -> (tempfile::TempDir, PalaceStore) {
+        let (dir, mut s) = store();
+        for i in 0..n {
+            s.upsert(&Drawer::new(
+                "w",
+                "r",
+                format!("routine filler note {i}"),
+                Some("t.md".into()),
+                i,
+                "test",
+            ))
+            .unwrap();
+        }
+        s.set_ivf(16, None);
+        s.set_wing_pq_min(8);
+        s.pq_schema().unwrap();
+        (dir, s)
+    }
+
+    fn meta_rows(s: &PalaceStore, key: &str) -> i64 {
+        s.conn
+            .query_row("SELECT COUNT(*) FROM pq_meta WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+
+    /// The interruption, made deterministic: the next row this rebuild
+    /// writes aborts, exactly where a power loss would land — after the
+    /// artifacts were trained, before the codes they describe exist.
+    fn interrupt_inserts_into(s: &PalaceStore, table: &str) {
+        s.conn
+            .execute(
+                &format!(
+                    "CREATE TRIGGER interrupt BEFORE INSERT ON {table} \
+                     BEGIN SELECT RAISE(ABORT, 'power loss'); END"
+                ),
+                [],
+            )
+            .unwrap();
+    }
+
+    /// M2. A codebook (and a centroid set) must reach disk with the rows it
+    /// describes, on BOTH PQ tiers.
+    ///
+    /// Trained artifacts used to be written the moment they existed — an
+    /// autocommit `INSERT` under `synchronous=FULL`, one fsync ahead of the
+    /// rows encoded against them. An interruption in that window left an
+    /// artifact no stored code matched, which the load path reads as coherent
+    /// (`matched == count && ivf_ok`) and probes the wrong lists with, and
+    /// which the generation counter reports as a real retrain — the one
+    /// artifact that counter exists to make visible, arriving invisibly.
+    ///
+    /// Both arms assert their own premise: arm one proves a clean build
+    /// really does persist both artifacts and step both generations, so the
+    /// zeroes in arm two mean "rolled back" rather than "never got there".
+    #[test]
+    fn an_interrupted_pq_rebuild_leaves_no_codebook_behind() {
+        // ── Global tier, clean: the premise.
+        let (_d, s) = filled(30);
+        assert!(s.pq_build().unwrap(), "premise: a build ran to completion");
+        assert_eq!(meta_rows(&s, "codebook"), 1);
+        assert_eq!(meta_rows(&s, "ivf"), 1, "30 ≥ ivf_min 16, so IVF trains");
+        assert_eq!(s.codebook_generation(CODEBOOK_PQ), 1);
+        assert_eq!(s.codebook_generation(CODEBOOK_PQ_IVF), 1);
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 30, "one code row per drawer");
+
+        // ── Global tier, interrupted. Before the fix the two `pq_meta`
+        // writes had already autocommitted by the time the first row insert
+        // ran, so the rollback took the rows and left the artifacts.
+        let (_d, s) = filled(30);
+        interrupt_inserts_into(&s, "drawer_pq");
+        let err = s.pq_build().unwrap_err();
+        assert!(
+            err.to_string().contains("power loss"),
+            "the interruption must be the trigger's, i.e. after training: {err}"
+        );
+        assert_eq!(
+            meta_rows(&s, "codebook"),
+            0,
+            "a codebook that no stored code was encoded against must not \
+             survive the rollback"
+        );
+        assert_eq!(
+            meta_rows(&s, "ivf"),
+            0,
+            "nor centroids no row is partitioned by"
+        );
+        assert_eq!(
+            s.codebook_generation(CODEBOOK_PQ),
+            0,
+            "and the generation counter must not claim a retrain that rolled back"
+        );
+        assert_eq!(s.codebook_generation(CODEBOOK_PQ_IVF), 0);
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "premise: the rows rolled back too");
+
+        // ── Per-wing tier, clean: the premise, under its own dynamic
+        // artifact names.
+        let wing_pq = format!("w/{CODEBOOK_PQ}");
+        let wing_ivf = format!("w/{CODEBOOK_PQ_IVF}");
+        let (_d, s) = filled(30);
+        assert!(
+            s.wing_pq_build("w").unwrap().is_some(),
+            "premise: the wing is past the floor and earns an index"
+        );
+        assert_eq!(meta_rows(&s, "codebook/w"), 1);
+        assert_eq!(meta_rows(&s, "ivf/w"), 1);
+        assert_eq!(s.codebook_generation(&wing_pq), 1);
+        assert_eq!(s.codebook_generation(&wing_ivf), 1);
+
+        // ── Per-wing tier, interrupted. This tier is the one that never
+        // self-heals: the global rebuild re-runs at the next writable open,
+        // a wing's split state simply stands.
+        let (_d, s) = filled(30);
+        interrupt_inserts_into(&s, "drawer_pq_wing");
+        // `WingPq` is not `Debug`, so match rather than `unwrap_err` — and
+        // the Ok arm is a real assertion: a rebuild that "succeeds" through
+        // an aborted insert would be the defect wearing a green tick.
+        let err = match s.wing_pq_build("w") {
+            Err(e) => e,
+            Ok(_) => panic!("an interrupted wing rebuild must fail, not report an index"),
+        };
+        assert!(
+            err.to_string().contains("power loss"),
+            "the interruption must be the trigger's: {err}"
+        );
+        assert_eq!(
+            meta_rows(&s, "codebook/w"),
+            0,
+            "the wing's codebook must roll back with the wing's rows"
+        );
+        assert_eq!(meta_rows(&s, "ivf/w"), 0, "and so must its centroids");
+        assert_eq!(
+            s.codebook_generation(&wing_pq),
+            0,
+            "no generation may be claimed for an artifact that never landed"
+        );
+        assert_eq!(s.codebook_generation(&wing_ivf), 0);
+        let rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawer_pq_wing", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "premise: the wing's rows rolled back too");
+    }
+
+    /// A20. `one_rewrite` exists because the derived-index rebuild loops
+    /// could not simply take a transaction: they are reachable both from the
+    /// top of the search path and from inside a caller's transaction, where a
+    /// `BEGIN` fails outright (the advisory-encode rule `upsert_many` rests
+    /// on). All three behaviours are asserted, because a helper that quietly
+    /// did nothing would pass a test for any one of them.
+    #[test]
+    fn one_rewrite_opens_a_transaction_only_at_the_top_level() {
+        let (_d, s) = store();
+        s.conn
+            .execute("CREATE TABLE t (k INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        let count = || -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        // Premise: at the top level the connection is in autocommit, which
+        // is exactly the state the un-transacted loops ran every row in.
+        assert!(s.conn.is_autocommit());
+        s.one_rewrite(|| {
+            assert!(
+                !s.conn.is_autocommit(),
+                "the rewrite must run inside a transaction"
+            );
+            s.conn.execute("INSERT INTO t (k) VALUES (1)", [])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count(), 1);
+
+        // An error rolls the WHOLE rewrite back — the property the codebook
+        // and the rows it recodes need, and the one per-row autocommit could
+        // not provide at any price.
+        let failed = s.one_rewrite(|| {
+            s.conn.execute("INSERT INTO t (k) VALUES (2)", [])?;
+            s.conn.execute("INSERT INTO t (k) VALUES (3)", [])?;
+            Err::<(), _>(StoreError::CorruptRow {
+                id: "-".into(),
+                reason: "interrupted".into(),
+            })
+        });
+        assert!(failed.is_err());
+        assert_eq!(count(), 1, "a failed rewrite must leave nothing behind");
+
+        // Inside a caller's transaction it must NOT begin one: a nested
+        // BEGIN is an error, so this call failing at all is the regression.
+        let outer = s.conn.unchecked_transaction().unwrap();
+        s.one_rewrite(|| {
+            assert!(!s.conn.is_autocommit());
+            s.conn.execute("INSERT INTO t (k) VALUES (4)", [])?;
+            Ok(())
+        })
+        .expect("must not BEGIN inside a caller's transaction");
+        assert_eq!(count(), 2, "the write is visible inside the outer tx");
+        outer.rollback().unwrap();
+        assert_eq!(
+            count(),
+            1,
+            "and it is atomic WITH the outer tx, not committed behind its back"
+        );
+    }
 
     /// The selection half of the keyed draw, and both of its properties: the
     /// **strata** (measured worth 1.4pp of R@1 on `synth --n 20000`) and the

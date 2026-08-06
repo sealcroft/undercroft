@@ -255,6 +255,27 @@ impl PalaceStore {
         if let Some(enc) = self.fde_encoder.borrow().as_ref() {
             return Ok(enc.token_dim() == tokdim);
         }
+        // R1: a read-only store loads the encoder's persisted params and
+        // never mints them. Creating the schema, dropping mismatched rows
+        // and writing a fresh `params` blob are all writes — and the last is
+        // the worst of them, because it would pin a REPLICA's env-derived
+        // parameters onto a vault its writer never chose them for.
+        if !self.may_build_indexes() {
+            if !self.table_exists("fde_meta")? {
+                self.ro_prefilter_fallback("FDE");
+                return Ok(false);
+            }
+            let Some((p, d)) = self.fde_meta_get("params")?.and_then(|b| params_unpack(&b)) else {
+                self.ro_prefilter_fallback("FDE");
+                return Ok(false);
+            };
+            if d != tokdim {
+                self.ro_prefilter_fallback("FDE");
+                return Ok(false);
+            }
+            *self.fde_encoder.borrow_mut() = Some(FdeEncoder::new(tokdim, p));
+            return Ok(true);
+        }
         self.fde_schema()?;
         let stored = self.fde_meta_get("params")?.and_then(|b| params_unpack(&b));
         let params = match stored {
@@ -395,38 +416,51 @@ impl PalaceStore {
         }
         self.tok_pq_ensure(model);
         let tok_pq = self.tok_pq.borrow();
-        for (id, blob) in missing {
-            let Ok(packed) = self.vault.tokens_from_rest(&id, &blob) else {
-                continue;
-            };
-            let matrix: Option<(Vec<f32>, usize)> = match packed.first() {
-                Some(2) => tok_pq.as_ref().and_then(|pq| {
-                    crate::latestage::unpack_v2(&packed, pq.code_len()).map(
-                        |(dim, _rows, codes)| {
-                            let mut m = Vec::with_capacity(codes.len() / pq.code_len() * dim);
-                            for code in codes.chunks_exact(pq.code_len()) {
-                                m.extend(pq.decode(code));
-                            }
-                            (m, dim)
-                        },
-                    )
-                }),
-                _ => dequantize_tokens(&packed),
-            };
-            let Some((matrix, tokdim)) = matrix else {
-                continue;
-            };
-            if !matches!(self.fde_encoder_ensure(tokdim), Ok(true)) {
-                continue;
-            }
-            let fde = {
-                let enc_ref = self.fde_encoder.borrow();
-                let Some(enc) = enc_ref.as_ref() else {
+        // One transaction for the whole backfill (ROADMAP A20): every row was
+        // its own autocommit `INSERT` under `synchronous=FULL`, i.e. one fsync
+        // per drawer, and an interruption left a half-backfilled table whose
+        // remainder only the next pass would notice.
+        let filled = self.one_rewrite(|| {
+            for (id, blob) in missing {
+                let Ok(packed) = self.vault.tokens_from_rest(&id, &blob) else {
                     continue;
                 };
-                enc.encode_doc(&matrix)
-            };
-            self.fde_store_row(&id, model, &fde);
+                let matrix: Option<(Vec<f32>, usize)> = match packed.first() {
+                    Some(2) => tok_pq.as_ref().and_then(|pq| {
+                        crate::latestage::unpack_v2(&packed, pq.code_len()).map(
+                            |(dim, _rows, codes)| {
+                                let mut m = Vec::with_capacity(codes.len() / pq.code_len() * dim);
+                                for code in codes.chunks_exact(pq.code_len()) {
+                                    m.extend(pq.decode(code));
+                                }
+                                (m, dim)
+                            },
+                        )
+                    }),
+                    _ => dequantize_tokens(&packed),
+                };
+                let Some((matrix, tokdim)) = matrix else {
+                    continue;
+                };
+                if !matches!(self.fde_encoder_ensure(tokdim), Ok(true)) {
+                    continue;
+                }
+                let fde = {
+                    let enc_ref = self.fde_encoder.borrow();
+                    let Some(enc) = enc_ref.as_ref() else {
+                        continue;
+                    };
+                    enc.encode_doc(&matrix)
+                };
+                self.fde_store_row(&id, model, &fde);
+            }
+            Ok(())
+        });
+        if let Err(e) = filled {
+            // Advisory, as everywhere on this tier: the rows that would have
+            // been written are simply still missing, and the next pass finds
+            // them again. A search must not fail because a backfill did.
+            undercroft_obs::diag_warn!("FDE backfill rolled back ({e}); rows stay missing");
         }
         Ok(())
     }
@@ -447,6 +481,13 @@ impl PalaceStore {
             .and_then(|b| ProductQuantizer::from_bytes(&b))
         {
             *self.fde_pq.borrow_mut() = Some(pq);
+            return Ok(());
+        }
+        // No stored codebook, and training one (plus repacking every row to
+        // v2) is a write — a read-only store keeps the raw v1 rows it has
+        // (R1). Not a fallback to the exact scan: the flat raw-FDE path is
+        // the tier's own default below `fde_pq_min` and still serves.
+        if !self.may_build_indexes() {
             return Ok(());
         }
         let rows: i64 = self.conn.query_row(
@@ -510,8 +551,6 @@ impl PalaceStore {
         let Some(pq) = ProductQuantizer::train(&sample, m, FDE_PQ_ITERS) else {
             return Ok(());
         };
-        self.fde_meta_put("codebook", &pq.to_bytes())?;
-        self.codebook_generation_bump(CODEBOOK_FDE);
         if raw.len() > FDE_PQ_SAMPLE {
             let probe: Vec<Vec<f32>> = self
                 .keyed_sample(
@@ -525,15 +564,35 @@ impl PalaceStore {
                 .collect();
             self.warn_unrepresentative(CODEBOOK_FDE, &pq, &sample, &probe);
         }
-        // Repack every raw row to v2 with the codebook in hand (list -1 —
-        // reserved, see the module docs).
-        for (id, fde) in &raw {
-            let payload = fde_row_pack_coded(-1, &pq.encode(fde));
-            let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
-            let _ = self.conn.execute(
-                "UPDATE drawer_fde SET fde = ?1 WHERE id = ?2",
-                params![blob, id],
+        // Codebook + the rows it recodes commit together (ROADMAP A20). The
+        // codebook was persisted before this loop and each repacked row
+        // autocommitted, so an interruption left a v2 codebook over rows
+        // still packed raw — readable only because `fde_row_unpack` accepts
+        // both, which is luck rather than design — at one fsync per row.
+        // Advisory tier: a failed rewrite rolls back whole and leaves the raw
+        // rows the reader already understands. It must not fail the search
+        // that happened to trigger it.
+        let repack = self.one_rewrite(|| {
+            self.fde_meta_put("codebook", &pq.to_bytes())?;
+            self.codebook_generation_bump(CODEBOOK_FDE);
+            // Repack every raw row to v2 with the codebook in hand (list -1 —
+            // reserved, see the module docs).
+            for (id, fde) in &raw {
+                let payload = fde_row_pack_coded(-1, &pq.encode(fde));
+                let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
+                self.conn.execute(
+                    "UPDATE drawer_fde SET fde = ?1 WHERE id = ?2",
+                    params![blob, id],
+                )?;
+            }
+            Ok(())
+        });
+        if let Err(e) = repack {
+            undercroft_obs::diag_warn!(
+                "FDE codebook + repack rolled back ({e}); the raw rows stand and \
+                 the flat scan serves — a later search retries"
             );
+            return Ok(());
         }
         *self.fde_pq.borrow_mut() = Some(pq);
         self.fde_cache.borrow_mut().take(); // rebuild coded
@@ -591,8 +650,13 @@ impl PalaceStore {
     /// over the palace's own decoded FDEs, every row's reserved list field
     /// rewrites in place (the v2 pack anticipated this — no migration), and
     /// the cache regroups. Centroids retrain when the corpus doubles past
-    /// their training size. Advisory like every derived artifact — and like
-    /// every advisory encode path it must never open a transaction.
+    /// their training size. Advisory like every derived artifact.
+    ///
+    /// It must never `BEGIN` **inside a caller's transaction** — the rule that
+    /// keeps `upsert_many`'s batch working, and the reason this rewrite was
+    /// left un-transacted for so long. [`PalaceStore::one_rewrite`] states the
+    /// rule instead of avoiding it: a transaction at the top level, nothing at
+    /// all when one is already open.
     fn fde_ivf_ensure(&self, model: &str) -> Result<(), StoreError> {
         if self.fde_ivf_checked.get() {
             return Ok(());
@@ -605,6 +669,13 @@ impl PalaceStore {
             {
                 *self.fde_ivf.borrow_mut() = Some(cq);
             }
+        }
+        // Training or retraining the inverted tier's centroids — and
+        // re-assigning every coded row to a list — is a write (R1). A
+        // read-only store uses the centroids it loaded above, or none, and
+        // the flat ADC scan serves either way.
+        if !self.may_build_indexes() {
+            return Ok(());
         }
         let n = self
             .fde_cache
@@ -659,10 +730,6 @@ impl PalaceStore {
         let Some(cq) = CoarseQuantizer::train(&sample, nlist, FDE_IVF_ITERS, n as u64) else {
             return Ok(());
         };
-        self.fde_meta_put("ivf", &cq.to_bytes())?;
-        self.codebook_generation_bump(CODEBOOK_FDE_IVF);
-        // Rewrite every row's list field in place, re-sealed; regroup the
-        // cache from the assignments in hand.
         let id_of: std::collections::HashMap<i64, String> = self
             .conn
             .prepare(
@@ -671,24 +738,43 @@ impl PalaceStore {
             )?
             .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
+        // Centroids + every row's re-assigned list field in ONE transaction
+        // (ROADMAP A20). Both halves describe the same partitioning: stored
+        // centroids over rows still carrying the previous assignment send
+        // every probe to the wrong slab, and the per-row autocommit made that
+        // the state any interruption left behind — at one fsync per row.
         let mut slabs: std::collections::HashMap<i64, (Vec<i64>, Vec<u8>)> =
             std::collections::HashMap::new();
         let mut code_len = 0usize;
-        for (seq, code, fde) in rows {
-            let list = cq.assign(&fde) as i64;
-            if let Some(id) = id_of.get(&seq) {
-                let payload = fde_row_pack_coded(list, &code);
-                let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
-                let _ = self.conn.execute(
-                    "UPDATE drawer_fde SET fde = ?1 WHERE id = ?2",
-                    params![blob, id],
-                );
+        let repartition = self.one_rewrite(|| {
+            self.fde_meta_put("ivf", &cq.to_bytes())?;
+            self.codebook_generation_bump(CODEBOOK_FDE_IVF);
+            for (seq, code, fde) in rows {
+                let list = cq.assign(&fde) as i64;
+                if let Some(id) = id_of.get(&seq) {
+                    let payload = fde_row_pack_coded(list, &code);
+                    let blob = self.vault.tokens_at_rest(&format!("fde/{id}"), &payload);
+                    self.conn.execute(
+                        "UPDATE drawer_fde SET fde = ?1 WHERE id = ?2",
+                        params![blob, id],
+                    )?;
+                }
+                code_len = code.len();
+                let (seqs, codes) = slabs.entry(list).or_default();
+                seqs.push(seq);
+                codes.extend_from_slice(&code);
             }
-            code_len = code.len();
-            let (seqs, codes) = slabs.entry(list).or_default();
-            seqs.push(seq);
-            codes.extend_from_slice(&code);
+            Ok(())
+        });
+        if let Err(e) = repartition {
+            // Advisory: the previous partitioning (or none) survives whole,
+            // and the flat ADC scan serves either way.
+            undercroft_obs::diag_warn!(
+                "FDE inverted tier rolled back ({e}); the previous partitioning stands"
+            );
+            return Ok(());
         }
+        // Regroup the cache from the assignments in hand.
         *self.fde_cache.borrow_mut() = Some(FdeCache::Coded { code_len, slabs });
         *self.fde_ivf.borrow_mut() = Some(cq);
         Ok(())
@@ -731,7 +817,10 @@ impl PalaceStore {
             .borrow()
             .as_ref()
             .map_or(0, |enc| enc.dim());
-        if !self.fde_checked.get() {
+        // The backfill writes a row per drawer that has a token matrix and
+        // no FDE — a build, not a read, so a read-only store skips it (R1)
+        // and answers from whatever rows its writer already stored.
+        if !self.fde_checked.get() && self.may_build_indexes() {
             self.fde_checked.set(true);
             self.fde_backfill(&model)?;
             self.fde_cache.borrow_mut().take(); // rebuild below with new rows

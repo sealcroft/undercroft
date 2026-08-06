@@ -44,6 +44,15 @@ pub fn vault_request(
     vault: &str,
     method: &str,
     subpath: &str,
+    // The caller's query string WITHOUT the `?` (empty = none). Required
+    // rather than optional because dropping it was silent and total: the
+    // proxy split the query off the request target and never forwarded it,
+    // so `GET /t/drawers?limit=500&offset=50&wing=legal` reached the engine
+    // as a bare `/v1/vaults/<v>/drawers` and got page one of the defaults.
+    // A paginating client looped on the first page forever, at HTTP 200,
+    // and every filter a tenant declared through the control plane was
+    // discarded. Making it an argument means a new call site has to decide.
+    query: &str,
     content_type: &str,
     body: &[u8],
 ) -> Result<EngineResponse, String> {
@@ -51,6 +60,14 @@ pub fn vault_request(
         format!("{}/v1/vaults/{vault}", creds.url)
     } else {
         format!("{}/v1/vaults/{vault}/{subpath}", creds.url)
+    };
+    // The query rides after `?`, so it cannot re-enter the path grammar —
+    // `url` parses everything past the first `?` as the query component.
+    // A `#` would start a fragment, which is dropped rather than sent.
+    let path = if query.is_empty() {
+        path
+    } else {
+        format!("{path}?{}", query.split('#').next().unwrap_or(""))
     };
     let req = agent()
         .request(method, &path)
@@ -111,7 +128,7 @@ pub fn create_vault(creds: &InstanceCreds, vault: &str, level: &str) -> Result<(
 }
 
 pub fn delete_vault(creds: &InstanceCreds, vault: &str) -> Result<(), String> {
-    match vault_request(creds, vault, "DELETE", "", "application/json", &[]) {
+    match vault_request(creds, vault, "DELETE", "", "", "application/json", &[]) {
         Ok(r) if r.status == 200 || r.status == 404 => Ok(()),
         Ok(r) => Err(format!(
             "engine refused vault delete ({}): {}",
@@ -124,7 +141,7 @@ pub fn delete_vault(creds: &InstanceCreds, vault: &str) -> Result<(), String> {
 
 /// Export a vault as NDJSON (v0.18 artifact-carrying format).
 pub fn export_vault(creds: &InstanceCreds, vault: &str) -> Result<String, String> {
-    let r = vault_request(creds, vault, "GET", "export", "application/json", &[])?;
+    let r = vault_request(creds, vault, "GET", "export", "", "application/json", &[])?;
     if r.status != 200 {
         return Err(format!(
             "engine export failed ({}): {}",
@@ -144,6 +161,16 @@ pub struct ImportCounts {
     pub kg_triples: u64,
     pub kg_entities: u64,
     pub tunnels: u64,
+    /// How many of `drawers` the destination's admission screen DIVERTED
+    /// into `quarantine-pending`. The engine has always reported this and
+    /// this struct dropped it, so `migrate_tenant`'s count check compared
+    /// `imported` (which counts diverted rows) against the source count,
+    /// found them equal, and **deleted the source vault** — destroying the
+    /// only copy that had those drawers filed where they belonged. A
+    /// migration is a burst from one writer identity, which is exactly what
+    /// a declared `UNDERCROFT_ADMISSION_RATE` diverts, so this was reachable
+    /// by configuration rather than by attack.
+    pub quarantined: u64,
 }
 
 pub fn import_vault(
@@ -156,6 +183,7 @@ pub fn import_vault(
         vault,
         "POST",
         "import",
+        "",
         "application/json",
         ndjson.as_bytes(),
     )?;
@@ -180,6 +208,7 @@ pub fn import_vault(
         kg_triples: n("kg_triples"),
         kg_entities: n("kg_entities"),
         tunnels: n("tunnels"),
+        quarantined: n("quarantined"),
     })
 }
 

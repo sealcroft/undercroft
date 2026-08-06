@@ -8,12 +8,14 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+undercroft-net = { path = "../undercroft-net" }
 undercroft-core = { path = "../undercroft-core" }
 undercroft-obs = { path = "../undercroft-obs" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 ureq = { version = "2.10", features = ["json"] }
+url = { workspace = true }
 # The exact rustls ureq's `tls` feature compiles (ring provider, no
 # aws-lc) — needed only to build the declared-CA `ClientConfig` for
 # UNDERCROFT_EMBED_CA. Version and features must stay unified with ureq's

@@ -4,12 +4,19 @@
 //! plaintext documents to these servers. Here a remote backend is an
 //! **untrusted search accelerator**:
 //!
-//! * the *sealed* content blob (base64 of the vault's AEAD output) is what
-//!   gets uploaded — a compromised server reads ciphertext;
-//! * embeddings are uploaded in plaintext because server-side ANN cannot
-//!   work otherwise — this is the documented trade-off of remote search
-//!   (embedding inversion can leak content gist; use local search if that
-//!   is unacceptable);
+//! * the *at-rest* content blob (base64 of the vault's AEAD output) is what
+//!   gets uploaded — a compromised server reads ciphertext. For an
+//!   `hmac-only` vault that blob IS the plaintext, and the store refuses
+//!   the push unless the caller says otherwise (ROADMAP C8);
+//! * embeddings are uploaded in the clear TO THE BACKEND because
+//!   server-side ANN cannot work otherwise — the documented trade-off of
+//!   remote search (embedding inversion can leak content gist; use local
+//!   search if that is unacceptable). They are **not** in the clear on the
+//!   WIRE: since 2026-08-05 this crate applies the same transport policy as
+//!   the embedder and LLM clients — TLS or loopback, no override, with
+//!   `UNDERCROFT_INDEX_CA` pinning a self-signed root — because an embedding
+//!   is plaintext-derived data and the sealed-vault invariant seals vectors
+//!   at rest for exactly that reason;
 //! * wing/room labels ride along as filterable payload, matching the
 //!   visibility they already have inside a sealed vault;
 //! * queries return candidate ids only — the caller re-loads records from
@@ -26,6 +33,10 @@ pub enum IndexError {
     Pg(String),
     #[error("unexpected response from backend: {0}")]
     BadResponse(String),
+    /// The transport policy refused this endpoint, or a declared CA pin
+    /// did not resolve. Construction-time, before a byte moves.
+    #[error("{0}")]
+    Transport(String),
     #[error("unknown backend {0:?} (expected: qdrant, chroma, pgvector, milvus, weaviate)")]
     UnknownBackend(String),
     #[error("backend {0} is not configured: set {1}")]
@@ -36,7 +47,15 @@ pub enum IndexError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexRecord {
     pub id: String,
-    /// Base64 of the at-rest (sealed) content blob. Never plaintext.
+    /// Base64 of the drawer's **at-rest** content blob.
+    ///
+    /// This said "Never plaintext" and that was a claim the code did not
+    /// enforce: `content_at_rest` returns the plaintext for an `HmacOnly`
+    /// vault, and the push base64'd the raw column with no level gate
+    /// (ROADMAP C8). It is sealed for a `Sealed` vault — the default and
+    /// the only level this field's name describes — and the store now
+    /// REFUSES to push an hmac-only vault unless the caller states that
+    /// plaintext leaving the machine is intended.
     pub sealed_b64: String,
     pub wing: String,
     pub room: String,
@@ -66,6 +85,33 @@ pub trait VectorIndex {
     fn delete(&mut self, collection: &str, ids: &[String]) -> Result<(), IndexError>;
 }
 
+/// The declared trust root for a self-signed backend terminator, as a PIN:
+/// it REPLACES the public roots rather than adding to them, exactly as
+/// `UNDERCROFT_EMBED_CA` and `UNDERCROFT_LLM_CA` do. A garbage file refuses to
+/// open rather than falling back — un-pinning silently is the failure mode.
+pub const CA_VAR: &str = "UNDERCROFT_INDEX_CA";
+
+/// A policy-bound HTTP agent for a backend, 30-second timeout.
+///
+/// **TLS or loopback, nothing else, no override** — the same rule the
+/// embedder and LLM clients have enforced since 2026-08-03, applied here
+/// because every push carries embeddings and an embedding is
+/// plaintext-DERIVED data (ROADMAP C8). A sealed vault's content blob is
+/// ciphertext on the wire; its VECTOR was not, and the sealed-vault
+/// invariant seals vectors at rest for precisely that reason.
+pub(crate) fn backend_agent(base_url: &str) -> Result<ureq::Agent, IndexError> {
+    backend_agent_with(base_url, std::time::Duration::from_secs(30))
+}
+
+pub(crate) fn backend_agent_with(
+    base_url: &str,
+    timeout: std::time::Duration,
+) -> Result<ureq::Agent, IndexError> {
+    let ca = std::env::var(CA_VAR).ok();
+    undercroft_net::agent("the remote index", base_url, ca.as_deref(), timeout)
+        .map_err(|e| IndexError::Transport(e.to_string()))
+}
+
 /// Construct a backend by name from environment configuration
 /// (`UNDERCROFT_QDRANT_URL`, `UNDERCROFT_CHROMA_URL`, `UNDERCROFT_PGVECTOR_DSN`).
 pub fn from_env(backend: &str) -> Result<Box<dyn VectorIndex>, IndexError> {
@@ -73,12 +119,12 @@ pub fn from_env(backend: &str) -> Result<Box<dyn VectorIndex>, IndexError> {
         "qdrant" => {
             let url = std::env::var("UNDERCROFT_QDRANT_URL")
                 .map_err(|_| IndexError::NotConfigured("qdrant", "UNDERCROFT_QDRANT_URL"))?;
-            Ok(Box::new(qdrant::QdrantIndex::new(&url)))
+            Ok(Box::new(qdrant::QdrantIndex::new(&url)?))
         }
         "chroma" => {
             let url = std::env::var("UNDERCROFT_CHROMA_URL")
                 .map_err(|_| IndexError::NotConfigured("chroma", "UNDERCROFT_CHROMA_URL"))?;
-            Ok(Box::new(chroma::ChromaIndex::new(&url)))
+            Ok(Box::new(chroma::ChromaIndex::new(&url)?))
         }
         "pgvector" => {
             let dsn = std::env::var("UNDERCROFT_PGVECTOR_DSN")
@@ -88,12 +134,12 @@ pub fn from_env(backend: &str) -> Result<Box<dyn VectorIndex>, IndexError> {
         "milvus" => {
             let url = std::env::var("UNDERCROFT_MILVUS_URL")
                 .map_err(|_| IndexError::NotConfigured("milvus", "UNDERCROFT_MILVUS_URL"))?;
-            Ok(Box::new(milvus::MilvusIndex::new(&url)))
+            Ok(Box::new(milvus::MilvusIndex::new(&url)?))
         }
         "weaviate" => {
             let url = std::env::var("UNDERCROFT_WEAVIATE_URL")
                 .map_err(|_| IndexError::NotConfigured("weaviate", "UNDERCROFT_WEAVIATE_URL"))?;
-            Ok(Box::new(weaviate::WeaviateIndex::new(&url)))
+            Ok(Box::new(weaviate::WeaviateIndex::new(&url)?))
         }
         other => Err(IndexError::UnknownBackend(other.into())),
     }
@@ -109,13 +155,11 @@ pub mod qdrant {
     }
 
     impl QdrantIndex {
-        pub fn new(base_url: &str) -> Self {
-            Self {
+        pub fn new(base_url: &str) -> Result<Self, IndexError> {
+            Ok(Self {
                 base: base_url.trim_end_matches('/').to_string(),
-                agent: ureq::AgentBuilder::new()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build(),
-            }
+                agent: super::backend_agent(base_url)?,
+            })
         }
 
         fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, IndexError> {
@@ -265,17 +309,15 @@ pub mod chroma {
     }
 
     impl ChromaIndex {
-        pub fn new(base_url: &str) -> Self {
-            Self {
+        pub fn new(base_url: &str) -> Result<Self, IndexError> {
+            Ok(Self {
                 base: format!(
                     "{}/api/v2/tenants/default_tenant/databases/default_database",
                     base_url.trim_end_matches('/')
                 ),
-                agent: ureq::AgentBuilder::new()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build(),
+                agent: super::backend_agent(base_url)?,
                 ids: Default::default(),
-            }
+            })
         }
 
         fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, IndexError> {
@@ -428,9 +470,91 @@ pub mod pgvector {
         client: Client,
     }
 
+    /// Is this DSN pointed at this machine?
+    ///
+    /// A libpq DSN is not a URL unless it is written as one, so both
+    /// spellings are read: the `postgres://` URL form goes through the same
+    /// parser the transport policy uses everywhere else, and the key/value
+    /// form (`host=... port=...`) is read by key. Anything unrecognised is
+    /// NOT loopback — the safe direction, matching `is_loopback`.
+    pub(crate) fn dsn_is_loopback(dsn: &str) -> bool {
+        let d = dsn.trim();
+        if d.starts_with("postgres://") || d.starts_with("postgresql://") {
+            return undercroft_net::is_loopback(d);
+        }
+        let mut saw_host = false;
+        for field in d.split_whitespace() {
+            if let Some(host) = field.strip_prefix("host=") {
+                saw_host = true;
+                let ok = host == "localhost"
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .map(|ip| ip.is_loopback())
+                        .unwrap_or(false)
+                    // A unix socket path never leaves the machine.
+                    || host.starts_with('/');
+                if !ok {
+                    return false;
+                }
+            }
+        }
+        // No host at all means libpq's default, which is the local socket.
+        saw_host || !d.is_empty()
+    }
+
+    /// Does this DSN ask for TLS?
+    ///
+    /// `sslmode` is the only thing in a DSN that can. `require` is accepted
+    /// and `disable`/`allow`/`prefer` are not, because `prefer` silently
+    /// falls back to cleartext — exactly the silent-downgrade shape this
+    /// policy exists to refuse.
+    ///
+    /// **`require` here is not libpq's `require`.** In libpq that mode
+    /// encrypts without verifying anything. The connector this crate hands
+    /// `postgres` is rustls, which always verifies the chain and the
+    /// hostname against its configured roots, so `require` behaves as
+    /// `verify-full` does elsewhere. `verify-ca`/`verify-full` are matched
+    /// too because an operator may well write them, but `tokio-postgres`
+    /// itself only parses `disable`/`prefer`/`require` — spelling one of
+    /// the stronger modes in the DSN makes the connection string
+    /// unparseable, so the accepted spelling is `require` and the
+    /// verification comes from the connector.
+    pub(crate) fn dsn_demands_tls(dsn: &str) -> bool {
+        let lower = dsn.to_ascii_lowercase();
+        [
+            "sslmode=require",
+            "sslmode=verify-ca",
+            "sslmode=verify-full",
+        ]
+        .iter()
+        .any(|m| lower.contains(m))
+    }
+
     impl PgVectorIndex {
         pub fn new(dsn: &str) -> Result<Self, IndexError> {
-            let client = Client::connect(dsn, NoTls).map_err(|e| IndexError::Pg(e.to_string()))?;
+            // The same rule as every other client, spelled for libpq:
+            // cleartext beyond loopback is refused at construction, before
+            // a byte moves (ROADMAP C8). This backend was wired `NoTls`
+            // with no check at all, so for pgvector **no TLS-compliant
+            // configuration existed** — the refusal below would have been
+            // unsatisfiable, which is why the connector had to come with it.
+            if !dsn_is_loopback(dsn) && !dsn_demands_tls(dsn) {
+                return Err(IndexError::Transport(format!(
+                    "the pgvector DSN points at a non-loopback host without TLS. Embeddings                      are plaintext-derived and would cross the network in the clear. Add                      `sslmode=require` to {} — the connector is rustls, so it verifies the                      chain and the hostname, which libpq's `require` does not — and declare                      the server's root with {} if it is self-signed. There is no override.",
+                    "UNDERCROFT_PGVECTOR_DSN", CA_VAR
+                )));
+            }
+            let client = if dsn_demands_tls(dsn) {
+                let cfg = match std::env::var(CA_VAR) {
+                    Ok(path) => undercroft_net::pinned_roots_from_file("the remote index", &path)
+                        .map_err(|e| IndexError::Transport(e.to_string()))?,
+                    Err(_) => undercroft_net::webpki_roots(),
+                };
+                let tls = tokio_postgres_rustls::MakeRustlsConnect::new((*cfg).clone());
+                Client::connect(dsn, tls).map_err(|e| IndexError::Pg(e.to_string()))?
+            } else {
+                Client::connect(dsn, NoTls).map_err(|e| IndexError::Pg(e.to_string()))?
+            };
             Ok(Self { client })
         }
 
@@ -575,13 +699,11 @@ pub mod milvus {
     }
 
     impl MilvusIndex {
-        pub fn new(base_url: &str) -> Self {
-            Self {
+        pub fn new(base_url: &str) -> Result<Self, IndexError> {
+            Ok(Self {
                 base: base_url.trim_end_matches('/').to_string(),
-                agent: ureq::AgentBuilder::new()
-                    .timeout(std::time::Duration::from_secs(60))
-                    .build(),
-            }
+                agent: super::backend_agent_with(base_url, std::time::Duration::from_secs(60))?,
+            })
         }
 
         fn call(&self, path: &str, body: Value) -> Result<Value, IndexError> {
@@ -720,13 +842,11 @@ pub mod weaviate {
     }
 
     impl WeaviateIndex {
-        pub fn new(base_url: &str) -> Self {
-            Self {
+        pub fn new(base_url: &str) -> Result<Self, IndexError> {
+            Ok(Self {
                 base: base_url.trim_end_matches('/').to_string(),
-                agent: ureq::AgentBuilder::new()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build(),
-            }
+                agent: super::backend_agent(base_url)?,
+            })
         }
 
         /// Weaviate class names must be /[A-Z][A-Za-z0-9]*/.

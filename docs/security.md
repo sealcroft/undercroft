@@ -82,16 +82,52 @@ stateDiagram-v2
   them is what rotates. Remote-index copies hold old-key ciphertext
   afterwards — re-run `index push`.
 - **Encrypted export bundles** (`undercroft export --to <recipient>`): a
-  backup or migration file never exists in plaintext. Recipient identity
-  is an X25519 keypair (`bundle keygen`); each bundle uses a fresh
-  ephemeral key (age-style ephemeral-static ECDH → HKDF-SHA256 →
-  XChaCha20-Poly1305, header bound as AAD). A bundle alone reveals
-  nothing without the identity key, and the identity key is unrelated to
-  the palace's own at-rest keys. `import --identity <keyfile>` opens it.
+  backup or migration file never exists in plaintext. Since C3.4 the
+  recipient identity is **hybrid post-quantum** — X25519 **and**
+  ML-KEM-768, both halves in one `pq1`-prefixed string from `bundle
+  keygen`. A v2 bundle derives its file key from **both** shared secrets
+  (HKDF ikm = `DH(eph, recipient_x) ‖ kem_shared`, with the magic, the
+  ephemeral key and the KEM ciphertext all bound as AAD), which is what
+  closes harvest-now-decrypt-later on the one asymmetric exchange in the
+  codebase. Legacy bare-hex X25519 identities still parse and still
+  receive v1 bundles (age-style ephemeral-static ECDH → HKDF-SHA256 →
+  XChaCha20-Poly1305, header as AAD), and a hybrid identity opens an old
+  v1 backup with its curve half — but **nothing downgrades silently**: a
+  hybrid recipient never gets a v1 bundle, and an X25519-only secret
+  handed a v2 bundle gets a typed refusal, pinned by test. A bundle alone
+  reveals nothing without the identity key, and the identity key is
+  unrelated to the palace's own at-rest keys. `import --identity
+  <keyfile>` opens it. Full posture and compatibility matrix: [PQ.md](PQ.md).
+- **Signed manifests** beside the recipient flow: encryption says who may
+  *read* a bundle, an Ed25519 sender attestation (`bundle sign-keygen`,
+  `export --sign`) says who *wrote* it — scope, trust claim, expiry,
+  counts, provenance, and a payload digest that is checked
+  unconditionally. Pin the sender with `import --sender <hex>`. A
+  sender-declared trust label is a **claim, never a boundary**
+  ([LABELS.md](LABELS.md)); legacy payloads import unattested and say so.
 - **Remote indexes** receive sealed bytes + plaintext embeddings only;
   results are re-verified locally. See the trade-off note in the README.
-- **HTTP server**: refuses non-loopback binds without a bearer token;
-  `--read-only` strips all mutating tools.
+- **HTTP server**: refuses non-loopback binds without a bearer token.
+  `--read-only` is a **posture on the whole process**, and it refuses at
+  the **call**, not in the catalogue — `tools/list` still advertises every
+  tool, and a mutating one answers `server is read-only: <name> is not
+  allowed`. (This line used to say it "strips all mutating tools"; it does
+  not, and a client that filters its own UI off the catalogue would show
+  buttons that cannot fire.) On `/v1` the gate sits in front of dispatch
+  and **fails closed**: every non-GET is refused unless named, and the two
+  named reads are `POST …/search` and `POST …/verify`. **The open is
+  covered too since v0.47.0** (ROADMAP R4): this line used to say the open
+  itself writes — schema creation, chain init, and a rotation reconcile
+  that could promote or delete a staged `vault.json.next`. The connection
+  is now `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema
+  is checked rather than created, a lagging anchor is reported rather than
+  healed, and a staged rotation is left on disk; what was declined is
+  readable as `unhealed` on every stats surface. An absent `palace.db`
+  under a present manifest and an unmigrated schema both refuse with 409
+  rather than being papered over. Residue: SQLite's WAL scaffolding
+  (`-shm`, a zero-length `-wal`) is still materialised where the directory
+  is writable, so if you need a byte-frozen vault, stop the server rather
+  than restarting it read-only, and take the incident runbook's step-1 copy.
 
 ## Server auth model (two layers)
 

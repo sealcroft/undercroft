@@ -658,8 +658,16 @@ scoped-recall fix** below. It buys no unscoped latency at any size
 measured, and is documented as exactly that. Wings past
 `UNDERCROFT_WING_PQ_MIN` (4096; `off` = no per-wing indexes) carry their
 own codebook/IVF/rows; below the floor a scoped query full-scans its wing
-— bounded by the floor, exact, and starvation-free. Stated honestly:
-BM25's IDF stays global, so the wing isolates *candidates*, not *scores*.
+— bounded by the floor, exact, and starvation-free. Stated honestly: the
+wing isolates *candidates*, not *scores*. This paragraph used to give
+"BM25's IDF stays global" as the reason, and that was wrong about the
+code: `bm25_raw` takes `n = cands.len()` and counts `df` over the same
+candidate slice, so IDF and `avgdl` are **pool-shaped** — they described
+neither the vault before the per-wing tier nor the wing after it. The
+conclusion is unchanged and the reason is now the true one; the cost of
+the pool shaping is recorded under the poison-resistance invariant in
+CLAUDE.md (df-flooding is cheaper than a corpus-wide count by roughly
+corpus/pool).
 
 ### What was filed, and closed: recall leaks with corpus size
 

@@ -44,8 +44,16 @@ undercroft's answers are structural, not bolted on:
 - **Sealed vaults**: content *and* every plaintext-derived artifact
   (embeddings, PQ codes/pages, ColBERT token matrices, KG objects) are
   AEAD-encrypted under per-vault keys derived via HKDF from a master
-  key that never leaves the machine. An offline copy of the store
-  yields record counts — nothing else.
+  key that never leaves the machine. An offline copy of the store yields
+  **no word of the content**. It is not "nothing else": drawer
+  *metadata* — wing and room names, the `source_file` path, `added_by`,
+  the hall label, `content_date`, the dates resolved out of the content,
+  the declared `kind`, the supersession link, the writer's
+  `agent`/`channel`/`session` claims and the per-row timestamps — is
+  stored in the clear, pinned by test and inventoried in
+  [THREAT_MODEL.md](THREAT_MODEL.md) under adversary class A1. Do not
+  put a secret in a wing
+  or room name.
 - **Evidence-grade integrity**: each record carries an HMAC verified on
   every read; every write advances a hash chain inside the same
   transaction; the chain head is anchored in the vault manifest so

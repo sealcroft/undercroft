@@ -27,6 +27,11 @@ time = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
+# The knowledge graph's blind index and its ids are keyed with a per-vault
+# secret (A10): HMAC for the derivation, and one CSPRNG draw to mint the
+# secret the first time a vault writes a fact.
+hmac = { workspace = true }
+rand = { workspace = true }
 instant-distance = { workspace = true, optional = true }
 
 [dev-dependencies]

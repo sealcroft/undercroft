@@ -3,9 +3,12 @@
 //! A remote backend (Qdrant / Chroma / pgvector) is an *untrusted search
 //! accelerator*, never the system of record:
 //!
-//! * `index_push` uploads each drawer's **sealed** content blob (base64 of
+//! * `index_push` uploads each drawer's **at-rest** content blob (base64 of
 //!   the AEAD output — ciphertext for sealed vaults) plus its embedding and
-//!   wing/room labels;
+//!   wing/room labels. For an `hmac-only` vault the at-rest blob is the
+//!   PLAINTEXT, so that push is refused unless the caller states otherwise
+//!   ([`PlaintextPush`], ROADMAP C8) — the field was named `sealed_b64` and
+//!   documented "never plaintext" while nothing checked the level;
 //! * `search_with_index` asks the remote for candidate ids only, then
 //!   re-loads every candidate from the local palace where the HMAC is
 //!   verified and content decrypted. A compromised index can *omit*
@@ -27,9 +30,25 @@ use undercroft_index::{IndexRecord, VectorIndex};
 use rusqlite::{params, OptionalExtension};
 
 use crate::{PalaceStore, SearchHit, SearchOptions, StoreError};
+use undercroft_vault::SecurityLevel;
 
 /// Raw index-push row: (id, wing, room, content, embedding).
 type PushRow = (String, String, String, Vec<u8>, Vec<u8>);
+
+/// Whether the caller accepts pushing PLAINTEXT content to a remote index.
+///
+/// A required argument rather than a defaulted flag, on the `Screen` and
+/// `Posture` precedent: an hmac-only vault's at-rest content *is* the
+/// plaintext, and the whole remote story ("sealed content only, re-verified
+/// locally") is written on six surfaces as though it were enforced. Making
+/// the caller say it is how the next push path cannot forget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaintextPush {
+    /// Refuse to push an hmac-only vault. Every shipped surface.
+    Refuse,
+    /// The operator declared it: push the plaintext anyway.
+    Allow,
+}
 
 impl PalaceStore {
     /// Collection name for this vault on remote backends.
@@ -39,7 +58,30 @@ impl PalaceStore {
 
     /// Push every drawer to a remote index (sealed content + embeddings).
     /// Returns the number of records uploaded.
-    pub fn index_push(&self, index: &mut dyn VectorIndex) -> Result<u64, StoreError> {
+    pub fn index_push(
+        &self,
+        index: &mut dyn VectorIndex,
+        plaintext: PlaintextPush,
+    ) -> Result<u64, StoreError> {
+        // An hmac-only vault's `content_at_rest` IS the plaintext, so this
+        // push sends drawer text to the backend — while `IndexRecord`'s own
+        // field said "Never plaintext", six documents repeated it, and the
+        // CLI printed "Pushed N sealed record(s)". A documented boundary
+        // whose premise the code did not enforce (ROADMAP C8). The level is
+        // an explicit operator choice, so this is a refusal a caller may
+        // override — by SAYING so, not by defaulting.
+        if matches!(self.vault.level(), SecurityLevel::HmacOnly)
+            && plaintext == PlaintextPush::Refuse
+        {
+            return Err(StoreError::Invalid(
+                "this vault is hmac-only, so its content is stored — and would be pushed — \
+                 as PLAINTEXT. A remote index is an untrusted accelerator in a different \
+                 trust domain; pushing plaintext there is a decision, not a default. Rotate \
+                 the vault to a sealed one, or re-run with plaintext pushes explicitly \
+                 allowed (`undercroft index push --allow-plaintext`)"
+                    .into(),
+            ));
+        }
         let collection = self.index_collection();
         index.ensure(&collection, self.embedder_dimension())?;
         let mut stmt = self
@@ -296,6 +338,15 @@ mod tests {
     #[derive(Default)]
     struct EchoIndex {
         ids: Vec<String>,
+        /// Every record as it went over the wire — what a backend operator
+        /// actually receives, which is the only way to test C8's claim.
+        pushed: Vec<IndexRecord>,
+    }
+
+    impl EchoIndex {
+        fn records(&self) -> &[IndexRecord] {
+            &self.pushed
+        }
     }
 
     impl VectorIndex for EchoIndex {
@@ -309,6 +360,7 @@ mod tests {
             for r in records {
                 if !self.ids.contains(&r.id) {
                     self.ids.push(r.id.clone());
+                    self.pushed.push(r.clone());
                 }
             }
             Ok(())
@@ -347,6 +399,58 @@ mod tests {
 
     fn drawer(wing: &str, content: &str, idx: u32) -> Drawer {
         Drawer::new(wing, "r", content.into(), Some("s.md".into()), idx, "test")
+    }
+
+    /// C8: `sealed_b64` said "Never plaintext" and nothing checked the
+    /// level. An hmac-only vault's `content_at_rest` IS the plaintext, so
+    /// the push base64'd drawer text and shipped it to a backend in another
+    /// trust domain while the CLI printed "Pushed N sealed record(s)".
+    #[test]
+    fn an_hmac_only_vault_refuses_to_push_its_plaintext_unless_told_to() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let mut s =
+            PalaceStore::open(mgr.create("plain", SecurityLevel::HmacOnly).unwrap()).unwrap();
+        let d = drawer("notes", "the kelp harvest quota is confidential", 0);
+        s.upsert(&d).unwrap();
+
+        let mut index = EchoIndex::default();
+        let refused = s.index_push(&mut index, PlaintextPush::Refuse);
+        assert!(
+            matches!(&refused, Err(StoreError::Invalid(m)) if m.contains("PLAINTEXT")),
+            "an hmac-only push must be refused by default: {refused:?}"
+        );
+        assert_eq!(
+            index.query("", &[], None, 100).unwrap().len(),
+            0,
+            "and nothing may have been pushed on the way to the refusal"
+        );
+
+        // Declared: it goes, and what goes is genuinely the plaintext —
+        // which is the fact the field name and six documents denied.
+        assert_eq!(s.index_push(&mut index, PlaintextPush::Allow).unwrap(), 1);
+        let pushed = index.records();
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&pushed[0].sealed_b64)
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&raw).contains("kelp harvest quota"),
+            "the premise of the refusal: this is the drawer's text in clear"
+        );
+
+        // Premise: a sealed vault pushes with no declaration at all, and
+        // what it pushes does NOT contain the text.
+        let (_d2, mut sealed) = store();
+        sealed.upsert(&d).unwrap();
+        let mut idx2 = EchoIndex::default();
+        assert_eq!(
+            sealed.index_push(&mut idx2, PlaintextPush::Refuse).unwrap(),
+            1
+        );
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&idx2.records()[0].sealed_b64)
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("kelp harvest quota"));
     }
 
     fn ids(hits: &[SearchHit]) -> std::collections::BTreeSet<String> {
@@ -391,7 +495,7 @@ mod tests {
 
         let mut index = EchoIndex::default();
         assert_eq!(
-            s.index_push(&mut index).unwrap(),
+            s.index_push(&mut index, PlaintextPush::Refuse).unwrap(),
             3,
             "premise: the mirror holds all three, quarantined row included"
         );
@@ -471,7 +575,7 @@ mod tests {
         s.upsert(&drawer("notes", "the kelp harvest quota was raised", 0))
             .unwrap();
         let mut index = EchoIndex::default();
-        s.index_push(&mut index).unwrap();
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
 
         for opts in [
             SearchOptions {

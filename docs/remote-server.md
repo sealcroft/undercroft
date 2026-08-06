@@ -31,30 +31,77 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
+**All 35 routes**, counted against `route()` in
+`crates/undercroft-cli/src/tenant.rs` rather than remembered — this table
+listed 18 of them until 2026-08-05, omitting the whole operator plane
+(trust, admission review, retention, forgetting) plus the golden-values
+tier. Everything under *operator plane* is deliberately absent from MCP:
+an agent must not rule on the queue that exists to contain it, nor assign
+the trust class that decides what it may retrieve.
+
 ```text
+── lifecycle ────────────────────────────────────────────────────────────
 POST   /v1/vaults                      {id, level?, embedder?}   create vault
+GET    /v1/vaults                                                list vault ids
 DELETE /v1/vaults/{id}                                           delete vault
+
+── read / write ─────────────────────────────────────────────────────────
 GET    /v1/vaults/{id}/stats            (records, level, writes, chain head,
                                          wings, rooms, kg, tunnels, db_bytes,
                                          codebooks)
+GET    /v1/vaults/{id}/stats/history    ?window=N   sample ring buffer
+                                         (501 without --features telemetry)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}
+                                         202 + {quarantined:true} if diverted
 GET    /v1/vaults/{id}/drawers          ?wing=&room=&limit=&offset=  paged summaries
 GET    /v1/vaults/{id}/drawers/{drawer_id}                       one full drawer
 PUT    /v1/vaults/{id}/drawers/{drawer_id}  {text}               replace content
-POST   /v1/vaults/{id}/search          {query, wing?, room?, limit?, vector?}
 DELETE /v1/vaults/{id}/drawers/{drawer_id}
+POST   /v1/vaults/{id}/search          {query, wing?, room?, limit?, vector?, …}
 GET    /v1/vaults/{id}/taxonomy         (wing → room tree with counts)
+
+── knowledge graph (read-only browse, plus the authority tier) ───────────
 GET    /v1/vaults/{id}/kg/stats         (entity/triple/active/closed counts)
 GET    /v1/vaults/{id}/kg/entities      ?limit=&offset=              paged entities
 GET    /v1/vaults/{id}/kg/query         ?entity=&direction=&as_of=   facts about one entity
 GET    /v1/vaults/{id}/kg/timeline      ?entity=                     temporal fact timeline
+GET    /v1/vaults/{id}/kg/receipts      receipt verdicts per fact
+                                         (verified|source_changed|dangling|tampered)
+GET    /v1/vaults/{id}/kg/canonical/{key}   the one active approved fact
+POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
+GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
+
+── operator plane (never on MCP) ────────────────────────────────────────
+GET    /v1/vaults/{id}/history          audit chain (subject?, limit?, offset?)
+GET    /v1/vaults/{id}/trust            wing trust assignments
+POST   /v1/vaults/{id}/trust            assign one (closed vocabulary)
+GET    /v1/vaults/{id}/admission        the pending review queue
+POST   /v1/vaults/{id}/admission        rule allow | deny (deny is receipted)
+GET    /v1/vaults/{id}/retention        policies per wing/room
+POST   /v1/vaults/{id}/retention        set one
+POST   /v1/vaults/{id}/retention/sweep  enforce; returns a proof receipt
+POST   /v1/vaults/{id}/forget           provable destruction + attestation
+
+── maintenance / portability ────────────────────────────────────────────
+POST   /v1/vaults/{id}/refine           LLM distillation → KG
 POST   /v1/vaults/{id}/verify           (HMAC + audit-chain report)
+POST   /v1/vaults/{id}/anchor           (tighten the manifest rollback anchor; a write)
 POST   /v1/vaults/{id}/rotate           (re-key the vault; sole-writer contract)
 GET    /v1/vaults/{id}/export           (decrypted NDJSON: {drawer, vector} per line)
-POST   /v1/vaults/{id}/import           (NDJSON body; returns {imported: N})
+POST   /v1/vaults/{id}/import           (NDJSON body; returns {imported, quarantined})
+
+── not under /v1 ────────────────────────────────────────────────────────
 GET    /ui                              (vault admin console; unauthenticated static page)
 GET    /healthz                         (unauthenticated)
 ```
+
+**The console at `/ui` is a `/v1` CLIENT, not a fourth surface.** It has no
+capability of its own and no code path the REST API does not expose, so the
+drift rule (CLI / MCP / `/v1` / orchestrator) does not add a column for it —
+but a fix that lands on `/v1` and not on the page is still a defect the user
+meets, which is how a success toast came to be shown for a `202
+{"quarantined": true}`. Stated because several boundaries in these documents
+rest on it and none of them said so (ROADMAP C14).
 
 The **admin console** at `/ui` drives this whole surface from a browser:
 vault lifecycle, stats, verification, key rotation, drawer browsing with
@@ -70,8 +117,36 @@ memory instance per tenant and migrate a vault between instances:
 the caller can verify before dropping the source.
 
 `level` is `sealed` (default) or `hmac-only`. `embedder` is `hash`
-(default) or `external:<name>@<dim>` (see below). Under `--read-only`, only
-reads (stats, search, export) are served; every mutation returns 403.
+(default) or `external:<name>@<dim>` (see below).
+
+**`--read-only`, precisely.** It is a posture on the whole process, not a
+filter on one port, and the gate sits **in front of dispatch** rather than
+at the top of each mutating handler — because the per-handler version had
+thirteen guards for fourteen mutating routes and `POST …/kg/authority`
+never got one. It **fails closed**: every `GET` is served, and every
+non-GET is refused with 403 *unless it is one of two named reads* —
+`POST …/search` and `POST …/verify` (both POST for cost, not for effect).
+A route added later is refused until someone deliberately names it. This
+paragraph used to say "only reads (stats, search, export) are served",
+which under-listed the reads and omitted `verify` entirely.
+
+**The open is covered too, since v0.47.0.** This paragraph used to name it
+as the thing `--read-only` did not cover — opening a store created schema,
+initialised the chain, and ran a rotation reconcile that could promote or
+delete a staged `vault.json.next`, all lazily on the first request against a
+cold handle. The connection is now `SQLITE_OPEN_READ_ONLY` under `PRAGMA
+query_only=ON`; the schema is checked rather than created, a lagging manifest
+anchor is reported rather than healed, and a staged rotation is honoured in
+memory with its file untouched. Whatever the open declined to repair appears
+as `unhealed` on `GET /v1/vaults/{id}/stats` beside `read_only`. Two
+conditions refuse with **409** instead: a manifest whose `palace.db` is
+absent, and a schema this build would have had to migrate.
+
+What is still not a claim: a read-only connection materialises SQLite's WAL
+scaffolding (`-shm`, and a zero-length `-wal`) where the directory is
+writable — no database content, and where the directory is not writable the
+open escalates to `immutable=1` and warns. If you need a genuinely
+byte-frozen vault, stop the server rather than restarting it read-only.
 
 ## Per-vault request authorization
 
