@@ -99,8 +99,23 @@ of exactly two shapes:
 1. **Closed-vocabulary enum in the clear** — a deliberate, low-entropy,
    inventoried leak (the `wing`/`room` precedent; the metadata-exposure and
    footprint tests fail until it is accounted for).
-2. **Keyed blind index** — truncated HMAC like `fingerprint()`: SQL
-   equality with zero leak, no prefix/`LIKE`/range.
+2. **Keyed blind index** — truncated HMAC, the *shape* `fingerprint()`
+   uses: SQL equality with zero leak, no prefix/`LIKE`/range.
+
+   **Copy the shape, NOT the key.** `fingerprint()` is keyed with the
+   vault's rotatable MAC key, which is correct for what it is — a dedup
+   LOOKUP key that rotation recomputes and nothing holds a reference to.
+   A blind index is not that: re-keying one means re-indexing the corpus,
+   and A10 unit 1 shipped a first version keyed with `Vault::tag` that
+   would have moved every fact id on every rotation. Use a per-vault
+   secret **stored sealed in `meta`**, which rotation re-seals and never
+   regenerates (`kg.rs::kg_secret`), and see the CLAUDE.md invariant *an
+   identifier is never derived from rotatable key material; neither is a
+   blind-index key*. Two riders that unit paid for: any UNKEYED digest of
+   the same value elsewhere (an id, a fingerprint) is a confirmation
+   oracle that blinding the column does not close, and `audit.record_id`
+   carries these values in clear too — it holds `trust/{wing}` and
+   `retention/{wing}` today.
 
 Free-form clear-text labels on sealed vaults are **not offerable**: a tag
 like `password-rotation-policy` copies content-derived words into unsealed

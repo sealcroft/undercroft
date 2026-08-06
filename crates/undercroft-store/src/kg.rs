@@ -23,6 +23,10 @@ use crate::{chain_append, PalaceStore, StoreError};
 /// (A10). Bumped only if the at-rest shape changes again.
 const KG_BLIND_VERSION: &str = "v1";
 
+/// Marker for the U12 at-rest migration: the two content-fingerprint
+/// columns hold keyed values rather than bare SHA-256 digests.
+const CONTENT_FP_VERSION: &str = "v1";
+
 /// Fill `buf` from the OS CSPRNG. Named rather than inlined so the one
 /// place this crate draws randomness is greppable.
 fn getrandom_bytes(buf: &mut [u8]) {
@@ -110,7 +114,13 @@ fn temporal_key(value: &str) -> String {
 /// rather than delimited, because a term may contain any byte the
 /// `validate_name` guard admits and a delimiter is only injective while no
 /// input contains it.
-fn kg_term_at_rest(
+/// `pub(crate)` so `no_durable_reference_moves_on_a_key_rotation` can
+/// re-derive a blind value and compare it across a rotation. Every SQL
+/// reader of the blind index sits inside a write path, and the one public
+/// read door (`kg_query_entity`) decrypts `terms` and filters in RAM — so a
+/// blind recipe that moved with the key is invisible from outside this
+/// module, and the gate has to derive it directly.
+pub(crate) fn kg_term_at_rest(
     vault: &undercroft_vault::Vault,
     secret: &[u8; 32],
     kind: &str,
@@ -127,6 +137,38 @@ fn kg_term_at_rest(
     buf.extend_from_slice(term.as_bytes());
     hex::encode(&keyed(secret, &buf)[..16])
 }
+
+/// Columns added to `kg_triples` after its first shipped shape, as
+/// `"name TYPE"`.
+///
+/// **Named rather than inlined so `PalaceStore::READ_SCHEMA` can be counted
+/// against it.** A read-only open refuses a schema it would have to migrate,
+/// which it decides by checking exactly these columns — and when A10 added
+/// `terms` here and `name_rest` next door, `READ_SCHEMA` was not updated. The
+/// consequence was not cosmetic: a read-only open of any pre-A10 vault PASSED
+/// the migration gate and then died with a raw SQLite *no such column* on
+/// every knowledge-graph read, because `TRIPLE_COLUMNS` names `terms`. R4
+/// exists to make that open answer honestly.
+/// `read_schema_covers_every_added_column` now fails in both directions.
+pub(crate) const ADDED_KG_TRIPLES_COLUMNS: &[&str] = &[
+    "source_fp BLOB",
+    "receipt_tag BLOB",
+    "support BLOB",
+    "authority_class TEXT",
+    "review_state TEXT",
+    "canonical_key TEXT",
+    "extractor TEXT",
+    // The subject and predicate SEALED, on a sealed vault (A10). Those two
+    // columns hold a blind index there — a truncated keyed HMAC, so SQL
+    // equality still works and an offline reader gets no word — and this is
+    // where the words themselves live. NULL on an hmac-only vault, whose
+    // columns hold the words because that level keeps plaintext by choice.
+    "terms BLOB",
+];
+
+/// Columns added to `kg_entities` after its first shipped shape. Same
+/// contract as [`ADDED_KG_TRIPLES_COLUMNS`].
+pub(crate) const ADDED_KG_ENTITIES_COLUMNS: &[&str] = &["name_rest BLOB"];
 
 /// HMAC-SHA256 under the KG blind secret.
 fn keyed(secret: &[u8; 32], msg: &[u8]) -> [u8; 32] {
@@ -358,13 +400,38 @@ pub(crate) fn authority_ext(
     Some(out)
 }
 
-/// Canonical bytes of an entity row. ONE definition: the tag over these
-/// four fields is written in two places here and verified in three, and a
-/// canonical that drifts between them reports tampering on a row nobody
-/// touched. (`rotate.rs` still builds its own copy for the re-key pass —
-/// same bytes, recorded here so the next edit knows to move both.)
-fn entity_canonical(id: &str, name: &str, etype: &str, created_at: &str) -> String {
-    format!("{id}\x1f{name}\x1f{etype}\x1f{created_at}")
+/// Canonical bytes of an entity row. ONE definition, and now genuinely one:
+/// the tag over these fields is written in three places here and verified in
+/// three, and a canonical that drifts between them reports tampering on a row
+/// nobody touched. `rotate.rs` used to build its own inline copy — same bytes
+/// at the time, which is exactly why it was safe right up until this gained
+/// the extension below, at which point rotation would have silently kept
+/// computing the old shape and marked every entity tampered. It calls this
+/// now.
+///
+/// **`name_rest` is the FIFTH extension (0x1b), on the
+/// `support`/authority/extractor/terms precedent**, and it is inside the tag
+/// for the reason the others are: on a sealed vault the `name` column holds
+/// only a blind index, so the WORD lives in `name_rest` alone. Leaving it
+/// outside the canonical meant an offline attacker could erase or swap one
+/// entity's sealed name — changing what the row MEANS, or destroying it
+/// outright — and `kg_verify` would report nothing, while the triple
+/// counterpart (`terms`) was covered from the start. Appended only when the
+/// blob exists, so an hmac-only vault and any entity written before A10 keep
+/// byte-identical canonical bytes and are not re-tagged by this existing.
+pub(crate) fn entity_canonical(
+    id: &str,
+    name: &str,
+    etype: &str,
+    created_at: &str,
+    name_rest: Option<&[u8]>,
+) -> Vec<u8> {
+    let mut out = format!("{id}\x1f{name}\x1f{etype}\x1f{created_at}").into_bytes();
+    if let Some(blob) = name_rest {
+        out.push(0x1b);
+        out.extend_from_slice(blob);
+    }
+    out
 }
 
 /// An entity's id.
@@ -461,8 +528,8 @@ fn ensure_entity_in(
     // The canonical covers what is AT REST, so a flipped column still fails
     // verification — and on a sealed vault that is the blind value, which
     // is what the column holds.
-    let canonical = entity_canonical(&id, &name_at_rest, "unknown", at);
-    let tag = vault.tag(canonical.as_bytes());
+    let canonical = entity_canonical(&id, &name_at_rest, "unknown", at, name_rest.as_deref());
+    let tag = vault.tag(&canonical);
     tx.execute(
         "INSERT INTO kg_entities (id, name, etype, tag, created_at, name_rest)          VALUES (?1, ?2, 'unknown', ?3, ?4, ?5)",
         params![id, name_at_rest, tag.as_slice(), at, name_rest],
@@ -525,14 +592,140 @@ fn check_authority_declaration(
     Ok(())
 }
 
-/// Unkeyed fingerprint of a source drawer's verbatim content, captured
-/// when a fact is distilled. Unkeyed (plain SHA-256) on purpose: it must
-/// survive key rotation unchanged so a receipt stays valid across
-/// rotations, while the *keyed* `receipt_tag` (below) is what makes the
-/// citation unforgeable. A change here means the cited source was edited
-/// out from under the fact — surfaced as `SourceChanged`, never hidden.
+/// The UNKEYED SHA-256 of a drawer's verbatim content.
+///
+/// **This is no longer what goes on disk** — see [`keyed_content_fp`], which
+/// wraps it. Two callers remain, and both are deliberate:
+///
+/// * the inner digest of the keyed recipe below, and
+/// * `forget.rs`'s Ed25519 attestation, whose entire third-party posture is
+///   that a data subject holding the destroyed content verifies the
+///   commitment **without the vault key**. Keying it there would destroy the
+///   one property that attestation exists to provide. It is a commitment
+///   published to a named party about content the vault no longer holds —
+///   the opposite situation from a digest sitting at rest in a stolen file.
 pub(crate) fn content_fp(content: &str) -> Vec<u8> {
     Sha256::digest(content.as_bytes()).to_vec()
+}
+
+/// Domain separation for the content-fingerprint key, distinct from
+/// `kgterm`/`kgtriple`/`kgentity` so one derivation can never be replayed
+/// as another.
+const CONTENT_FP_DOMAIN: &[u8] = b"kgcontentfp";
+
+/// Marker byte on a KEYED fingerprint, which is what makes the at-rest
+/// migration idempotent.
+///
+/// A legacy value is a bare 32-byte SHA-256 and a keyed one is 33 bytes, so
+/// "have I already wrapped this row?" is answerable from the row itself. It
+/// is not decoration: the migration's completion marker is written after a
+/// `VACUUM` (U6) and is withheld entirely while any row is pending (U7), so
+/// the walk **is** re-entered — and with no per-row guard a re-entry would
+/// wrap an already-wrapped value a second time, silently breaking every
+/// receipt it had just fixed. A10's walk is idempotent through
+/// `terms IS NOT NULL` / `name_rest IS NULL`; a 32-byte digest and a 32-byte
+/// MAC are indistinguishable, so this column has to carry its own.
+const CONTENT_FP_KEYED: u8 = 0x01;
+
+/// The fingerprint of a source drawer's verbatim content **as it is
+/// stored**: keyed with the long-lived per-vault [`PalaceStore::kg_secret`]
+/// on a sealed vault, the bare digest on an hmac-only one (which keeps
+/// plaintext by the operator's explicit choice, so a digest of it adds
+/// nothing).
+///
+/// **Why keyed at all (U12).** Stored unkeyed, this is a confirmation
+/// oracle: an offline reader holding a candidate document hashes it and
+/// matches the column, learning byte-exactly that this plaintext was filed
+/// here. "You must reproduce a whole document" is weak comfort when a drawer
+/// is one line. It is the same capability A10 closed for `triple_id`, one
+/// table over.
+///
+/// **Why the KEY is the stored secret and not a vault key.** A rotation
+/// re-derives every vault key, so a vault-keyed fingerprint would move on
+/// every rotation — and these values are compared across one: `rotate.rs`
+/// preserves them and re-tags the receipts *over* them. `kg_secret` is 32
+/// random bytes sealed in `meta` that rotation RE-SEALS and never
+/// regenerates, so this is rotation-stable by construction. That is the
+/// invariant in CLAUDE.md, not a preference.
+///
+/// **Why it keys the DIGEST rather than the content.** Because the at-rest
+/// migration has only the stored digest to work from. Keying the content
+/// would require re-reading every source drawer, and where a source has
+/// legitimately CHANGED since the receipt was written the original bytes are
+/// gone — leaving a choice between laundering a real `SourceChanged` into
+/// `Verified` and stranding the oracle in the file forever. `HMAC(k, H(m))`
+/// is computable from `H(m)` alone, so every legacy row migrates losslessly
+/// and neither branch is needed. The composition is standard (MAC-over-hash)
+/// and inherits SHA-256's collision resistance.
+///
+/// Residue, stated: this is deterministic, so two rows citing identical
+/// content still hold identical bytes — an offline reader learns that two
+/// receipts point at the same text, never what it says. `drawers.fp` on the
+/// same row already makes that trade and says so.
+pub(crate) fn keyed_content_fp(
+    vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
+    content: &str,
+) -> Vec<u8> {
+    keyed_fp_of_digest(vault, secret, &content_fp(content))
+}
+
+/// [`keyed_content_fp`] from an already-computed unkeyed digest — the form
+/// the at-rest migration needs, since a stored legacy value is exactly that
+/// digest and the content behind it may no longer exist.
+pub(crate) fn keyed_fp_of_digest(
+    vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
+    digest: &[u8],
+) -> Vec<u8> {
+    if !matches!(vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+        return digest.to_vec();
+    }
+    let mut buf = Vec::with_capacity(digest.len() + CONTENT_FP_DOMAIN.len() + 8);
+    buf.extend_from_slice(CONTENT_FP_DOMAIN);
+    buf.extend_from_slice(&(digest.len() as u64).to_le_bytes());
+    buf.extend_from_slice(digest);
+    let mut out = Vec::with_capacity(33);
+    out.push(CONTENT_FP_KEYED);
+    out.extend_from_slice(&keyed(secret, &buf));
+    out
+}
+
+/// Is this stored fingerprint still the pre-U12 unkeyed digest?
+///
+/// The migration's per-row guard, and deliberately a function of the VALUE
+/// rather than of a vault-level flag: a partially-migrated vault (one with a
+/// tamper-failing row it refused to launder) is a state this store reports
+/// and keeps operating in, so every reader has to cope with both shapes.
+pub(crate) fn is_legacy_unkeyed_fp(fp: &[u8]) -> bool {
+    fp.len() == 32
+}
+
+/// Does `content` still hash to the fingerprint `stored` on this row?
+///
+/// **Shape-aware on purpose, and not optional.** A vault can legitimately
+/// hold both shapes at once: a read-only open cannot migrate anything (R4),
+/// and a writable one leaves a tamper-failing row alone rather than
+/// laundering it (A10's rule). Comparing everything under the keyed recipe
+/// would report `SourceChanged` for every receipt in a pre-U12 vault opened
+/// read-only — a false integrity verdict on an intact vault, which is the
+/// failure class this project treats as most expensive.
+///
+/// It is not a downgrade door: the fingerprint is inside the receipt's HMAC,
+/// so swapping a keyed value for an attacker-chosen bare digest fails
+/// `verify_tag` and reports `Tampered` before this is ever consulted. On an
+/// hmac-only vault both branches compute the same bytes.
+pub(crate) fn fp_matches(
+    vault: &undercroft_vault::Vault,
+    secret: &[u8; 32],
+    content: &str,
+    stored: &[u8],
+) -> bool {
+    if is_legacy_unkeyed_fp(stored) {
+        content_fp(content) == stored
+    } else {
+        keyed_content_fp(vault, secret, content) == stored
+    }
 }
 
 /// Canonical bytes of a **receipt**: the tamper-covered binding of a
@@ -569,9 +762,17 @@ pub enum ReceiptVerdict {
     /// The receipt binding itself failed its HMAC — offline tampering.
     Tampered,
     /// The link was declared but never bound: the cited drawer was absent
-    /// when the link was written (an out-of-order import), so there is no
-    /// receipt to check. Only drawer supersessions produce this — a KG
-    /// receipt is always written with its fact.
+    /// when the link was written, so there is no receipt to check.
+    ///
+    /// Both a drawer supersession and a KG fact produce this. The KG half
+    /// arrived with U12: a fingerprint keyed to its own vault cannot be
+    /// recomputed at a destination, so `kg_import` re-derives it from the
+    /// source drawer it just imported — and when the payload does not carry
+    /// that drawer there is nothing to bind. This verdict, rather than
+    /// `Dangling`, because the two say different things: `Dangling` asserts
+    /// a receipt was written and its target has since gone, and here no
+    /// receipt was ever written. The distinction is the reason this variant
+    /// exists.
     Unreceipted,
 }
 
@@ -593,10 +794,20 @@ pub struct SupersessionStatus {
     pub verdict: ReceiptVerdict,
 }
 
-/// One exported fact: the decoded, verified triple plus its receipt's
-/// unkeyed source fingerprint (hex) when the fact was receipted — enough
-/// for an importing vault to re-key the receipt under its own mac without
-/// ever seeing the source content (the rotation precedent, across vaults).
+/// One exported fact: the decoded, verified triple plus its stored source
+/// fingerprint (hex) when the fact was receipted.
+///
+/// **Since U12 the fingerprint is a CLAIM, not material.** It is keyed with
+/// the exporting vault's own `kg_secret`, so a destination cannot recompute
+/// or verify it; `kg_import` re-derives the fingerprint from the source
+/// drawer it just imported and binds the receipt to that. The field's
+/// remaining job is to say *that* this fact was receipted, which is what
+/// separates "cited nothing" from "cited a drawer we could not bind".
+///
+/// Reading an OLD bundle still works — the re-derivation ignores whatever
+/// the payload carries. Reading a NEW bundle with a pre-U12 binary does not:
+/// it would bind the traveling value verbatim and read `SourceChanged`
+/// forever. Recorded in the CHANGELOG as an upgrade note.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TripleExport {
     pub triple: Triple,
@@ -627,9 +838,11 @@ impl PalaceStore {
     /// identifier is never derived from rotatable key material, and
     /// neither is a blind-index key** (re-keying an index means
     /// re-indexing the corpus — the searchable-encryption reason the index
-    /// key and the data key have different lifecycles). This file already
-    /// demonstrated it: `content_fp` and `supersedes_fp` are unkeyed
-    /// *specifically so they survive rotation*.
+    /// key and the data key have different lifecycles). The content
+    /// fingerprints demonstrate it from the other side: they must survive a
+    /// rotation unchanged, so U12 keyed them with THIS secret rather than
+    /// with a vault key ([`keyed_content_fp`]) — which is the same
+    /// conclusion reached by asking what holds a reference to them.
     ///
     /// So the secret is a stable random 32 bytes, sealed at rest under the
     /// vault's encryption key like any other artifact. Rotation RE-SEALS it
@@ -753,30 +966,17 @@ impl PalaceStore {
         // Migrate palaces created before the receipt columns existed. SQLite
         // has no ADD COLUMN IF NOT EXISTS; a duplicate-column error just
         // means the migration already ran, so it is swallowed.
-        for col in [
-            "source_fp BLOB",
-            "receipt_tag BLOB",
-            "support BLOB",
-            "authority_class TEXT",
-            "review_state TEXT",
-            "canonical_key TEXT",
-            "extractor TEXT",
-            // The subject and predicate SEALED, on a sealed vault (A10).
-            // Those two columns hold a blind index there — a truncated
-            // keyed HMAC, so SQL equality still works and an offline reader
-            // gets no word — and this is where the words themselves live.
-            // NULL on an hmac-only vault, whose columns hold the words
-            // because that level keeps plaintext content by choice.
-            "terms BLOB",
-        ] {
+        for col in ADDED_KG_TRIPLES_COLUMNS {
             let _ = self
                 .conn
                 .execute(&format!("ALTER TABLE kg_triples ADD COLUMN {col}"), []);
         }
         // The entity name, same shape one table over.
-        let _ = self
-            .conn
-            .execute("ALTER TABLE kg_entities ADD COLUMN name_rest BLOB", []);
+        for col in ADDED_KG_ENTITIES_COLUMNS {
+            let _ = self
+                .conn
+                .execute(&format!("ALTER TABLE kg_entities ADD COLUMN {col}"), []);
+        }
         // After the columns exist (fresh table or migration): the exact-
         // authority door is an INDEXED equality — `lookup_canonical` must
         // never ride an O(graph) `all_triples` decode.
@@ -801,12 +1001,47 @@ impl PalaceStore {
     /// the vault's KG secret, re-seal the object and grounding blobs (their
     /// AAD is the id), re-tag over the new at-rest bytes, and re-key the
     /// receipt (which binds the id). **Ids move here, once**, and that is
-    /// the price of closing the oracle — stated rather than hidden. Nothing
-    /// outside the vault depends on them: an export carries ids but
-    /// `kg_import` re-derives, and the audit records written under the old
-    /// `kg/{id}` are left exactly as they are, because rotation's rule
-    /// applies here too — historical audit bytes are evidence, not state to
-    /// rewrite.
+    /// the price of closing the oracle — stated rather than hidden.
+    ///
+    /// **Something outside the tables DOES hold those ids, and the first
+    /// version of this said otherwise.** It claimed "nothing outside the
+    /// vault depends on them … the audit records written under the old
+    /// `kg/{id}` are left exactly as they are, because historical audit
+    /// bytes are evidence, not state to rewrite." The principle is right and
+    /// the conclusion drawn from it was wrong in both directions:
+    ///
+    /// * **It left the oracle in the file.** `chain_append` writes a fact's
+    ///   id into `audit.record_id` in clear (`kg/{id}`, `kg/{id}/authority`,
+    ///   `kg-entity/{id}`), and on a pre-A10 vault that id IS the unkeyed
+    ///   digest of the words. Blinding the columns while the audit table
+    ///   keeps `kg/<sha256(s‖p‖o‖valid_from)[..16]>` leaves exactly the
+    ///   confirmation oracle this unit exists to remove, for anyone with a
+    ///   candidate word list. The gate could not see it: it asserted the
+    ///   absence of `legacy_entity_id` — the SINGLE-WORD recipe — and never
+    ///   of the four-component TRIPLE recipe, and its fixture never planted
+    ///   legacy audit rows at all, so the check had nothing to find. That is
+    ///   "a substring gate cannot see a digest" repeated one level down.
+    /// * **It orphaned every pre-A10 fact's audit trail.** `kg/{old_id}`
+    ///   resolved to nothing afterwards — the precise harm the invariant in
+    ///   `CLAUDE.md` is written about, and an audit trail whose references
+    ///   have moved is not an audit trail.
+    ///
+    /// So the label follows the row it always described. That is **not**
+    /// rewriting historical evidence, and the distinction is load-bearing:
+    /// the chain hashes `audit.tag` and nothing else (`chain_next_hex` takes
+    /// the tag; `verify` replays tags; rotation preserves tags verbatim).
+    /// `record_id` is a *label* for navigation, outside the chain
+    /// arithmetic and outside HMAC coverage — so remapping it moves no
+    /// evidence, while leaving it moved a reference. One `UPDATE` over a
+    /// temp mapping table, inside the same transaction, so it is one pass
+    /// and a remap can never chain through a second.
+    ///
+    /// Still true, and unchanged: an export carries ids but `kg_import`
+    /// re-derives, so a payload is unaffected. Residue, stated: an id a
+    /// caller recorded BEFORE the migration — an agent's note from a
+    /// previous session — does not resolve afterwards, because the recipe
+    /// it was derived from is the oracle. The migration is a one-time
+    /// operator-visible event and reports how many labels it carried.
     ///
     /// **A row whose tag does not verify is SKIPPED, not migrated and not
     /// fatal.** Migrating it would launder a tampered row into a freshly
@@ -836,17 +1071,30 @@ impl PalaceStore {
         // path falls back to the columns when `terms`/`name_rest` is NULL,
         // so a legacy graph still answers. It says what it did not do,
         // which is R4's rule.
-        if self.read_only {
-            undercroft_obs::diag_warn!(
-                "this vault's knowledge graph predates the blind index (A10) and was NOT \
-                 migrated: migrating is a write. Its subjects, predicates and entity names \
-                 stay readable at rest until a writable open migrates it"
-            );
-            return Ok(());
-        }
+        // **No read-only branch here, deliberately.** There was one — an
+        // `if self.read_only { warn; return }` — and it was DEAD: this
+        // function is reached only from `init_kg_schema`, called only from
+        // `open_inner`, which builds its store with `read_only = false`. So a
+        // read-only open of a pre-A10 vault emitted no warning at all, while
+        // the comment on that branch claimed "every read path falls back to
+        // the columns when `terms`/`name_rest` is NULL" — true on a writable
+        // open, where the ALTERs had just created those columns, and false on
+        // the posture it described, where they do not exist and a NULL
+        // fallback presupposes a column to be NULL.
+        //
+        // Both cases are covered, by two mechanisms rather than one dead
+        // guard: a vault MISSING the columns is refused outright by
+        // `check_read_schema` (`ReadOnlyUnmigrated`, which names them since
+        // this unit), and a vault that HAS them with rows still pending is
+        // reported on `PalaceStats.unhealed` by `note_unblinded_kg`, which
+        // does run on the read-only open.
         let secret = self.kg_secret()?;
         let tx = self.conn.unchecked_transaction()?;
         let mut skipped = 0usize;
+        // Audit labels to carry with the rows whose ids move — see the
+        // reasoning on this function. `(old_label, new_label)` pairs, applied
+        // in ONE statement below.
+        let mut relabel: Vec<(String, String)> = Vec::new();
 
         // ---- triples ------------------------------------------------------
         let sql = format!("SELECT {TRIPLE_COLUMNS}, source_fp, receipt_tag FROM kg_triples");
@@ -935,6 +1183,12 @@ impl PalaceStore {
                 ),
                 _ => None,
             };
+            // The two audit labels a fact can carry, both keyed on its id.
+            relabel.push((format!("kg/{}", row.id), format!("kg/{new_id}")));
+            relabel.push((
+                format!("kg/{}/authority", row.id),
+                format!("kg/{new_id}/authority"),
+            ));
             tx.execute(
                 "UPDATE kg_triples SET id = ?1, subject = ?2, predicate = ?3, object = ?4, \
                         support = ?5, tag = ?6, receipt_tag = ?7, terms = ?8 WHERE id = ?9",
@@ -964,12 +1218,12 @@ impl PalaceStore {
             })?
             .collect::<Result<_, _>>()?;
         for (id, name, etype, tag, created) in ents {
+            // A legacy row is selected `WHERE name_rest IS NULL`, so its
+            // canonical carries no fifth extension — verify the shape it was
+            // written under.
             if self
                 .vault
-                .verify_tag(
-                    entity_canonical(&id, &name, &etype, &created).as_bytes(),
-                    &tag,
-                )
+                .verify_tag(&entity_canonical(&id, &name, &etype, &created, None), &tag)
                 .is_err()
             {
                 skipped += 1;
@@ -977,9 +1231,16 @@ impl PalaceStore {
             }
             let new_id = entity_id(&self.vault, &secret, &name);
             let (blind, sealed) = entity_name_at_rest(&self.vault, &secret, &name);
-            let new_tag = self
-                .vault
-                .tag(entity_canonical(&new_id, &blind, &etype, &created).as_bytes());
+            // The NEW sealed name is what the new tag covers, the way the
+            // triple arm covers its new `terms`.
+            let new_tag = self.vault.tag(&entity_canonical(
+                &new_id,
+                &blind,
+                &etype,
+                &created,
+                sealed.as_deref(),
+            ));
+            relabel.push((format!("kg-entity/{id}"), format!("kg-entity/{new_id}")));
             tx.execute(
                 "UPDATE kg_entities SET id = ?1, name = ?2, tag = ?3, name_rest = ?4 \
                  WHERE id = ?5",
@@ -987,11 +1248,54 @@ impl PalaceStore {
             )?;
         }
 
-        tx.execute(
-            "INSERT INTO meta (key, value) VALUES ('kg_blind_version', ?1) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![KG_BLIND_VERSION],
-        )?;
+        // ---- audit labels -------------------------------------------------
+        // Carry every moved id's audit label with its row. ONE `UPDATE` over
+        // a temp mapping table rather than one per pair: a per-pair loop
+        // could in principle rewrite a label a previous iteration had just
+        // produced (`new_i == old_j`), and "the recipes are different so a
+        // 128-bit collision will not happen" is an argument, not a
+        // guarantee. A single statement reads one snapshot and touches each
+        // row at most once, so the property holds by construction.
+        let relabelled = if relabel.is_empty() {
+            0
+        } else {
+            tx.execute_batch(
+                // **`main`, not `temp`.** This table is populated with every
+                // legacy `kg/<unkeyed digest>` label — the confirmation
+                // oracle itself — and `VACUUM` rewrites `main` only. In
+                // SQLite's `temp` database (file-backed by default; nothing
+                // here sets `temp_store`) those pages could outlive the
+                // migration in the OS temp directory: outside the vault,
+                // outside the VACUUM, and outside this function's own
+                // "residue, stated" paragraph. Created and dropped inside the
+                // one transaction, so the VACUUM below genuinely covers it —
+                // which is what the comment on that VACUUM already claimed.
+                "CREATE TABLE IF NOT EXISTS kg_audit_relabel (
+                     old_label TEXT PRIMARY KEY,
+                     new_label TEXT NOT NULL
+                 );
+                 DELETE FROM kg_audit_relabel;",
+            )?;
+            {
+                let mut ins = tx.prepare(
+                    "INSERT OR REPLACE INTO kg_audit_relabel (old_label, new_label) \
+                     VALUES (?1, ?2)",
+                )?;
+                for (old, new) in &relabel {
+                    ins.execute(params![old, new])?;
+                }
+            }
+            let n = tx.execute(
+                "UPDATE audit SET record_id = (
+                     SELECT new_label FROM kg_audit_relabel WHERE old_label = audit.record_id
+                 )
+                 WHERE record_id IN (SELECT old_label FROM kg_audit_relabel)",
+                [],
+            )?;
+            tx.execute_batch("DROP TABLE IF EXISTS kg_audit_relabel")?;
+            n
+        };
+
         tx.commit()?;
         // **The UPDATEs are not enough, and this is the part that is easy to
         // get wrong.** An in-place UPDATE leaves the old row image in a
@@ -1008,18 +1312,293 @@ impl PalaceStore {
         // The cost is a one-time full rewrite of the vault, paid once per
         // vault, on the open that migrates it.
         //
+        // **And the completion marker is written AFTER it, not with the
+        // rows.** It used to go in the transaction above, which meant any
+        // interruption between the commit and this VACUUM — a full disk on a
+        // large vault, a power loss — left the marker saying "migrated" while
+        // every subject, predicate, entity name and legacy digest sat in the
+        // freed pages of the file. The next open then took the early return
+        // at the top of this function and never tried again: exactly the
+        // state the paragraph above calls worse than never running. The row
+        // walk is idempotent by its own per-row guards (`terms IS NOT NULL`,
+        // `name_rest IS NULL`), so repeating it costs a scan and changes
+        // nothing.
+        //
         // Residue, stated: a COPY of the database taken before this ran
         // still holds the words, and so may an un-checkpointed `-wal` from
         // before it. Neither is something this code can reach.
+        //
+        // The audit relabel above is inside the transaction and therefore
+        // also inside this rewrite — which matters, because a legacy
+        // `record_id` is an unkeyed digest of the words, so leaving its old
+        // row image in a freed page would leave the oracle in the file just
+        // as the un-VACUUMed column UPDATEs did.
         self.conn.execute_batch("VACUUM")?;
+        if relabelled > 0 {
+            undercroft_obs::diag_warn!(
+                "knowledge-graph blind-index migration (A10): {relabelled} audit label(s) \
+                 carried onto the re-derived ids, so every record still resolves to the fact \
+                 it describes. An id recorded by a caller BEFORE this migration does not \
+                 resolve — the recipe it came from was the oracle this closes"
+            );
+        }
+        // **The marker: only now, and only if the walk actually finished.**
+        //
+        // A row whose tag does not verify is skipped rather than re-tagged
+        // (migrating it would launder a tampered row) — and it keeps its
+        // CLEAR words and its unkeyed digest. Writing the marker anyway
+        // declared the vault migrated while part of it was still readable at
+        // rest, and the early return at the top of this function meant
+        // nothing ever looked again. So while anything is pending, the marker
+        // stays unset and every writable open re-attempts; the walk is
+        // idempotent, so the retry is a scan and nothing else. That also
+        // means the exposure is a REPORTED state rather than a silent one:
+        // see `PalaceStats.unhealed`.
         if skipped > 0 {
             undercroft_obs::diag_warn!(
                 "{skipped} knowledge-graph row(s) failed their own HMAC and were left \
                  unmigrated rather than re-tagged — migrating one would launder a tampered \
-                 row. Run `undercroft verify` to see them"
+                 row. THEIR SUBJECTS, PREDICATES AND NAMES ARE STILL READABLE AT REST, and \
+                 this vault is not marked migrated, so the next writable open retries. Run \
+                 `undercroft verify` to see them"
             );
+            return Ok(());
         }
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('kg_blind_version', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![KG_BLIND_VERSION],
+        )?;
         Ok(())
+    }
+
+    /// **U12: re-key the two content fingerprints that sat at rest as bare
+    /// SHA-256 digests of verbatim drawer content.**
+    ///
+    /// `drawers.supersedes_fp` and `kg_triples.source_fp` were unkeyed, in
+    /// clear, on a sealed vault — a confirmation oracle for an offline
+    /// reader holding a candidate document. [`keyed_content_fp`] explains
+    /// the recipe and why its key is the stored secret; this is the walk
+    /// that moves what is already on disk.
+    ///
+    /// **It needs no content, and that is the whole reason the recipe keys
+    /// the digest.** A stored legacy value *is* `sha256(content)`, so
+    /// `HMAC(k, stored)` is exactly the new value — no source drawer is
+    /// read, and the case that would otherwise have no honest answer (a
+    /// source legitimately edited since the receipt was written, whose
+    /// original bytes are gone) does not arise. Every row migrates or is
+    /// skipped for tampering; none is stranded for want of content.
+    ///
+    /// **The receipt is re-tagged, so it is verified FIRST.** The
+    /// fingerprint is inside `receipt_canonical`/`supersession_canonical`,
+    /// so moving it without re-tagging would turn every receipt in the vault
+    /// `Tampered`. Re-tagging a row whose binding does not already verify
+    /// would launder offline tampering into a freshly-signed claim — A10's
+    /// rule, and the reason a failing row is left exactly as it is.
+    ///
+    /// Crash-safety follows A10 and its two corrections: the marker is
+    /// written LAST and only after the `VACUUM` (U6 — an in-place UPDATE
+    /// leaves the old digest in a freed page, so the oracle is in the FILE
+    /// until the rewrite), and it is withheld entirely while any row is
+    /// pending (U7), so a partially-migrated vault is retried and REPORTED
+    /// rather than declared done. The retry is safe because the walk is
+    /// idempotent per row: a keyed value carries [`CONTENT_FP_KEYED`] and is
+    /// skipped on sight.
+    pub(crate) fn rekey_content_fingerprints(&self) -> Result<(), StoreError> {
+        // hmac-only vaults keep plaintext by the operator's explicit choice,
+        // so a digest of it discloses nothing they have not already
+        // accepted — and `keyed_fp_of_digest` is the identity there anyway.
+        if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+            return Ok(());
+        }
+        let done: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'content_fp_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if done.as_deref() == Some(CONTENT_FP_VERSION) {
+            return Ok(());
+        }
+        let secret = self.kg_secret()?;
+        let tx = self.conn.unchecked_transaction()?;
+        let mut skipped = 0usize;
+        let mut moved = 0usize;
+
+        // ---- drawer supersessions -----------------------------------------
+        // `supersedes` is read as OPTIONAL even though the write path never
+        // writes a fingerprint without one: an offline editor can NULL it,
+        // and a non-optional read would fail the whole open on that row.
+        // A migration that makes a tampered vault unopenable takes `verify`
+        // and `repair` down with it — the argument the embedder migration
+        // settled and A10 restated.
+        type SupRow = (String, Option<String>, Vec<u8>, Option<Vec<u8>>);
+        let sups: Vec<SupRow> = tx
+            .prepare(
+                "SELECT id, supersedes, supersedes_fp, supersedes_receipt FROM drawers \
+                 WHERE supersedes_fp IS NOT NULL",
+            )?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<_, _>>()?;
+        for (id, old_id, fp, receipt) in sups {
+            if !is_legacy_unkeyed_fp(&fp) {
+                continue;
+            }
+            // A fingerprint with no link is already a broken row that no
+            // walk can bind. Left alone and COUNTED, so the vault is not
+            // declared migrated while it still holds the digest.
+            let Some(old_id) = old_id else {
+                skipped += 1;
+                continue;
+            };
+            // A receipt that does not verify is offline tampering; re-tagging
+            // it over a new fingerprint would sign the attacker's row.
+            if let Some(r) = &receipt {
+                if self
+                    .vault
+                    .verify_tag(&crate::supersession_canonical(&id, &old_id, &fp), r)
+                    .is_err()
+                {
+                    skipped += 1;
+                    continue;
+                }
+            }
+            let new_fp = keyed_fp_of_digest(&self.vault, &secret, &fp);
+            let new_receipt = receipt.map(|_| {
+                self.vault
+                    .tag(&crate::supersession_canonical(&id, &old_id, &new_fp))
+                    .to_vec()
+            });
+            tx.execute(
+                "UPDATE drawers SET supersedes_fp = ?1, supersedes_receipt = ?2 WHERE id = ?3",
+                params![new_fp, new_receipt, id],
+            )?;
+            moved += 1;
+        }
+
+        // ---- knowledge-graph citations ------------------------------------
+        type CiteRow = (String, Option<String>, Vec<u8>, Option<Vec<u8>>);
+        let cites: Vec<CiteRow> = tx
+            .prepare(
+                "SELECT id, source_drawer_id, source_fp, receipt_tag FROM kg_triples \
+                 WHERE source_fp IS NOT NULL",
+            )?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<_, _>>()?;
+        for (id, did, fp, receipt) in cites {
+            if !is_legacy_unkeyed_fp(&fp) {
+                continue;
+            }
+            // A fingerprint with no cited drawer is a half-written binding
+            // that already reports `Tampered`. Re-keying it closes the
+            // oracle and changes no verdict, so it is migrated, not skipped.
+            if let (Some(did), Some(r)) = (&did, &receipt) {
+                if self
+                    .vault
+                    .verify_tag(&receipt_canonical(&id, did, &fp), r)
+                    .is_err()
+                {
+                    skipped += 1;
+                    continue;
+                }
+            }
+            let new_fp = keyed_fp_of_digest(&self.vault, &secret, &fp);
+            let new_receipt = match (&did, &receipt) {
+                (Some(did), Some(_)) => Some(
+                    self.vault
+                        .tag(&receipt_canonical(&id, did, &new_fp))
+                        .to_vec(),
+                ),
+                _ => receipt,
+            };
+            tx.execute(
+                "UPDATE kg_triples SET source_fp = ?1, receipt_tag = ?2 WHERE id = ?3",
+                params![new_fp, new_receipt, id],
+            )?;
+            moved += 1;
+        }
+        tx.commit()?;
+
+        // The UPDATEs above leave the old row images — and therefore the
+        // unkeyed digests this exists to remove — in freed pages, so the
+        // oracle is still in the FILE until the database is rewritten. The
+        // gate reads bytes for exactly that reason. Skipped when nothing
+        // moved so an ordinary open of an already-clean vault, and of the
+        // very many vaults that hold no receipt at all, pays nothing.
+        if moved > 0 {
+            self.conn.execute_batch("VACUUM")?;
+        }
+        if skipped > 0 {
+            undercroft_obs::diag_warn!(
+                "{skipped} content fingerprint(s) failed their own receipt HMAC and were left \
+                 unmigrated rather than re-tagged — re-tagging one would launder a tampered \
+                 row. AN UNKEYED SHA-256 OF THE CITED CONTENT IS STILL READABLE AT REST for \
+                 those rows, and this vault is not marked migrated, so the next writable open \
+                 retries. Run `undercroft verify` to see them"
+            );
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('content_fp_version', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![CONTENT_FP_VERSION],
+        )?;
+        Ok(())
+    }
+
+    /// How many content fingerprints still sit at rest as unkeyed digests of
+    /// verbatim drawer content — rows the U12 migration could not move
+    /// because their receipt does not verify.
+    ///
+    /// Reported rather than warned-once, for the same reason
+    /// [`Self::kg_unblinded_rows`] is: an exposure an operator has to have
+    /// been watching stderr to catch is a silent one.
+    pub(crate) fn unkeyed_fingerprint_rows(&self) -> Result<u64, StoreError> {
+        if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+            return Ok(0);
+        }
+        let n: i64 = self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM drawers
+                      WHERE supersedes_fp IS NOT NULL AND length(supersedes_fp) = 32)
+                  + (SELECT COUNT(*) FROM kg_triples
+                      WHERE source_fp IS NOT NULL AND length(source_fp) = 32)",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n.max(0) as u64)
+    }
+
+    /// How many knowledge-graph rows still hold their words in clear —
+    /// i.e. rows the A10 migration has not moved onto the blind index.
+    ///
+    /// Reported rather than warned-once, on the pattern R4 built for an
+    /// unhealed rotation: "this vault still holds clear graph words" is a
+    /// state an operator should be able to READ, not a line they had to be
+    /// watching stderr to catch. Zero on an hmac-only vault, which keeps
+    /// plaintext by the operator's explicit choice.
+    pub(crate) fn kg_unblinded_rows(&self) -> Result<u64, StoreError> {
+        if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+            return Ok(0);
+        }
+        let triples: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM kg_triples WHERE terms IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let entities: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM kg_entities WHERE name_rest IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Ok((triples + entities) as u64)
     }
 
     /// The knowledge graph is a **second content path to the agent**, and
@@ -1249,7 +1828,10 @@ impl PalaceStore {
         extractor: Option<&str>,
     ) -> Result<String, StoreError> {
         let (drawer_id, drawer_content) = source;
-        let fp = content_fp(drawer_content);
+        // Keyed with the stored secret, never stored as the bare digest: an
+        // unkeyed digest of verbatim content in a clear column is a
+        // confirmation oracle for an offline reader (U12).
+        let fp = keyed_content_fp(&self.vault, &self.kg_secret()?, drawer_content);
         self.kg_add_inner(
             subject,
             predicate,
@@ -1417,42 +1999,65 @@ impl PalaceStore {
     /// Verify every fact that carries a receipt against its cited verbatim
     /// source. Returns one [`ReceiptStatus`] per receipted fact:
     /// `Verified` (citation intact, source unchanged), `SourceChanged`
-    /// (source edited since distillation), `Dangling` (source deleted), or
-    /// `Tampered` (the receipt binding failed its HMAC). Facts without a
-    /// receipt are skipped — they never claimed a provable citation.
+    /// (source edited since distillation), `Dangling` (source deleted),
+    /// `Unreceipted` (a citation that was never bound — an import whose
+    /// payload did not carry the cited drawer), or `Tampered` (the receipt
+    /// binding failed its HMAC). Facts that cite no drawer at all are
+    /// skipped — they never claimed a provable citation.
+    ///
+    /// **The walk selects on the CITATION, not on the receipt.** It used to
+    /// select `WHERE receipt_tag IS NOT NULL`, which meant a fact claiming a
+    /// source it had no binding for simply vanished from the report rather
+    /// than being reported as unbound. U12 made that state reachable (an
+    /// import whose source drawer is absent), and `verify_supersessions` —
+    /// the same walk one level down — had always selected on the link for
+    /// exactly this reason.
     pub fn kg_verify_receipts(&self) -> Result<Vec<ReceiptStatus>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, source_drawer_id, source_fp, receipt_tag
-             FROM kg_triples WHERE receipt_tag IS NOT NULL ORDER BY seq",
+             FROM kg_triples WHERE receipt_tag IS NOT NULL OR source_drawer_id IS NOT NULL
+             ORDER BY seq",
         )?;
-        // (triple id, cited drawer id, source fingerprint, receipt tag)
-        type ReceiptRow = (String, Option<String>, Option<Vec<u8>>, Vec<u8>);
+        // (triple id, cited drawer id, source fingerprint, receipt tag).
+        // The tag is optional since the walk stopped selecting on it: a
+        // citation with no binding is a state to report, not one to hide.
+        type ReceiptRow = (String, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>);
         let rows: Vec<ReceiptRow> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(rows.len());
+        let secret = self.kg_secret()?;
         for (id, drawer_id, fp, receipt_tag) in rows {
-            // A receipt_tag is only ever written alongside both fields.
-            let (Some(drawer_id), Some(fp)) = (drawer_id, fp) else {
-                out.push(ReceiptStatus {
-                    triple_id: id,
-                    source_drawer_id: String::new(),
-                    verdict: ReceiptVerdict::Tampered,
-                });
-                continue;
-            };
-            let verdict = if self
-                .vault
-                .verify_tag(&receipt_canonical(&id, &drawer_id, &fp), &receipt_tag)
-                .is_err()
-            {
-                ReceiptVerdict::Tampered
-            } else {
-                match self.get(&drawer_id)? {
-                    None => ReceiptVerdict::Dangling,
-                    Some(d) if content_fp(&d.content) == fp => ReceiptVerdict::Verified,
-                    Some(_) => ReceiptVerdict::SourceChanged,
+            let (verdict, drawer_id) = match (drawer_id, fp, receipt_tag) {
+                // A citation with no binding at all — declared, never
+                // receipted. The drawer supersession precedent, and since
+                // U12 the shape an import lands in when its payload does not
+                // carry the cited drawer.
+                (Some(did), None, None) => (ReceiptVerdict::Unreceipted, did),
+                (Some(did), Some(fp), Some(tag)) => {
+                    let v = if self
+                        .vault
+                        .verify_tag(&receipt_canonical(&id, &did, &fp), &tag)
+                        .is_err()
+                    {
+                        ReceiptVerdict::Tampered
+                    } else {
+                        match self.get(&did)? {
+                            None => ReceiptVerdict::Dangling,
+                            // Recomputed under the SAME recipe the write path
+                            // used, so a legacy row the migration refused to
+                            // launder still compares against what is stored.
+                            Some(d) if fp_matches(&self.vault, &secret, &d.content, &fp) => {
+                                ReceiptVerdict::Verified
+                            }
+                            Some(_) => ReceiptVerdict::SourceChanged,
+                        }
+                    };
+                    (v, did)
                 }
+                // Half a binding is tampering: the three fields are only ever
+                // written together or not at all.
+                (did, _, _) => (ReceiptVerdict::Tampered, did.unwrap_or_default()),
             };
             out.push(ReceiptStatus {
                 triple_id: id,
@@ -1463,11 +2068,11 @@ impl PalaceStore {
         Ok(out)
     }
 
-    /// Every fact, decoded and tag-verified, paired with its receipt's
-    /// unkeyed source fingerprint (hex) where one exists — the export half
-    /// of closing the meta-rows gap. The fingerprint travels so the
-    /// importing vault can re-key the receipt under its own mac without
-    /// ever seeing the source content (exactly what rotation does).
+    /// Every fact, decoded and tag-verified, paired with its stored source
+    /// fingerprint (hex) where one exists — the export half of closing the
+    /// meta-rows gap. Since U12 that fingerprint travels as the receipted
+    /// CLAIM only; see [`TripleExport`] for why the destination re-derives
+    /// rather than re-keys it.
     pub fn kg_export(&self) -> Result<Vec<TripleExport>, StoreError> {
         let sql =
             format!("SELECT {TRIPLE_COLUMNS}, source_fp, receipt_tag FROM kg_triples ORDER BY seq");
@@ -1517,9 +2122,9 @@ impl PalaceStore {
             // The canonical covers what is AT REST, which on a sealed vault
             // is the blind index — verify against that, then decrypt the
             // word for the caller (A10).
-            let canonical = entity_canonical(&id, &name, &etype, &created);
+            let canonical = entity_canonical(&id, &name, &etype, &created, name_rest.as_deref());
             self.vault
-                .verify_tag(canonical.as_bytes(), &tag)
+                .verify_tag(&canonical, &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
             out.push((
                 entity_name_from_rest(&self.vault, &name, name_rest.as_deref())?,
@@ -1644,13 +2249,34 @@ impl PalaceStore {
             ext.as_deref(),
             terms_ext(terms.as_deref()).as_deref(),
         ));
-        let source_fp = exp
+        // The payload's fingerprint is still parsed — garbage owes a 400 —
+        // but it is deliberately NOT stored. Since U12 the value is keyed
+        // with the SOURCE vault's `kg_secret`, so this vault could never
+        // recompute it and every imported receipt would read `SourceChanged`
+        // forever: the fact would look edited when nothing had touched it.
+        // It is re-derived instead, from the drawer this vault actually
+        // holds — the traveling value survives only as the payload's claim
+        // that a receipt existed, which is what tells "no citation" apart
+        // from "a citation we could not bind".
+        let claimed = exp
             .source_fp
             .as_deref()
             .map(hex::decode)
             .transpose()
             // Caller input on an import payload, so 400, not 500.
-            .map_err(|e| StoreError::Invalid(format!("source_fp is not hex: {e}")))?;
+            .map_err(|e| StoreError::Invalid(format!("source_fp is not hex: {e}")))?
+            .is_some();
+        // Absent cited drawer => no binding, and `kg_verify_receipts`
+        // reports `Unreceipted`. NOT `Dangling`, which would claim a receipt
+        // had been written and its target since destroyed. A whole-palace
+        // export orders drawers before facts precisely so this arm is the
+        // exception rather than the rule.
+        let source_fp = match (claimed, t.source_drawer_id.as_deref()) {
+            (true, Some(did)) => self
+                .get(did)?
+                .map(|d| keyed_content_fp(&self.vault, &secret, &d.content)),
+            _ => None,
+        };
         let receipt_tag = source_fp
             .as_ref()
             .zip(t.source_drawer_id.as_deref())
@@ -1759,18 +2385,24 @@ impl PalaceStore {
             // (A10). Looking it up by the WORD found nothing there, so
             // every import re-created the row instead of refining it.
             let name_at_rest = kg_term_at_rest(&self.vault, &secret, "e", name);
-            let existing: Option<(String, String, String)> = tx
+            // `name_rest` comes along because it is inside the canonical
+            // (the fifth extension): re-tagging an etype refinement without
+            // it would drop the sealed name out of the tag and mark the row
+            // tampered on the next read.
+            #[allow(clippy::type_complexity)]
+            let existing: Option<(String, String, String, Option<Vec<u8>>)> = tx
                 .query_row(
-                    "SELECT id, etype, created_at FROM kg_entities WHERE name = ?1",
+                    "SELECT id, etype, created_at, name_rest FROM kg_entities WHERE name = ?1",
                     params![name_at_rest],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .optional()?;
-            if let Some((id, cur, created)) = existing {
+            if let Some((id, cur, created, name_rest)) = existing {
                 if cur == "unknown" {
                     // The canonical covers what is at rest.
-                    let canonical = entity_canonical(&id, &name_at_rest, etype, &created);
-                    let tag = self.vault.tag(canonical.as_bytes());
+                    let canonical =
+                        entity_canonical(&id, &name_at_rest, etype, &created, name_rest.as_deref());
+                    let tag = self.vault.tag(&canonical);
                     tx.execute(
                         "UPDATE kg_entities SET etype = ?1, tag = ?2 WHERE id = ?3",
                         params![etype, tag.as_slice(), id],
@@ -2295,13 +2927,34 @@ impl PalaceStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<(String, String, String)>, StoreError> {
-        let mut stmt = self.conn.prepare(
+        // **Sorted and paged in RAM on a sealed vault, and that is not a
+        // preference.** `ORDER BY name LIMIT/OFFSET` was the whole query, and
+        // since A10 `kg_entities.name` holds a truncated keyed HMAC there — so
+        // the paged browser on `/v1` and in the console presented entities in
+        // an order with no relation to their names, while the identical code
+        // path on an hmac-only vault still read alphabetically. The same
+        // capability, silently weaker on one security level, which is exactly
+        // the drift shape this project keeps closing.
+        //
+        // The order has to come from the DECRYPTED word, so the page cannot be
+        // computed in SQL. Bounded by construction: one row per distinct
+        // subject, and `kg_export_entities` and `kg_verify` already read the
+        // whole table. `kg_query_entity` makes the same trade one door over.
+        let sealed = matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed);
+        let mut stmt = self.conn.prepare(if sealed {
+            "SELECT id, name, etype, tag, created_at, name_rest FROM kg_entities"
+        } else {
             "SELECT id, name, etype, tag, created_at, name_rest FROM kg_entities \
-             ORDER BY name LIMIT ?1 OFFSET ?2",
-        )?;
+             ORDER BY name LIMIT ?1 OFFSET ?2"
+        })?;
         type EntityRow = (String, String, String, Vec<u8>, String, Option<Vec<u8>>);
+        let bind: Vec<Box<dyn rusqlite::ToSql>> = if sealed {
+            Vec::new()
+        } else {
+            vec![Box::new(limit as i64), Box::new(offset as i64)]
+        };
         let rows: Vec<EntityRow> = stmt
-            .query_map(params![limit as i64, offset as i64], |r| {
+            .query_map(rusqlite::params_from_iter(bind.iter()), |r| {
                 Ok((
                     r.get(0)?,
                     r.get(1)?,
@@ -2317,15 +2970,21 @@ impl PalaceStore {
             // The canonical covers what is AT REST — on a sealed vault the
             // blind index — so verification runs against the column and the
             // WORD is decrypted afterwards for the caller (A10).
-            let canonical = entity_canonical(&id, &name, &etype, &created);
+            let canonical = entity_canonical(&id, &name, &etype, &created, name_rest.as_deref());
             self.vault
-                .verify_tag(canonical.as_bytes(), &tag)
+                .verify_tag(&canonical, &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
             out.push((
                 entity_name_from_rest(&self.vault, &name, name_rest.as_deref())?,
                 etype,
                 created,
             ));
+        }
+        if sealed {
+            // Alphabetical by the WORD, then the caller's page — the order an
+            // hmac-only vault gets from SQL for free.
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            return Ok(out.into_iter().skip(offset).take(limit).collect());
         }
         Ok(out)
     }
@@ -2372,19 +3031,32 @@ impl PalaceStore {
             }
         }
         drop(stmt);
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, etype, tag, created_at FROM kg_entities ORDER BY name")?;
-        let entities: Vec<(String, String, String, Vec<u8>, String)> = stmt
+        // `name_rest` is selected because it is inside the canonical (the
+        // fifth extension). Without it this leg verified a shape the write
+        // path does not produce on a sealed vault — i.e. it would report
+        // every entity tampered — and before the extension existed it could
+        // not see a sealed name being erased at all.
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, etype, tag, created_at, name_rest FROM kg_entities ORDER BY name",
+        )?;
+        #[allow(clippy::type_complexity)]
+        let entities: Vec<(String, String, String, Vec<u8>, String, Option<Vec<u8>>)> = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?
             .collect::<Result<_, _>>()?;
-        for (id, name, etype, tag, created) in entities {
+        for (id, name, etype, tag, created, name_rest) in entities {
             if self
                 .vault
                 .verify_tag(
-                    entity_canonical(&id, &name, &etype, &created).as_bytes(),
+                    &entity_canonical(&id, &name, &etype, &created, name_rest.as_deref()),
                     &tag,
                 )
                 .is_err()
@@ -2523,6 +3195,27 @@ impl TripleRow {
 #[cfg(test)]
 fn legacy_entity_id(name: &str) -> String {
     hex::encode(&Sha256::digest(name.as_bytes())[..16])
+}
+
+/// A fact id exactly as every build before A10 derived it: an UNKEYED
+/// SHA-256 over the four components, `0x1f`-delimited.
+///
+/// **This is the digest shape the migration gate did not check**, and the
+/// omission mattered: `legacy_entity_id` is a digest of ONE word, so
+/// asserting its absence says nothing about a four-component fact id — and
+/// that fact id is what `chain_append` wrote into `audit.record_id` as
+/// `kg/{id}`. The oracle survived the migration in the audit table while
+/// the gate reported the file clean. Named for the same reason as its
+/// neighbour: a test that plants or hunts a pre-A10 shape must use the
+/// pre-A10 recipe, not an approximation of it.
+#[cfg(test)]
+fn legacy_triple_id(subject: &str, predicate: &str, object: &str, valid_from: &str) -> String {
+    let mut h = Sha256::new();
+    for part in [subject, predicate, object, valid_from] {
+        Digest::update(&mut h, part.as_bytes());
+        Digest::update(&mut h, [0x1f]);
+    }
+    hex::encode(&h.finalize()[..16])
 }
 
 fn valid_at(t: &Triple, as_of_key: Option<&str>) -> bool {
@@ -2827,6 +3520,13 @@ mod tests {
                     None,
                     None,
                 ));
+                // Cross-check the recipe helper against the shape planted
+                // here, so `legacy_triple_id` cannot drift from it.
+                assert_eq!(
+                    legacy_id,
+                    super::legacy_triple_id(&subject, &predicate, &object, ""),
+                    "the planted legacy id must be the pre-A10 recipe"
+                );
                 s.conn
                     .execute(
                         "UPDATE kg_triples SET id = ?1, subject = ?2, predicate = ?3, \
@@ -2841,19 +3541,52 @@ mod tests {
                         ],
                     )
                     .unwrap();
+                // **And the audit label, which is what a genuine pre-A10
+                // vault holds.** `chain_append` wrote `kg/{id}` with the id
+                // of the day — the unkeyed digest. The first version of this
+                // fixture rewrote the TABLES and left `audit` as the
+                // post-A10 build had written it, so the digest assertion
+                // below had nothing to find and passed while the oracle sat
+                // in the audit table of every real legacy vault.
+                //
+                // Relabelling only: `record_id` is outside the chain hash
+                // (`chain_next_hex` takes the tag), so the chain still
+                // replays and `verify` stays meaningful.
+                s.conn
+                    .execute(
+                        "UPDATE audit SET record_id = ?1 WHERE record_id = ?2",
+                        rusqlite::params![format!("kg/{legacy_id}"), format!("kg/{id}")],
+                    )
+                    .unwrap();
             }
-            // The entity row, in its pre-A10 shape.
-            let created = "2020-01-01T00:00:00Z";
+            // The entity row, in its pre-A10 shape — rewritten in place
+            // rather than deleted and re-inserted, so the audit record
+            // `ensure_entity` appended survives to be relabelled. Deleting
+            // it was how the fixture ended up with no legacy entity label
+            // either; re-inserting one by hand is not an option, because a
+            // bare `INSERT` into `audit` breaks the chain and `verify` would
+            // then fail for a reason that has nothing to do with A10.
+            let (old_eid, created): (String, String) = s
+                .conn
+                .query_row("SELECT id, created_at FROM kg_entities", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
             let eid = super::legacy_entity_id("alice");
-            let etag = s
-                .vault
-                .tag(super::entity_canonical(&eid, "alice", "unknown", created).as_bytes());
-            s.conn.execute("DELETE FROM kg_entities", []).unwrap();
+            let etag = s.vault.tag(&super::entity_canonical(
+                &eid, "alice", "unknown", &created, None,
+            ));
             s.conn
                 .execute(
-                    "INSERT INTO kg_entities (id, name, etype, tag, created_at) \
-                     VALUES (?1, 'alice', 'unknown', ?2, ?3)",
-                    rusqlite::params![eid, etag.as_slice(), created],
+                    "UPDATE kg_entities SET id = ?1, name = 'alice', tag = ?2, \
+                     name_rest = NULL WHERE id = ?3",
+                    rusqlite::params![eid, etag.as_slice(), old_eid],
+                )
+                .unwrap();
+            s.conn
+                .execute(
+                    "UPDATE audit SET record_id = ?1 WHERE record_id = ?2",
+                    rusqlite::params![format!("kg-entity/{eid}"), format!("kg-entity/{old_eid}")],
                 )
                 .unwrap();
             s.conn
@@ -2866,6 +3599,18 @@ mod tests {
         assert!(
             legacy.windows(5).any(|w| w == b"alice"),
             "premise: a pre-A10 graph keeps its subject in clear"
+        );
+        // Premise for the half this gate used to miss: the ORACLE is in the
+        // file too, as the audit label of a fact. Without this arm the
+        // digest assertion after the migration could pass on a fixture that
+        // never planted one — which is exactly what happened.
+        let legacy_fact = super::legacy_triple_id("alice", "works_at", "acme", "");
+        assert!(
+            legacy
+                .windows(legacy_fact.len())
+                .any(|w| w == legacy_fact.as_bytes()),
+            "premise: a pre-A10 graph keeps an unkeyed fact digest in \
+             audit.record_id — the confirmation oracle A10 exists to close"
         );
 
         // The next writable open migrates it.
@@ -2886,6 +3631,51 @@ mod tests {
         assert_eq!(s.kg_stats().unwrap().triples, 2);
         assert_eq!(s.kg_stats().unwrap().entities, 1);
         assert!(s.verify().unwrap().ok(), "and the vault still verifies");
+
+        // **Traceability: every audit label naming a graph record still
+        // resolves to one.** This is the assertion that fails without the
+        // relabel — `kg/{old_id}` pointed at nothing once the id moved, and
+        // an audit trail whose references have moved is not an audit trail.
+        // It also fails if someone ever "closes" the oracle by DELETING the
+        // audit rows, which would destroy the evidence instead of moving the
+        // label, so the two failure modes are pinned apart.
+        let labels: Vec<String> = s
+            .conn
+            .prepare("SELECT record_id FROM audit WHERE record_id LIKE 'kg%'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            labels.len() >= 3,
+            "premise: the legacy vault's graph writes were audited: {labels:?}"
+        );
+        for label in &labels {
+            let (table, id) = match label.strip_prefix("kg-entity/") {
+                Some(id) => ("kg_entities", id.to_string()),
+                None => (
+                    "kg_triples",
+                    label
+                        .strip_prefix("kg/")
+                        .unwrap()
+                        .trim_end_matches("/authority")
+                        .to_string(),
+                ),
+            };
+            let live: i64 = s
+                .conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
+                    rusqlite::params![id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                live, 1,
+                "audit label {label:?} resolves to no live record after the migration"
+            );
+        }
         drop(s);
 
         let after = std::fs::read(&db).unwrap();
@@ -2900,6 +3690,22 @@ mod tests {
                     .windows(digest.len())
                     .any(|win| win == digest.as_bytes()),
                 "an unkeyed digest of {w:?} survived the migration"
+            );
+        }
+        // And the FOUR-COMPONENT fact recipe, which the single-word check
+        // above cannot express. This is the shape that lived on in
+        // `audit.record_id`.
+        for (s_, p_, o_) in [
+            ("alice", "works_at", "acme"),
+            ("alice", "reports_to", "bob"),
+        ] {
+            let digest = super::legacy_triple_id(s_, p_, o_, "");
+            assert!(
+                !after
+                    .windows(digest.len())
+                    .any(|win| win == digest.as_bytes()),
+                "the unkeyed fact digest of {s_}/{p_}/{o_} survived the migration — \
+                 a confirmation oracle for anyone with a candidate word list"
             );
         }
     }
@@ -2949,6 +3755,22 @@ mod tests {
                 "an unkeyed digest of {w:?} is on disk — a confirmation                  oracle for anyone with a candidate word list"
             );
         }
+        // The four-component FACT recipe as well, not only the single-word
+        // one. A fresh vault keys its ids, so this passes today — it is here
+        // because `chain_append` writes the id into `audit.record_id` in
+        // clear, so a regression to the unkeyed recipe would put the oracle
+        // back in the file through the audit table, which is exactly where
+        // the migration path had left it.
+        for (s_, p_, o_) in [
+            (words[0], words[1], words[2]),
+            ("alice", "reports_to", "bob"),
+        ] {
+            let digest = super::legacy_triple_id(s_, p_, o_, "");
+            assert!(
+                !db.windows(digest.len()).any(|win| win == digest.as_bytes()),
+                "an unkeyed FACT digest of {s_}/{p_}/{o_} is on disk"
+            );
+        }
 
         // Premise, both halves. An hmac-only vault DOES keep the words —
         // that level stores plaintext by the operator's explicit choice, so
@@ -2962,6 +3784,218 @@ mod tests {
         assert!(
             db2.windows(5).any(|w| w == b"alice"),
             "premise: an hmac-only vault keeps the subject readable"
+        );
+    }
+
+    /// **A row the A10 migration cannot migrate does not get declared
+    /// migrated** — and its exposure is reported rather than warned once.
+    ///
+    /// Two defects in one place. The completion marker was written INSIDE the
+    /// row transaction and the `VACUUM` ran after the commit, so any
+    /// interruption between them (a full disk on a large vault, a power loss)
+    /// left the marker saying "migrated" while every word sat in the file's
+    /// freed pages — and the early return at the top of the migration meant
+    /// nothing ever looked again. Separately, a row whose tag does not verify
+    /// is deliberately SKIPPED rather than re-tagged (migrating it would
+    /// launder a tampered row), and the marker was written anyway: the vault
+    /// claimed to be migrated while part of it was still readable at rest.
+    ///
+    /// The premise here is the sharp part: the word is asserted to be STILL
+    /// IN THE FILE, as a pinned cost. That is not the migration failing —
+    /// it is the honest consequence of refusing to launder a tampered row,
+    /// and pinning it is how it stays visible instead of becoming a
+    /// surprise.
+    #[test]
+    fn a_tamper_failing_row_leaves_the_migration_incomplete_and_says_so() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let db = dir.path().join("vaults/kg-test/palace.db");
+        {
+            let mut s =
+                PalaceStore::open(mgr.create("kg-test", SecurityLevel::Sealed).unwrap()).unwrap();
+            s.kg_add("zebracorp", "employs", "quintus", None, None, 1.0, None)
+                .unwrap();
+            // Put the row back into pre-A10 shape (clear columns, no sealed
+            // terms) and then CORRUPT its tag, so the migration must skip it.
+            let (id, tag): (String, Vec<u8>) = s
+                .conn
+                .query_row("SELECT id, tag FROM kg_triples", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            let row = s.triple_row(&id).unwrap().unwrap();
+            let (subject, predicate) = row.terms(&s.vault).unwrap();
+            s.conn
+                .execute(
+                    "UPDATE kg_triples SET subject = ?1, predicate = ?2, terms = NULL, \
+                     tag = ?3 WHERE id = ?4",
+                    rusqlite::params![subject, predicate, vec![0u8; tag.len()], id],
+                )
+                .unwrap();
+            s.conn
+                .execute("DELETE FROM meta WHERE key = 'kg_blind_version'", [])
+                .unwrap();
+        }
+
+        // A writable open runs the migration, skips the row, and must NOT
+        // declare the vault migrated.
+        let s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        // A COUNT, not `query_row(...).ok()`: the latter yields `None` both
+        // for "no such row" and for any query error, so it could have passed
+        // for the wrong reason.
+        let marker: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE key = 'kg_blind_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            marker, 0,
+            "a skipped row must leave the vault UNMARKED so the next writable \
+             open retries"
+        );
+        // ...and the exposure is readable, not a warning someone had to catch.
+        assert!(
+            s.unhealed().iter().any(|u| u.contains("in CLEAR at rest")),
+            "the remaining exposure must be reported on `unhealed`, got {:?}",
+            s.unhealed()
+        );
+        assert_eq!(s.kg_unblinded_rows().unwrap(), 1, "one row still in clear");
+        drop(s);
+
+        // The pinned COST: because the row was not laundered, its word is
+        // still in the file. Asserted so it cannot become a surprise.
+        let after = std::fs::read(&db).unwrap();
+        assert!(
+            after.windows(9).any(|w| w == b"zebracorp"),
+            "premise: refusing to migrate a tampered row means its word stays \
+             readable at rest — that is the trade, and it is pinned"
+        );
+
+        // And a re-open retries rather than skipping the walk: still unmarked,
+        // still reported, and idempotent (no duplicate rows).
+        let s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        assert_eq!(s.kg_stats().unwrap().triples, 1, "no duplicate row");
+        assert_eq!(
+            s.kg_unblinded_rows().unwrap(),
+            1,
+            "still pending on re-open"
+        );
+    }
+
+    /// **The entity browser reads alphabetically on BOTH security levels.**
+    ///
+    /// `kg_entities` paged with `ORDER BY name LIMIT/OFFSET`, and since A10
+    /// that column holds a truncated keyed HMAC on a sealed vault — so the
+    /// browser on `/v1` and in the console listed entities in an order with
+    /// no relation to their names, while the identical call on an hmac-only
+    /// vault still read alphabetically. A capability silently weaker on one
+    /// security level, with nothing recorded.
+    ///
+    /// Asserted as an EQUALITY between the levels, which is stronger than
+    /// asserting sortedness on one: it pins the two surfaces together, so a
+    /// future change cannot fix one and leave the other.
+    #[test]
+    fn the_entity_browser_orders_by_the_word_on_both_levels() {
+        let names = ["zulu", "alpha", "mike", "bravo", "yankee"];
+        let listing = |level| {
+            let (_d, mut s) = store(level);
+            for n in names {
+                s.kg_add(n, "is", "a-letter", None, None, 1.0, None)
+                    .unwrap();
+            }
+            let all: Vec<String> = s
+                .kg_entities(100, 0)
+                .unwrap()
+                .into_iter()
+                .map(|(n, _, _)| n)
+                .collect();
+            // And a PAGE, because paging in RAM is where an off-by-one lives.
+            let page: Vec<String> = s
+                .kg_entities(2, 1)
+                .unwrap()
+                .into_iter()
+                .map(|(n, _, _)| n)
+                .collect();
+            (all, page)
+        };
+        let (sealed_all, sealed_page) = listing(SecurityLevel::Sealed);
+        let (clear_all, clear_page) = listing(SecurityLevel::HmacOnly);
+
+        let mut expected: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(clear_all, expected, "premise: hmac-only sorts by the word");
+        assert_eq!(
+            sealed_all, expected,
+            "a sealed vault must list entities in the same alphabetical order \
+             — before this it ordered by the keyed blind index"
+        );
+        assert_eq!(
+            sealed_page, clear_page,
+            "and paging must agree too: limit=2 offset=1"
+        );
+        assert_eq!(sealed_page, vec!["bravo", "mike"], "the actual page");
+    }
+
+    /// **U3: an offline relabel of an audit row fails `verify`.**
+    ///
+    /// `audit.record_id` is the one part of an audit row the chain does not
+    /// authenticate — `chain_next_hex` takes the tag, `verify` replays tags,
+    /// rotation preserves tags verbatim. That is exactly what makes the A10
+    /// audit-label remap legitimate (it moves no evidence), and the flip side
+    /// is that an attacker with write access could point a record at a
+    /// different subject and every other leg of `verify` still passed. This
+    /// is the fourth leg.
+    ///
+    /// Both directions, and the premise is the point: the same vault verifies
+    /// clean before the relabel, so this is about the relabel and not about a
+    /// vault that was already broken.
+    #[test]
+    fn a_relabelled_audit_row_fails_verify() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let id = s
+            .kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
+        assert!(
+            s.verify().unwrap().ok(),
+            "premise: clean before the relabel"
+        );
+        assert!(
+            s.verify().unwrap().orphan_labels.is_empty(),
+            "premise: no orphans to begin with"
+        );
+
+        // Point the fact's audit record at a subject that does not exist.
+        // The TAG is untouched, so every other leg still passes — which is
+        // the whole reason this leg is needed.
+        let n = s
+            .conn
+            .execute(
+                "UPDATE audit SET record_id = 'kg/deadbeefdeadbeefdeadbeefdeadbeef' \
+                 WHERE record_id = ?1",
+                rusqlite::params![format!("kg/{id}")],
+            )
+            .unwrap();
+        assert_eq!(n, 1, "premise: exactly one label was moved");
+
+        let report = s.verify().unwrap();
+        assert_eq!(
+            report.bad_records.len(),
+            0,
+            "premise: the relabel does NOT trip the HMAC legs — no record's \
+             tag changed, which is why the other three legs cannot see it"
+        );
+        assert!(report.chain_ok, "premise: nor the chain, which hashes tags");
+        assert_eq!(
+            report.orphan_labels,
+            vec!["kg/deadbeefdeadbeefdeadbeefdeadbeef".to_string()],
+            "the relabelled row must be reported as an orphan"
+        );
+        assert!(
+            !report.ok(),
+            "and it must fail the overall verdict, not merely be counted"
         );
     }
 
@@ -3051,8 +4085,23 @@ mod tests {
         assert_eq!(r[0].verdict, ReceiptVerdict::Dangling);
     }
 
+    /// A plain citation is **reported as unbound**, not hidden.
+    ///
+    /// This asserted `len() == 1` — the walk selected `WHERE receipt_tag IS
+    /// NOT NULL`, so a fact naming a source it had no binding for vanished
+    /// from the provenance report entirely. U12 forced the question by
+    /// making that row shape reachable a second way (an import whose payload
+    /// does not carry the cited drawer, since a keyed fingerprint cannot be
+    /// recomputed at a destination), and the two are INDISTINGUISHABLE at
+    /// the row: `source_drawer_id` set, fingerprint and tag NULL. So either
+    /// both are reported or both are silent, and silence is what let an
+    /// unbindable import look like a fact that never claimed a source.
+    ///
+    /// `verify_supersessions` — the same walk one level down — has always
+    /// selected on the LINK and reported `Unreceipted` for exactly this.
+    /// The verdict still carries no integrity failure: only `Tampered` does.
     #[test]
-    fn plain_facts_carry_no_receipt() {
+    fn plain_facts_are_reported_as_unreceipted() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
         let src = src_drawer("some verbatim source");
         s.upsert(&src).unwrap();
@@ -3069,11 +4118,30 @@ mod tests {
             None,
         )
         .unwrap();
-        // Only the receipted fact is verified; the plain citation (stored
-        // but not tamper-covered) is not treated as a receipt.
+        // A fact that cites nothing at all is still skipped — it never
+        // claimed a provable citation, so it is not a provenance state.
+        s.kg_add("e", "rel", "f", None, None, 1.0, None).unwrap();
         let r = s.kg_verify_receipts().unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].verdict, ReceiptVerdict::Verified);
+        assert_eq!(r.len(), 2, "the two facts that CITE something: {r:?}");
+        let verdict = |subject_of: &str| {
+            r.iter()
+                .find(|x| x.triple_id == subject_of)
+                .map(|x| x.verdict.clone())
+        };
+        let bound = s
+            .kg_query_entity("c", None, "outgoing")
+            .unwrap()
+            .first()
+            .map(|t| t.id.clone())
+            .unwrap();
+        let unbound = s
+            .kg_query_entity("a", None, "outgoing")
+            .unwrap()
+            .first()
+            .map(|t| t.id.clone())
+            .unwrap();
+        assert_eq!(verdict(&bound), Some(ReceiptVerdict::Verified));
+        assert_eq!(verdict(&unbound), Some(ReceiptVerdict::Unreceipted));
     }
 
     #[test]
@@ -3626,9 +4694,9 @@ mod tests {
         // A pre-upgrade entity: tagged, in the table, with no audit record.
         let id = super::legacy_entity_id("legacy");
         let created = "2020-01-01T00:00:00Z";
-        let tag = s
-            .vault
-            .tag(super::entity_canonical(&id, "legacy", "unknown", created).as_bytes());
+        let tag = s.vault.tag(&super::entity_canonical(
+            &id, "legacy", "unknown", created, None,
+        ));
         s.conn
             .execute(
                 "INSERT INTO kg_entities (id, name, etype, tag, created_at) \
@@ -3706,6 +4774,107 @@ mod tests {
             "and it is named as an entity, got {:?}",
             report.bad_records
         );
+    }
+
+    /// A10 rider: on a sealed vault the entity's WORD lives only in
+    /// `name_rest`, so that blob has to be inside the entity's tag.
+    ///
+    /// It was not. `entity_canonical` covered `(id, name, etype,
+    /// created_at)`, and on a sealed vault `name` is a blind index — so an
+    /// offline attacker could NULL out or swap one entity's sealed name,
+    /// destroying or changing what the row means, and `kg_verify` reported
+    /// nothing. The triple counterpart (`terms`) was inside the fact's
+    /// canonical from the day it shipped; its neighbour was not, which is
+    /// the same asymmetry that made rotation forget `name_rest` one commit
+    /// after it forgot `terms`.
+    ///
+    /// Both directions, and the ERASURE arm is the one that was blind:
+    /// swapping is caught by the blind column moving too, erasing is not.
+    #[test]
+    fn erasing_a_sealed_entity_name_is_detected() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
+        // Premise: the sealed name exists and the vault is clean.
+        let sealed: Option<Vec<u8>> = s
+            .conn
+            .query_row("SELECT name_rest FROM kg_entities", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            sealed.is_some(),
+            "premise: a sealed vault seals the entity name"
+        );
+        assert!(s.verify().unwrap().ok(), "premise: clean before tampering");
+
+        // ERASE it — the column the tag did not use to cover.
+        s.conn
+            .execute("UPDATE kg_entities SET name_rest = NULL", [])
+            .unwrap();
+        let report = s.verify().unwrap();
+        assert!(
+            !report.ok(),
+            "erasing the sealed entity name must be tampering"
+        );
+        assert!(
+            report
+                .bad_records
+                .iter()
+                .any(|r| r.starts_with("kg-entity/")),
+            "and it is named as an entity, got {:?}",
+            report.bad_records
+        );
+
+        // **SWAP, not just erase** — and this is the arm that actually pins
+        // the blob's CONTENT into the tag. Erasure is caught by the
+        // extension's marker byte disappearing, so a canonical that appended
+        // the marker and dropped the bytes would pass the arm above while
+        // leaving one entity's sealed name substitutable for another's.
+        // Verified against exactly that mutation.
+        let (_d3, mut two) = store(SecurityLevel::Sealed);
+        two.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
+        two.kg_add("bob", "works_at", "globex", None, None, 1.0, None)
+            .unwrap();
+        let blobs: Vec<(String, Vec<u8>)> = two
+            .conn
+            .prepare("SELECT id, name_rest FROM kg_entities ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(blobs.len(), 2, "premise: two sealed entity names");
+        assert!(two.verify().unwrap().ok(), "premise: clean");
+        two.conn
+            .execute(
+                "UPDATE kg_entities SET name_rest = ?1 WHERE id = ?2",
+                rusqlite::params![blobs[1].1, blobs[0].0],
+            )
+            .unwrap();
+        let swapped = two.verify().unwrap();
+        assert!(
+            !swapped.ok()
+                && swapped
+                    .bad_records
+                    .iter()
+                    .any(|r| r.starts_with("kg-entity/")),
+            "swapping one entity's sealed name for another's must be \
+             tampering, got {:?}",
+            swapped.bad_records
+        );
+
+        // And an hmac-only vault, where the column holds the word and there
+        // is no blob: the canonical carries no extension, so nothing here
+        // re-tags or falsely alarms.
+        let (_d2, mut h) = store(SecurityLevel::HmacOnly);
+        h.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
+        let none: Option<Vec<u8>> = h
+            .conn
+            .query_row("SELECT name_rest FROM kg_entities", [], |r| r.get(0))
+            .unwrap();
+        assert!(none.is_none(), "premise: hmac-only seals nothing here");
+        assert!(h.verify().unwrap().ok(), "and it still verifies");
     }
 
     #[test]
@@ -4238,5 +5407,321 @@ mod tests {
             "a refused etype must not leave the entity behind"
         );
         assert!(s.verify().unwrap().ok());
+    }
+
+    /// Build a sealed vault holding one superseded drawer, one drawer that
+    /// supersedes it, and one receipted fact citing it — then put both
+    /// fingerprint columns back into their **pre-U12 shape**: the bare
+    /// `sha256(content)`, with the receipts re-tagged over that shape so the
+    /// rows verify exactly as a genuine legacy vault's do.
+    ///
+    /// Returns `(cited drawer id, its verbatim content, the fact id)`.
+    ///
+    /// Planted with the real pre-U12 recipe rather than by mocking the
+    /// migration's inputs — `legacy_triple_id`'s lesson, one unit on: a
+    /// fixture that plants an approximation tests the approximation.
+    #[cfg(test)]
+    fn plant_pre_u12_fingerprints(s: &mut PalaceStore) -> (String, String, String) {
+        use undercroft_core::Drawer;
+        let cited = Drawer::new(
+            "w",
+            "r",
+            "Ptolemy wired 4.2 million to the Vaduz account.".into(),
+            None,
+            0,
+            "t",
+        );
+        s.upsert(&cited).unwrap();
+        let newer = Drawer::new("w", "r", "Correction: cancelled.".into(), None, 1, "t")
+            .with_supersedes(Some(cited.id.clone()));
+        s.upsert(&newer).unwrap();
+        let fact = s
+            .kg_add_receipted(
+                "ptolemy",
+                "wired_to",
+                "vaduz",
+                None,
+                None,
+                1.0,
+                (&cited.id, &cited.content),
+                None,
+            )
+            .unwrap();
+        // Back to the pre-U12 shape.
+        let legacy = super::content_fp(&cited.content);
+        let sup_receipt = s
+            .vault
+            .tag(&crate::supersession_canonical(
+                &newer.id, &cited.id, &legacy,
+            ))
+            .to_vec();
+        s.conn
+            .execute(
+                "UPDATE drawers SET supersedes_fp = ?1, supersedes_receipt = ?2 WHERE id = ?3",
+                rusqlite::params![legacy, sup_receipt, newer.id],
+            )
+            .unwrap();
+        let rcpt = s
+            .vault
+            .tag(&super::receipt_canonical(&fact, &cited.id, &legacy))
+            .to_vec();
+        s.conn
+            .execute(
+                "UPDATE kg_triples SET source_fp = ?1, receipt_tag = ?2 WHERE id = ?3",
+                rusqlite::params![legacy, rcpt, fact],
+            )
+            .unwrap();
+        s.conn
+            .execute("DELETE FROM meta WHERE key = 'content_fp_version'", [])
+            .unwrap();
+        (cited.id.clone(), cited.content.clone(), fact)
+    }
+
+    /// **U12: a pre-U12 vault stops holding an unkeyed SHA-256 of verbatim
+    /// drawer content in a clear column, and every receipt still verifies.**
+    ///
+    /// Both halves matter and they pull in opposite directions. Closing the
+    /// oracle means moving a value that is inside two HMACs, so the easy
+    /// wrong answer is a migration that closes the leak and leaves every
+    /// receipt reading `Tampered` — or one that keeps the receipts by not
+    /// moving anything. The byte assertion is over the FILE, because an
+    /// in-place `UPDATE` leaves the old digest in a freed page and reasoning
+    /// about rows cannot see that (U6's lesson, and the reason this walk
+    /// VACUUMs).
+    #[test]
+    fn a_pre_u12_vault_rekeys_its_content_fingerprints_and_stops_leaking() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let db = dir.path().join("vaults/u12/palace.db");
+        let (cited_id, content, fact) = {
+            let mut s =
+                PalaceStore::open(mgr.create("u12", SecurityLevel::Sealed).unwrap()).unwrap();
+            let out = plant_pre_u12_fingerprints(&mut s);
+            // Premise: the planted state really does verify, so what the
+            // migration preserves is a live property and not a broken one.
+            assert!(
+                s.verify_supersessions()
+                    .unwrap()
+                    .iter()
+                    .all(|v| v.verdict == ReceiptVerdict::Verified),
+                "premise: a pre-U12 supersession verifies"
+            );
+            assert!(
+                s.kg_verify_receipts()
+                    .unwrap()
+                    .iter()
+                    .all(|v| v.verdict == ReceiptVerdict::Verified),
+                "premise: a pre-U12 receipt verifies"
+            );
+            out
+        };
+        let digest = super::content_fp(&content);
+        let legacy = std::fs::read(&db).unwrap();
+        assert!(
+            legacy.windows(32).any(|w| w == digest),
+            "premise: a pre-U12 vault holds sha256(content) in the clear — without this \
+             the assertion after the migration proves nothing"
+        );
+
+        // The next writable open migrates it. **Every handle is dropped
+        // before the file is read**: in WAL mode the `VACUUM` lands in the
+        // `-wal` and reaches `palace.db` at the checkpoint an unforced close
+        // performs, so reading the file with a store still open measures the
+        // pre-migration pages and fails for a reason that is not the code's.
+        {
+            let s = PalaceStore::open(mgr.unlock("u12").unwrap()).unwrap();
+            assert!(
+                s.unhealed().is_empty(),
+                "a clean walk leaves nothing pending: {:?}",
+                s.unhealed()
+            );
+            let marker: String = s
+                .conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'content_fp_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(marker, super::CONTENT_FP_VERSION);
+            for (what, v) in [
+                (
+                    "supersession",
+                    s.verify_supersessions().unwrap()[0].verdict.clone(),
+                ),
+                (
+                    "receipt",
+                    s.kg_verify_receipts()
+                        .unwrap()
+                        .iter()
+                        .find(|r| r.triple_id == fact)
+                        .unwrap()
+                        .verdict
+                        .clone(),
+                ),
+            ] {
+                assert_eq!(
+                    v,
+                    ReceiptVerdict::Verified,
+                    "the {what} must still verify after the fingerprint moved — it is inside \
+                     the binding, so moving it without re-tagging turns every receipt Tampered"
+                );
+            }
+            // And the stored value really is the keyed shape, so the arm
+            // above is not passing because nothing moved.
+            let stored: Vec<u8> = s
+                .conn
+                .query_row(
+                    "SELECT source_fp FROM kg_triples WHERE id = ?1",
+                    rusqlite::params![fact],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                !super::is_legacy_unkeyed_fp(&stored),
+                "the fingerprint is still the bare digest: the walk did nothing"
+            );
+        }
+        let after = std::fs::read(&db).unwrap();
+        assert!(
+            !after.windows(32).any(|w| w == digest),
+            "the unkeyed SHA-256 of a drawer's verbatim content survived the migration — \
+             an offline reader holding the document can still confirm it (U12)"
+        );
+
+        // A `SourceChanged` verdict is still reachable, so `Verified` above
+        // is not a comparison that always says yes.
+        let mut s = PalaceStore::open(mgr.unlock("u12").unwrap()).unwrap();
+        let mut edited = s.get(&cited_id).unwrap().unwrap();
+        edited.content = "Ptolemy wired nothing at all.".into();
+        s.upsert(&edited).unwrap();
+        assert_eq!(
+            s.kg_verify_receipts()
+                .unwrap()
+                .iter()
+                .find(|r| r.triple_id == fact)
+                .unwrap()
+                .verdict,
+            ReceiptVerdict::SourceChanged,
+            "an edited source must still be detected"
+        );
+    }
+
+    /// **The migration refuses to launder a tampered binding, and that has a
+    /// price this pins as a COST rather than hiding.**
+    ///
+    /// A row whose receipt does not verify keeps its unkeyed digest — so the
+    /// word is asserted to be STILL IN THE FILE, exactly as A10's
+    /// counterpart asserts for a tamper-failing graph row. The alternative
+    /// is re-tagging an attacker's row into a freshly-signed claim. The
+    /// vault is therefore not marked migrated, the next writable open
+    /// retries, and the exposure is reported rather than silent (U7).
+    #[test]
+    fn a_tamper_failing_receipt_keeps_its_unkeyed_digest_and_says_so() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let content = {
+            let mut s =
+                PalaceStore::open(mgr.create("u12t", SecurityLevel::Sealed).unwrap()).unwrap();
+            let (_, content, fact) = plant_pre_u12_fingerprints(&mut s);
+            // Offline tampering: the receipt no longer binds its row.
+            s.conn
+                .execute(
+                    "UPDATE kg_triples SET receipt_tag = ?1 WHERE id = ?2",
+                    rusqlite::params![vec![0u8; 32], fact],
+                )
+                .unwrap();
+            content
+        };
+        let s = PalaceStore::open(mgr.unlock("u12t").unwrap()).unwrap();
+        assert!(
+            s.unhealed().iter().any(|u| u.contains("UNKEYED SHA-256")),
+            "the remaining exposure must be REPORTED, not merely left: {:?}",
+            s.unhealed()
+        );
+        assert_eq!(
+            s.unkeyed_fingerprint_rows().unwrap(),
+            1,
+            "exactly the tampered row stays behind — its neighbour migrates"
+        );
+        assert_eq!(
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM meta WHERE key = 'content_fp_version'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0,
+            "while anything is pending the marker stays unset, so the next writable open \
+             retries instead of declaring a half-migrated vault done"
+        );
+        drop(s);
+        let after = std::fs::read(dir.path().join("vaults/u12t/palace.db")).unwrap();
+        assert!(
+            after.windows(32).any(|w| w == super::content_fp(&content)),
+            "COST, pinned: refusing to re-tag a tampered binding leaves its unkeyed digest \
+             at rest. If this ever stops being true, say why here rather than deleting it"
+        );
+    }
+
+    /// **The portability leg (U12): an exported receipt still reads
+    /// `Verified` after import, and an unbindable one says so honestly.**
+    ///
+    /// A keyed fingerprint cannot be recomputed by a destination, so
+    /// `kg_import` re-derives it from the source drawer it just imported.
+    /// Left alone, every imported receipt would read `SourceChanged` — the
+    /// fact would look edited when nothing had touched it.
+    #[test]
+    fn an_imported_receipt_is_rebound_to_the_drawer_that_travelled_with_it() {
+        use undercroft_core::Drawer;
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let cited = Drawer::new("w", "r", "Ptolemy wired the money.".into(), None, 0, "t");
+        let exported = {
+            let mut src =
+                PalaceStore::open(mgr.create("src", SecurityLevel::Sealed).unwrap()).unwrap();
+            src.upsert(&cited).unwrap();
+            src.kg_add_receipted(
+                "ptolemy",
+                "wired_to",
+                "vaduz",
+                None,
+                None,
+                1.0,
+                (&cited.id, &cited.content),
+                None,
+            )
+            .unwrap();
+            src.kg_export().unwrap()
+        };
+        assert!(
+            exported[0].source_fp.is_some(),
+            "premise: the fact travels as a receipted one"
+        );
+
+        // Drawers before facts, which is the order a whole-palace export
+        // writes and the reason this arm is the common case.
+        let mut dst = PalaceStore::open(mgr.create("dst", SecurityLevel::Sealed).unwrap()).unwrap();
+        dst.upsert(&cited).unwrap();
+        dst.kg_import(&exported[0]).unwrap();
+        assert_eq!(
+            dst.kg_verify_receipts().unwrap()[0].verdict,
+            ReceiptVerdict::Verified,
+            "an imported receipt must verify against the drawer that came with it"
+        );
+
+        // And with the cited drawer absent, the honest verdict is that the
+        // citation was never bound — NOT `Dangling`, which would claim a
+        // receipt had existed and its target since gone.
+        let mut bare =
+            PalaceStore::open(mgr.create("bare", SecurityLevel::Sealed).unwrap()).unwrap();
+        bare.kg_import(&exported[0]).unwrap();
+        assert_eq!(
+            bare.kg_verify_receipts().unwrap()[0].verdict,
+            ReceiptVerdict::Unreceipted,
+            "a citation that could not be bound must be REPORTED as unbound — selecting on \
+             `receipt_tag IS NOT NULL` made it vanish from the report instead"
+        );
     }
 }

@@ -5,6 +5,46 @@ Verbatim drawers filed into wings/rooms, stored in isolated **vaults** with
 per-vault HKDF-derived keys, XChaCha20-Poly1305 content sealing, and
 HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
+## Who works on this project — the role every agent takes
+
+**Every agent on this project — the session agent and every subagent it
+spawns — works as an expert Senior Engineer holding three competencies at
+once: Software Engineering, Agentic Memory Architecture and design, and
+Security.** Not one of the three in turn, and not a generic coder. This is a
+role statement, not a flourish: it is what the work has repeatedly needed and
+what its absence has repeatedly cost.
+
+- **Software Engineering** — the change compiles, is tested on both sides of
+  its premise, is verified on every surface that reaches it, and leaves no
+  second implementation of one decision.
+- **Agentic Memory Architecture and design** — reason about **identity,
+  lifetime, provenance and traceability BEFORE writing code.** A stored
+  memory's value is that a reference to it still resolves later: across a key
+  rotation, across a migration, across an export, and across an agent's own
+  sessions. For any identifier or index key the question is one line: *what
+  holds a reference to this, and what is that reference's lifetime?* The
+  worked example is A10 — a rotating key used to derive identifiers, which
+  would have orphaned every audit record, receipt and agent-held id at once.
+- **Security** — assume the offline reader, the malicious writer and the
+  injected drawer. Ask what a gate can **SEE**, not what it asserts: the two
+  most expensive defects in this tree were gates measuring an observable the
+  defect does not move (a substring scan against a hex digest; a column
+  snapshot against a recipe that only moves when next derived).
+
+Consequences that are binding, not advisory:
+
+- **Verify by reading code. A heading, a doc claim, a CHANGELOG bullet and a
+  test NAME are not verification** — headings here have been wrong
+  repeatedly and are the most expensive artifact this project produces.
+- **Report your own defects as your own**, never as discoveries. A fix that
+  introduces a hole and reports it as a finding is worse than the hole.
+- **Do the impact analysis first**: establish what a change touches and what
+  could fail *silently*, plan it, prove it, then present the diff.
+- **A gap is a gap** — never dressed up as a principled refusal.
+- When fanning out subagents, they inherit this role and the read-only rule
+  that goes with parallel work (a shared cargo target dir yields false
+  greens; builds and the battery belong to the integrator).
+
 ## Layout
 
 - `Cargo.toml` — workspace root (12 crates; `undercroft-embed-onnx` and
@@ -367,15 +407,40 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   VACUUM** — an in-place UPDATE leaves the old row images in freed pages, so
   the words were still in the FILE until it did; any future at-rest
   migration needs the same, and a gate that reads bytes rather than rows),
+  **and neither is a DIGEST of a drawer's words (U12, 2026-08-06)**:
+  `kg_triples.source_fp` and `drawers.supersedes_fp` were unkeyed
+  `sha256(verbatim content)` in clear columns — the same confirmation
+  oracle one table over, and the pinned exposure inventory could not see
+  them because its fixture superseded a NONEXISTENT id and used plain
+  `kg_add`, so both columns were NULL in the only vault it ever measured.
+  Now `HMAC(kg_secret, sha256(content))`, on the A10 key for the A10
+  reason. **Keying the digest rather than the content is what makes the
+  migration total**: the stored legacy value IS that digest, so every row
+  re-wraps without reading a drawer — which matters because a source that
+  was legitimately EDITED since its receipt has no original bytes left,
+  and re-deriving from content would have forced a choice between
+  laundering a real `SourceChanged` into `Verified` and leaving the oracle
+  in the file forever. The receipt is re-tagged (the fingerprint is inside
+  it), so it is VERIFIED first and a failing row is skipped, not laundered
+  — reported on `PalaceStats.unhealed`, marker withheld, retried. Readers
+  are shape-aware (`fp_matches`): a read-only open cannot migrate, so
+  comparing a pre-U12 row under the keyed recipe would call an intact
+  vault `SourceChanged`. The cost is PORTABILITY and it is paid at
+  import: a keyed fingerprint cannot be recomputed at a destination, so
+  `kg_import` re-derives from the source drawer it just imported (both
+  import surfaces already order drawers first) and writes NO binding when
+  the payload lacks it — reported `Unreceipted`, not `Dangling`, because
+  no receipt was ever written. `forget.rs`'s attestation fp stays
+  unkeyed: it is verified by a third party without the vault key),
   extractor identity (which model claimed each distilled fact, inside the
   fact's HMAC via the third canonical extension — 0x1d, the
   support/authority precedent, so untouched facts keep byte-identical
   canonicals; a flipped attribution fails verification), receipted drawer
   supersession (`meta.supersedes` under the drawer HMAC + mirror column +
-  keyed receipt over the superseded content's unkeyed fp in separate
-  columns — the kg source_fp/receipt_tag shape one level up, re-keyed on
-  rotation; five verdicts via `verify_supersessions`; superseding NEVER
-  deletes), whole-palace export/import (typed records: drawers + KG
+  keyed receipt over the superseded content's fingerprint in separate
+  columns — the kg source_fp/receipt_tag shape one level up, the receipt
+  re-keyed on rotation while the fingerprint does not move; five verdicts
+  via `verify_supersessions`; superseding NEVER deletes), whole-palace export/import (typed records: drawers + KG
   entities/facts/tunnels; receipts re-key from the traveling fp at the
   destination; the manifest carries embedder identity and chain head as
   provenance, never as state),
@@ -615,7 +680,9 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
   `serve-http --read-only` opens BOTH its stores read-only; the two opens
   had drifted apart, and which port path opened the vault decided whether
   a `--read-only` server re-embedded every drawer at start-up and appended
-  a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **33 tools, 12
+  a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **34 tools (incl. `undercroft_history`, the audit chain
+  at `HistoryScope::Agent` — fenced by namespace and by the reserved review
+  wing, so a diverted write cannot read its own evidence back), 12
   of them writes** — `WRITE_TOOLS`
   + the quarantine fence and the authority fence over raw arguments;
   parity.rs: the surface inventory the code is COUNTED AGAINST in both
@@ -818,8 +885,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (641 run,
-                                      # 4 #[ignore]d = 645 declared. Counted from
+docker compose run --rm test          # cargo unit + integration tests (656 run,
+                                      # 4 #[ignore]d = 660 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -833,7 +900,7 @@ docker compose run --rm test          # cargo unit + integration tests (641 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (238 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (257 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (76 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -905,6 +972,45 @@ at a time, as different build targets reached each file.
 one for code.** Applying it blindly across a 7-way merge spliced away closing
 braces in three `.rs` files. Resolve code conflicts on their merits; reserve
 union for additive prose.
+
+**Run the battery with `bash tests/battery.sh`** (all seven suites, or name a
+subset). It exists because two mistakes on 2026-08-06 were the same defect —
+a verdict taken from something other than the thing that decides it:
+a summary built by piping `cargo test` through `awk` reported `failed=0` from
+an EMPTY field, and `lint` was run locally *before* the last edit and reported
+green while the battery failed on a lint introduced after it. So the script
+never parses suite output to decide pass/fail — **the exit code is the
+verdict** — and it runs every suite in one pass over one tree, which makes "I
+ran it before the last edit" impossible rather than merely discouraged. It
+also handles the `backends-e2e` `down -v` and never pipes a suite (a
+pipeline's status is its LAST command's, which is how `| grep` turns a failing
+suite into a passing one). Logs land in `.battery/` (gitignored).
+
+**Line endings are enforced, in two scopes, because no image carries the whole
+tree.** `.gitattributes` declares `* text=auto eol=lf` so a CRLF shell script
+cannot break in the containers — and nothing checked it until scripted
+text-mode edits on Windows converted eleven files and `tests/e2e.sh` died with
+`$'\r': command not found` before a single check ran (it also made a 100-line
+CLAUDE.md change show as 1,415 lines, which is how a real defect hides in an
+unreadable diff). `crates/` is gated by
+`no_source_file_has_crlf_line_endings` (complete inside every image, since the
+test image COPYs exactly that subtree); everything else — `tests/`, `docs/`,
+`website/`, compose files — by the `tests/battery.sh` preflight, host-side,
+via `git ls-files --eol` (git owns the concept, so ask git rather than
+hand-rolling byte detection: three hand-rolled attempts each failed, twice as
+a false negative and once declaring the whole repo corrupt). **Write files in
+BINARY mode on this repo.**
+
+**A local LLM is available for consultation** (maintainer's machine): LM Studio
+on `http://localhost:1234/v1`, OpenAI-compatible, model id `deephat-v1-7b` — a
+security-oriented model, with `qwen/qwen3.5-9b` and
+`deepseek/deepseek-r1-0528-qwen3-8b` also loaded. Loopback, so the engine's own
+transport policy permits it. Useful as a cheap second opinion on a security or
+crypto decision. **Calibrate honestly**: asked about the U12 fingerprint
+exposure it listed "unkeyed so they survive rotation" as a *low-risk factor*
+and then recommended keying them — contradicting the constraint in the question
+— and raised irrelevant points. Argue with it; never cite it as authority, and
+verify anything it says against the code.
 
 **Before trusting any run of a freshly built binary, prove the binary is
 fresh**: probe it for a symbol only the new code has (`--help | grep -c
@@ -1223,14 +1329,132 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   The tree already said all of this and it is written here because a
   session did it wrong anyway (A10, 2026-08-05, caught before merge):
   `drawer_id` and the tunnel id are unkeyed deterministic digests;
-  `content_fp` and `supersedes_fp` are unkeyed **specifically so they
-  survive rotation**, each with a comment saying so; `fingerprint()` is
+  the two stored content fingerprints (`supersedes_fp`,
+  `kg_triples.source_fp`) must **survive rotation unchanged**, which is
+  why U12 keyed them with the STORED `kg_secret` rather than leaving them
+  unkeyed (an unkeyed digest of content in a clear column is the oracle
+  the sentence above forbids) and rather than with a vault key (which
+  would move them). The recipe keys the DIGEST, not the content —
+  `HMAC(k, sha256(m))` — so the at-rest migration re-wraps what is
+  already stored and never needs the content back, which is what makes a
+  legitimately-edited source migrate instead of forcing a choice between
+  laundering a `SourceChanged` verdict and stranding the oracle forever.
+  `forget.rs`'s attestation fingerprint stays unkeyed on purpose: it is
+  signed and verified by a third party WITHOUT the vault key.
+  `fingerprint()` is
   keyed but is a LOOKUP key that rotation recomputes, never an identifier;
   `sample_rank` is keyed and deliberately rotation-sensitive because it
   chooses a training sample and nothing holds a reference to it. Before
   changing how any identifier is derived, **enumerate what holds a
   reference to it and state that reference's lifetime** — the impact
   analysis, not the compiler, is what catches this.
+  **It is a GATE now, because prose is what failed the first time**
+  (`no_durable_reference_moves_on_a_key_rotation`, rotate.rs): every
+  durable reference — ids, both blind columns, the content fingerprints,
+  every `audit.record_id`, the KG secret's plaintext — snapshotted, rotated,
+  required byte-identical, with the keyed lookup keys and receipts required
+  to **change** so "nothing moved" cannot also pass for a rotation that did
+  nothing. It needed **two arms and the first version had one**: a snapshot
+  of the columns PASSED with the original defect reproduced verbatim,
+  because rotation deliberately does not re-derive ids — **a moved recipe
+  only appears the next time the id is DERIVED**, so the gate re-derives
+  every reference after the rotation and requires it to land on the existing
+  row. Same trap one level down from the ROADMAP's substring gate: measure
+  the observable the defect actually moves, not the one nearby.
+  **`audit.record_id` is a LABEL, not evidence, and the difference decides
+  what a migration may touch.** The chain hashes `audit.tag` and nothing
+  else (`chain_next_hex` takes the tag, `verify` replays tags, rotation
+  preserves tags verbatim), so `record_id` sits outside the chain
+  arithmetic and outside HMAC coverage. Consequence, learned the hard way in
+  A10's own migration: when a re-derivation legitimately MOVES an id, the
+  label must follow the row — leaving it both orphaned the audit trail and,
+  because a pre-A10 id was an unkeyed digest of the words, **left the
+  confirmation oracle in the file that the migration existed to remove**.
+  Relabelling moves no evidence; not relabelling moved a reference. Any
+  future migration that moves an identifier owes the same remap (one pass,
+  inside the transaction, so it is inside the `VACUUM` too) — and note the
+  audit table also holds **wing and room names** in clear
+  (`trust/{wing}`, `retention/{wing}[/{room}]`, `retention-clear/…`), which
+  is scope A10 unit 2 inherits and which its sizing did not list.
+- **Rotation completeness is ENFORCED, not remembered.** *Every sealed column
+  and every sealed meta value needs a line in `rotate.rs`* was prose and
+  failed four times: `terms` (caught by e2e on `export`), then its neighbour
+  `name_rest`, then `meta.kg_blind_secret`, then — worst — `wing_trust` and
+  `retention_policy`, which were never re-TAGGED at all, so a routine
+  rotation made `wing_trusts()` raise `Integrity` forever and took
+  `trust_clause` and every floored search with it. Two gates now:
+  `rotation_names_every_key_derived_artifact` (source-level, both directions:
+  every at-rest AAD domain must be named in `rotate.rs`, every `tag`-carrying
+  table must be both SELECTed and UPDATEd there, one justified exemption —
+  `audit`, whose tags are preserved verbatim as historical evidence) and the
+  `verified` arm of `no_durable_reference_moves_on_a_key_rotation`, which
+  calls every reader whose contract is "tag-verified on the way out" after a
+  rotation. **A forgotten re-tag is invisible to any snapshot of the
+  columns** — the row is byte-identical and simply stops verifying — which is
+  why the reader arm exists. Residual, stated: the source gate matches an AAD
+  domain's static PREFIX, so it cannot see a wrong *variable* inside the
+  domain; only reading rows back covers that. A key rotation also **records
+  itself** in the chain now (was A19: the largest single mutation the engine
+  performs left no evidence of itself).
+- **A clear MIRROR column is safe for a narrowing filter and unsafe for an
+  EXCLUSION — so a security decision reads the covered copy, never the
+  mirror.** `wing`, `room`, `kind` and `supersedes` are indexed copies of
+  values whose authoritative form is inside the HMAC-covered `meta_json`. The
+  justification on file was that "the filter itself only ever narrows — a
+  forged mirror can hide a row from a kind filter, never smuggle one in".
+  True of `kind = 'x'`. **It inverts for `wing <> 'quarantine-pending'`**: one
+  offline `UPDATE drawers SET wing = 'notes'` and diverted content stopped
+  matching the exclusion, so it was back in `search`, in `recent` (which
+  `wake_up` and the closet index call) and in `list_drawers`, while `verify`
+  reported clean — the drawer's own HMAC covers `meta_json`, and nothing
+  compared the two. The trust floor is a floor rather than a match and inverts
+  the same way. This was A28, and it had a working exploit.
+  The correct pattern was **already in the tree, twice**: `remote.rs` applies
+  the policy off `drawer.meta.wing` after an HMAC-verified load and says why
+  ("a mirror can offer any id it likes … so this is the boundary"), and
+  `retention.rs` reads the covered `meta.filed_at` rather than the clear
+  column. The local read path was the outlier. Now: `verified_meta_admits` is
+  the boundary for all three reads (the SQL clause stays as the accelerator —
+  it is what keeps poison out of the candidate pool, and "poison cannot crowd
+  or starve" is a pre-candidate property), and `VerifyReport.mirror_drift`
+  makes a flipped column DETECTED rather than merely ineffective.
+  **`filed_at` is deliberately NOT a mirror in this sense** and the first
+  version of that check got it wrong: the column takes the write path's own
+  `now` while `meta.filed_at` was stamped when the `Drawer` was constructed,
+  so they differ by a clock read in normal operation — checking it reported
+  eight healthy vaults as tampered. The column is storage metadata; the
+  covered field is the declared value, which is exactly why retention reads
+  the covered one.
+- **A migration's ADD COLUMN list and `READ_SCHEMA` are ONE inventory,
+  counted both ways.** The read-only open decides "would I have to migrate
+  this?" by checking `READ_SCHEMA`, so a column a writable open adds and that
+  list does not name makes the refusal stop firing — the open proceeds and then
+  fails on the first query naming the column. A10 did exactly that with
+  `kg_triples.terms` and `kg_entities.name_rest`: a read-only open of any
+  pre-A10 vault passed the gate and died on every KG read. The three ADD COLUMN
+  lists are named constants the initialisers iterate, and
+  `read_schema_covers_every_added_column` fails on a new column absent from
+  `READ_SCHEMA` **and** on a `READ_SCHEMA` entry nothing adds. The old prose
+  count ("twelve `ALTER TABLE`s", while the tree ran fourteen) is deleted in
+  favour of naming the inventories.
+- **An at-rest migration marks itself complete only when it IS complete.** The
+  A10 marker went in with the rows while the `VACUUM` ran after the commit, so
+  an interruption between them left "migrated" declared over words still in
+  freed pages, and the early return meant nothing retried. A skipped row — one
+  whose tag fails, which must not be re-tagged because that would launder it —
+  did the same thing permanently. Rule: **write the marker last, only on a
+  clean walk, and report what is still pending on `PalaceStats.unhealed`**
+  (which is therefore no longer empty on a writable open — two comments said it
+  was). Any future at-rest migration owes the same shape, plus the VACUUM and
+  the byte-reading gate.
+- **A struct is not a surface.** `/v1` serializes report structs whole, so a
+  new field reaches the wire for free; the CLI prints named fields one by one
+  and silently does not. This has bitten `PalaceStats` and then
+  `RotationReport` — the second time inside the very unit that existed to fix
+  forgotten sweeps. `parity.rs::HAND_PROJECTED` +
+  `every_hand_projected_report_field_reaches_the_cli` now fails when a field
+  has no projection, in both directions. Add a hand-projected report to that
+  list when you create one.
 - Cross-vault access must fail cryptographically (AAD binds vault id), not
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path

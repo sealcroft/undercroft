@@ -124,6 +124,18 @@ a drift, and requires that which one be written down:
   resolves its wing at the engine first. It exists because `/v1` deliberately
   opens the reviewer's door to a caller who names the wing, which is right
   for an operator's own surface and wrong for a proxied tenant token.
+- **The audit chain is not on the data plane, and that is a boundary rather
+  than an omission.** The engine's `GET /v1/vaults/{id}/history` answers at
+  OPERATOR scope — the whole chain, including `admission/{id}/{verdict}` (the
+  reviewer's view of the queue that screened this tenant's own writes) and
+  `trust/{wing}` (the retrieval policy deciding what it may retrieve).
+  Forwarding that to a tenant token is A13 restated one capability later, so
+  `history` is absent from `data_subpath_ok`'s allowlist, which is
+  fail-closed. The agent-facing half of the capability exists —
+  `undercroft_history` on MCP, fenced by namespace and by the reserved review
+  wing — but it runs against a local vault rather than through a proxy into
+  someone else's operator surface. `stats/history` in the table above is
+  unrelated: metrics over time, not the audit chain.
 - **That fence's 200-branch is dead against a same-version engine**, which
   refuses first. What remains is defence against an OLDER engine on the
   other end of the proxy — an intent worth stating, because a reader

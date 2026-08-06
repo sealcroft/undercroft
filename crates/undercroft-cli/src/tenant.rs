@@ -337,6 +337,7 @@ impl Tenancy {
                 self.drawer_supersessions(id, req, now)
             }
             ("POST", &["v1", "vaults", id, "trust"]) => self.set_trust(id, req, body, now),
+            ("GET", &["v1", "vaults", id, "history"]) => self.history(id, req, now),
             ("GET", &["v1", "vaults", id, "trust"]) => self.list_trust(id, req, now),
             ("GET", &["v1", "vaults", id, "admission"]) => self.admission_list(id, req, now),
             ("POST", &["v1", "vaults", id, "forget"]) => self.forget(id, req, body, now),
@@ -479,10 +480,14 @@ impl Tenancy {
                         "generation": generation,
                     }))
                     .collect::<Vec<_>>(),
-                // What a read-only open found and declined to repair (R4).
-                // Empty on every writable server, so a client can treat a
-                // non-empty array as "this replica is serving a vault its
-                // writer has not finished with".
+                // What an open found and declined to repair (R4). NOT empty
+                // on every writable server any more: since 2026-08-06 a
+                // writable open also reports knowledge-graph rows the A10
+                // migration could not move (their own HMAC fails, and
+                // migrating one would launder a tampered row), so a non-empty
+                // array means either "this replica is serving a vault its
+                // writer has not finished with" or "this vault still holds
+                // some graph words in clear at rest" — each note says which.
                 "read_only": full.read_only,
                 "unhealed": full.unhealed,
             })),
@@ -1084,6 +1089,8 @@ impl Tenancy {
                 "records_checked": report.records_checked,
                 "bad_records": report.bad_records,
                 "chain_ok": report.chain_ok,
+                "orphan_labels": report.orphan_labels,
+                "mirror_drift": report.mirror_drift,
                 "supersessions": {
                     "verified": count(V::Verified),
                     "source_changed": count(V::SourceChanged),
@@ -1266,14 +1273,28 @@ impl Tenancy {
 
     /// `GET /v1/vaults/{id}/kg/receipts` — verify every distilled fact
     /// against its cited verbatim source. Each entry reports a verdict
-    /// (verified | source_changed | dangling | tampered); the summary counts
-    /// let a caller alert on `tampered` without walking the list.
+    /// (verified | source_changed | dangling | unreceipted | tampered); the
+    /// summary counts let a caller alert on `tampered` without walking the
+    /// list.
+    ///
+    /// `unreceipted` became reachable for a fact with U12 — a citation with
+    /// no binding, which is what a plain `kg_add` with a source id writes
+    /// and what an import lands on when its payload does not carry the cited
+    /// drawer. It was missing from this vocabulary, so such a row appeared
+    /// in `receipts` and in no count: the summary a caller is told to alert
+    /// on would not have added up to the list beside it.
     fn kg_receipts(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         let receipts = store.kg_verify_receipts().map_err(store_err)?;
         let mut summary = serde_json::Map::new();
-        for verdict in ["verified", "source_changed", "dangling", "tampered"] {
+        for verdict in [
+            "verified",
+            "source_changed",
+            "dangling",
+            "unreceipted",
+            "tampered",
+        ] {
             let n = receipts
                 .iter()
                 .filter(|r| {
@@ -1502,6 +1523,49 @@ impl Tenancy {
 
     /// `GET /v1/vaults/{id}/trust` — every assigned wing trust class,
     /// tag-verified. Wings absent here read as `standard`.
+    /// `GET /v1/vaults/{id}/history` — the audit chain, readable at last.
+    ///
+    /// The chain was tamper-EVIDENT and not BROWSABLE: `verify` replayed it
+    /// and a forgetting attestation exported a slice, but no surface could
+    /// answer "what happened to this drawer, or this fact". For a store whose
+    /// product is traceability that was a gap, not a design choice.
+    ///
+    /// Operator scope here — the whole chain, every namespace. The agent
+    /// surface gets the same capability fenced; see
+    /// `manage::AGENT_FENCED_NAMESPACES`.
+    ///
+    /// A READ: `&self` on the store, no mutating call, so a `--read-only`
+    /// server serves it. Query: `subject` (a drawer, fact or entity id, or a
+    /// whole label), `limit`, `offset`.
+    fn history(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let subject = query_param(req, "subject");
+        let limit = query_param(req, "limit")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(50)
+            .min(1000);
+        let offset = query_param(req, "offset")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let store = self.store_for(id)?;
+        let rows = store
+            .history(
+                undercroft_store::manage::HistoryScope::Operator,
+                subject.as_deref(),
+                limit,
+                offset,
+            )
+            .map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "records": serde_json::to_value(&rows).unwrap_or_else(|_| json!([])),
+                "count": rows.len(),
+                "scope": "operator",
+            })),
+        ))
+    }
+
     fn list_trust(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;

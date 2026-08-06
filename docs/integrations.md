@@ -20,7 +20,7 @@ flowchart LR
         mine["mine / sweep<br/><i>transcript backfill</i>"]
         daemon["daemon --watch<br/><i>systemd unit</i>"]
     end
-    cc --> mcp["MCP stdio<br/><i>serve-mcp, 33 tools</i>"]
+    cc --> mcp["MCP stdio<br/><i>serve-mcp, 34 tools</i>"]
     cur --> mcp
     gem --> mcp
     cc -. "shared server" .-> http["HTTP<br/><i>serve-http: MCP /mcp +<br/>REST /v1, bearer + assertions</i>"]

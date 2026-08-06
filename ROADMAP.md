@@ -4,6 +4,303 @@ Undercroft is the Rust conversion of MemPalace with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
 
+## A28 + F12 — CLOSED 2026-08-06 (Unit C), and the doctrine corrected with them
+
+**A28 had a working exploit and this is the record of it.** The reserved-wing
+exclusion, the trust floor and every scoped read filtered on the CLEAR `wing`
+mirror. One offline `UPDATE drawers SET wing = 'notes'` released
+admission-diverted content into `search`, `recent`/`wake_up` and
+`list_drawers`, and `verify` reported a clean vault throughout.
+
+- **The mirror doctrine was stated for the wrong half of the filter space**: "a
+  forged mirror can hide a row, never smuggle one in" is true of a NARROWING
+  filter and inverts for an EXCLUSION or a FLOOR — which is what every
+  security-relevant mirror use is.
+- **The correct pattern was already in the tree twice** (`remote.rs` applies
+  policy off the verified `meta.wing`; `retention.rs` reads the covered clock),
+  so this was a fix, not a redesign: the local read path was the outlier.
+- CLOSED by `verified_meta_admits` as the boundary on all three reads, with the
+  SQL clause KEPT as the accelerator (it is what stops poison occupying
+  candidate-pool slots — a pre-candidate property), plus
+  `VerifyReport.mirror_drift` so the edit is detected rather than merely
+  ineffective. **F12 closes with it**: `verify_supersessions` selects `WHERE
+  supersedes IS NOT NULL` and is therefore blind to an ERASED link, which the
+  covered-copy comparison catches.
+- **Gates**: `a_forged_wing_mirror_cannot_release_quarantined_content` and
+  `an_erased_supersession_mirror_is_detected`, each asserting its own premise
+  (that the flip defeats the SQL clause; that the supersession walk cannot see
+  the erasure) and verified against the fix disabled.
+- Correction worth keeping: the first version of the drift leg also checked
+  `filed_at` and reported **eight healthy vaults as tampered** — the column is
+  the write path's `now`, `meta.filed_at` is stamped at `Drawer` construction,
+  and they differ by a clock read in normal operation. Storage metadata is not
+  a mirror of a declared value.
+
+### CLOSED 2026-08-06 · U12 · The two unkeyed content fingerprints (F3/F17)
+
+`drawers.supersedes_fp` and `kg_triples.source_fp` are unkeyed
+`SHA-256(full verbatim content)` in CLEAR columns on a sealed vault — a
+confirmation oracle for an offline reader holding a candidate document. They
+are unkeyed deliberately: rotation-stability (each carries a comment saying so)
+and cross-machine portability, since `kg_import` re-keys a receipt from the
+traveling fingerprint.
+
+**Severity: medium, and the reason is not the one the fix shape assumed.** The
+comforting argument is "you must reproduce an entire document byte-for-byte" —
+but a drawer is frequently ONE LINE, so for short or templated memories the
+candidate space is small and the oracle is real.
+
+**Two proposed mitigations are wrong and are recorded as such so they are not
+re-proposed.** (a) A per-row random salt with `H(salt ‖ content)` buys nothing:
+the salt sits in the clear beside the digest, so a targeted confirmation with a
+candidate list still succeeds — a salt defeats precomputation, not this. (b)
+Keying with a *vault* key is forbidden outright by the identifier/index-key
+invariant and breaks rotation-stability.
+
+**The shape that works** is A10's: key it with the long-lived per-vault secret
+stored sealed in `meta` (`kg_secret`), which rotation re-seals and never
+regenerates — rotation-stable by construction. The cost is the portability leg
+and it must be paid explicitly: the traveling fingerprint is keyed with the
+SOURCE's secret, so a destination cannot recompute it and every imported
+receipt would read `SourceChanged`. Import must therefore **re-derive the
+fingerprint from the source drawer it just imported** and bind its receipt to
+that, falling back to the honest `Dangling` verdict when the cited drawer is
+not in the payload. `kg_verify_receipts` compares
+`content_fp(local content) == fp`, so that is the one place the semantics
+change.
+
+**Why it was filed rather than done in Unit C**: it changes export/import
+provenance semantics and the supersession verdicts, and bolting it onto the end
+of a long session is how the defects this branch exists to fix were written.
+
+**CLOSED.** `HMAC(kg_secret, sha256(content))` in both columns, with three
+things this entry did not anticipate, each recorded because the difference is
+load-bearing:
+
+- **The recipe keys the DIGEST, not the content, and that decision is what
+  makes the migration total.** The plan as written could not migrate a legacy
+  row whose source had legitimately CHANGED since its receipt: producing
+  `HMAC(k, content)` needs the ORIGINAL bytes, which are gone, leaving a
+  choice between laundering a real `SourceChanged` into `Verified` and
+  stranding the oracle in the file forever. A stored legacy value *is*
+  `sha256(content)`, so keying it re-wraps every row without reading a drawer
+  and neither branch arises. Standard MAC-over-hash; the local comparison,
+  the rotation-stability and the `SourceChanged` semantics are all unchanged.
+- **`forget.rs` is a THIRD consumer of `content_fp` and must stay unkeyed.**
+  It puts the fingerprint inside an Ed25519 attestation whose entire posture
+  is that a data subject verifies it against content they hold **without the
+  vault key**. The two situations are opposites — a signed disclosure to a
+  named party about content the vault no longer holds, versus a digest at
+  rest beside content it does — and only the second is an oracle.
+- **The absent-source verdict is `Unreceipted`, not `Dangling`.** `Dangling`
+  asserts a receipt was written and its target has since gone; here no
+  receipt was ever written, which is exactly what `Unreceipted` was created
+  to say and what `verify_supersessions` has always reported for the same
+  state. Making it reachable meant `kg_verify_receipts` had to select on the
+  CITATION rather than on `receipt_tag IS NOT NULL` — so a fact claiming a
+  source it has no binding for is now reported instead of vanishing from the
+  provenance report. That state was already reachable without U12 (a plain
+  `kg_add` with a source id) and was silently invisible; it is one row shape,
+  so it could not be reported for imports and hidden for `kg_add`.
+
+`supersedes_fp` turned out to have **no** portability leg at all: `write_drawer`
+always recomputes it from the LOCAL superseded drawer, so only the KG citation
+travels. Both import surfaces (CLI and `/v1`) already order drawers before KG
+records, each with a comment saying why.
+
+**Two drifts found while checking the surfaces, both fixed here**: the CLI's
+`kg receipts` tallied `unreceipted` into a bucket its summary line never
+printed, and `/v1 GET …/kg/receipts` built its summary from a hard-coded
+vocabulary that omitted it — so the counts a caller is told to alert on would
+not have added up to the list beside them.
+
+**And one in a gate**: `no_durable_reference_moves_on_a_key_rotation`'s
+`verified` arm mapped `verify_supersessions`/`kg_verify_receipts` to `()`, so it
+asserted only that the walk did not error. Both answer `Ok` for a vault in which
+every receipt reads `Tampered`. It now asserts the VERDICTS — which is what U12
+required, having moved a value into those bindings.
+
+**Gates**: `a_sealed_vault_exposes_metadata_but_never_content` gained a
+raw-32-byte digest arm over both columns and its fixture was fixed first (it
+superseded a NONEXISTENT id and used plain `kg_add`, so both columns were NULL —
+the reason it never saw this; the pre-existing digest loop hunts a 16-byte hex
+prefix and would have walked past a raw digest anyway). Verified against the fix
+disabled: it fails naming the superseded drawer. Plus
+`a_pre_u12_vault_rekeys_its_content_fingerprints_and_stops_leaking` (byte-level,
+over the FILE, with a `SourceChanged` control so `Verified` cannot pass by a
+comparison that always says yes),
+`a_tamper_failing_receipt_keeps_its_unkeyed_digest_and_says_so` (the COST,
+pinned — A10's precedent), `an_imported_receipt_is_rebound_to_the_drawer_that_
+travelled_with_it`, `plain_facts_are_reported_as_unreceipted`, and four e2e
+checks driving the real CLI and `/v1`.
+
+**Residues, stated**: the fingerprint is deterministic, so two rows citing
+identical content hold identical bytes — a reader learns that two receipts point
+at the same text, never what it says (`drawers.fp` already makes that trade). A
+row whose receipt does not verify keeps its unkeyed digest, because re-tagging
+it would launder offline tampering; it is reported on `PalaceStats.unhealed` and
+retried at every writable open. A NEW export read by a PRE-U12 binary binds the
+traveling value verbatim and reads `SourceChanged` forever — old bundles into
+new binaries are fine, since the re-derivation ignores the payload.
+
+## Residuals U5-U11 — from Unit B, ALL CLOSED 2026-08-06
+
+Found by the nine-lens expert review of this branch and fixed in the same
+session. Each names the gate that fails if it stops being true.
+
+- **U5 · `READ_SCHEMA` did not know A10's two columns.** A read-only open of
+  any pre-A10 vault passed the `ReadOnlyUnmigrated` gate and then died with a
+  raw SQLite *no such column* on every KG read, because `TRIPLE_COLUMNS` names
+  `terms`. CLOSED: both columns listed, the three ADD COLUMN lists hoisted into
+  named constants the initialisers iterate, and
+  `read_schema_covers_every_added_column` counting them both ways. The refusal
+  test gained a dropped-COLUMN arm — it had only ever dropped a whole table,
+  which is why it could not see this.
+- **U6 · The migration marked itself complete before the `VACUUM`.** An
+  interruption between the commit and the rewrite left "migrated" declared over
+  words still in freed pages, permanently, because of the early return.
+  CLOSED: marker after the VACUUM.
+- **U7 · A skipped row was declared migrated.** A row whose tag fails is
+  skipped rather than re-tagged (re-tagging would launder it) and keeps its
+  clear words; the marker was written anyway. CLOSED: while anything is
+  pending the marker stays unset and every writable open retries, and the
+  exposure is reported on `PalaceStats.unhealed`. **Gate**:
+  `a_tamper_failing_row_leaves_the_migration_incomplete_and_says_so`, which
+  pins the remaining exposure as a COST — the word is asserted to be still in
+  the file, because refusing to launder a tampered row has that consequence
+  and hiding it would be worse.
+- **U8 · The relabel's mapping table lived in `temp`.** It holds every legacy
+  unkeyed digest and `VACUUM` rewrites `main` only, so those pages could
+  outlive the migration in the OS temp directory. CLOSED: created and dropped
+  in `main` inside the same transaction, which is what the VACUUM comment
+  already claimed.
+- **U9 · The migration's read-only branch was dead code with a false
+  comment.** Reachable only from `open_inner`, which sets `read_only = false`.
+  CLOSED: deleted, with the two real cases covered by two mechanisms —
+  `check_read_schema` refuses a vault missing the columns, `note_unblinded_kg`
+  reports one that has them with rows pending.
+- **U10 · The entity browser lost alphabetical order on sealed vaults.**
+  `ORDER BY name` orders by a keyed blind index there, so `/v1` and the console
+  paged in an order unrelated to the names while hmac-only vaults read
+  alphabetically. CLOSED: sorted and paged on the decrypted word (bounded —
+  one row per distinct subject, and two neighbours already read the whole
+  table). **Gate**:
+  `the_entity_browser_orders_by_the_word_on_both_levels`, asserted as an
+  EQUALITY between the levels so a future change cannot fix one and leave the
+  other.
+- **U11 · "twelve `ALTER TABLE`s" was fourteen.** CLOSED by deleting the
+  count: the sentence names the three inventories, and the gate asserts the
+  arithmetic.
+
+Stated, not closed, and out of Unit B's scope: the CLI has no `kg entities`
+command at all (the browser is `/v1` + console), which predates this branch.
+
+## Residuals U1-U4 — from Unit A, ALL FOUR CLOSED 2026-08-06 (U1 partly, and it says which part)
+
+Recorded here rather than only in a code comment, because this project's own
+rule is that **every residual is written down AS WORK with its reason, the
+shape of its fix, and a gate** — and the first draft of Unit A left all four
+of these as prose in CLAUDE.md, which is the failure mode that file exists to
+name. They were filed OPEN and closed in the same session, because the maintainer's
+standing rule is that nothing on this branch defers to the roadmap as future
+work. Read the entries: each names the gate that fails if it stops being
+true, and U1 states precisely which half of it remains and why.
+
+### U1 · The rotation inventory matches an AAD domain's static PREFIX only
+
+`rotation_names_every_key_derived_artifact` extracts the leading literal of
+each `*_at_rest` domain (`kgterms/`, `pqrow/`, …) and requires it in
+`rotate.rs`. It therefore **cannot see a wrong VARIABLE inside the domain** —
+`format!("kgname/{name}")` and `format!("kgname/{blind}")` compare equal, and
+on a sealed vault those happen to be the same value only because the column
+holds the blind index. A mismatched variable seals under one AAD and reopens
+under another, which fails at READ time rather than at rotation.
+
+*Partly covered already*: the `verified` arm reads back through every public
+reader whose contract is tag-verification, so a mismatched AAD on the KG
+artifacts (`terms`, `name_rest`, the object, grounding) surfaces there. **Not**
+covered for artifacts with no failing public reader — `drawer_pq`, `pq_page`,
+`drawer_pq_wing`, `drawer_tok`, `drawer_fde` and the `pq_meta`/`tok_meta`/
+`fde_meta` blobs — because those degrade to a rebuild rather than an error,
+which is the same asymmetry `verify` draws between evidence and index.
+
+**CLOSED for the artifacts that have a failing reader; the rest is a stated
+cost, not an open item.** The `verified` arm added in this unit calls every
+public reader whose contract is tag-verification after the rotation, so a
+mismatched AAD on the KG artifacts fails immediately. For `drawer_pq`,
+`pq_page`, `drawer_pq_wing`, `drawer_tok`, `drawer_fde` and the three meta
+blobs there is no reader that can fail — by design: those artifacts are
+recomputable from content, so a bad domain there costs a REBUILD and not
+evidence, which is the same asymmetry `verify` draws between the walked set
+and the index tier. Adding a read-back that asserts a rebuild-able artifact
+survives would assert a property the system does not promise. **Gate**:
+`rotation_names_every_key_derived_artifact` (a domain sealed anywhere in the
+crate and named nowhere in `rotate.rs` fails, both directions, comments
+stripped and a real SQL context required) plus the `verified` arm. The residue
+is one sentence: a domain whose *variable* is wrong on a rebuild-able artifact
+degrades to a rebuild instead of an error.
+
+### U2 · The rotation snapshot omits three derived references
+
+`references()` covers ids, both blind columns, the unkeyed fingerprints, audit
+labels and the KG secret. It does not cover `kg_triples.canonical_key` (the
+authority door's exact-lookup key), the read-audit query fingerprint, or the
+`wing_trust`/`retention_policy` tags as VALUES (they are covered
+behaviourally, by the `verified` arm calling their readers).
+
+**CLOSED.** `canonical_key` and every `audit.tag` are in the snapshot; the
+two policy tags went into the **rekeyed** set rather than the stable one,
+because rotation must CHANGE them — putting them in `stable` first is what
+proved it. The audit tags had to move into the prefix-compared `audit` set for
+the same reason A19's record forced the label arm there: the list grows.
+**Gate**: the existing before/after arms, which now cover a rotation that
+"helpfully" re-tagged preserved audit evidence — a mutation no other arm could
+see, since the label arm compares `record_id` only.
+
+### U3 · `audit.record_id` and `audit.at` are unauthenticated
+
+The chain hashes `audit.tag` and nothing else (`chain_next_hex` takes the tag;
+`verify` replays tags; rotation preserves them verbatim). That property is
+what makes the A10 audit-label remap legitimate — it moves no evidence — and
+its flip side is that **an offline writer can relabel or re-time any audit row
+and `verify` still reports `chain_ok`**. Not a content leak and not a
+tamper-hiding primitive for the records themselves (each row's tag still
+binds its subject's canonical), but it can misattribute *which* record a row
+describes.
+
+One exception worth knowing, because it makes the general rule dangerous to
+state as an absolute: `record_id` **is** inside the Ed25519 canonical of a
+forgetting attestation (`forget.rs`), so relabelling a `del/` row invalidates
+that attestation. The A10 remap touches `kg*` labels only.
+
+**CLOSED.** `VerifyReport::orphan_labels` is the fourth leg, and it counts
+toward `ok()` — a relabel must FAIL verification, not merely be reported.
+Scoped to `kg/{id}`, `kg/{id}/authority` and `kg-entity/{id}`, because nothing
+in the crate deletes from either kg table (verified: zero `DELETE FROM
+kg_triples`/`kg_entities` anywhere), so those labels must always resolve —
+while every other namespace has a legitimate route to an absent subject
+(`del/{id}` names a destroyed drawer BY DEFINITION, a denied admission
+destroys its drawer, `retention-clear/{wing}` removes the row
+`retention/{wing}` described, and `read/`/`egress/`/`rotate/` name no row at
+all). Including those would alarm on ordinary operation, which is worse than
+no check. **Gate**: `a_relabelled_audit_row_fails_verify`, which asserts its
+own premise in the sharpest available form — that the relabel leaves
+`bad_records` empty and `chain_ok` true, i.e. that the other three legs
+structurally cannot see it. Bounded caveat: a vault migrated by the
+pre-relabel A10 code would now report orphans; that code is unreleased.
+
+### U4 · The `history` capability has no console surface
+
+`undercroft history`, `GET /v1/…/history` and `undercroft_history` exist;
+`ui.html` has no history view. Recorded as an absence rather than fixed
+because **the console is a `/v1` client, not a surface** under the drift rule
+(ROADMAP C14 establishes that premise) — so this is a feature gap, not a
+drift. **CLOSED.** An AUDIT CHAIN panel at the top of the OPS tab, with a subject
+filter, reading the existing route; wired into `loadOps()` and given its own
+LOAD button. **Gate**: two `/ui` e2e checks asserting the panel and the
+`/history` CALL SITE (not the rendering) — the same bounded coverage C15
+records for every other console panel, and the same stated residue.
+
 ## Residuals R1-R5 — ALL FIVE CLOSED (verified 2026-08-05 by reading the code, not the heading)
 
 **This heading has been wrong before, so read the entries, not the heading.**
@@ -320,13 +617,13 @@ sweep cannot see a boundary. Both stay.
 rows), 34 `/v1` routes / 15 mutating, 35 CLI commands, 12 crates,
 11 diagrams, 9 i18n languages, 58 control rows in 10 sets, 144 roots
 × 20 patterns, 18 attack fixtures, 14 probe pairs, `TRUST_VOCAB` 3, and every
-numeric env default. Test count reconciles as **647 static − 2
-telemetry-gated − 4 ignored = 641 run** (counted at the integrated tree,
+numeric env default. Test count reconciles as **662 static − 2
+telemetry-gated − 4 ignored = 656 run** (counted at the integrated tree,
 2026-08-05, after the completeness fleet: a bare `grep -c '#[test]'` over
 `crates/` reads 625 because it also counts `undercroft-embed-onnx`'s 3 and
 `undercroft-embed-ort`'s 1, and neither is a default member). The e2e
 counts moved with it, and again on 2026-08-05 as this branch added
-coverage: **e2e 238, orchestrator-e2e 76, e2e-telemetry 24,
+coverage: **e2e 253, orchestrator-e2e 76, e2e-telemetry 24,
 backends-e2e 57.** Record the reconciliation, because a naive
 `grep -c '#[test]'` is wrong in both directions, and because it must be
 counted over the *integrated* tree: each member of this session's fleet
@@ -522,7 +819,57 @@ heading and stop.
   named: enumerate what holds a reference to the id and state that
   reference's lifetime, BEFORE changing the recipe.
 
-  **Two more findings to carry into units 2 and 3:**
+  **CORRECTED 2026-08-05, second pass — the shipped unit was still
+  bypassable, and by the same mechanism this entry was written about.**
+  `chain_append` writes a fact's id into `audit.record_id` in clear
+  (`kg/{id}`, `kg/{id}/authority`, `kg-entity/{id}`), and on a pre-A10 vault
+  that id **is** the unkeyed digest of the words. The migration blinded the
+  columns, re-derived the ids and left the audit table alone — reasoning,
+  correctly, that historical audit bytes are evidence. The conclusion drawn
+  from it was wrong in both directions:
+
+  - **The oracle survived in the audit table.** An offline reader with a
+    candidate word list recomputes
+    `sha256(subject‖predicate‖object‖valid_from)[..16]` and greps
+    `audit.record_id`. That is the exact capability the clear columns gave
+    them, i.e. this unit's whole purpose, still available on every migrated
+    vault.
+  - **Every pre-A10 fact's audit trail was orphaned.** `kg/{old_id}`
+    resolved to nothing. This entry's own text three paragraphs up calls
+    that "the store losing its traceability, which is the thing it exists to
+    provide".
+
+  **And the gate could not see either half** — the failure mode this entry
+  already names, reproduced one level down. It asserted the absence of
+  `legacy_entity_id`, the SINGLE-WORD recipe, and never of the
+  four-component TRIPLE recipe; and its fixture rewrote `kg_triples` and
+  `kg_entities` while leaving `audit` exactly as the post-A10 build had
+  written it, so even the entity-shaped check had nothing to find. The
+  comment claiming the fixture wrote rows "the way every build before A10
+  wrote them" was false of the audit table.
+
+  **Fixed**: the label follows the row, in ONE `UPDATE` over a temp mapping
+  table inside the migration's transaction (one pass, so a remap cannot
+  chain through a second) and therefore inside the `VACUUM`. The
+  justification is a distinction worth keeping: the chain hashes `audit.tag`
+  and nothing else, so `record_id` is a navigation label outside the chain
+  arithmetic and outside HMAC coverage — **remapping it moves no evidence,
+  and leaving it moved a reference.** Gates: the fixture now plants genuine
+  legacy audit rows, a new `legacy_triple_id` helper asserts the
+  four-component digest is absent from the file, and every audit label is
+  asserted to RESOLVE to a live record — an arm that fails without the
+  relabel *and* fails if anyone ever "closes" the oracle by deleting audit
+  rows. Residue, stated: an id a caller recorded before the migration does
+  not resolve, because the recipe it came from was the oracle.
+
+  **The invariant is enforced now rather than written down**
+  (`no_durable_reference_moves_on_a_key_rotation`) — see CLAUDE.md. It also
+  needed two arms: a snapshot of the id columns PASSED with the original
+  `Vault::tag` defect reproduced verbatim, because rotation deliberately
+  does not re-derive ids, so the gate re-derives every reference after the
+  rotation as well.
+
+  **Findings to carry into units 2 and 3:**
 
   1. **An in-place UPDATE does not remove the old bytes.** The migration
      rewrote every row and the words were still in the database FILE, in
@@ -533,6 +880,15 @@ heading and stop.
   2. **A copy taken before the migration still holds the words**, and so may
      an un-checkpointed `-wal`. Neither is reachable from this code; both
      are stated rather than implied.
+  3. **`audit.record_id` is part of the exposure surface, and unit 2's
+     sizing below does not list it.** It holds wing and room names in clear
+     today — `trust/{wing}`, `retention/{wing}[/{room}]`,
+     `retention-clear/{wing}[/{room}]` — so blinding the name COLUMNS
+     without them repeats exactly what unit 1 did with the fact digest.
+     Enumerate `chain_append` call sites when scoping either unit.
+  4. **Ask what the gate can SEE, not what it asserts.** Both of unit 1's
+     escapes were a gate measuring an observable the defect does not move: a
+     substring scan against a digest, a column snapshot against a recipe.
 
   Gates: `a_sealed_vault_leaks_neither_a_facts_words_nor_a_digest_of_them`
   (words AND unkeyed digests, with an hmac-only premise arm proving the
@@ -567,6 +923,16 @@ heading and stop.
 - **A12 · `kg_import` is a second implementation of the authority
   declaration**, skipping all four of `kg_set_authority`'s guards. Reachable
   from the tenant data plane with no traversal. R5's shape, one tier over.
+- **The audit chain is readable as of 2026-08-06** — `PalaceStore::history`
+  behind a required `HistoryScope`, on CLI + `/v1` (operator, every
+  namespace) and MCP (`undercroft_history`, fenced). It had been
+  tamper-evident and unbrowsable: `FROM audit` appeared on no surface, so
+  nothing could answer "what happened to this record" — the gap the A10
+  audit-label fix made impossible to ignore. Deliberately NOT on the tenant
+  data plane (operator-scope history over `/t/*` is A13 one capability
+  later); recorded in `proxy.rs` and `docs/MULTI_TENANCY.md`. Gates:
+  `history_is_readable_and_the_agent_scope_is_fenced` (both directions, both
+  fences proven by disabling each) plus CLI, `/v1` and MCP e2e checks.
 - **A13 · The tenant data plane hands a tenant the reviewer's view** of the
   queue that screened its own writes, via `/t/search`, `/t/drawers` and
   `/t/export`. The ruling half moved to the admin plane; the reading half did
@@ -602,8 +968,23 @@ heading and stop.
 - **A18 · Entity rows are written with no chain record**, and outside the
   transaction of the fact they exist for — the one persisted, HMAC-tagged
   class that appends nothing, so an INSERTION is undetectable.
-- **A19 · A key rotation appends no chain record**: the largest single
-  mutation the engine can perform leaves no evidence of itself.
+- **A19 · CLOSED 2026-08-06.** A key rotation appended no chain record — the
+  largest single mutation the engine can perform left no evidence of itself,
+  against the invariant that every write updates the chain atomically with
+  its data. It now appends one record (`rotate/{keycheck prefix}`), tagged
+  with the NEW mac key and folded into the head **before** the manifest is
+  staged, so the anchor commits it and `verify` replays to the same head; the
+  `writes` counter counts it. The canonical binds the generation rotated TO
+  plus what was touched, and deliberately not the OLD keycheck — that value is
+  overwritten by the same transaction, so nothing could recompute it
+  afterwards and a component nobody can reproduce is decoration, not
+  evidence. Stated limit: the counts inside the canonical are likewise not
+  independently recomputable later, so the record proves *that* a rotation
+  happened at a time, not what it contained. Gate: the audit arm of
+  `no_durable_reference_moves_on_a_key_rotation` requires exactly one
+  appended label naming the rotation — and that arm had to be changed from
+  strict equality to a PREFIX check to allow it, which is the shape a
+  reviewer flagged before this landed.
 - **A20 · `rebuild_fts` has no transaction** (its doc says it does), runs on a
   read-only open, and shows a concurrent reader a SHORT index — which
   `seq IN (...)` turns into silently missing results. Four more rebuild loops

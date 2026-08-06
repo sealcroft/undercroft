@@ -361,6 +361,8 @@ fn tool_definitions() -> Value {
             &["from_wing", "to_wing"]),
         tool("undercroft_list_tunnels", "List tunnels, optionally touching one wing.",
             json!({ "wing": s("filter") }), &[]),
+        tool("undercroft_history", "Audit-chain history for a memory or fact: what happened to it, when, and the tamper tag as of each write. Pass `subject` (a drawer id, fact id or entity id) to trace one record, or omit it for recent activity. Never returns content. Operator-only namespaces (review rulings, trust and retention policy, destructions, exports, read audits, rotations) are not visible here.",
+            json!({ "subject": s("drawer / fact / entity id"), "limit": i("max records"), "offset": i("skip") }), &[]),
         tool("undercroft_follow_tunnel", "Recent drawers from a tunnel's destination wing.",
             json!({ "id": s("tunnel id"), "limit": i("max drawers") }), &["id"]),
         tool("undercroft_delete_tunnel", "Remove a tunnel.",
@@ -668,10 +670,12 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 )
             };
             Ok(format!(
-                "records checked: {}\nhmac failures: {}\naudit chain: {}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\naudit chain: {}\norphan labels: {}\nmirror drift: {}{}\nresult: {}",
                 report.records_checked,
                 report.bad_records.len(),
                 if report.chain_ok { "ok" } else { "BROKEN" },
+                report.orphan_labels.len(),
+                report.mirror_drift.len(),
                 sup_line,
                 if report.ok() {
                     "VERIFY OK"
@@ -794,6 +798,21 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
         "undercroft_list_tunnels" => {
             let t = store.list_tunnels(opt_str(args, "wing"))?;
             Ok(serde_json::to_string_pretty(&t)?)
+        }
+        // `HistoryScope::Agent`, and the scope is a REQUIRED argument so this
+        // call site had to decide. The fence is two-part and neither half is
+        // expressible in the argument fence above: operator namespaces are
+        // excluded in SQL (so paging cannot walk them), and a record whose
+        // subject sits in the reserved review wing is dropped on the way out
+        // — an agent whose write was diverted must not read the evidence back.
+        "undercroft_history" => {
+            let rows = store.history(
+                undercroft_store::manage::HistoryScope::Agent,
+                opt_str(args, "subject"),
+                opt_u64(args, "limit").unwrap_or(20) as usize,
+                opt_u64(args, "offset").unwrap_or(0) as usize,
+            )?;
+            Ok(serde_json::to_string_pretty(&rows)?)
         }
         "undercroft_follow_tunnel" => {
             let drawers = store.follow_tunnel(

@@ -356,6 +356,17 @@
         <div id="tab-ops" style="display:none">
           <div class="sect" style="border-top:none;margin-top:0;padding-top:0">
             <div class="rowflex">
+              <span class="h" style="margin:0">AUDIT CHAIN</span>
+              <span class="spacer"></span>
+              <input id="histSubject" placeholder="drawer / fact / entity id (blank = recent)" style="min-width:22rem">
+              <button class="ctl" id="histRefresh">↻ LOAD</button>
+            </div>
+            <p class="kv">Every write, in chain order. <code>#seq</code> is the row's unique id and the chain's order; <code>TAG</code> is the subject's own HMAC as of that write — the evidence the chain folds in; <code>RECORD</code> is a navigable label and is <b>not</b> authenticated, which is why <code>verify</code> reports a label naming no live record. Never content: the audit table holds none. This is OPERATOR scope — every namespace, including review rulings, trust and retention policy, destructions, exports and rotations. The agent surface sees the same capability fenced.</p>
+            <table><thead><tr><th>#SEQ</th><th>AT</th><th>RECORD</th><th>TAG</th></tr></thead><tbody id="histRows"></tbody></table>
+          </div>
+
+          <div class="sect">
+            <div class="rowflex">
               <span class="h" style="margin:0">ADMISSION REVIEW QUEUE</span>
               <span class="spacer"></span>
               <button class="ctl" id="admRefresh">↻ REFRESH</button>
@@ -1207,7 +1218,7 @@ async function runImport() {
 // them CLI-only for anyone driving the server over HTTP.
 function opsPath(sub) { return "/v1/vaults/" + encodeURIComponent(state.vault) + "/" + sub; }
 
-async function loadOps() { loadAdmission(); loadTrust(); loadRetention(); }
+async function loadOps() { loadAdmission(); loadTrust(); loadRetention(); loadHistory(); }
 
 async function loadAdmission() {
   const v = state.vault;
@@ -1249,6 +1260,23 @@ async function ruleAdmission(drawerId, verdict) {
     toast(verdict === "allow" ? "allowed — re-filed as " + r.restored_id : "denied " + drawerId);
     loadAdmission();
   } catch (e) { toast("ruling failed — " + e.message, true); }
+}
+
+// The audit chain, readable (ROADMAP U4). `esc` on every cell: a record_id
+// is a label the vault stores, so it is data here, not markup.
+async function loadHistory() {
+  const v = state.vault;
+  const subj = $("histSubject").value.trim();
+  const q = "?limit=200" + (subj ? "&subject=" + encodeURIComponent(subj) : "");
+  try {
+    const r = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/history" + q, { vault: v });
+    const rows = (r.records || []).map(a =>
+      "<tr><td class='kv'>#" + esc(String(a.seq)) + "</td><td class='kv'>" + esc(a.at) +
+      "</td><td><code>" + esc(a.record_id) + "</code></td><td class='kv'>" +
+      esc(String(a.tag || "").slice(0, 16)) + "…</td></tr>");
+    $("histRows").innerHTML = rows.join("") ||
+      "<tr><td colspan=4 class='kv'>no audit records match" + (subj ? " that subject" : "") + "</td></tr>";
+  } catch (e) { toast("history failed — " + e.message, true); }
 }
 
 async function loadTrust() {
@@ -1361,6 +1389,7 @@ $("grafanaEmbedBtn").onclick = embedGrafana;
 $("grafanaBack").onclick = embedGrafana;
 $("grafanaUrl").addEventListener("keydown", e => { if (e.key === "Enter") embedGrafana(); });
 $("admRefresh").onclick = loadAdmission;
+$("histRefresh").onclick = loadHistory;
 $("trustRefresh").onclick = loadTrust;
 $("trustSet").onclick = setTrust;
 $("retRefresh").onclick = loadRetention;

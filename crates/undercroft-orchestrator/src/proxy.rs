@@ -171,6 +171,18 @@ fn data_subpath_ok(subpath: &str) -> bool {
     if !segs.iter().all(segment_is_safe) {
         return false;
     }
+    // A closed allowlist of whole shapes, and the absences are decisions.
+    //
+    // **`["history"]` is deliberately NOT here.** The engine's
+    // `GET /v1/vaults/{id}/history` is OPERATOR scope — the whole audit
+    // chain, including `admission/{id}/{verdict}` (the reviewer's view of the
+    // queue that screened this tenant's own writes) and `trust/{wing}` (the
+    // retrieval policy deciding what it may retrieve). Forwarding it to a
+    // tenant is A13 verbatim, one capability later. The agent-facing scope of
+    // that capability exists and is fenced, but it lives on MCP against a
+    // local vault, not on a plane that proxies a tenant into someone else's
+    // operator surface. `["stats", "history"]` below is unrelated — metrics
+    // over time, not the audit chain.
     matches!(
         segs.as_slice(),
         ["drawers"]

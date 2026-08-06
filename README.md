@@ -343,7 +343,7 @@ undercroft bundle sign-keygen|sender  # Ed25519 sender-attestation identities (e
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
-undercroft serve-mcp [--vault]        # MCP stdio server (33 tools)
+undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
                                      # --read-only is a posture on the whole
                                      # process: both stores open read-only and

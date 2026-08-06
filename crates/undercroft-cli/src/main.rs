@@ -249,6 +249,23 @@ enum Command {
         #[arg(long, global = true, default_value = "default")]
         vault: String,
     },
+    /// Audit-chain history: what happened to a record, when, and the tamper
+    /// tag as of each write. Never content — the audit table holds none.
+    /// Operator scope: every namespace, including review rulings, trust and
+    /// retention policy, destructions, exports and rotations. The agent
+    /// surface gets the same capability fenced.
+    History {
+        /// A drawer, fact or entity id — or a whole label like
+        /// `trust/legal`. Omit for recent activity across the vault.
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value = "default")]
+        vault: String,
+    },
     /// Deployment-assigned wing trust classes — the receiving principal's
     /// declaration (an operator surface: agents cannot assign trust over
     /// MCP, only read with a floor)
@@ -1598,6 +1615,19 @@ fn run(cli: Cli) -> Result<()> {
                     report.kg_entities, report.kg_triples
                 );
                 println!("  tunnels:             {}", report.tunnels);
+                // Re-tagged, not re-sealed, and level-independent. Printed
+                // because a rotation that silently skipped these is what
+                // broke the trust floor and retention enforcement outright —
+                // an operator watching a rotation should see the two tables
+                // whose tags are verified on every read. `/v1` serializes the
+                // whole struct and got them for free; this projection is
+                // hand-written, which is the trap CLAUDE.md records and
+                // `every_hand_projected_report_field_reaches_the_cli` now
+                // fails on.
+                println!(
+                    "  policy tags re-keyed: {} wing trust, {} retention",
+                    report.wing_trusts, report.retention_policies
+                );
                 println!(
                     "  derived artifacts:   {} token, {} pq (+{} pages, +{} wing rows), {} fde, {} meta",
                     report.token_matrices,
@@ -1889,6 +1919,20 @@ fn run(cli: Cli) -> Result<()> {
                 "audit chain:     {}",
                 if report.chain_ok { "ok" } else { "BROKEN" }
             );
+            // The fourth leg: a graph label naming a record that is not
+            // there. `record_id` is the one part of an audit row the chain
+            // does not authenticate, so this is the only place a relabel
+            // shows up.
+            println!("orphan labels:   {}", report.orphan_labels.len());
+            for l in &report.orphan_labels {
+                println!("  ORPHANED: {l} — names no live record");
+            }
+            // A28: an indexed mirror that disagrees with the covered meta.
+            // The record is intact; the COLUMN was edited offline.
+            println!("mirror drift:    {}", report.mirror_drift.len());
+            for m in &report.mirror_drift {
+                println!("  MIRROR: {m}");
+            }
             // Drawer supersession links are part of the vault's integrity
             // story: a receipted link that fails its HMAC is tampering,
             // reported with the same severity as a bad record. The leg now
@@ -2105,6 +2149,37 @@ fn run(cli: Cli) -> Result<()> {
                     }
                 }
             }
+        }
+        Command::History {
+            subject,
+            limit,
+            offset,
+            vault,
+        } => {
+            let store = open_store(&cli, vault)?;
+            let rows = store.history(
+                undercroft_store::manage::HistoryScope::Operator,
+                subject.as_deref(),
+                *limit,
+                *offset,
+            )?;
+            if rows.is_empty() {
+                println!("No audit records match.");
+            }
+            for r in &rows {
+                // The tag is the evidence and the label is navigation, so the
+                // label leads and the tag is abbreviated — an operator
+                // chasing a record reads the label; one verifying it reads
+                // the full value off `/v1` or a forgetting attestation.
+                println!(
+                    "  #{:<6} {}  {:<40} {}…",
+                    r.seq,
+                    r.at,
+                    r.record_id,
+                    &r.tag[..16.min(r.tag.len())]
+                );
+            }
+            println!("{} record(s).", rows.len());
         }
         Command::Trust { action, vault } => {
             let mut store = open_store(&cli, vault)?;
@@ -2592,9 +2667,12 @@ fn run(cli: Cli) -> Result<()> {
                             ReceiptVerdict::SourceChanged => ("source-changed", 1),
                             ReceiptVerdict::Dangling => ("dangling", 2),
                             ReceiptVerdict::Tampered => ("TAMPERED", 3),
-                            // Drawer supersessions only; a KG receipt is
-                            // always written with its fact. Covered so the
-                            // match stays exhaustive.
+                            // Reachable for a FACT since U12: a fact can
+                            // cite a drawer without a binding — a plain
+                            // `kg_add` with a source id, or an import whose
+                            // payload did not carry the cited drawer, since
+                            // a keyed fingerprint cannot travel. This used
+                            // to say "drawer supersessions only".
                             ReceiptVerdict::Unreceipted => ("unreceipted", 4),
                         };
                         counts[idx] += 1;
@@ -2607,9 +2685,14 @@ fn run(cli: Cli) -> Result<()> {
                     if *problems_only && shown == 0 {
                         println!("All {} receipt(s) verified.", receipts.len());
                     }
+                    // `unreceipted` is printed, not merely counted: the
+                    // bucket was written and never read, so a fact citing a
+                    // drawer it has no binding for was tallied into a number
+                    // no surface showed. It became reachable with U12.
                     println!(
-                        "receipts: {} verified · {} source-changed · {} dangling · {} tampered",
-                        counts[0], counts[1], counts[2], counts[3]
+                        "receipts: {} verified · {} source-changed · {} dangling · \
+                         {} unreceipted · {} tampered",
+                        counts[0], counts[1], counts[2], counts[4], counts[3]
                     );
                     // A tampered receipt is a hard integrity failure.
                     if counts[3] > 0 {
@@ -2910,8 +2993,12 @@ fn run(cli: Cli) -> Result<()> {
                 println!("codebooks: {}", trained.join(", "));
             }
             // R4: a read-only open detects instead of healing, and this is
-            // where it says what it left. Nothing prints on a writable
-            // open, where the list is empty by construction.
+            // where it says what it left. **No longer empty by construction on
+            // a writable open**: since 2026-08-06 a writable open also reports
+            // knowledge-graph rows the A10 migration could not move, because
+            // their own HMAC does not verify and migrating one would launder a
+            // tampered row. That exposure is a state to READ, not a warning
+            // someone had to be watching stderr to catch.
             for note in &st.unhealed {
                 println!("unhealed: {note}");
             }

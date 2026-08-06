@@ -92,8 +92,12 @@ database, manifest, and derived artifact. No keys, no passphrase.
 content, nor of anything derived from it that copies its words**.
 Content is zstd-then-AEAD; embeddings and all index artifacts are
 sealed under their own AAD domains; sealed vaults build no FTS index;
-duplicate-detection fingerprints are keyed HMACs that reveal nothing
-offline; `Drawer::meta_at_rest()` strips `time_mentions[].text` and
+**every** content fingerprint is keyed — the duplicate-detection one
+with the vault mac, and since U12 the two provenance fingerprints
+(`supersedes_fp`, `kg_triples.source_fp`) with the long-lived stored
+`kg_secret`, so none of them is a confirmation oracle. What a keyed
+fingerprint still reveals is EQUALITY between rows, never content;
+`Drawer::meta_at_rest()` strips `time_mentions[].text` and
 `entities` before a row is written, keeping only offsets and ISO dates.
 The at-rest bytes are asserted opaque by tests, and every new derived
 artifact is required (project invariant) to follow the same pattern.
@@ -114,7 +118,8 @@ offline reader of a sealed database reads, in the clear:
 | `content_date` | declared date |
 | dates **resolved out of** the content | resolutions only — offsets + ISO dates, never the words |
 | declared `kind` | closed vocabulary, ≤10 bytes, NULL when undeclared (docs/LABELS.md) |
-| `supersedes` link (+ `supersedes_fp`, `supersedes_receipt`) | chain topology: which record replaced which. Ids are HMAC-derived hex |
+| `supersedes` link (+ `supersedes_receipt`) | chain topology: which record replaced which. The link is a drawer id (an unkeyed deterministic digest of wing/room/source/chunk, not of content); the receipt is a keyed HMAC |
+| `supersedes_fp`, and `kg_triples.source_fp` | **a keyed fingerprint of a superseded / cited document's verbatim content — CLOSED as ROADMAP U12.** Both were an unkeyed SHA-256 in the clear, and this page called them "HMAC-derived hex", which was wrong twice over. They were a confirmation oracle: an offline reader holding a candidate document hashed it and matched the column, learning byte-exactly that this plaintext was filed here — bounded only by having to reproduce the text, which is weak comfort when a drawer is one line. They are now `HMAC(kg_secret, sha256(content))`, keyed with the long-lived per-vault secret that rotation re-seals and never regenerates, so they stay rotation-stable without being an oracle. What remains readable is EQUALITY: two rows citing identical content still hold identical bytes, so a reader learns that two receipts point at the same text and never what it says. Legacy vaults are migrated at the next writable open; a row whose receipt does not verify is left alone rather than laundered and is reported on `PalaceStats.unhealed` |
 | `agent` / `channel` / `session` claims | writer-declared provenance |
 | `filed_at` / `updated_at` | per-row timestamps |
 | record counts, per-record ciphertext sizes | unavoidable at this layer |
@@ -142,6 +147,19 @@ literal-substring gate could not have seen it. Ask that question of
 anything derived from a field in this table. The test fails in **both**
 directions, so shrinking the exposure forces this table to be updated
 rather than quietly over-promising again.
+
+**And ask it of the audit table, which is where unit 1's first attempt
+still leaked.** Every write records its subject's id in
+`audit.record_id` in clear, so on a vault written before A10 the audit log
+held `kg/<unkeyed digest of the words>` — the same oracle, one table over,
+surviving a migration that had rewritten and `VACUUM`ed every column it
+knew about. The migration now carries each moved id's audit label with its
+row; that is sound because the chain hashes `audit.tag` and nothing else,
+so `record_id` is a navigation label rather than evidence, and leaving it
+behind orphaned the audit trail as well as leaking. For the two units still
+open this matters directly: `audit.record_id` **holds wing and room names
+in clear today** (`trust/{wing}`, `retention/{wing}[/{room}]`), so treat
+them as part of the same exposure and not as a separate question.
 
 Also residual: at-rest sizes correlate weakly with content
 compressibility (standard compress-then-encrypt caveat; bounded because
@@ -221,8 +239,10 @@ runs and read auditing is force-disabled with a warning rather than
 silently. The REST gate sits **in front of dispatch**, not at the top
 of each mutating handler, and it **fails closed**: every non-GET is
 refused unless it is on a two-entry allowlist (`POST …/search`, and
-`POST …/verify` — which walks every record's HMAC and replays the whole
-audit chain, and is a POST for cost, not for effect: it takes `&self`
+`POST …/verify` — which walks every record's HMAC, replays the whole
+audit chain, checks every supersession receipt, resolves every graph audit
+label and compares every mirror column against the covered meta (five legs
+since 2026-08-06), and is a POST for cost, not for effect: it takes `&self`
 and writes nothing at all). Said plainly, because an earlier draft of
 this page said the opposite: verify does **not** fast-forward the
 manifest anchor. `anchor_manifest` needs `&mut`; the fast-forward
@@ -378,7 +398,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Record integrity | HMAC-SHA256 per record, verified before every return | A2 forgery, A5 result forgery |
 | Audit chain | hash chain advanced in the data transaction; MAC'd manifest anchor; open-time reconciliation (crash ≠ rollback) | A2 rollback/truncation, A7 forensics |
 | Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; fsync'd key files | keeps A2 detection sound under power loss |
-| Key rotation | one-transaction byte-exact reseal of every artifact + chain re-key; two-phase manifest swap, crash-safe | key-compromise recovery; A1 going forward |
+| Key rotation | one-transaction byte-exact reseal of every artifact + re-tag of every HMAC'd table + chain re-key; two-phase manifest swap, crash-safe; the rotation appends its own chain record | key-compromise recovery; A1 going forward |
 | Export bundles | hybrid X25519 + ML-KEM-768 ephemeral-static → HKDF → XChaCha20-Poly1305; header + KEM ct as AAD (v2; legacy X25519 v1 still opens) | A1 for backups in transit/at rest, incl. harvest-now-decrypt-later |
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
@@ -411,6 +431,22 @@ is authenticated when the page is opened at search time and again when
 rotation reseals it — not by `verify`. That asymmetry is deliberate:
 index artifacts are recomputable from content, so a failure there costs
 a rebuild, while a failure in the walked set costs evidence.
+
+**Rotation must re-key every tag, and that is now enforced rather than
+reviewed.** A `tag` column is by definition keyed with the vault MAC, which
+rotation replaces — so a tagged table with no sweep in the rotation path
+does not merely go stale, it starts reporting a FALSE tamper verdict on
+every read. That happened to `wing_trust` and `retention_policy`, which
+carried tags verified on read and were swept by nothing until 2026-08-06:
+a routine key rotation broke wing-trust assignment and retention
+enforcement permanently, and the trust floor with them. Two gates hold the
+line: a source-level inventory requiring every at-rest AAD domain and every
+`tag`-carrying table to be named in the rotation path (with `audit` as the
+one justified exemption, since its tags are preserved verbatim as
+historical evidence), and a post-rotation arm that calls every reader whose
+contract is "tag-verified on the way out" and requires it to answer
+cleanly. The second exists because the first cannot see the failure: a row
+whose tag was not re-keyed is byte-identical and simply stops verifying.
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient
@@ -658,8 +694,13 @@ straight, each carrying what it actually is.
   HMAC, so a flipped attribution fails verification.
 - **Provable forgetting (C3.2) — BUILT (2026-08-03), both phases**:
   `forget` destroys named drawers through the chain and emits an
-  attestation (ids + unkeyed content fingerprints, heads before/after,
-  the tombstone interval, optional Ed25519 signature);
+  attestation (ids + content fingerprints, heads before/after,
+  the tombstone interval, optional Ed25519 signature). Those
+  fingerprints stay **unkeyed** where U12 keyed the two stored ones,
+  deliberately and for the opposite reason: this value is signed and
+  handed to a data subject who checks it against content they already
+  hold, without the vault key — and it names content the vault no longer
+  has, rather than sitting at rest beside content it does;
   `verify-forgetting` replays it with the key in hand. Retention
   policies per wing/room ride the wing-trust pattern — operator-only,
   HMAC-tagged, chain-audited, and enforced by an **explicit sweep**

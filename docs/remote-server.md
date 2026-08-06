@@ -31,7 +31,7 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
-**All 34 routes**, counted against `route()` in
+**All 35 routes**, counted against `route()` in
 `crates/undercroft-cli/src/tenant.rs` rather than remembered — this table
 listed 18 of them until 2026-08-05, omitting the whole operator plane
 (trust, admission review, retention, forgetting) plus the golden-values
@@ -72,6 +72,7 @@ POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
 GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
 
 ── operator plane (never on MCP) ────────────────────────────────────────
+GET    /v1/vaults/{id}/history          audit chain (subject?, limit?, offset?)
 GET    /v1/vaults/{id}/trust            wing trust assignments
 POST   /v1/vaults/{id}/trust            assign one (closed vocabulary)
 GET    /v1/vaults/{id}/admission        the pending review queue
