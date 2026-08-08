@@ -31,8 +31,8 @@
 //! `index push`. Remote search correctness is unaffected either way: every
 //! candidate is re-verified and decrypted locally.
 
-use undercroft_vault::Vault;
 use rusqlite::{params, OptionalExtension};
+use undercroft_vault::Vault;
 
 use crate::{canonical, PalaceStore, StoreError};
 
@@ -797,9 +797,9 @@ impl PalaceStore {
 mod tests {
     use crate::PalaceStore;
     use crate::StoreError;
+    use tempfile::TempDir;
     use undercroft_core::Drawer;
     use undercroft_vault::{SecurityLevel, VaultManager};
-    use tempfile::TempDir;
 
     fn drawer(content: &str, idx: u32) -> Drawer {
         Drawer::new(

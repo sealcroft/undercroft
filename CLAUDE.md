@@ -853,7 +853,7 @@ Consequences that are binding, not advisory:
 - `.github/workflows/release.yml` — on every `v*` tag: five binary
   targets (linux x86_64/arm64 native, macOS Intel cross-compiled on
   macos-latest + Apple Silicon, windows) uploaded to the release with
-  sha256, and the multi-arch `ghcr.io/compufreq/undercroft` image
+  sha256, and the multi-arch `ghcr.io/sealcroft/undercroft` image
   (per-arch native builds merged into one manifest; index annotations
   carry the package description). Since the posture-configs unit also
   the **`ort` variant**, and since 2026-08-04 at FULL target parity

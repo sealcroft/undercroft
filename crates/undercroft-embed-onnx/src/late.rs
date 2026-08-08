@@ -17,9 +17,9 @@
 //! Like every model here: user-supplied files, no download, no network.
 //! `UNDERCROFT_COLBERT_MODEL` / `_TOKENIZER` / optional `_NAME`.
 
-use undercroft_core::late::LateInteraction;
 use tokenizers::Tokenizer;
 use tract_onnx::prelude::*;
+use undercroft_core::late::LateInteraction;
 
 use crate::{OnnxError, RunnableOnnx};
 

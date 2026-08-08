@@ -26,8 +26,8 @@
 //!   the bytes are decrypted.
 
 use base64::Engine;
-use undercroft_index::{IndexRecord, VectorIndex};
 use rusqlite::{params, OptionalExtension};
+use undercroft_index::{IndexRecord, VectorIndex};
 
 use crate::{PalaceStore, SearchHit, SearchOptions, StoreError};
 use undercroft_vault::SecurityLevel;
@@ -323,10 +323,10 @@ impl PalaceStore {
 mod tests {
     use super::*;
     use crate::SearchOptions;
+    use tempfile::TempDir;
     use undercroft_core::Drawer;
     use undercroft_index::{Candidate, IndexError};
     use undercroft_vault::{SecurityLevel, VaultManager};
-    use tempfile::TempDir;
 
     /// A mirror that answers every query with EVERY id it was ever given,
     /// ignoring the query vector and the wing filter alike.

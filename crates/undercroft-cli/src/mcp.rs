@@ -962,8 +962,8 @@ fn opt_u64(args: &Value, key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use undercroft_vault::{SecurityLevel, VaultManager};
     use tempfile::TempDir;
+    use undercroft_vault::{SecurityLevel, VaultManager};
 
     fn handler() -> (TempDir, McpHandler) {
         let dir = TempDir::new().unwrap();

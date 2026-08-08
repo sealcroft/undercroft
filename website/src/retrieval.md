@@ -7,9 +7,9 @@ edge box to a many-core server.
 
 Every measurement below is reproducible with the harnesses in the repo; recall
 figures and exact commands are in
-[`benchmarks/RESULTS.md`](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md).
+[`benchmarks/RESULTS.md`](https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md).
 The engineering rationale is in
-[`docs/RETRIEVAL_SCALING.md`](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
+[`docs/RETRIEVAL_SCALING.md`](https://github.com/sealcroft/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
 
 ## The pipeline
 
@@ -182,7 +182,7 @@ the flat cache is faster until the corpus makes the open-time decrypt hurt.
 Those pages are sealed but deliberately **not compressed**: a 4096-row page is
 InnoDB's geometry, and compressing-then-encrypting page-shaped data is exactly
 DBREACH's precondition (measured details in
-[`docs/RETRIEVAL_SCALING.md`](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)).
+[`docs/RETRIEVAL_SCALING.md`](https://github.com/sealcroft/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)).
 
 **IVF inverted lists** now sit on top of the codes: a coarse quantizer
 (`√N` centroids) partitions the corpus, codes are physically clustered by

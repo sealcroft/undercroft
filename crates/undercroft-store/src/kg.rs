@@ -3240,8 +3240,8 @@ fn valid_at(t: &Triple, as_of_key: Option<&str>) -> bool {
 mod tests {
     use super::{ReceiptVerdict, Triple, TripleExport};
     use crate::{PalaceStore, SearchOptions, StoreError};
-    use undercroft_vault::{SecurityLevel, VaultManager};
     use tempfile::TempDir;
+    use undercroft_vault::{SecurityLevel, VaultManager};
 
     fn store(level: SecurityLevel) -> (TempDir, PalaceStore) {
         let dir = TempDir::new().unwrap();

@@ -95,7 +95,8 @@ pub fn vs_eval(
                 .collect();
             let body = undercroft_core::normalize_content(&text.join("\n"));
             let session = format!("session_{n}");
-            for chunk in undercroft_core::chunk_text(&body, undercroft_core::ChunkOptions::default())
+            for chunk in
+                undercroft_core::chunk_text(&body, undercroft_core::ChunkOptions::default())
             {
                 system.add(&session, &chunk)?;
                 score.ingest_chunks += 1;

@@ -50,9 +50,9 @@
 //! v2 repack is deleted, which turns it back into "missing" for the next
 //! backfill; nothing is ever silently mixed across formats or models.
 
+use rusqlite::{params, OptionalExtension};
 use undercroft_core::fde::{fde_dot, FdeEncoder, FdeParams};
 use undercroft_core::late::dequantize_tokens;
-use rusqlite::{params, OptionalExtension};
 
 use crate::pq::{CoarseQuantizer, ProductQuantizer};
 use crate::{PalaceStore, StoreError, CODEBOOK_FDE, CODEBOOK_FDE_IVF};

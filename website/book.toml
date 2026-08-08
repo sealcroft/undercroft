@@ -5,7 +5,7 @@ authors = ["compufreq"]
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/compufreq/undercroft"
+git-repository-url = "https://github.com/sealcroft/undercroft"
 default-theme = "ayu"
 preferred-dark-theme = "ayu"
 additional-css = ["assets/undercroft.css"]

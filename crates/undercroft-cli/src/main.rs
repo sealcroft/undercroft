@@ -1185,9 +1185,9 @@ fn embedder_factory() -> tenant::EmbedderFactory {
                 Ok("onnx") => {
                     #[cfg(feature = "onnx")]
                     {
-                        Ok(Box::new(undercroft_embed_onnx::from_env().map_err(|e| {
-                            anyhow::anyhow!("loading ONNX embedder: {e}")
-                        })?))
+                        Ok(Box::new(undercroft_embed_onnx::from_env().map_err(
+                            |e| anyhow::anyhow!("loading ONNX embedder: {e}"),
+                        )?))
                     }
                     #[cfg(not(feature = "onnx"))]
                     bail!(
@@ -2510,7 +2510,10 @@ fn run(cli: Cli) -> Result<()> {
                     // screen on any vault that declares `cli` trusted.
                     let d = serde_json::from_value::<Drawer>(v)
                         .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?;
-                    undercroft_store::PalaceStore::import_stamp(&d, undercroft_store::IMPORT_SURFACE)
+                    undercroft_store::PalaceStore::import_stamp(
+                        &d,
+                        undercroft_store::IMPORT_SURFACE,
+                    )
                 } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
                     // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
                     let meta = v.get("metadata").cloned().unwrap_or_default();

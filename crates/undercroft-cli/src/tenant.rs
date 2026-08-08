@@ -147,7 +147,8 @@ pub type EmbedderFactory =
 /// model is loaded **once** in `main` and every call hands back a cheap
 /// handle onto that single shared model (an `Arc` clone), so all tenant
 /// vaults share one ONNX reranker instead of loading a copy apiece.
-pub type RerankerFactory = Box<dyn Fn() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync>>;
+pub type RerankerFactory =
+    Box<dyn Fn() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync>>;
 
 /// The multi-tenant engine state behind the `/v1` routes. Single-threaded
 /// (the `tiny_http` request loop is sequential), so the store cache needs
@@ -1635,8 +1636,8 @@ impl Tenancy {
             ));
         }
 
-        let llm =
-            undercroft_llm::LlmClient::from_env().map_err(|e| RestError::new(400, e.to_string()))?;
+        let llm = undercroft_llm::LlmClient::from_env()
+            .map_err(|e| RestError::new(400, e.to_string()))?;
         let store = self.store_for(id)?;
 
         // The distillation itself lives in `crate::refine`, driven
@@ -2452,9 +2453,9 @@ fn respond(req: Request, code: u16, body: &str, content_type: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use undercroft_vault::bundle;
     use std::io::{Read as _, Write as _};
     use tempfile::TempDir;
+    use undercroft_vault::bundle;
 
     const NOW: i64 = 1_800_000_000;
     const SECRET: &[u8] = b"orchestrator-shared-secret";

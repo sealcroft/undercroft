@@ -56,8 +56,8 @@
 
 use std::cell::Cell;
 
-use undercroft_core::embed::Embedder;
 use serde_json::{json, Value};
+use undercroft_core::embed::Embedder;
 
 use crate::{ApiKind, LlmError};
 

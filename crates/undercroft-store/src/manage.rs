@@ -1463,9 +1463,9 @@ mod history_tests {
     use crate::admission::QUARANTINE_WING;
     use crate::manage::{HistoryScope, AGENT_FENCED_NAMESPACES};
     use crate::PalaceStore;
+    use tempfile::TempDir;
     use undercroft_core::Drawer;
     use undercroft_vault::{SecurityLevel, VaultManager};
-    use tempfile::TempDir;
 
     fn store(level: SecurityLevel) -> (TempDir, PalaceStore) {
         let dir = TempDir::new().unwrap();
@@ -1591,8 +1591,8 @@ use sha2::Digest;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use undercroft_vault::{SecurityLevel, VaultManager};
     use tempfile::TempDir;
+    use undercroft_vault::{SecurityLevel, VaultManager};
 
     fn store() -> (TempDir, PalaceStore) {
         let dir = TempDir::new().unwrap();

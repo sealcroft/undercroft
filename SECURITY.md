@@ -8,7 +8,7 @@ taken seriously and handled privately.
 **Please do not report security vulnerabilities through public GitHub
 issues.**
 
-- Preferred: **[GitHub private vulnerability reporting](https://github.com/compufreq/undercroft/security/advisories/new)**
+- Preferred: **[GitHub private vulnerability reporting](https://github.com/sealcroft/undercroft/security/advisories/new)**
   (Security → Report a vulnerability) — keeps the report, discussion, and
   fix coordination private until disclosure.
 - Alternative: email **compufreq@proton.me** with subject
@@ -59,10 +59,10 @@ Palace Monitor beacon all fire on the same real signal — never synthetically.
 how to confirm, mitigate, fix, and prevent it.
 
 Details are documented in `crates/undercroft-vault/src/lib.rs` and the
-[security model](https://compufreq.github.io/undercroft/docs/security.html);
+[security model](https://sealcroft.github.io/undercroft/docs/security.html);
 the formal adversary-class treatment — what each layer defeats and the
 honest non-goals — is the
-[threat-model whitepaper](https://compufreq.github.io/undercroft/docs/threat-model.html)
+[threat-model whitepaper](https://sealcroft.github.io/undercroft/docs/threat-model.html)
 (docs/THREAT_MODEL.md).
 
 ## Scope

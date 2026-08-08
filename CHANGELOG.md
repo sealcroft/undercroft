@@ -2040,7 +2040,7 @@ default same-language contracts are byte-identical throughout.
 - **Releases ship the `ort` posture ready-made** — deliberately scoped
   to the deployable-server case as a first increment: a
   `…-x86_64-unknown-linux-gnu-ort.tar.gz` binary asset and a
-  `ghcr.io/compufreq/undercroft:<tag>-ort` amd64 image. Both
+  `ghcr.io/sealcroft/undercroft:<tag>-ort` amd64 image. Both
   **smoke-probed at build**: `--help` must run and
   `UNDERCROFT_EMBEDDER=ort` without model files must fail on MODEL
   CONFIGURATION ("loading ORT embedder"), never on a missing feature —
@@ -5035,7 +5035,7 @@ reporting has a real front door.
   x86_64, macOS Intel, macOS Apple Silicon, and Windows x86_64 — with
   SHA-256 checksums, LICENSE/NOTICE included, default features (offline,
   zero telemetry deps).
-- **Published container image**: `ghcr.io/compufreq/undercroft:<tag>` and
+- **Published container image**: `ghcr.io/sealcroft/undercroft:<tag>` and
   `:latest`, built from the same Dockerfile as always, pushed by the
   release workflow.
 - **SECURITY.md expanded** into a full policy: GitHub private

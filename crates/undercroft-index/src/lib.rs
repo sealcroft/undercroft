@@ -1073,5 +1073,4 @@ mod tests {
             Err(IndexError::UnknownBackend(_))
         ));
     }
-
 }

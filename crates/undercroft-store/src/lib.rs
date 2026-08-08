@@ -7128,8 +7128,8 @@ fn recency_boost(filed_at: &str, now: OffsetDateTime) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use undercroft_vault::{SecurityLevel, VaultManager};
     use tempfile::TempDir;
+    use undercroft_vault::{SecurityLevel, VaultManager};
 
     fn store(level: SecurityLevel) -> (TempDir, PalaceStore) {
         let dir = TempDir::new().unwrap();

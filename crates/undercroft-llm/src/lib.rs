@@ -140,7 +140,8 @@ impl LlmClient {
     /// default, means drawer text leaves the machine.
     pub fn from_env() -> Result<Self, LlmError> {
         let base = std::env::var("UNDERCROFT_LLM_URL").map_err(|_| LlmError::NotConfigured)?;
-        let model = std::env::var("UNDERCROFT_LLM_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+        let model =
+            std::env::var("UNDERCROFT_LLM_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
         let kind = match std::env::var("UNDERCROFT_LLM_API").ok().as_deref() {
             Some("openai") => ApiKind::OpenAi,
             Some("ollama") => ApiKind::Ollama,
