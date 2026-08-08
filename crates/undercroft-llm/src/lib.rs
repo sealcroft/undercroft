@@ -1,4 +1,4 @@
-//! Local-LLM client for optional refinement, ported from mempalace's
+//! Local-LLM client for optional refinement, modelled on the behaviour of mempalace's
 //! `llm_client.py` / `llm_refine.py` design.
 //!
 //! Rules inherited from the mission:

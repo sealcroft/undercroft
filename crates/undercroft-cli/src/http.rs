@@ -1,5 +1,5 @@
 //! HTTP transport for the MCP server — the "remote team server" mode,
-//! ported from mempalace's `serve` command.
+//! modelled on the behaviour of mempalace's `serve` command.
 //!
 //! One shared palace, reachable by a team's MCP clients over HTTP:
 //!
@@ -9,7 +9,7 @@
 //!     --header "Authorization: Bearer $UNDERCROFT_MCP_HTTP_TOKEN"
 //! ```
 //!
-//! Security posture (matches upstream's rules, enforced not documented):
+//! Security posture (matches MemPalace's rules, enforced not documented):
 //! a bearer token (`UNDERCROFT_MCP_HTTP_TOKEN`) is **mandatory for any
 //! non-loopback bind** — the server refuses to start without one. The
 //! transport itself is plaintext HTTP; for anything beyond a trusted

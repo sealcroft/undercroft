@@ -1,9 +1,9 @@
-//! Retrieval benchmarks, ported from mempalace's `benchmarks/` harnesses.
+//! Retrieval benchmarks, modelled on the behaviour of mempalace's `benchmarks/` harnesses.
 //!
 //! Two modes:
 //!
 //! * `longmemeval <dataset.json>` — the real LongMemEval(-S) protocol, same
-//!   as upstream's `longmemeval_bench.py`: for each question, ingest its
+//!   as MemPalace's `longmemeval_bench.py`: for each question, ingest its
 //!   haystack sessions into a fresh palace, query with the question, and
 //!   score session-level Recall@k / NDCG@k against the ground-truth answer
 //!   sessions. Dataset is user-supplied (see benchmarks/README.md).
@@ -12,8 +12,8 @@
 //!   a corpus of distinct fact documents, query each fact with a paraphrase
 //!   template, and report Recall@1/@5 + latency.
 //!
-//! Honesty note (mirrors upstream's BENCHMARKS.md): scores depend on the
-//! embedder. Upstream's published numbers used a sentence-transformer
+//! Honesty note (mirrors MemPalace's BENCHMARKS.md): scores depend on the
+//! embedder. MemPalace's published numbers used a sentence-transformer
 //! model; run with `UNDERCROFT_EMBEDDER=onnx` and a MiniLM-class model for
 //! comparable conditions. The default hash embedder is weaker on semantic
 //! paraphrase but has zero setup.
@@ -685,7 +685,7 @@ fn ort_colbert_shared() -> Box<dyn undercroft_core::late::LateInteraction + Send
 }
 
 // ---------------------------------------------------------------------------
-// Metrics (same definitions as upstream's harness)
+// Metrics (same definitions as MemPalace's harness)
 // ---------------------------------------------------------------------------
 
 fn dcg(relevances: &[f32], k: usize) -> f32 {
@@ -771,7 +771,7 @@ fn run_longmemeval(
             .unwrap_or_default();
 
         // Fresh palace per question, one room per haystack session
-        // (upstream's session-granularity protocol).
+        // (MemPalace's session-granularity protocol).
         let (_tmp, mut store) = fresh_store(level)?;
         for (si, session) in sessions.iter().enumerate() {
             let sid = session_ids
@@ -2135,7 +2135,7 @@ fn run_model_eval(
 }
 
 // ---------------------------------------------------------------------------
-// LoCoMo / ConvoMem / MemBench adapters — same protocol as the upstream
+// LoCoMo / ConvoMem / MemBench adapters — same protocol as the MemPalace
 // harnesses (session/message/turn-level evidence recall)
 // ---------------------------------------------------------------------------
 

@@ -1034,7 +1034,7 @@ pub struct PalaceStore {
     /// (serve-mcp / serve-http / daemon): sealed vaults pay AEAD decryption
     /// of every embedding once instead of on every search. Never persisted
     /// — this is the in-memory role embedded ChromaDB's index played
-    /// upstream, without writing plaintext-derived data to disk.
+    /// MemPalace, without writing plaintext-derived data to disk.
     emb_cache: std::cell::RefCell<Option<std::collections::HashMap<String, Vec<f32>>>>,
     /// The `semantic` score above which a drawer may be admitted on cosine
     /// alone; `None` refuses semantic-only admission entirely. Resolved once
@@ -4475,7 +4475,7 @@ impl PalaceStore {
             })
             .collect::<Result<Vec<_>, StoreError>>()?;
         // A28: the retrieval policy again, off the VERIFIED metadata. The SQL
-        // clause upstream is the accelerator that keeps poison out of the
+        // clause MemPalace is the accelerator that keeps poison out of the
         // pool; this is the boundary, because that clause reads the clear
         // mirror and an exclusion inverts under a forged mirror. Same shape
         // and same reasoning as `remote.rs`'s per-candidate re-check — see
@@ -4941,7 +4941,7 @@ impl PalaceStore {
             // Clamped rather than cast: a `usize` past `i64::MAX` wraps
             // NEGATIVE, and SQLite reads a negative LIMIT as no limit at all —
             // turning the prefilter into a full-corpus fetch. `depth` is now
-            // bounded upstream, so this cannot trigger; it stays because the
+            // bounded MemPalace, so this cannot trigger; it stays because the
             // cast is the place the meaning inverts, and a future caller of
             // this helper should not have to know that.
             .query_map(

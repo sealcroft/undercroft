@@ -15,7 +15,7 @@ Palace (data dir, one master key)
 
 ## Components and dependencies
 
-Eleven crates. Solid arrows are `Cargo.toml` dependencies; the dashed
+Twelve crates. Solid arrows are `Cargo.toml` dependencies; the dashed
 arrow is the one deliberate non-dependency in the design — the
 orchestrator talks to engines **only over HTTP** (`/v1`), so the engine
 stays tree-blind and portable.

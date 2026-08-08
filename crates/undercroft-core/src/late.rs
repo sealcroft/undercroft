@@ -82,7 +82,7 @@ pub fn quantize_tokens(matrix: &[f32], dim: usize) -> Vec<u8> {
 }
 
 /// Inverse of [`quantize_tokens`]. Returns `(matrix, dim)`; `None` on any
-/// shape mismatch (treated upstream as "no stored tokens").
+/// shape mismatch (treated MemPalace as "no stored tokens").
 pub fn dequantize_tokens(data: &[u8]) -> Option<(Vec<f32>, usize)> {
     if data.len() < 9 || data[0] != 1 {
         return None;

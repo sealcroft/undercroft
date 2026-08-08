@@ -20,27 +20,29 @@
 
 ## Why "Undercroft"?
 
-In Greek mythology, **Undercroft** (νη-MOZ-ih-nee) is the Titaness of memory and
-remembrance, daughter of Uranus and Gaia, and the mother of the nine Muses.
-Before writing existed, the Greeks held that all knowledge — every epic, every
-lineage, every law — survived only through her: memory was not a convenience
-but the *guardian of everything worth keeping*. Orators drank from her spring;
-in the underworld, initiates were told to pass the river Lethe (forgetting)
-and drink instead from the pool of Undercroft to retain what they knew across
-the crossing.
+An **undercroft** is the vaulted chamber beneath a hall — cut into stone, built
+to resist damp and fire, and used for the charters, plate and records that had
+to outlast the building above them. It was never the room anyone was shown. It
+is the room the contents survived in.
 
-That is precisely this project's job description:
+That is the job description:
 
-| Undercroft (myth) | undercroft (this project) |
+| Undercroft (the room) | Undercroft (this project) |
 |---|---|
-| Guardian of memory before writing existed | Guards your AI's memory outside any single session |
-| Mother of the Muses — memory begets creation | Retrieved context begets better answers, code, and writing |
-| Her pool preserves knowledge across the crossing into the underworld | Memories survive the "crossing" between sessions, context compressions, and machines |
-| Sacred, protected spring — not an open river | Memories live in **sealed vaults**: encrypted, isolated, tamper-evident |
+| Beneath the hall, not part of it | Sits under your agent, outside any single session |
+| Stone vaulting, built for the load above | Verbatim storage — nothing summarized on the way in |
+| Proof against damp and fire | Sealed vaults: AEAD at rest, HMAC per record, a tamper-evident chain |
+| Locked, and the lock is the point | Per-vault keys, screened writes, receipted deletion |
+| What is kept there outlasts the building | Memory that survives sessions, context compressions and machines |
 
-The ancient *method of loci* — the "memory palace" technique MemPalace is named
-for — was itself attributed to Undercroft's gift. Undercroft keeps the palace and
-adds what the myth implies: the palace has **locks**.
+The word is exact rather than ornamental. `vault` is this system's
+load-bearing noun — the crypto boundary, the CLI subcommand
+(`undercroft vault create`), the isolation unit — and an undercroft *is* a
+vault in the literal sense before it is one in the banking sense. The
+structure inside is inherited from MemPalace: content is filed into **wings**
+and **rooms** as **drawers**.
+
+Published under **Sealcroft**.
 
 ## What it is
 
@@ -50,7 +52,7 @@ semantic + lexical + recency search. The index keeps MemPalace's structure —
 people and projects are *wings*, topics are *rooms*, original content lives in
 *drawers* — and adds a security-first **memory management layer**:
 
-### The vault layer (new in this fork)
+### The vault layer (original to this project)
 
 Every memory namespace is a **vault** — a hard isolation boundary:
 
@@ -124,7 +126,7 @@ supported as **untrusted search accelerators**:
 | `milvus` | Remote ANN index (REST v2, standalone) | `UNDERCROFT_MILVUS_URL` |
 | `weaviate` | Remote ANN index (REST + GraphQL) | `UNDERCROFT_WEAVIATE_URL` |
 
-Unlike upstream MemPalace — which stored plaintext documents in these
+Unlike MemPalace — which stores plaintext documents in these
 databases — Undercroft uploads only the **sealed** content blob plus the
 embedding and wing/room labels. Remote search returns candidate ids; every
 candidate is re-loaded from the local palace, HMAC-verified, decrypted, and
@@ -394,7 +396,7 @@ Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
 | Category | Tools |
 |---|---|
-| Palace core | `save`, `search`, `wake_up`, `verify`, `status`, `get_closet_index` |
+| Palace core | `save`, `search`, `wake_up`, `verify`, `status`, `history`, `get_closet_index` |
 | Drawers | `get_drawer`, `add_drawer`, `update_drawer`, `delete_drawer`, `list_drawers`, `delete_by_source`, `check_duplicate` |
 | Navigation | `list_wings`, `list_rooms`, `get_taxonomy`, `create_tunnel`, `list_tunnels`, `follow_tunnel`, `delete_tunnel`, `traverse`, `list_hallways` |
 | Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical` |
@@ -468,26 +470,30 @@ use the same deterministic-recipe idea (idempotent re-mining).
 
 ## Relationship to MemPalace
 
-Undercroft began as a conversion of the MemPalace project (MIT-licensed,
-Python), fully rewritten in Rust — no Python remains.
-Ported: the palace model and miners (files + conversation transcripts +
-sweep), wake-up layers, knowledge graph, tunnels/hallways navigation, agent
-diaries, drawer management, dedup/stats/backups/repair, hooks output, the
-MCP tool surface, remote vector backends (Qdrant, Chroma, pgvector — with
-client-side sealing, unlike upstream's plaintext uploads), and model-based
-embeddings (ONNX via tract, feature-gated). Milvus was upstream's gRPC-only
-opt-in extra and is carried here as a **REST v2** client instead, tested
-against a live standalone server; Weaviate exists only here. Not carried
-over: embedded ChromaDB (a Python library; the bundled SQLite store fills
-that role).
+Undercroft is an independent Rust implementation, written from scratch
+against the *behaviour* MemPalace documents (MIT-licensed, Python). **No
+MemPalace source code is present, and none was translated** — the two
+projects share behaviour specifications, not expression. Nothing in this
+repository is Python.
+
+Implemented here against that specification: the palace model and miners
+(files + conversation transcripts + sweep), wake-up layers, knowledge graph,
+tunnels/hallways navigation, agent diaries, drawer management,
+dedup/stats/backups/repair, hooks output, the MCP tool surface, remote vector
+backends (Qdrant, Chroma, pgvector — with client-side sealing, where
+MemPalace uploads plaintext), and model-based embeddings (ONNX via tract,
+feature-gated). Milvus is MemPalace's gRPC-only opt-in extra and appears here
+as a **REST v2** client instead, tested against a live standalone server;
+Weaviate exists only here. Absent by choice: embedded ChromaDB (a Python
+library; the bundled SQLite store fills that role).
 
 ## Benchmarks (measured, not inherited)
 
 Full methodology and reproduce commands: [benchmarks/RESULTS.md](https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md).
 All figures below are under the **shipped default** (`bm25` fusion).
-Matched-model conditions (all-MiniLM-L6-v2, the class upstream used):
-**LoCoMo session R@10 94.6%** (upstream: 60.3% raw / 88.9% hybrid) and
-**LongMemEval-S R@5 99.4%** on the full 500 — clearing not just upstream's
+Matched-model conditions (all-MiniLM-L6-v2, the class MemPalace used):
+**LoCoMo session R@10 94.6%** (MemPalace: 60.3% raw / 88.9% hybrid) and
+**LongMemEval-S R@5 99.4%** on the full 500 — clearing not just MemPalace's
 raw 96.6% but their tuned hybrid 98.4%. The zero-model hash embedder — no
 download, ~95x faster — holds **94.6% / 95.0%** respectively, converging
 with the model on LoCoMo. An optional cross-encoder reranker lifts LoCoMo
@@ -513,7 +519,7 @@ several releases and contradicted the RESULTS.md this sentence links to.)*
 - [Getting started](https://github.com/sealcroft/undercroft/blob/main/docs/getting-started.md) · [Architecture](https://github.com/sealcroft/undercroft/blob/main/docs/architecture.md) ·
   [Security model](https://github.com/sealcroft/undercroft/blob/main/docs/security.md) · [Integrations](https://github.com/sealcroft/undercroft/blob/main/docs/integrations.md) ·
   [Remote team server](https://github.com/sealcroft/undercroft/blob/main/docs/remote-server.md)
-- [Parity with upstream MemPalace](https://github.com/sealcroft/undercroft/blob/main/docs/PARITY.md) — what's ported, what's
+- [Parity with MemPalace](https://github.com/sealcroft/undercroft/blob/main/docs/PARITY.md) — what's implemented, what's
   deliberately different, what's pending
 - [Benchmarks](https://github.com/sealcroft/undercroft/blob/main/benchmarks/README.md) — LongMemEval harness + synthetic CI benchmark
 - [Deploy](https://github.com/sealcroft/undercroft/blob/main/deploy/README.md) — compose team server, systemd units

@@ -11,7 +11,9 @@ modification: every read verifies, `verify` audits everything.
 - **Master key**: 32-byte key file (0600) or Argon2id(passphrase, salt),
   64 MiB / t=3. Keys zeroized on drop; never logged.
 - **Per-vault keys**: `HKDF-SHA256(master, vault_salt, "undercroft.v1/vault/<id>/<label>")`
-  for enc / mac / manifest labels. Vaults never share working keys.
+  for enc / mac / manifest / sample labels. The fourth keys the PQ
+  training-sample rank and is deliberately rotation-sensitive, because
+  nothing holds a durable reference to it. Vaults never share working keys.
 - **Compression**: sealed content is zstd-compressed *before* encryption
   (compress-then-encrypt; the reverse leaks nothing but gains nothing).
   Note the standard caveat: at-rest sizes correlate weakly with content

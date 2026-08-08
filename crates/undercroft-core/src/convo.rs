@@ -1,4 +1,4 @@
-//! Conversation transcript parsing, ported from mempalace's `convo_miner.py`.
+//! Conversation transcript parsing, modelled on the behaviour of mempalace's `convo_miner.py`.
 //!
 //! Understands the JSONL session format written by Claude Code / Codex-style
 //! agents: one JSON object per line with a `type` and a `message` whose

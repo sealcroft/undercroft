@@ -47,7 +47,7 @@ opt-in choices, never defaults and never silent fallbacks.
 **Honest engineering.** Trade-offs are documented where they live: what
 sealed vaults still reveal (structure labels, embeddings pushed to remote
 indexes), what the threat model does and does not cover, and what has not
-been ported yet. A security feature that overstates itself is a
+been implemented yet. A security feature that overstates itself is a
 vulnerability with good marketing.
 
 ## What we will not accept
@@ -59,8 +59,9 @@ audit chain.
 
 ## The name
 
-Undercroft is the Greek Titaness of memory, mother of the nine Muses. Her
-pool — unlike the river Lethe beside it — let souls keep what they knew
-across the crossing. That is the whole mission in one image: memory that
-survives the crossing between sessions, and a spring that is guarded, not
-an open river.
+An undercroft is the vaulted chamber beneath a hall — stone, sealed, built
+for the charters and records that had to outlast the building above them.
+That is the whole mission in one image: not the room you show people, the
+room the contents survive in. The word is exact rather than ornamental,
+since `vault` is this system's actual isolation unit and an undercroft is a
+vault in the literal sense first. Published under Sealcroft.

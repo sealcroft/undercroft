@@ -1,6 +1,6 @@
 //! `undercroft` — hardened, local-first AI memory.
 //!
-//! Rust conversion of MemPalace with a security-first management layer:
+//! Independent Rust implementation, with a security-first management layer:
 //! memories live in isolated vaults with per-vault derived keys, AEAD
 //! encryption, and HMAC integrity verification.
 
@@ -624,7 +624,7 @@ enum TunnelAction {
 #[derive(Subcommand)]
 enum DaemonAction {
     /// Run the sweep loop in the foreground (systemd/compose manage the
-    /// process; upstream's start/stop/jobs machinery is replaced by them)
+    /// process; MemPalace's start/stop/jobs machinery is replaced by them)
     Run {
         /// Transcript directory to watch
         #[arg(long, default_value = "~/.claude/projects")]

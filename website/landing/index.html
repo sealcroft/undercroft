@@ -91,7 +91,7 @@ h1 .cursor-block {
   animation: rise .9s ease .5s both;
 }
 .tagline b { color: var(--ink); font-weight: 500; }
-.lethe {
+.epigraph {
   margin-top: 1.1rem;
   font-family: var(--didot);
   font-style: italic;
@@ -262,8 +262,8 @@ body.js .reveal.in { opacity: 1; transform: none; }
 .feat p { font-size: .9rem; color: var(--ink-dim); }
 .feat p code { font-family: var(--mono); color: var(--gold); font-size: .82em; }
 
-/* ---------------- myth strip: a marble slab in the dark ---------------- */
-.myth {
+/* ---------------- name strip: a stone slab in the dark ---------------- */
+.slab {
   border-top: 3px double var(--gold-dim);
   border-bottom: 3px double var(--gold-dim);
   background:
@@ -273,7 +273,7 @@ body.js .reveal.in { opacity: 1; transform: none; }
   position: relative;
   z-index: 2;
 }
-.myth blockquote {
+.slab blockquote {
   font-family: var(--didot);
   font-size: clamp(1.25rem, 3.2vw, 1.9rem);
   font-style: italic;
@@ -281,8 +281,8 @@ body.js .reveal.in { opacity: 1; transform: none; }
   color: #262e28;
   text-shadow: 0 1px 0 rgba(255,255,255,.55);
 }
-.myth blockquote em { color: #8a6a1f; font-style: normal; }
-.myth figcaption { margin-top: 1.1rem; font-family: var(--mono); font-size: .78rem; color: #6d6650; letter-spacing: .2em; }
+.slab blockquote em { color: #8a6a1f; font-style: normal; }
+.slab figcaption { margin-top: 1.1rem; font-family: var(--mono); font-size: .78rem; color: #6d6650; letter-spacing: .2em; }
 
 /* ---------------- benchmarks ---------------- */
 .bench-lede { color: var(--ink-dim); max-width: 730px; margin-top: .2rem; }
@@ -493,12 +493,12 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
   <button class="snm-chip" aria-expanded="false">§ top</button>
 </nav>
   <header class="hero wrap">
-    <div class="eyebrow">ΜΝΗΜΟΣΥΝΗ · TITANESS OF MEMORY</div>
+    <div class="eyebrow">A SEALCROFT PROJECT · THE VAULT BENEATH THE HALL</div>
     <h1 class="title"><span id="scramble">UNDERCROFT</span><span class="cursor-block"></span></h1>
     <p class="tagline">Hardened, local-first AI memory. Your agent's every word, kept
       <b>verbatim</b> in <b>encrypted vaults</b> — HMAC-chained, tamper-evident,
       searchable, and never leaving your machine.</p>
-    <p class="lethe">Pass the river Lethe. Drink from the pool.</p>
+    <p class="epigraph">Below the hall. Cut from stone. Sealed.</p>
     <div class="cta-row">
       <a class="btn" href="docs/">Read the docs</a>
       <a class="btn gold" href="https://github.com/sealcroft/undercroft">Source on GitHub</a>
@@ -565,7 +565,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
           <span class="lbl">● LIVE · palace-demo</span>
         </div>
         <img src="assets/palace-monitor-live.png" width="1536" height="864" loading="lazy"
-             alt="Palace Monitor live view: nine wings named for conversation participants, each filling with filed drawers, an archivist mid-file, gold audit-chain links stamping between wings.">
+             alt="Palace Monitor live view: eight wings named for conversation participants, each filling with filed drawers, an archivist mid-file, gold audit-chain links stamping between wings.">
         <figcaption class="mon-cap"><b>Live.</b> Each wing is a real drawer stream — this palace is
            built from the <b>LoCoMo</b> long-conversation benchmark, filed verbatim. The archivist
            files every write, the chain stamps, and the counts climb as it happens.</figcaption>
@@ -597,7 +597,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
       <div class="mon-note">
         <h3>A beacon you can trust</h3>
-        <p>The tamper light is wired to the same <code>hmac_verify_failures</code> signal as the
+        <p>The tamper light is wired to the same <code>undercroft_hmac_verify_failures_total</code> signal as the
            metrics: it fires on real verification failure and nothing else. No synthetic alarms.</p>
       </div>
     </div>
@@ -631,7 +631,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <span class="lbl">🚨 PalaceTamperDetected · firing</span>
       </div>
       <img src="assets/grafana-tamper-alert.png" width="1400" height="210" loading="lazy"
-           alt="Grafana active-alerts table showing PalaceTamperDetected firing at critical severity on the drawer surface.">
+           alt="Grafana active-alerts table showing PalaceTamperDetected firing at critical severity on the drawer surface, above HighSearchLatencyP95 firing at warning.">
       <figcaption class="mon-cap"><b>A real alert.</b> Corrupt one drawer's bytes on disk and the next
          read fails its HMAC — <code>PalaceTamperDetected</code> fires <b>critical</b>, names the
          <code>drawer</code> surface, and is delivered through Alertmanager. No synthetic alarms.</figcaption>
@@ -656,7 +656,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     </div>
   </section>
 
-  <section class="myth reveal">
+  <section class="slab reveal">
     <div class="wrap">
       <figure>
         <blockquote>The <em>undercroft</em> is the vaulted chamber beneath the
@@ -671,10 +671,10 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="sec-label">Measured, not promised</div>
     <h2>Benchmarks that were actually run</h2>
     <p class="bench-lede">Both public long-memory suites, end to end, on the shipped scoring
-       pipeline — full datasets, upstream MemPalace's own protocol and metrics, everything inside
+       pipeline — full datasets, MemPalace's own protocol and metrics, everything inside
        Docker. Two configurations: the default <b>hash embedder</b> (deterministic, offline, zero
-       downloads) and <b>all-MiniLM-L6-v2 via ONNX</b> — the same model class upstream used, so
-       those rows compare like for like. Upstream rows are their published numbers.</p>
+       downloads) and <b>all-MiniLM-L6-v2 via ONNX</b> — the same model class MemPalace used, so
+       those rows compare like for like. MemPalace rows are their published numbers.</p>
 
     <div class="bench-grid">
       <figure class="bench-card">
@@ -686,7 +686,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <div class="bar-row hash"><span class="bar-name">undercroft · hash</span><div class="bar"><i style="--w:95.0%"></i></div><span class="bar-val">95.0</span></div>
         <div class="bar-row up"><span class="bar-name">mempalace · hybrid</span><div class="bar"><i style="--w:98.4%"></i></div><span class="bar-val">98.4</span></div>
         <div class="bar-row up2"><span class="bar-name">mempalace · raw</span><div class="bar"><i style="--w:96.6%"></i></div><span class="bar-val">96.6</span></div>
-        <div class="bench-foot">recall@5 of the evidence session · MiniLM + BM25 clears upstream's tuned hybrid; zero-model hash reaches 95.0 · already saturated at 99.4, so a reranker only adds noise here</div>
+        <div class="bench-foot">recall@5 of the evidence session · MiniLM + BM25 clears MemPalace's tuned hybrid; zero-model hash reaches 95.0 · already saturated at 99.4, so a reranker only adds noise here</div>
       </figure>
       <figure class="bench-card">
         <figcaption class="bench-head">
@@ -698,15 +698,15 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <div class="bar-row hash"><span class="bar-name">undercroft · hash</span><div class="bar"><i style="--w:94.6%"></i></div><span class="bar-val">94.6</span></div>
         <div class="bar-row up"><span class="bar-name">mempalace · hybrid</span><div class="bar"><i style="--w:88.9%"></i></div><span class="bar-val">88.9</span></div>
         <div class="bar-row up2"><span class="bar-name">mempalace · raw</span><div class="bar"><i style="--w:60.3%"></i></div><span class="bar-val">60.3</span></div>
-        <div class="bench-foot">recall@10 of the evidence session · MiniLM + BM25 and zero-model hash converge at 94.6, both far above upstream; an optional cross-encoder reranker lifts it to 97.68 (1936/1982)</div>
+        <div class="bench-foot">recall@10 of the evidence session · MiniLM + BM25 and zero-model hash converge at 94.6, both far above MemPalace; an optional cross-encoder reranker lifts it to 97.68 (1936/1982)</div>
       </figure>
     </div>
 
     <div class="bench-how">
       <div class="bench-note">
         <h3>What was measured</h3>
-        <p>Evidence recall at session granularity, the metric upstream reports:
-           <b>LongMemEval-S</b> (xiaowu0162/longmemeval-cleaned — the exact file upstream
+        <p>Evidence recall at session granularity, the metric MemPalace reports:
+           <b>LongMemEval-S</b> (xiaowu0162/longmemeval-cleaned — the exact file MemPalace
            benchmarked) and <b>LoCoMo</b> (snap-research/locomo; 1,982 of 1,986 QA are
            evaluable, no-evidence questions skipped). Scoring runs the sealed-level
            pipeline — the same code path production uses.</p>
@@ -722,12 +722,12 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
       <div class="bench-note">
         <h3>Honest reading</h3>
-        <p>Matched-model rows are the fair comparison: <b>+2.8 over upstream raw</b> on
+        <p>Matched-model rows are the fair comparison: <b>+2.8 over MemPalace raw</b> on
            LongMemEval-S and <b>+1.0 over their tuned hybrid</b> (99.4 vs 98.4), and
-           <b>+5.7 over their best</b> on LoCoMo (94.6 vs 88.9). Upstream numbers come from
+           <b>+5.7 over their best</b> on LoCoMo (94.6 vs 88.9). MemPalace numbers come from
            their own harness; ours from the commands below, reproducible on any machine
            with Docker. The zero-model hash rows are the honest floor, and honestly split:
-           94.6 on LoCoMo is above upstream's best (88.9) with no model to download, while
+           94.6 on LoCoMo is above MemPalace's best (88.9) with no model to download, while
            95.0 on LongMemEval-S sits below their raw 96.6 — that suite is where the model
            still earns its keep.</p>
       </div>
@@ -801,28 +801,28 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="sec-label">Architecture</div>
     <h2>Eight rooms of the machine</h2>
     <div class="feat-grid">
-      <div class="feat" data-glyph="Μ">
+      <div class="feat" data-glyph="I">
         <h3>Sealed vaults</h3>
         <p>Each namespace gets its own database and its own HKDF-derived keys.
            Content and embeddings encrypted at rest; structure searchable; nothing
            plaintext-derived ever touches disk.</p>
       </div>
-      <div class="feat" data-glyph="Ν">
+      <div class="feat" data-glyph="II">
         <h3>Tamper evidence</h3>
         <p>HMAC tags on every drawer, knowledge-graph fact, and tunnel; an append-only
            audit chain with a MAC'd manifest. <code>verify</code> replays all of it.</p>
       </div>
-      <div class="feat" data-glyph="Η">
+      <div class="feat" data-glyph="III">
         <h3>Verbatim recall</h3>
         <p>Never summarized on the way in. Hybrid semantic + lexical + recency search
            with one-typo tolerance returns your <i>exact words</i>.</p>
       </div>
-      <div class="feat" data-glyph="Γ">
+      <div class="feat" data-glyph="IV">
         <h3>Knowledge graph</h3>
         <p>Temporal facts with validity windows. <code>kg query --as-of 2024-06</code>
            answers what was true <i>then</i>; supersede closes the old fact and opens the new.</p>
       </div>
-      <div class="feat" data-glyph="Ω">
+      <div class="feat" data-glyph="V">
         <h3>Untrusted accelerators</h3>
         <p>Qdrant, Chroma, pgvector, Milvus, Weaviate — fed only sealed bytes. Their answers are
            re-verified against local HMACs before you ever see them, then filtered by the
@@ -830,14 +830,14 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
            vocabularies — off each candidate's verified metadata. An index push is not a
            route around admission control.</p>
       </div>
-      <div class="feat" data-glyph="Σ">
+      <div class="feat" data-glyph="VI">
         <h3>Agent-native</h3>
-        <p>33 MCP tools over stdio or team HTTP (bearer-enforced; <code>--read-only</code> is a
+        <p>34 MCP tools over stdio or team HTTP (bearer-enforced; <code>--read-only</code> is a
            posture on the whole process, not a filter on one port), auto-save hooks, per-agent
-           diaries, transcript sweeps — memory that survives the crossing between sessions. The
+           diaries, transcript sweeps — memory that survives the gap between sessions. The
            tool list is an inventory the build counts itself against, in both directions.</p>
       </div>
-      <div class="feat" data-glyph="Δ">
+      <div class="feat" data-glyph="VII">
         <h3>Screened at the door</h3>
         <p>Opt-in write-path admission, enforced at the one write choke point behind a
            <i>required</i> argument — a new write path does not compile until its author
@@ -848,7 +848,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
            classifier may say <i>suspicious</i> — never <i>admitted</i>. Trust classes and
            training-draw caps bound what any writer can shape.</p>
       </div>
-      <div class="feat" data-glyph="Θ">
+      <div class="feat" data-glyph="VIII">
         <h3>Forgetting with a receipt</h3>
         <p><code>forget</code> destroys through the audit chain and hands back a verifiable
            attestation — heads, tombstones, content fingerprints. Retention policies per
@@ -857,8 +857,8 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
     </div>
     <div class="stats">
-      <div class="stat"><div class="n" data-count="551">0</div><div class="l">cargo tests</div></div>
-      <div class="stat"><div class="n" data-count="329">0</div><div class="l">e2e checks</div></div>
+      <div class="stat"><div class="n" data-count="656">0</div><div class="l">cargo tests</div></div>
+      <div class="stat"><div class="n" data-count="414">0</div><div class="l">e2e checks</div></div>
       <div class="stat"><div class="n" data-count="5">0</div><div class="l">live backends</div></div>
       <div class="stat"><div class="n" data-count="34">0</div><div class="l">mcp tools</div></div>
       <div class="stat"><div class="n" data-count="0">0</div><div class="l">bytes phoned home</div></div>
@@ -869,13 +869,13 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="sec-label">What to build with it</div>
     <h2>Use cases it covers today</h2>
     <div class="feat-grid">
-      <div class="feat" data-glyph="Α">
+      <div class="feat" data-glyph="I">
         <h3>A coding agent that remembers</h3>
         <p>MCP stdio server + auto-save hooks: every session's decisions survive the
            crossing. <code>wake-up</code> loads identity and the essential story;
            <code>search</code> returns the exact words, one-typo tolerant.</p>
       </div>
-      <div class="feat" data-glyph="Β">
+      <div class="feat" data-glyph="II">
         <h3>A team's shared memory</h3>
         <p>One <code>serve-http</code> instance, bearer-enforced beyond loopback, with
            <code>--read-only</code> for consumers — a posture the whole process takes, gated
@@ -883,13 +883,13 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
            refused rather than served. Same MCP tools over HTTP — every teammate's agent
            shares one sealed palace.</p>
       </div>
-      <div class="feat" data-glyph="Γ">
+      <div class="feat" data-glyph="III">
         <h3>A multi-tenant memory product</h3>
         <p>The versioned <code>/v1</code> REST engine: per-vault assertions, external
            embeddings, count-verified migration — and an optional orchestrator that
            routes fleets of engines with HMAC-only tenant tokens.</p>
       </div>
-      <div class="feat" data-glyph="Δ">
+      <div class="feat" data-glyph="IV">
         <h3>An auditable record of what was said</h3>
         <p>Verbatim storage, HMAC on every record, a tamper-evident audit chain, and
            crash-safe key rotation. <code>verify</code> replays it all; a rollback is
@@ -897,7 +897,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
            audited unconditionally, and <code>UNDERCROFT_READ_AUDIT=chain</code> adds a
            record per search — a <i>keyed fingerprint</i> of the query, never its text.</p>
       </div>
-      <div class="feat" data-glyph="Ε">
+      <div class="feat" data-glyph="V">
         <h3>Backups that never leak</h3>
         <p>Encrypted export bundles sealed to a <b>hybrid post-quantum</b> recipient —
            X25519 <i>and</i> ML-KEM-768, both shared secrets feeding one key, because the
@@ -905,7 +905,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
            only needs it copied. A migration file never exists in plaintext. Restore is
            <code>import --identity</code>; token matrices ride along as portable artifacts.</p>
       </div>
-      <div class="feat" data-glyph="Ζ">
+      <div class="feat" data-glyph="VI">
         <h3>Offline retrieval that scales</h3>
         <p>Deterministic hash embedder by default; opt-in ONNX / ONNX Runtime models,
            cross-encoder rerank, ColBERT late interaction, PQ/IVF and MUVERA FDE
@@ -938,7 +938,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
 
   <footer>
     <div class="wrap foot-row">
-      <span class="foot-glyph">Μ</span>
+      <span class="foot-glyph">∩</span>
       <a href="docs/">documentation</a>
       <a href="#monitor">monitor</a>
       <a href="#operate">operate</a>
@@ -947,20 +947,20 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       <a href="docs/agents.html">agents guide</a>
       <a href="docs/parity.html">parity</a>
       <a href="https://github.com/sealcroft/undercroft">github</a>
-      <span class="foot-license">BUSL-1.1 · rust · μηδὲν λήθῃ — let nothing be forgotten</span>
+      <span class="foot-license">BUSL-1.1 · rust · nothing filed here leaves here</span>
     </div>
   </footer>
 </main>
 
 <script>
 document.body.classList.add('js');
-/* ============ matrix rain of greek glyphs ============ */
+/* ============ hex rain: the tags, falling ============ */
 (() => {
   const canvas = document.getElementById('rain');
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const ctx = canvas.getContext('2d');
-  const GLYPHS = 'ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω0123456789';
-  const BRAND = 'ΜΝΗΜΟΣΥΝΗ';
+  const GLYPHS = '0123456789abcdef';
+  const BRAND = 'UNDERCROFT';
   let W, H, cols, drops, fs;
   function size() {
     W = canvas.width = innerWidth;
@@ -1015,7 +1015,7 @@ document.body.classList.add('js');
 (() => {
   const el = document.getElementById('scramble');
   const FINAL = 'UNDERCROFT';
-  const POOL = 'ΜΝΗΜΟΣΥΝΗΞΦΨΔΘΛ#$%&';
+  const POOL = '0123456789ABCDEF#$%&';
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = FINAL; return; }
   let locked = 0, t = 0;
   const iv = setInterval(() => {
@@ -1130,7 +1130,7 @@ document.body.classList.add('js');
 /* ============ seal / verify demo ============ */
 (() => {
   const PLAIN = 'We chose GraphQL over REST because the mobile app needed fewer round trips. Ship the gateway change behind the beta flag on Friday.';
-  const CIPHER_POOL = 'ΞΨΦΘΛΔΩμλσ옵ξζ¤§01xf9e7a3bc45d8';
+  const CIPHER_POOL = '0123456789abcdefABCDEF+/=$%&#@';
   const textEl = document.getElementById('seal-text');
   const stateEl = document.getElementById('vault-state');
   const hmacEl = document.getElementById('hmac-val');

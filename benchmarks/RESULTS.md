@@ -3,7 +3,7 @@
 Run 2026-07-14, sealed-level scoring pipeline, inside Docker on Apple
 Silicon (aarch64). Two embedder configurations: the default **hash
 embedder** (zero model, zero network) and **all-MiniLM-L6-v2 via ONNX**
-(`--features onnx`) — the same model class upstream MemPalace used, making
+(`--features onnx`) — the same model class MemPalace used, making
 the model rows the like-for-like comparison. Reproduce with the exact
 commands shown.
 
@@ -18,7 +18,7 @@ change is embedder-independent, so it holds or helps. See
 ## LongMemEval-S (full 500 questions, session granularity)
 
 Dataset: `xiaowu0162/longmemeval-cleaned` → `longmemeval_s_cleaned.json`
-(the same file upstream MemPalace benchmarked).
+(the same file MemPalace benchmarked).
 
 ```
 undercroft-bench longmemeval longmemeval_s_cleaned.json --k 5
@@ -38,11 +38,11 @@ undercroft-bench longmemeval longmemeval_s_cleaned.json --k 5
 Both configurations use the default **BM25 fusion**. The MiniLM rows were
 re-measured under BM25 (8-way sharded, full 500).
 
-Matched-model reading: with the same embedding-model class upstream used
+Matched-model reading: with the same embedding-model class MemPalace used
 and BM25 fusion, Undercroft's raw pipeline reaches **99.4%** — **above
-upstream's own tuned hybrid (98.4%)**, not just their raw number (96.6%).
+MemPalace's own tuned hybrid (98.4%)**, not just their raw number (96.6%).
 The zero-model hash embedder reaches 95.0% — within 4.4 points of the
-model and above upstream raw, closing most of the semantics gap with no
+model and above MemPalace raw, closing most of the semantics gap with no
 download.
 
 Per-type (R@5 any):
@@ -73,7 +73,7 @@ undercroft-bench locomo locomo10.json --k 10
 | Session R@10 | 94.6% | **94.6%** | 60.3% | 88.9% |
 
 Both under BM25 fusion. Here the model and the zero-model hash embedder
-converge at 94.6% — both above upstream's best (88.9%).
+converge at 94.6% — both above MemPalace's best (88.9%).
 
 Per-category (hash + BM25): 1: 94.7 · 2: 90.3 · 3: 81.5 · 4: 96.3 · 5: 97.1
 (the hardest multi-hop category 3 rises from 75.0 under legacy to 81.5).
@@ -103,7 +103,7 @@ undercroft-bench locomo locomo10.json --k 10 --skip N --limit M
 | Session R@10 | 94.6% | **97.68%** (1936/1982) | **+3.08 pts** |
 
 The reranker lifts LoCoMo R@10 to **97.68%** — above the pre-reranker
-pipeline and far above upstream's best (88.9%). It is **off by default**
+pipeline and far above MemPalace's best (88.9%). It is **off by default**
 (the fusion-ranked result is already strong); enabling it costs a second
 tract pass per top-N candidate, so `UNDERCROFT_RERANK_TOP_N` bounds latency.
 
@@ -187,15 +187,15 @@ LongMemEval and **93.8 → 94.6** on LoCoMo under BM25.
 ## Honest reading
 
 - **Matched-model conditions (the fair comparison):** with the same model
-  class and BM25 fusion, LongMemEval **99.4% clears upstream's tuned hybrid
+  class and BM25 fusion, LongMemEval **99.4% clears MemPalace's tuned hybrid
   (98.4%)** — not just their raw (96.6%) — and LoCoMo **94.6% is well above
-  upstream's best (88.9%)**. Undercroft's pipeline is at or above upstream on
+  MemPalace's best (88.9%)**. Undercroft's pipeline is at or above MemPalace on
   both benchmarks.
 - **Zero-model rows now close most of the gap:** with BM25 the hash
   embedder reaches 95.0 on LongMemEval (was 90.4) and 94.6 on LoCoMo (was
   92.7) — no download, ~95x faster per question, and on LoCoMo it now
   edges past the earlier MiniLM figure.
-- Differences to keep in mind: upstream evaluated 1,986 LoCoMo questions
+- Differences to keep in mind: MemPalace evaluated 1,986 LoCoMo questions
   to our 1,982 evaluable (no-evidence QA skipped); their numbers come from
   their own harness implementation; our MiniLM inference runs tract
   (pure Rust) with 256-token truncation and mean pooling.

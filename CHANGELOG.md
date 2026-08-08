@@ -45,9 +45,13 @@ hours after it.
 - **History was rewritten and the 46 releases deleted.** Their asset filenames
   were immutable, and GHCR namespaces do not redirect the way repository URLs
   do.
-- Landing-page copy: the Orphic epigraph became a fabricated quote attributed
-  to a real 4th-century BC artifact once the name was substituted, so it is
-  replaced with the project's own words.
+- Landing-page copy: the hero epigraph became a fabricated quote attributed to
+  a real 4th-century BC artifact once the name was substituted, so it is
+  replaced with the project's own words. The same substitution turned the
+  README's origin story into an assertion that a stone cellar is a Greek
+  deity; that section is rewritten around what the word actually means, and
+  around the fact that `vault` — the crypto boundary, the CLI subcommand, the
+  isolation unit — is now the same word as the product.
 
 **A byte grep cannot verify this.** The first history pass reported clean while
 17 of 54 historical PDF blobs still carried the old name inside Flate-compressed
@@ -1163,10 +1167,10 @@ each one told a reader something the code does not do.
   default: MiniLM **94.6** LoCoMo / **99.4** LongMemEval-S, hash **94.6** /
   **95.0**. The landing page's "honest reading" deltas were computed from
   the retired values and **argued against its own bars** — it claimed "+0.8
-  over upstream raw" and that "their tuned hybrid still holds 98.4" beside a
+  over MemPalace raw" and that "their tuned hybrid still holds 98.4" beside a
   bar reading 99.4. Now +2.8 over raw, +1.0 over the tuned hybrid, +5.7 on
   LoCoMo — and honest about the split: the zero-model hash row beats
-  upstream's best on LoCoMo and sits *below* their raw on LongMemEval.
+  MemPalace's best on LoCoMo and sits *below* their raw on LongMemEval.
 - **The superseded "~85 ms/q" scoped figure** survived in CLAUDE.md 23 lines
   from the current one. Scoped latency is wing ~32 ms/q, room ~14,
   wing+room ~13, flat across 8× corpus growth (`scopescale`).
@@ -5902,8 +5906,8 @@ and single-vault behavior are unchanged.
 
 - First measured benchmark results, in-repo (benchmarks/RESULTS.md), with
   the zero-model hash embedder: LoCoMo session R@10 92.7% (beats
-  upstream's published raw and hybrid), LongMemEval-S R@5 90.4% (6.2 pts
-  under upstream's model-based raw; gap isolated to the
+  MemPalace's published raw and hybrid), LongMemEval-S R@5 90.4% (6.2 pts
+  under MemPalace's model-based raw; gap isolated to the
   single-session-preference type).
 - Weaviate backend (REST + GraphQL, vectorizer:none) — fifth live-tested
   remote index; PUT-vs-POST upsert semantics handled.
@@ -5915,7 +5919,7 @@ and single-vault behavior are unchanged.
 ## 0.6.0 — Benchmark adapters + in-process vector cache; PARITY complete
 
 - `undercroft-bench locomo|convomem|membench`: adapters for the remaining
-  three upstream benchmarks (session / message / turn-level evidence
+  three MemPalace benchmarks (session / message / turn-level evidence
   recall, same protocols as the Python harnesses), fixture-tested so the
   scoring is trustworthy before any dataset is downloaded.
 - `PalaceStore::warm_embedding_cache`: decrypt-once in-memory vector cache

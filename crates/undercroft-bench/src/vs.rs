@@ -21,7 +21,7 @@
 //!
 //! External systems are driven over plain HTTP (their documented REST
 //! surfaces) so this crate stays pure Rust. Endpoints and auth are
-//! env-overridable to absorb upstream API drift without a rebuild:
+//! env-overridable to absorb MemPalace API drift without a rebuild:
 //! `UNDERCROFT_VS_URL`, `UNDERCROFT_VS_ADD_PATH`, `UNDERCROFT_VS_SEARCH_PATH`,
 //! `UNDERCROFT_VS_BEARER`.
 
@@ -180,7 +180,7 @@ pub struct HttpConfig {
 
 impl HttpConfig {
     /// Resolve from CLI/env with per-system defaults. Env wins over the
-    /// defaults so upstream API drift is absorbable without a rebuild.
+    /// defaults so MemPalace API drift is absorbable without a rebuild.
     pub fn resolve(url_flag: &str, default_base: &str, add: &str, search: &str) -> Self {
         let base = if !url_flag.is_empty() {
             url_flag.to_string()

@@ -1,6 +1,6 @@
 //! Remote vector indexes for Undercroft — Qdrant, Chroma, and pgvector.
 //!
-//! Design differs deliberately from upstream MemPalace, which shipped
+//! Design differs deliberately from MemPalace, which shipped
 //! plaintext documents to these servers. Here a remote backend is an
 //! **untrusted search accelerator**:
 //!
@@ -875,7 +875,7 @@ pub mod weaviate {
                 .chars()
                 .filter(|c| c.is_ascii_alphanumeric())
                 .collect();
-            format!("Mnemo{safe}")
+            format!("Undercroft{safe}")
         }
 
         /// Weaviate object ids must be UUIDs; derive one from the record id.

@@ -1,7 +1,7 @@
 # Undercroft remote team server — MCP over HTTP, backed by a central Qdrant.
 #
 # One command stands up a shared memory service a whole team's AI clients
-# connect to. Unlike the upstream MemPalace server, drawer content reaches
+# connect to. Unlike the MemPalace server, drawer content reaches
 # Qdrant SEALED (encrypted client-side inside the undercroft container);
 # the vector index never holds plaintext.
 #

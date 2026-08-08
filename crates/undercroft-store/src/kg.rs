@@ -1,4 +1,4 @@
-//! Temporal knowledge graph, ported from mempalace's `knowledge_graph.py`.
+//! Temporal knowledge graph, modelled on the behaviour of mempalace's `knowledge_graph.py`.
 //!
 //! Entities + triples with validity windows: a fact holds from
 //! `valid_from` until `valid_to` (open-ended when `None`). Facts are never
@@ -86,7 +86,7 @@ pub struct KgStats {
 
 /// Normalize a date or datetime string to a sortable comparison key.
 /// Date-only values are treated as midnight UTC so mixed granularity
-/// compares correctly (mirrors `_temporal_start_key` upstream).
+/// compares correctly (mirrors `_temporal_start_key` MemPalace).
 fn temporal_key(value: &str) -> String {
     let v = value.trim();
     if v.len() == 10 && v.as_bytes().get(4) == Some(&b'-') {

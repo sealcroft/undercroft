@@ -152,7 +152,7 @@ docker compose run --rm -v /path/to/dataset-dir:/data:ro test \
 Competitor stacks and pinned configurations live in
 [`deploy/bench-vs/`](../deploy/bench-vs/README.md). Endpoint paths are
 env-overridable (`UNDERCROFT_VS_URL`, `UNDERCROFT_VS_ADD_PATH`,
-`UNDERCROFT_VS_SEARCH_PATH`, `UNDERCROFT_VS_BEARER`) so upstream API
+`UNDERCROFT_VS_SEARCH_PATH`, `UNDERCROFT_VS_BEARER`) so MemPalace API
 drift is absorbable without a rebuild.
 
 ### Reading the mem0 row
@@ -187,7 +187,7 @@ with the caveat that none of it affects the scored retrieval path):
   in the shipped `mem0/openmemory-mcp` image: it calls
   `chat.completions.with_response_format(...)`, an API that does not
   exist in any release of the bundled `openai` SDK (verified
-  in-container; upstream `main` has since been corrected to
+  in-container; MemPalace `main` has since been corrected to
   `beta.chat.completions.parse`, but the published image still carries
   the broken call, erroring continuously — and even the corrected
   version hardcodes `model="gpt-4o-mini"` regardless of configured

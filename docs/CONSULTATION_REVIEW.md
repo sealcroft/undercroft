@@ -13,7 +13,7 @@ consultation-filtered track"); this file is the evidence behind it.
 largely content-farm or hallucination-grade (an article announcing that a
 film actress launched MemPalace; several domains that do not exist as
 described). One substantive source drives nearly every claim. Several
-criticisms target the **Python upstream** (ChromaDB, its benchmark
+criticisms target the **Python MemPalace** (ChromaDB, its benchmark
 methodology, its lack of selective retrieval), not this engine. It knew
 nothing of the PQ/FDE/per-wing tiers, the semantic admission gate, the
 footprint pricing, receipts and grounding, or any measurement below. Treat it
@@ -232,7 +232,7 @@ Confirmed real, most already tracked, now with external confirmation:
   the manifest, so they anchor at the next store open — until then a
   stripped unanchored tail is indistinguishable from a crash.
 - **Entity resolution.** `kg_entities` is name-unique; no aliasing or merge.
-  Upstream of multi-hop quality.
+  MemPalace of multi-hop quality.
 - **Multi-hop retrieval depth.** Measured weakest category (AMB: multi-hop
   71.9% accuracy, 53.9% gold-recall). Already C2.5 on the roadmap.
 - **Large artifacts.** Image *bytes* are a recorded gap (37.9% of LoCoMo

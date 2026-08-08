@@ -125,7 +125,7 @@ table th {
 }
 
 /* home link injected by undercroft.js */
-.mnemo-home {
+.uc-home {
   font-family: "GFS Didot", "Times New Roman", serif;
   font-size: 1.35rem;
   line-height: 1;
@@ -134,7 +134,7 @@ table th {
   padding: 0 8px;
 }
 
-.mnemo-home:hover {
+.uc-home:hover {
   color: #35e0c2 !important;
   text-shadow: 0 0 18px rgba(53, 224, 194, .5);
 }

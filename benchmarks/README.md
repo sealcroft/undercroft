@@ -14,7 +14,7 @@ query throughput. CI runs it to catch retrieval regressions.
 
 ## LongMemEval
 
-Same protocol as upstream's `longmemeval_bench.py`: per question, ingest the
+Same protocol as MemPalace's `longmemeval_bench.py`: per question, ingest the
 haystack sessions into a fresh palace (one room per session), retrieve with
 the question, score session-level Recall@k and NDCG@k.
 
@@ -26,7 +26,7 @@ cargo run --release -p undercroft-bench -- longmemeval longmemeval_s.json --limi
 
 ## LoCoMo / ConvoMem / MemBench
 
-Adapters for the other three upstream benchmarks, same protocols
+Adapters for the other three MemPalace benchmarks, same protocols
 (session / message / turn-level evidence recall). Datasets are
 user-supplied — see each benchmark's repository for downloads:
 
@@ -60,7 +60,7 @@ and type accuracy.
 
 ## Honesty notes
 
-- Upstream's published numbers (96.6% R@5 raw) were produced with a
+- MemPalace's published numbers (96.6% R@5 raw) were produced with a
   sentence-transformer embedding model. The default hash embedder here is
   much weaker on semantic paraphrase; for comparable conditions build with
   `--features onnx` and set `UNDERCROFT_EMBEDDER=onnx` with a MiniLM-class

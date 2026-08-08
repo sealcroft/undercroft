@@ -1,3 +1,1 @@
-# Undercroft
-
 {{#include ../../README.md}}

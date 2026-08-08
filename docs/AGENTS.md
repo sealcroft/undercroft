@@ -162,7 +162,7 @@ undercroft serve-http --host 0.0.0.0 --port 8800
 - The server **refuses to start** on a non-loopback bind without the
   bearer. Every request (MCP and `/v1`) must send
   `Authorization: Bearer <token>`.
-- `--read-only` refuses all 13 mutating MCP tools and returns 403 on
+- `--read-only` refuses all 12 mutating MCP tools and returns 403 on
   mutating `/v1` routes — run a second read-only instance for consumers
   that should never write. It is a posture on the whole process, not a
   route filter: **both** stores the server opens (the `/mcp` one and each

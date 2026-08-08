@@ -1,15 +1,16 @@
-# Parity with upstream MemPalace
+# Parity with MemPalace
 
 Feature-by-feature comparison against `MemPalace/mempalace` (the Python
-original this repo was forked from), updated 2026-08-05.
+project whose concepts this one reimplements; no source code is shared,
+see "License lineage" below), updated 2026-08-05.
 
-## Ported (Rust equivalent exists)
+## Implemented (Rust equivalent exists)
 
-| Upstream | Undercroft equivalent |
+| MemPalace | Undercroft equivalent |
 |---|---|
 | Palace model (wings/rooms/drawers, verbatim) | `undercroft-core` (same metadata fields, deterministic ids) |
 | `sqlite_exact` backend | `undercroft-store` (SQLite system of record) |
-| Chroma/Qdrant/pgvector server backends | `undercroft-index` — **sealed client-side** (upstream sent plaintext) |
+| Chroma/Qdrant/pgvector server backends | `undercroft-index` — **sealed client-side** (MemPalace sent plaintext) |
 | Embedder + identity tracking (RFC 001) | `Embedder` trait + per-vault identity enforcement (a swap is refused, not silently ranked; only hash→hash migrates automatically) |
 | Model embeddings (sentence-transformers) | four postures — `undercroft-embed-onnx` (tract, pure Rust), `undercroft-embed-ort` (ONNX Runtime, ~2.5×/forward + int8), `http` (any served model, TLS-or-loopback enforced), or caller-supplied `external:<name>@<dim>`. Models are user-supplied throughout; see [EMBEDDERS.md](EMBEDDERS.md) |
 | File miner | `mine --mode files` |
@@ -32,19 +33,19 @@ original this repo was forked from), updated 2026-08-05.
 | Auto-save hooks (Claude Code/Codex/Cursor) | `hooks/`, `.claude-plugin/hooks/`, `undercroft hooks claude-code` |
 | Claude Code plugin (commands/skills/MCP) | `.claude-plugin/` + root `commands/`, `skills/`, `rules/` |
 | Benchmarks (LongMemEval harness) | `undercroft-bench longmemeval` (same protocol/metrics) + `synth` CI benchmark |
-| LoCoMo / ConvoMem / MemBench harnesses | `undercroft-bench locomo|convomem|membench` — session / message / turn-level evidence recall, same protocols as upstream's harnesses, adapter logic fixture-tested |
+| LoCoMo / ConvoMem / MemBench harnesses | `undercroft-bench locomo|convomem|membench` — session / message / turn-level evidence recall, same protocols as MemPalace's harnesses, adapter logic fixture-tested |
 | Embedded ChromaDB's in-process index role | Bundled SQLite store is the system of record; `warm_embedding_cache` gives long-running servers (serve-mcp / serve-http / daemon) a decrypt-once in-memory vector cache — the in-process index role, with nothing plaintext-derived persisted |
 | Deploy (compose server, systemd) | `deploy/` |
 | Docs / examples | `docs/`, `examples/` |
 
 ## What exists only here (updated for v0.46.0)
 
-Everything below has **no upstream equivalent** — it is original work of
+Everything below has **no MemPalace equivalent** — it is original work of
 this project, which is why the two codebases share concepts but not code
-(and why this project's license is independent of upstream's; see the
+(and why this project's license is independent of MemPalace's; see the
 "License lineage" section at the end).
 
-**Security layer** (upstream stored everything in plaintext):
+**Security layer** (MemPalace stored everything in plaintext):
 
 - Vault isolation: per-vault SQLite databases with per-vault
   HKDF-SHA256-derived keys (enc/mac/manifest domains) from one master key
@@ -105,7 +106,7 @@ this project, which is why the two codebases share concepts but not code
 - Keyed duplicate fingerprints, token-mandatory non-loopback HTTP bind,
   per-vault request assertions, read-only serving posture.
 
-**Retrieval stack beyond upstream's cosine search:**
+**Retrieval stack beyond MemPalace's cosine search:**
 
 - Hybrid semantic + lexical (BM25) + recency fusion with typo tolerance.
 - Optional ONNX embedders on two runtimes (pure-Rust tract, or ONNX
@@ -159,13 +160,13 @@ this project, which is why the two codebases share concepts but not code
   reference.
 
 **Also only here:** Weaviate backend; sealed-client remote indexing (all
-five backends receive ciphertext; upstream uploaded plaintext); zstd
+five backends receive ciphertext; MemPalace uploaded plaintext); zstd
 compress-then-encrypt; int8 embedding quantization; deterministic
 offline hash embedder as the default.
 
-## Ported in v0.5.0 (previously listed as gaps)
+## Implemented in v0.5.0 (previously listed as gaps)
 
-| Upstream | Undercroft equivalent |
+| MemPalace | Undercroft equivalent |
 |---|---|
 | Milvus backend | `undercroft-index` REST v2 client (`--backend milvus`), tested against live standalone Milvus in compose |
 | LLM refinement pipeline (`llm_refine`, `llm_client`) | `undercroft-llm` crate (Ollama + OpenAI-compatible local runtimes) + `undercroft refine` — extracts entities and KG triples from drawers; never touches verbatim content; only runs when `UNDERCROFT_LLM_URL` is explicitly set |
@@ -177,7 +178,7 @@ offline hash embedder as the default.
 | Memory-extraction eval task | `undercroft-bench model-eval memories` — SQuAD-style token-F1 with greedy one-to-one alignment (threshold 0.5), CJK-aware tokenization; reports match P/R/F1, mean token-F1, type accuracy |
 | i18n (`mempalace/i18n`) | CLI result strings localized in the 9 dataset languages (de/es/fr/hi/it/ko/pt/ru/zh) via `UNDERCROFT_LANG`, English default + fallback; errors/help stay English by design (exit codes are the script contract) |
 
-## Not ported
+## Not implemented
 
 Nothing remains. The one permanent role-replacement worth restating:
 embedded ChromaDB is a Python library and cannot be linked from Rust — its
@@ -191,12 +192,12 @@ the bundled SQLite store and the in-memory embedding cache respectively.
   above ~2k drawers, an FTS5 BM25 prefilter (tunable via
   `UNDERCROFT_FTS_PREFILTER_MIN`, `off` to disable) that narrows the
   candidate scan without changing final scoring.
-- Remote backends receive sealed content; upstream uploaded plaintext. A
+- Remote backends receive sealed content; MemPalace uploaded plaintext. A
   mirror is an accelerator, not a different policy: remote search takes
   its trust floor, quarantine fence and closed vocabularies from the same
   resolver the local path uses.
 - Benchmark numbers with the default hash embedder are not comparable to
-  upstream's published model-based numbers — use a model posture with a
+  MemPalace's published model-based numbers — use a model posture with a
   MiniLM-class model for like-for-like conditions. Measured here, the
   choice matters more than this repo used to say: hash → *any* modern
   model is **+3.2 to +4.2pp** turn all-gold on LoCoMo, while four modern
@@ -213,7 +214,7 @@ the bundled SQLite store and the in-memory embedding cache respectively.
 
 ## License lineage
 
-Upstream MemPalace is Python, published under the MIT License. Undercroft
+MemPalace is Python, published under the MIT License. Undercroft
 is a from-scratch Rust implementation of the *concepts* documented in
 this file and **contains no MemPalace source code** — the two projects
 share behavior specifications, not expression. Undercroft is therefore

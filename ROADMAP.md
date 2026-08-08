@@ -1,6 +1,6 @@
 # Undercroft Roadmap
 
-Undercroft is the Rust conversion of MemPalace with a hardened memory-management
+Undercroft is the Independent Rust implementation, with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
 
@@ -1409,7 +1409,7 @@ body and nothing else.
 ## v0.4.0 — Ecosystem parity (done)
 
 - `undercroft-bench`: LongMemEval harness (same protocol/metrics as
-  upstream) + synthetic CI benchmark
+  MemPalace) + synthetic CI benchmark
 - MCP HTTP team server (`serve-http`, token-enforced, read-only mode) and
   `deploy/` (compose + systemd)
 - `daemon run`, `transcript render`, `import` (mempalace migration path)
