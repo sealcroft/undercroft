@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### the project is renamed to Undercroft, under the Sealcroft house
+
+Every identifier moved. **No pre-rename vault, export bundle or remote mirror
+is readable by this build**, and that is deliberate rather than incidental: the
+crypto domain separation carries the project name, so the HKDF info string, the
+AEAD AAD prefix, the keycheck marker and both bundle file-key infos all moved
+with it. The data this was done against was disposable; if yours is not, export
+with a pre-rename binary first.
+
+The previous name was a *category* collision, not a word collision. Another AI
+agent memory system with an MCP server had shipped under it three months
+earlier and held the matching org name, domain and two thousand stars, and
+GitHub carried over a thousand repositories on the word. Neither project copied
+the other — both descend from MemPalace, and the other was created fourteen
+hours after it.
+
+- **Sealcroft is the house and never ships.** Nothing is called bare
+  `sealcroft` anywhere technical. `sealcroft-core` is one global crates.io
+  name, `SEALCROFT_*` is ambiguous on a host running two products, and MCP tool
+  namespaces are flat per agent. The product word carries the namespace:
+  `undercroft`, `UNDERCROFT_*`, `undercroft_*`, `undercroft-*`,
+  `ghcr.io/sealcroft/undercroft`.
+- **`BUNDLE_MAGIC` gained a byte** (`[u8; 18]` → `[u8; 19]`). The type caught
+  it, which is why that constant is length-typed.
+- **`compufreq` stays wherever it means the person** — LICENSE Licensor, NOTICE
+  copyright, `Cargo.toml` authors, git identity, SECURITY contact. Only
+  repository, registry and Pages URLs moved to the org. The MemPalace MIT block
+  and the ICU4X notice are byte-identical: those obligations attach to the
+  code, not to what the project is called.
+- **Five gates that passed while inspecting nothing were fixed first**, because
+  two of them go vacuous exactly when a rename lands. `parity.rs` now has one
+  `TOOL_PREFIX` and a shared extractor that asserts its own premise; the
+  `WRITE_TOOLS` reverse check counts what it examined; three `e2e.sh` at-rest
+  assertions no longer report *ok* for a database that does not exist; and two
+  `undercroft-index` tests stopped asserting against hand-copied duplicates of
+  the functions under test. Counterfactual recorded: with the prefix moved and
+  `mcp.rs` not, three parity tests now fail. Before, that combination passed.
+- **The stale MCP tool count is corrected to 34** in five places, one of which
+  was a derived inline in `architecture/index.html` that `build.sh` restores
+  from the SVG — so the SVG was the fix.
+- **History was rewritten and the 46 releases deleted.** Their asset filenames
+  were immutable, and GHCR namespaces do not redirect the way repository URLs
+  do.
+- Landing-page copy: the Orphic epigraph became a fabricated quote attributed
+  to a real 4th-century BC artifact once the name was substituted, so it is
+  replaced with the project's own words.
+
+**A byte grep cannot verify this.** The first history pass reported clean while
+17 of 54 historical PDF blobs still carried the old name inside Flate-compressed
+content streams — invisible to `grep`, visible to git's own `astextplain`
+textconv and to anyone opening the file. `architecture/pdf/*` is a derived
+artifact, so it was dropped from history and regenerated. Any future claim that
+a string is gone has to decompress, not grep.
+
 ### the two content fingerprints stopped being a confirmation oracle (U12)
 
 `drawers.supersedes_fp` and `kg_triples.source_fp` were an **unkeyed SHA-256 of

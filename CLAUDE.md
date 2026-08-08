@@ -1520,6 +1520,21 @@ project.*
 - Rust 2021, workspace-level dependency versions, `thiserror` per-crate error
   enums, `anyhow` only in the CLI.
 - Keys live in `SecretKey` (zeroize-on-drop); never `Debug`-print key material.
+- **Sealcroft is the HOUSE and never ships. Undercroft is this product.**
+  Nothing is ever called bare `sealcroft` at the command line, in a crate, in
+  an env var or in an MCP tool name — the product word carries the technical
+  namespace, the house name carries only the org, the domain and the docs.
+  The reason is mechanical, not aesthetic: `sealcroft-core` is ONE global
+  crates.io name, so whichever product claims it locks the others out;
+  `SEALCROFT_*` is ambiguous on a host running two of them; and **MCP tool
+  namespaces are flat per agent**, so two Sealcroft servers collide by name in
+  a client that has both. Binding for the planned sibling products (a security
+  posture tool and an AI harness): each takes its own one-word namespace under
+  `github.com/sealcroft`, exactly as `undercroft`/`UNDERCROFT_*`/
+  `undercroft_*`/`undercroft-*` does here.
+- **`compufreq` is a PERSON, not the org.** It stays in the LICENSE Licensor
+  line, the NOTICE copyright, `Cargo.toml` authors, the git identity and the
+  SECURITY contact. Only repository/registry/Pages URLs moved to `sealcroft`.
 - Git identity for this repo: compufreq <compufreq@proton.me>.
 - License: **BUSL-1.1** (source-available; rolling 4-year conversion to
   MPL 2.0; `NOTICE` carries the MemPalace MIT heritage attribution).
