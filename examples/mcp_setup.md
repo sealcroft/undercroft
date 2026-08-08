@@ -22,4 +22,4 @@ claude mcp add undercroft -- docker run -i --rm -v undercroft-data:/data undercr
 
 See [docs/remote-server.md](../docs/remote-server.md).
 
-32 tools are exposed; ask the client to list them, or see the README table.
+34 tools are exposed; ask the client to list them, or see the README table.

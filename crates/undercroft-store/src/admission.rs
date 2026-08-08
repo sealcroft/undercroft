@@ -25,10 +25,10 @@
 //!   re-running the allow converges (same deterministic ids), the
 //!   append-only crash posture everywhere else in this store.
 
-use undercroft_core::Drawer;
 use rusqlite::params;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use undercroft_core::Drawer;
 
 use crate::{chain_append, PalaceStore, StoreError};
 

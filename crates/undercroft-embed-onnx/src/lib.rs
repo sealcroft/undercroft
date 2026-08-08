@@ -14,9 +14,9 @@
 //! store's embedder-identity tracking prevents silently mixing vectors
 //! from different models.
 
-use undercroft_core::embed::Embedder;
 use tokenizers::Tokenizer;
 use tract_onnx::prelude::*;
+use undercroft_core::embed::Embedder;
 
 const MAX_LEN: usize = 256;
 

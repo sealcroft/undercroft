@@ -79,7 +79,7 @@ vector (lexically findable, semantically invisible until re-embedded).
 
 For `ort`, no build is required: every release ships `…-<target>-ort`
 binary assets for all five targets and a multi-arch
-`ghcr.io/compufreq/undercroft:<tag>-ort` image (amd64 + arm64), each
+`ghcr.io/sealcroft/undercroft:<tag>-ort` image (amd64 + arm64), each
 smoke-probed at build for the compiled feature. Building yourself:
 
 ```sh

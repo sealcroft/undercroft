@@ -131,8 +131,8 @@ this project, which is why the two codebases share concepts but not code
   exist because instruments filed recall defects against the previous
   fixed pool and the gate was not declared met until they closed.
 - Every number above is measured and reproduced in
-  [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md)
-  and [RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
+  [benchmarks/RESULTS.md](https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md)
+  and [RETRIEVAL_SCALING.md](https://github.com/sealcroft/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
 
 **Multi-tenancy & fleet operation:**
 
@@ -154,7 +154,7 @@ this project, which is why the two codebases share concepts but not code
   traces (with header auth), structured logs, live SSE, the Palace
   Monitor UI, and a full Grafana/Alertmanager/Loki/Tempo deploy stack
   with a tamper runbook. Zero telemetry deps in default builds.
-- Scenario-driven [agents implementation guide](https://compufreq.github.io/undercroft/docs/agents.html)
+- Scenario-driven [agents implementation guide](https://sealcroft.github.io/undercroft/docs/agents.html)
   covering every deployment shape with the complete tool/route/env
   reference.
 
@@ -218,8 +218,8 @@ is a from-scratch Rust implementation of the *concepts* documented in
 this file and **contains no MemPalace source code** — the two projects
 share behavior specifications, not expression. Undercroft is therefore
 licensed independently, under the
-[Business Source License 1.1](https://github.com/compufreq/undercroft/blob/main/LICENSE)
+[Business Source License 1.1](https://github.com/sealcroft/undercroft/blob/main/LICENSE)
 (free use including production, one hosted/embedded non-compete
 carve-out, automatic conversion to MPL 2.0 four years after each
 release). The MIT notice for MemPalace's conceptual heritage is
-preserved in [NOTICE](https://github.com/compufreq/undercroft/blob/main/NOTICE).
+preserved in [NOTICE](https://github.com/sealcroft/undercroft/blob/main/NOTICE).

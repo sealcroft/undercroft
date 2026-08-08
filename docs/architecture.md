@@ -160,11 +160,11 @@ flowchart LR
 The FDE and MaxSim stages share one query forward per search; sealed
 vaults serve all of this from decrypt-once RAM caches. Measured numbers
 for every stage live in
-[RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
+[RETRIEVAL_SCALING.md](https://github.com/sealcroft/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
 
 ## Multi-tenant deployment
 
 One engine hosts many cryptographically isolated vaults; fleets add the
 optional orchestrator — topology, request routing, and the migration
 sequence are diagrammed in
-[MULTI_TENANCY.md](https://github.com/compufreq/undercroft/blob/main/docs/MULTI_TENANCY.md).
+[MULTI_TENANCY.md](https://github.com/sealcroft/undercroft/blob/main/docs/MULTI_TENANCY.md).

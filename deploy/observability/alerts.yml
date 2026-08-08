@@ -21,7 +21,7 @@ groups:
             '{{ $labels.surface }}' in the last 2m. A stored record failed its
             integrity tag on read — treat as on-disk tampering until proven
             otherwise. Confirm with `undercroft verify`; follow the runbook.
-          runbook_url: "https://compufreq.github.io/undercroft/docs/runbook.html"
+          runbook_url: "https://sealcroft.github.io/undercroft/docs/runbook.html"
 
       - alert: AuditChainStalled
         # Writes are landing but the tamper-evident chain isn't advancing.
@@ -35,7 +35,7 @@ groups:
             Drawer writes are being recorded but no audit-chain commits have
             occurred in 10m. The tamper-evident chain may be stuck; investigate
             before trusting integrity guarantees.
-          runbook_url: "https://compufreq.github.io/undercroft/docs/runbook.html"
+          runbook_url: "https://sealcroft.github.io/undercroft/docs/runbook.html"
 
   - name: undercroft-health
     rules:

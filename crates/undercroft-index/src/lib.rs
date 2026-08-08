@@ -194,6 +194,15 @@ pub mod qdrant {
                 &h[20..32]
             )
         }
+
+        /// Exposed so the unit test can exercise `point_id` ITSELF, for the
+        /// same reason as `PgVectorIndex::table_for_test`: the test used to
+        /// assert against a hand-copied duplicate of this body kept at crate
+        /// root, so `point_id` could change shape with the test still green.
+        #[doc(hidden)]
+        pub fn point_id_for_test(id: &str) -> String {
+            Self::point_id(id)
+        }
     }
 
     impl VectorIndex for QdrantIndex {
@@ -566,6 +575,17 @@ pub mod pgvector {
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
                 .collect();
             format!("undercroft_{safe}")
+        }
+
+        /// Exposed so the unit test can exercise `table` ITSELF. The test
+        /// used to carry a hand-copied duplicate of that body in its own
+        /// module and assert against the copy, so it could not observe a
+        /// change to the real function in either direction — a gate
+        /// measuring an observable the defect does not move. This name
+        /// remains the only way in from outside the module.
+        #[doc(hidden)]
+        pub fn table_for_test(collection: &str) -> String {
+            Self::table(collection)
         }
 
         fn vec_literal(embedding: &[f32]) -> String {
@@ -1016,22 +1036,6 @@ pub mod weaviate {
     }
 }
 
-// Expose the point-id helper for the unit test without making it public API.
-impl qdrant::QdrantIndex {
-    #[doc(hidden)]
-    pub fn point_id_for_test(id: &str) -> String {
-        let h = format!("{:0<32}", id.chars().take(32).collect::<String>());
-        format!(
-            "{}-{}-{}-{}-{}",
-            &h[0..8],
-            &h[8..12],
-            &h[12..16],
-            &h[16..20],
-            &h[20..32]
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1053,8 +1057,12 @@ mod tests {
         // Ensured indirectly: names map to a fixed alphabet.
         // (Construction requires a live server; only the pure helpers are
         // unit-tested. Live-server coverage is in tests/backends.rs, gated
-        // on UNDERCROFT_TEST_* env vars.)
-        let t = pgvector_table_for_test("my-vault");
+        // on the backend URL variables the compose suite sets.)
+        //
+        // This calls the PRODUCTION function. It used to call a duplicate
+        // of the body kept in this test module, which meant the assertion
+        // held no matter what `table` did.
+        let t = pgvector::PgVectorIndex::table_for_test("my-vault");
         assert_eq!(t, "undercroft_my_vault");
     }
 
@@ -1064,14 +1072,5 @@ mod tests {
             from_env("nope"),
             Err(IndexError::UnknownBackend(_))
         ));
-    }
-
-    // Test-only accessors for private helpers.
-    fn pgvector_table_for_test(name: &str) -> String {
-        let safe: String = name
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        format!("undercroft_{safe}")
     }
 }

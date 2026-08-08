@@ -14,8 +14,8 @@
 //! to re-implement it — and the ones that read JSON (`/v1` bodies and MCP tool
 //! arguments use the same key names) share the identical function.
 
-use undercroft_store::{PalaceStore, SearchHit, SearchOptions, StoreError};
 use serde_json::Value;
+use undercroft_store::{PalaceStore, SearchHit, SearchOptions, StoreError};
 
 /// How many hits a search returns when the caller does not say.
 ///

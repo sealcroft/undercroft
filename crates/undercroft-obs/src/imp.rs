@@ -120,7 +120,8 @@ pub(crate) fn enter_op(op: &'static str, vault: &str) -> SpanGuard {
 
 pub(crate) fn enter_request(route: &str, vault: &str) -> SpanGuard {
     SpanGuard(
-        tracing::info_span!(target: "undercroft", "request", route = route, vault = vault).entered(),
+        tracing::info_span!(target: "undercroft", "request", route = route, vault = vault)
+            .entered(),
     )
 }
 

@@ -13,9 +13,9 @@
 
 use std::sync::Mutex;
 
-use undercroft_core::late::LateInteraction;
 use ort::session::Session;
 use tokenizers::Tokenizer;
+use undercroft_core::late::LateInteraction;
 
 use crate::{build_session, cores, run_batch, OrtError};
 

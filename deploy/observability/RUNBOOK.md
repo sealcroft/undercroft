@@ -1,6 +1,6 @@
 # Tamper runbook (operator quick-reference)
 
-Full version, published: **https://compufreq.github.io/undercroft/docs/runbook.html**
+Full version, published: **https://sealcroft.github.io/undercroft/docs/runbook.html**
 (this is what the `PalaceTamperDetected` alert's `runbook_url` links to).
 
 `PalaceTamperDetected` fired (or `undercroft verify` shows `hmac failures > 0`, or

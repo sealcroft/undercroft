@@ -9,8 +9,8 @@ names, routes, and environment variables are copied from the code, not
 paraphrased.
 
 Links are absolute so this page reads correctly anywhere:
-repository <https://github.com/compufreq/undercroft>, rendered docs
-<https://compufreq.github.io/undercroft/docs/>.
+repository <https://github.com/sealcroft/undercroft>, rendered docs
+<https://sealcroft.github.io/undercroft/docs/>.
 
 ---
 
@@ -59,7 +59,7 @@ HKDF-derived keys). When you build on it:
 5. **Integrity is enforced, not assumed.** Every read verifies an HMAC;
    every write advances a tamper-evident audit chain in the same
    transaction. If `verify` fails, treat it as an incident (see the
-   [tamper runbook](https://compufreq.github.io/undercroft/docs/runbook.html)),
+   [tamper runbook](https://sealcroft.github.io/undercroft/docs/runbook.html)),
    not as noise.
 6. **Names are validated.** Vault/wing/room names go through a
    path-traversal guard — expect errors on `../`-style input rather than
@@ -93,9 +93,9 @@ HKDF-derived keys). When you build on it:
 All scenarios start the same way:
 
 ```bash
-docker pull ghcr.io/compufreq/undercroft:latest   # published image
+docker pull ghcr.io/sealcroft/undercroft:latest   # published image
 # or: prebuilt binaries on every GitHub release (linux/macos/windows, sha256)
-# or: git clone https://github.com/compufreq/undercroft && docker build -t undercroft .
+# or: git clone https://github.com/sealcroft/undercroft && docker build -t undercroft .
 # or: cargo build --release
 undercroft init                     # palace at ~/.undercroft (override: UNDERCROFT_HOME)
 ```
@@ -271,7 +271,7 @@ When one engine is not enough, `undercroft-orchestrator` (separate binary,
 same repo) is the control plane: instance registry, tenant→vault mapping,
 token minting, routing, and live migration. It is a pure client of `/v1` —
 engines never know it exists. Full docs:
-[MULTI_TENANCY.md](https://github.com/compufreq/undercroft/blob/main/docs/MULTI_TENANCY.md).
+[MULTI_TENANCY.md](https://github.com/sealcroft/undercroft/blob/main/docs/MULTI_TENANCY.md).
 
 ```bash
 export UNDERCROFT_ORCH_KEY=$(undercroft-orchestrator keygen)   # seals engine creds
@@ -315,7 +315,7 @@ setup recipes, the model-export procedure, and the security trades is
 [docs/EMBEDDERS.md](EMBEDDERS.md) — published as the "Choosing an
 embedder posture" chapter. Since the posture-configs unit, releases ship
 the `ort` posture ready-made: a `…-x86_64-unknown-linux-gnu-ort.tar.gz`
-binary asset and a `ghcr.io/compufreq/undercroft:<tag>-ort` image, both
+binary asset and a `ghcr.io/sealcroft/undercroft:<tag>-ort` image, both
 smoke-probed for the compiled feature at build):
 
 | Value | What | When |
@@ -530,7 +530,7 @@ FTS prefilter (fine to ~10⁴ drawers); `pq` = bounded-RAM PQ/IVF prefilter
 cache); `fde` = MUVERA fixed-dimensional encodings for the ColBERT stage —
 measured recall identical to fusion at −25% latency, rows PQ-compress 32×.
 Export recipes and all measured tables:
-[RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
+[RETRIEVAL_SCALING.md](https://github.com/sealcroft/undercroft/blob/main/docs/RETRIEVAL_SCALING.md).
 
 **Remote vector DBs** (Qdrant/Chroma/pgvector/Milvus/Weaviate via
 `undercroft index push` + `search --backend`) are **untrusted
@@ -647,7 +647,7 @@ is, and the message has always said "possible tampering".
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record
   always is**. On `VERIFY FAILED`, follow the
-  [runbook](https://compufreq.github.io/undercroft/docs/runbook.html).
+  [runbook](https://sealcroft.github.io/undercroft/docs/runbook.html).
 - **Key rotation** — `undercroft vault rotate <name>`: fresh derived keys,
   every sealed blob re-encrypted and every tag re-keyed in one
   transaction, crash-safe at any instant. Do it on key-exposure suspicion
@@ -691,7 +691,7 @@ undercroft import palace.bundle --identity ops.key --sender <sender-hex>
 
 ---
 
-## 8. Reference — MCP tools (33)
+## 8. Reference — MCP tools (34)
 
 **What is deliberately NOT here, and why** (added 2026-08-05: each of these
 was an absence with nothing written down, and this project's own rule is

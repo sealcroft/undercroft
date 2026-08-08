@@ -1747,7 +1747,7 @@ Also closes the v0.13.0 follow-up items:
 ## v0.34.0 — Distribution & security policy (done)
 
 - Release workflow: prebuilt binaries (linux/macos×2/windows, sha256) on
-  every tag + `ghcr.io/compufreq/undercroft` image; SECURITY.md expanded
+  every tag + `ghcr.io/sealcroft/undercroft` image; SECURITY.md expanded
   to a full disclosure policy with private reporting enabled.
 
 ## v0.35.0 — Vault admin console (done)

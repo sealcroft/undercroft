@@ -23,8 +23,8 @@
 //! recorded under a different model name are ignored the same way (never
 //! silently mixed). `delete_drawer` purges the row.
 
-use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInteraction};
 use rusqlite::{params, OptionalExtension};
+use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInteraction};
 
 use crate::pq::ProductQuantizer;
 use crate::{PalaceStore, SearchHit, StoreError, CODEBOOK_TOK};

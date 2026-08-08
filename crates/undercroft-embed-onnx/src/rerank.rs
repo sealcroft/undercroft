@@ -14,9 +14,9 @@
 //! `undercroft_core::rerank::Reranker`.
 
 use crate::{OnnxError, RunnableOnnx, MAX_LEN};
-use undercroft_core::rerank::Reranker;
 use tokenizers::Tokenizer;
 use tract_onnx::prelude::*;
+use undercroft_core::rerank::Reranker;
 
 /// Cross-encoder reranker over a tract-run ONNX model.
 pub struct OnnxReranker {

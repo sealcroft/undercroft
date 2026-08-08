@@ -50,10 +50,10 @@ type KemDk = ml_kem::kem::DecapsulationKey<MlKem768Params>;
 type KemEk = ml_kem::kem::EncapsulationKey<MlKem768Params>;
 
 /// v1 bundle file magic (also AAD, with the ephemeral key).
-pub const BUNDLE_MAGIC: &[u8; 18] = b"UNDERCROFT-BUNDLE-1";
+pub const BUNDLE_MAGIC: &[u8; 19] = b"UNDERCROFT-BUNDLE-1";
 /// v2 (hybrid X25519 + ML-KEM-768) magic (also AAD, with the ephemeral
 /// key and the KEM ciphertext).
-pub const BUNDLE_MAGIC_V2: &[u8; 18] = b"UNDERCROFT-BUNDLE-2";
+pub const BUNDLE_MAGIC_V2: &[u8; 19] = b"UNDERCROFT-BUNDLE-2";
 
 /// Prefix on hybrid identity/recipient strings. A bare 64-char hex string
 /// remains a legacy X25519 key; the prefix is a declared format, not an

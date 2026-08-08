@@ -1,6 +1,6 @@
 # Integrations
 
-> The [agents implementation guide](https://compufreq.github.io/undercroft/docs/agents.html)
+> The [agents implementation guide](https://sealcroft.github.io/undercroft/docs/agents.html)
 > covers each of these surfaces as a step-by-step scenario, with the full
 > MCP tool, REST route, and environment-variable reference.
 

@@ -4,10 +4,10 @@
 
 **Hardened, local-first AI memory: encrypted, integrity-verified memory vaults with verbatim recall.**
 
-[Website](https://compufreq.github.io/undercroft/) · [Documentation](https://compufreq.github.io/undercroft/docs/) · [Agents implementation guide](https://compufreq.github.io/undercroft/docs/agents.html) · [Security model](https://compufreq.github.io/undercroft/docs/security.html)
+[Website](https://sealcroft.github.io/undercroft/) · [Documentation](https://sealcroft.github.io/undercroft/docs/) · [Agents implementation guide](https://sealcroft.github.io/undercroft/docs/agents.html) · [Security model](https://sealcroft.github.io/undercroft/docs/security.html)
 
 > **Implementing with an AI agent?** Point it at
-> [docs/AGENTS.md](https://github.com/compufreq/undercroft/blob/main/docs/AGENTS.md) —
+> [docs/AGENTS.md](https://github.com/sealcroft/undercroft/blob/main/docs/AGENTS.md) —
 > a scenario-driven guide (personal agent memory, team server, multi-tenant
 > engine, fleet orchestration, retrieval tiers, security operations) written
 > so an agent can pick the right deployment shape and implement it
@@ -170,7 +170,7 @@ row** — declaring German merges `flow`/`flower`, Italian merges `pesca`/`pesce
 real search at realistic drawer length: 49 pairs that must stay apart, plus
 9 that already meet and are pinned as the known price, so a cost that
 disappears gets reported rather than absorbed. See
-[docs/agents.html](https://compufreq.github.io/undercroft/docs/agents.html).
+[docs/agents.html](https://sealcroft.github.io/undercroft/docs/agents.html).
 
 Note this is **within-language**. Cross-lingual retrieval needs one thing: a
 multilingual model via `onnx`/`ort`/`http` — the default hashed embedder
@@ -240,7 +240,7 @@ Runtime backend — recall identical across runtimes. Set
 `UNDERCROFT_RERANKER=colbert` (tract) or `colbert-ort` (ONNX Runtime,
 `--features ort`) + `UNDERCROFT_COLBERT_MODEL` (doc export) /
 `_QUERY_MODEL` / `_TOKENIZER` (fixed-shape ONNX exports; recipe in
-[docs/RETRIEVAL_SCALING.md](https://github.com/compufreq/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)). Token matrices ride
+[docs/RETRIEVAL_SCALING.md](https://github.com/sealcroft/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)). Token matrices ride
 export bundles as portable artifacts (restore = copy, not re-encode);
 `repair --tokens` backfills palaces that predate the encoder.
 **MUVERA FDE candidates** (`UNDERCROFT_RETRIEVAL=fde`) make the candidate
@@ -262,15 +262,15 @@ Large corpora can cut candidate generation from a full scan to a bounded-RAM
 size (99+% R@5 at N=50k). **Sealed vaults get it too** — code rows, codebook,
 and centroids are AEAD-sealed and scanned via a decrypt-once RAM cache;
 measured sealed search went from 2.1 → 33.4 q/s at N=20k (×16), parity with
-the plaintext index. Full numbers: [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md).
+the plaintext index. Full numbers: [benchmarks/RESULTS.md](https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md).
 
 ## Quickstart (Docker — recommended)
 
 Everything persists under `/data`, so mount a volume there:
 
 ```bash
-docker pull ghcr.io/compufreq/undercroft:latest   # published image
-docker tag ghcr.io/compufreq/undercroft:latest undercroft
+docker pull ghcr.io/sealcroft/undercroft:latest   # published image
+docker tag ghcr.io/sealcroft/undercroft:latest undercroft
 # or build it yourself:
 docker build -t undercroft .
 
@@ -297,7 +297,7 @@ Wire it into an MCP client (e.g. Claude Code):
 
 No Docker? **Prebuilt binaries** for Linux (x86_64 + arm64), macOS (Intel +
 Apple Silicon), and Windows are attached to every
-[release](https://github.com/compufreq/undercroft/releases/latest)
+[release](https://github.com/sealcroft/undercroft/releases/latest)
 (`undercroft` + `undercroft-orchestrator`, SHA-256 checksums included).
 Or build natively: `cargo build --release` → `target/release/undercroft`.
 
@@ -359,7 +359,7 @@ caller-supplied embeddings, dedup-refresh on save, the operator plane
 export/import for migrating a tenant between instances — every one of those
 write doors screened by the same admission control, and every read of them
 answering with the same trust floor and quarantine exclusion as the CLI. See
-[the remote-server guide](https://github.com/compufreq/undercroft/blob/main/docs/remote-server.md).
+[the remote-server guide](https://github.com/sealcroft/undercroft/blob/main/docs/remote-server.md).
 
 It also serves a **vault admin console at `GET /ui`** — one static,
 dependency-free page (every build, no telemetry feature needed): vault
@@ -385,12 +385,12 @@ horizontally with **read replicas** (`serve --read-replica`): a replica
 opens the state database read-only and serves only the `/t/*` data
 plane, with `/healthz` reporting `mode` + `last_write` so replication
 lag is observable. Design + surface:
-[docs/MULTI_TENANCY.md](https://github.com/compufreq/undercroft/blob/main/docs/MULTI_TENANCY.md).
+[docs/MULTI_TENANCY.md](https://github.com/sealcroft/undercroft/blob/main/docs/MULTI_TENANCY.md).
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
-## MCP tools (33)
+## MCP tools (34)
 
 | Category | Tools |
 |---|---|
@@ -483,7 +483,7 @@ that role).
 
 ## Benchmarks (measured, not inherited)
 
-Full methodology and reproduce commands: [benchmarks/RESULTS.md](https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md).
+Full methodology and reproduce commands: [benchmarks/RESULTS.md](https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md).
 All figures below are under the **shipped default** (`bm25` fusion).
 Matched-model conditions (all-MiniLM-L6-v2, the class upstream used):
 **LoCoMo session R@10 94.6%** (upstream: 60.3% raw / 88.9% hybrid) and
@@ -510,20 +510,20 @@ several releases and contradicted the RESULTS.md this sentence links to.)*
 
 ## More
 
-- [Getting started](https://github.com/compufreq/undercroft/blob/main/docs/getting-started.md) · [Architecture](https://github.com/compufreq/undercroft/blob/main/docs/architecture.md) ·
-  [Security model](https://github.com/compufreq/undercroft/blob/main/docs/security.md) · [Integrations](https://github.com/compufreq/undercroft/blob/main/docs/integrations.md) ·
-  [Remote team server](https://github.com/compufreq/undercroft/blob/main/docs/remote-server.md)
-- [Parity with upstream MemPalace](https://github.com/compufreq/undercroft/blob/main/docs/PARITY.md) — what's ported, what's
+- [Getting started](https://github.com/sealcroft/undercroft/blob/main/docs/getting-started.md) · [Architecture](https://github.com/sealcroft/undercroft/blob/main/docs/architecture.md) ·
+  [Security model](https://github.com/sealcroft/undercroft/blob/main/docs/security.md) · [Integrations](https://github.com/sealcroft/undercroft/blob/main/docs/integrations.md) ·
+  [Remote team server](https://github.com/sealcroft/undercroft/blob/main/docs/remote-server.md)
+- [Parity with upstream MemPalace](https://github.com/sealcroft/undercroft/blob/main/docs/PARITY.md) — what's ported, what's
   deliberately different, what's pending
-- [Benchmarks](https://github.com/compufreq/undercroft/blob/main/benchmarks/README.md) — LongMemEval harness + synthetic CI benchmark
-- [Deploy](https://github.com/compufreq/undercroft/blob/main/deploy/README.md) — compose team server, systemd units
-- Claude Code plugin: [.claude-plugin/](https://github.com/compufreq/undercroft/tree/main/.claude-plugin) · hooks: [hooks/](https://github.com/compufreq/undercroft/tree/main/hooks) ·
-  examples: [examples/](https://github.com/compufreq/undercroft/tree/main/examples)
+- [Benchmarks](https://github.com/sealcroft/undercroft/blob/main/benchmarks/README.md) — LongMemEval harness + synthetic CI benchmark
+- [Deploy](https://github.com/sealcroft/undercroft/blob/main/deploy/README.md) — compose team server, systemd units
+- Claude Code plugin: [.claude-plugin/](https://github.com/sealcroft/undercroft/tree/main/.claude-plugin) · hooks: [hooks/](https://github.com/sealcroft/undercroft/tree/main/hooks) ·
+  examples: [examples/](https://github.com/sealcroft/undercroft/tree/main/examples)
 
 ## License
 
 **Business Source License 1.1** — see
-[LICENSE](https://github.com/compufreq/undercroft/blob/main/LICENSE).
+[LICENSE](https://github.com/sealcroft/undercroft/blob/main/LICENSE).
 In practice:
 
 - **Free for almost everything**: use, modify, self-host, and run in
@@ -536,7 +536,7 @@ In practice:
 
 Undercroft is a from-scratch Rust implementation of concepts from the
 MIT-licensed MemPalace project and contains no code from it — see
-[NOTICE](https://github.com/compufreq/undercroft/blob/main/NOTICE) for the
+[NOTICE](https://github.com/sealcroft/undercroft/blob/main/NOTICE) for the
 heritage attribution and
-[docs/PARITY.md](https://github.com/compufreq/undercroft/blob/main/docs/PARITY.md)
+[docs/PARITY.md](https://github.com/sealcroft/undercroft/blob/main/docs/PARITY.md)
 for the full feature-by-feature relationship.

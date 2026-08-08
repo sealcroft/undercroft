@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Undercroft — hardened local-first AI memory</title>
 <meta name="description" content="Encrypted, integrity-verified memory vaults for AI agents. Verbatim recall, knowledge graph, MCP server — all local, all in Rust.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%CE%9C%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3EU%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=GFS+Didot&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -501,8 +501,8 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <p class="lethe">Pass the river Lethe. Drink from the pool.</p>
     <div class="cta-row">
       <a class="btn" href="docs/">Read the docs</a>
-      <a class="btn gold" href="https://github.com/compufreq/undercroft">Source on GitHub</a>
-      <a class="btn ghost" href="https://github.com/compufreq/undercroft/releases/latest">v0.46.0 · releases</a>
+      <a class="btn gold" href="https://github.com/sealcroft/undercroft">Source on GitHub</a>
+      <a class="btn ghost" href="https://github.com/sealcroft/undercroft/releases/latest">v0.46.0 · releases</a>
     </div>
     <div class="scroll-hint">descend</div>
   </header>
@@ -659,10 +659,10 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
   <section class="myth reveal">
     <div class="wrap">
       <figure>
-        <blockquote>“You will find a spring on the left of the halls of Hades…
-          and by it the pool of <em>Undercroft</em>, cold water flowing forth.
-          Drink, and you will remember.”</blockquote>
-        <figcaption>— PETELIA TABLET · ORPHIC GOLD LEAF · IV BC</figcaption>
+        <blockquote>The <em>undercroft</em> is the vaulted chamber beneath the
+          hall — cut from stone, sealed against damp and fire, and built to
+          outlast everything raised above it.</blockquote>
+        <figcaption>— ON THE NAME</figcaption>
       </figure>
     </div>
   </section>
@@ -744,7 +744,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
 <span class="t-prompt">❯ </span><span class="t-cmd">undercroft-bench locomo locomo10.json --k 10</span>
 <span class="t-out">LoCoMo · 1,982 QA · session R@10 94.6% (hash) · 97.68% with reranker</span></div>
     </div>
-    <a class="bench-link" href="https://github.com/compufreq/undercroft/blob/main/benchmarks/RESULTS.md">full numbers, per-type breakdowns, exact commands →</a>
+    <a class="bench-link" href="https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md">full numbers, per-type breakdowns, exact commands →</a>
   </section>
 
   <section class="wrap reveal" id="versus">
@@ -792,8 +792,8 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     </div>
 
     <div class="vs-links">
-      <a class="bench-link" href="https://github.com/compufreq/undercroft/blob/main/docs/BENCHMARKS_VS.md">methodology, configs, raw logs — BENCHMARKS_VS.md →</a>
-      <a class="bench-link" href="https://github.com/compufreq/undercroft/blob/main/docs/SECURITY_COMPARISON.md">the security table nobody else can fill in — SECURITY_COMPARISON.md →</a>
+      <a class="bench-link" href="https://github.com/sealcroft/undercroft/blob/main/docs/BENCHMARKS_VS.md">methodology, configs, raw logs — BENCHMARKS_VS.md →</a>
+      <a class="bench-link" href="https://github.com/sealcroft/undercroft/blob/main/docs/SECURITY_COMPARISON.md">the security table nobody else can fill in — SECURITY_COMPARISON.md →</a>
     </div>
   </section>
 
@@ -932,7 +932,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="cta-row" style="justify-content:center">
       <a class="btn" href="docs/getting-started.html">Get started</a>
       <a class="btn gold" href="docs/agents.html">Agents implementation guide</a>
-      <a class="btn ghost" href="https://github.com/compufreq/undercroft">Source on GitHub</a>
+      <a class="btn ghost" href="https://github.com/sealcroft/undercroft">Source on GitHub</a>
     </div>
   </section>
 
@@ -946,7 +946,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       <a href="docs/security.html">security model</a>
       <a href="docs/agents.html">agents guide</a>
       <a href="docs/parity.html">parity</a>
-      <a href="https://github.com/compufreq/undercroft">github</a>
+      <a href="https://github.com/sealcroft/undercroft">github</a>
       <span class="foot-license">BUSL-1.1 · rust · μηδὲν λήθῃ — let nothing be forgotten</span>
     </div>
   </footer>
@@ -1208,7 +1208,7 @@ document.body.classList.add('js');
   if (!stepsEl || !panelEl) return;
   const STEPS = [
     { t: 'Install', p: 'One Rust binary. Build it in Docker (the project’s own path) or natively — no services, no accounts, no network.',
-      c: 'docker pull ghcr.io/compufreq/undercroft:latest\n# or: prebuilt binaries on every GitHub release (linux/macos/windows)\n# or build from source:\ngit clone https://github.com/compufreq/undercroft && cd undercroft\ndocker build -t undercroft .          # or: cargo build --release',
+      c: 'docker pull ghcr.io/sealcroft/undercroft:latest\n# or: prebuilt binaries on every GitHub release (linux/macos/windows)\n# or build from source:\ngit clone https://github.com/sealcroft/undercroft && cd undercroft\ndocker build -t undercroft .          # or: cargo build --release',
       l: [['docs/getting-started.html','getting started →']] },
     { t: 'Initialize', p: 'A palace holds isolated vaults — each with its own database and its own HKDF-derived keys. Sealed is the default: content and embeddings encrypted at rest.',
       c: 'undercroft init\n# Palace initialized at ~/.undercroft\n# Created vault \'default\' (level: sealed)\nundercroft vault create work          # more isolated namespaces',
@@ -1219,7 +1219,7 @@ document.body.classList.add('js');
     { t: 'Ask it', p: 'Hybrid semantic + lexical + recency search returns your exact words (one typo tolerated). wake-up loads a session’s worth of identity and recent essentials.',
       c: 'undercroft search "why did we pick graphql"\nundercroft wake-up                    # L0 identity + L1 essential story\nundercroft kg query alice --as-of 2024-06-15',
       l: [['docs/retrieval.html','retrieval & scaling →']] },
-    { t: 'Wire an agent', p: 'The MCP stdio server exposes 33 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation, and placing a fact on the authority tier) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
+    { t: 'Wire an agent', p: 'The MCP stdio server exposes 34 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation, and placing a fact on the authority tier) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
       c: '# claude_desktop_config.json / .mcp.json\n{ "mcpServers": { "undercroft": {\n    "command": "undercroft", "args": ["serve-mcp"] } } }\n\nundercroft hooks claude-code          # auto-save hook snippet',
       l: [['docs/integrations.html','integrations →'],['docs/agents.html','agents guide →']] },
     { t: 'Share it', p: 'One server, a whole team — or a whole product. Bearer beyond loopback, per-vault assertions (enforced on /mcp as well as /v1), a process-wide read-only posture, and an orchestrator for fleets.',

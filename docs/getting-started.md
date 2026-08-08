@@ -1,7 +1,7 @@
 # Getting started
 
 > Implementing with (or as) an AI agent? The
-> [agents implementation guide](https://compufreq.github.io/undercroft/docs/agents.html)
+> [agents implementation guide](https://sealcroft.github.io/undercroft/docs/agents.html)
 > is the scenario-driven version of this page: pick a deployment shape
 > (single agent, team server, multi-tenant engine, fleet), follow its
 > steps, and verify with the checklist.
@@ -11,12 +11,12 @@
 Docker (recommended — nothing touches the host):
 
 ```bash
-docker pull ghcr.io/compufreq/undercroft:latest    # or: docker build -t undercroft .
-alias undercroft='docker run --rm -v undercroft-data:/data ghcr.io/compufreq/undercroft:latest'
+docker pull ghcr.io/sealcroft/undercroft:latest    # or: docker build -t undercroft .
+alias undercroft='docker run --rm -v undercroft-data:/data ghcr.io/sealcroft/undercroft:latest'
 ```
 
 Prebuilt binaries (Linux x86_64/arm64, macOS Intel/Apple Silicon, Windows) are
-attached to every [release](https://github.com/compufreq/undercroft/releases/latest),
+attached to every [release](https://github.com/sealcroft/undercroft/releases/latest),
 with SHA-256 checksums. Or native: `cargo build --release` →
 `target/release/undercroft`.
 

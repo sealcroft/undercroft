@@ -30,7 +30,10 @@ use undercroft_store::{PalaceStore, SearchHit, SearchOptions};
 use undercroft_vault::{SecurityLevel, VaultManager};
 
 #[derive(Parser)]
-#[command(name = "undercroft-bench", about = "Retrieval benchmarks for Undercroft")]
+#[command(
+    name = "undercroft-bench",
+    about = "Retrieval benchmarks for Undercroft"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -572,7 +575,8 @@ fn colbert_shared() -> Box<dyn undercroft_core::late::LateInteraction + Send + S
     let arc = SHARED
         .get_or_init(|| {
             Arc::new(
-                undercroft_embed_onnx::colbert_from_env().expect("loading ColBERT encoder from env"),
+                undercroft_embed_onnx::colbert_from_env()
+                    .expect("loading ColBERT encoder from env"),
             )
         })
         .clone();
@@ -3276,8 +3280,9 @@ fn membench_eval(raw: &Value, topic: &str, k: usize, limit: Option<usize>) -> Re
                 .get("assistant")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let body =
-                undercroft_core::normalize_content(&format!("User: {user}\nAssistant: {assistant}"));
+            let body = undercroft_core::normalize_content(&format!(
+                "User: {user}\nAssistant: {assistant}"
+            ));
             if body.is_empty() {
                 continue;
             }
@@ -3414,9 +3419,9 @@ fn run_fde_synth(
     query_tokens: usize,
     dim: usize,
 ) -> Result<()> {
+    use std::time::Instant;
     use undercroft_core::fde::{fde_dot, FdeEncoder, FdeParams};
     use undercroft_core::late::maxsim;
-    use std::time::Instant;
 
     fn splitmix(state: &mut u64) -> u64 {
         *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
@@ -3667,11 +3672,11 @@ fn run_pqpage_synth(
     nlist_arg: usize,
     k: usize,
 ) -> Result<()> {
+    use rusqlite::{params, Connection};
+    use std::collections::HashMap;
     use undercroft_store::pq::ProductQuantizer;
     use undercroft_vault::keys::{derive_vault_key, load_or_create_master, new_vault_salt};
     use undercroft_vault::seal::{open_content, seal_content};
-    use rusqlite::{params, Connection};
-    use std::collections::HashMap;
 
     fn splitmix(state: &mut u64) -> u64 {
         *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);

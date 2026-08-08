@@ -59,8 +59,8 @@
 //! an orphan surviving a crash window merely wastes a candidate slot (the
 //! hydration query filters against live drawers) until the next rebuild.
 
-use undercroft_vault::SecurityLevel;
 use rusqlite::{params, OptionalExtension};
+use undercroft_vault::SecurityLevel;
 
 use crate::pq::{CoarseQuantizer, ProductQuantizer};
 use crate::{PalaceStore, StoreError, CODEBOOK_PQ, CODEBOOK_PQ_IVF};

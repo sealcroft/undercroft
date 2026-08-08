@@ -21,11 +21,11 @@ pub use late::{colbert_from_env, OrtColbert};
 
 use std::sync::Mutex;
 
-use undercroft_core::embed::Embedder;
-use undercroft_core::rerank::Reranker;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
+use undercroft_core::embed::Embedder;
+use undercroft_core::rerank::Reranker;
 
 const MAX_LEN: usize = 256;
 
