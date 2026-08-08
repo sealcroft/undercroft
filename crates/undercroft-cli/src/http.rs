@@ -1,5 +1,5 @@
 //! HTTP transport for the MCP server — the "remote team server" mode,
-//! modelled on the behaviour of mempalace's `serve` command.
+//! ported from mempalace's `serve` command.
 //!
 //! One shared palace, reachable by a team's MCP clients over HTTP:
 //!

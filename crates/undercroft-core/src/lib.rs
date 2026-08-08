@@ -1,6 +1,6 @@
 //! Undercroft core domain model.
 //!
-//! Modelled on MemPalace's documented model (Python): a *palace* holds *wings* (people /
+//! Ported from MemPalace (Python): a *palace* holds *wings* (people /
 //! projects), wings hold *rooms* (topics), rooms hold *drawers* — verbatim
 //! chunks of original text. Nothing is summarized or paraphrased on the way
 //! in; retrieval returns the exact bytes that were stored.

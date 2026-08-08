@@ -1,4 +1,4 @@
-//! Temporal knowledge graph, modelled on the behaviour of mempalace's `knowledge_graph.py`.
+//! Temporal knowledge graph, ported from mempalace's `knowledge_graph.py`.
 //!
 //! Entities + triples with validity windows: a fact holds from
 //! `valid_from` until `valid_to` (open-ended when `None`). Facts are never

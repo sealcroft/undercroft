@@ -1,7 +1,6 @@
 # Undercroft — agent guide
 
-Undercroft is hardened, local-first AI memory in Rust — an independent
-implementation of behaviour MemPalace documents, sharing no code with it.
+Undercroft is a Rust conversion of MemPalace: hardened, local-first AI memory.
 Verbatim drawers filed into wings/rooms, stored in isolated **vaults** with
 per-vault HKDF-derived keys, XChaCha20-Poly1305 content sealing, and
 HMAC-SHA256 integrity tags + a tamper-evident audit chain.
@@ -877,8 +876,8 @@ Consequences that are binding, not advisory:
   builds the orchestrator (the runtime stage copies both binaries — a
   features-only build used to leave it missing)
 
-The MemPalace project (Python) is *not* in this repo, is not a parent of
-it, and no code was taken from it; its behavior is documented in
+The upstream Python implementation (the MemPalace project) is *not* in
+this repo and no longer linked as a fork; its behavior is documented in
 docs/PARITY.md. Never reintroduce Python code here.
 
 ## Build & test — Docker only

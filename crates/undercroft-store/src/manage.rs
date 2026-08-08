@@ -1,4 +1,4 @@
-//! Palace management, modelled on the behaviour of mempalace's drawer-management, diary,
+//! Palace management, ported from mempalace's drawer-management, diary,
 //! tunnel, hallway, dedup, and stats surfaces.
 //!
 //! Everything here rides the vault security layer: content stays sealed,

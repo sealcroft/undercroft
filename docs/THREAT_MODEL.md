@@ -6,7 +6,7 @@ adversaries it defends against, the mechanism that defeats each one, and
 document a security reviewer should be handed alongside
 [SECURITY.md](../SECURITY.md) (the disclosure policy and scope list),
 the [security model](security.md) (the mechanism reference), and
-[SECURITY_COMPARISON.md](SECURITY_COMPARISON.md) (the market context).
+[SECURITY_COMPARISON.md](https://sealcroft.github.io/undercroft/docs/security-comparison.html) (the market context).
 Nothing here is aspirational: every defensive claim names the shipping
 mechanism, and planned work is labeled as planned.
 
@@ -210,7 +210,7 @@ into every ciphertext, so a blob copied from vault A into vault B
 could have a bug, it is rejected by the cipher. Vault, wing, and room
 names pass a path-traversal guard (`validate_name`). This is the
 property that makes vault-per-customer multi-tenancy defensible; every
-competitor surveyed in [SECURITY_COMPARISON.md](SECURITY_COMPARISON.md)
+competitor surveyed in [SECURITY_COMPARISON.md](https://sealcroft.github.io/undercroft/docs/security-comparison.html)
 isolates tenants with a metadata filter.
 
 ### A4 — Network adversary (reaching the served surface)
@@ -475,7 +475,7 @@ says.
 
 The market treats "what to store" as a quality trade-off. It is also a
 security decision, and the measured benchmark rows make the stakes
-concrete ([BENCHMARKS_VS.md](BENCHMARKS_VS.md)): extraction pipelines
+concrete ([BENCHMARKS_VS.md](https://sealcroft.github.io/undercroft/docs/benchmarks-vs.html)): extraction pipelines
 retained 55 memories from 177 ingested chunks — content their rubric
 judged uninteresting simply ceased to exist. Applied to security:
 
@@ -611,7 +611,7 @@ cannot *enforce* them, and says so:
 - **Data-not-instructions delivery** — retrieval returns memory as a
   result payload, never as instruction/system text, and the assembly
   pattern (the standard spotlighting defense against prompt injection)
-  is documented in [AGENTS.md §7.1](AGENTS.md). Stated exactly, because
+  is documented in [AGENTS.md §7.1](https://sealcroft.github.io/undercroft/docs/agents.html). Stated exactly, because
   this bullet previously overstated it in two ways. First, it cited an
   AGENTS.md section that **did not exist**; §7.1 was written to close
   that, on 2026-08-05. Second, it claimed retrieval carries "the
@@ -725,7 +725,7 @@ straight, each carrying what it actually is.
   X25519 + ML-KEM-768 by default (`bundle keygen`), with legacy
   identities fully supported and downgrade refused in every direction.
   Full inventory, compat matrix, and deployment guidance in
-  [PQ.md](PQ.md). No "quantum" marketing beyond this paragraph.
+  [PQ.md](https://sealcroft.github.io/undercroft/docs/pq.html). No "quantum" marketing beyond this paragraph.
 
 ## 10. Audit us
 

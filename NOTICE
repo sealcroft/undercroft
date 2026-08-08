@@ -7,12 +7,16 @@ Undercroft is licensed under the Business Source License 1.1 (see LICENSE).
 
 Heritage attribution
 
-Undercroft is a from-scratch Rust implementation of concepts from the
-MemPalace project (https://github.com/MemPalace/mempalace), a Python
-AI-memory system published under the MIT License. Undercroft contains no
-source code from MemPalace; the feature-by-feature relationship is
-documented in docs/PARITY.md. The MIT notice below is preserved as
-attribution for that conceptual heritage:
+Undercroft began as a fork of the MemPalace project
+(https://github.com/MemPalace/mempalace), a Python AI-memory system published
+under the MIT License, and its feature surface was ported to Rust. The two
+have since diverged completely: no Python remains, Undercroft contains no
+source code from MemPalace, and the vault and security layer, the retrieval
+stack, the language layer and the orchestrator have no MemPalace counterpart.
+The feature-by-feature relationship is documented in docs/PARITY.md.
+
+The MIT notice below is reproduced as an acknowledgement of that origin —
+offered as a courtesy rather than claimed as a condition:
 
     MIT License
 

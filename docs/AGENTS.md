@@ -312,7 +312,7 @@ per vault on first write, and a model swap is refused unless you set
 
 **Embedder tiers** (`UNDERCROFT_EMBEDDER`; the full posture guide with
 setup recipes, the model-export procedure, and the security trades is
-[docs/EMBEDDERS.md](EMBEDDERS.md) — published as the "Choosing an
+[docs/EMBEDDERS.md](https://sealcroft.github.io/undercroft/docs/embedders.html) — published as the "Choosing an
 embedder posture" chapter. Since the posture-configs unit, releases ship
 the `ort` posture ready-made: a `…-x86_64-unknown-linux-gnu-ort.tar.gz`
 binary asset and a `ghcr.io/sealcroft/undercroft:<tag>-ort` image, both
@@ -684,7 +684,7 @@ undercroft import palace.bundle --identity ops.key --sender <sender-hex>
   (X25519 + ML-KEM-768, `pq1`-prefixed strings) and seals v2 bundles that
   close harvest-now-decrypt-later; legacy bare-hex X25519 identities keep
   working in both directions, and nothing downgrades silently — the full
-  posture and compat matrix live in [PQ.md](PQ.md).
+  posture and compat matrix live in [PQ.md](https://sealcroft.github.io/undercroft/docs/pq.html).
 
 - Durability is real: SQLite runs WAL + `synchronous=FULL`, the manifest
   anchor and key files are fsynced — an acknowledged write is on disk.

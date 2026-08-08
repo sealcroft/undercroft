@@ -1,6 +1,6 @@
 //! `undercroft` — hardened, local-first AI memory.
 //!
-//! Independent Rust implementation, with a security-first management layer:
+//! Rust conversion of MemPalace with a security-first management layer:
 //! memories live in isolated vaults with per-vault derived keys, AEAD
 //! encryption, and HMAC integrity verification.
 

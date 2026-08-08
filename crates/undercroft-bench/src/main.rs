@@ -1,4 +1,4 @@
-//! Retrieval benchmarks, modelled on the behaviour of mempalace's `benchmarks/` harnesses.
+//! Retrieval benchmarks, ported from mempalace's `benchmarks/` harnesses.
 //!
 //! Two modes:
 //!

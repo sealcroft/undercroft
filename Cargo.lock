@@ -3633,7 +3633,7 @@ checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
 
 [[package]]
 name = "undercroft-bench"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3654,7 +3654,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-cli"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3683,7 +3683,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-core"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "calendrical_calculations",
  "hex",
@@ -3697,7 +3697,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-embed-onnx"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "rayon",
  "thiserror 2.0.18",
@@ -3708,7 +3708,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-embed-ort"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "ort",
  "rayon",
@@ -3719,7 +3719,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-index"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "postgres",
  "rustls",
@@ -3733,7 +3733,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-llm"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "rustls",
  "rustls-pemfile",
@@ -3750,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-net"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "rustls",
  "rustls-pemfile",
@@ -3763,7 +3763,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-obs"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -3779,7 +3779,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-orchestrator"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chacha20poly1305",
@@ -3800,7 +3800,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-store"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -3823,7 +3823,7 @@ dependencies = [
 
 [[package]]
 name = "undercroft-vault"
-version = "0.46.0"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",

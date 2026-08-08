@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
+
+First release under the name Undercroft, published by Sealcroft. The version
+resets to 1.0.0: every prior tag and release belonged to the project under its
+former name, carried binaries and images named for it, and has been withdrawn.
+Nothing before this release is installable, and nothing before it needs to be
+— a vault written by any earlier build cannot be opened by this one, because
+the crypto domain separation carried the old name and moved with it.
 
 ### the project is renamed to Undercroft, under the Sealcroft house
 

@@ -4,7 +4,7 @@ Feature-by-feature comparison against `MemPalace/mempalace` (the Python
 project whose concepts this one reimplements; no source code is shared,
 see "License lineage" below), updated 2026-08-05.
 
-## Implemented (Rust equivalent exists)
+## Ported (Rust equivalent exists)
 
 | MemPalace | Undercroft equivalent |
 |---|---|
@@ -12,7 +12,7 @@ see "License lineage" below), updated 2026-08-05.
 | `sqlite_exact` backend | `undercroft-store` (SQLite system of record) |
 | Chroma/Qdrant/pgvector server backends | `undercroft-index` — **sealed client-side** (MemPalace sent plaintext) |
 | Embedder + identity tracking (RFC 001) | `Embedder` trait + per-vault identity enforcement (a swap is refused, not silently ranked; only hash→hash migrates automatically) |
-| Model embeddings (sentence-transformers) | four postures — `undercroft-embed-onnx` (tract, pure Rust), `undercroft-embed-ort` (ONNX Runtime, ~2.5×/forward + int8), `http` (any served model, TLS-or-loopback enforced), or caller-supplied `external:<name>@<dim>`. Models are user-supplied throughout; see [EMBEDDERS.md](EMBEDDERS.md) |
+| Model embeddings (sentence-transformers) | four postures — `undercroft-embed-onnx` (tract, pure Rust), `undercroft-embed-ort` (ONNX Runtime, ~2.5×/forward + int8), `http` (any served model, TLS-or-loopback enforced), or caller-supplied `external:<name>@<dim>`. Models are user-supplied throughout; see [EMBEDDERS.md](https://sealcroft.github.io/undercroft/docs/embedders.html) |
 | File miner | `mine --mode files` |
 | Conversation miner (`--mode convos`) | `mine --mode convos` |
 | Sweep (per-message drawers) | `sweep` (idempotent via keyed fingerprints) |
@@ -38,11 +38,11 @@ see "License lineage" below), updated 2026-08-05.
 | Deploy (compose server, systemd) | `deploy/` |
 | Docs / examples | `docs/`, `examples/` |
 
-## What exists only here (updated for v0.46.0)
+## What exists only here (updated for v1.0.0)
 
-Everything below has **no MemPalace equivalent** — it is original work of
+Everything below has **no upstream equivalent** — it is original work of
 this project, which is why the two codebases share concepts but not code
-(and why this project's license is independent of MemPalace's; see the
+(and why this project's license is independent of upstream's; see the
 "License lineage" section at the end).
 
 **Security layer** (MemPalace stored everything in plaintext):
@@ -74,12 +74,12 @@ this project, which is why the two codebases share concepts but not code
   still parse and still receive openable v1 bundles, and a hybrid identity
   opens old v1 backups with its curve half — but a hybrid recipient never
   silently downgrades, and an X25519-only secret gets a typed refusal on a
-  v2 bundle (pinned by test). Posture page: [PQ.md](PQ.md).
+  v2 bundle (pinned by test). Posture page: [PQ.md](https://sealcroft.github.io/undercroft/docs/pq.html).
 - **Signed bundle manifests** — Ed25519 sender attestation beside the
   recipient flow: encryption says who may READ, the signature says who
   WROTE. Scope, trust claim, expiry, counts, provenance, and an
   unconditionally-checked payload digest. A sender-declared trust label is
-  a **claim, never a boundary** ([LABELS.md](LABELS.md)); legacy payloads
+  a **claim, never a boundary** ([LABELS.md](https://sealcroft.github.io/undercroft/docs/labels.html)); legacy payloads
   import unattested and say so.
 - **Write-path admission control** — a deterministic tier-1 screen over a
   closed signal vocabulary (offsets, never content) plus attack-fixture
@@ -164,7 +164,7 @@ five backends receive ciphertext; MemPalace uploaded plaintext); zstd
 compress-then-encrypt; int8 embedding quantization; deterministic
 offline hash embedder as the default.
 
-## Implemented in v0.5.0 (previously listed as gaps)
+## Ported in v0.5.0 (previously listed as gaps)
 
 | MemPalace | Undercroft equivalent |
 |---|---|
@@ -178,7 +178,7 @@ offline hash embedder as the default.
 | Memory-extraction eval task | `undercroft-bench model-eval memories` — SQuAD-style token-F1 with greedy one-to-one alignment (threshold 0.5), CJK-aware tokenization; reports match P/R/F1, mean token-F1, type accuracy |
 | i18n (`mempalace/i18n`) | CLI result strings localized in the 9 dataset languages (de/es/fr/hi/it/ko/pt/ru/zh) via `UNDERCROFT_LANG`, English default + fallback; errors/help stay English by design (exit codes are the script contract) |
 
-## Not implemented
+## Not ported
 
 Nothing remains. The one permanent role-replacement worth restating:
 embedded ChromaDB is a Python library and cannot be linked from Rust — its
@@ -214,9 +214,8 @@ the bundled SQLite store and the in-memory embedding cache respectively.
 
 ## License lineage
 
-MemPalace is Python, published under the MIT License. Undercroft
-is a from-scratch Rust implementation of the *concepts* documented in
-this file and **contains no MemPalace source code** — the two projects
+MemPalace is Python, published under the MIT License. Undercroft began as a fork and its feature surface was reimplemented in
+Rust as documented in this file; it **contains no MemPalace source code** — the two projects
 share behavior specifications, not expression. Undercroft is therefore
 licensed independently, under the
 [Business Source License 1.1](https://github.com/sealcroft/undercroft/blob/main/LICENSE)

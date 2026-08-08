@@ -13,4 +13,7 @@
 - [Remote team server](remote-server.md)
 - [Observability](observability.md)
 - [Tamper runbook](runbook.md)
+- [Label doctrine](labels.md)
+- [Security comparison](security-comparison.md)
+- [Head-to-head benchmarks](benchmarks-vs.md)
 - [Parity with MemPalace](parity.md)

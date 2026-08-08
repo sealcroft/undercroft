@@ -99,14 +99,14 @@ stateDiagram-v2
   handed a v2 bundle gets a typed refusal, pinned by test. A bundle alone
   reveals nothing without the identity key, and the identity key is
   unrelated to the palace's own at-rest keys. `import --identity
-  <keyfile>` opens it. Full posture and compatibility matrix: [PQ.md](PQ.md).
+  <keyfile>` opens it. Full posture and compatibility matrix: [PQ.md](https://sealcroft.github.io/undercroft/docs/pq.html).
 - **Signed manifests** beside the recipient flow: encryption says who may
   *read* a bundle, an Ed25519 sender attestation (`bundle sign-keygen`,
   `export --sign`) says who *wrote* it — scope, trust claim, expiry,
   counts, provenance, and a payload digest that is checked
   unconditionally. Pin the sender with `import --sender <hex>`. A
   sender-declared trust label is a **claim, never a boundary**
-  ([LABELS.md](LABELS.md)); legacy payloads import unattested and say so.
+  ([LABELS.md](https://sealcroft.github.io/undercroft/docs/labels.html)); legacy payloads import unattested and say so.
 - **Remote indexes** receive sealed bytes + plaintext embeddings only;
   results are re-verified locally. See the trade-off note in the README.
 - **HTTP server**: refuses non-loopback binds without a bearer token.

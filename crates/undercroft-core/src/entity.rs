@@ -1,4 +1,4 @@
-//! Heuristic entity detection, modelled on the behaviour of mempalace's `entity_detector.py`
+//! Heuristic entity detection, ported from mempalace's `entity_detector.py`
 //! spirit: no models, no network — capitalized-token heuristics good enough
 //! to tag drawers and build co-occurrence hallways.
 

@@ -1,6 +1,6 @@
 # Undercroft Roadmap
 
-Undercroft is the Independent Rust implementation, with a hardened memory-management
+Undercroft is the Rust conversion of MemPalace with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
 

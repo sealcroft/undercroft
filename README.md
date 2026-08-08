@@ -213,7 +213,7 @@ set, after which `undercroft repair` re-embeds every drawer.
   `embeddings-tls` terminator ships the infra). The stated trade: the
   endpoint reads your text in plaintext — the in-process backends above
   close that. The full posture guide is
-  [docs/EMBEDDERS.md](docs/EMBEDDERS.md).
+  [docs/EMBEDDERS.md](https://sealcroft.github.io/undercroft/docs/embedders.html).
 
 ### Cross-encoder reranker (optional, `onnx` / `ort` features)
 
@@ -470,13 +470,13 @@ use the same deterministic-recipe idea (idempotent re-mining).
 
 ## Relationship to MemPalace
 
-Undercroft is an independent Rust implementation, written from scratch
-against the *behaviour* MemPalace documents (MIT-licensed, Python). **No
-MemPalace source code is present, and none was translated** — the two
-projects share behaviour specifications, not expression. Nothing in this
-repository is Python.
+Undercroft began as a fork of the MemPalace project (MIT-licensed, Python)
+and its feature surface was ported to Rust; no Python remains and **no
+MemPalace source code is present**. Everything since — the vault and
+security layer, the retrieval stack, the language layer and the
+orchestrator — is original work with no MemPalace counterpart.
 
-Implemented here against that specification: the palace model and miners
+Ported: the palace model and miners
 (files + conversation transcripts + sweep), wake-up layers, knowledge graph,
 tunnels/hallways navigation, agent diaries, drawer management,
 dedup/stats/backups/repair, hooks output, the MCP tool surface, remote vector
@@ -540,8 +540,8 @@ In practice:
 - **Time-limited by design**: each release automatically converts to the
   open-source **MPL 2.0** four years after publication.
 
-Undercroft is a from-scratch Rust implementation of concepts from the
-MIT-licensed MemPalace project and contains no code from it — see
+Undercroft began as a fork of the MIT-licensed MemPalace project, was ported
+to Rust, and contains no code from it — see
 [NOTICE](https://github.com/sealcroft/undercroft/blob/main/NOTICE) for the
 heritage attribution and
 [docs/PARITY.md](https://github.com/sealcroft/undercroft/blob/main/docs/PARITY.md)
