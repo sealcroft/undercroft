@@ -341,24 +341,43 @@ mod tests {
     /// A tool added to the server without a line here fails; a line here
     /// naming a tool that no longer exists fails too. The second half is
     /// what stops the inventory becoming the stale doc table it replaces.
-    #[test]
-    fn the_mcp_tool_surface_matches_its_inventory() {
-        let src = include_str!("mcp.rs");
-        // Every tool the server advertises, taken from the definitions
-        // themselves rather than from a count someone maintains by hand.
-        // Tools are declared as `tool("undercroft_x", ...)` in
-        // `tool_definitions`, so that call is the surface of record.
-        let advertised: std::collections::BTreeSet<&str> = src
-            .match_indices("tool(\"undercroft_")
+    /// The MCP tool-name prefix, in ONE place. Every gate below scans
+    /// `mcp.rs` as text and keys on it, and a copy left behind by a rename
+    /// would search for a string that cannot occur — which passes green
+    /// while inspecting nothing. That is the failure this module exists to
+    /// prevent, so its own needles may not be spelled out per site.
+    const TOOL_PREFIX: &str = "undercroft_";
+
+    /// Every tool the server advertises, taken from the definitions
+    /// themselves rather than from a count someone maintains by hand.
+    /// Tools are declared as `tool("<prefix>x", ...)` in `tool_definitions`,
+    /// so that call is the surface of record.
+    ///
+    /// It asserts its own premise. An extraction that finds nothing means
+    /// the extraction is broken, never that the surface is empty, and
+    /// returning an empty set quietly is how every caller downstream turns
+    /// into a test that examines zero things and reports success.
+    fn advertised_tools(src: &str) -> std::collections::BTreeSet<&str> {
+        let needle = format!("tool(\"{TOOL_PREFIX}");
+        let found: std::collections::BTreeSet<&str> = src
+            .match_indices(&needle)
             .map(|(i, _)| {
                 let rest = &src[i + "tool(\"".len()..];
                 &rest[..rest.find('"').expect("a closing quote")]
             })
             .collect();
         assert!(
-            !advertised.is_empty(),
-            "found no tool definitions — the extraction, not the surface, is broken"
+            !found.is_empty(),
+            "found no tool definitions matching {needle:?} — the extraction, \
+             not the surface, is broken"
         );
+        found
+    }
+
+    #[test]
+    fn the_mcp_tool_surface_matches_its_inventory() {
+        let src = include_str!("mcp.rs");
+        let advertised = advertised_tools(src);
 
         let inventoried: std::collections::BTreeSet<&str> = MCP_TOOLS.iter().copied().collect();
         assert_eq!(
@@ -386,6 +405,12 @@ mod tests {
     #[test]
     fn operator_only_capabilities_never_reach_mcp() {
         let src = include_str!("mcp.rs");
+        // Read from the SOURCE as well as from the inventory, so a tool
+        // advertised without a line in `MCP_TOOLS` is still caught. This
+        // used to be `src.contains(&format!("tool(\"undercroft_{cap}"))` —
+        // a needle spelled out here, which a rename of the tool prefix
+        // would have left matching nothing at all while still passing.
+        let from_source = advertised_tools(src);
         for cap in OPERATOR_ONLY {
             // The capability ANYWHERE in a tool name, not only as a prefix.
             // `tool("undercroft_{cap}` could not express "no MCP tool may
@@ -400,15 +425,17 @@ mod tests {
                     "{advertised} carries the operator-only capability                      {cap:?}. An agent must not rule on the queue that                      contains it, assign the trust class that decides what                      it may retrieve, or write the authority tier its own                      lookups read. If deliberate, that is a threat-model                      change, not a test change."
                 );
             }
-            let tool = format!("tool(\"undercroft_{cap}");
-            assert!(
-                !src.contains(&tool),
-                "undercroft_{cap}* is exposed over MCP. That is an operator \
-                 surface: an agent must not rule on the queue that contains \
-                 it, or assign the trust class that decides what it can \
-                 retrieve. If this was deliberate, it needs a threat-model \
-                 change, not a test change."
-            );
+            for advertised in &from_source {
+                assert!(
+                    !advertised.contains(cap),
+                    "{advertised} is exposed over MCP and carries the \
+                     operator-only capability {cap:?}. An agent must not rule \
+                     on the queue that contains it, or assign the trust class \
+                     that decides what it can retrieve. If this was \
+                     deliberate, it needs a threat-model change, not a test \
+                     change."
+                );
+            }
         }
     }
 
@@ -446,6 +473,7 @@ mod tests {
         // `undercroft_kg_set_authority` from the surface left its entry behind,
         // and nothing failed. That is the rot this module's header claims to
         // prevent in BOTH directions; it was true of `MCP_TOOLS` only.
+        let mut checked = 0usize;
         for line in write_list.lines() {
             let Some(name) = line.trim().strip_prefix('"') else {
                 continue;
@@ -453,9 +481,10 @@ mod tests {
             let Some(name) = name.split('"').next() else {
                 continue;
             };
-            if !name.starts_with("undercroft_") {
+            if !name.starts_with(TOOL_PREFIX) {
                 continue;
             }
+            checked += 1;
             assert!(
                 MCP_TOOLS.contains(&name),
                 "WRITE_TOOLS lists {name}, which is not an advertised tool — a \
@@ -463,5 +492,16 @@ mod tests {
                  and is not"
             );
         }
+        // The premise, which this loop did not assert. Every `continue` above
+        // is silent, so a prefix that stops matching skips every entry and
+        // the loop body never runs — green, permanently, having examined
+        // nothing. Its sibling above (`advertised_tools`) has always had this
+        // guard; this half did not, and that asymmetry is the whole reason
+        // one of the two was safe against a rename and the other was not.
+        assert!(
+            checked > 0,
+            "examined no WRITE_TOOLS entries — the extraction, not the \
+             surface, is broken"
+        );
     }
 }

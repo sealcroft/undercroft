@@ -32,6 +32,28 @@ check() { # check <name> <expected-exit> <expected-substring> -- cmd...
   PASS=$((PASS+1))
 }
 
+absent_in_db() { # absent_in_db <name> <needle> <db>
+  # A NEGATIVE at-rest assertion, with its premise asserted first.
+  #
+  # `grep -qF needle file 2>/dev/null` returns non-zero when the file does
+  # not exist, so the naked form reported "ok — no plaintext on disk" for a
+  # database that was never there. Every one of these guards the project's
+  # headline claim, and each would go green the moment $UNDERCROFT_HOME
+  # stopped pointing where the binary writes — a gate measuring an
+  # observable the defect does not move. The file's existence IS the
+  # premise, so it is checked, not assumed.
+  local name="$1" needle="$2" db="$3"
+  if [ ! -s "$db" ]; then
+    echo "FAIL  $name — no database at $db, so this asserted nothing"
+    FAIL=$((FAIL+1)); return
+  fi
+  if grep -qF "$needle" "$db"; then
+    echo "FAIL  $name — found $needle at rest"; FAIL=$((FAIL+1))
+  else
+    echo "ok    $name"; PASS=$((PASS+1))
+  fi
+}
+
 echo "== UX: help, version, error surfaces =="
 check "help shows purpose"        0 "hardened local-first AI memory" -- "$BIN" --help
 check "help lists commands"       0 "wake-up"                        -- "$BIN" --help
@@ -73,11 +95,8 @@ check "vault status"              0 "chain head"                     -- "$BIN" v
 check "vault anchor"              0 "committed chain head"           -- "$BIN" vault anchor work
 
 echo "== Encryption at rest =="
-if grep -qF "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/palace.db" 2>/dev/null; then
-  echo "FAIL  sealed vault leaked plaintext to disk"; FAIL=$((FAIL+1))
-else
-  echo "ok    sealed vault has no plaintext on disk"; PASS=$((PASS+1))
-fi
+absent_in_db "sealed vault has no plaintext on disk" \
+  "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/palace.db"
 
 echo "== FTS5 BM25 prefilter (hmac-only vaults) =="
 check "hmac-only vault create"    0 "Created vault 'plain'"          -- "$BIN" vault create plain --level hmac-only
@@ -92,11 +111,8 @@ if grep -qF "drawers_fts" "$UNDERCROFT_HOME/vaults/plain/palace.db" 2>/dev/null;
 else
   echo "FAIL  hmac-only vault missing its FTS index"; FAIL=$((FAIL+1))
 fi
-if grep -qF "drawers_fts" "$UNDERCROFT_HOME/vaults/work/palace.db" 2>/dev/null; then
-  echo "FAIL  sealed vault grew an FTS index"; FAIL=$((FAIL+1))
-else
-  echo "ok    sealed vault has no FTS index"; PASS=$((PASS+1))
-fi
+absent_in_db "sealed vault has no FTS index" \
+  "drawers_fts" "$UNDERCROFT_HOME/vaults/work/palace.db"
 
 echo "== PQ/IVF prefilter (UNDERCROFT_RETRIEVAL=pq, both vault levels) =="
 check "pq search hits"            0 "kubernetes"                     -- \
@@ -113,11 +129,8 @@ check "pq search on sealed vault" 0 "BLUE HERON"                     -- \
 # The sealed vault gets the index too — but every artifact is AEAD-sealed
 # (the unit suite asserts no plaintext-derived bytes; here we re-assert the
 # at-rest check now that the PQ tables exist in the same db file).
-if grep -qF "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/palace.db" 2>/dev/null; then
-  echo "FAIL  sealed vault leaked plaintext into the db"; FAIL=$((FAIL+1))
-else
-  echo "ok    sealed vault db stays sealed with PQ on"; PASS=$((PASS+1))
-fi
+absent_in_db "sealed vault db stays sealed with PQ on" \
+  "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/palace.db"
 
 echo "== Admission screening (C3.3) =="
 # Opt-in per command: a flagged save diverts to quarantine (never lands
