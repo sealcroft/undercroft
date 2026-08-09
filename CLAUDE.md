@@ -1127,6 +1127,17 @@ images either; mount the repo instead:
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
+**The seven compose suites run as a `fail-fast: false` MATRIX, one job each**,
+named from the same strings `tests/battery.sh` uses so CI and a local battery
+cannot drift into different sets. Two properties are load-bearing: the legs
+are independent, so wall-clock is the slowest suite rather than their sum;
+and **every suite runs even when one fails**, where the old serial job
+stopped at the first failure and hid the state of the five behind it — a fix
+then landed blind. The verdict is an aggregate job kept under the name
+`test`, because that is what a required status check on `main` resolves
+against: renaming the job that carries the verdict would silently un-gate the
+branch, which is the same class of defect as an alert on a series nobody
+exports.
 Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 (host bind-mounted `target/` SIGBUSes under memory pressure).
 

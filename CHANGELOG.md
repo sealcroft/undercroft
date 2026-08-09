@@ -89,6 +89,15 @@ measures the observable rather than the claim.
 Battery green at the final tree. Test count 656 → **664** across the three
 commits on this branch; the battery is eight suites.
 
+**CI runs the seven compose suites as a parallel matrix.** They were seven
+steps of one serial job, so a failure in the second meant the remaining
+five never ran — one broken suite hid the state of the rest, and a fix
+landed blind. `fail-fast: false`, one job per suite, names taken from the
+same strings `tests/battery.sh` uses so CI and a local battery cannot
+drift into different sets; the verdict is an aggregate job kept under the
+name `test`, because that is what a required status check resolves
+against and renaming it would silently un-gate the branch.
+
 **Not merged.** Two drift-audit rounds ran against this branch and the second
 found four defects in the first round's own fixes. Everything still open is
 enumerated in `.handover/AUDIT_CONTINUATION.md` and summarised in ROADMAP;
