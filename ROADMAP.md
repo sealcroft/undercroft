@@ -11,13 +11,20 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
 
-### O1 — the landing page advertises artifacts that only just started existing
-`v1.0.0` is cut and `release.yml` builds five binary targets plus the GHCR
-image, but the run was in flight at session end. **Gate:** fetch
-`https://github.com/sealcroft/undercroft/releases/latest`, assert a non-empty
-asset list, and `docker pull ghcr.io/sealcroft/undercroft:1.0.0`. Until both
-pass, the install walkthrough on the landing page is a promise the project
-cannot keep.
+### O1 — PARTLY CLOSED 2026-08-09: binaries shipped, the image is still private
+The `v1.0.0` release workflow completed successfully and **20 assets** are
+published, correctly named `undercroft-v1.0.0-<target>[-ort].tar.gz` plus
+`.sha256` — five targets, both variants. The release button on the landing
+page is now honest.
+
+**What remains:** `ghcr.io/sealcroft/undercroft` answers **HTTP 403 to an
+anonymous pull token**. GHCR packages default to *private* visibility on
+first push, so `docker pull ghcr.io/sealcroft/undercroft:1.0.0` — the first
+command in the landing page's install walkthrough — fails for everyone who is
+not the owner. **Shape:** flip the package to public (Packages → undercroft →
+Package settings → Change visibility). **Gate:** an anonymous
+`ghcr.io/token` + `tags/list` must return 200, not 403; the check is in this
+session's transcript and takes one curl.
 
 ### O2 — the site loads three font families from Google
 `website/landing/index.html` head and `website/assets/undercroft.css:6`
