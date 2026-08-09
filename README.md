@@ -466,6 +466,7 @@ crates/
   undercroft-cli/     `undercroft` binary: CLI, MCP stdio, HTTP + /v1, admin UI
   undercroft-index/   remote vector backends as untrusted accelerators
   undercroft-llm/     local LLM runtimes + the HTTP-served embedder
+  undercroft-net/     the outbound transport policy: TLS or loopback, no override
   undercroft-obs/     observability shim: no-op and zero-dep by default
   undercroft-orchestrator/  optional multi-tenant control plane (own binary)
   undercroft-bench/   retrieval benchmark + synthetic-instrument harnesses

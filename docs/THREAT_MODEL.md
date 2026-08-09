@@ -241,7 +241,7 @@ of each mutating handler, and it **fails closed**: every non-GET is
 refused unless it is on a two-entry allowlist (`POST …/search`, and
 `POST …/verify` — which walks every record's HMAC, replays the whole
 audit chain, checks every supersession receipt, resolves every graph audit
-label and compares every mirror column against the covered meta (five legs
+label and compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta (five legs
 since 2026-08-06), and is a POST for cost, not for effect: it takes `&self`
 and writes nothing at all). Said plainly, because an earlier draft of
 this page said the opposite: verify does **not** fast-forward the
@@ -403,7 +403,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
 | Retrieval policy | trust floor + quarantine fence + closed-vocabulary validation resolved before candidates are drawn, and shared verbatim by the remote path | A5 result steering, A7 reach |
-| Read/egress audit | `egress/export` chain record on every export, behind no declaration (a read-only replica warns and serves unaudited); `UNDERCROFT_READ_AUDIT=chain` records each search with a **keyed** query fingerprint, never text | A7 forensics; insider/exfil accounting |
+| Read/egress audit | `egress/export` on every export **and `egress/index-push` on every remote-index mirror** (the second is a whole-corpus egress, and on an hmac-only vault its payload is the plaintext), both behind no declaration (a read-only replica warns and serves unaudited); `UNDERCROFT_READ_AUDIT=chain` records each search with a **keyed** query fingerprint, never text | A7 forensics; insider/exfil accounting |
 | Remote-index posture | sealed bytes out, local re-verification in; feature off by default | A5 |
 | Zero-telemetry default | no telemetry deps compiled in; metadata-only when opted in | A6 |
 | Verbatim + tombstones | exact words, keyed deletion markers, chain ordering | A7 attribution/excision |
@@ -723,7 +723,7 @@ straight, each carrying what it actually is.
   adversaries (256-bit XChaCha20 keys, HMAC-SHA256, HKDF); the one
   asymmetric exchange — the export bundle's X25519 — is now hybrid
   X25519 + ML-KEM-768 by default (`bundle keygen`), with legacy
-  identities fully supported and downgrade refused in every direction.
+  identities fully supported and downgrade refused in every direction that matters — a hybrid recipient never silently accepts a legacy bundle as hybrid, and an X25519-only secret is refused a v2 outright. The one direction deliberately allowed is a hybrid identity opening an old v1 backup with its curve half, so upgrading an identity never orphans existing backups.
   Full inventory, compat matrix, and deployment guidance in
   [PQ.md](https://sealcroft.com/undercroft/docs/pq.html). No "quantum" marketing beyond this paragraph.
 

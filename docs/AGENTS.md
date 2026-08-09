@@ -900,7 +900,7 @@ back to `bm25`) · `UNDERCROFT_FUSION_WEIGHT` (0.55 — the blend's semantic
 weight `w` in `w·semantic + (0.90−w)·lexical + 0.10·recency`; declared,
 clamped to 0.20–0.70 so no configuration can retire a channel, one global
 value never per-query) · `UNDERCROFT_TRUST_FLOOR` (unset — vault-level
-minimum wing trust, `quarantined`|`standard`|`trusted`: unscoped searches
+minimum wing trust, `quarantined`|`standard`|`trusted`: unscoped **reads** (search, `recent`/`wake_up`, `list_drawers`)
 exclude wings the operator assigned below it, resolved before candidates
 are drawn; an explicitly named wing scope bypasses the vault floor,
 a request's own `min_trust` never is; garbage warns and stays off) ·
@@ -953,7 +953,7 @@ close the window explicitly with `POST /v1/vaults/{id}/anchor` (or
 `undercroft vault anchor <name>`) on a cadence of your own. **Not**
 `POST …/verify`: it is a genuine read and does not anchor, and this
 paragraph told you otherwise before 1.0.0.
-Exports are chain-audited unconditionally — one `egress/export` record
+Egress is chain-audited unconditionally — one `egress/export` record per export, and one `egress/index-push` record per remote-index mirror
 binding surface, recipient, counts and the export's own manifest digest —
 with no variable to set) ·
 `UNDERCROFT_TRAIN_SOURCE_CAP` (4 — per-wing cap divisor on global
@@ -1033,7 +1033,7 @@ e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 
 Orchestrator: `UNDERCROFT_ORCH_DB` · `UNDERCROFT_ORCH_KEY` (required) ·
 `UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, ≥16 chars; unused
-by `serve --read-replica`) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
+by `serve --read-replica`) · `UNDERCROFT_ORCH_ENGINE_CA` (PEM pinning the root for the hop to the engines — that hop refuses cleartext beyond loopback, with no override) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
 `UNDERCROFT_ORCH_RATE_LIMIT` (req/min per tenant; unset/`0`/`off` = off;
 per-process — each replica enforces its own windows. A value that is not
 one of those **refuses to start**, the engine's posture for a declaration

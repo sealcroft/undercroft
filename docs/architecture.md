@@ -28,6 +28,7 @@ flowchart TB
         store["undercroft-store<br/><i>per-vault SQLite, hybrid search,<br/>PQ/IVF, ColBERT stage, FDE index, KG</i>"]
         index["undercroft-index<br/><i>remote vector backends<br/>(untrusted accelerators)</i>"]
         llm["undercroft-llm<br/><i>local LLM runtimes<br/>(refine → KG)</i>"]
+        net["undercroft-net<br/><i>outbound transport policy:<br/>TLS or loopback, no override</i>"]
         obs["undercroft-obs<br/><i>observability shim<br/>(no-op by default)</i>"]
         cli["undercroft-cli<br/><b>undercroft</b> binary<br/><i>CLI + MCP + HTTP /v1</i>"]
     end
@@ -70,6 +71,7 @@ flowchart TB
 | `undercroft-store` | Per-vault SQLite (system of record), hybrid search, PQ/IVF prefilter, ColBERT token store + LUT MaxSim, FDE candidate index, knowledge graph, management, remote-index integration |
 | `undercroft-index` | Qdrant / Chroma / pgvector / Milvus / Weaviate clients — untrusted accelerators, sealed content only |
 | `undercroft-llm` | Local LLM runtimes (Ollama / OpenAI-compatible) for `refine` → KG extraction |
+| `undercroft-net` | The outbound transport policy, in one place: **TLS or loopback, nothing else, no override**, refused at construction; plus CA pinning, where a declared root *replaces* the public roots and a file that pins nothing refuses rather than falling back. Every HTTP client calls it — the served embedder, the LLM runtimes, the remote index backends, and the orchestrator's hop to its engines |
 | `undercroft-obs` | Observability shim: zero-dep no-op by default; logs, `/metrics`, OTLP, SSE under `--features telemetry` |
 | `undercroft-cli` | `undercroft` binary: CLI + MCP stdio + HTTP (MCP `/mcp` + multi-tenant `/v1`) |
 | `undercroft-embed-onnx` | Feature-gated tract backend: sentence embedder, cross-encoder reranker, ColBERT encoder |

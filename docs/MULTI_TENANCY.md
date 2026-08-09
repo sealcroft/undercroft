@@ -480,6 +480,15 @@ engine.
   it forward to the loopback port. The same applies to the
   orchestrator→engine hop when engines live on other hosts: point the
   instance `url` at an HTTPS reverse proxy in front of each engine.
+  **This is now enforced rather than advised**: the orchestrator builds
+  its engine client through `undercroft-net`, which refuses cleartext to
+  any non-loopback host at construction, with no override — the same
+  rule the embedder, the LLM clients and the index backends obey. A
+  fleet registered at `http://engine.internal:8080` is refused; declare
+  a self-signed root with `UNDERCROFT_ORCH_ENGINE_CA` if you terminate
+  TLS yourself. Known residue, recorded in ROADMAP: the variable is read
+  per outbound call rather than at startup, so a bad pin binds the port
+  and fails per request instead of refusing to start.
   Everything auth-bearing (tenant tokens, engine bearers, assertions)
   must only ever transit inside TLS or on loopback.
 - **Rate limiting** (`UNDERCROFT_ORCH_RATE_LIMIT`, requests/minute per

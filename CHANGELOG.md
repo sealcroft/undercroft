@@ -86,8 +86,13 @@ measures the observable rather than the claim.
   occur per A31). Each re-verified in code, then removed; what remains out of
   scope is the genuine residual, named with its explicit closer.
 
-Battery green at the final tree. Test count 656 → 660 (four new gates); the
-battery is eight suites.
+Battery green at the final tree. Test count 656 → **664** across the three
+commits on this branch; the battery is eight suites.
+
+**Not merged.** Two drift-audit rounds ran against this branch and the second
+found four defects in the first round's own fixes. Everything still open is
+enumerated in `.handover/AUDIT_CONTINUATION.md` and summarised in ROADMAP;
+the maintainer's bar is not to merge known defects.
 
 ### the drift audit that gated the merge, and the eight it found
 
