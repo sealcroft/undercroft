@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08131a"/>
+      <stop offset="1" stop-color="#03080a"/>
+    </linearGradient>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3ff0cf"/>
+      <stop offset="1" stop-color="#0d7f6d"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#eaf4f4"/>
+      <stop offset="1" stop-color="#9fe9d9"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="22%" cy="52%" r="46%">
+      <stop offset="0" stop-color="#35e0c2" stop-opacity=".17"/>
+      <stop offset="1" stop-color="#35e0c2" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#halo)"/>
+
+  <!-- faint structural grid -->
+  <g stroke="#12242a" stroke-width="1">
+    <path d="M0 160H1280M0 320H1280M0 480H1280"/>
+    <path d="M160 0V640M320 0V640M960 0V640M1120 0V640"/>
+  </g>
+
+  <!-- the mark -->
+  <g transform="translate(96,164) scale(0.62)">
+    <rect x="72" y="152" width="368" height="34" rx="3" fill="#c9a961"/>
+    <path fill-rule="evenodd" fill="url(#stone)"
+          d="M96 186 H416 V424 H96 Z
+             M176 424 V318 A80 80 0 0 1 336 318 V424 Z"/>
+    <circle cx="256" cy="330" r="30" fill="none" stroke="#c9a961" stroke-width="14"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="450" y="286" font-family="Segoe UI, Helvetica, Arial, sans-serif"
+        font-size="96" font-weight="700" letter-spacing="-3" fill="url(#word)">Undercroft</text>
+
+  <text x="454" y="342" font-family="Segoe UI, Helvetica, Arial, sans-serif"
+        font-size="30" font-weight="400" fill="#8ea6ab">Hardened, local-first AI memory in Rust.</text>
+
+  <text x="454" y="392" font-family="Consolas, Menlo, monospace"
+        font-size="23" fill="#35e0c2">encrypted vaults · HMAC integrity · verbatim recall</text>
+
+  <!-- rule + house line -->
+  <rect x="454" y="432" width="150" height="3" fill="#c9a961"/>
+  <text x="454" y="486" font-family="Consolas, Menlo, monospace"
+        font-size="22" letter-spacing="5" fill="#5d7378">A SEALCROFT PROJECT</text>
+</svg>
