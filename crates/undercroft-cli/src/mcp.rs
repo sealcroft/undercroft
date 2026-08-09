@@ -263,8 +263,13 @@ impl McpHandler {
     }
 }
 
-pub fn serve(store: PalaceStore) -> Result<()> {
-    let mut handler = McpHandler::new(store, false);
+/// Serve MCP over stdio. `read_only` is the same posture `serve-http`
+/// takes: it refuses every tool in `WRITE_TOOLS`, and the caller is
+/// expected to have opened the store read-only as well — the flag alone
+/// would leave the open-time writes (embedder migration, read-audit
+/// records) happening on a server that says it does not write.
+pub fn serve(store: PalaceStore, read_only: bool) -> Result<()> {
+    let mut handler = McpHandler::new(store, read_only);
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

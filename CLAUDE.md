@@ -638,8 +638,9 @@ Consequences that are binding, not advisory:
   `drawer-quarantined`; `website/src/observability.md` documents it.
   **The counter travels with the frame since 2026-08-05 (C11/R5)**: both
   are emitted by ONE function (`PalaceStore::emit_write_event`) off ONE
-  `save_event` classification, and `drawer_writes_total` gained a third
-  label, `quarantined`. It used to be a hard-coded
+  `save_event` classification, and `drawer_writes_total` gained a third VALUE on its one
+  `outcome` label, `quarantined` (not a third label — the counter has
+  exactly one). It used to be a hard-coded
   `WriteOutcome::Created` one line above the branch that decided the
   frame, on all five write arms, so the monitor showed
   `drawer-quarantined` while the counter climbed as `created` — a durable
@@ -840,12 +841,14 @@ Consequences that are binding, not advisory:
   version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all **77**
-  `UNDERCROFT_*` variables the engine honours — 62 written out in full
-  across the env table's 58 rows, plus 15 siblings abbreviated to a
+  which inlines them and documents every layer plus all **78**
+  `UNDERCROFT_*` variables the engine honours — 63 written out in full
+  across the env table's 59 rows, plus 15 siblings abbreviated to a
   suffix inside the row that owns them (`_TOKENIZER` three times, one
   per model role), which is why grepping the page for full names
-  undercounts it. Count the truth, never a number in prose:
+  undercounts it. (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
+  pin for the orchestrator→engine hop, which had no transport policy at
+  all until the post-1.0.0 drift audit.) Count the truth, never a number in prose:
   `grep -rhoE '"UNDERCROFT_[A-Z0-9_]+"' crates/ | sort -u` over every
   crate except `undercroft-bench`, whose `UNDERCROFT_VS_*`/`UNDERCROFT_TEST_*`
   belong to the harness rather than the engine.

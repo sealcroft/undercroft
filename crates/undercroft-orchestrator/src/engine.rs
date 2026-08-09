@@ -30,10 +30,39 @@ pub struct EngineResponse {
     pub body: Vec<u8>,
 }
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
+/// `UNDERCROFT_ORCH_ENGINE_CA` — a self-signed root to PIN for the hop to
+/// the engines, replacing the public roots (never adding to them), exactly
+/// as `UNDERCROFT_INDEX_CA` / `_EMBED_CA` / `_LLM_CA` do on their hops.
+const CA_VAR: &str = "UNDERCROFT_ORCH_ENGINE_CA";
+
+/// An agent that obeys the project's ONE transport policy: TLS or
+/// loopback, nothing else, no override — refused at construction, before a
+/// byte moves.
+///
+/// This hop had no policy at all. `undercroft-net` exists because the rule
+/// was implemented once for the embedder and LLM clients while the remote
+/// index backends had none, and its own header says it is "the only
+/// implementation of them" — yet the control plane that fronts every
+/// request in a fleet built a bare `ureq` agent and never referenced the
+/// crate. What travels here is not incidental: the palace bearer, a minted
+/// `X-Vault-Assertion`, search bodies, and whole-corpus export/import
+/// NDJSON during a migration. `docs/MULTI_TENANCY.md` stated it as
+/// operator advice ("point the instance `url` at an HTTPS reverse proxy"),
+/// which made the no-override rule advisory on exactly one surface.
+///
+/// A refusal is a `String`, like every other failure this module reports,
+/// and deliberately NOT a `ureq` transport error: nothing reached the wire,
+/// so dressing it as one would tell an operator the engine was unreachable
+/// when the truth is that this process declined to speak to it in clear.
+fn agent(base: &str) -> Result<ureq::Agent, String> {
+    let ca = std::env::var(CA_VAR).ok();
+    undercroft_net::agent(
+        "the engine",
+        base,
+        ca.as_deref(),
+        std::time::Duration::from_secs(600),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Send `method` + `body` to `{url}/v1/vaults/{vault}/{subpath}` (or the
@@ -69,7 +98,7 @@ pub fn vault_request(
     } else {
         format!("{path}?{}", query.split('#').next().unwrap_or(""))
     };
-    let req = agent()
+    let req = agent(&creds.url)?
         .request(method, &path)
         .set("Authorization", &format!("Bearer {}", &*creds.bearer))
         .set(
@@ -108,7 +137,7 @@ pub fn vault_request(
 pub fn create_vault(creds: &InstanceCreds, vault: &str, level: &str) -> Result<(), String> {
     let body = serde_json::json!({ "id": vault, "level": level }).to_string();
     let path = format!("{}/v1/vaults", creds.url);
-    let result = agent()
+    let result = agent(&creds.url)?
         .post(&path)
         .set("Authorization", &format!("Bearer {}", &*creds.bearer))
         .set(
@@ -214,8 +243,9 @@ pub fn import_vault(
 
 /// Probe an instance's unauthenticated `/healthz`.
 pub fn health(url: &str) -> bool {
-    agent()
-        .get(&format!("{url}/healthz"))
+    // A refused transport is not a healthy instance.
+    let Ok(a) = agent(url) else { return false };
+    a.get(&format!("{url}/healthz"))
         .call()
         .map(|r| r.status() == 200)
         .unwrap_or(false)

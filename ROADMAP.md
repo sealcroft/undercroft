@@ -12,9 +12,35 @@ Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
 
 **Status 2026-08-09: O2, O3 and O4 are CLOSED, each with an executed gate
-(below). O5 stands as a decision. What remains open is O1's second half and
-O6 — both are clicks in the GitHub web UI that no REST endpoint exposes, so
-no amount of engineering closes them from here.**
+(below). O5 is RE-OPENED — its blocker turned out not to apply. What remains
+open is O1's second half and O6 — both are clicks in the GitHub web UI that
+no REST endpoint exposes, so no amount of engineering closes them from here.**
+
+**D1–D8 — the pre-merge drift audit, CLOSED 2026-08-09.** The
+seven-dimension audit this file's own conventions require before a release
+was run before merging the above, and did not come back clean. Eight drifts,
+every one re-verified against the code before it counted, none caused by the
+O-work and all reachable on `main`: an unaudited whole-corpus `index push`
+egress; a fleet integrity check exiting 0 on a tampered vault; a trust floor
+governing one content read of three; an orchestrator→engine hop with no
+transport policy; `refine`'s mirror on the bare `upsert`; `PalaceStats` and
+`DedupReport` hand-projected with no inventory entry; `serve-mcp` with no
+read-only posture; a non-constant-time bearer comparison. Each is described
+with its evidence and its gate in CHANGELOG under "the drift audit that gated
+the merge".
+
+**Still open from the docs-vs-code dimension** (found, verified in part, not
+yet fixed — recorded here rather than left in a transcript): `undercroft-net`
+is absent from `README.md`'s crate map and from `docs/architecture.md`; ~23
+`ROADMAP <id>` citations across the tree (A10, C8, C14, R5, U12 …) resolve to
+no heading in this file, including ones `parity.rs` and `undercroft-net`
+point a future author at; `docs/AGENTS.md` routes the observability scenario
+to a "Scenario G" that does not exist and omits `anchor` from the
+orchestrator ops vocabulary; `docs/THREAT_MODEL.md` says the bundle
+downgrade is "refused in every direction" where one direction is
+deliberately allowed; two rustdoc comments and THREAT_MODEL list `filed_at`
+as a compared mirror column when `verify` deliberately excludes it; the
+1.0.0 CHANGELOG contradicts itself on suite counts.
 
 ### O1 — PARTLY CLOSED 2026-08-09: binaries shipped, the image is still private
 The `v1.0.0` release workflow completed successfully and **20 assets** are

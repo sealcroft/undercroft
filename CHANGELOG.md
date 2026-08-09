@@ -89,6 +89,79 @@ measures the observable rather than the claim.
 Battery green at the final tree. Test count 656 → 660 (four new gates); the
 battery is eight suites.
 
+### the drift audit that gated the merge, and the eight it found
+
+Before merging the above, the seven-dimension drift audit CLAUDE.md requires
+before a release was run as a read-only fan-out — config wiring, write path,
+search path, operational capabilities, error/status classes, audit-chain
+coverage, docs vs code — with every finding re-verified against the code
+before it counted. It did not come back clean. **None of the eight was caused
+by the work above; all were reachable on `main`.**
+
+- **`index push` was a whole-corpus egress with no audit record at all.** It
+  ships every drawer's at-rest content to a third party — and on an hmac-only
+  vault that content *is* the plaintext, by the function's own comment —
+  while `docs/THREAT_MODEL.md` says the egress record is "not behind a
+  declaration" and this file said exports are audited "unconditionally, on
+  every surface". Both were false: the largest content egress in the tree left
+  only an `index_pushed_embedder` row in `meta`. It could not have recorded
+  one either, because it took `&self`. Now chain-recorded under
+  `egress/index-push` from **inside** the function, binding backend,
+  collection, count, embedding space and whether the payload was plaintext.
+- **A fleet-wide integrity check reported success on a tampered vault.**
+  `undercroft-orchestrator ops <tenant> verify` keyed its exit code on the
+  HTTP status, and verify answers **200** — the verdict rides in the body as
+  `"ok": false`. So a scripted nightly check over a broken chain printed
+  `"ok":false` and exited 0. That binary had no exit-code doctrine at all.
+  It now exits 2 on an integrity verdict, recognising both shapes: the
+  `"ok": false` body, and a new machine-readable `"class": "integrity"` the
+  engine attaches to that error family — because 409 is *also* how a
+  co-resident refusal and a wrong read-only posture answer, and those must
+  not page anyone.
+- **A declared `UNDERCROFT_TRUST_FLOOR` governed one content read of three.**
+  `search` passed the resolved trust clause; `recent` and `list_drawers`
+  passed `None` — and `recent` is what `wake_up` and the closet index call,
+  i.e. the bulk context load an agent starts a session with. Exactly the
+  asymmetry the quarantine fence had already been widened to close, on the
+  other exclusion the same resolver produces. All three now share one
+  `TrustClause::sql` for the accelerator and decide off the HMAC-covered
+  meta; naming a wing still bypasses the vault floor, as it does for search.
+- **The orchestrator→engine hop had no transport policy.** `undercroft-net`
+  exists because "TLS or loopback, nothing else, no override" was implemented
+  once and missed elsewhere, and its header calls itself the only
+  implementation — yet the control plane that fronts every request in a fleet
+  built a bare agent and never referenced the crate, while carrying the
+  palace bearer, a minted assertion, and whole-corpus NDJSON during a
+  migration. Now policy-constructed, with `UNDERCROFT_ORCH_ENGINE_CA` to pin
+  a self-signed root (**78** engine variables, was 77).
+- **`refine`'s fact mirror was the last save arm on the bare `upsert`**, which
+  returns "was the id new" and throws the landing away — so both surfaces
+  printed "mirrored into room 'facts'" over drawers that were in quarantine.
+  Reachable with entirely clean content, since the rate screen and the
+  advisor never see the graph's own object-string screen. `RefineReport`
+  carries `quarantined` now, and both surfaces say so.
+- **`PalaceStats` was hand-projected on two surfaces with no inventory
+  entry** — the struct this file names as the *first* one that drift bit, and
+  the one struct missing from the list written after it. The CLI was silently
+  omitting `chain_head` and `read_only`. `DedupReport` was the same story with
+  `dates_kept`, "the difference between collapsing text and losing history"
+  by its own doc comment. Both added to `HAND_PROJECTED`.
+- **`serve-mcp` had no `--read-only`**, while `docs/AGENTS.md` said write
+  tools are refused on a read-only server without qualifying the transport.
+  The posture now reaches the open, so a read-only stdio server also declines
+  the embedder migration and the per-search read-audit record.
+- **The `/mcp` bearer was compared with `==`**, short-circuiting on the first
+  differing byte, while both neighbouring secret comparisons in the fleet use
+  constant time. Now `ct_eq`, scheme checked separately.
+
+Also corrected from the same audit: `SECURITY.md` enumerated 5 of the 10
+operator-only capabilities to reporters deciding whether a finding was in
+scope (`export` — "could exfiltrate a palace in one tool call" — among the
+missing); three of the four commands in the incident runbook did not parse,
+and it told a responder to localize by a `vault` label no series emits, which
+is the same belief that produced the fleet-wide inhibition defect; the
+landing page's test count and a label-vs-value confusion in two places.
+
 ## 1.0.0
 
 First release under the name Undercroft, published by Sealcroft. The version

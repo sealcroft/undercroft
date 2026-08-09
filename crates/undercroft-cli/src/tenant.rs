@@ -184,6 +184,15 @@ enum Body {
 struct RestError {
     code: u16,
     message: String,
+    /// A machine-readable class for the errors whose STATUS is ambiguous.
+    ///
+    /// Only `"integrity"` today, and only for the family the CLI exits 2
+    /// on: an HMAC that does not verify, an attestation that does not
+    /// describe this vault, a tampered or unparseable manifest, a manifest
+    /// whose database is absent. All of those answer 409 — and so does a
+    /// co-resident refusal and a wrong read-only posture, which are not
+    /// integrity verdicts and must not page anyone.
+    class: Option<&'static str>,
 }
 
 impl RestError {
@@ -191,6 +200,16 @@ impl RestError {
         Self {
             code,
             message: message.into(),
+            class: None,
+        }
+    }
+
+    /// Mark this error as an integrity verdict — the class a scripted
+    /// operator exits 2 on.
+    fn integrity(self) -> Self {
+        Self {
+            class: Some("integrity"),
+            ..self
         }
     }
 }
@@ -284,12 +303,21 @@ impl Tenancy {
         match reply {
             Ok((code, Body::Json(v))) => respond(req, code, &v.to_string(), "application/json"),
             Ok((code, Body::Ndjson(s))) => respond(req, code, &s, "application/x-ndjson"),
-            Err(e) => respond(
-                req,
-                e.code,
-                &json!({ "error": e.message }).to_string(),
-                "application/json",
-            ),
+            Err(e) => {
+                // `class` is additive and present only for the integrity
+                // family. Status alone cannot carry it: 409 is also how a
+                // co-resident refusal and a wrong read-only posture answer,
+                // so a client keying alerting on the status cannot tell
+                // "the vault contradicts itself" from "that request was
+                // not allowed here". The engine's own CLI has always made
+                // this distinction (exit 2 vs 1); every other `/v1` client
+                // had to guess from the message text.
+                let payload = match e.class {
+                    Some(c) => json!({ "error": e.message, "class": c }),
+                    None => json!({ "error": e.message }),
+                };
+                respond(req, e.code, &payload.to_string(), "application/json")
+            }
         }
     }
 
@@ -1677,6 +1705,11 @@ impl Tenancy {
                 // the second is what lets the graph answer across notes.
                 "stated": rep.stated,
                 "background": rep.facts.saturating_sub(rep.stated),
+                // Mirrors the admission screen diverted. `fact_room` below
+                // says where the mirrors went; without this the answer
+                // claims a location for drawers that are in the reserved
+                // review wing instead, unretrievable by any search.
+                "quarantined": rep.quarantined,
                 "fact_room": fact_room,
                 "model": llm.model(),
             })),
@@ -1879,6 +1912,10 @@ impl Tenancy {
         // and the typed KG/tunnel records make those two different numbers.
         let at = |n: usize, e: RestError| RestError {
             code: e.code,
+            // The class travels with the error: an import that fails on a
+            // tampered record is still an integrity verdict, and adding the
+            // record's position must not launder it into a plain refusal.
+            class: e.class,
             message: format!(
                 "record {} ({}): {}",
                 n + 1,
@@ -2393,7 +2430,22 @@ fn store_err(e: StoreError) -> RestError {
         StoreError::NotFound(_) => 404,
         _ => 500,
     };
-    RestError::new(code, e.to_string())
+    // The integrity family, named for machines. This is the SAME set the
+    // engine's own CLI exits 2 on (`integrity_verdict` in main.rs) — kept
+    // deliberately identical, including the exclusion of
+    // `ReadOnlyUnmigrated`, which is an intact vault and a wrong posture
+    // rather than a verdict about stored evidence.
+    let err = RestError::new(code, e.to_string());
+    match &e {
+        StoreError::Integrity(_)
+        | StoreError::Attestation(_)
+        | StoreError::DatabaseMissing { .. }
+        | StoreError::Vault(
+            undercroft_vault::VaultError::ManifestTampered
+            | undercroft_vault::VaultError::CorruptManifest(_),
+        ) => err.integrity(),
+        _ => err,
+    }
 }
 
 /// How a failing import record is NAMED in an error.

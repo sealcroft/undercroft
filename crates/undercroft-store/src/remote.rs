@@ -58,8 +58,20 @@ impl PalaceStore {
 
     /// Push every drawer to a remote index (sealed content + embeddings).
     /// Returns the number of records uploaded.
+    ///
+    /// **Chain-audited, like every other egress.** This moves the whole
+    /// corpus out of the vault to a third party — and on an hmac-only
+    /// vault the pushed blob IS the plaintext, as the comment below has
+    /// always said — while `docs/THREAT_MODEL.md` states that the egress
+    /// record is "not behind a declaration" and the CHANGELOG says exports
+    /// are audited "unconditionally, on every surface". Both were false
+    /// here: this was the largest content egress in the tree and it left no
+    /// chain record at all, only an `index_pushed_embedder` row in `meta`.
+    /// The audit happens INSIDE this function rather than at the call site,
+    /// so a second caller cannot forget it — the same reason the admission
+    /// screen lives at the write choke point.
     pub fn index_push(
-        &self,
+        &mut self,
         index: &mut dyn VectorIndex,
         plaintext: PlaintextPush,
     ) -> Result<u64, StoreError> {
@@ -92,6 +104,9 @@ impl PalaceStore {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
             .collect::<Result<_, _>>()?;
+        // The rows are materialised, so release the connection borrow: the
+        // egress record at the end of this function needs `&mut self`.
+        drop(stmt);
         let b64 = base64::engine::general_purpose::STANDARD;
         let mut batch = Vec::with_capacity(64);
         let mut pushed = 0u64;
@@ -121,7 +136,51 @@ impl PalaceStore {
             pushed += batch.len() as u64;
         }
         self.record_pushed_embedder()?;
+        // The egress record, after the bytes have actually left. Recording
+        // it first would claim an egress a failed upload never performed;
+        // recording it here means a crash mid-push under-reports rather
+        // than over-reports, which is the honest direction for a count that
+        // says "this much left the vault".
+        let backend = index.name().to_string();
+        self.audit_index_push(&backend, &collection, pushed, plaintext)?;
         Ok(pushed)
+    }
+
+    /// Chain-record one index push under `egress/index-push`.
+    ///
+    /// A sibling of [`audit_export`](PalaceStore::audit_export) rather than
+    /// the same record type: a reader has to be able to tell a
+    /// recipient-encrypted bundle handed to a named identity from a mirror
+    /// of the whole corpus handed to an untrusted accelerator. The
+    /// canonical binds who received it (backend + collection), how many
+    /// records, which embedding space they were built in, and — the field
+    /// that matters most on this path — whether the pushed content was
+    /// **plaintext**, which is the case an hmac-only vault produces.
+    fn audit_index_push(
+        &mut self,
+        backend: &str,
+        collection: &str,
+        pushed: u64,
+        plaintext: PlaintextPush,
+    ) -> Result<(), StoreError> {
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 now");
+        let content = match plaintext {
+            PlaintextPush::Allow => "plaintext",
+            PlaintextPush::Refuse => "sealed",
+        };
+        let canonical = format!(
+            "egress\u{1f}index-push\u{1f}{backend}\u{1f}{collection}\u{1f}{pushed}\u{1f}{}\u{1f}{content}\u{1f}{now}",
+            self.embedder.model_name(),
+        );
+        let tag = self.vault.tag(canonical.as_bytes());
+        let tx = self.conn.transaction()?;
+        let (head, writes) =
+            crate::chain_append(&tx, &self.vault, "egress/index-push", &tag, &now)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        Ok(())
     }
 
     /// Remember which embedding space the mirror was built in.
@@ -399,6 +458,55 @@ mod tests {
 
     fn drawer(wing: &str, content: &str, idx: u32) -> Drawer {
         Drawer::new(wing, "r", content.into(), Some("s.md".into()), idx, "test")
+    }
+
+    /// **An index push is an EGRESS, and every egress is chain-recorded.**
+    ///
+    /// This moves the whole corpus to a third party — and on an hmac-only
+    /// vault the pushed blob is the plaintext — while `docs/THREAT_MODEL.md`
+    /// states the egress record is "not behind a declaration" and the
+    /// CHANGELOG says exports are audited "unconditionally, on every
+    /// surface". Both were false here: the largest content egress in the
+    /// tree left no chain record at all, only an `index_pushed_embedder`
+    /// row in `meta`. `index_push` took `&self`, so it could not have
+    /// recorded one even if someone had remembered to.
+    ///
+    /// Asserted three ways, because "a record exists" is the weakest of
+    /// them: the record must be its OWN kind (an operator has to be able to
+    /// tell a recipient-encrypted bundle from a corpus mirror), the chain
+    /// must actually advance, and the whole chain must still verify — a
+    /// record appended outside the chain arithmetic would pass the first
+    /// two.
+    #[test]
+    fn an_index_push_records_its_egress_on_the_chain() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("notes", "the kelp harvest quota", 0))
+            .unwrap();
+        s.upsert(&drawer("notes", "the second consignment note", 1))
+            .unwrap();
+
+        let (head_before, writes_before) = s.chain_state().unwrap();
+        let mut index = EchoIndex::default();
+        let pushed = s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        assert_eq!(pushed, 2, "premise: the push actually moved both drawers");
+
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit WHERE record_id = 'egress/index-push'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "one push, one egress record of its own kind");
+
+        let (head_after, writes_after) = s.chain_state().unwrap();
+        assert_ne!(head_before, head_after, "the chain head must advance");
+        assert_eq!(writes_before + 1, writes_after);
+        assert!(
+            s.verify().unwrap().ok(),
+            "the appended record must be inside the chain arithmetic, not beside it"
+        );
     }
 
     /// C8: `sealed_b64` said "Never plaintext" and nothing checked the

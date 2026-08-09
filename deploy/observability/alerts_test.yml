@@ -58,7 +58,7 @@ tests:
   # second, independent way to break this rule while the config stays valid.
   - interval: 1m
     input_series:
-      - series: 'undercroft_drawer_writes_total{job="undercroft",instance="undercroft:8765",service="undercroft",outcome="created",quarantined="false"}'
+      - series: 'undercroft_drawer_writes_total{job="undercroft",instance="undercroft:8765",service="undercroft",outcome="created"}'
         values: "0+1x20"
       - series: 'undercroft_chain_commits_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
         values: "5+0x20"
@@ -165,7 +165,7 @@ tests:
     input_series:
       - series: 'up{job="undercroft",instance="undercroft:8765",service="undercroft"}'
         values: "1+0x20"
-      - series: 'undercroft_drawer_writes_total{job="undercroft",instance="undercroft:8765",service="undercroft",outcome="created",quarantined="false"}'
+      - series: 'undercroft_drawer_writes_total{job="undercroft",instance="undercroft:8765",service="undercroft",outcome="created"}'
         values: "0+1x20"
       - series: 'undercroft_chain_commits_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
         values: "0+1x20"

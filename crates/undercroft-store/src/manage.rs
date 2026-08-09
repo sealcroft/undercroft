@@ -157,6 +157,39 @@ impl TrustClause {
             TrustClause::Allow(w) => w.iter().any(|x| x == wing),
         }
     }
+
+    /// This clause as a SQL fragment over the `wing` column, pushing its
+    /// binds onto `binds` and answering `None` when it narrows nothing.
+    ///
+    /// **One implementation for every read that narrows by trust** —
+    /// `search`'s exact-scan arm, `recent`, and `list_drawers`. It was
+    /// hand-written inside `search` and nowhere else, which is precisely
+    /// how a declared `UNDERCROFT_TRUST_FLOOR` came to be enforced on one
+    /// content read out of three: there was nothing to reuse, so the other
+    /// two silently passed `None`.
+    ///
+    /// The SQL is the ACCELERATOR, never the boundary — it reads the clear
+    /// mirror column, so it keeps an excluded wing out of the candidate
+    /// pool (and out of the LIMIT) while `verified_meta_admits` decides,
+    /// off the HMAC-covered copy.
+    pub(crate) fn sql(&self, binds: &mut Vec<String>) -> Option<String> {
+        let (op, wings) = match self {
+            TrustClause::Exclude(w) => ("NOT IN", w),
+            TrustClause::Allow(w) => ("IN", w),
+        };
+        if wings.is_empty() {
+            // Allow-nothing: no wing qualifies, so this is an honest empty
+            // rather than an absent filter. An empty Exclude narrows
+            // nothing and must not emit a clause.
+            return matches!(self, TrustClause::Allow(_)).then(|| "1 = 0".to_string());
+        }
+        let mut marks = Vec::with_capacity(wings.len());
+        for w in wings {
+            binds.push(w.clone());
+            marks.push(format!("?{}", binds.len()));
+        }
+        Some(format!("wing {op} ({})", marks.join(",")))
+    }
 }
 
 /// Columns added to `drawers` after its first shipped shape, as
@@ -477,6 +510,15 @@ impl PalaceStore {
             binds.push(r.to_string());
             clauses.push(format!("room = ?{}", binds.len()));
         }
+        // The vault trust floor, on the same terms as `recent` and `search`.
+        // This read passed `None` and so ignored a declared floor entirely
+        // — the accelerator matters here as well as the boundary, because
+        // the LIMIT/OFFSET is applied by SQL and post-filtering alone would
+        // silently short-page.
+        let trust = self.read_trust_clause(wing)?;
+        if let Some(c) = trust.as_ref().and_then(|t| t.sql(&mut binds)) {
+            clauses.push(c);
+        }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
@@ -492,11 +534,11 @@ impl PalaceStore {
         for (id, meta_json, content_rest, tag) in rows {
             let drawer = self.verify_and_decode(&id, &meta_json, &content_rest, &tag)?;
             // A28: the SQL clause above filters on the CLEAR `wing` mirror,
-            // and the reserved-wing exclusion is an EXCLUSION — so a forged
-            // mirror slips past it rather than being hidden by it. Decided
-            // here, off the HMAC-covered copy. See
-            // `PalaceStore::verified_meta_admits`.
-            if !PalaceStore::verified_meta_admits(&drawer.meta, wing, None) {
+            // and both the reserved-wing rule and the trust floor are
+            // EXCLUSIONS — so a forged mirror slips past them rather than
+            // being hidden by them. Decided here, off the HMAC-covered
+            // copy. See `PalaceStore::verified_meta_admits`.
+            if !PalaceStore::verified_meta_admits(&drawer.meta, wing, trust.as_ref()) {
                 continue;
             }
             out.push(DrawerSummary {

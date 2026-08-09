@@ -69,7 +69,7 @@ Exposed series (all `undercroft_*`):
   query's candidates — the honest cost metric for anything fan-out
   shaped; a count, never a wing name),
   `drawer_writes_total{outcome}` (`created` / `deduped` / `quarantined` —
-  the third label since 1.0.0, because a diverted write was counted as
+  a third VALUE on its one `outcome` label since 1.0.0, because a diverted write was counted as
   `created` on every write arm, which is a durable signal that is *wrong*
   rather than merely missing; the counter and the live frame are now
   emitted from one function so they cannot be classified differently),

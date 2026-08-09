@@ -3858,10 +3858,33 @@ impl PalaceStore {
         })
     }
 
+    /// The vault-level trust floor as a clause, for the content reads that
+    /// carry no [`SearchOptions`] to declare one.
+    ///
+    /// Same rule [`resolve_search_policy`](Self::resolve_search_policy)
+    /// applies: **naming a wing is self-scoping and bypasses the VAULT
+    /// floor**, so a reviewer or operator who asks for a specific wing
+    /// still sees it. There is no per-request `min_trust` on these reads,
+    /// so the vault floor is the only input.
+    pub(crate) fn read_trust_clause(
+        &self,
+        wing: Option<&str>,
+    ) -> Result<Option<crate::manage::TrustClause>, StoreError> {
+        if wing.is_some() {
+            return Ok(None);
+        }
+        match self.trust_floor.as_deref() {
+            Some(f) => self.trust_clause(f),
+            None => Ok(None),
+        }
+    }
+
     /// Most recently filed drawers (optionally scoped to a wing) — the
     /// palace's "essential story" feed used by wake-up.
     pub fn recent(&self, wing: Option<&str>, limit: usize) -> Result<Vec<Drawer>, StoreError> {
         let mut sql = String::from("SELECT id, meta_json, content, tag FROM drawers");
+        let mut clauses: Vec<String> = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
         // Quarantine exclusion belongs on EVERY read that returns content,
         // not only on `search`. It used to live in search alone, so a
         // diverted drawer was invisible to a query and then handed to the
@@ -3869,14 +3892,25 @@ impl PalaceStore {
         // closet index — the two surfaces whose whole job is loading context
         // at session start, i.e. exactly where injected text wants to be.
         // The reviewer's own view still works: naming the wing opts in.
-        if wing.is_some() {
-            sql.push_str(" WHERE wing = ?1");
+        if let Some(w) = wing {
+            binds.push(w.to_string());
+            clauses.push(format!("wing = ?{}", binds.len()));
         } else {
-            sql.push_str(&format!(
-                " WHERE wing <> '{}'",
-                crate::admission::QUARANTINE_WING
-            ));
+            clauses.push(format!("wing <> '{}'", crate::admission::QUARANTINE_WING));
         }
+        // **And so does the trust floor.** This read passed `None` for the
+        // trust clause while `search` passed the resolved one, so a
+        // declared `UNDERCROFT_TRUST_FLOOR` was enforced on one content
+        // read of three — and the two it missed are what `wake_up` and the
+        // closet index call, i.e. the bulk context load. Exactly the
+        // asymmetry the quarantine fence had already been widened to close,
+        // on the other exclusion the same resolver produces.
+        let trust = self.read_trust_clause(wing)?;
+        if let Some(c) = trust.as_ref().and_then(|t| t.sql(&mut binds)) {
+            clauses.push(c);
+        }
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
         sql.push_str(" ORDER BY updated_at DESC, seq DESC LIMIT ");
         sql.push_str(&limit.to_string());
         let mut stmt = self.conn.prepare(&sql)?;
@@ -3888,10 +3922,9 @@ impl PalaceStore {
                 r.get::<_, Vec<u8>>(3)?,
             ))
         };
-        let rows: Vec<(String, String, Vec<u8>, Vec<u8>)> = match wing {
-            Some(w) => stmt.query_map(params![w], map)?.collect::<Result<_, _>>()?,
-            None => stmt.query_map([], map)?.collect::<Result<_, _>>()?,
-        };
+        let rows: Vec<(String, String, Vec<u8>, Vec<u8>)> = stmt
+            .query_map(rusqlite::params_from_iter(binds.iter()), map)?
+            .collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(rows.len());
         for (id, meta_json, content_rest, tag) in rows {
             self.vault
@@ -3906,8 +3939,11 @@ impl PalaceStore {
             // `wake_up` and the closet index call — the two surfaces whose
             // whole job is loading context at session start, which is exactly
             // where injected text wants to be. The SQL clause above reads the
-            // clear mirror; this decides, off the covered copy.
-            if !Self::verified_meta_admits(&drawer.meta, wing, None) {
+            // clear mirror; this decides, off the covered copy — for the
+            // trust floor as well as the quarantine wing, because a clear
+            // mirror is safe for a narrowing filter and unsafe for an
+            // exclusion.
+            if !Self::verified_meta_admits(&drawer.meta, wing, trust.as_ref()) {
                 continue;
             }
             out.push(drawer);
@@ -4361,25 +4397,11 @@ impl PalaceStore {
         }
         // The trust clause bounds the exact-scan arm the same way it
         // bounded candidate generation — the two must agree or the scan
-        // path would readmit what the scope resolution excluded.
-        if let Some(t) = &trust {
-            let (op, wings) = match t {
-                crate::manage::TrustClause::Exclude(w) => ("NOT IN", w),
-                crate::manage::TrustClause::Allow(w) => ("IN", w),
-            };
-            if wings.is_empty() {
-                if matches!(t, crate::manage::TrustClause::Allow(_)) {
-                    // Allow-nothing: no wing qualifies; an honest empty.
-                    clauses.push("1 = 0".to_string());
-                }
-            } else {
-                let mut marks = Vec::with_capacity(wings.len());
-                for w in wings {
-                    binds.push(w.clone());
-                    marks.push(format!("?{}", binds.len()));
-                }
-                clauses.push(format!("wing {op} ({})", marks.join(",")));
-            }
+        // path would readmit what the scope resolution excluded. Rendered
+        // by `TrustClause::sql`, the one implementation `recent` and
+        // `list_drawers` also use.
+        if let Some(c) = trust.as_ref().and_then(|t| t.sql(&mut binds)) {
+            clauses.push(c);
         }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
@@ -11545,6 +11567,83 @@ mod tests {
     /// assigned wings (unassigned = standard, below it); the VAULT floor
     /// is bypassed by an explicitly named wing scope, but a request's own
     /// `min_trust` never is.
+    /// **A declared trust floor governs every read that returns content,
+    /// not `search` alone.**
+    ///
+    /// `recent` and `list_drawers` passed `None` for the trust clause while
+    /// `search` passed the resolved one, so `UNDERCROFT_TRUST_FLOOR` was a
+    /// declared configuration that took effect on one read of three — and
+    /// the two it missed are what `wake_up` and the closet index call, i.e.
+    /// the bulk context load an agent starts a session with. That is the
+    /// same asymmetry the quarantine fence was widened to close, on the
+    /// other exclusion the very same resolver produces.
+    ///
+    /// Both arms matter and both fail before the fix. The self-scoping
+    /// bypass is asserted too, because a fix that simply always applied the
+    /// floor would take the reviewer's own view away and would pass a
+    /// one-armed test.
+    #[test]
+    fn the_trust_floor_governs_recent_and_list_drawers_too() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.upsert(&drawer("safe", "r", "quarterly totals in the ledger", 0))
+            .unwrap();
+        s.upsert(&drawer("risky", "r", "napkin figures, unverified", 1))
+            .unwrap();
+        s.set_wing_trust("risky", "quarantined").unwrap();
+
+        // Premise: with no floor declared, both reads see both wings. A
+        // fixture where `risky` never appears would satisfy every assertion
+        // below while measuring nothing.
+        assert!(
+            s.recent(None, 20)
+                .unwrap()
+                .iter()
+                .any(|d| d.meta.wing == "risky"),
+            "premise: an undeclared floor hides nothing from `recent`"
+        );
+        assert!(
+            s.list_drawers(None, None, 20, 0)
+                .unwrap()
+                .iter()
+                .any(|d| d.wing == "risky"),
+            "premise: an undeclared floor hides nothing from `list_drawers`"
+        );
+
+        s.set_trust_floor(Some("standard".into())).unwrap();
+
+        // `recent` — what `wake_up` and the closet index call.
+        let recent = s.recent(None, 20).unwrap();
+        assert!(
+            !recent.is_empty() && recent.iter().all(|d| d.meta.wing != "risky"),
+            "a declared floor must exclude a below-floor wing from `recent`; got {:?}",
+            recent.iter().map(|d| &d.meta.wing).collect::<Vec<_>>()
+        );
+        // `list_drawers`.
+        let listed = s.list_drawers(None, None, 20, 0).unwrap();
+        assert!(
+            !listed.is_empty() && listed.iter().all(|d| d.wing != "risky"),
+            "a declared floor must exclude a below-floor wing from `list_drawers`; got {:?}",
+            listed.iter().map(|d| &d.wing).collect::<Vec<_>>()
+        );
+
+        // Naming the wing is self-scoping and still answers on both — the
+        // reviewer's and the operator's own view, unchanged.
+        assert!(
+            s.recent(Some("risky"), 20)
+                .unwrap()
+                .iter()
+                .any(|d| d.meta.wing == "risky"),
+            "naming a wing bypasses the VAULT floor, as it does for search"
+        );
+        assert!(
+            s.list_drawers(Some("risky"), None, 20, 0)
+                .unwrap()
+                .iter()
+                .any(|d| d.wing == "risky"),
+            "naming a wing bypasses the VAULT floor, as it does for search"
+        );
+    }
+
     #[test]
     fn trust_floor_arms_and_the_self_scoping_bypass() {
         let (_d, mut s) = store(SecurityLevel::Sealed);

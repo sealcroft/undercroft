@@ -123,6 +123,36 @@ fn orch_key() -> Result<String> {
         .context("UNDERCROFT_ORCH_KEY is not set (generate one with `keygen`)")
 }
 
+/// An integrity verdict, on the fleet's scripted operator door exactly as
+/// on the engine's own CLI.
+///
+/// `docs/AGENTS.md` states the doctrine without qualification — *"Exit 2
+/// means an integrity verdict, on every command"* — and this binary had no
+/// exit-code doctrine at all: `fn main() -> Result<()>` gives 1 for
+/// everything, and `ops … verify` keyed only on the HTTP status, which is
+/// **200** when a vault fails verification (the verdict travels as
+/// `"ok": false` in the body, correctly). So a scripted fleet check over a
+/// tampered vault printed `"ok":false` and exited 0. That is engine defect
+/// A22 verbatim, one plane out.
+const EXIT_INTEGRITY: u8 = 2;
+
+/// Classify an engine reply for the scripted operator door.
+///
+/// Two shapes carry an integrity verdict and neither is the status alone:
+/// a 200 whose body says `"ok": false` (verify, supersessions), and an
+/// error whose body carries `"class": "integrity"` — which the engine
+/// emits precisely because 409 is also how a co-resident refusal and a
+/// wrong read-only posture answer, and those must not page anyone.
+fn is_integrity_verdict(status: u16, body: &[u8]) -> bool {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    if status < 400 {
+        return v.get("ok") == Some(&serde_json::Value::Bool(false));
+    }
+    v.get("class").and_then(|c| c.as_str()) == Some("integrity")
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -261,6 +291,18 @@ fn main() -> Result<()> {
             // The engine's own body, verbatim — the admin plane relays it
             // rather than re-summarising, and so does this.
             println!("{}", String::from_utf8_lossy(&r.body));
+            // An integrity verdict exits 2 BEFORE the status check, because
+            // the verdict that matters most arrives on a 200: `verify`
+            // answers `{"ok": false}` with a perfectly successful HTTP
+            // status, and this door used to exit 0 on it.
+            if is_integrity_verdict(r.status, &r.body) {
+                eprintln!(
+                    "INTEGRITY VERDICT from vault '{}' — this is not a failed run to retry. \
+                     Follow the tamper runbook.",
+                    tenant.vault
+                );
+                std::process::exit(EXIT_INTEGRITY.into());
+            }
             if r.status >= 400 {
                 bail!("engine answered {}", r.status);
             }
@@ -277,5 +319,56 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A fleet-wide integrity check must not report success on a
+    /// tampered vault.**
+    ///
+    /// `ops <tenant> verify` keyed its exit code on `r.status >= 400`
+    /// alone, and the engine answers verify with **200** — the verdict
+    /// rides in the body as `"ok": false`, which is correct for HTTP and
+    /// fatal for a scripted operator. So a nightly fleet check over a
+    /// broken chain printed `"ok":false` and exited 0.
+    ///
+    /// Both shapes are asserted, and so are the near misses, because the
+    /// obvious over-fix — treating every 409 as an integrity verdict —
+    /// would page someone for a co-resident refusal or a wrong read-only
+    /// posture, which are ordinary refusals on the same status.
+    #[test]
+    fn an_integrity_verdict_is_recognised_on_a_200_and_on_a_classed_error() {
+        // The case that exited 0: a successful HTTP status carrying a
+        // failed verdict.
+        assert!(is_integrity_verdict(200, br#"{"ok":false,"drawers":12}"#));
+        // The engine's classed error, which status alone cannot express.
+        assert!(is_integrity_verdict(
+            409,
+            br#"{"error":"integrity failure on drawer x","class":"integrity"}"#
+        ));
+
+        // A clean verify is not a verdict.
+        assert!(!is_integrity_verdict(200, br#"{"ok":true,"drawers":12}"#));
+        // A 409 that is NOT an integrity verdict — a co-resident refusal,
+        // a wrong read-only posture. These must stay exit 1.
+        assert!(!is_integrity_verdict(
+            409,
+            br#"{"error":"vault is served over /mcp by this process"}"#
+        ));
+        assert!(!is_integrity_verdict(
+            409,
+            br#"{"error":"schema needs migration","class":"posture"}"#
+        ));
+        // An unrelated failure, and a body that is not JSON at all: the
+        // classifier must not manufacture a verdict from either.
+        assert!(!is_integrity_verdict(404, br#"{"error":"no such vault"}"#));
+        assert!(!is_integrity_verdict(500, b"internal error"));
+        assert!(!is_integrity_verdict(200, b""));
+        // `ok` on an ERROR body is not the verdict channel — only the
+        // class is, or a 200 could be contradicted by its own status.
+        assert!(!is_integrity_verdict(400, br#"{"ok":false}"#));
     }
 }

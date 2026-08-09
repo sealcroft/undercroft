@@ -306,6 +306,15 @@ enum Command {
     ServeMcp {
         #[arg(long, default_value = "default")]
         vault: String,
+        /// Refuse every write tool, and open the vault read-only.
+        ///
+        /// `serve-http` has had this since it existed; stdio did not, and
+        /// the docs said "write tools are refused when the server runs
+        /// `--read-only`" without qualifying which transport. The posture
+        /// is not only about tool refusal: a read-write open also runs the
+        /// embedder migration and appends a read-audit record per search.
+        #[arg(long)]
+        read_only: bool,
     },
     /// Serve MCP + the multi-tenant REST surface over HTTP. Requires
     /// UNDERCROFT_MCP_HTTP_TOKEN for any non-loopback bind; set
@@ -2290,12 +2299,24 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::ServeMcp { vault } => {
-            let store = open_store(&cli, vault)?;
+        Command::ServeMcp { vault, read_only } => {
+            // The posture is STATED, exactly as `serve-http` states it — and
+            // it reaches the open, not only the tool gate, so a read-only
+            // stdio server does not migrate the embedder or append a
+            // read-audit record per search.
+            let store = open_store_as(
+                &cli,
+                vault,
+                if *read_only {
+                    Posture::ReadOnly
+                } else {
+                    Posture::ReadWrite
+                },
+            )?;
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            mcp::serve(store)?;
+            mcp::serve(store, *read_only)?;
         }
         Command::ServeHttp {
             host,
@@ -2985,6 +3006,18 @@ fn run(cli: Cli) -> Result<()> {
                     "  {} dated from the text · {} duplicate(s), {} skipped, {} failed",
                     rep.dated_from_text, rep.duplicates, rep.skipped, rep.failed
                 );
+                // The line above claims the mirrors are in `fact_room`. When
+                // the screen diverted some, they are not — the fact is in the
+                // graph, the mirror is not retrievable, and saying nothing
+                // makes the previous line false.
+                if rep.quarantined > 0 {
+                    println!(
+                        "  {} of these mirrors tripped the admission screen and are NOT \
+                         retrievable in '{}' — the facts are in the graph, the drawers are \
+                         in review. See `undercroft admission list`.",
+                        rep.quarantined, fact_room
+                    );
+                }
             }
         }
         Command::Hallways { wing, top, vault } => {
@@ -3014,7 +3047,19 @@ fn run(cli: Cli) -> Result<()> {
                 st.kg.triples, st.kg.active
             );
             println!("writes:  {}", st.writes);
+            // The committed audit-chain head. `/v1` and MCP have always
+            // carried it and the CLI silently did not — the hand-projection
+            // drift, on the struct CLAUDE.md names as the first one it bit.
+            // It is what an operator compares against a receipt or a
+            // colleague's copy, so a surface that omits it is the surface
+            // that cannot answer "are we looking at the same chain?".
+            println!("chain:   {}", st.chain_head);
             println!("db size: {} bytes", st.db_bytes);
+            // The posture this handle was opened under. Silence here read as
+            // "writable" on a replica.
+            if st.read_only {
+                println!("posture: read-only");
+            }
             // Trained index artifacts, but only the ones that exist: a
             // generation of 0 means this vault never trained that codebook,
             // and listing five zeroes on every default vault would bury the
@@ -3065,6 +3110,17 @@ fn run(cli: Cli) -> Result<()> {
                     "found (use --apply to remove)"
                 }
             );
+            // `dates_kept` is, in its own doc comment, "the difference
+            // between collapsing text and losing history" — the survivor
+            // absorbs the duplicates' occurrence dates before they are
+            // deleted. MCP has always shown it (it serializes the report
+            // whole) and the CLI silently did not.
+            if report.dates_kept > 0 {
+                println!(
+                    "{} occurrence date(s) absorbed into the surviving drawer(s)",
+                    report.dates_kept
+                );
+            }
         }
         Command::Repair { vault, tokens } => {
             let mut store = open_store(&cli, vault)?;
@@ -3160,7 +3216,11 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Index { action, vault } => {
-            let store = open_store(&cli, vault)?;
+            // Mutable because `index_push` now chain-records its own egress
+            // — a whole-corpus mirror to a third party is exactly the event
+            // an audit trail is for, and it was the one export path leaving
+            // no record.
+            let mut store = open_store(&cli, vault)?;
             match action {
                 IndexAction::Push {
                     backend,

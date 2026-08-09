@@ -92,9 +92,16 @@ In scope (examples, not a limit):
   the id the caller aimed at while the content sits in quarantine.
 - Reading, editing, or destroying **quarantine-pending** content through
   any surface but the operator's own (`admission` on the CLI and `/v1`)
-  — MCP in particular must refuse it — or reaching an operator-only
-  capability (admission rulings, wing-trust assignment, retention,
-  forgetting, rotation) from the agent surface.
+  — MCP in particular must refuse it — or reaching an **operator-only**
+  capability from the agent surface. The full list is `OPERATOR_ONLY` in
+  `crates/undercroft-cli/src/parity.rs`, enforced by a test rather than by
+  this paragraph: admission rulings, wing-trust assignment, retention,
+  attested forgetting, key rotation, knowledge-graph authority promotion,
+  manifest-anchor tightening, **export**, **import**, and `refine`. The
+  last three were missing here, and `export` is the one the inventory
+  justifies with "an agent that could call it could exfiltrate a palace in
+  one tool call" — so a reporter reading this list to decide whether a
+  finding was in scope was reading a shorter list than the code enforces.
 - A `--read-only` server or store changing state: any request that
   writes, any write on a read path — including a search that builds or
   retrains a missing prefilter index — and any write at **open**. Schema

@@ -154,6 +154,17 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "\"undercroft_verify\" =>",
     ),
     ("lib.rs", "VerifyReport", "tenant.rs", "fn verify(&mut self"),
+    // `PalaceStats` is the struct CLAUDE.md names as the FIRST one this
+    // class of drift bit, and it was the one struct missing from this list
+    // — so the gate written after it went straight past it. Added with two
+    // live omissions on the CLI (`chain_head`, `read_only`), which is what
+    // an inventory nobody counts against looks like from the inside.
+    ("manage.rs", "PalaceStats", "main.rs", "Command::Stats"),
+    // MCP serializes `DedupReport` whole and the CLI hand-projects it, so
+    // `dates_kept` — "the difference between collapsing text and losing
+    // history", by its own doc comment — reached one surface only. `/v1`
+    // has no dedup route at all.
+    ("manage.rs", "DedupReport", "main.rs", "Command::Dedup"),
 ];
 
 #[cfg(test)]
