@@ -13,7 +13,8 @@
 //!
 //! It exists as its own crate because it was implemented once, in
 //! `undercroft-llm`, for the embedder and the LLM client — and the remote
-//! **index** backends had no transport policy at all (ROADMAP C8). Every
+//! **index** backends had no transport policy at all (closed as ROADMAP
+//! C8 — a breadcrumb into the CHANGELOG, not a live entry). Every
 //! push carries embeddings, and an embedding is plaintext-DERIVED data:
 //! the sealed-vault invariant seals them at rest for exactly that reason,
 //! so shipping them in clear over a network is the same exposure one layer
@@ -160,6 +161,116 @@ pub fn pinned_roots_from_file(
     })
 }
 
+/// A declared CA file **already resolved** into trust roots.
+///
+/// Exists so a caller can pay the read-and-parse ONCE, at the moment it is
+/// allowed to refuse, and hand the result to every later request. A client
+/// that resolves its pin per outbound call turns a configuration error into
+/// a runtime one: the process binds its port, reports healthy, and then
+/// fails every request — which is precisely the shape
+/// `RateLimiter::from_env` was moved in front of the bind to avoid.
+///
+/// Opaque on purpose. The `rustls` types stay inside this crate so a
+/// consumer can hold a resolved pin without taking a TLS dependency of its
+/// own, and so nothing outside here can assemble a `ClientConfig` that
+/// skipped [`pinned_roots`]' refusals.
+#[derive(Clone)]
+pub struct Pin(Arc<rustls::ClientConfig>);
+
+impl std::fmt::Debug for Pin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Pin(<resolved trust roots>)")
+    }
+}
+
+/// Resolve a declared CA path into a [`Pin`], refusing here rather than later.
+pub fn resolve_pin(what: &'static str, path: &str) -> Result<Pin, NetError> {
+    pinned_roots_from_file(what, path).map(Pin)
+}
+
+/// What a DECLARED CA setting resolves to — the one place the four pins
+/// agree about what an empty value means.
+///
+/// They did not agree. `UNDERCROFT_ORCH_ENGINE_CA=""` refused explicitly,
+/// `UNDERCROFT_INDEX_CA=""` refused by accident (via `fs::read("")`), and
+/// `UNDERCROFT_EMBED_CA=""` / `UNDERCROFT_LLM_CA=""` were **silently treated
+/// as no pin** — un-pinning at exactly the moment an operator believes they
+/// pinned, which is the failure mode all four doc comments name in the same
+/// words. Three behaviours, one rule, four copies of the decision.
+///
+/// Unset is not a declaration and resolves to the public roots. An empty or
+/// whitespace-only value IS a declaration, and it names no file, so it
+/// refuses — the same verdict [`pinned_roots`] gives a file that holds no
+/// certificate.
+pub fn declared_pin(what: &'static str, declared: Option<&str>) -> Result<Option<Pin>, NetError> {
+    match declared {
+        None => Ok(None),
+        Some(p) if p.trim().is_empty() => Err(NetError::Config {
+            what,
+            reason: "a declared trust root is set to an empty value. It names no file, so it \
+                     pins nothing; unset it to use the public roots, or point it at a PEM. \
+                     There is no silent fallback"
+                .to_string(),
+        }),
+        Some(p) => resolve_pin(what, p.trim()).map(Some),
+    }
+}
+
+type PinCache = std::sync::Mutex<std::collections::HashMap<String, Result<Option<Pin>, String>>>;
+static PINS: std::sync::OnceLock<PinCache> = std::sync::OnceLock::new();
+
+/// [`declared_pin`] read from the environment and resolved **once per
+/// process**, keyed by variable name.
+///
+/// Resolving a pin per outbound call was a defect on the orchestrator hop —
+/// a bad declaration bound the port and then failed every request — and the
+/// remote-index hop had the same shape. Caching the `Result`, not just the
+/// success, is the point: a declaration that does not resolve must keep
+/// refusing identically for the life of the process, and re-reading the file
+/// per call makes the pin mutable at runtime by anything that can rewrite
+/// it, which is silent un-pinning by another name.
+///
+/// **The operational consequence, stated: rotating a pinned CA now needs a
+/// process restart.** That is the trade — a pin that reloads itself is a pin
+/// an attacker with write access to the file can replace without anyone
+/// restarting anything, and a certificate rotation is a planned event while
+/// silent un-pinning is not.
+pub fn pin_from_env(what: &'static str, var: &str) -> Result<Option<Pin>, NetError> {
+    let cache = PINS.get_or_init(Default::default);
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(cached) = map.get(var) {
+        return cached
+            .clone()
+            .map_err(|reason| NetError::Config { what, reason });
+    }
+    let resolved = declared_pin(what, std::env::var(var).ok().as_deref());
+    map.insert(
+        var.to_string(),
+        resolved
+            .as_ref()
+            .map(Clone::clone)
+            .map_err(|e| e.to_string()),
+    );
+    resolved
+}
+
+/// [`agent_pinned`] with the pin taken from `var`, resolved once per process.
+///
+/// The one constructor every hop that reads a `*_CA` variable should use.
+pub fn agent_from_env(
+    what: &'static str,
+    base: &str,
+    ca_var: &str,
+    timeout: std::time::Duration,
+) -> Result<ureq::Agent, NetError> {
+    // Transport policy FIRST: an operator with both a cleartext base and a
+    // bad pin needs to be told about the cleartext, which is the refusal
+    // that cannot be fixed by editing a file.
+    require_secure_transport(what, base)?;
+    let pin = pin_from_env(what, ca_var)?;
+    agent_pinned(what, base, pin.as_ref(), timeout)
+}
+
 /// A `ureq` agent that obeys the policy: refuses cleartext beyond loopback,
 /// and pins `ca_path` when one is declared.
 ///
@@ -170,10 +281,30 @@ pub fn agent(
     ca_path: Option<&str>,
     timeout: std::time::Duration,
 ) -> Result<ureq::Agent, NetError> {
+    // The cleartext refusal is reported BEFORE a pin failure: it is the one
+    // an operator cannot fix by editing a file, and reporting the pin first
+    // sends them to correct a certificate and then hit the real refusal.
+    require_secure_transport(what, base)?;
+    let pin = ca_path.map(|p| resolve_pin(what, p)).transpose()?;
+    agent_pinned(what, base, pin.as_ref(), timeout)
+}
+
+/// [`agent`] with the pin already resolved.
+///
+/// The two share ONE body — the cleartext refusal and the root replacement
+/// happen here and nowhere else — so a caller that pre-resolves its pin
+/// cannot end up under a different policy from one that does not. That is
+/// the whole reason this crate exists as a crate.
+pub fn agent_pinned(
+    what: &'static str,
+    base: &str,
+    pin: Option<&Pin>,
+    timeout: std::time::Duration,
+) -> Result<ureq::Agent, NetError> {
     require_secure_transport(what, base)?;
     let mut builder = ureq::AgentBuilder::new().timeout(timeout);
-    if let Some(path) = ca_path {
-        builder = builder.tls_config(pinned_roots_from_file(what, path)?);
+    if let Some(Pin(roots)) = pin {
+        builder = builder.tls_config(roots.clone());
     }
     Ok(builder.build())
 }
@@ -222,6 +353,54 @@ mod tests {
         assert!(require_secure_transport("x", "http://127.0.0.1:6333").is_ok());
         // And the userinfo spoof does not buy an exemption.
         assert!(require_secure_transport("x", "http://127.0.0.1:6333@evil.com/").is_err());
+    }
+
+    /// **One rule for what an empty declaration means, across all four
+    /// `*_CA` variables.** They had three behaviours: the orchestrator hop
+    /// refused explicitly, the index hop refused by accident (via
+    /// `fs::read("")`), and the embedder and LLM hops treated it as NO PIN —
+    /// silently un-pinning at exactly the moment an operator believes they
+    /// pinned, which is the failure mode all four doc comments name in the
+    /// same words.
+    ///
+    /// Unset is not a declaration. Empty IS one, and it names no file.
+    #[test]
+    fn an_empty_declaration_is_a_declaration_that_pins_nothing() {
+        assert!(declared_pin("x", None)
+            .expect("unset is not a refusal")
+            .is_none());
+        for empty in ["", "   ", "\t", "\n"] {
+            let err = declared_pin("x", Some(empty)).expect_err("must refuse");
+            assert!(err.to_string().contains("pins nothing"), "{err}");
+            assert!(err.to_string().contains("no silent fallback"), "{err}");
+        }
+        // A real path still resolves, and a bad one still refuses — so this
+        // is a rule about the empty case, not a blanket.
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("nope.pem");
+        assert!(declared_pin("x", Some(missing.to_str().unwrap())).is_err());
+    }
+
+    /// The cleartext refusal is reported BEFORE a pin failure. An operator
+    /// with both cannot fix the cleartext one by editing a file, so telling
+    /// them about the certificate first sends them to correct the wrong
+    /// thing and hit the real refusal afterwards.
+    #[test]
+    fn the_cleartext_refusal_is_reported_before_a_pin_failure() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let empty_pem = dir.path().join("empty.pem");
+        std::fs::write(&empty_pem, b"").unwrap();
+        let err = agent(
+            "x",
+            "http://engine.internal:8800",
+            Some(empty_pem.to_str().unwrap()),
+            std::time::Duration::from_secs(1),
+        )
+        .expect_err("both are wrong; one must be reported");
+        assert!(
+            matches!(err, NetError::Cleartext { .. }),
+            "the unfixable-by-file refusal comes first: {err}"
+        );
     }
 
     #[test]

@@ -195,6 +195,198 @@ else
   fail "orchestrator CLI ops refuses an unknown operation" "$OPS_ERR"
 fi
 
+echo "== Transport policy and exit-code doctrine on the control plane =="
+# All of this was unit-tested only. The definition of done asks for the
+# surface a user drives, and the surface is where the wiring lives.
+
+# A cleartext instance URL is refused AT REGISTRATION, not at first request.
+code_is  "cleartext instance refused 400" 400 -- -X POST "${ADMIN[@]}" \
+  -d '{"name":"cleartext","url":"http://engine.internal:8800","bearer":"b","assertion_secret":"s"}' \
+  "$O/admin/instances"
+body_has "and it names the fix"   'no override' -- -X POST "${ADMIN[@]}" \
+  -d '{"name":"cleartext","url":"http://engine.internal:8800","bearer":"b","assertion_secret":"s"}' \
+  "$O/admin/instances"
+body_has "refused means not registered" '"instances":[' -- "${ADMIN[@]}" "$O/admin/instances"
+if curl -s "${ADMIN[@]}" "$O/admin/instances" | grep -qF '"cleartext"'; then
+  fail "a refused registration must not appear in the list"
+else
+  ok "a refused registration must not appear in the list"
+fi
+
+# Health answers a STATE, so a local refusal is distinguishable from an
+# outage. `engine-a` was deregistered earlier in this suite, so this asks
+# `engine-b` — the one still registered. The `refused` arm cannot be
+# reached through this door at all now, because the registration check
+# above proves a cleartext instance can no longer be STORED; it is covered
+# by the unit test on `Health` instead, and that split is the point: the
+# door refuses earlier than the probe can observe.
+body_has "health carries a state"   '"state":"healthy"' -- "${ADMIN[@]}" \
+  "$O/admin/instances/engine-b/health"
+
+# A garbage CA pin refuses to START, rather than binding the port and
+# 502-ing every request afterwards.
+BADCA="$(mktemp)"; : > "$BADCA"
+if UNDERCROFT_ORCH_ENGINE_CA="$BADCA" "$ORCH" --db "$UNDERCROFT_ORCH_DB" instance-list >/dev/null 2>&1; then
+  fail "a CA pin that resolves to nothing must refuse to start"
+else
+  ok "a CA pin that resolves to nothing must refuse to start"
+fi
+PIN_ERR="$(UNDERCROFT_ORCH_ENGINE_CA="$BADCA" "$ORCH" --db "$UNDERCROFT_ORCH_DB" instance-list 2>&1)"
+if grep -qF 'pins nothing' <<<"$PIN_ERR"; then
+  ok "and it says what is wrong with the pin"
+else
+  fail "and it says what is wrong with the pin" "$PIN_ERR"
+fi
+# ...and the refusal is a run failure (exit 1), never the integrity code.
+UNDERCROFT_ORCH_ENGINE_CA="$BADCA" "$ORCH" --db "$UNDERCROFT_ORCH_DB" instance-list >/dev/null 2>&1
+if [ $? -eq 1 ]; then
+  ok "a configuration refusal exits 1, not the integrity code"
+else
+  fail "a configuration refusal exits 1, not the integrity code"
+fi
+rm -f "$BADCA"
+
+# **A usage error exits 1, not clap's default 2.** Exit 2 is reserved for an
+# integrity verdict on every command, so a typo reaching a compliance script
+# as a tamper verdict is the collision this pins.
+"$ORCH" --db "$UNDERCROFT_ORCH_DB" migrate acme >/dev/null 2>&1
+CODE=$?
+if [ "$CODE" -eq 1 ]; then
+  ok "a usage error exits 1, not the integrity code"
+else
+  fail "a usage error exits 1, not the integrity code" "exit $CODE"
+fi
+"$ORCH" --help >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+  ok "--help still exits 0"
+else
+  fail "--help still exits 0"
+fi
+
+# Removing an unregistered instance is not a success on EITHER door.
+"$ORCH" --db "$UNDERCROFT_ORCH_DB" instance-remove nosuchinstance >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+  ok "CLI: removing an unregistered instance fails"
+else
+  fail "CLI: removing an unregistered instance fails"
+fi
+code_is  "HTTP: same, 404"          404 -- -X DELETE "${ADMIN[@]}" \
+  "$O/admin/instances/nosuchinstance"
+
+echo "== Integrity doctrine: a tampered vault exits 2 on the fleet's door =="
+# **The gap that let the last regression ship.** `is_integrity_verdict` had
+# only a unit test over hand-written bodies — and a unit test fed a
+# fabricated body cannot see that the engine never emits the class. It
+# didn't: `vault_err` classed nothing, so `ops verify` over a tampered
+# vault exited 1 while the engine's own `verify` exited 2 on the same
+# bytes. Two surfaces, two doctrines, one vault.
+#
+# Both arms, because they arrive by different routes and only one of them
+# is a 4xx:
+#   1. a 200 whose body says {"ok":false} — `verify` succeeded at HTTP and
+#      is telling you the vault is bad;
+#   2. a 4xx carrying {"class":"integrity"} — the vault would not even
+#      open, which is the arm the regression lived in.
+#
+# Both vaults are tampered while the ENGINE HAS NEVER OPENED THEM. That is
+# not incidental: `store_for` caches a handle for the life of the process,
+# so editing a database the server already holds open measures SQLite's
+# page cache rather than the tamper detection. A tenant that has never been
+# routed to has no cached handle, so the next `ops` call opens it cold.
+tamper_vault_of() { # <tenant-id> -> echoes the vault DIRECTORY on its engine
+  local tid="$1" inst home
+  # The tenant list is one JSON object per tenant; splitting on `}` gives
+  # one per line, so the id and the instance that are read here are
+  # guaranteed to come from the SAME tenant. Grepping the whole document
+  # for `"instance"` would happily return a neighbour's.
+  inst="$(curl -s "${ADMIN[@]}" "$O/admin/tenants" | tr '}' '\n' \
+    | grep -F "\"id\":\"$tid\"" \
+    | sed -n 's/.*"instance":"\([a-z0-9-]*\)".*/\1/p')"
+  case "$inst" in
+    engine-a) home="$HOME_A" ;;
+    engine-b) home="$HOME_B" ;;
+    *) return 1 ;;
+  esac
+  echo "$home/vaults/tenant-$tid"
+}
+
+# Every forgery below asserts that it CHANGED THE FILE. Both of these
+# silently matched nothing on their first run — one wrong subcommand, one
+# regex that missed a space in pretty-printed JSON — and the suite then
+# reported a clean vault, which reads exactly like a broken exit code. A
+# fixture that cannot fire is indistinguishable from a defect it cannot
+# find, so it says so itself.
+forged() { # <name> <file> <before-md5>
+  local name="$1" file="$2" before="$3"
+  if [ "$(md5sum "$file" | cut -d' ' -f1)" != "$before" ]; then
+    ok "$name"
+  else
+    fail "$name" "the forgery matched nothing in $file — this test would now \
+pass for the wrong reason"
+  fi
+}
+
+# ---- arm 1: the verdict that arrives on a 200 ------------------------------
+HOT="$(curl -s -X POST "${ADMIN[@]}" -d '{"name":"tamper-row"}' "$O/admin/tenants")"
+HOT_ID="$(sed -n 's/.*"id":"\([0-9a-f]*\)".*/\1/p' <<<"$HOT")"
+HOT_DIR="$(tamper_vault_of "$HOT_ID")"
+if [ -n "$HOT_DIR" ] && [ -d "$HOT_DIR" ]; then
+  ok "tamper fixture: located the tenant vault"
+else
+  fail "tamper fixture: located the tenant vault" "got: '$HOT_DIR'"
+fi
+# Content written by a SEPARATE CLI process against the same home. The
+# server has never opened this vault, so there is no second handle and no
+# stale page cache — and the forgery below is what the HMAC must catch.
+UNDERCROFT_HOME="$(dirname "$(dirname "$HOT_DIR")")" \
+  "$BIN" remember "the turbine bearing was replaced in March" \
+  --vault "tenant-$HOT_ID" --wing w --room r >/dev/null 2>&1
+HOT_BEFORE="$(md5sum "$HOT_DIR/palace.db" | cut -d' ' -f1)"
+# Same length, so the SQLite file stays structurally valid and only the
+# record HMAC can catch it.
+perl -0777 -pi -e 's/"wing":"w"/"wing":"x"/' "$HOT_DIR/palace.db"
+forged "tamper fixture: the drawer row was forged" "$HOT_DIR/palace.db" "$HOT_BEFORE"
+OUT="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$HOT_ID" verify 2>&1)"; CODE=$?
+if [ "$CODE" -eq 2 ] && grep -q '"ok":false' <<<"$OUT"; then
+  ok "tampered vault: ops verify exits 2 on a 200 + ok:false"
+else
+  fail "tampered vault: ops verify exits 2 on a 200 + ok:false" "exit $CODE" "$OUT"
+fi
+
+# ---- arm 2: the verdict that arrives as a classed 4xx ----------------------
+COLD="$(curl -s -X POST "${ADMIN[@]}" -d '{"name":"tamper-manifest"}' "$O/admin/tenants")"
+COLD_ID="$(sed -n 's/.*"id":"\([0-9a-f]*\)".*/\1/p' <<<"$COLD")"
+COLD_DIR="$(tamper_vault_of "$COLD_ID")"
+COLD_BEFORE="$(md5sum "$COLD_DIR/vault.json" | cut -d' ' -f1)"
+# The manifest MAC covers `writes`, so moving it is an offline edit the
+# unlock must refuse. Structure-preserving, so this is ManifestTampered
+# rather than a parse failure — the sharper of the two classed verdicts.
+# The JSON is pretty-printed, hence `\s*`.
+perl -0777 -pi -e 's/"writes":\s*\d+/"writes": 4242/' "$COLD_DIR/vault.json"
+forged "tamper fixture: the manifest was forged" "$COLD_DIR/vault.json" "$COLD_BEFORE"
+BODY="$(curl -s -X POST "${ADMIN[@]}" "$O/admin/tenants/$COLD_ID/ops/verify")"
+CODE_HTTP="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${ADMIN[@]}" \
+  "$O/admin/tenants/$COLD_ID/ops/verify")"
+if [ "$CODE_HTTP" = "409" ] && grep -qF '"class":"integrity"' <<<"$BODY"; then
+  ok "tampered manifest: the engine EMITS class integrity (409)"
+else
+  fail "tampered manifest: the engine EMITS class integrity (409)" \
+    "HTTP $CODE_HTTP" "$BODY"
+fi
+OUT="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$COLD_ID" verify 2>&1)"; CODE=$?
+if [ "$CODE" -eq 2 ]; then
+  ok "tampered manifest: ops verify exits 2 on a classed 4xx"
+else
+  fail "tampered manifest: ops verify exits 2 on a classed 4xx" "exit $CODE" "$OUT"
+fi
+# The premise both arms rest on: an INTACT vault still exits 0, so this is
+# a verdict and not a door that always says 2.
+if "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify >/dev/null 2>&1; then
+  ok "an intact vault still exits 0"
+else
+  fail "an intact vault still exits 0"
+fi
+
 echo "== Data-plane quarantine fence (C15) =="
 # The fence had ZERO occurrences in this suite: the reading half of the
 # boundary OPS_ROUTES draws for the ruling half, tested only in a unit test.

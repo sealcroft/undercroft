@@ -36,6 +36,12 @@ flowchart LR
 ## Claude Code
 
 MCP server: `claude mcp add undercroft -- undercroft serve-mcp`
+
+Add `--read-only` to serve recall without write access: every write tool
+is refused, and the posture reaches the OPEN too — a read-only stdio
+server does not migrate the embedder or append a read-audit record per
+search. The gate fails closed: a tool it has not classified as a read is
+refused.
 Auto-save hooks: `undercroft hooks claude-code` prints settings; or install
 the plugin from `.claude-plugin/` (commands, hooks, skills, MCP).
 Backfill history: `undercroft mine ~/.claude/projects --mode convos`, then

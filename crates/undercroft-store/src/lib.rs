@@ -27,7 +27,7 @@ pub mod retention;
 mod rotate;
 
 pub use admission::{PendingAdmission, QUARANTINE_WING};
-pub use forget::ForgetAttestation;
+pub use forget::{ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel, UpdateOutcome};
 pub use pqidx::WING_PQ_MIN_DEFAULT;
@@ -59,19 +59,156 @@ const DEFAULT_FTS_PREFILTER_MIN: usize = 2048;
 /// `UNDERCROFT_SEMANTIC_GATE` overrides whatever the embedder says: a number in
 /// `0.0..=1.0` declares the gate, and `off` refuses semantic-only admission
 /// outright. That is for an operator who has measured their own corpus, which
-/// beats a 14-pair probe set. A value that parses as neither falls back to the
-/// embedder rather than failing the open — the fallback is the safe direction
-/// (calibration, or a refusal), and bricking a server on a typo'd env var is
-/// worse than ignoring it.
-fn resolve_semantic_gate<E: Embedder + ?Sized>(embedder: &E) -> Option<f32> {
-    match std::env::var("UNDERCROFT_SEMANTIC_GATE") {
-        Ok(v) if v.eq_ignore_ascii_case("off") => None,
-        Ok(v) => match v.parse::<f32>() {
-            Ok(g) if (0.0..=1.0).contains(&g) => Some(g),
-            _ => embedder.semantic_admission_gate(),
-        },
-        Err(_) => embedder.semantic_admission_gate(),
+/// beats a 14-pair probe set.
+///
+/// **A value that parses as neither REFUSES to open, and this comment used to
+/// say the opposite** — "the fallback is the safe direction … bricking a
+/// server on a typo'd env var is worse than ignoring it". Two things were
+/// wrong with that. The fallback is not the safe direction: a declared `off`
+/// that silently becomes the embedder's own gate re-admits semantic-only
+/// matches on a deployment that measured its corpus and decided against them,
+/// which is a retrieval-admission boundary quietly widening. And it fell back
+/// **silently** — alone in this family — which is how the second half was
+/// found: it was the only resolver here that did not `.trim()`, so an `off`
+/// carrying the trailing newline a `$(cat …)` or a YAML block scalar produces
+/// reverted the declaration with no warning at all.
+///
+/// So this file now holds ONE doctrine, the one its siblings already state: a
+/// declaration that does not parse refuses, because silently running without
+/// what was declared is the failure mode. Declining is declarable — `off` —
+/// it just has to be declared.
+fn resolve_semantic_gate<E: Embedder + ?Sized>(
+    embedder: &E,
+    declared: Option<&str>,
+) -> Result<Option<f32>, StoreError> {
+    let Some(v) = declared else {
+        return Ok(embedder.semantic_admission_gate());
+    };
+    let v = v.trim();
+    if v.is_empty() {
+        return Ok(embedder.semantic_admission_gate());
     }
+    if v.eq_ignore_ascii_case("off") {
+        return Ok(None);
+    }
+    match v.parse::<f32>() {
+        Ok(g) if (0.0..=1.0).contains(&g) => Ok(Some(g)),
+        _ => Err(StoreError::Invalid(format!(
+            "UNDERCROFT_SEMANTIC_GATE={v:?} is neither 'off' nor a number in 0.0..=1.0. A \
+             declaration that does not parse would silently restore the embedder's own gate, \
+             re-admitting semantic-only matches on a deployment that decided against them. \
+             Fix the value, or set it to 'off'"
+        ))),
+    }
+}
+
+/// Validate one declaration **through the resolver that will actually run**,
+/// without opening a vault or binding a port.
+///
+/// This is what `undercroft config check` drives. Every arm calls the same
+/// function the engine calls at start-up — never a second copy of the parse.
+/// A validator that agreed with its own reimplementation rather than with the
+/// code would be exactly the defect class this tree spends its time closing,
+/// and it would be worse than no validator: an operator would trust it.
+///
+/// `Ok(Some(what))` describes what the value resolved to, `Ok(None)` means
+/// accepted with nothing interesting to say, `Err(why)` is the refusal text
+/// the engine itself would print. Whether a refusal is FATAL is not decided
+/// here — that is the variable's `ConfigClass`, which lives in the inventory
+/// the code is counted against.
+///
+/// A variable with no arm is accepted: it is a path, a URL, a token or a
+/// model name whose only validation is the thing that consumes it, and
+/// claiming to have checked it would be a stronger statement than the truth.
+pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String> {
+    let described = |v: String| Ok(Some(v));
+    match name {
+        "UNDERCROFT_ADMISSION" => resolve_admission(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|on| {
+                described(if on {
+                    "the write-path screen is ON".into()
+                } else {
+                    "the write-path screen is off".into()
+                })
+            }),
+        "UNDERCROFT_READ_AUDIT" => resolve_read_audit(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|on| {
+                described(if on {
+                    "every search appends a chain record".into()
+                } else {
+                    "reads are not audited".into()
+                })
+            }),
+        "UNDERCROFT_TRUST_FLOOR" => resolve_trust_floor(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|f| {
+                described(match f {
+                    Some(f) => format!("wings below {f:?} are excluded from every content read"),
+                    None => "no vault floor".into(),
+                })
+            }),
+        "UNDERCROFT_SEMANTIC_GATE" => {
+            resolve_semantic_gate(&undercroft_core::embed::HashEmbedder, Some(raw))
+                .map_err(|e| e.to_string())
+                .and_then(|g| {
+                    described(match g {
+                        Some(g) => format!("semantic-only admission above {g}"),
+                        None => "semantic-only admission refused".into(),
+                    })
+                })
+        }
+        "UNDERCROFT_ADMISSION_RATE" => resolve_admission_rate(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|r| {
+                described(match r {
+                    Some((n, secs)) => format!("{n} write(s) per {secs}s per writer identity"),
+                    None => "no rate screen".into(),
+                })
+            }),
+        // The four CA pins share one resolver, and its refusal is the one
+        // that matters most here: a pin that does not load un-pins a hop.
+        "UNDERCROFT_EMBED_CA"
+        | "UNDERCROFT_LLM_CA"
+        | "UNDERCROFT_INDEX_CA"
+        | "UNDERCROFT_ORCH_ENGINE_CA" => undercroft_net::declared_pin("this hop", Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|p| {
+                described(match p {
+                    Some(_) => "resolves to trust roots that REPLACE the public ones".into(),
+                    None => "no pin".into(),
+                })
+            }),
+        _ => Ok(None),
+    }
+}
+
+/// `UNDERCROFT_ADMISSION`: `quarantine` turns the write-path screen on;
+/// unset/empty/`off` is the byte-identical default.
+///
+/// **Garbage REFUSES to open.** It used to warn once on stderr and resolve to
+/// `false` — the permissive direction on the ENABLEMENT of the exclusion the
+/// whole quarantine machinery exists to serve. A deployment that typed
+/// `UNDERCROFT_ADMISSION=quarantien` believed injected text was being
+/// diverted, and every poisoned drawer entered `search`, `recent` and
+/// `list_drawers`. Same argument as `UNDERCROFT_READ_AUDIT` and
+/// `UNDERCROFT_TRUST_FLOOR`, and a stronger case than either: this one
+/// decides whether a screen runs at all.
+fn resolve_admission(env: Option<&str>) -> Result<bool, StoreError> {
+    let Some(v) = env else { return Ok(false) };
+    let v = v.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("off") {
+        return Ok(false);
+    }
+    if v.eq_ignore_ascii_case("quarantine") {
+        return Ok(true);
+    }
+    Err(StoreError::Invalid(format!(
+        "UNDERCROFT_ADMISSION={v:?} is not 'quarantine' or 'off'. A declaration that does not \
+         parse would leave the write-path screen OFF on a deployment that believes injected \
+         text is being diverted. Fix the value, or set it to 'off'"
+    )))
 }
 
 /// Bumped whenever `search_key` changes what the FTS index holds, so an
@@ -351,24 +488,41 @@ fn resolve_semantic_floor<E: Embedder + ?Sized>(embedder: &E) -> f32 {
 }
 
 /// Pure for the same reason as [`resolve_late_top_n`]: the vault-level
-/// trust floor, validated against the closed vocabulary. Garbage warns
-/// and resolves to no floor — a typo must not silently reshape what a
-/// deployment's searches can reach.
-fn resolve_trust_floor(env: Option<&str>) -> Option<String> {
-    let v = env?.trim().to_string();
+/// trust floor, validated against the closed vocabulary.
+///
+/// **Garbage REFUSES to open**, and this line used to say the opposite —
+/// "garbage warns and resolves to no floor — a typo must not silently
+/// reshape what a deployment's searches can reach". Resolving to no floor
+/// *is* reshaping what searches can reach, in the permissive direction: a
+/// deployment that declared `UNDERCROFT_TRUST_FLOOR=trusetd` believed
+/// below-floor wings could not be retrieved and every one of them answered
+/// every query, behind one `diag_warn!` on stderr at open.
+///
+/// Its two siblings already refuse for exactly this argument — a declared
+/// `UNDERCROFT_READ_AUDIT` that will not parse refuses because "a
+/// deployment that declared read auditing believes reads leave a trail, and
+/// silently running without one is the failure mode", and
+/// `UNDERCROFT_ADMISSION_RATE` refuses on the CA-pin precedent, "not
+/// warn-and-fall-back". This is the same shape and a stronger case: read
+/// auditing is evidentiary, a trust floor is a retrieval boundary.
+///
+/// `off` and empty remain the way to say "no floor" — declining is
+/// declarable, it just has to be declared.
+fn resolve_trust_floor(env: Option<&str>) -> Result<Option<String>, StoreError> {
+    let Some(v) = env else { return Ok(None) };
+    let v = v.trim().to_string();
     if v.is_empty() || v.eq_ignore_ascii_case("off") {
-        return None;
+        return Ok(None);
     }
-    match undercroft_core::validate_trust(&v) {
-        Ok(()) => Some(v),
-        Err(_) => {
-            undercroft_obs::diag_warn!(
-                "UNDERCROFT_TRUST_FLOOR={v:?} is not in the trust vocabulary \
-                 (quarantined|standard|trusted); no floor applied"
-            );
-            None
-        }
-    }
+    undercroft_core::validate_trust(&v).map_err(|_| {
+        StoreError::Invalid(format!(
+            "UNDERCROFT_TRUST_FLOOR={v:?} is not in the trust vocabulary \
+             (quarantined|standard|trusted). A declared floor that does not parse would \
+             silently apply NO floor, so every below-floor wing would answer every query \
+             on a deployment that believes they cannot. Fix the value, or set it to 'off'"
+        ))
+    })?;
+    Ok(Some(v))
 }
 
 /// `UNDERCROFT_READ_AUDIT`: `chain` puts a record on the audit chain for
@@ -1524,6 +1678,20 @@ impl PalaceStore {
             );
         }
         self.invalidate_embedding_space()?;
+        // **This walk records itself too.** It rewrites every embedding and
+        // drops four derived tables, unattended, at an open nobody asked
+        // for — the same class as the two at-rest migrations, and it was the
+        // third of three when only two were closed. It is the WORST of the
+        // three for an auditor: it writes its completion marker even when
+        // rows were skipped (see below), so `damaged` is one stderr line and
+        // then unreconstructible. Binding it here is the only place it
+        // survives.
+        //
+        // Written before the marker, so a crash between them repeats the
+        // walk rather than losing the record.
+        let model = self.embedder.model_name().to_string();
+        let moved = (ids.len() as u64).saturating_sub(damaged);
+        self.audit_migration_standalone("embedding-space", &model, moved, damaged)?;
         // Recorded even when rows were skipped. Withholding it would make
         // every future open repeat the whole walk for damage that only
         // `repair` can clear — and on the multi-tenant server that is once
@@ -1778,12 +1946,26 @@ impl PalaceStore {
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
         store.init_manage_schema()?;
-        // AFTER `init_manage_schema`, which is what adds `supersedes_fp` —
-        // the migration reads both fingerprint columns and one of them does
-        // not exist until then (U12).
-        store.rekey_content_fingerprints()?;
         store.init_retention_schema()?;
         store.init_chain()?;
+        // **The two at-rest migrations, AFTER the chain is seeded.**
+        //
+        // Both are whole-vault mutations that run unattended at the next
+        // writable open — A10 re-tags every graph row, re-derives its ids
+        // and bulk-rewrites `audit.record_id`; U12 re-keys both stored
+        // content fingerprints and re-tags every receipt — and until now
+        // neither appended anything, which is the hole A19 closed for
+        // rotation. They record themselves now, and `chain_append` needs a
+        // seeded `chain_meta`: on a legacy vault that table does not exist
+        // until `init_chain` creates and seeds it, so running the walks
+        // before it (where both used to sit) would have failed the open of
+        // exactly the vaults the migrations exist for.
+        //
+        // Ordering constraints, both still honoured: A10 needs the kg
+        // schema, and U12 needs `supersedes_fp`, which `init_manage_schema`
+        // is what adds. `init_chain` is strictly after both.
+        store.blind_existing_kg_rows()?;
+        store.rekey_content_fingerprints()?;
         // The rate screen counts recent rows by `filed_at`; only a vault
         // that declared a rate pays for the index (created here so the
         // per-save COUNT walks an index range, never the table).
@@ -2141,7 +2323,15 @@ impl PalaceStore {
         let Some(db_head) = db_head else {
             return Ok(AnchorState::Unseeded);
         };
-        let anchor = self.vault.chain_head_hex().to_string();
+        // **The anchor is read from DISK and MAC-verified**, never from this
+        // handle's cached copy. That copy is written only by this handle's
+        // own `anchor_manifest`, so with two handles on one vault — what
+        // `serve-http` runs — this compared the database against an anchor a
+        // different handle had already moved. `chain_state` was moved off the
+        // cached manifest for exactly this reason and the tamper decision was
+        // not, which left the least security-relevant consumer reading fresh
+        // and the one that raises `ManifestTampered` reading stale.
+        let anchor = self.vault.anchored_head()?;
         if anchor == db_head {
             return Ok(AnchorState::Current);
         }
@@ -2210,7 +2400,10 @@ impl PalaceStore {
             .then(|| embedder.dimension());
         // Once, here, and never again for the life of the store: a calibrating
         // embedder pays forward passes for this (gate and map floor both).
-        let semantic_gate = resolve_semantic_gate(embedder.as_ref());
+        let semantic_gate = resolve_semantic_gate(
+            embedder.as_ref(),
+            std::env::var("UNDERCROFT_SEMANTIC_GATE").ok().as_deref(),
+        )?;
         let sem_floor = resolve_semantic_floor(embedder.as_ref());
         let store = Self {
             conn,
@@ -2228,20 +2421,11 @@ impl PalaceStore {
             ),
             trust_floor: resolve_trust_floor(
                 std::env::var("UNDERCROFT_TRUST_FLOOR").ok().as_deref(),
-            ),
+            )?,
             sem_floor,
-            admission_quarantine: match std::env::var("UNDERCROFT_ADMISSION") {
-                Ok(v) if v.eq_ignore_ascii_case("quarantine") => true,
-                Ok(v) if v.eq_ignore_ascii_case("off") || v.is_empty() => false,
-                Ok(v) => {
-                    undercroft_obs::diag_warn!(
-                        "UNDERCROFT_ADMISSION={v:?} is not 'quarantine' or 'off'; \
-                         admission stays off"
-                    );
-                    false
-                }
-                Err(_) => false,
-            },
+            admission_quarantine: resolve_admission(
+                std::env::var("UNDERCROFT_ADMISSION").ok().as_deref(),
+            )?,
             admission_advisor: None,
             admission_rate: resolve_admission_rate(
                 std::env::var("UNDERCROFT_ADMISSION_RATE").ok().as_deref(),
@@ -4859,40 +5043,35 @@ impl PalaceStore {
         trust: Option<&crate::manage::TrustClause>,
     ) -> Result<Option<std::collections::HashSet<i64>>, StoreError> {
         let mut clauses: Vec<String> = Vec::new();
-        let mut binds: Vec<&str> = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
         if let Some(w) = wing {
-            clauses.push("wing = ?".into());
-            binds.push(w);
+            binds.push(w.to_string());
+            clauses.push(format!("wing = ?{}", binds.len()));
         }
         if let Some(r) = room {
-            clauses.push("room = ?".into());
-            binds.push(r);
+            binds.push(r.to_string());
+            clauses.push(format!("room = ?{}", binds.len()));
         }
         if let Some(k) = kind {
-            clauses.push("kind = ?".into());
-            binds.push(k);
+            binds.push(k.to_string());
+            clauses.push(format!("kind = ?{}", binds.len()));
         }
-        // Trust restricts by wing SET. The wing names were validated at
-        // assignment (`validate_name`) and the rows tag-verified when the
-        // clause was resolved; they bind as parameters regardless.
-        if let Some(t) = trust {
-            let (op, wings) = match t {
-                crate::manage::TrustClause::Exclude(w) => ("NOT IN", w),
-                crate::manage::TrustClause::Allow(w) => ("IN", w),
-            };
-            if wings.is_empty() {
-                // Allow-nothing: the floor admits no wing at all. An empty
-                // IN () is a SQL syntax error, so say it directly.
-                if matches!(t, crate::manage::TrustClause::Allow(_)) {
-                    return Ok(Some(std::collections::HashSet::new()));
-                }
-            } else {
-                let marks = vec!["?"; wings.len()].join(",");
-                clauses.push(format!("wing {op} ({marks})"));
-                for w in wings {
-                    binds.push(w.as_str());
-                }
-            }
+        // **The trust clause comes from `TrustClause::sql`, not from a
+        // second copy of it.** This block used to re-derive the operator,
+        // the mark list and — the part that matters — the empty-`Allow`
+        // decision, beside a function whose own doc says "one
+        // implementation for every read that narrows by trust". The two
+        // agreed, which is the only reason it was a latent defect rather
+        // than a live one: an empty `Allow` returned an empty set here and
+        // emits `1 = 0` there, the same answer by two routes. A second
+        // implementation of a security narrowing is a second place for the
+        // alarm to be subtly wrong, and the empty-`Allow` branch is exactly
+        // the one that produced the "Palace is empty" regression.
+        //
+        // `1 = 0` needs no special case: the query returns no rows and the
+        // caller gets the empty scope it would have been handed directly.
+        if let Some(c) = trust.and_then(|t| t.sql(&mut binds)) {
+            clauses.push(c);
         }
         if clauses.is_empty() {
             return Ok(None);
@@ -5143,7 +5322,11 @@ impl PalaceStore {
         // steady state, strictly behind after a crash-before-anchor (legal),
         // and absent only when the database was rolled back or forked
         // relative to an anchor it never produced.
-        let anchor = self.vault.chain_head_hex().to_string();
+        // From disk and MAC-verified — see `reconcile_chain`. `verify` could
+        // not see a `vault.json` swapped underneath a long-lived server
+        // until a fresh open, which is the one deployment its own doctrine
+        // is written for.
+        let anchor = self.vault.anchored_head()?;
         let mut head = Vault::chain_genesis_hex();
         let mut anchor_seen = head == anchor;
         for tag in &tags {
@@ -10210,6 +10393,125 @@ mod tests {
         }
     }
 
+    /// **The declared trust floor parses or REFUSES, on the same argument.**
+    ///
+    /// It used to warn and resolve to NO floor, which is the permissive
+    /// direction: a deployment that typed `trusetd` believed its
+    /// below-floor wings were unreachable and every one of them answered
+    /// every query, behind a single stderr line at open. Read auditing
+    /// refuses because "silently running without one is the failure mode";
+    /// a retrieval boundary has a stronger claim to the same rule than an
+    /// evidentiary one.
+    ///
+    /// Declining is still declarable — `off` and empty — so the refusal
+    /// costs a deployment nothing except having to mean it.
+    #[test]
+    fn the_trust_floor_declaration_parses_or_refuses() {
+        assert_eq!(resolve_trust_floor(None).unwrap(), None);
+        assert_eq!(resolve_trust_floor(Some("off")).unwrap(), None);
+        assert_eq!(resolve_trust_floor(Some("")).unwrap(), None);
+        assert_eq!(resolve_trust_floor(Some("  ")).unwrap(), None);
+        for good in ["quarantined", "standard", "trusted"] {
+            assert_eq!(
+                resolve_trust_floor(Some(good)).unwrap().as_deref(),
+                Some(good),
+                "{good:?}"
+            );
+        }
+        // The typo class this exists for, plus the two shapes that used to
+        // read as "no floor" by accident.
+        for bad in ["trusetd", "TRUSTED", "golden", "high", "standard,trusted"] {
+            let err = resolve_trust_floor(Some(bad)).expect_err("{bad:?} must refuse");
+            assert!(
+                err.to_string().contains("trust vocabulary"),
+                "the refusal must name the vocabulary: {err}"
+            );
+        }
+    }
+
+    /// `TrustClause::sql` had no test at all, and its empty-`Allow` branch
+    /// — the one that produced the "Palace is empty over an intact corpus"
+    /// regression — was exercised by nothing.
+    ///
+    /// Driven THROUGH SQLite rather than by comparing strings: what matters
+    /// is which rows a query returns, and a string assertion agrees with the
+    /// implementation by construction. The asymmetry is the whole point —
+    /// an empty `Allow` must emit a clause that matches nothing, an empty
+    /// `Exclude` must emit no clause at all, and treating the two lists
+    /// symmetrically is wrong in one direction or the other whichever way
+    /// you do it.
+    #[test]
+    fn the_trust_clause_sql_is_correct_including_the_empty_allow() {
+        use crate::manage::TrustClause;
+
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        let keep = drawer("keep", "r", "alpha", 0);
+        let drop = drawer("drop", "r", "beta", 1);
+        s.upsert(&keep).unwrap();
+        s.upsert(&drop).unwrap();
+
+        // How many drawers a clause admits, asked of SQLite. `None` means
+        // "no clause", which is every row.
+        let count = |clause: &TrustClause| -> i64 {
+            let mut binds: Vec<String> = Vec::new();
+            let sql = match clause.sql(&mut binds) {
+                Some(w) => format!("SELECT COUNT(*) FROM drawers WHERE {w}"),
+                None => "SELECT COUNT(*) FROM drawers".to_string(),
+            };
+            s.conn
+                .query_row(&sql, rusqlite::params_from_iter(binds.iter()), |r| r.get(0))
+                .expect("the clause must be valid SQL")
+        };
+
+        // The regression's branch: nothing qualifies, so the honest answer
+        // is a clause that matches nothing — never an absent filter, and
+        // never a syntactically broken empty IN-list.
+        let empty_allow = TrustClause::Allow(vec![]);
+        assert!(!empty_allow.admits("anything"));
+        assert_eq!(count(&empty_allow), 0);
+        let mut binds = Vec::new();
+        assert_eq!(empty_allow.sql(&mut binds).as_deref(), Some("1 = 0"));
+        assert!(binds.is_empty());
+
+        // Its mirror: an empty Exclude narrows nothing, so it must emit NO
+        // clause. Symmetric handling would have made this `1 = 0` too and
+        // emptied every unfloored read.
+        let empty_exclude = TrustClause::Exclude(vec![]);
+        assert!(empty_exclude.admits("drop"));
+        assert_eq!(count(&empty_exclude), 2);
+        assert_eq!(empty_exclude.sql(&mut Vec::new()), None);
+
+        // The populated shapes, and `admits` agreeing with the SQL — the
+        // two are used as one boundary (`verified_meta_admits` decides,
+        // the clause accelerates) and disagreeing would be a fence that
+        // holds on one path and not the other.
+        let allow = TrustClause::Allow(vec!["keep".into()]);
+        assert_eq!(count(&allow), 1);
+        assert!(allow.admits("keep") && !allow.admits("drop"));
+        let exclude = TrustClause::Exclude(vec!["drop".into()]);
+        assert_eq!(count(&exclude), 1);
+        assert!(exclude.admits("keep") && !exclude.admits("drop"));
+
+        // Several wings bind several marks, in order.
+        let mut binds = Vec::new();
+        let two = TrustClause::Allow(vec!["keep".into(), "drop".into()]);
+        assert_eq!(two.sql(&mut binds).as_deref(), Some("wing IN (?1,?2)"));
+        assert_eq!(binds, vec!["keep".to_string(), "drop".to_string()]);
+        assert_eq!(count(&two), 2);
+
+        // A wing name is BOUND, never interpolated. Wing names go through
+        // `validate_name`, so this is defence in depth rather than a live
+        // hole — but the clause is built by formatting, and the day someone
+        // pushes a name into the string instead of the binds this is what
+        // notices.
+        let quoted = TrustClause::Allow(vec!["ke'ep\") OR 1=1 --".into()]);
+        assert_eq!(
+            count(&quoted),
+            0,
+            "bound, so it matches nothing and still parses"
+        );
+    }
+
     /// The declared rate screen (C3.3 tier-1 wishlist, closed): a writer
     /// identity that exceeds its declared budget diverts, identities
     /// never tax each other, trusted surfaces bypass, and clearing the
@@ -15134,25 +15436,68 @@ mod tests {
     }
 
     /// `UNDERCROFT_SEMANTIC_GATE` is for an operator who has measured their
-    /// own corpus, which beats a 14-pair probe set. Garbage falls back to the
-    /// embedder rather than failing the open: the fallback is the safe
-    /// direction, and bricking a server on a typo is worse than ignoring it.
+    /// own corpus, which beats a 14-pair probe set — and a value that parses
+    /// as neither `off` nor a number in range REFUSES to open.
+    ///
+    /// The previous version of this test asserted the opposite ("garbage
+    /// falls back to the embedder … bricking a server on a typo is worse than
+    /// ignoring it") and pinned two defects with it: the fallback is not the
+    /// safe direction (a declared `off` silently becoming the embedder's own
+    /// gate RE-ADMITS semantic-only matches on a deployment that decided
+    /// against them), and the resolver was the only one in this family that
+    /// did not `.trim()`, so `"off\n"` — what a `$(cat …)` or a YAML block
+    /// scalar produces — reverted the declaration silently.
+    ///
+    /// Pure now, like its siblings: no `set_var`, so it cannot flake the
+    /// tests running beside it.
     #[test]
     fn an_operator_can_declare_or_disable_the_gate() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("UNDERCROFT_SEMANTIC_GATE", "0.8");
-        assert_eq!(resolve_semantic_gate(&HashEmbedder), Some(0.8));
-        std::env::set_var("UNDERCROFT_SEMANTIC_GATE", "off");
-        assert_eq!(resolve_semantic_gate(&HashEmbedder), None);
-        for junk in ["banana", "1.5", "-0.2", ""] {
-            std::env::set_var("UNDERCROFT_SEMANTIC_GATE", junk);
+        let g = |v: Option<&str>| resolve_semantic_gate(&HashEmbedder, v);
+        assert_eq!(g(Some("0.8")).unwrap(), Some(0.8));
+        assert_eq!(g(Some("off")).unwrap(), None);
+        // Whitespace is trimmed on every arm — the half that was silent.
+        assert_eq!(g(Some(" off\n")).unwrap(), None);
+        assert_eq!(g(Some(" 0.8 ")).unwrap(), Some(0.8));
+        assert_eq!(g(Some("OFF")).unwrap(), None);
+        // Undeclared, or declared empty, is the embedder's own calibration.
+        for absent in [None, Some(""), Some("   ")] {
             assert_eq!(
-                resolve_semantic_gate(&HashEmbedder),
+                g(absent).unwrap(),
                 Some(undercroft_core::embed::HASH_ADMISSION_GATE),
-                "{junk:?} did not fall back to the embedder"
+                "{absent:?} must resolve to the embedder's gate"
             );
         }
-        std::env::remove_var("UNDERCROFT_SEMANTIC_GATE");
+        // And garbage refuses, naming the two legal shapes.
+        for junk in ["banana", "1.5", "-0.2", "0.5,0.6"] {
+            let err = g(Some(junk)).expect_err("{junk:?} must refuse");
+            assert!(
+                err.to_string().contains("neither 'off' nor a number"),
+                "{err}"
+            );
+        }
+    }
+
+    /// `UNDERCROFT_ADMISSION` parses or REFUSES, on the same argument, and
+    /// with a stronger claim to it than any sibling: this one decides whether
+    /// the write-path screen runs at all. It used to warn once on stderr and
+    /// resolve to `false`, so a typo left every poisoned drawer in `search`,
+    /// `recent` and `list_drawers` on a deployment that believed otherwise.
+    #[test]
+    fn the_admission_declaration_parses_or_refuses() {
+        assert!(!resolve_admission(None).unwrap());
+        for off in ["", "  ", "off", "OFF", " off\n"] {
+            assert!(!resolve_admission(Some(off)).unwrap(), "{off:?}");
+        }
+        for on in ["quarantine", "QUARANTINE", " quarantine "] {
+            assert!(resolve_admission(Some(on)).unwrap(), "{on:?}");
+        }
+        for junk in ["quarantien", "1", "true", "on", "quarantine,off"] {
+            let err = resolve_admission(Some(junk)).expect_err("{junk:?} must refuse");
+            assert!(
+                err.to_string().contains("not 'quarantine' or 'off'"),
+                "{err}"
+            );
+        }
     }
 
     /// A family match must never *admit* a drawer — only reorder one already

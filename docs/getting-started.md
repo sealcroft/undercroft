@@ -39,6 +39,9 @@ mode: export `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
 ```bash
 claude mcp add undercroft -- undercroft serve-mcp
+
+# ...or recall only, with every write tool refused:
+claude mcp add undercroft -- undercroft serve-mcp --read-only
 undercroft hooks claude-code   # auto-save hook settings to paste
 ```
 

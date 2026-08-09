@@ -1,6 +1,505 @@
 # Changelog
 
-## Unreleased
+## Unreleased — 1.1.0
+
+**MINOR.** New capability (`undercroft config check`, four capability-parity
+closures, the operator-plane absence inventory) plus a large number of fixes.
+**No documented contract changes**, so this is not a major.
+
+Four changes tighten validation of input that was never documented as valid —
+a config value that was always a typo, a cleartext URL the transport policy
+always refused one step later, an exit code that always contradicted the
+published doctrine, and a CLI that answered 0 where its HTTP twin answered
+404. Those are fixes: they make the code match the contract, and a deployment
+that "worked" on the old behaviour was running without a protection it had
+declared. Each is listed in **`UPGRADING.md`** with symptom, cause and fix,
+and every one is detectable in advance by `undercroft config check`, which
+opens nothing and exits non-zero if an environment would refuse to start.
+
+The first draft of the release plan filed these as `2.0.0` on the reasoning
+that they can stop a deployment. That test is wrong and the doctrine now says
+so: **MAJOR is a documented contract that changes, not "a deployment could
+stop"** — conflating the two inflates a fix release into a major one. What a
+fix like this owes is a warning and a way to detect it before a restart, and
+that obligation is not the same as a version bump.
+
+### T1–T15 — everything round three found and did not close, closed
+
+Round three's audit left fifteen items filed as work with a shape and a
+gate. They are all closed here, because "recorded" is not a resting state —
+nothing merges until it is fixed. Two of them found live drifts on the way,
+which is the argument for closing rather than filing.
+
+**Declarations that warned and ignored, where their siblings refuse (T1).**
+`UNDERCROFT_TRUST_FLOOR` was fixed in the previous round on the argument
+that resolving to *no floor* is the permissive direction. The identical
+argument applied to two more and they are fixed the same way:
+`UNDERCROFT_ADMISSION` — a typo left the write-path screen OFF while a
+deployment believed injected text was being diverted, which is the
+enablement of the exclusion the whole quarantine machinery serves — and
+`UNDERCROFT_SEMANTIC_GATE`, which fell back **silently** and was the only
+resolver in the family that did not `.trim()`, so a declared `off` carrying
+the newline a `$(cat …)` or a YAML block scalar produces reverted to the
+embedder's own gate with no warning at all. That file held two contradictory
+written doctrines — one comment arguing "bricking a server on a typo'd env
+var is worse than ignoring it" three hundred lines above the sibling that
+refuses — and it now holds one. Declining is still declarable; it just has
+to be declared.
+
+**Four CA pins, three empty-value behaviours (T2), one of them in the crate
+the policy was extracted from (T3), one still resolved per call (T4).**
+`UNDERCROFT_ORCH_ENGINE_CA=""` refused explicitly, `UNDERCROFT_INDEX_CA=""`
+refused by accident (via `fs::read("")`), and `UNDERCROFT_EMBED_CA=""` /
+`UNDERCROFT_LLM_CA=""` were silently treated as no pin — un-pinning at
+exactly the moment an operator believes they pinned, which is the failure
+mode all four doc comments name in the same words. `undercroft-net` now owns
+that decision once (`declared_pin`), caches it per process (`pin_from_env`,
+caching the `Result` so a bad declaration keeps refusing identically), and
+exposes one constructor (`agent_from_env`) that every hop reading a `*_CA`
+variable uses. `undercroft-llm` stopped building its own `AgentBuilder`,
+which also fixes a subtler half: its local copy applied a pin only `if tls`,
+so a loopback-http base never validated the CA file while the shared path
+does. The client-construction gate is workspace-wide now, with two
+exemptions that are **named, reasoned and required to be reached** — the
+policy crate itself, and the bench harness, which drives a comparison target
+with a public corpus and whose variables are already excluded from the
+engine inventory on that same argument.
+
+**Two more unattended whole-vault mutations that recorded nothing (T5).**
+`migrate_embedding_space` rewrites every embedding and drops four derived
+tables at an open nobody asked for — the third of three when only two were
+closed, and the worst for an auditor because it writes its completion marker
+even when rows were skipped. `repair` backfills fingerprints, re-embeds
+everything, drops the PQ/IVF tables and re-stamps the embedder identity, and
+`rotate` was given a self-record for precisely that shape. Both record
+themselves now, through one helper rather than two hand-rolled anchors.
+
+**The tamper decision read a cached manifest (T6).** `reconcile_chain` and
+`verify` took the anchor from the handle's own `chain_head_hex()`, written
+only by that handle's anchor — so on `serve-http`, which holds two handles,
+they compared the database against an anchor a different handle had already
+moved, and neither could see a `vault.json` swapped on disk until a fresh
+open. `chain_state` was moved off the cached manifest for exactly this
+reason and then the commit counter was too, which had left the *least*
+security-relevant consumer reading fresh and the two that raise
+`ManifestTampered` reading stale. `Vault::anchored_head` reads from disk and
+**verifies the MAC** — deliberately unlike `anchored_writes`, which feeds a
+counter and skips it.
+
+**A vault trust floor narrowed `search` and nothing said so (T7).**
+`Exclusions::measure` read the request's declared floor only, so a
+deployment-level floor emptied `search` and `list_drawers` on all three
+surfaces silently while `wake_up` got the honest message — and
+`docs/THREAT_MODEL.md` stated the disclosure as done. It reads the EFFECTIVE
+floor now, with `resolve_search_policy`'s precedence verbatim so it cannot
+disclose an exclusion that did not happen. The previous round's own e2e
+**pinned the silence**; it pins the disclosure now, plus the premise that an
+unfloored search discloses nothing.
+
+**The hand-projection gate could not see one whole crate (T8).** The struct
+root was generalised last round and the PROJECTING root was left as three
+hard-coded arms under `undercroft-cli/src` — so an orchestrator projection
+was unreachable and, worse, a bare `main.rs` would silently have read the
+CLI's. Both are crates-relative now, and five entries joined the inventory.
+The gate then immediately found two live drifts: `DrawerSummary.source_file`
+never reached the CLI (so the operator surface could not tell a mined drawer
+from an API save), and `Tenant.level` was dropped from `tenant-list` — the
+field whose own doc says it exists because a migration has to ask for it,
+missing from the surface an operator reads *before* migrating.
+
+**`forget --backend` was CLI-only (T9).** `/v1` and the fleet's
+`ops <t> forget` could receive the attestation's warning that a mirror copy
+may survive with no surface able to act on it — and an operator running a
+fleet is exactly the operator who has pushed a mirror. `POST /v1/…/forget`
+takes `backend` now.
+
+**Engine refusals flattened to 502 (T10).** `create_tenant` and
+`delete_tenant` mapped every engine error to the one status retry layers
+hammer, so the engine's `409 "vault already exists"` and its co-resident
+delete refusal arrived as gateway failures — the exact defect `engine_err`
+was written to fix, applied on `migrate` and on neither neighbour. One
+`engine_response` now keeps the status AND the `class`, which the migrate
+route was stringifying into `error` — losing the one field this fleet's own
+docs tell a client to read, on the route that documents it. A local
+transport refusal says it is local rather than posing as an unreachable
+engine, and the data plane's auth lookup stopped throwing its typed
+`StateError` away for a bare 500.
+
+**clap usage errors exited 2, colliding with the integrity verdict (T11).**
+`docs/AGENTS.md` states exit 2 means an integrity verdict "on every command"
+and exit 1 means bad arguments; clap's `USAGE_CODE` is 2, so a typo or a
+renamed flag reached a compliance script as a TAMPER VERDICT. Both binaries
+exit 1 now, `--help` still exits 0 — and the e2e check that **asserted the
+collision** asserts the doctrine instead.
+
+**Two integrity verdicts outside the doctrine (T12).**
+`ops <t> supersessions` returned 200 with `summary.tampered` and no `ok`, so
+the classifier could not fire and a forged receipt exited 0; it answers `ok`
+now, the same shape `verify` does. And `StateError::Unsealable` — "a tamper
+verdict or a wrong key" by its own doc — exited 1 on every orchestrator
+subcommand while every engine-side verdict exited 2.
+
+**The coverage the fixes did not get (T13).** Nine e2e arms across both
+suites: the cleartext instance refused at registration and absent from the
+list afterwards, health carrying a `state`, a CA pin that resolves to
+nothing refusing to START (and exiting 1, not the integrity code), a usage
+error exiting 1 while `--help` exits 0, `instance-remove` of an unknown name
+failing on both doors — it printed "not found" and exited 0, so a
+decommission script read it as done — and the migration record seen by the
+operator's `history` and REFUSED to the agent's, with a premise arm proving
+the agent surface answers at all.
+
+**No inventory for the ops parity axis (T14).** `OPERATOR_ONLY` counts the
+MCP absences and nothing counted CLI↔`/v1`↔ops, so four capabilities were
+missing from the ops vocabulary with no written reason — and an omission and
+a boundary look identical from outside, which is the question this entire
+audit exists to answer. `OPS_DELIBERATELY_ABSENT` records each with its
+reason, counted against the engine's capabilities in both directions, and a
+reason-less entry fails the build.
+
+**Residues, stated where the code is (T15).** A mirror-served search ships a
+query vector to the third party on every call: plaintext-derived, and
+unrecorded unless `UNDERCROFT_READ_AUDIT=chain` is declared — a per-search
+egress record being exactly the durability cost that variable exists to make
+declarable. And caching the CA pin means rotating a pinned root needs a
+process restart: the trade is that a pin which reloads itself is a pin an
+attacker with write access can replace without anyone restarting anything.
+
+### round three of the drift audit — eleven regressions in the fixes above, all mine
+
+The seven-dimension audit was re-run against the fixes in the section below,
+each auditor asked adversarially whether the fix closed its drift **and
+whether it introduced one**. That framing is the whole instrument: it found
+**eleven defects in the fix round itself**, and the pattern held — every one
+was "right and incomplete, in a direction the fixer could not see from where
+they stood". Reported here as mine, because they are.
+
+**Two of my gates did not measure what their own doc comments claimed.**
+
+- **`ENGINE_ENV_VARS`' second direction was unfalsifiable.** `parity.rs` is
+  inside the tree it scans and spells every name as a string literal, so
+  `found` was guaranteed to contain every entry — sourced from the inventory
+  itself. Deleting the last real read of a variable would have kept the gate
+  green forever. I had written exactly this filter for the premise probe one
+  screen above, and not for the half that decides. That is the *ask what the
+  checker sees when it reads itself* trap, inside a checker written to avoid
+  it, in the same file that says so.
+- **The orchestrator's client-construction gate said "the crate's whole
+  `src/`" and read one directory level**, dropping subdirectories — while its
+  sibling written in the same unit recursed. Two gates, one change,
+  disagreeing about what "whole" means.
+
+**The hand-projection gate had a live false negative and got LOOSER on one
+file.** `.{field}` containment is receiver-blind: `PalaceStats.level` was
+reported satisfied by `/v1`'s `vault.level()` — a different object's METHOD,
+while the struct field was never read at all. It matched `.tag` inside
+`.tags`, `.at` inside `.attestation`, `.kg` inside `.kg_stats()`. The
+character after the name must now END it and must not open a call, and `/v1`
+reads the report's own field. Separately, my "window ends at the next
+projecting block" rule left `mcp.rs` with no boundary at all — one anchor, no
+`Command::` arms — so its window ran to the end of `call_tool`: **14 kB,
+3.6× the fixed cap it replaced**, on the one file the rule was meant to
+tighten. A tool arm is that file's sibling construct now.
+
+**The migration self-record appended on EVERY writable open, forever.** Found
+independently by two auditors. A row whose tag fails is SKIPPED and the
+completion marker withheld, deliberately, so every open retries — and on each
+retry every migrated row hits its idempotence guard, leaving `moved = 0` with
+`skipped` unchanged. My `|| skipped > 0` disjunct therefore recorded on every
+open: unbounded chain growth, `chain_meta.writes` climbing on a vault that
+received no write, the counter firing per open, on precisely the vaults an
+auditor is inspecting. It produced the exact noise the guard's own comment
+said it existed to avoid. `moved > 0` alone; a walk that moved nothing
+changed nothing, and the unmigrated exposure is a CONDITION, reported on
+`PalaceStats.unhealed`, not an event.
+
+**The partial-push fix disarmed the staleness refusal it sits beside.**
+`index_pushed_embedder` answers two questions with opposite needs — "was
+anything ever pushed?" and "is the mirror's whole content in the CURRENT
+vector space?". Stamping the current model on a partial push after an
+embedder change leaves the mirror genuinely MIXED and tells
+`search_with_index` it is uniform, so the query is ranked against
+mostly-foreign vectors — the empty-result failure that refusal exists to
+prevent. It is now written only when absent or already equal. The same error
+path also discarded the original backend failure through `?`, reporting a
+locked database for a network outage.
+
+**`forget --backend` could not have worked on Chroma, and could have deleted
+everything.** The path never called `VectorIndex::ensure`, which is where
+Chroma resolves a collection NAME to the backend's opaque id — so
+`--backend chroma` was a 100% failure, invisible to a fake index whose
+`ensure` is a no-op. And the pre-flight duplicated the ruled path's existence
+and quarantine refusals but not its FIRST one, `ids.is_empty()`, so an empty
+slice reached `index.delete(collection, &[])` — which is Chroma's
+delete-everything shape.
+
+**`mirror_note` decided off an unauthenticated `meta` row.** One offline
+`DELETE FROM meta WHERE key='index_pushed_embedder'` and every later
+attestation silently drops the disclosure — and still verifies, because the
+signature covers bytes that never contained it. That is the suppress-BEFORE
+twin of the strip-after attack the canonical extension was written to stop,
+three paragraphs above it in the same file, with the covered evidence sitting
+one table over. It reads the `egress/index-push` chain record now.
+
+**`migrate/` reached the agent history surface.** A namespace is fenced only
+if somebody adds it to `AGENT_FENCED_NAMESPACES`, and the fence's test
+asserts one direction — a returned row does not start with a LISTED prefix —
+which is structurally unable to notice a new one. Fenced, for the reason
+`rotate/` is, and the missing half is now a gate: every namespace the store
+mints is classified, in both directions.
+
+**`dedup`'s dry run previewed an outcome `--apply` would refuse.** Making
+`apply` honest about a diverted survivor left the preview promising a
+deletion and a date-carry that will not happen, and reporting
+`quarantined: 0` where `--apply` reports 1 — under a sibling test whose own
+doc says "a dry run must report the same history it would preserve".
+
+**`instance-list` claimed "unreachable" for a control-plane tamper verdict.**
+`instance_creds` makes no network call; its failures are a wrong orchestrator
+key, a tampered credential blob or a SQLite error. I flattened all three into
+`Health::Unreachable` — committing the exact error the `Health` enum exists
+to stop, one variant over from where I had just fixed it.
+
+**Two string literals my editing collapsed onto one line**, with 30-space
+runs inside them — one of them the incident message an operator reads at the
+moment a tenant migration hits a tamper verdict. rustfmt does not reformat
+string literals, so no gate catches this class.
+
+**And the docs.** Scenario G shipped `UNDERCROFT_METRICS_ADDR` — a variable
+no crate reads, on a port nothing binds, in a document the same page
+contradicts 300 lines later; the exact failure class the new env inventory
+was added for, and invisible to it because that gate is code↔inventory only.
+The `ops` example was `verify || [ $? -eq 2 ] && echo TAMPER`, which prints
+TAMPER on a CLEAN vault. The bootstrap command still showed the cleartext
+instance URL my own registration refusal now rejects. Inserting Scenario G
+renumbered five sections and left four cross-references pointing at the wrong
+one, two of them sending a reader after REST routes into the MCP tool table.
+The identifier-scheme section stated two counts in prose and both were wrong
+— in the paragraph telling you not to trust a number in prose.
+
+**What the audit found and this unit did NOT close is filed as work**, not
+absorbed: fifteen entries under **OPEN after the round-three audit** in
+ROADMAP, each with its shape and its gate. The recurring shapes are worth
+naming: two more declarations that warn-and-ignore where their siblings
+refuse; two more unattended whole-vault mutations that record nothing; the
+tamper decision still reading a cached manifest while the telemetry counter
+now reads the file; and a vault-level trust floor that narrows `search` on
+all three surfaces while only `wake_up` says so — which this round's own new
+e2e pins rather than closes.
+
+### the merge-blocker list is empty — twenty defects, each with a test that fails without it
+
+The list `.handover/AUDIT_CONTINUATION.md` §4 recorded after two audit rounds,
+worked in the order it gave: security and integrity first, then the coverage
+gaps that let the previous round's regressions ship green, then correctness,
+then the gates themselves, then the docs. **Every fix carries a test that was
+run against the reverted code and observed to fail**, because the pattern this
+list exists to fight is not "the fix is wrong" — it is "the fix is right and
+incomplete, in a direction the fixer could not see from where they stood".
+
+**Security / integrity.**
+
+- **The remote search path decided the quarantine fence off the CLEAR mirror
+  column — A28 inverted, and it had a working exploit.**
+  `resolve_search_policy` folds the reserved wing into the trust clause only
+  when an `EXISTS` over the *unauthenticated* `wing` column finds a
+  quarantined row. One offline `UPDATE drawers SET wing = 'notes'` on the sole
+  quarantined row and that probe goes false, so the clause arrives with no
+  fence in it — and `search_with_index` consulted nothing else. The local path
+  survived the same write only because `verified_meta_admits` refuses the
+  reserved wing UNCONDITIONALLY, before it looks at any clause. So the
+  exclusion belongs to the function, not to the clause, and the mirror path
+  calls the function now. The test flips the mirror BEFORE the push, so
+  nothing anywhere in the candidate offer says `quarantine-pending` except the
+  drawer's own HMAC-covered meta; it asserts both premises (the probe really
+  is defeated, the mirror really is offering the id) so it cannot pass having
+  measured nothing.
+- **`UNDERCROFT_ORCH_ENGINE_CA` was resolved per outbound call**, so a garbage
+  or unreadable pin BOUND THE PORT, answered `/healthz`, and then 502'd every
+  request — while the same binary states the opposite rule one module over,
+  where `RateLimiter::from_env` sits deliberately in front of `Server::http`.
+  Resolved once now, into a `OnceLock` that caches the *`Result`* (a
+  declaration that does not resolve must keep refusing identically for the
+  life of the process), validated in `main` before any subcommand runs. The
+  gate is a source check — the property is WHERE the read happens, and no
+  behavioural test can see that without mutating a process-global variable
+  under every test running beside it.
+- **A transport-policy refusal rendered as "the engine is down."** Three
+  conditions arrived as one `healthy: false`, and the only one an operator
+  can act on from the control plane — this process declining to speak — was
+  the one indistinguishable from an outage. `Health` is four states now
+  (`healthy` | `unhealthy` | `unreachable` | `refused`), the refusal carries
+  its reason, and the fleet console shows REFUSED with the reason rather than
+  DOWN. `healthy` keeps its meaning, so no client changes.
+- **A cleartext instance URL was accepted at registration and refused at
+  request time.** Registration is this crate's construction moment;
+  `instance_add` calls `require_secure_transport` and answers 400. The error
+  lands on the operator who typed it instead of on a tenant's request hours
+  later.
+- **The two at-rest migrations were whole-vault mutations with no chain
+  record** — the hole A19 closed for rotation. The A10 blind-index walk
+  re-tags every graph row, re-derives every id and bulk-rewrites
+  `audit.record_id`; the U12 walk re-keys both stored content fingerprints
+  and re-tags every receipt. Both run UNATTENDED at the next writable open.
+  Each appends one record now, inside its own transaction, binding how much
+  it moved and how much it SKIPPED for failing its own HMAC — the number that
+  means "this vault still holds readable-at-rest material the migration would
+  not launder", and the one an auditor cannot reconstruct afterwards because
+  the walk is idempotent. Both walks moved after `init_chain()`: `chain_append`
+  needs a seeded `chain_meta`, which on a legacy vault does not exist until
+  then, so running them where they were would have failed the open of exactly
+  the vaults the migrations exist for.
+- **`forget` attested a destruction the remote mirror never heard about.**
+  `VectorIndex::delete` was declared, implemented by all five backends, and
+  called by NOTHING — so a signed attestation said "destroyed" over content
+  still sitting on a third party's Qdrant, and the new `egress/index-push`
+  record sharpened it into a contradiction: the chain says the corpus left on
+  date X beside an attestation saying it is gone. `forget --backend <b>` now
+  issues the delete FIRST (a failure there leaves the vault intact and
+  retryable; the other order leaves a signed lie), and the attestation states
+  the boundary itself either way. The note is a **canonical extension** —
+  present only when the vault was pushed, appended last — so every attestation
+  already signed and handed to a data subject produces byte-identical
+  canonical bytes and still verifies. Every refusal the local walk makes is
+  made BEFORE the remote delete, or an agent whose write was diverted could
+  strip half the review evidence with a command that returns an error.
+
+**The coverage gaps that let the last round ship green.**
+
+- **A tampered-vault arm on the orchestrator e2e, both shapes.** The
+  `"class": "integrity"` wire contract had only a unit test over hand-written
+  bodies — which is exactly why the previous round's regression shipped: a
+  unit test fed a fabricated body cannot see that the engine never emits the
+  class. Two arms now, because they arrive by different routes: a 200 whose
+  body says `"ok": false`, and a 4xx carrying the class. Both vaults are
+  tampered while the ENGINE HAS NEVER OPENED THEM — `store_for` caches a
+  handle for the life of the process, so editing a database the server already
+  holds open measures SQLite's page cache rather than the tamper detection.
+  Every forgery asserts that it CHANGED THE FILE: both matched nothing on
+  their first run (one wrong subcommand, one regex that missed a space in
+  pretty-printed JSON) and the suite reported a clean vault, which reads
+  exactly like a broken exit code.
+- **Nothing pinned that the orchestrator routes through the transport
+  policy.** A source gate now scans the crate's whole `src/` — so a NEW module
+  cannot evade it — with a premise probe against `undercroft-net`'s own source,
+  because a scanner that cannot run reports what a clean tree reports.
+- **`UNDERCROFT_TRUST_FLOOR` appeared in zero files under `tests/`.** It has
+  an end-to-end arm now on both sides (a wing at the floor still answers, one
+  below it does not), plus the regression itself: a read emptied BY THE FLOOR
+  must say which, never "Palace is empty". Driven WITHOUT `--wing`, because
+  naming a wing bypasses the vault floor by design and a wing-scoped read is
+  the one shape that cannot reach that branch — the first version used one and
+  measured nothing.
+- **`serve-mcp --read-only` was untested on any surface.** The refusal logic is
+  shared with `serve-http` and proven there; the WIRING the flag added was not.
+  Four arms: the write tool is refused, the refusal is `isError: true` rather
+  than prose, reads still answer, and the refused write is not in the vault.
+- **Dedup with admission on.** The gap was not `save_with_dedup` (already
+  covered) but `DedupReport.quarantined` — a diverted survivor rewrite, where
+  nothing may be deleted because the duplicates hold the only copies of the
+  dates the survivor never received. Two arms, and the second is what makes
+  the first mean anything: with the screen off the identical corpus collapses.
+
+**Correctness.**
+
+- **`undercroft_chain_commits_total` over-counted in `serve-http`.** The delta
+  was `writes - self.manifest.writes`, where the subtrahend is written only by
+  that handle's own anchor — so with two handles on one vault each measured the
+  other's growth from its own stale baseline and counted it again: steady state
+  2×, worse with more. `audit_chain_height` was moved off the cached manifest
+  for this exact reason; the commit DELTA was not. It reads the on-disk
+  manifest now — the last anchor ANY handle committed. `anchor_manifest`
+  returns the count, because the only other consumer is a metric that is a
+  no-op in a default build, which is why this was invisible to every test.
+- **A partially-successful `index push` recorded nothing.** The audit call sat
+  after the last batch, on the success path only, so a push that shipped 9,000
+  of 10,000 and then failed left the chain saying no egress had happened. "A
+  crash mid-push under-reports rather than over-reports" was true of the COUNT
+  and not of the record's EXISTENCE. The error path records what actually left.
+  The opposite convention on the CLI export path (records BEFORE writing, so it
+  over-reports) is now stated beside it — both are deliberate, neither said so.
+- **MCP returned a verify verdict as prose inside `isError: false`** — the one
+  machine-readable field in an MCP tool result, saying success over a tampered
+  vault. Not a protocol limit: `undercroft_status` one arm down returns
+  structured JSON. The whole report still travels; only the flag changed.
+- **`migrate` had no exit-code doctrine**, so a source vault whose export came
+  back 409 `"class": "integrity"` exited the same code as a typo'd destination,
+  and a retry loop treating 1 as transient kept asking a tampered vault to
+  export itself. It exits 2 now, through the SAME classifier `ops` uses applied
+  to the JSON inside the wrapped message — never a substring scan for the class
+  name, which is the gate shape this tree has paid for twice.
+- **The MCP read-only gate failed OPEN.** `WRITE_TOOLS.contains(name)` served a
+  tool nobody had classified yet, and the compensating parity check was a name
+  heuristic blind to `_merge`, `_move`, `_import`, `_forget`, `_prune`,
+  `_promote` and `_sweep`. `/v1` decided the same question with "anything not
+  GET is a write unless named" and got it right; that is the shape now. An
+  unclassified tool is refused at runtime AND fails the build.
+
+**The gates themselves.**
+
+- **`UNDERCROFT_*` had no inventory gate at all** — the dimension whose whole
+  job is "a declared configuration that never took effect" had its own census
+  living as hand-maintained prose, and it went stale. `ENGINE_ENV_VARS` is
+  counted against `crates/` in both directions, with a premise probe that must
+  match in a crate other than the one holding the list.
+- **The hand-projection gate could not see `RefineReport`** (its reader
+  resolved struct files only under `../undercroft-store/src`), **passed on a
+  neighbour's text** (substring containment in a 4000-char forward window that
+  ran from `Command::Stats` through all of `Command::Dedup` — deleting
+  `println!("rooms: …")` still passed), and **skipped `pub(crate)` fields**.
+  Paths are crates-relative, the window ends at the next projecting block or
+  sibling construct, and a field must be ACCESSED (`.field`) rather than
+  merely spelled — which is what distinguishes "prints the value" from "prints
+  the word" for the 8 of 12 `PalaceStats` fields whose label equals their name.
+  Four more (struct × surface) projections joined the inventory: `AuditRecord`,
+  `PendingAdmission`, `RetentionPolicy` and `RetentionSweep`, the last being
+  the sharpest — its whole-JSON dump is conditional on `--out`.
+- **`scope_seqs` was a second implementation of `TrustClause::sql`**, beside a
+  function whose own doc says "one implementation for every read that narrows
+  by trust". They agreed, which is the only reason it was latent rather than
+  live — and the branch they both re-derived is the empty-`Allow` one that
+  produced the "Palace is empty" regression. Merged; `1 = 0` needs no special
+  case.
+- **`TrustClause::sql` had no test.** It has one now, driven THROUGH SQLite
+  rather than by comparing strings, covering the asymmetry that matters: an
+  empty `Allow` must emit a clause matching nothing, an empty `Exclude` must
+  emit no clause at all, and treating the two lists symmetrically is wrong
+  whichever way you do it.
+
+**Found while writing the tests, not on the list.**
+
+- **`UNDERCROFT_TRUST_FLOOR` warned and applied NO floor on a typo.** That is
+  the permissive direction: a deployment that typed `trusetd` believed its
+  below-floor wings were unreachable while every one of them answered every
+  query, behind a single stderr line at open. Its two siblings already refuse
+  for exactly this argument — `UNDERCROFT_READ_AUDIT` because "silently running
+  without one is the failure mode", `UNDERCROFT_ADMISSION_RATE` on the CA-pin
+  precedent — and a retrieval boundary has a stronger claim to that rule than
+  an evidentiary one. It refuses now; `off` still declines the floor.
+- **`POST /v1/…/refine` could not dry-run.** The CLI has had `--dry-run` since
+  refine existed and prints the triples it WOULD add; the route hard-coded
+  `false`, so the surface a fleet operator drives could not preview a
+  distillation before committing it to the graph. Found BY the strengthened
+  hand-projection gate, which reported `preview` as a field `/v1` never reads —
+  correctly, because the route could never produce one.
+
+**Docs.** `serve-mcp --read-only` reaches README, `docs/AGENTS.md`,
+`docs/integrations.md`, `docs/getting-started.md` and `examples/mcp_setup.md`;
+the `/v1` refine contract names `quarantined`, `dry_run` and `preview`;
+`docs/AGENTS.md` gained the **Scenario G** its own routing table pointed at
+and an orchestrator `ops` section carrying the exit-2 doctrine, the
+`"class": "integrity"` field a client has to read, and `anchor`; a stale
+"(71st env var)" ordinal is gone. ROADMAP explains the **identifier scheme** —
+an `A`/`C`/`R`/`U` entry lives there only while the item is OPEN, so a
+citation is a breadcrumb into the CHANGELOG rather than a pointer to a
+heading, and a comment that cites one must stand without it.
+
+**Two items on the list did not survive verification and are recorded as
+such**: the claim that CHANGELOG's 1.0.0 summary contradicts itself on
+`backends-e2e` conflated that figure (47) with `orchestrator-e2e` (57), which
+the same section states as a `44 → 57` transition; and `e2e 224` in a 1.0.0
+section is a historical record of that release, not drift against today.
+`findings.md` was already gitignored.
 
 ### the open work after 1.0.0 is closed — O2, O3, O4, each with an executed gate
 

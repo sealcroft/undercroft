@@ -146,31 +146,22 @@ impl HttpEmbedder {
                  unacceptable, use the in-process onnx/ort embedders."
             );
         }
-        let mut builder = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(120));
-        match std::env::var("UNDERCROFT_EMBED_CA") {
-            Ok(path) if !path.trim().is_empty() => {
-                if tls {
-                    let pem = std::fs::read(&path).map_err(|e| {
-                        LlmError::Refused(format!(
-                            "UNDERCROFT_EMBED_CA {path:?} cannot be read: {e}"
-                        ))
-                    })?;
-                    builder = builder.tls_config(pinned_roots_from_pem(&pem).map_err(|e| {
-                        LlmError::Refused(format!("UNDERCROFT_EMBED_CA {path:?}: {e}"))
-                    })?);
-                } else {
-                    // Declared trust root, cleartext URL: the declaration
-                    // cannot apply. Say so rather than silently ignoring a
-                    // security setting.
-                    undercroft_obs::diag_warn!(
-                        "UNDERCROFT_EMBED_CA is set but {base} is not https — \
-                         the declared root is ignored on a loopback cleartext \
-                         connection"
-                    );
-                }
-            }
-            _ => {}
-        }
+        // **This crate stopped building its own client.** The transport
+        // policy lives in `undercroft-net` — which was EXTRACTED FROM this
+        // crate — and two copies of a rule are two places for it to drift.
+        // They had: the local copy applied a declared pin only `if tls`, so
+        // a loopback-http base never read or validated the CA file while the
+        // shared path does, and it treated `UNDERCROFT_EMBED_CA=""` as no
+        // pin at all — silently un-pinning exactly when the operator
+        // believes they pinned. It also re-read and re-parsed the PEM on
+        // every construction. One call now, resolved once per process.
+        let agent = undercroft_net::agent_from_env(
+            "the embedder",
+            &base,
+            "UNDERCROFT_EMBED_CA",
+            std::time::Duration::from_secs(120),
+        )
+        .map_err(|e| LlmError::Refused(e.to_string()))?;
         let mut me = Self {
             base,
             model: model.to_string(),
@@ -178,7 +169,7 @@ impl HttpEmbedder {
             key: key.to_string(),
             dim: dim.unwrap_or(0),
             identity: format!("http:{model}"),
-            agent: builder.build(),
+            agent,
             failures: Cell::new(0),
         };
         if me.dim == 0 {
@@ -261,7 +252,6 @@ fn parse_embedding(resp: &Value) -> Option<Vec<f32>> {
 // closing. Nothing about the behaviour changed in the move; the tests below
 // still exercise it through these names.
 pub(crate) use undercroft_net::is_loopback;
-pub(crate) use undercroft_net::pinned_roots as pinned_roots_from_pem;
 
 impl Embedder for HttpEmbedder {
     fn model_name(&self) -> &str {
@@ -439,7 +429,7 @@ XJe04q/5oCD050fMeJFyrKm5Uo41tVBhRggcN2IUvdF/ra8YeQjtj+OMgJVrOwIq\n\
 3zqoWLvt0tGY61aaH2u2ulH33/SJGuksaewVLQP9qA==\n\
 -----END CERTIFICATE-----\n";
         assert!(
-            pinned_roots_from_pem(TEST_CA.as_bytes()).is_ok(),
+            undercroft_net::pinned_roots(TEST_CA.as_bytes()).is_ok(),
             "a real certificate must pin"
         );
         for (name, bad) in [
@@ -451,7 +441,7 @@ XJe04q/5oCD050fMeJFyrKm5Uo41tVBhRggcN2IUvdF/ra8YeQjtj+OMgJVrOwIq\n\
             ),
         ] {
             assert!(
-                pinned_roots_from_pem(bad).is_err(),
+                undercroft_net::pinned_roots(bad).is_err(),
                 "{name} must refuse, never fall back to public roots"
             );
         }

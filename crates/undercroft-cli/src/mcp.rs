@@ -16,9 +16,68 @@ use undercroft_store::{PalaceStore, SearchOptions};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-/// Tools that mutate the palace — rejected when the server runs read-only
-/// (the team-server deployment exposes recall without write access).
-const WRITE_TOOLS: &[&str] = &[
+/// **The tools a read-only server may serve. Everything else is refused.**
+///
+/// An inventory of READS, not of writes, and the inversion is the point.
+/// The gate used to be `WRITE_TOOLS.contains(name)`, which fails OPEN: a
+/// tool added later was SERVED by a `--read-only` server until somebody
+/// remembered to add it to the list, and the compensating parity check was
+/// a name heuristic (`_save|_add|_update|_delete|_create|_write|_dedup|…`)
+/// blind to `_merge`, `_move`, `_import`, `_forget`, `_prune`, `_promote`
+/// and `_sweep`. `/v1` decided the same question the other way round —
+/// "anything not GET is a write unless named" — and got it right, which is
+/// the shape copied here.
+///
+/// Failing closed means a new READ tool is refused on a read-only server
+/// until it is listed. That is a read that does not answer, against a write
+/// that does; the asymmetry is deliberate and it is the safe direction.
+///
+/// `WRITE_TOOLS` is DERIVED from this (`MCP_TOOLS` minus these), so there
+/// is one list and it cannot disagree with itself. `parity.rs` counts both
+/// directions against the advertised surface.
+pub(crate) const READ_TOOLS: &[&str] = &[
+    "undercroft_search",
+    "undercroft_get_drawer",
+    "undercroft_list_drawers",
+    "undercroft_wake_up",
+    "undercroft_check_duplicate",
+    "undercroft_list_wings",
+    "undercroft_list_rooms",
+    "undercroft_get_taxonomy",
+    "undercroft_get_closet_index",
+    "undercroft_list_agents",
+    "undercroft_diary_read",
+    "undercroft_list_tunnels",
+    "undercroft_history",
+    "undercroft_list_hallways",
+    "undercroft_follow_tunnel",
+    "undercroft_traverse",
+    "undercroft_status",
+    "undercroft_verify",
+    "undercroft_kg_query",
+    "undercroft_kg_timeline",
+    "undercroft_kg_stats",
+    "undercroft_lookup_canonical",
+];
+
+/// Whether a read-only server must refuse this tool.
+///
+/// Fails CLOSED: an unknown name is a write. That is what makes forgetting
+/// to classify a new tool a refused read rather than a served write.
+pub(crate) fn refused_when_read_only(name: &str) -> bool {
+    !READ_TOOLS.contains(&name)
+}
+
+/// Tools that mutate the palace.
+///
+/// Not consulted at runtime — the gate is [`refused_when_read_only`], which
+/// fails closed off `READ_TOOLS`. This is the other half of the inventory
+/// `parity.rs` counts against the advertised surface, so an advertised tool
+/// that is in neither list fails the build. Without it a new tool would be
+/// implicitly a write: refused (which is safe) and never flagged (which is
+/// how a surface drifts).
+#[cfg(test)]
+pub(crate) const WRITE_TOOLS: &[&str] = &[
     "undercroft_save",
     "undercroft_add_drawer",
     "undercroft_update_drawer",
@@ -84,7 +143,7 @@ fn quarantine_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()>
         // a name that does not say so, and adding it here is cheaper than
         // pretending the rule covered it.
         if (key == "id" || key.ends_with("_id") || key == "supersedes")
-            && store.is_quarantine_pending(s)?
+            && store.is_quarantine_pending_for_read(s)?
         {
             anyhow::bail!(
                 "{tool}: {s} is quarantine-pending — pending review evidence \
@@ -225,7 +284,7 @@ impl McpHandler {
                     .pointer("/params/arguments")
                     .cloned()
                     .unwrap_or(json!({}));
-                let result = if self.read_only && WRITE_TOOLS.contains(&name.as_str()) {
+                let result = if self.read_only && refused_when_read_only(&name) {
                     Err(anyhow::anyhow!(
                         "server is read-only: {name} is not allowed"
                     ))
@@ -264,7 +323,7 @@ impl McpHandler {
 }
 
 /// Serve MCP over stdio. `read_only` is the same posture `serve-http`
-/// takes: it refuses every tool in `WRITE_TOOLS`, and the caller is
+/// takes: it serves only `READ_TOOLS` and refuses the rest, and the caller is
 /// expected to have opened the store read-only as well — the flag alone
 /// would leave the open-time writes (embedder migration, read-audit
 /// records) happening on a server that says it does not write.
@@ -688,7 +747,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     sup_tampered
                 )
             };
-            Ok(format!(
+            let text = format!(
                 "records checked: {}\nhmac failures: {}\naudit chain: {}\norphan labels: {}\nmirror drift: {}{}\nresult: {}",
                 report.records_checked,
                 report.bad_records.len(),
@@ -701,7 +760,28 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 } else {
                     "VERIFY FAILED"
                 }
-            ))
+            );
+            // **A failed verify is an ERROR on this transport, not prose.**
+            //
+            // It used to return `Ok(text)`, so the reply carried
+            // `"isError": false` — the ONE machine-readable field in an MCP
+            // tool result — with `VERIFY FAILED` buried in a text blob. An
+            // agent keying on that field, which is what the field is for,
+            // read a tampered vault as a successful check. Every other
+            // surface states this verdict where a machine can see it: the
+            // CLI exits 2, `/v1` answers `"ok": false`, and the fleet's
+            // `ops verify` exits 2 off exactly that. This transport was the
+            // outlier, and not for a protocol reason — `undercroft_status`
+            // one arm down returns structured JSON, and the error path here
+            // renders the same text.
+            //
+            // The whole report travels either way, so nothing an agent
+            // could read before is lost; only the flag changes, from a
+            // statement that was WRONG to one that is right.
+            if !report.ok() {
+                anyhow::bail!("{text}");
+            }
+            Ok(text)
         }
         "undercroft_status" => {
             let st = store.stats()?;

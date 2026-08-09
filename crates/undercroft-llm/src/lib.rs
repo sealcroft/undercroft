@@ -99,33 +99,28 @@ impl LlmClient {
                  another process."
             );
         }
-        let mut builder = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(120));
-        match std::env::var("UNDERCROFT_LLM_CA") {
-            Ok(path) if !path.trim().is_empty() => {
-                if tls {
-                    let pem = std::fs::read(&path).map_err(|e| {
-                        LlmError::Refused(format!("UNDERCROFT_LLM_CA {path:?} cannot be read: {e}"))
-                    })?;
-                    builder =
-                        builder.tls_config(crate::embed::pinned_roots_from_pem(&pem).map_err(
-                            |e| LlmError::Refused(format!("UNDERCROFT_LLM_CA {path:?}: {e}")),
-                        )?);
-                } else {
-                    undercroft_obs::diag_warn!(
-                        "UNDERCROFT_LLM_CA is set but {base} is not https — the \
-                         declared root is ignored on a loopback cleartext \
-                         connection"
-                    );
-                }
-            }
-            _ => {}
-        }
+        // **This crate stopped building its own client.** The transport
+        // policy lives in `undercroft-net` — which was EXTRACTED FROM this
+        // crate — and two copies of a rule are two places for it to drift.
+        // They had: the local copy applied a declared pin only `if tls`, so
+        // a loopback-http base never read or validated the CA file while the
+        // shared path does, and it treated `UNDERCROFT_LLM_CA=""` as no
+        // pin at all — silently un-pinning exactly when the operator
+        // believes they pinned. It also re-read and re-parsed the PEM on
+        // every construction. One call now, resolved once per process.
+        let agent = undercroft_net::agent_from_env(
+            "the LLM endpoint",
+            &base,
+            "UNDERCROFT_LLM_CA",
+            std::time::Duration::from_secs(120),
+        )
+        .map_err(|e| LlmError::Refused(e.to_string()))?;
         Ok(Self {
             base,
             model: model.to_string(),
             kind,
             key: key.to_string(),
-            agent: builder.build(),
+            agent,
         })
     }
 

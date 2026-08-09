@@ -18,6 +18,8 @@ rayon = { workspace = true }
 undercroft-core = { path = "../undercroft-core" }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-index = { path = "../undercroft-index" }
+# The transport policy owns the CA-pin resolver that `config check` drives.
+undercroft-net = { path = "../undercroft-net" }
 undercroft-obs = { path = "../undercroft-obs" }
 base64 = "0.22"
 rusqlite = { workspace = true }

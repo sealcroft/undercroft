@@ -4,6 +4,9 @@
 
 ```bash
 claude mcp add undercroft -- undercroft serve-mcp
+
+# Recall only — every write tool refused, and the vault opened read-only:
+claude mcp add undercroft -- undercroft serve-mcp --read-only
 ```
 
 Docker variant:

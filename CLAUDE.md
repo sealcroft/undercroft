@@ -50,6 +50,33 @@ Consequences that are binding, not advisory:
 - **Do the impact analysis first**: establish what a change touches and what
   could fail *silently*, plan it, prove it, then present the diff.
 - **A gap is a gap** — never dressed up as a principled refusal.
+- **A RULE written into this file gets the same scrutiny as code, and the
+  test is the same one: apply it backwards.** Before a doctrine lands here,
+  run it over decisions the tree has already made and see what it
+  reclassifies. If it changes nothing, it is describing what is already done
+  — say that, or do not write it. If it changes a lot, the rule is probably
+  wrong, and every past decision it overturns owes its own argument.
+  This is not hypothetical. A versioning doctrine was written here as *"MAJOR
+  carries anything that can stop a deployment which worked before"*, and it
+  read as obviously correct. Applied backwards it would have made most of
+  this project's past security fixes major releases, and none of them were —
+  which is the signal that the RULE was wrong, not the history. The real test
+  is a **documented contract** that changes; "a deployment could stop" is a
+  different question with a different answer, and conflating them would have
+  inflated every future hardening fix into a major. The maintainer caught it,
+  not a gate.
+  **"It changes nothing" has two meanings and they are opposite.** Either the
+  rule describes what the tree already does — fine, say so — or there is no
+  history to test it against, which is not validation at all. Applying the
+  CORRECTED versioning test backwards returns the second: `1.0.0` is the only
+  release under it and it was a version RESET, so nothing before it promised
+  an upgrade path. The rule is therefore **untested by history and this
+  release is its first real application**, which is a caveat that has to be
+  written down rather than mistaken for a pass.
+  So: a doctrine is a claim about the tree, and an unverified claim about the
+  tree is exactly what the rule above forbids for code. **The reasoning that
+  produces a rule fails in the same ways the code does, and it is harder to
+  notice because prose does not fail to compile.**
 - When fanning out subagents, they inherit this role and the read-only rule
   that goes with parallel work (a shared cargo target dir yields false
   greens; builds and the battery belong to the integrator).
@@ -571,8 +598,21 @@ Consequences that are binding, not advisory:
   `ExternalEmbedder::embed` degrades to a ZERO vector, so the mirror was
   probed with zeros. **Retrieval policy is the local path's, verbatim**:
   closed vocabularies + trust floor + quarantine fence all come from the
-  shared `resolve_search_policy`, applied per candidate off the
-  HMAC-verified `meta.wing`. They were absent here until 2026-08-04, so an
+  shared `resolve_search_policy`, and the per-candidate decision is
+  `verified_meta_admits` off the HMAC-verified `meta.wing` — the FUNCTION,
+  not the clause it returns. That distinction is A28 inverted and it
+  shipped exploitable: `resolve_search_policy` folds the reserved wing in
+  only when an `EXISTS` over the CLEAR `wing` column finds a quarantined
+  row, so one offline `UPDATE drawers SET wing = 'notes'` on the sole
+  quarantined row defeats the probe and the clause arrives with no fence
+  in it. The local path never cared, because `verified_meta_admits`
+  refuses the reserved wing UNCONDITIONALLY before consulting any clause;
+  this path checked `trust` alone and returned diverted content that
+  `search` drops. Any future retrieval path calls the FUNCTION. Residue,
+  stated: with the probe defeated the quarantined row still enters the
+  candidate pool, so "poison cannot crowd or starve" degrades to an
+  availability cost under an offline writer — who can also just delete
+  rows. They were absent here until 2026-08-04, so an
   `index push` turned `--backend qdrant` into a route around admission
   control — the fix is a shared REQUIRED step, not a second copy. `index_push`
   still mirrors quarantined rows (an untrusted mirror can offer any id, so a
@@ -709,7 +749,14 @@ Consequences that are binding, not advisory:
   a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **34 tools (incl. `undercroft_history`, the audit chain
   at `HistoryScope::Agent` — fenced by namespace and by the reserved review
   wing, so a diverted write cannot read its own evidence back), 12
-  of them writes** — `WRITE_TOOLS`
+  of them writes** — the read-only gate is `READ_TOOLS` and it FAILS
+  CLOSED (`refused_when_read_only` = not-a-read), because
+  `WRITE_TOOLS.contains(name)` served any tool nobody had classified yet and
+  its compensating parity heuristic was blind to `_merge`, `_move`,
+  `_import`, `_forget`, `_prune`, `_promote` and `_sweep`; `/v1`'s `mutates`
+  decided the same question the safe way round and this copies it.
+  `WRITE_TOOLS` survives `#[cfg(test)]` as the other half of the inventory,
+  so an advertised tool in NEITHER list fails the build
   + the quarantine fence and the authority fence over raw arguments;
   parity.rs: the surface inventory the code is COUNTED AGAINST in both
   directions — a tool advertised without a line fails the build, a line
@@ -959,8 +1006,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (664 run,
-                                      # 4 #[ignore]d = 668 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (689 run,
+                                      # 4 #[ignore]d = 693 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -974,8 +1021,8 @@ docker compose run --rm test          # cargo unit + integration tests (664 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (257 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (76 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (290 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (95 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -1084,6 +1131,37 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
+
+**A SCRIPTED EDIT IS A CHANGE YOU HAVE NOT READ.** Four defects in one
+session, all the same root — a `python`/`sed` edit that matched its anchor and
+damaged what was around it — and the expensive one was invisible to every
+test by construction:
+
+- **An offset computed before a length-changing replace.** `j = s.index(...)`,
+  then a `replace()` that shifts everything, then `s[:i] + block + s[j:]` — the
+  block landed in the MIDDLE of a string literal. **Never carry an index
+  across a mutation.** Re-find after every change, or edit by line index.
+- **An anchor matched on a `fn` line with an attribute above it.** The
+  insertion took that `#[test]`, so a live parity gate silently became dead
+  code — and no test could report it, because the test was the thing that
+  stopped running. Only `clippy`'s "never used" caught it. **Read what is
+  ADJACENT to the anchor**: an attribute, a doc comment and a closing brace
+  all belong to something.
+- **Escape handling.** A Python octal escape wrote a raw `\x01` into a shell
+  script, and `bash -n` parsed it happily; doubled backslashes collapsed two
+  Rust string literals onto one line with 30-space runs, and **rustfmt does
+  not reformat string literals**, so no gate sees that class. Prefer raw
+  strings and line-index edits; **byte-scan** anything a script wrote
+  (control bytes, CRLF, space runs inside literals).
+- **`2>/dev/null` on a formatter.** It swallowed the failure, and the drift
+  surfaced a battery later. **Never redirect a checker's stderr** — that is
+  the documented "a checker that cannot run reports the same thing as a clean
+  tree" trap, one level up.
+
+**So: compile after EVERY structural edit, before making the next one.**
+Batching them hides which edit broke what, and this session batched them four
+times. The cost of a rebuild is seconds; the cost of a disabled gate is a
+release.
 
 **Line endings are enforced, in two scopes, because no image carries the whole
 tree.** `.gitattributes` declares `* text=auto eol=lf` so a CRLF shell script
@@ -1686,6 +1764,41 @@ project.*
 - License: **BUSL-1.1** (source-available; rolling 4-year conversion to
   MPL 2.0; `NOTICE` carries the MemPalace MIT heritage attribution).
   Never reintroduce MIT as the project license or publish under it.
+- **Semantic versioning, and the test for MAJOR is a DOCUMENTED CONTRACT
+  that changes — not "a deployment could stop".** Those are different, and
+  conflating them inflates a fix release into a major one. MAJOR is a removed
+  or renamed surface, an on-disk format that will not open, a default that
+  changes what is retrievable, a documented value that stops being accepted.
+  MINOR is new capability, backward compatible. PATCH is a fix whose only
+  observable change is that a defect is gone.
+  **Tightening validation of input that was never documented as valid is a
+  FIX, not a break.** A config value that was always a typo, an exit code
+  that always contradicted the published doctrine, a refusal the policy
+  always stated but enforced one step too late — closing those makes the code
+  match the contract, and a deployment that "worked" on the old behaviour was
+  running without the protection it declared. Say that plainly rather than
+  reaching for a major.
+  What such a fix DOES owe is warning: **anything that can stop a running
+  deployment gets an `UPGRADING.md` entry in the same unit**, with symptom,
+  cause and fix, and `undercroft config check` must be able to detect it
+  before a restart. That is the obligation, and it is not the same as a
+  version bump. ROADMAP is filed by target release.
+- **A declared configuration is classified, and the class decides what a bad
+  value does.** `architecture/index.html` states the doctrine — *"every
+  default is the conservative choice"*, *"integrity is not a tier"*,
+  *"outward paths are explicit"* — and it settles the question one call site
+  at a time used to: where the default is already conservative and the
+  declaration merely ADJUSTS it, garbage warns and keeps the default, because
+  the operator loses tuning and nothing else. Where the DECLARATION is what
+  turns a protection on, pins an outward path, or names which vector space a
+  vault is in, the default is *off* and a silent fallback removes what was
+  asked for — so garbage REFUSES to open. That is "integrity is not a tier"
+  extended by one step: a protection an operator declared must not become a
+  tier by typo. `parity.rs::ENGINE_ENV_VARS` carries `(name, ConfigClass)`
+  and is counted against the code in both directions, so a new variable does
+  not compile until someone classifies it; `undercroft config check` runs
+  every declaration through the resolver that will run at start-up, opening
+  nothing, so an upgrade fails in a pipeline instead of at a restart.
 - **Drift check before every release**, not only when something feels off.
   The 65-drift audit found capabilities present on one surface and missing,
   weaker or silently ignored on another — 55 of them failing with no signal
@@ -1695,7 +1808,9 @@ project.*
   docs vs code) with an adversarial verifier per dimension. `parity.rs` holds
   the line between audits; the audit is what finds what a fixed inventory
   cannot express.
-- Release flow: full Docker battery (always `--build`) → PR → CI green →
+- Release flow: full Docker battery (always `--build`) → **`UPGRADING.md`
+  updated if anything can stop a running deployment, and `undercroft config
+  check` able to detect it** → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
   post-merge CI green → Pages live-verified. Version bumps touch

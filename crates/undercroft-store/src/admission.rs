@@ -396,7 +396,11 @@ impl PalaceStore {
         self.admission_ruling(id, "denied", None)?;
         // `Ruled`: the deny verdict is committed; the attested destruction
         // is the effect of a ruling, not an ordinary forget.
-        self.forget_with_proof_ruled(&[id.to_string()], crate::manage::PendingEvidence::Ruled)
+        self.forget_with_proof_ruled(
+            &[id.to_string()],
+            crate::manage::PendingEvidence::Ruled,
+            crate::forget::MirrorDelete::NotIssued,
+        )
     }
 
     /// Append a ruling record without acting on it — the crash-window

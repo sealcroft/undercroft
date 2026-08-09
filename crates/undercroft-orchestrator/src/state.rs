@@ -310,6 +310,21 @@ impl Orch {
                 "instance name must be non-empty alphanumeric/dash".into(),
             ));
         }
+        // **Registration is this crate's construction moment.** The
+        // transport policy is "refused at CONSTRUCTION, before a byte
+        // moves", and a cleartext instance URL used to be accepted here,
+        // stored, listed, routed to and reported on — and only refused at
+        // the first outbound request, which arrives on a tenant's behalf,
+        // long after the operator who typed it has walked away. The
+        // fleet console showed it as a registered instance that was merely
+        // unhealthy. Refusing at the door means the error lands on the
+        // person who can fix it, in the command that caused it.
+        //
+        // `Invalid` → 400: the value is malformed for this system, which is
+        // exactly what a bad request means. The message is
+        // `undercroft-net`'s own, so it names the fix.
+        undercroft_net::require_secure_transport("an engine instance", url)
+            .map_err(|e| StateError::Invalid(e.to_string()))?;
         let cred = serde_json::json!({ "bearer": bearer, "assertion_secret": assertion_secret });
         let blob = self.seal(
             &format!("orch/instance/{name}"),
@@ -590,10 +605,10 @@ mod tests {
     #[test]
     fn credentials_seal_and_open_with_aad_binding() {
         let (_d, o) = orch();
-        o.instance_add("alpha", "http://a:8800/", "bearer-a", "secret-a")
+        o.instance_add("alpha", "https://a:8800/", "bearer-a", "secret-a")
             .unwrap();
         let c = o.instance_creds("alpha").unwrap();
-        assert_eq!(c.url, "http://a:8800");
+        assert_eq!(c.url, "https://a:8800");
         assert_eq!(&*c.bearer, "bearer-a");
         assert_eq!(&*c.assertion_secret, "secret-a");
         // A blob copied onto another instance row must fail to open (AAD
@@ -606,7 +621,7 @@ mod tests {
             .unwrap();
         o.conn
             .execute(
-                "INSERT INTO instances (name, url, cred) VALUES ('beta', 'http://b', ?1)",
+                "INSERT INTO instances (name, url, cred) VALUES ('beta', 'https://b', ?1)",
                 params![blob],
             )
             .unwrap();
@@ -616,13 +631,55 @@ mod tests {
         ));
     }
 
+    /// **Registration is the construction moment, so the transport policy
+    /// applies here.** A cleartext instance URL used to be accepted, sealed,
+    /// listed, placed on and routed to, and refused only at the first
+    /// outbound call — which happens on a tenant's behalf, long after the
+    /// operator who typed it has gone. The fleet console showed it as a
+    /// registered instance that merely looked unhealthy.
+    ///
+    /// Both directions, and the refusal names the fix: a gate that refused
+    /// everything would pass a one-sided test and lock every operator out.
+    #[test]
+    fn registering_a_cleartext_instance_is_refused_at_the_door() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let o = Orch::open(&dir.path().join("orch.db"), KEY).unwrap();
+
+        let err = o
+            .instance_add("alpha", "http://engine.internal:8800", "b", "s")
+            .expect_err("cleartext beyond loopback must be refused at registration");
+        assert!(matches!(err, StateError::Invalid(_)), "{err:?}");
+        assert_eq!(err.status(), 400, "a malformed value is a bad request");
+        let msg = err.to_string();
+        assert!(msg.contains("no override"), "{msg}");
+        assert!(
+            msg.contains("an engine instance"),
+            "names WHICH client: {msg}"
+        );
+        // Refused means NOT registered — not registered-then-unhealthy.
+        assert!(o.instance_list().unwrap().is_empty());
+
+        // The userinfo spoof buys no exemption here either: the policy is
+        // `undercroft-net`'s, which asks the transport's own URL parser.
+        assert!(o
+            .instance_add("spoof", "http://127.0.0.1:8800@evil.com/", "b", "s")
+            .is_err());
+
+        // And the two legal shapes still register.
+        o.instance_add("loop", "http://127.0.0.1:8800", "b", "s")
+            .expect("loopback is allowed — TLS or loopback, and this is loopback");
+        o.instance_add("tls", "https://engine.internal:8800", "b", "s")
+            .expect("https is allowed");
+        assert_eq!(o.instance_list().unwrap().len(), 2);
+    }
+
     #[test]
     fn wrong_key_cannot_open_credentials() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("orch.db");
         Orch::open(&path, KEY)
             .unwrap()
-            .instance_add("alpha", "http://a", "b", "s")
+            .instance_add("alpha", "https://a", "b", "s")
             .unwrap();
         let other = Orch::open(
             &path,
@@ -638,7 +695,7 @@ mod tests {
     #[test]
     fn tokens_resolve_by_mac_and_never_store_plaintext() {
         let (_d, o) = orch();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         let (t, token) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         assert_eq!(t.vault, format!("tenant-{}", t.id));
         let hit = o.tenant_by_token(&token).unwrap().expect("token resolves");
@@ -663,7 +720,7 @@ mod tests {
     #[test]
     fn a_tenants_security_level_is_recorded_and_read_back_everywhere() {
         let (_d, o) = orch();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         let (sealed, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         let (plain, token) = o.tenant_create("globex", "alpha", "hmac-only").unwrap();
         assert_eq!(sealed.level, "sealed");
@@ -695,7 +752,7 @@ mod tests {
         let path = dir.path().join("orch.db");
         {
             let o = Orch::open(&path, KEY).unwrap();
-            o.instance_add("alpha", "http://a", "b", "s").unwrap();
+            o.instance_add("alpha", "https://a", "b", "s").unwrap();
             o.tenant_create("acme", "alpha", "hmac-only").unwrap();
             // Put the schema back the way it was before the column.
             o.conn
@@ -710,7 +767,7 @@ mod tests {
     #[test]
     fn token_rotation_revokes_the_old_token_immediately() {
         let (_d, o) = orch();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         let (t, old) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         let new = o.tenant_rotate_token(&t.id).unwrap();
         assert_ne!(old, new);
@@ -728,7 +785,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("orch.db");
         let writer = Orch::open(&path, KEY).unwrap();
-        writer.instance_add("alpha", "http://a", "b", "s").unwrap();
+        writer.instance_add("alpha", "https://a", "b", "s").unwrap();
         let (t, token) = writer.tenant_create("acme", "alpha", "sealed").unwrap();
 
         let replica = Orch::open_read_only(&path, KEY).unwrap();
@@ -736,7 +793,9 @@ mod tests {
         assert_eq!(&*replica.instance_creds("alpha").unwrap().bearer, "b");
         assert!(replica.last_write().unwrap().is_some());
         for err in [
-            replica.instance_add("x", "http://x", "b", "s").unwrap_err(),
+            replica
+                .instance_add("x", "https://x", "b", "s")
+                .unwrap_err(),
             replica
                 .tenant_create("x", "alpha", "sealed")
                 .map(|_| ())
@@ -779,7 +838,7 @@ mod tests {
         // And the refusals the state layer actually raises land on the
         // right class, end to end.
         let (_d, o) = orch();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         let (t, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
         // `.err()`, never `unwrap_err()`: `InstanceCreds` is deliberately
         // not `Debug` — it carries key material.
@@ -803,7 +862,7 @@ mod tests {
     #[test]
     fn removing_an_unregistered_instance_is_not_a_removal() {
         let (_d, o) = orch();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         assert!(o.instance_remove("alpha").unwrap(), "premise: a real one");
         assert!(!o.instance_remove("alpha").unwrap(), "already gone");
         assert!(!o.instance_remove("never-registered").unwrap());
@@ -812,8 +871,8 @@ mod tests {
     #[test]
     fn least_loaded_placement_and_remove_guard() {
         let (_d, o) = orch();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
-        o.instance_add("beta", "http://b", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
+        o.instance_add("beta", "https://b", "b", "s").unwrap();
         assert_eq!(o.instance_least_loaded().unwrap().as_deref(), Some("alpha"));
         let (t1, _) = o.tenant_create("one", "alpha", "sealed").unwrap();
         assert_eq!(o.instance_least_loaded().unwrap().as_deref(), Some("beta"));

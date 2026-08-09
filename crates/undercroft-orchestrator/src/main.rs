@@ -84,7 +84,7 @@ enum Command {
     /// and rulings, wing trust, retention, attested forgetting, anchor
     /// tightening, supersession receipts.
     ///
-    /// These ten routes landed on the admin plane on the argument that they
+    /// These eleven routes landed on the admin plane on the argument that they
     /// "were reachable from nowhere in a fleet", and then WERE reachable
     /// from nowhere but `curl`: the console has no element for any of them
     /// and this CLI had no subcommand, while docs/MULTI_TENANCY.md said the
@@ -155,8 +155,88 @@ fn is_integrity_verdict(status: u16, body: &[u8]) -> bool {
     v.get("class").and_then(|c| c.as_str()) == Some("integrity")
 }
 
+/// Whether a migration failure is an integrity verdict from the engine.
+///
+/// The engine's refusal travels as `MigrateError::Engine(status, message)`,
+/// where the message is the relayed body wrapped in prose
+/// (`"engine export failed (409): {json}"`). So this finds the JSON and
+/// hands it to the SAME classifier `ops` uses — never a substring scan for
+/// the class name, which would match the word appearing in any error text
+/// and is the gate shape this tree has been bitten by twice.
+fn migrate_is_integrity(e: &proxy::MigrateError) -> bool {
+    match e {
+        proxy::MigrateError::Engine(status, msg) => msg
+            .find('{')
+            .is_some_and(|i| is_integrity_verdict(*status, &msg.as_bytes()[i..])),
+        // **The control plane's OWN tamper verdict.** `Unsealable` is "a
+        // tamper verdict or a wrong key" by its own doc, and it exited 1 on
+        // every subcommand while every ENGINE-side integrity verdict exited
+        // 2 — so the fleet's state file failing to open was, to a compliance
+        // script, an ordinary failed run.
+        proxy::MigrateError::State(state::StateError::Unsealable) => true,
+        _ => false,
+    }
+}
+
+/// The same verdict for a bare state error, on the subcommands that do not
+/// go through `MigrateError`.
+fn state_is_integrity(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<state::StateError>(),
+        Some(state::StateError::Unsealable)
+    )
+}
+
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Exit 2 for an integrity verdict raised anywhere in this binary, not
+    // only on the two doors that were given one by hand. `Unsealable` is the
+    // control plane's own tamper verdict and reached `?` on `ops`,
+    // `tenant-create`, `tenant-delete` and `tenant-rotate` as an ordinary
+    // error.
+    let out = run();
+    if let Err(e) = &out {
+        if state_is_integrity(e) {
+            eprintln!(
+                "INTEGRITY VERDICT: {e}. This is the orchestrator's own state, not an                  engine's — a credential blob that will not open under the declared key                  is a tamper verdict or a wrong key, never a transient condition."
+            );
+            std::process::exit(EXIT_INTEGRITY.into());
+        }
+    }
+    out
+}
+
+fn run() -> Result<()> {
+    // **Exit 1 for a usage error, not clap's default 2.** `docs/AGENTS.md`
+    // states the doctrine without qualification — exit 2 means an integrity
+    // verdict, exit 1 means the run itself failed, "bad arguments, a missing
+    // file" — and clap's `USAGE_CODE` is 2, so a typo or a renamed flag
+    // reached a compliance script as a TAMPER VERDICT. The doctrine and the
+    // parser disagreed, and the doctrine is the one that is published.
+    // `--help`/`--version` still exit 0, which is what `use_stderr` decides.
+    let parsed = <Cli as clap::Parser>::try_parse().unwrap_or_else(|e| {
+        let _ = e.print();
+        std::process::exit(if e.use_stderr() { 1 } else { 0 });
+    });
+    let cli = parsed;
+    // The engine hop's TLS pin, resolved and VALIDATED before anything is
+    // served or sent — the rule `RateLimiter::from_env` already states in
+    // front of the bind, applied to the other declaration this process
+    // reads. It used to be resolved inside every outbound call, so an
+    // unreadable or certificate-less `UNDERCROFT_ORCH_ENGINE_CA` bound the
+    // port, answered `/healthz` and then failed every proxied request.
+    //
+    // Here rather than in `serve` so it covers `migrate`, `instance-add`
+    // and the rest: each of those makes an outbound call too, and a
+    // configuration refusal belongs at the start of the command, not
+    // halfway through a tenant migration.
+    //
+    // Unconditional, and the cost is stated: `keygen` makes no call and is
+    // refused too when the declaration is broken. The alternative is a list
+    // of exempt subcommands, and a list somebody has to remember to add to
+    // is the exact shape this tree keeps paying for. An undeclared pin —
+    // the default — resolves to `Ok(None)` and costs nothing, so only an
+    // operator whose fleet is already misconfigured ever sees this.
+    engine::init_transport().map_err(|e| anyhow::anyhow!(e))?;
     match cli.command {
         Command::Keygen => {
             let mut key = [0u8; 32];
@@ -201,22 +281,49 @@ fn main() -> Result<()> {
         Command::InstanceList => {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
             for i in orch.instance_list()? {
-                let healthy = orch
-                    .instance_creds(&i.name)
-                    .map(|c| engine::health(&c.url))
-                    .unwrap_or(false);
+                // A refusal is not an outage, and printing it as one sent
+                // operators to look at an engine that was fine. `healthy`
+                // keeps its meaning; the reason is appended when there is
+                // one to give.
+                // `instance_creds` makes no network call: its failures are
+                // a wrong orchestrator key, a tampered credential blob or a
+                // SQLite error. Flattening those to `Unreachable` would
+                // commit the exact error `Health` exists to stop — claiming
+                // an outage for a local condition — one variant over from
+                // where it was just fixed. They are refusals, and they say
+                // what they are.
+                let health = match orch.instance_creds(&i.name) {
+                    Ok(c) => engine::health(&c.url),
+                    Err(e) => engine::Health::Refused(e.to_string()),
+                };
+                let note = match health.refusal() {
+                    Some(why) => format!("\trefused={why}"),
+                    None => String::new(),
+                };
                 println!(
-                    "{}\t{}\ttenants={}\thealthy={healthy}",
-                    i.name, i.url, i.tenants
+                    "{}\t{}\ttenants={}\thealthy={}{note}",
+                    i.name,
+                    i.url,
+                    i.tenants,
+                    health.is_healthy()
                 );
             }
             Ok(())
         }
         Command::InstanceRemove { name } => {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
-            let removed = orch.instance_remove(&name)?;
-            println!("{}", if removed { "removed" } else { "not found" });
-            Ok(())
+            // A delete of a name that is not registered is NOT a success —
+            // the same doctrine `DELETE /admin/instances/{name}` states,
+            // under a comment calling the cheerful 200 "verbatim the
+            // anti-pattern the engine eradicated". This door printed
+            // "not found" and exited 0, so a decommission script read it as
+            // done. Two doors, opposite answers, on one call.
+            if orch.instance_remove(&name)? {
+                println!("removed");
+                Ok(())
+            } else {
+                bail!("no instance {name:?}")
+            }
         }
         Command::TenantCreate {
             name,
@@ -245,9 +352,15 @@ fn main() -> Result<()> {
         Command::TenantList => {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
             for t in orch.tenant_list()? {
+                // `level` reached `GET /admin/tenants` (which serializes the
+                // struct whole) and not this line — and it is precisely the
+                // field whose doc says it exists because "a migration has to
+                // recreate the vault on the destination and had no way to
+                // ask". The surface an operator reads BEFORE a migration was
+                // the one that could not show it.
                 println!(
-                    "{}\t{}\t{} @ {}\t{}",
-                    t.id, t.name, t.vault, t.instance, t.created_at
+                    "{}	{}	{} @ {}	{}	{}",
+                    t.id, t.name, t.vault, t.instance, t.level, t.created_at
                 );
             }
             Ok(())
@@ -316,10 +429,31 @@ fn main() -> Result<()> {
             keep_source,
         } => {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
-            let summary = proxy::migrate_tenant(&orch, &id, &to, keep_source)
-                .map_err(|e| anyhow::anyhow!(e))?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
-            Ok(())
+            // **The same exit-code doctrine as `ops`, on the other door
+            // that talks to an engine.** `migrate` returned `Result<()>`,
+            // so every failure exited 1 — including a source vault whose
+            // export came back 409 `"class": "integrity"`, which is a
+            // tamper verdict and not a run to retry. A migration is exactly
+            // where that matters: the retry loop that treats exit 1 as
+            // transient will keep asking a tampered vault to export itself.
+            match proxy::migrate_tenant(&orch, &id, &to, keep_source) {
+                Ok(summary) => {
+                    println!("{}", serde_json::to_string_pretty(&summary)?);
+                    Ok(())
+                }
+                Err(e) => {
+                    if migrate_is_integrity(&e) {
+                        eprintln!(
+                            "INTEGRITY VERDICT from the engine during migration of tenant '{id}' — the \
+                             source is left authoritative and untouched. This is not a failed run to \
+                             retry. Follow the tamper runbook."
+                        );
+                        eprintln!("{e}");
+                        std::process::exit(EXIT_INTEGRITY.into());
+                    }
+                    Err(anyhow::anyhow!(e))
+                }
+            }
         }
     }
 }
@@ -341,6 +475,57 @@ mod tests {
     /// obvious over-fix — treating every 409 as an integrity verdict —
     /// would page someone for a co-resident refusal or a wrong read-only
     /// posture, which are ordinary refusals on the same status.
+    /// **`migrate` had no exit-code doctrine at all.**
+    ///
+    /// `fn main() -> Result<()>` gives 1 for everything, so a migration
+    /// whose source vault answered its export with 409 `"class":
+    /// "integrity"` — a tamper verdict — exited the same code as a typo'd
+    /// destination. A retry loop that treats 1 as transient keeps asking a
+    /// tampered vault to export itself.
+    ///
+    /// The classifier is the SAME one `ops` uses, applied to the JSON found
+    /// inside the wrapped message. Not a substring scan for the class name:
+    /// that would match the word wherever it appeared in prose, which is
+    /// the gate shape this tree has paid for twice.
+    #[test]
+    fn a_migration_refused_for_integrity_is_distinguishable_from_a_bad_request() {
+        use proxy::MigrateError as M;
+        // The verdict: the engine relayed a classed 409 through export.
+        assert!(migrate_is_integrity(&M::Engine(
+            409,
+            r#"engine export failed (409): {"error":"vault manifest failed integrity verification","class":"integrity"}"#.into(),
+        )));
+        // ...and through import, which wraps its body the same way.
+        assert!(migrate_is_integrity(&M::Engine(
+            409,
+            r#"engine import failed (409): {"error":"bad hmac","class":"integrity"}"#.into(),
+        )));
+
+        // Every near miss stays exit 1. A 409 is ALSO how a co-resident
+        // refusal and a wrong read-only posture answer, and paging someone
+        // for those is the over-fix this classifier exists to avoid.
+        assert!(!migrate_is_integrity(&M::Engine(
+            409,
+            r#"engine export failed (409): {"error":"vault already exists"}"#.into(),
+        )));
+        assert!(!migrate_is_integrity(&M::Engine(
+            502,
+            "engine unreachable: connection refused".into(),
+        )));
+        // The word appearing in prose is not the class — the substring
+        // scan this deliberately is not.
+        assert!(!migrate_is_integrity(&M::Engine(
+            400,
+            r#"engine import failed (400): {"error":"integrity is not a valid kind"}"#.into(),
+        )));
+        // And nothing that is not an engine refusal is one.
+        assert!(!migrate_is_integrity(&M::UnknownTenant("acme".into())));
+        assert!(!migrate_is_integrity(&M::AlreadyThere));
+        assert!(!migrate_is_integrity(&M::Unfaithful(
+            "count mismatch: 9 of 10".into()
+        )));
+    }
+
     #[test]
     fn an_integrity_verdict_is_recognised_on_a_200_and_on_a_classed_error() {
         // The case that exited 0: a successful HTTP status carrying a

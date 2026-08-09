@@ -3,10 +3,167 @@
 Undercroft is the Rust conversion of MemPalace with a hardened memory-management
 layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 
+---
+
+## How this file is organised — semantic versioning
+
+Work is filed under the release that will carry it, using the standard
+convention. There was no versioning doctrine at all before this.
+
+| | Carries | Test |
+|---|---|---|
+| **MAJOR** (`2.0.0`) | An incompatible change to a documented contract | A removed or renamed surface; an on-disk format that will not open; a default that changes what is retrievable; a **documented** value that stops being accepted |
+| **MINOR** (`1.1.0`) | New capability, backward compatible | A new subcommand, route or tool; a new opt-in variable; a report gaining a field |
+| **PATCH** (`1.0.1`) | Fixes whose only observable change is that a defect is gone | Including security fixes, and including stricter validation of input that was never documented as valid |
+
+**The test is a documented contract that changes — not "a deployment could
+stop".** Conflating those inflates a fix release into a major one, and the
+first draft of this file did exactly that. Tightening validation of a value
+that was always a typo, correcting an exit code that always contradicted the
+published doctrine, or enforcing a stated policy one step earlier are FIXES:
+they make the code match the contract, and a deployment that "worked" on the
+old behaviour was running without the protection it had declared.
+
+**What such a fix owes is warning, not a version bump.** Anything that can
+stop a running deployment gets an `UPGRADING.md` entry in the same unit — with
+symptom, cause and fix — and `undercroft config check` must be able to detect
+it before a restart. That obligation is the point; the number is not.
 
 ---
 
-## OPEN after 1.0.0 — recorded as work, with a gate each
+## 1.1.0 — the release this branch is
+
+MINOR: new capability, backward compatible. No documented contract changes.
+Everything else on the branch is patch-level and folded in.
+
+### New capability
+
+* **`undercroft config check`** — validates every `UNDERCROFT_*` declaration
+  through the resolver that runs at start-up, opening nothing (no vault, no
+  database, no socket, no outbound call), and exits non-zero if the
+  environment would refuse to start. Reports validated and merely-accepted
+  separately, because only some variables have a parse to run.
+* **Capability parity closed on four surfaces.** `POST /v1/…/refine` gained
+  `dry_run` and `preview`; `POST /v1/…/forget` gained `backend`;
+  `DrawerSummary.source_file` reaches the CLI; `Tenant.level` reaches
+  `tenant-list`. Each was found by an inventory gate rather than by report.
+* **`OPS_DELIBERATELY_ABSENT`** — the operator plane records the seven engine
+  capabilities it does not reach, each with its reason, counted against the
+  engine's own surface in both directions.
+
+### Stricter validation — fixes, listed in `UPGRADING.md`
+
+These can stop a *misconfigured* deployment, which is why they are in
+`UPGRADING.md` and detectable by `config check`. None changes a documented
+contract:
+
+* A declaration that turns a protection on now refuses when it does not parse
+  (`UNDERCROFT_TRUST_FLOOR`, `UNDERCROFT_ADMISSION`,
+  `UNDERCROFT_SEMANTIC_GATE`). The documented values never included the typo;
+  accepting it and silently disabling the protection was the defect.
+* A cleartext engine URL is refused at REGISTRATION rather than at the first
+  outbound request. The transport policy always said "TLS or loopback,
+  nothing else, no override"; enforcing it at the door is the fix.
+* `instance-remove <unknown>` exits non-zero, matching
+  `DELETE /admin/instances/{name}`, which already answered 404.
+* Usage errors exit 1 rather than clap's default 2. `docs/AGENTS.md` always
+  said exit 2 means an integrity verdict and exit 1 means bad arguments; the
+  parser was the outlier.
+
+### Fixes folded in
+
+The twenty defects on the pre-merge blocker list, the eleven regressions the
+third audit round found inside those fixes, and T1–T15. All described in
+CHANGELOG under `## Unreleased`. The two worth naming:
+
+* **The remote search path decided the quarantine fence off the CLEAR mirror
+  column** (A28 inverted) — one offline `UPDATE drawers SET wing = 'notes'`
+  and `search_with_index` returned diverted content that `search` drops.
+* **The chain-commit counter over-counted 2× on `serve-http`**, and the two
+  at-rest migrations — whole-vault mutations that run unattended at the next
+  writable open — left no chain record at all.
+
+---
+
+## 2.0.0 — nothing is filed here yet
+
+Reserved for a documented contract that changes. The `palace` terminology
+rename (below) is the candidate most likely to land here, since it would move
+a CLI subcommand and a room literal.
+
+---
+
+## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
+
+Code comments and documents across this tree cite ids of the form
+`ROADMAP <letter><number>`: **A** (audit findings), **C** (the completeness
+audit), **R** (read-only-posture residuals), **U** (at-rest units), **O**
+(open work after 1.0.0). Most of the ids cited across the tree resolve to no
+heading here, which reads as rot and is not: **an `A`/`C`/`R`/`U` entry
+lives in this file only while the item is OPEN.** (Count them yourself if
+you need to — `grep -rhoE 'ROADMAP [ACRUO][0-9]+' . | sort -u`. The first
+draft of this paragraph put the number in prose, which is the exact thing
+this file tells you not to trust, and it was wrong twice over.) When it closes, the entry leaves — the file is a list of work, not
+an archive — and the narrative moves to the CHANGELOG section of the release
+that closed it.
+
+So a citation is a **breadcrumb into the history, not a pointer to a
+heading**, and the authoritative description of any closed item is the
+comment at the citation site itself, which is written to stand alone. If you
+are following one and want more, search CHANGELOG.md for the id.
+
+Two consequences, both binding:
+
+- **Cite an id only beside a description that stands without it.** A comment
+  whose whole content is "see ROADMAP C14" tells a future reader nothing
+  once C14 closes.
+- **A newly OPENED item gets a heading here**, so an open item is always
+  resolvable. That is what the `O` entries below are.
+
+---
+
+---
+
+## The round-three audit — T1–T15, ALL CLOSED 2026-08-09
+
+The seven-dimension audit run against the round-three fixes found eleven
+regressions inside them (all closed in the same unit, described in CHANGELOG)
+and fifteen further items. **This section listed those fifteen as open work;
+every one is now closed**, because the maintainer's rule is that nothing
+merges until it is fixed — not "recorded with a shape".
+
+| | What | How it closed |
+|---|---|---|
+| T1 | `UNDERCROFT_ADMISSION` and `_SEMANTIC_GATE` warned and ignored | Both refuse and `.trim()`; the file holds ONE doctrine now, and the semantic gate's comment stating the opposite is gone |
+| T2 | Four CA pins, three empty-value behaviours | `undercroft_net::declared_pin` — one rule, and an empty declaration refuses everywhere |
+| T3 | `undercroft-llm` built its own client | It calls `agent_from_env`; the gate is workspace-wide, with two named-and-checked exemptions |
+| T4 | `UNDERCROFT_INDEX_CA` resolved per call | `pin_from_env` caches per process, `Result` and all |
+| T5 | `migrate_embedding_space` and `repair` recorded nothing | `audit_migration_standalone`; both bind what they moved and skipped |
+| T6 | Tamper decision read a cached manifest | `Vault::anchored_head` — from disk, MAC-verified; `reconcile_chain` and `verify` both use it |
+| T7 | Vault trust floor narrowed `search` silently | `Exclusions::measure` reads the EFFECTIVE floor; the e2e that pinned the silence now pins the disclosure |
+| T8 | Projections uninventoried; orchestrator root unreachable | Projecting paths are crates-relative; five entries added — and the gate immediately found `DrawerSummary.source_file` and `Tenant.level` genuinely missing |
+| T9 | `forget --backend` was CLI-only | `POST /v1/…/forget` takes `backend`, so the ops plane reaches it too |
+| T10 | Engine refusals flattened to 502 | `engine_response` keeps the engine's status AND its `class`; a local transport refusal says so |
+| T11 | clap usage errors exited 2 | Both binaries exit 1; the e2e check that PINNED the collision now pins the doctrine |
+| T12 | Two integrity verdicts outside the doctrine | `supersessions` answers `ok`; `Unsealable` exits 2 on every subcommand |
+| T13 | Coverage the fixes did not get | Nine new e2e arms across both suites, incl. the CA refusal, the usage-exit doctrine, and the migration record seen by the operator and refused to the agent |
+| T14 | No inventory for the ops parity axis | `OPS_DELIBERATELY_ABSENT`, counted against the engine's capabilities in both directions, every absence carrying a reason |
+| T15 | Residues stated | The query-vector egress boundary and the CA-rotation restart, both written where the code is |
+
+**Two of these found live drifts while being closed** — `DrawerSummary.source_file`
+never reached the CLI, and `Tenant.level` was dropped from `tenant-list`, which
+is the field that exists because a migration has to ask for it. Both are fixed.
+
+---
+
+## Unversioned — decisions and external actions, not code
+
+These are not releasable work: two are clicks in a web UI that no REST
+endpoint exposes, and one is a naming decision. Kept out of the version
+sections deliberately, so a release plan is not padded with things a
+release cannot contain.
+
+### OPEN after 1.0.0 — recorded as work, with a gate each
 
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
@@ -60,40 +217,20 @@ screens, skips the deletes for that group, and reports `quarantined`.
 `HAND_PROJECTED` gained the `PalaceStats` x `/v1` entry the doctrine
 requires.
 
-**Recorded, NOT fixed** - each needs its own unit and none is a boundary:
-the remote path's quarantine fence decides inclusion off the CLEAR mirror
-column (A28 inverted; the trust leg is correct); `UNDERCROFT_ORCH_ENGINE_CA`
-is resolved per outbound call rather than at startup, so a bad pin binds the
-port and 502s per request, and a policy refusal renders as "engine is down"
-on the health surface; a cleartext instance URL is accepted at registration
-and refused at request time; `undercroft_chain_commits_total` over-counts in
-a two-handle `serve-http` because the record delta comes from the handle's
-own stale manifest baseline; the two at-rest migrations (A10, U12) are
-whole-vault mutations with no chain record, which is the hole A19 closed for
-rotation; `forget` attests a destruction the remote mirror never hears about
-(`VectorIndex::delete` has zero callers); a partially-successful `index push`
-records zero rather than what left; `RefineReport` is hand-projected on both
-surfaces and is structurally outside `HAND_PROJECTED`'s reach; that gate's
-4000-char window can pass on a neighbouring handler's text; MCP returns a
-verify verdict as prose inside `isError: false`; `migrate` has no exit-code
-doctrine; `WRITE_TOOLS` fails OPEN behind a name heuristic. Docs still
-stating superseded claims: the egress record (THREAT_MODEL, AGENTS,
-architecture, CLAUDE), the trust floor's reach, `serve-mcp --read-only`,
-`RefineReport.quarantined`, the new CA variable, and MULTI_TENANCY's framing
-of the engine hop as advice.
-
-**Still open from the docs-vs-code dimension** (found, verified in part, not
-yet fixed — recorded here rather than left in a transcript): `undercroft-net`
-is absent from `README.md`'s crate map and from `docs/architecture.md`; ~23
-`ROADMAP <id>` citations across the tree (A10, C8, C14, R5, U12 …) resolve to
-no heading in this file, including ones `parity.rs` and `undercroft-net`
-point a future author at; `docs/AGENTS.md` routes the observability scenario
-to a "Scenario G" that does not exist and omits `anchor` from the
-orchestrator ops vocabulary; `docs/THREAT_MODEL.md` says the bundle
-downgrade is "refused in every direction" where one direction is
-deliberately allowed; two rustdoc comments and THREAT_MODEL list `filed_at`
-as a compared mirror column when `verify` deliberately excludes it; the
-1.0.0 CHANGELOG contradicts itself on suite counts.
+**Recorded, NOT fixed at the time — ALL CLOSED 2026-08-09 (round three).**
+This paragraph listed twenty items: the remote quarantine fence deciding off
+the CLEAR mirror column; `UNDERCROFT_ORCH_ENGINE_CA` resolved per call and a
+policy refusal rendering as "engine is down"; a cleartext instance URL
+accepted at registration; `undercroft_chain_commits_total` over-counting on
+two handles; the two at-rest migrations recording nothing; `forget` attesting
+a destruction the mirror never hears about; a partial `index push` recording
+zero; `RefineReport` outside the hand-projection gate's reach and that gate's
+4000-char window passing on a neighbour's text; MCP's verify verdict as prose
+inside `isError: false`; `migrate` with no exit-code doctrine; `WRITE_TOOLS`
+failing OPEN; and the doc claims. Each is closed with a test that was run
+against the reverted code and observed to fail — see CHANGELOG, "the
+merge-blocker list is empty". What the round-three audit found in those fixes,
+and what it found fresh, is above under **OPEN after the round-three audit**.
 
 ### O1 — PARTLY CLOSED 2026-08-09: binaries shipped, the image is still private
 The `v1.0.0` release workflow completed successfully and **20 assets** are
@@ -323,7 +460,12 @@ upload itself remains a click.
 
 ---
 
-## Competitive track (ordered 2026-07-22 — compete hard and exceed)
+## Beyond 2.0.0 — the competitive track
+
+Phased rather than versioned: each phase is several releases and the
+version each lands in is decided when it is scoped, not now.
+
+### Competitive track (ordered 2026-07-22 — compete hard and exceed)
 
 The market (mem0, Zep/Graphiti, Letta, Cognee, Supermemory, plus the
 MCP-server long tail) competes on **convenience**: extraction-based
@@ -610,7 +752,11 @@ nothing but benefits from C1.1's baselines; scale items 4–6 above
 
 ---
 
-## Operability track (planned)
+## Shipped — the operability track
+
+Kept as a record of what each version carried.
+
+### Operability track
 
 Observability and a management/visualization surface for the stack. The
 whole track obeys the project's core stance — **local-first, opt-in,

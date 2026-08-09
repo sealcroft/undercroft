@@ -347,11 +347,18 @@ undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
 undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
+undercroft serve-mcp --read-only     # ...recall only: every write tool refused,
+                                     #    and the vault opened read-only
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
                                      # --read-only is a posture on the whole
                                      # process: both stores open read-only and
                                      # the route gate fails closed
 undercroft assert-header <vault>      # mint an X-Vault-Assertion (per-tenant auth)
+undercroft config check              # validate every UNDERCROFT_* declaration
+                                     # WITHOUT opening a vault or binding a port;
+                                     # exits non-zero if this environment would
+                                     # refuse to start. Run it in CI before an
+                                     # upgrade — see UPGRADING.md
 ```
 
 `serve-http` is both the shared team server (MCP over HTTP, bearer auth) and

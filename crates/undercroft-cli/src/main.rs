@@ -5,6 +5,7 @@
 //! encryption, and HMAC integrity verification.
 
 mod assertion;
+mod config_check;
 mod http;
 mod i18n;
 mod mcp;
@@ -222,6 +223,13 @@ enum Command {
         /// operator as sender, which is what a third party verifies
         #[arg(long)]
         sign: Option<PathBuf>,
+        /// Also delete these drawers from a remote index this vault was
+        /// pushed to (qdrant | chroma | pgvector | milvus | weaviate).
+        /// Without it, the attestation WARNS that a mirror copy may
+        /// survive — `index push` moves the at-rest blob to a third party,
+        /// and destroying the local row does not reach it
+        #[arg(long)]
+        backend: Option<String>,
     },
     /// Verify a forgetting attestation against a vault (replays the
     /// chain segment with the key in hand; also checks the signature
@@ -476,6 +484,18 @@ enum Command {
         action: BackupAction,
     },
     /// Print auto-save hook settings for an agent client
+    /// Validate every `UNDERCROFT_*` declaration in this environment
+    /// WITHOUT opening a vault or binding a port — so an upgrade is tested
+    /// in a pipeline rather than discovered at restart.
+    ///
+    /// Exit 1 if any declaration that turns a protection on would refuse to
+    /// start; exit 0 otherwise. Warnings do not fail the run: those are
+    /// declarations whose default is already the conservative choice.
+    ConfigCheck {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
+    },
     Hooks {
         /// Client: claude-code
         #[arg(default_value = "claude-code")]
@@ -1456,7 +1476,18 @@ fn main() -> std::process::ExitCode {
     // `fn main() -> Result<()>` let the std `Termination` impl choose the
     // code, and it only knows one failure: 1. Everything this CLI wants to
     // say about a failure has to be said here.
-    match run(Cli::parse()) {
+    // **Exit 1 for a usage error, not clap's default 2.** `docs/AGENTS.md`
+    // states the doctrine without qualification — exit 2 means an integrity
+    // verdict, exit 1 means the run itself failed, "bad arguments, a missing
+    // file" — and clap's `USAGE_CODE` is 2, so a typo or a renamed flag
+    // reached a compliance script as a TAMPER VERDICT. The doctrine and the
+    // parser disagreed, and the doctrine is the one that is published.
+    // `--help`/`--version` still exit 0, which is what `use_stderr` decides.
+    let parsed = <Cli as clap::Parser>::try_parse().unwrap_or_else(|e| {
+        let _ = e.print();
+        std::process::exit(if e.use_stderr() { 1 } else { 0 });
+    });
+    match run(parsed) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             // Byte-for-byte what `Termination` printed before, so no
@@ -2022,9 +2053,25 @@ fn run(cli: Cli) -> Result<()> {
             vault,
             out,
             sign,
+            backend,
         } => {
             let mut store = open_store(&cli, vault)?;
-            let mut att = store.forget_with_proof(ids)?;
+            // Named backend: the remote delete goes first, so a failure
+            // there leaves the vault intact and the operator can retry.
+            // Unnamed: the attestation says so itself when this vault was
+            // ever pushed — `VectorIndex::delete` was implemented by every
+            // backend and called by nothing, so "destroyed" was being
+            // attested over content still sitting on a third-party mirror.
+            let mut att = match backend {
+                Some(b) => {
+                    let mut index = open_index(b)?;
+                    store.forget_with_proof_mirrored(ids, index.as_mut())?
+                }
+                None => store.forget_with_proof(ids)?,
+            };
+            if let Some(note) = &att.mirror {
+                eprintln!("warning: {note}");
+            }
             if let Some(path) = sign {
                 let secret = std::fs::read_to_string(path)
                     .with_context(|| format!("reading signing identity {}", path.display()))?;
@@ -2830,8 +2877,20 @@ fn run(cli: Cli) -> Result<()> {
                         println!("No drawers.");
                     }
                     for d in rows {
+                        // `source_file` reached `/v1` and MCP (both
+                        // serialize the struct whole) and not this line —
+                        // so the operator surface could not tell a mined
+                        // drawer from an API save, which is the one field
+                        // that says where a memory came from. Rendered as
+                        // a suffix so the existing column layout is
+                        // unchanged for a drawer that has none.
+                        let src = d
+                            .source_file
+                            .as_deref()
+                            .map(|f| format!("  <- {f}"))
+                            .unwrap_or_default();
                         println!(
-                            "{}  {}/{}  {}  {}",
+                            "{}  {}/{}  {}  {}{src}",
                             d.id,
                             d.wing,
                             d.room,
@@ -3277,6 +3336,33 @@ fn run(cli: Cli) -> Result<()> {
                     println!("local:      {}", store.count()?);
                 }
             }
+        }
+        Command::ConfigCheck { verbose } => {
+            println!("Checking every UNDERCROFT_* declaration in this environment.");
+            println!(
+                "Nothing is opened: no vault, no database, no socket, no outbound call.
+"
+            );
+            let (fatal, warned, validated, accepted) = config_check::run(*verbose);
+            if validated + accepted == 0 {
+                println!("  (no UNDERCROFT_* variables are declared here)");
+            }
+            println!();
+            println!(
+                "{validated} declaration(s) validated against the resolver that runs at start-up."
+            );
+            println!("{accepted} more are declared with no parse to run — this command has NOT");
+            println!("checked those: a path, a URL, a token or a model name is validated by the");
+            println!("thing that consumes it, and claiming otherwise would be a stronger");
+            println!("statement than the truth.");
+            println!("{fatal} would REFUSE to start. {warned} would warn and keep the default.");
+            if fatal > 0 {
+                // Exit 1, deliberately, and not the integrity code: a
+                // configuration that will not start is a run failure, not a
+                // verdict about stored evidence.
+                bail!("this environment would not start");
+            }
+            println!("This environment starts.");
         }
         Command::Hooks { client } => match client.as_str() {
             "claude-code" => {

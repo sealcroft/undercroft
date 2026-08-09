@@ -43,7 +43,7 @@ pub struct LlmAdmissionAdvisor {
 
 impl LlmAdmissionAdvisor {
     /// Build when the deployment declared `UNDERCROFT_ADMISSION_LLM=advisory`
-    /// (71st env var) — the model itself comes from the existing
+    /// — the model itself comes from the existing
     /// `UNDERCROFT_LLM_*` family. `Ok(None)` when not declared; an error
     /// when declared but unusable (no URL, or a cleartext non-loopback
     /// URL — a screen that silently isn't running is worse than a

@@ -3818,6 +3818,7 @@ dependencies = [
  "time",
  "undercroft-core",
  "undercroft-index",
+ "undercroft-net",
  "undercroft-obs",
  "undercroft-vault",
 ]

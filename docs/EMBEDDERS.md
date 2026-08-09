@@ -184,11 +184,14 @@ space in hand:
 `off` refuses semantic-only admission outright, i.e. lexical channels
 only) and `UNDERCROFT_SEMANTIC_FLOOR` the floor (a cosine in `[0.0, 0.98]`;
 `off` = 0, the shipped hash map). Both are for an operator who has
-measured their own corpus, which beats a 14-pair probe set. Garbage in
-either falls back to the embedder rather than failing the open — the
-fallback is the safe direction, and bricking a server on a typo'd
-variable is worse than ignoring it (the floor also says so at warning
-level).
+measured their own corpus, which beats a 14-pair probe set. Garbage in the GATE now **refuses
+to open**: falling back is not the safe direction — a declared `off` that
+silently becomes the embedder's own gate re-admits semantic-only matches
+on a deployment that measured its corpus and decided against them. The
+FLOOR still warns and defers, because it moves a calibration rather than
+an admission boundary. Both `.trim()`, which the gate did not: `off`
+carrying the trailing newline a `$(cat …)` or a YAML block scalar
+produces used to revert the declaration silently.
 
 ## Cross-lingual honesty, in one paragraph
 

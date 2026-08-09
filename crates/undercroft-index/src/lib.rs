@@ -107,8 +107,14 @@ pub(crate) fn backend_agent_with(
     base_url: &str,
     timeout: std::time::Duration,
 ) -> Result<ureq::Agent, IndexError> {
-    let ca = std::env::var(CA_VAR).ok();
-    undercroft_net::agent("the remote index", base_url, ca.as_deref(), timeout)
+    // Resolved ONCE per process, not per call — the shape declared a defect
+    // on the orchestrator hop (a bad pin binds the port and then fails every
+    // request) and present here too, with the same consequence one layer
+    // down: a push re-read and re-parsed the PEM for every batch, and the
+    // pin was mutable at runtime by anything that could rewrite the file.
+    // `agent_from_env` is also where the four `*_CA` variables agree about
+    // what an empty declaration means.
+    undercroft_net::agent_from_env("the remote index", base_url, CA_VAR, timeout)
         .map_err(|e| IndexError::Transport(e.to_string()))
 }
 

@@ -468,7 +468,6 @@ impl Tenancy {
         let store = self.store_for(id)?;
         let full = store.stats().map_err(store_err)?;
         let external = store.is_external();
-        let vault = store.vault();
         undercroft_obs::set_gauge("drawers", id, full.records as f64);
         // The COMMITTED height (`PalaceStats`, i.e. `chain_meta`), never
         // this handle's cached manifest: in `serve-http` the MCP store is
@@ -485,7 +484,12 @@ impl Tenancy {
             Body::Json(json!({
                 "id": id,
                 "drawers": full.records,
-                "level": vault.level().to_string(),
+                // The REPORT's field, not `vault.level()`. Same value
+                // today, and that is the point: a hand projection that
+                // reads a different object cannot follow the struct when
+                // the struct changes, and the gate could not tell the two
+                // apart until it stopped matching method calls.
+                "level": full.level,
                 "external": external,
                 "writes": full.writes,
                 "chain_head": full.chain_head,
@@ -964,7 +968,10 @@ impl Tenancy {
         let under_assertions = self.requires_assertion();
         let named_wing = query_param(req, "wing");
         let store = self.store_for(id)?;
-        if store.is_quarantine_pending(drawer_id).map_err(store_err)? {
+        if store
+            .is_quarantine_pending_for_read(drawer_id)
+            .map_err(store_err)?
+        {
             review_door(under_assertions, named_wing.as_deref())?;
         }
         match store.get(drawer_id).map_err(store_err)? {
@@ -1375,9 +1382,24 @@ impl Tenancy {
                 .count();
             summary.insert(verdict.into(), json!(n));
         }
+        // **`ok` — the field the integrity classifier reads.** This route
+        // reported `summary.tampered` and nothing else, so a scripted
+        // `ops <tenant> supersessions` over a vault with a forged receipt
+        // exited 0: `is_integrity_verdict` keys on `"ok": false` for a 200,
+        // and there was no `ok`. The gap was recorded honestly in a code
+        // comment on the classifier and nowhere a machine could act on it.
+        //
+        // A tampered supersession IS an integrity verdict — the receipt is
+        // a keyed claim about what replaced what — so it answers the same
+        // shape `verify` does rather than a second convention.
+        let tampered = summary
+            .get("tampered")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         Ok((
             200,
             Body::Json(json!({
+                "ok": tampered == 0,
                 "supersessions": serde_json::to_value(&links).unwrap_or_else(|_| json!([])),
                 "summary": summary,
             })),
@@ -1404,8 +1426,26 @@ impl Tenancy {
         if ids.is_empty() {
             return Err(RestError::new(400, "ids must be a non-empty array"));
         }
+        // **`backend` — the capability this route did not have.** The CLI
+        // could delete the named drawers from a remote mirror and attest it;
+        // `/v1` and the fleet's `ops <t> forget` could only receive the
+        // attestation's WARNING that a mirror copy may survive, with no
+        // surface able to act on it. An operator running a fleet is exactly
+        // the operator who has pushed a mirror.
+        //
+        // Optional, so the request contract is unchanged when it is absent.
+        let backend = body.get("backend").and_then(Value::as_str);
         let store = self.store_for(id)?;
-        let att = store.forget_with_proof(&ids).map_err(store_err)?;
+        let att = match backend {
+            Some(b) => {
+                let mut index = undercroft_index::from_env(b)
+                    .map_err(|e| RestError::new(400, e.to_string()))?;
+                store
+                    .forget_with_proof_mirrored(&ids, index.as_mut())
+                    .map_err(store_err)?
+            }
+            None => store.forget_with_proof(&ids).map_err(store_err)?,
+        };
         Ok((
             200,
             Body::Json(serde_json::to_value(&att).unwrap_or_else(|_| json!({}))),
@@ -1642,6 +1682,17 @@ impl Tenancy {
             .get("limit")
             .and_then(Value::as_u64)
             .unwrap_or(1_000_000) as usize;
+        // **`dry_run` — the capability this route did not have.** The CLI
+        // has had `--dry-run` since refine existed and prints the triples it
+        // WOULD add; this route hard-coded `false`, so the one surface a
+        // fleet operator drives could not preview a distillation before
+        // committing it to the graph. Found by the hand-projection gate,
+        // which reported `preview` as a field `/v1` never reads — correctly,
+        // because the route could never produce one.
+        let dry_run = body
+            .get("dry_run")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         // Distillation reads through `recent(wing, ..)`, which opts back
         // into the reserved wing the moment one is named — so scoping a
         // refine at the queue lifts pending evidence out of it and writes it
@@ -1681,7 +1732,7 @@ impl Tenancy {
                 room,
                 fact_room,
                 limit,
-                dry_run: false,
+                dry_run,
             },
         )
         .map_err(store_err)?;
@@ -1710,6 +1761,14 @@ impl Tenancy {
                 // claims a location for drawers that are in the reserved
                 // review wing instead, unretrievable by any search.
                 "quarantined": rep.quarantined,
+                // The triples a dry run WOULD add, in extraction order.
+                // Empty on a committing run, exactly as on the CLI.
+                "dry_run": dry_run,
+                "preview": rep
+                    .preview
+                    .iter()
+                    .map(|(s, p, o)| json!({ "subject": s, "predicate": p, "object": o }))
+                    .collect::<Vec<_>>(),
                 "fact_room": fact_room,
                 "model": llm.model(),
             })),
