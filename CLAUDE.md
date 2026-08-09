@@ -1158,6 +1158,14 @@ test by construction:
   the documented "a checker that cannot run reports the same thing as a clean
   tree" trap, one level up.
 
+- **A counterfactual must exercise the ARTIFACT, not a copy of it.** The
+  ROADMAP-heading gate was "proved" by typing a correct `awk` inline in the
+  shell while the version written to `tests/battery.sh` carried a literal
+  newline inside a string literal. awk died, printed nothing, and the check
+  reported `ok` — a broken scanner and a clean tree are indistinguishable, so
+  it shipped. Source the code out of the file, or invoke the command, and
+  give every scanner a **premise probe** that fails when it examined nothing.
+
 **So: compile after EVERY structural edit, before making the next one.**
 Batching them hides which edit broke what, and this session batched them four
 times. The cost of a rebuild is seconds; the cost of a disabled gate is a
@@ -1709,9 +1717,11 @@ had and was still bypassable on the surface most deployments use.
    catches an added or removed TOOL, and it cannot catch a capability that
    drifts in behaviour. That half is yours.
 4. **Every governance surface updated in the same unit**: CHANGELOG, CLAUDE.md,
-   ROADMAP, and whichever of docs/AGENTS.md, docs/THREAT_MODEL.md, README,
-   architecture/index.html, website/ carry the claim you changed. A claim
-   lives on every surface that states it.
+   ROADMAP, **the three `.handover/` files** (ignored by git, governance
+   nonetheless — see session-end hygiene), and whichever of docs/AGENTS.md,
+   docs/THREAT_MODEL.md, README, architecture/index.html, website/ carry the
+   claim you changed. A claim lives on every surface that states it, and an
+   UNCOMMITTED surface is the one nobody notices going stale.
 5. **The full Docker battery** at the final tree, with raw exit codes:
    `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
    `backends-e2e`, `site`. `cargo build -p <crate>` does **not** compile
@@ -1738,15 +1748,30 @@ project.*
   **"accepted" is not a resting state**. Nothing broken or half-baked stays a
   gap; if it is genuinely not worth fixing, that is a decision with an
   argument, written down, not a line item that quietly never moves.
-- **A handover, and it is part of the UNIT — not a follow-up.**
-  `.handover/SESSION_START.md` is the prompt a new session is handed: reading
-  order, the state as verified, an index into this file's doctrine, every
-  governance / architecture / doc surface, and what is left. It ships in the
-  same commit as the work it describes, because a handover written after the
-  merge describes a tree nobody reviewed. `.handover/NEXT_SESSION.md` (project
-  state) and `.handover/AUDIT_CONTINUATION.md` (audit state) travel with it.
-  This was learned by getting it wrong: the handover and a stale ROADMAP
-  heading were both left for a follow-up commit after PR #115 merged.
+- **The handover is a GOVERNANCE SURFACE that is deliberately NOT committed,
+  and both halves of that are binding.**
+  `.handover/` is gitignored on purpose (`.gitignore:44`, *"local only — never
+  committed"*) and **must stay that way**: the directory holds 1.6 GB of
+  working material including the 269 MB pre-rename history bundle, and none of
+  it belongs in the repo. Do not "fix" this by un-ignoring it or by adding
+  negation patterns.
+  It is nonetheless a governance surface with the same standing as `ROADMAP`
+  or `CHANGELOG`: **kept current in the same unit as the work, and
+  drift-checked like everything else.** Three files carry that weight —
+  `SESSION_START.md` (the prompt a new session is handed),
+  `NEXT_SESSION.md` (project state) and `AUDIT_CONTINUATION.md` (audit
+  state). A handover describing a tree that no longer exists is worse than
+  none, because the next session acts on it.
+  **This paragraph replaces one that said the opposite.** It read "it ships in
+  the same commit as the work it describes" — a rule the repo forbids, written
+  without checking whether it was satisfiable. The commit that introduced it
+  (`a60b342`) is titled "handover: the session-start prompt…" and its diffstat
+  is three files, none of them the handover: `git add -A` skips ignored paths
+  SILENTLY, the output said "3 files changed", and nobody read which three.
+  A doctrine that cannot be obeyed is not a high standard, it is a false
+  claim — and this one was asserted in the same commit that added the
+  verification doctrine. Gated now by the handover-freshness preflight in
+  `tests/battery.sh`, because prose is what failed.
 - **Every ROADMAP entry states its own status in its HEADING**, matching its
   body. `O2`'s heading read "the site loads three font families from Google"
   while its own body said CLOSED, and a handover was nearly written around an

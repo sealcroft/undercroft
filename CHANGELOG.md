@@ -2,6 +2,64 @@
 
 ## Unreleased — 1.1.0
 
+### correction: `a60b342`'s message claims the handover shipped; it did not
+
+**And the gate that commit added never worked.** `a60b342`'s ROADMAP-heading
+preflight built its awk through a scripted edit that wrote a literal newline
+into a string literal. awk died with `unterminated string`, produced no
+output, and the check printed `ok    every closed ROADMAP entry says so in its
+heading` — **reporting a clean tree having examined nothing.** That is
+verbatim the trap it exists to prevent, shipped one commit after the trap was
+written into `CLAUDE.md`, and it was visible only because `tests/battery.sh`
+lets a suite's stderr reach the terminal.
+
+The counterfactual that "proved" it worked was run against a **correct awk
+typed inline in the shell**, not against the file. A reimplementation was
+tested and the broken original shipped — the precise inverse of the
+"re-implement the gate and run it" technique that found the two worst defects
+of the third audit round. **Verify the artifact, not a copy of it.**
+
+Rewritten with no escape sequences anywhere (an escape is what broke it) and
+with a premise probe: the scan counts the sections it examined and prints
+`PREMISE-FAILED-no-sections-examined` when that is zero, which the preflight
+treats as a broken scanner rather than a clean tree. All three paths were then
+exercised **by sourcing the code out of `tests/battery.sh` itself** — clean
+passes, a reverted `O2` heading is caught, and an empty file trips the probe.
+
+
+**Stated rather than quietly fixed, because the false claim is in `main`'s
+history and cannot be edited off a protected branch.**
+
+`a60b342` is titled *"handover: the session-start prompt, and gate the heading
+drift…"* and its body describes `.handover/SESSION_START.md` as shipping. Its
+diffstat is three files — `CLAUDE.md`, `ROADMAP.md`, `tests/battery.sh` — and
+the handover is not among them. It could not have been: `.gitignore:44`
+ignores `.handover/` wholesale, `git add -A` skips ignored paths **silently**,
+the output read `3 files changed`, and nobody checked which three. Found by
+the next session reading `git ls-files`, not by any gate.
+
+The same commit wrote a doctrine into `CLAUDE.md` saying the handover *"ships
+in the same commit as the work it describes"* — a rule the repository forbids,
+written without checking whether it could be obeyed. Asserting an unverified
+claim inside the commit that adds verification doctrine is the failure this
+release spent itself closing, committed one more time.
+
+**Resolution, and it keeps the maintainer's original decision.** `.handover/`
+stays gitignored — 1.6 GB of working material including the 269 MB pre-rename
+history bundle, none of which belongs in the repo, and no negation patterns.
+What changes is that the three files are now named as governance surfaces with
+the same standing as `ROADMAP` and `CHANGELOG`: current in the same unit as
+the work, drift-checked like everything else.
+
+Gated, because prose is what failed. `tests/battery.sh` gains a
+handover-freshness preflight that fires **only when the working tree is
+clean** — the moment you would be finishing — and requires the three files to
+exist and `SESSION_START.md`'s `handover-head:` marker to match `HEAD`. While
+the tree is dirty it stays quiet, because a lagging handover mid-work is
+normal and a gate that cries wolf gets disabled. Untracked is precisely why
+this needs a local gate: CI clones fresh and never sees these files,
+`git status` never mentions them, and no diff ever shows them going stale.
+
 **MINOR.** New capability (`undercroft config check`, four capability-parity
 closures, the operator-plane absence inventory) plus a large number of fixes.
 **No documented contract changes**, so this is not a major.

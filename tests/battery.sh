@@ -98,15 +98,29 @@ echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 # position on inventories versus prose.
 echo "═══ preflight: ROADMAP headings ═══"
 ROADMAP_DRIFT=$(awk '
-  /^### [A-Z][0-9]+/ {
-    if (sec != "" && body ~ /CLOSED/ && sec !~ /CLOSED/) print sec
-    sec = $0; body = ""; next
+  function flush() {
+    if (sec != "") { seen++; if (body ~ /CLOSED/ && sec !~ /CLOSED/) print sec }
   }
-  /^## / { if (sec != "" && body ~ /CLOSED/ && sec !~ /CLOSED/) print sec; sec = ""; body = "" }
-  { if (sec != "") body = body "
-" $0 }
-  END { if (sec != "" && body ~ /CLOSED/ && sec !~ /CLOSED/) print sec }
+  /^### [A-Z][0-9]+/ { flush(); sec = $0; body = ""; next }
+  /^## /              { flush(); sec = "";  body = ""; next }
+  { if (sec != "") body = body " " $0 }
+  END {
+    flush()
+    # The premise. An awk that cannot run prints nothing, and nothing is
+    # exactly what a clean tree prints — which is how the FIRST version of
+    # this gate reported ok having examined zero sections for a whole
+    # commit. It said so only because the battery surfaced awk stderr.
+    if (seen == 0) print "PREMISE-FAILED-no-sections-examined"
+  }
 ' ROADMAP.md)
+if [ "$ROADMAP_DRIFT" = "PREMISE-FAILED-no-sections-examined" ]; then
+  echo "FAIL  the ROADMAP heading scan examined NO sections. The scanner is"
+  echo "      broken, not the tree — a checker that cannot run reports exactly"
+  echo "      what a clean tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
 if [ -n "$ROADMAP_DRIFT" ]; then
   echo "FAIL  these ROADMAP entries say CLOSED in the body and not in the heading."
   echo "      A reader skims headings; one that contradicts its own section is"
@@ -118,6 +132,64 @@ if [ -n "$ROADMAP_DRIFT" ]; then
   exit 1
 fi
 echo "ok    every closed ROADMAP entry says so in its heading"
+
+# ── preflight: the handover has not drifted ────────────────────────────────
+# `.handover/` is gitignored on purpose and MUST stay so — 1.6 GB of working
+# material including the 269 MB pre-rename bundle. It is still a governance
+# surface: `SESSION_START.md`, `NEXT_SESSION.md` and `AUDIT_CONTINUATION.md`
+# are what the next session acts on, and one describing a tree that no longer
+# exists is worse than none.
+#
+# Being untracked is exactly why this needs a gate. CI clones fresh and never
+# sees these files, `git status` never mentions them, and no diff ever shows
+# them going stale — the last session wrote doctrine claiming the handover
+# shipped in its commit, and `git add -A` skipped it silently.
+#
+# It fires only when the working tree is CLEAN, i.e. at the moment you would
+# be finishing. During work the tree is dirty and a lagging handover is
+# normal, so this stays quiet instead of crying wolf until it is ignored.
+echo "═══ preflight: handover freshness ═══"
+HANDOVER_DIR=".handover"
+HANDOVER_FILES="SESSION_START.md NEXT_SESSION.md AUDIT_CONTINUATION.md"
+if [ ! -d "$HANDOVER_DIR" ]; then
+  echo "warn  no $HANDOVER_DIR/ on this machine — it is gitignored, so a fresh"
+  echo "      clone has none. Ask whoever handed you this tree for it."
+elif [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "ok    working tree is dirty — handover freshness is checked when clean"
+else
+  MISSING=""
+  for f in $HANDOVER_FILES; do
+    [ -f "$HANDOVER_DIR/$f" ] || MISSING="$MISSING $f"
+  done
+  if [ -n "$MISSING" ]; then
+    echo "FAIL  these governance handover files are absent:$MISSING"
+    echo "      They are gitignored by design and governance nonetheless."
+    echo ""
+    echo "BATTERY FAILED — preflight"
+    exit 1
+  fi
+  # The prompt records the commit it describes. A clean tree whose handover
+  # names a different commit is a handover that has already gone stale.
+  RECORDED=$(grep -oE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null | awk '{print $2}' | head -1)
+  HEAD_SHA=$(git rev-parse --short HEAD 2>/dev/null)
+  if [ -z "$RECORDED" ]; then
+    echo "FAIL  $HANDOVER_DIR/SESSION_START.md records no commit."
+    echo "      Add a line containing: handover-head: $HEAD_SHA"
+    echo "      Without it nothing can tell whether the handover is current."
+    echo ""
+    echo "BATTERY FAILED — preflight"
+    exit 1
+  fi
+  if [ "${HEAD_SHA#"$RECORDED"}" = "$HEAD_SHA" ] && [ "${RECORDED#"$HEAD_SHA"}" = "$RECORDED" ]; then
+    echo "FAIL  the handover describes $RECORDED; HEAD is $HEAD_SHA."
+    echo "      The tree is clean, so this is the moment it should be current."
+    echo "      Update the three files under $HANDOVER_DIR/ and re-run."
+    echo ""
+    echo "BATTERY FAILED — preflight"
+    exit 1
+  fi
+  echo "ok    handover is current with HEAD ($HEAD_SHA)"
+fi
 
 for suite in "${SUITES[@]}"; do
   # `tests/e2e-backends.sh` asserts exact record counts and therefore assumes
