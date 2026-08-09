@@ -17,6 +17,10 @@ thiserror = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The ONE transport policy: TLS or loopback, nothing else, no override.
+# This hop carries the palace bearer, a minted assertion, and drawer
+# content during search and migration, and had no policy at all.
+undercroft-net = { path = "../undercroft-net" }
 rusqlite = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }

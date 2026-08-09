@@ -33,6 +33,22 @@ use crate::mcp::McpHandler;
 use crate::tenant::Tenancy;
 use undercroft_store::PalaceStore;
 
+/// Does `header` carry exactly `Bearer <expected>`, compared in constant
+/// time?
+///
+/// The scheme prefix is checked normally — it is public — and only the
+/// secret half goes through `ct_eq`. The length guard is separate and
+/// deliberate: `ct_eq` requires equal lengths, and a differing length is
+/// already observable from the header itself, so nothing is leaked by
+/// returning early on it.
+fn bearer_matches(header: &str, expected: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    let Some(presented) = header.strip_prefix("Bearer ") else {
+        return false;
+    };
+    presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
+}
+
 pub fn serve_http(
     store: PalaceStore,
     tenancy: Tenancy,
@@ -160,12 +176,21 @@ pub fn serve_http(
             continue;
         }
         // Palace-wide bearer gates every non-health route (MCP and REST).
+        //
+        // Compared in CONSTANT TIME. This was `==` on a `format!`, which
+        // short-circuits on the first differing byte and so leaks the shared
+        // prefix length to anyone who can time the 401 — on the outermost
+        // gate in front of `/mcp`, `/v1` and `/metrics`. Both neighbouring
+        // secret comparisons in this fleet already do it properly
+        // (`assertion.rs` via `ConstantTimeEq`, the orchestrator's admin
+        // token via its own `ct_eq`), so this was the odd one out rather
+        // than a considered trade.
         if let Some(expected) = &token {
             let ok = request
                 .headers()
                 .iter()
                 .find(|h| h.field.equiv("Authorization"))
-                .map(|h| h.value.as_str() == format!("Bearer {expected}"))
+                .map(|h| bearer_matches(h.value.as_str(), expected))
                 .unwrap_or(false);
             if !ok {
                 let _ =
@@ -284,4 +309,40 @@ pub fn serve_http(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The palace-wide bearer is compared in constant time, and it still
+    /// compares the *right thing*.
+    ///
+    /// The constant-time property itself is not observable from a unit test
+    /// — timing is not a value — so this pins the behaviour a naive
+    /// "fix" would break instead: exact match required, scheme required,
+    /// no prefix match, no length-only match. The odd one out here was
+    /// `h.value.as_str() == format!("Bearer {expected}")`, which
+    /// short-circuits on the first differing byte while its two neighbours
+    /// in this fleet (`assertion.rs`, the orchestrator's admin token) do
+    /// not.
+    #[test]
+    fn the_bearer_is_matched_exactly_and_only_with_its_scheme() {
+        assert!(bearer_matches("Bearer s3cret", "s3cret"));
+
+        // A prefix must not pass — this is the case a byte-wise compare
+        // leaks a position at a time.
+        assert!(!bearer_matches("Bearer s3cre", "s3cret"));
+        assert!(!bearer_matches("Bearer s3crett", "s3cret"));
+        // Same length, different content.
+        assert!(!bearer_matches("Bearer s3crec", "s3cret"));
+        // The scheme is not optional, and is not part of the secret.
+        assert!(!bearer_matches("s3cret", "s3cret"));
+        assert!(!bearer_matches("bearer s3cret", "s3cret"));
+        assert!(!bearer_matches("Bearer  s3cret", "s3cret"));
+        assert!(!bearer_matches("", "s3cret"));
+        // A non-ASCII secret must not panic on a byte-length guard.
+        assert!(bearer_matches("Bearer pässwörd", "pässwörd"));
+        assert!(!bearer_matches("Bearer passwörd", "pässwörd"));
+    }
 }

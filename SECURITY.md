@@ -92,11 +92,24 @@ In scope (examples, not a limit):
   the id the caller aimed at while the content sits in quarantine.
 - Reading, editing, or destroying **quarantine-pending** content through
   any surface but the operator's own (`admission` on the CLI and `/v1`)
-  — MCP in particular must refuse it — or reaching an operator-only
-  capability (admission rulings, wing-trust assignment, retention,
-  forgetting, rotation) from the agent surface.
-- A `--read-only` server changing state: any request that writes, and
-  any read-path write beyond the accepted open-time ones below.
+  — MCP in particular must refuse it — or reaching an **operator-only**
+  capability from the agent surface. The full list is `OPERATOR_ONLY` in
+  `crates/undercroft-cli/src/parity.rs`, enforced by a test rather than by
+  this paragraph: admission rulings, wing-trust assignment, retention,
+  attested forgetting, key rotation, knowledge-graph authority promotion,
+  manifest-anchor tightening, **export**, **import**, and `refine`. The
+  last three were missing here, and `export` is the one the inventory
+  justifies with "an agent that could call it could exfiltrate a palace in
+  one tool call" — so a reporter reading this list to decide whether a
+  finding was in scope was reading a shorter list than the code enforces.
+- A `--read-only` server or store changing state: any request that
+  writes, any write on a read path — including a search that builds or
+  retrains a missing prefilter index — and any write at **open**. Schema
+  creation and migration, chain seeding, anchor fast-forward, FTS rebuild
+  and promotion of a writer's staging manifest are all refused there now
+  rather than merely avoided: the connection is opened `READ_ONLY` under
+  `PRAGMA query_only=ON`, so a write nobody thought of fails loudly
+  instead of happening quietly.
 
 Out of scope (documented threat-model boundaries):
 
@@ -105,15 +118,20 @@ Out of scope (documented threat-model boundaries):
 - A consistent old database + manifest pair restored **together** by an
   attacker with full disk control (documented residual; external witness
   is the planned mitigation).
-- Writes a `--read-only` process performs at **open** — schema creation,
-  rotation reconciliation, chain initialization — and `POST …/verify`,
-  which only fast-forwards the manifest anchor and is deliberately
-  classified as a read. Two things are **known gaps rather than
-  boundaries**, so a report adds nothing but we would rather say so than
-  have you find them: under `UNDERCROFT_RETRIEVAL=pq` a read-only search
-  can still build or retrain a missing PQ/IVF index, and audited read
-  records anchor only at the next store open, so a stripped unanchored
-  tail is crash-indistinguishable until then.
+- The **anchor lag on audited reads**. Under
+  `UNDERCROFT_READ_AUDIT=chain` a read appends a chain record but
+  deliberately does not fast-forward the manifest anchor, so a stripped
+  *unanchored* tail is indistinguishable from a crash until the anchor
+  next moves — at the next store open, or on demand through
+  `undercroft vault anchor` / `POST /v1/vaults/{id}/anchor`, which exist
+  because a long-lived server never re-opens. The lag itself is the
+  documented boundary; a way to strip an **anchored** tail is very much
+  in scope.
+- The WAL scaffolding a read-only open materialises beside a vault when
+  the directory is writable (an `-shm`, and a zero-length `-wal`). It
+  carries no database content, is reconstructible, and is the price of
+  reading a WAL database at all; where the directory is not writable the
+  open escalates to `immutable=1` and says so.
 - Denial of service against a server you operate, and resource
   exhaustion requiring authenticated access.
 - Vulnerabilities exclusively in optional attached components (remote

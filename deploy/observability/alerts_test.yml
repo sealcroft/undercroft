@@ -1,0 +1,188 @@
+# Unit tests for alerts.yml, run by `promtool test rules` (tests/obs-config.sh).
+#
+# **What this exists to catch.** `alertmanager.yml` silences warnings while a
+# critical is firing, and scopes that with `equal:` on a label. Alertmanager
+# treats a label absent from BOTH sides as equal, so an `equal:` naming a
+# label no rule emits does not scope the inhibition — it makes it global. The
+# shipped config equalled on `vault`, which nothing emitted, so one
+# PalaceTamperDetected muted every warning in the fleet. Nothing could see it:
+# the config was valid, the rules were valid, and the failure was an alert
+# that never arrived.
+#
+# So each block below asserts the **exact label set** a rule produces, which
+# is the observable the defect moves. `promtool` evaluates the real PromQL
+# against real series, so this cannot agree with the rules by construction the
+# way a second copy of the expressions would. The companion check in
+# tests/obs-config.sh then requires every label in alertmanager's `equal:`
+# list to appear in every `exp_labels` block here — which closes the loop:
+# promtool proves these expectations are what the rules really emit, and the
+# script proves the inhibition is scoped by something they all carry.
+#
+# Adding a rule? Add a block. A rule with no block is not covered, and the
+# script fails if the alert count here drops below the rule count in
+# alerts.yml.
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── PalaceTamperDetected — the critical, and the inhibition's source ──────
+  # No aggregation at all, so every scrape label survives: this is the one
+  # rule that was never in doubt, and it is here because the inhibition is
+  # only correctly scoped if the SOURCE carries `instance` too.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_hmac_verify_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",surface="drawer"}'
+        values: "0 0 0 0 1 2"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PalaceTamperDetected
+        exp_alerts:
+          - exp_labels:
+              alertname: PalaceTamperDetected
+              severity: critical
+              job: undercroft
+              instance: undercroft:8765
+              service: undercroft
+              surface: drawer
+            exp_annotations:
+              summary: "Tamper detected — HMAC verify failed on drawer"
+              description: "2 HMAC-verify failure(s) on surface 'drawer' in the last 2m. A stored record failed its integrity tag on read — treat as on-disk tampering until proven otherwise. Confirm with `undercroft verify`; follow the runbook."
+              runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
+  # ── AuditChainStalled — writes landing, chain not advancing ───────────────
+  # Both sides of the `and` must aggregate by the same label or the vector
+  # match finds no counterpart and the rule silently never fires. That is a
+  # second, independent way to break this rule while the config stays valid.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_drawer_writes_total{job="undercroft",instance="undercroft:8765",service="undercroft",outcome="created"}'
+        values: "0+1x20"
+      - series: 'undercroft_chain_commits_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "5+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AuditChainStalled
+        exp_alerts:
+          - exp_labels:
+              alertname: AuditChainStalled
+              severity: warning
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "Audit chain is not advancing while writes are happening"
+              description: "Drawer writes are being recorded but no audit-chain commits have occurred in 10m. The tamper-evident chain may be stuck; investigate before trusting integrity guarantees."
+              runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
+  # ── UndercroftDown — the other critical ──────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "0+0x5"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: UndercroftDown
+        exp_alerts:
+          - exp_labels:
+              alertname: UndercroftDown
+              severity: critical
+              job: undercroft
+              instance: undercroft:8765
+              service: undercroft
+            exp_annotations:
+              summary: "Undercroft /metrics target is down"
+              description: "Prometheus cannot scrape undercroft:8765/metrics for 1m."
+
+  # ── HighSearchLatencyP95 ─────────────────────────────────────────────────
+  # `le` has to survive the sum for the quantile to mean anything and must
+  # NOT survive the alert; `sum by (instance, le)` is the only form that gets
+  # both right. All observations land in (0.1, 1], so p95 interpolates to
+  # 0.1 + 0.9*0.95 = 0.955.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_search_duration_seconds_bucket{job="undercroft",instance="undercroft:8765",service="undercroft",le="0.1"}'
+        values: "0+0x20"
+      - series: 'undercroft_search_duration_seconds_bucket{job="undercroft",instance="undercroft:8765",service="undercroft",le="1"}'
+        values: "0+10x20"
+      - series: 'undercroft_search_duration_seconds_bucket{job="undercroft",instance="undercroft:8765",service="undercroft",le="+Inf"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighSearchLatencyP95
+        exp_alerts:
+          - exp_labels:
+              alertname: HighSearchLatencyP95
+              severity: warning
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "Search p95 latency above 500ms"
+              description: "p95 search latency has exceeded 500ms for 10m (0.955s)."
+
+  # ── HttpServerErrors ─────────────────────────────────────────────────────
+  # Two 5xx series on one instance: the aggregation must fold them into ONE
+  # alert, not one per route, or a broken deploy pages once per handler.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_http_requests_total{job="undercroft",instance="undercroft:8765",service="undercroft",route="v1_search",status="500"}'
+        values: "0+1x20"
+      - series: 'undercroft_http_requests_total{job="undercroft",instance="undercroft:8765",service="undercroft",route="v1_save",status="503"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HttpServerErrors
+        exp_alerts:
+          - exp_labels:
+              alertname: HttpServerErrors
+              severity: warning
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "Undercroft is returning HTTP 5xx"
+              description: "5xx responses observed for 5m — the server is erroring on some requests."
+
+  # ── AuthRejectionsSpike ──────────────────────────────────────────────────
+  # 30/min = 0.5/s, over the 0.2/s threshold.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_auth_rejections_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "0+30x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AuthRejectionsSpike
+        exp_alerts:
+          - exp_labels:
+              alertname: AuthRejectionsSpike
+              severity: warning
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "Elevated auth rejections"
+              description: "Bearer/assertion rejections are elevated (> 0.2/s for 10m) — could be a misconfigured client or a credential-probing attempt."
+
+  # ── The negative control ─────────────────────────────────────────────────
+  # A healthy instance fires nothing. Without this, a rule that fired
+  # unconditionally would satisfy every block above.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "1+0x20"
+      - series: 'undercroft_drawer_writes_total{job="undercroft",instance="undercroft:8765",service="undercroft",outcome="created"}'
+        values: "0+1x20"
+      - series: 'undercroft_chain_commits_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "0+1x20"
+      - series: 'undercroft_hmac_verify_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",surface="drawer"}'
+        values: "0+0x20"
+      - series: 'undercroft_auth_rejections_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: UndercroftDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PalaceTamperDetected
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuditChainStalled
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuthRejectionsSpike
+        exp_alerts: []

@@ -3794,6 +3794,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tiny_http",
+ "undercroft-net",
  "ureq 2.12.1",
  "zeroize",
 ]
@@ -3817,6 +3818,7 @@ dependencies = [
  "time",
  "undercroft-core",
  "undercroft-index",
+ "undercroft-net",
  "undercroft-obs",
  "undercroft-vault",
 ]

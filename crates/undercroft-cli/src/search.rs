@@ -157,8 +157,27 @@ impl Exclusions {
             Some(_) => Some(store.unkinded_in_scope(opts.wing.as_deref(), opts.room.as_deref())?),
             None => None,
         };
-        let trust_excluded = match opts.min_trust.as_deref() {
-            Some(floor) => Some(store.trust_excluded_wing_count(floor)?),
+        // **The EFFECTIVE floor, not the declared one.** This read
+        // `opts.min_trust` alone, so a vault-level `UNDERCROFT_TRUST_FLOOR`
+        // narrowed `search` and `list_drawers` on all three surfaces and
+        // NOTHING said so — an exclusion nobody can see, which is the exact
+        // failure mode that produced "Palace is empty over an intact corpus"
+        // one read over. `wake_up` and the closet index were given the
+        // honest message; the two reads a caller drives most were not, and
+        // `docs/THREAT_MODEL.md` stated the disclosure as done.
+        //
+        // The precedence is `resolve_search_policy`'s, verbatim: a request
+        // floor wins; otherwise the vault floor applies UNLESS an explicit
+        // wing scope bypasses it (naming a wing is self-scoping). Reading it
+        // differently here would disclose an exclusion that did not happen,
+        // or miss one that did.
+        let effective = match (opts.min_trust.as_deref(), opts.wing.as_deref()) {
+            (Some(t), _) => Some(t.to_string()),
+            (None, Some(_)) => None,
+            (None, None) => store.trust_floor().map(str::to_string),
+        };
+        let trust_excluded = match effective {
+            Some(floor) => Some(store.trust_excluded_wing_count(&floor)?),
             None => None,
         };
         Ok(Exclusions {

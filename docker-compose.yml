@@ -3,7 +3,11 @@
 #   docker compose run --rm test          # unit + integration tests (cargo)
 #   docker compose run --rm e2e           # end-to-end UI/UX suite against the real binary
 #   docker compose run --rm backends-e2e  # remote index suite (starts qdrant/chroma/pgvector)
+#   docker compose run --rm obs-config    # alert rules + alertmanager route (promtool/amtool)
+#   docker compose run --rm site          # build, assemble and check the website
 #   docker compose run --rm onnx-build    # compile check for the ONNX embedder feature
+#
+#   bash tests/battery.sh                 # all eight suites, one tree, raw exit codes
 #   docker compose run --rm cli --help    # any CLI command
 #   docker compose run --rm -i mcp        # MCP stdio server
 
@@ -166,6 +170,23 @@ services:
     volumes:
       - ./tests/e2e-telemetry.sh:/src/tests/e2e-telemetry.sh:ro
 
+  # The observability CONFIG suite: promtool + amtool, at the versions the
+  # stack deploys, over deploy/observability. Validates the alert rules, runs
+  # their unit tests, validates the Alertmanager route, and checks the join
+  # between them — that the inhibition is scoped by a label every alert
+  # actually emits. It equalled on one nothing emitted, and Alertmanager
+  # reads absent-on-both as equal, so a single critical muted every warning
+  # in the fleet with nothing anywhere reporting it.
+  #
+  #   docker compose run --rm --build obs-config
+  obs-config:
+    build:
+      context: .
+      dockerfile: deploy/observability/Dockerfile.config-check
+    volumes:
+      - ./deploy:/src/deploy:ro
+      - ./tests/obs-config.sh:/src/tests/obs-config.sh:ro
+
   bench:
     build:
       context: .
@@ -300,7 +321,12 @@ services:
     working_dir: /src
     # Same version the pages workflow pins — the two builds must not drift,
     # or the manual's sidebar markup/behavior differs between preview and live.
-    command: ["sh", "-c", "cargo install mdbook --version 0.5.4 --locked --quiet && mdbook build website && echo SITE OK: website/book"]
+    # Builds AND assembles, through the same script the Pages workflow runs,
+    # because the checks that matter are true only of the assembled site:
+    # the manual's stylesheet reaches the fonts by a path that leaves the
+    # book and re-enters the landing assets, and that path resolves only
+    # once both halves are in one tree.
+    command: ["sh", "-c", "cargo install mdbook --version 0.5.4 --locked --quiet && bash website/build-site.sh"]
     volumes:
       - ./website:/src/website
       # The book sources {{#include}} files from the repo root.

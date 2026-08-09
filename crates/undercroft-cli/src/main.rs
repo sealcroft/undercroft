@@ -5,6 +5,7 @@
 //! encryption, and HMAC integrity verification.
 
 mod assertion;
+mod config_check;
 mod http;
 mod i18n;
 mod mcp;
@@ -222,6 +223,13 @@ enum Command {
         /// operator as sender, which is what a third party verifies
         #[arg(long)]
         sign: Option<PathBuf>,
+        /// Also delete these drawers from a remote index this vault was
+        /// pushed to (qdrant | chroma | pgvector | milvus | weaviate).
+        /// Without it, the attestation WARNS that a mirror copy may
+        /// survive — `index push` moves the at-rest blob to a third party,
+        /// and destroying the local row does not reach it
+        #[arg(long)]
+        backend: Option<String>,
     },
     /// Verify a forgetting attestation against a vault (replays the
     /// chain segment with the key in hand; also checks the signature
@@ -306,6 +314,15 @@ enum Command {
     ServeMcp {
         #[arg(long, default_value = "default")]
         vault: String,
+        /// Refuse every write tool, and open the vault read-only.
+        ///
+        /// `serve-http` has had this since it existed; stdio did not, and
+        /// the docs said "write tools are refused when the server runs
+        /// `--read-only`" without qualifying which transport. The posture
+        /// is not only about tool refusal: a read-write open also runs the
+        /// embedder migration and appends a read-audit record per search.
+        #[arg(long)]
+        read_only: bool,
     },
     /// Serve MCP + the multi-tenant REST surface over HTTP. Requires
     /// UNDERCROFT_MCP_HTTP_TOKEN for any non-loopback bind; set
@@ -467,6 +484,18 @@ enum Command {
         action: BackupAction,
     },
     /// Print auto-save hook settings for an agent client
+    /// Validate every `UNDERCROFT_*` declaration in this environment
+    /// WITHOUT opening a vault or binding a port — so an upgrade is tested
+    /// in a pipeline rather than discovered at restart.
+    ///
+    /// Exit 1 if any declaration that turns a protection on would refuse to
+    /// start; exit 0 otherwise. Warnings do not fail the run: those are
+    /// declarations whose default is already the conservative choice.
+    ConfigCheck {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
+    },
     Hooks {
         /// Client: claude-code
         #[arg(default_value = "claude-code")]
@@ -947,13 +976,46 @@ fn report_quarantined(quarantined: usize) {
     }
 }
 
+/// The user's home directory — the anchor for the default palace and for
+/// `~/` expansion.
+///
+/// **`HOME` alone is a Unix assumption and the released Windows binary paid
+/// for it.** Native Windows sets `USERPROFILE` and not `HOME`, so
+/// [`data_dir`] fell through to `"."` and every vault landed in whatever
+/// directory the user happened to be standing in: a different palace per
+/// shell, none of them found again, and no error at any point. It survived
+/// because every environment this was ever exercised in — Linux, macOS, the
+/// Docker battery, and Git Bash or WSL on a Windows host — sets `HOME`. The
+/// one configuration that does not is the one the release ships a binary for.
+fn home_dir() -> Option<PathBuf> {
+    // A concrete signature, not `std::env::var_os` passed bare: that is
+    // generic over `AsRef<OsStr>`, so the fn item it names is bound to one
+    // specific lifetime and does not satisfy the higher-ranked `Fn(&str)`
+    // the parameter asks for.
+    fn from_env(key: &str) -> Option<std::ffi::OsString> {
+        std::env::var_os(key)
+    }
+    home_dir_from(from_env)
+}
+
+/// The lookup itself, split from the environment so it can be tested without
+/// mutating process state — `set_var` races every other test in the binary.
+///
+/// An **empty** value is treated as absent. `HOME=` set to nothing is not a
+/// home directory, and taking it would skip the fallback that exists for
+/// exactly the case where the first variable is not usable.
+fn home_dir_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(&get)
+        .find(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 fn data_dir(cli: &Cli) -> PathBuf {
-    cli.data_dir.clone().unwrap_or_else(|| {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| ".".into());
-        home.join(".undercroft")
-    })
+    cli.data_dir
+        .clone()
+        .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".into()).join(".undercroft"))
 }
 
 fn passphrase() -> Option<String> {
@@ -1414,7 +1476,18 @@ fn main() -> std::process::ExitCode {
     // `fn main() -> Result<()>` let the std `Termination` impl choose the
     // code, and it only knows one failure: 1. Everything this CLI wants to
     // say about a failure has to be said here.
-    match run(Cli::parse()) {
+    // **Exit 1 for a usage error, not clap's default 2.** `docs/AGENTS.md`
+    // states the doctrine without qualification — exit 2 means an integrity
+    // verdict, exit 1 means the run itself failed, "bad arguments, a missing
+    // file" — and clap's `USAGE_CODE` is 2, so a typo or a renamed flag
+    // reached a compliance script as a TAMPER VERDICT. The doctrine and the
+    // parser disagreed, and the doctrine is the one that is published.
+    // `--help`/`--version` still exit 0, which is what `use_stderr` decides.
+    let parsed = <Cli as clap::Parser>::try_parse().unwrap_or_else(|e| {
+        let _ = e.print();
+        std::process::exit(if e.use_stderr() { 1 } else { 0 });
+    });
+    match run(parsed) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             // Byte-for-byte what `Termination` printed before, so no
@@ -1896,7 +1969,20 @@ fn run(cli: Cli) -> Result<()> {
             let store = open_store(&cli, vault)?;
             let recent = store.recent(wing.as_deref(), 15)?;
             if recent.is_empty() {
-                println!("Palace is empty. File memories with: undercroft remember / mine");
+                // "Empty" only when it IS empty. A declared trust floor above
+                // `standard` with no wing yet assigned that class empties
+                // this read entirely, and saying "empty" over an intact
+                // corpus is a false statement the caller cannot see through.
+                match store.trust_floor() {
+                    Some(f) => println!(
+                        "No drawers meet the declared trust floor '{f}' — the palace is NOT \
+                         empty. Assign wing trust with `undercroft trust set`, or lower \
+                         UNDERCROFT_TRUST_FLOOR."
+                    ),
+                    None => {
+                        println!("Palace is empty. File memories with: undercroft remember / mine")
+                    }
+                }
             }
             for d in recent {
                 println!(
@@ -1967,9 +2053,25 @@ fn run(cli: Cli) -> Result<()> {
             vault,
             out,
             sign,
+            backend,
         } => {
             let mut store = open_store(&cli, vault)?;
-            let mut att = store.forget_with_proof(ids)?;
+            // Named backend: the remote delete goes first, so a failure
+            // there leaves the vault intact and the operator can retry.
+            // Unnamed: the attestation says so itself when this vault was
+            // ever pushed — `VectorIndex::delete` was implemented by every
+            // backend and called by nothing, so "destroyed" was being
+            // attested over content still sitting on a third-party mirror.
+            let mut att = match backend {
+                Some(b) => {
+                    let mut index = open_index(b)?;
+                    store.forget_with_proof_mirrored(ids, index.as_mut())?
+                }
+                None => store.forget_with_proof(ids)?,
+            };
+            if let Some(note) = &att.mirror {
+                eprintln!("warning: {note}");
+            }
             if let Some(path) = sign {
                 let secret = std::fs::read_to_string(path)
                     .with_context(|| format!("reading signing identity {}", path.display()))?;
@@ -2257,12 +2359,24 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::ServeMcp { vault } => {
-            let store = open_store(&cli, vault)?;
+        Command::ServeMcp { vault, read_only } => {
+            // The posture is STATED, exactly as `serve-http` states it — and
+            // it reaches the open, not only the tool gate, so a read-only
+            // stdio server does not migrate the embedder or append a
+            // read-audit record per search.
+            let store = open_store_as(
+                &cli,
+                vault,
+                if *read_only {
+                    Posture::ReadOnly
+                } else {
+                    Posture::ReadWrite
+                },
+            )?;
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            mcp::serve(store)?;
+            mcp::serve(store, *read_only)?;
         }
         Command::ServeHttp {
             host,
@@ -2763,8 +2877,20 @@ fn run(cli: Cli) -> Result<()> {
                         println!("No drawers.");
                     }
                     for d in rows {
+                        // `source_file` reached `/v1` and MCP (both
+                        // serialize the struct whole) and not this line —
+                        // so the operator surface could not tell a mined
+                        // drawer from an API save, which is the one field
+                        // that says where a memory came from. Rendered as
+                        // a suffix so the existing column layout is
+                        // unchanged for a drawer that has none.
+                        let src = d
+                            .source_file
+                            .as_deref()
+                            .map(|f| format!("  <- {f}"))
+                            .unwrap_or_default();
                         println!(
-                            "{}  {}/{}  {}  {}",
+                            "{}  {}/{}  {}  {}{src}",
                             d.id,
                             d.wing,
                             d.room,
@@ -2952,6 +3078,18 @@ fn run(cli: Cli) -> Result<()> {
                     "  {} dated from the text · {} duplicate(s), {} skipped, {} failed",
                     rep.dated_from_text, rep.duplicates, rep.skipped, rep.failed
                 );
+                // The line above claims the mirrors are in `fact_room`. When
+                // the screen diverted some, they are not — the fact is in the
+                // graph, the mirror is not retrievable, and saying nothing
+                // makes the previous line false.
+                if rep.quarantined > 0 {
+                    println!(
+                        "  {} of these mirrors tripped the admission screen and are NOT \
+                         retrievable in '{}' — the facts are in the graph, the drawers are \
+                         in review. See `undercroft admission list`.",
+                        rep.quarantined, fact_room
+                    );
+                }
             }
         }
         Command::Hallways { wing, top, vault } => {
@@ -2981,7 +3119,19 @@ fn run(cli: Cli) -> Result<()> {
                 st.kg.triples, st.kg.active
             );
             println!("writes:  {}", st.writes);
+            // The committed audit-chain head. `/v1` and MCP have always
+            // carried it and the CLI silently did not — the hand-projection
+            // drift, on the struct CLAUDE.md names as the first one it bit.
+            // It is what an operator compares against a receipt or a
+            // colleague's copy, so a surface that omits it is the surface
+            // that cannot answer "are we looking at the same chain?".
+            println!("chain:   {}", st.chain_head);
             println!("db size: {} bytes", st.db_bytes);
+            // The posture this handle was opened under. Silence here read as
+            // "writable" on a replica.
+            if st.read_only {
+                println!("posture: read-only");
+            }
             // Trained index artifacts, but only the ones that exist: a
             // generation of 0 means this vault never trained that codebook,
             // and listing five zeroes on every default vault would bury the
@@ -3032,6 +3182,25 @@ fn run(cli: Cli) -> Result<()> {
                     "found (use --apply to remove)"
                 }
             );
+            // `dates_kept` is, in its own doc comment, "the difference
+            // between collapsing text and losing history" — the survivor
+            // absorbs the duplicates' occurrence dates before they are
+            // deleted. MCP has always shown it (it serializes the report
+            // whole) and the CLI silently did not.
+            if report.dates_kept > 0 {
+                println!(
+                    "{} occurrence date(s) absorbed into the surviving drawer(s)",
+                    report.dates_kept
+                );
+            }
+            if report.quarantined > 0 {
+                println!(
+                    "{} group(s) LEFT INTACT — the surviving drawer's rewrite tripped the \
+                     admission screen, so nothing was deleted and no dates were absorbed \
+                     for them. Review with `undercroft admission list`.",
+                    report.quarantined
+                );
+            }
         }
         Command::Repair { vault, tokens } => {
             let mut store = open_store(&cli, vault)?;
@@ -3127,7 +3296,11 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Index { action, vault } => {
-            let store = open_store(&cli, vault)?;
+            // Mutable because `index_push` now chain-records its own egress
+            // — a whole-corpus mirror to a third party is exactly the event
+            // an audit trail is for, and it was the one export path leaving
+            // no record.
+            let mut store = open_store(&cli, vault)?;
             match action {
                 IndexAction::Push {
                     backend,
@@ -3163,6 +3336,33 @@ fn run(cli: Cli) -> Result<()> {
                     println!("local:      {}", store.count()?);
                 }
             }
+        }
+        Command::ConfigCheck { verbose } => {
+            println!("Checking every UNDERCROFT_* declaration in this environment.");
+            println!(
+                "Nothing is opened: no vault, no database, no socket, no outbound call.
+"
+            );
+            let (fatal, warned, validated, accepted) = config_check::run(*verbose);
+            if validated + accepted == 0 {
+                println!("  (no UNDERCROFT_* variables are declared here)");
+            }
+            println!();
+            println!(
+                "{validated} declaration(s) validated against the resolver that runs at start-up."
+            );
+            println!("{accepted} more are declared with no parse to run — this command has NOT");
+            println!("checked those: a path, a URL, a token or a model name is validated by the");
+            println!("thing that consumes it, and claiming otherwise would be a stronger");
+            println!("statement than the truth.");
+            println!("{fatal} would REFUSE to start. {warned} would warn and keep the default.");
+            if fatal > 0 {
+                // Exit 1, deliberately, and not the integrity code: a
+                // configuration that will not start is a run failure, not a
+                // verdict about stored evidence.
+                bail!("this environment would not start");
+            }
+            println!("This environment starts.");
         }
         Command::Hooks { client } => match client.as_str() {
             "claude-code" => {
@@ -3354,8 +3554,11 @@ fn sweep_path(
 
 fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
+        // Same lookup as the default palace: `~/` meant nothing on native
+        // Windows for the same reason, and a watch path that silently stayed
+        // literal (`./~/notes`) is the same class of quiet wrong answer.
+        if let Some(home) = home_dir() {
+            return home.join(rest);
         }
     }
     PathBuf::from(path)
@@ -3550,7 +3753,55 @@ fn collect_files(path: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use tempfile::TempDir;
+
+    /// The default palace must resolve on a machine that sets `USERPROFILE`
+    /// and not `HOME` — i.e. on native Windows, which is a target the
+    /// release publishes a binary for.
+    ///
+    /// Driven through [`home_dir_from`] rather than the environment: a test
+    /// that called `set_var` would race every other test in this binary, and
+    /// the failure it introduces is intermittent and blamed elsewhere.
+    ///
+    /// Four arms, because only the second one fails before the fix and a
+    /// single-arm test would also pass if the order were inverted — which
+    /// would break every Unix host instead.
+    #[test]
+    fn the_home_directory_falls_back_to_userprofile() {
+        let one = |want: &'static str, value: &'static str| {
+            move |k: &str| (k == want).then(|| OsString::from(value))
+        };
+
+        // Both set: `HOME` wins. Git Bash and WSL set both, and taking
+        // `USERPROFILE` there would move an existing palace.
+        assert_eq!(
+            home_dir_from(|k| match k {
+                "HOME" => Some(OsString::from("/home/a")),
+                "USERPROFILE" => Some(OsString::from("C:\\Users\\a")),
+                _ => None,
+            }),
+            Some(PathBuf::from("/home/a"))
+        );
+        // `USERPROFILE` only — the native Windows case, and the one that
+        // resolved to `"."` before this fix.
+        assert_eq!(
+            home_dir_from(one("USERPROFILE", "C:\\Users\\a")),
+            Some(PathBuf::from("C:\\Users\\a"))
+        );
+        // An empty `HOME` is not a home directory; the fallback still runs.
+        assert_eq!(
+            home_dir_from(|k| match k {
+                "HOME" => Some(OsString::new()),
+                "USERPROFILE" => Some(OsString::from("C:\\Users\\a")),
+                _ => None,
+            }),
+            Some(PathBuf::from("C:\\Users\\a"))
+        );
+        // Neither: the caller decides. `data_dir` keeps its historical `"."`,
+        // so this fix changes no behaviour where `HOME` is set.
+        assert_eq!(home_dir_from(|_| None), None);
+    }
 
     /// **An integrity verdict on a READ path exited 1**, the code
     /// docs/AGENTS.md reserves for "the run failed, retry it".

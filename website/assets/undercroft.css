@@ -3,7 +3,13 @@
    IBM Plex Sans text, IBM Plex Mono code). Loaded after the stock theme
    css, and pins the brand look across every built-in theme choice. */
 
-@import url('https://fonts.googleapis.com/css2?family=GFS+Didot&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+/* Self-hosted, so no docs page contacts a third party to render. The path
+   is relative to where mdBook puts this file — `<book>/assets/` — and the
+   fonts ship with the landing page's assets, which the site assembly copies
+   to the site root: `../../assets/fonts/` from `/undercroft/docs/assets/` is
+   `/undercroft/assets/fonts/`. website/build-site.sh assembles both halves
+   and fails if the result references a font CDN. */
+@import url('../../assets/fonts/fonts.css');
 
 html.light, html.rust, html.coal, html.navy, html.ayu {
   --bg: #04080a;

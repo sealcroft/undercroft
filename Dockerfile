@@ -21,6 +21,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# The observability deployment configs. `undercroft-obs` gates them against
+# the series inventory it exports — an alert naming a series the binary does
+# not export never fires and never errors — and that gate must FAIL rather
+# than skip when the files are absent, so they have to be in the image the
+# battery runs `cargo test` in. Copied after `crates` so an edit here does
+# not invalidate the dependency layer.
+COPY deploy ./deploy
 # Default members only — the onnx embedder crate is built by the
 # dedicated `onnx-build` compose service.
 #

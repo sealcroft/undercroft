@@ -381,6 +381,64 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "anchor"),
 ];
 
+/// **What the ops plane deliberately does NOT reach, and why.**
+///
+/// `OPERATOR_ONLY` in the engine's `parity.rs` records the MCP absences and
+/// nothing recorded these: the CLI↔`/v1`↔ops axes had no counted inventory
+/// at all, so four capabilities were missing from the ops vocabulary with no
+/// written reason and no way to tell an omission from a boundary. That is
+/// the same "is it a boundary or a drift" question the whole drift audit
+/// exists to answer, on the axis nobody had counted.
+///
+/// Gated below, in both directions, against the engine's own `/v1` surface.
+#[cfg(test)]
+pub(crate) const OPS_DELIBERATELY_ABSENT: &[(&str, &str)] = &[
+    // A KEY rotation invalidates every in-flight assertion and re-seals the
+    // whole vault. It belongs on the engine host, run by someone who can
+    // see the process, not on a control plane that would fire it remotely
+    // while the engine serves.
+    (
+        "rotate",
+        "belongs on the engine host, not a remote control plane",
+    ),
+    // Content. The ops plane is an OPERATOR plane; drawer reads are the
+    // tenant's own data and travel through `/t/*` under the tenant's token,
+    // never through an admin bearer that can reach every tenant.
+    (
+        "drawers",
+        "content belongs to the tenant's own token, not the admin bearer",
+    ),
+    (
+        "search",
+        "content belongs to the tenant's own token, not the admin bearer",
+    ),
+    // Whole-corpus movement. `migrate` is the supported path and it is
+    // count-verified end to end; a bare export or import through the ops
+    // plane would be the same egress with none of that.
+    (
+        "export",
+        "use `migrate`, which count-verifies; a bare egress has no such check",
+    ),
+    (
+        "import",
+        "use `migrate`, which count-verifies; a bare ingest has no such check",
+    ),
+    // Distillation calls an LLM and WRITES facts. It is a content-producing
+    // operation, not an operator one, and it needs `UNDERCROFT_LLM_*` on the
+    // engine host anyway.
+    (
+        "refine",
+        "content-producing, and its LLM configuration lives on the engine",
+    ),
+    // The agent's own audit view. `ops` is the operator door; the operator
+    // reads history on the engine, where the scope is `Operator` rather than
+    // the fenced `Agent`.
+    (
+        "history",
+        "operator history is read on the engine, at operator scope",
+    ),
+];
+
 /// The operator-plane vocabulary as NAMES, for the CLI (ROADMAP C9).
 ///
 /// Each alias resolves to a pair that must also be in [`OPS_ROUTES`] —
@@ -613,7 +671,10 @@ fn data_plane(
     let tenant = match orch.tenant_by_token(&token) {
         Ok(Some(t)) => t,
         Ok(None) => return err_response(401, "unauthorized"),
-        Err(_) => return err_response(500, "state error"),
+        // The typed class, not a bare 500. A tampered token table
+        // (`Unsealable`, permanent, 409 everywhere else) answered 500 here —
+        // the class that tells a caller to retry.
+        Err(e) => return state_error_response(&e),
     };
     // Rate limit after auth (unauthenticated traffic never occupies a
     // window), per tenant — one noisy tenant can't starve the rest.
@@ -679,7 +740,7 @@ fn data_plane(
                     return relay(r);
                 }
             }
-            Err(e) => return err_response(502, &e),
+            Err(e) => return engine_response(&e),
         }
     }
     match engine::vault_request(
@@ -713,7 +774,7 @@ fn data_plane(
             }
             relay(r)
         }
-        Err(e) => err_response(502, &e),
+        Err(e) => engine_response(&e),
     }
 }
 
@@ -767,11 +828,32 @@ fn admin_plane(
             Ok(list) => json_response(200, &serde_json::json!({ "instances": list })),
             Err(e) => state_error_response(&e),
         },
+        // `healthy` keeps its meaning (only a 200 from `/healthz` is
+        // healthy) and the VERDICT travels beside it, because three
+        // different conditions used to arrive as the same `false`: the
+        // engine is down, the engine answered something else, and this
+        // process refused to speak to it at all. Only the third is
+        // actionable here, and it was the one indistinguishable from an
+        // outage. `state` is additive; `refused` carries the reason and is
+        // absent unless there is one.
         ("GET", ["admin", "instances", name, "health"]) => match orch.instance_creds(name) {
-            Ok(c) => json_response(
-                200,
-                &serde_json::json!({ "name": name, "healthy": engine::health(&c.url) }),
-            ),
+            Ok(c) => {
+                let h = engine::health(&c.url);
+                let mut body = serde_json::json!({
+                    "name": name,
+                    "healthy": h.is_healthy(),
+                    "state": match h {
+                        engine::Health::Healthy => "healthy",
+                        engine::Health::Unhealthy => "unhealthy",
+                        engine::Health::Unreachable => "unreachable",
+                        engine::Health::Refused(_) => "refused",
+                    },
+                });
+                if let Some(why) = h.refusal() {
+                    body["refused"] = serde_json::Value::String(why.to_string());
+                }
+                json_response(200, &body)
+            }
             Err(e) => state_error_response(&e),
         },
         // A delete of a name that is not registered is NOT a success. This
@@ -822,6 +904,15 @@ fn admin_plane(
             let keep = v.get("keep_source").and_then(serde_json::Value::as_bool) == Some(true);
             match migrate_tenant(orch, id, &to, keep) {
                 Ok(summary) => json_response(200, &summary),
+                // **The `class` survives.** This stringified the engine's
+                // classed body into `error`, so the one field this fleet's
+                // docs tell a client to read was lost on the one route that
+                // documents it — and `AlreadyThere`, `Unfaithful` and a
+                // relayed integrity 409 became indistinguishable.
+                Err(MigrateError::Engine(status, msg)) => {
+                    let _ = status;
+                    engine_response(&msg)
+                }
                 Err(e) => err_response(e.status(), &e.to_string()),
             }
         }
@@ -883,7 +974,7 @@ fn tenant_ops(
         body,
     ) {
         Ok(r) => relay(r),
-        Err(e) => err_response(502, &e),
+        Err(e) => engine_response(&e),
     }
 }
 
@@ -905,7 +996,7 @@ fn create_tenant(
     };
     if let Err(e) = engine::create_vault(&creds, &tenant.vault, level) {
         let _ = orch.tenant_delete(&tenant.id);
-        return err_response(502, &e);
+        return engine_response(&e);
     }
     // The token appears in this response and nowhere else, ever.
     json_response(
@@ -942,7 +1033,7 @@ fn tenant_stats(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
             .with_header(
                 Header::from_bytes("Content-Type", "application/json").expect("static header"),
             ),
-        Err(e) => err_response(502, &e),
+        Err(e) => engine_response(&e),
     }
 }
 
@@ -966,7 +1057,7 @@ fn delete_tenant(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
         Err(e) => return state_error_response(&e),
     };
     if let Err(e) = engine::delete_vault(&creds, &tenant.vault) {
-        return err_response(502, &e);
+        return engine_response(&e);
     }
     match orch.tenant_delete(id) {
         Ok(true) => json_response(200, &serde_json::json!({ "deleted": id })),
@@ -989,7 +1080,7 @@ fn delete_tenant(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
 /// a retry were hammered forever while the operator was told the engine
 /// was down.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum MigrateError {
+pub enum MigrateError {
     #[error("{0}")]
     State(#[from] StateError),
     #[error("unknown tenant {0:?}")]
@@ -1033,6 +1124,43 @@ impl MigrateError {
 /// engine client, which is the right fix and a much larger one. A 4xx is
 /// the ENGINE's verdict on the request and is kept verbatim; anything else
 /// (a transport failure, an engine 5xx) is what 502 actually means.
+/// Turn an `engine::*` String failure into a response that keeps what the
+/// engine said.
+///
+/// **Every site used a bare 502**, so the engine's `409 "vault already
+/// exists"` and its co-resident delete refusal arrived as the one status
+/// retry layers hammer — the exact defect `engine_err` was written to fix,
+/// applied on `migrate` and on none of its neighbours. A local transport
+/// REFUSAL was reported as a gateway failure too: `agent()` declines before
+/// a byte moves, and `health` says `refused` while every other plane said
+/// "bad gateway".
+///
+/// The classed body travels as `class` rather than being stringified into
+/// `error`, because that is the field this fleet's own docs tell a client to
+/// read and the migrate route was losing it.
+fn engine_response(msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let e = engine_err(msg.to_string());
+    let MigrateError::Engine(status, _) = &e else {
+        return err_response(502, msg);
+    };
+    // A refusal this process made about itself is not a gateway failure.
+    // `undercroft-net`'s errors name the client and say "no override".
+    if *status == 502 && (msg.contains("no override") || msg.contains("trust root")) {
+        return err_response(
+            502,
+            &format!("{msg} (this is a local transport refusal, not an unreachable engine)"),
+        );
+    }
+    let class = msg
+        .find('{')
+        .and_then(|i| serde_json::from_str::<serde_json::Value>(&msg[i..]).ok())
+        .and_then(|v| v.get("class").and_then(|c| c.as_str()).map(str::to_string));
+    match class {
+        Some(c) => json_response(*status, &serde_json::json!({ "error": msg, "class": c })),
+        None => err_response(*status, msg),
+    }
+}
+
 fn engine_err(msg: String) -> MigrateError {
     let b = msg.as_bytes();
     for i in 0..b.len().saturating_sub(4) {
@@ -1244,6 +1372,71 @@ mod tests {
             "key rotation is not an ops route"
         );
         assert!(ops_alias("drawers").is_none());
+    }
+
+    /// **Every operator capability the engine offers is either reachable
+    /// through the ops plane or recorded as deliberately absent.**
+    ///
+    /// `OPERATOR_ONLY` counts the MCP absences and nothing counted these, so
+    /// four capabilities were missing from the ops vocabulary with no
+    /// written reason — and an omission and a boundary look identical from
+    /// the outside. That is the question this whole audit exists to answer,
+    /// on the axis nobody had counted.
+    ///
+    /// Both directions: a capability in neither list fails the build, and an
+    /// entry in the absent list that has become reachable fails it too.
+    #[test]
+    fn every_operator_capability_is_reachable_or_recorded_as_absent() {
+        // The engine's operator-plane subpaths, as `/v1` exposes them. This
+        // list is what the two halves are counted against; a new engine
+        // capability lands here first and then has to be classified.
+        let engine_ops = [
+            "verify",
+            "anchor",
+            "supersessions",
+            "forget",
+            "admission",
+            "retention",
+            "retention/sweep",
+            "trust",
+            "rotate",
+            "drawers",
+            "search",
+            "export",
+            "import",
+            "refine",
+            "history",
+        ];
+        let reachable: std::collections::BTreeSet<&str> =
+            OPS_ROUTES.iter().map(|(_, p)| *p).collect();
+        let absent: std::collections::BTreeSet<&str> =
+            OPS_DELIBERATELY_ABSENT.iter().map(|(c, _)| *c).collect();
+        assert!(
+            reachable.len() > 5 && absent.len() > 3,
+            "premise: both inventories were read ({} reachable, {} absent)",
+            reachable.len(),
+            absent.len()
+        );
+        for cap in engine_ops {
+            let r = reachable.contains(cap);
+            let a = absent.contains(cap);
+            assert!(
+                r || a,
+                "{cap} is an engine operator capability that the ops plane neither                  reaches nor records as deliberately absent. Say which — an omission                  and a boundary look identical from outside."
+            );
+            assert!(!(r && a), "{cap} is both reachable and recorded absent");
+        }
+        // And every recorded absence carries a reason, not an empty string.
+        for (cap, why) in OPS_DELIBERATELY_ABSENT {
+            assert!(
+                !why.trim().is_empty(),
+                "{cap} is recorded absent with no reason — that is an omission                  with a list entry, which is worse than an omission"
+            );
+            assert!(
+                engine_ops.contains(cap),
+                "{cap} is recorded absent but is not an engine capability — a                  stale entry reads as a boundary being enforced"
+            );
+        }
     }
 
     #[test]
@@ -1542,7 +1735,7 @@ mod tests {
     #[test]
     fn deleting_an_unregistered_instance_is_404_not_a_cheerful_200() {
         let (_d, o) = orch_for_tests();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         // Premise: a real removal is still a 200, and still says so.
         assert_eq!(
             admin_status(&o, "DELETE", "/admin/instances/alpha", ""),
@@ -1557,7 +1750,7 @@ mod tests {
             404
         );
         // The guard that already worked keeps its class.
-        o.instance_add("beta", "http://b", "b", "s").unwrap();
+        o.instance_add("beta", "https://b", "b", "s").unwrap();
         o.tenant_create("acme", "beta", "sealed").unwrap();
         assert_eq!(admin_status(&o, "DELETE", "/admin/instances/beta", ""), 409);
     }
@@ -1569,7 +1762,7 @@ mod tests {
     #[test]
     fn a_migration_failure_carries_its_own_class() {
         let (_d, o) = orch_for_tests();
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         let (t, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
 
         // Unknown tenant: a missing resource in the path.
@@ -1681,14 +1874,14 @@ mod tests {
                 &o,
                 "POST",
                 "/admin/instances",
-                r#"{"name":"bad name!","url":"http://a","bearer":"b","assertion_secret":"s"}"#
+                r#"{"name":"bad name!","url":"https://a","bearer":"b","assertion_secret":"s"}"#
             ),
             400
         );
         // A tampered credential blob is a tamper verdict (409), and its
         // message — which names the remedy — survives instead of being
         // flattened into "instance unavailable".
-        o.instance_add("alpha", "http://a", "b", "s").unwrap();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
         let other = Orch::open(
             &dir.path().join("orch.db"),
             "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",

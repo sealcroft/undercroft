@@ -50,6 +50,33 @@ Consequences that are binding, not advisory:
 - **Do the impact analysis first**: establish what a change touches and what
   could fail *silently*, plan it, prove it, then present the diff.
 - **A gap is a gap** — never dressed up as a principled refusal.
+- **A RULE written into this file gets the same scrutiny as code, and the
+  test is the same one: apply it backwards.** Before a doctrine lands here,
+  run it over decisions the tree has already made and see what it
+  reclassifies. If it changes nothing, it is describing what is already done
+  — say that, or do not write it. If it changes a lot, the rule is probably
+  wrong, and every past decision it overturns owes its own argument.
+  This is not hypothetical. A versioning doctrine was written here as *"MAJOR
+  carries anything that can stop a deployment which worked before"*, and it
+  read as obviously correct. Applied backwards it would have made most of
+  this project's past security fixes major releases, and none of them were —
+  which is the signal that the RULE was wrong, not the history. The real test
+  is a **documented contract** that changes; "a deployment could stop" is a
+  different question with a different answer, and conflating them would have
+  inflated every future hardening fix into a major. The maintainer caught it,
+  not a gate.
+  **"It changes nothing" has two meanings and they are opposite.** Either the
+  rule describes what the tree already does — fine, say so — or there is no
+  history to test it against, which is not validation at all. Applying the
+  CORRECTED versioning test backwards returns the second: `1.0.0` is the only
+  release under it and it was a version RESET, so nothing before it promised
+  an upgrade path. The rule is therefore **untested by history and this
+  release is its first real application**, which is a caveat that has to be
+  written down rather than mistaken for a pass.
+  So: a doctrine is a claim about the tree, and an unverified claim about the
+  tree is exactly what the rule above forbids for code. **The reasoning that
+  produces a rule fails in the same ways the code does, and it is harder to
+  notice because prose does not fail to compile.**
 - When fanning out subagents, they inherit this role and the read-only rule
   that goes with parallel work (a shared cargo target dir yields false
   greens; builds and the battery belong to the integrator).
@@ -571,8 +598,21 @@ Consequences that are binding, not advisory:
   `ExternalEmbedder::embed` degrades to a ZERO vector, so the mirror was
   probed with zeros. **Retrieval policy is the local path's, verbatim**:
   closed vocabularies + trust floor + quarantine fence all come from the
-  shared `resolve_search_policy`, applied per candidate off the
-  HMAC-verified `meta.wing`. They were absent here until 2026-08-04, so an
+  shared `resolve_search_policy`, and the per-candidate decision is
+  `verified_meta_admits` off the HMAC-verified `meta.wing` — the FUNCTION,
+  not the clause it returns. That distinction is A28 inverted and it
+  shipped exploitable: `resolve_search_policy` folds the reserved wing in
+  only when an `EXISTS` over the CLEAR `wing` column finds a quarantined
+  row, so one offline `UPDATE drawers SET wing = 'notes'` on the sole
+  quarantined row defeats the probe and the clause arrives with no fence
+  in it. The local path never cared, because `verified_meta_admits`
+  refuses the reserved wing UNCONDITIONALLY before consulting any clause;
+  this path checked `trust` alone and returned diverted content that
+  `search` drops. Any future retrieval path calls the FUNCTION. Residue,
+  stated: with the probe defeated the quarantined row still enters the
+  candidate pool, so "poison cannot crowd or starve" degrades to an
+  availability cost under an offline writer — who can also just delete
+  rows. They were absent here until 2026-08-04, so an
   `index push` turned `--backend qdrant` into a route around admission
   control — the fix is a shared REQUIRED step, not a second copy. `index_push`
   still mirrors quarantined rows (an untrusted mirror can offer any id, so a
@@ -638,15 +678,32 @@ Consequences that are binding, not advisory:
   `drawer-quarantined`; `website/src/observability.md` documents it.
   **The counter travels with the frame since 2026-08-05 (C11/R5)**: both
   are emitted by ONE function (`PalaceStore::emit_write_event`) off ONE
-  `save_event` classification, and `drawer_writes_total` gained a third
-  label, `quarantined`. It used to be a hard-coded
+  `save_event` classification, and `drawer_writes_total` gained a third VALUE on its one
+  `outcome` label, `quarantined` (not a third label — the counter has
+  exactly one). It used to be a hard-coded
   `WriteOutcome::Created` one line above the branch that decided the
   frame, on all five write arms, so the monitor showed
   `drawer-quarantined` while the counter climbed as `created` — a durable
   signal that was *wrong* rather than missing. Gated by a SOURCE count
   (`write_telemetry_has_exactly_one_emitter`), because the counter is a
   no-op without the telemetry feature and no test that merely drives a
-  save could ever have seen it
+  save could ever have seen it. **The exported series are an INVENTORY,
+  and the whole of it is now counted (2026-08-09, ROADMAP O4)**:
+  `GAUGE_NAMES` + `COUNTER_NAMES` + `HISTOGRAM_NAMES`, pinned to the emit
+  sites by `the_series_inventory_matches_the_emit_sites` (both
+  directions), and consumed by two gates that could not exist before it.
+  `every_gauge_name_is_registered_and_every_registered_name_is_emitted`
+  (in `undercroft-store`, where `CODEBOOK_ARTIFACTS` lives) covers all
+  **ten** gauges — it covered the five codebook ones and the other five
+  were bare literals in `tenant.rs` with nothing pinning them, i.e. the
+  exact arrangement whose first instance shipped five dead names; a gauge
+  outside `GAUGE_NAMES` is dropped with no error at any level.
+  `every_series_the_deployment_configs_name_is_one_the_binary_exports`
+  reads `deploy/observability/` (hence the Dockerfile's `COPY deploy`)
+  and is deliberately ONE-directional: every series a config names must
+  exist, never the reverse — an alert on a series the binary does not
+  export stays `inactive` forever and a panel merely looks empty, and
+  nothing in the stack reports either
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
@@ -692,7 +749,14 @@ Consequences that are binding, not advisory:
   a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **34 tools (incl. `undercroft_history`, the audit chain
   at `HistoryScope::Agent` — fenced by namespace and by the reserved review
   wing, so a diverted write cannot read its own evidence back), 12
-  of them writes** — `WRITE_TOOLS`
+  of them writes** — the read-only gate is `READ_TOOLS` and it FAILS
+  CLOSED (`refused_when_read_only` = not-a-read), because
+  `WRITE_TOOLS.contains(name)` served any tool nobody had classified yet and
+  its compensating parity heuristic was blind to `_merge`, `_move`,
+  `_import`, `_forget`, `_prune`, `_promote` and `_sweep`; `/v1`'s `mutates`
+  decided the same question the safe way round and this copies it.
+  `WRITE_TOOLS` survives `#[cfg(test)]` as the other half of the inventory,
+  so an advertised tool in NEITHER list fails the build
   + the quarantine fence and the authority fence over raw arguments;
   parity.rs: the surface inventory the code is COUNTED AGAINST in both
   directions — a tool advertised without a line fails the build, a line
@@ -803,15 +867,35 @@ Consequences that are binding, not advisory:
   threshold headroom, plus the true-positive arm where every committed
   fixture must trip; deterministic, no vault, no model)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
-  stack (see its README.md + RUNBOOK.md)
+  stack (see its README.md + RUNBOOK.md). **Every rule is aggregated `by
+  (instance)` and that is load-bearing, not cosmetic**: Alertmanager's
+  inhibition scopes itself with `equal:`, and a label absent from BOTH the
+  source and the target counts as EQUAL — so equalling on a label no rule
+  emits does not narrow the inhibition, it makes it global. The shipped
+  config equalled on `vault`, which nothing emitted (every rule was a
+  `sum()`, an `up{}` or a `sum by (le)`), so one critical
+  `PalaceTamperDetected` silenced every warning in the fleet for as long
+  as it fired, and the only symptom of that class is an alert that never
+  arrives. Gated by the `obs-config` suite: `promtool test rules` over
+  `alerts_test.yml` asserts the exact label set each rule emits — real
+  PromQL evaluation, so it cannot agree with the rules by construction the
+  way a second copy of the expressions would — and `tests/obs-config.sh`
+  then requires every `equal:` label to be present in all of them, and
+  every rule to have a test block. Adding a rule means adding a block
+- `deploy/observability/Dockerfile.config-check` — the `obs-config` image:
+  `promtool` and `amtool` lifted from the pinned Prometheus/Alertmanager
+  images onto debian. Pinning matters — a check that runs a different
+  version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all **77**
-  `UNDERCROFT_*` variables the engine honours — 62 written out in full
-  across the env table's 58 rows, plus 15 siblings abbreviated to a
+  which inlines them and documents every layer plus all **78**
+  `UNDERCROFT_*` variables the engine honours — 63 written out in full
+  across the env table's 59 rows, plus 15 siblings abbreviated to a
   suffix inside the row that owns them (`_TOKENIZER` three times, one
   per model role), which is why grepping the page for full names
-  undercounts it. Count the truth, never a number in prose:
+  undercounts it. (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
+  pin for the orchestrator→engine hop, which had no transport policy at
+  all until the post-1.0.0 drift audit.) Count the truth, never a number in prose:
   `grep -rhoE '"UNDERCROFT_[A-Z0-9_]+"' crates/ | sort -u` over every
   crate except `undercroft-bench`, whose `UNDERCROFT_VS_*`/`UNDERCROFT_TEST_*`
   belong to the harness rather than the engine.
@@ -834,9 +918,37 @@ Consequences that are binding, not advisory:
   so that with JS off every section stays visible and the document still
   reads end to end
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
-  under `src/`
+  under `src/`. **`build-site.sh` is the ONE assembly**, run by both
+  `pages.yml` and `docker compose run --rm site`; the two used to carry
+  their own `cp` lines, so the local preview could not exercise the
+  deployed layout — which is the only place the cross-directory paths
+  resolve at all. Landing goes to the root and the book to `/docs`, so
+  the manual's skin reaches the fonts via `../../assets/fonts/` and the
+  404's links resolve only under `book.toml`'s `site-url`
+  (`/undercroft/docs/`; unset, mdBook built them as if the book were at
+  the domain root, so the one page a lost visitor sees was the one page
+  with no stylesheet). **The three font families are vendored**, under
+  `landing/assets/fonts/` with their OFL texts — regenerate with
+  `tools/vendor-fonts.sh`, which is run BY HAND and never by the build,
+  since a build step that fetched fonts would defeat the point. It passes
+  every `unicode-range` through unchanged rather than hand-authoring the
+  `@font-face` blocks, which is how a vendoring pass silently drops a
+  script. **Only the subsets rendered text uses are shipped** — `latin`,
+  `greek`, `cyrillic`; the other four are 357 KB nothing needs — and that
+  is MEASURED over rendered `.html` only, because a scan that includes the
+  vendored scripts finds all seven (`mermaid.min.js` carries Unicode parser
+  tables, `mark.min.js` a diacritic map: data inside a script, never glyphs
+  a browser paints). `build-site.sh` fails if the assembled site references
+  a font CDN at all, and fails if rendered text needs a dropped subset —
+  that second check was born broken (a shell-built regex class, `sed` ate
+  the backslashes, `2>/dev/null` ate perl's death) and reported a clean
+  result having scanned nothing, which is why it now **probes itself
+  against a range that must match before its zero-results are believed**.
+  The probe then also caught that the site image carries `perl-base`, with
+  neither `File::Find` nor `PerlIO`
 - `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,
-  `tests/e2e-orchestrator.sh` — end-to-end suites (run in Docker)
+  `tests/e2e-orchestrator.sh`, `tests/obs-config.sh` — end-to-end and
+  config suites (run in Docker)
 - `docs/AGENTS.md` — the scenario-driven agent implementation guide
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
@@ -894,8 +1006,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (656 run,
-                                      # 4 #[ignore]d = 660 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (689 run,
+                                      # 4 #[ignore]d = 693 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -909,18 +1021,43 @@ docker compose run --rm test          # cargo unit + integration tests (656 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (257 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (76 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (290 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (95 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
+docker compose run --rm obs-config    # the observability CONFIG suite (10 checks):
+                                      # promtool check/test rules + amtool
+                                      # check-config at the versions the stack
+                                      # deploys, plus the join between them —
+                                      # every label alertmanager's `equal:` names
+                                      # must be one the alerts actually emit. It
+                                      # equalled on a label NOTHING emitted, and
+                                      # alertmanager reads absent-on-both as
+                                      # equal, so one critical silenced every
+                                      # warning fleet-wide. The only symptom of
+                                      # that class is an alert that never
+                                      # arrives, which is why it needs a suite
 docker compose run --rm onnx-build    # compile-check the ONNX embedder+reranker feature
 docker compose run --rm ort-build    # compile-check CLI with --features onnx,ort
                                       # (CI clippy never sees non-default features —
                                       # clippy ort-gated code here explicitly)
-docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5.4;
-                                      # mermaid via vendored website/assets/mermaid.min.js)
+docker compose run --rm site          # build AND ASSEMBLE the site (7 checks) via
+                                      # website/build-site.sh — the same script
+                                      # pages.yml deploys with, because the
+                                      # checks that matter are true only of the
+                                      # assembled tree: the manual's skin reaches
+                                      # the fonts by a path that leaves the book
+                                      # and re-enters the landing assets, and the
+                                      # 404's links resolve only under site-url.
+                                      # Fails if any page references a font CDN.
+                                      # (mdbook pinned 0.5.4; mermaid via
+                                      # vendored website/assets/mermaid.min.js;
+                                      # fonts vendored under
+                                      # website/landing/assets/fonts — regenerate
+                                      # with website/tools/vendor-fonts.sh, which
+                                      # is run BY HAND and never by the build)
 docker build -t undercroft .           # runtime image
 
 # A quantized text embedder on the compose network, CPU only — so a
@@ -982,7 +1119,7 @@ one for code.** Applying it blindly across a 7-way merge spliced away closing
 braces in three `.rs` files. Resolve code conflicts on their merits; reserve
 union for additive prose.
 
-**Run the battery with `bash tests/battery.sh`** (all seven suites, or name a
+**Run the battery with `bash tests/battery.sh`** (all eight suites, or name a
 subset). It exists because two mistakes on 2026-08-06 were the same defect —
 a verdict taken from something other than the thing that decides it:
 a summary built by piping `cargo test` through `awk` reported `failed=0` from
@@ -995,6 +1132,37 @@ also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
 
+**A SCRIPTED EDIT IS A CHANGE YOU HAVE NOT READ.** Four defects in one
+session, all the same root — a `python`/`sed` edit that matched its anchor and
+damaged what was around it — and the expensive one was invisible to every
+test by construction:
+
+- **An offset computed before a length-changing replace.** `j = s.index(...)`,
+  then a `replace()` that shifts everything, then `s[:i] + block + s[j:]` — the
+  block landed in the MIDDLE of a string literal. **Never carry an index
+  across a mutation.** Re-find after every change, or edit by line index.
+- **An anchor matched on a `fn` line with an attribute above it.** The
+  insertion took that `#[test]`, so a live parity gate silently became dead
+  code — and no test could report it, because the test was the thing that
+  stopped running. Only `clippy`'s "never used" caught it. **Read what is
+  ADJACENT to the anchor**: an attribute, a doc comment and a closing brace
+  all belong to something.
+- **Escape handling.** A Python octal escape wrote a raw `\x01` into a shell
+  script, and `bash -n` parsed it happily; doubled backslashes collapsed two
+  Rust string literals onto one line with 30-space runs, and **rustfmt does
+  not reformat string literals**, so no gate sees that class. Prefer raw
+  strings and line-index edits; **byte-scan** anything a script wrote
+  (control bytes, CRLF, space runs inside literals).
+- **`2>/dev/null` on a formatter.** It swallowed the failure, and the drift
+  surfaced a battery later. **Never redirect a checker's stderr** — that is
+  the documented "a checker that cannot run reports the same thing as a clean
+  tree" trap, one level up.
+
+**So: compile after EVERY structural edit, before making the next one.**
+Batching them hides which edit broke what, and this session batched them four
+times. The cost of a rebuild is seconds; the cost of a disabled gate is a
+release.
+
 **Line endings are enforced, in two scopes, because no image carries the whole
 tree.** `.gitattributes` declares `* text=auto eol=lf` so a CRLF shell script
 cannot break in the containers — and nothing checked it until scripted
@@ -1003,8 +1171,11 @@ text-mode edits on Windows converted eleven files and `tests/e2e.sh` died with
 CLAUDE.md change show as 1,415 lines, which is how a real defect hides in an
 unreadable diff). `crates/` is gated by
 `no_source_file_has_crlf_line_endings` (complete inside every image, since the
-test image COPYs exactly that subtree); everything else — `tests/`, `docs/`,
-`website/`, compose files — by the `tests/battery.sh` preflight, host-side,
+test image COPYs that whole subtree — it also COPYs `deploy/`, deliberately
+NOT in this gate's scope: that is YAML and JSON no shell executes, and a gate
+widened to whatever happens to be in the image is a gate whose stated scope
+has stopped matching its real one); everything else — `tests/`, `deploy/`,
+`docs/`, `website/`, compose files — by the `tests/battery.sh` preflight, host-side,
 via `git ls-files --eol` (git owns the concept, so ask git rather than
 hand-rolling byte detection: three hand-rolled attempts each failed, twice as
 a false negative and once declaring the whole repo corrupt). **Write files in
@@ -1034,6 +1205,17 @@ images either; mount the repo instead:
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
+**The seven compose suites run as a `fail-fast: false` MATRIX, one job each**,
+named from the same strings `tests/battery.sh` uses so CI and a local battery
+cannot drift into different sets. Two properties are load-bearing: the legs
+are independent, so wall-clock is the slowest suite rather than their sum;
+and **every suite runs even when one fails**, where the old serial job
+stopped at the first failure and hid the state of the five behind it — a fix
+then landed blind. The verdict is an aggregate job kept under the name
+`test`, because that is what a required status check on `main` resolves
+against: renaming the job that carries the verdict would silently un-gate the
+branch, which is the same class of defect as an alert on a series nobody
+exports.
 Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 (host bind-mounted `target/` SIGBUSes under memory pressure).
 
@@ -1531,9 +1713,9 @@ had and was still bypassable on the surface most deployments use.
    architecture/index.html, website/ carry the claim you changed. A claim
    lives on every surface that states it.
 5. **The full Docker battery** at the final tree, with raw exit codes:
-   `test`, `lint`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`, `backends-e2e`,
-   `site`. `cargo build -p <crate>` does **not** compile integration tests —
-   `--tests` does.
+   `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
+   `backends-e2e`, `site`. `cargo build -p <crate>` does **not** compile
+   integration tests — `--tests` does.
 
 ## Session-end hygiene — leave no debt, drift or stale
 
@@ -1582,6 +1764,41 @@ project.*
 - License: **BUSL-1.1** (source-available; rolling 4-year conversion to
   MPL 2.0; `NOTICE` carries the MemPalace MIT heritage attribution).
   Never reintroduce MIT as the project license or publish under it.
+- **Semantic versioning, and the test for MAJOR is a DOCUMENTED CONTRACT
+  that changes — not "a deployment could stop".** Those are different, and
+  conflating them inflates a fix release into a major one. MAJOR is a removed
+  or renamed surface, an on-disk format that will not open, a default that
+  changes what is retrievable, a documented value that stops being accepted.
+  MINOR is new capability, backward compatible. PATCH is a fix whose only
+  observable change is that a defect is gone.
+  **Tightening validation of input that was never documented as valid is a
+  FIX, not a break.** A config value that was always a typo, an exit code
+  that always contradicted the published doctrine, a refusal the policy
+  always stated but enforced one step too late — closing those makes the code
+  match the contract, and a deployment that "worked" on the old behaviour was
+  running without the protection it declared. Say that plainly rather than
+  reaching for a major.
+  What such a fix DOES owe is warning: **anything that can stop a running
+  deployment gets an `UPGRADING.md` entry in the same unit**, with symptom,
+  cause and fix, and `undercroft config check` must be able to detect it
+  before a restart. That is the obligation, and it is not the same as a
+  version bump. ROADMAP is filed by target release.
+- **A declared configuration is classified, and the class decides what a bad
+  value does.** `architecture/index.html` states the doctrine — *"every
+  default is the conservative choice"*, *"integrity is not a tier"*,
+  *"outward paths are explicit"* — and it settles the question one call site
+  at a time used to: where the default is already conservative and the
+  declaration merely ADJUSTS it, garbage warns and keeps the default, because
+  the operator loses tuning and nothing else. Where the DECLARATION is what
+  turns a protection on, pins an outward path, or names which vector space a
+  vault is in, the default is *off* and a silent fallback removes what was
+  asked for — so garbage REFUSES to open. That is "integrity is not a tier"
+  extended by one step: a protection an operator declared must not become a
+  tier by typo. `parity.rs::ENGINE_ENV_VARS` carries `(name, ConfigClass)`
+  and is counted against the code in both directions, so a new variable does
+  not compile until someone classifies it; `undercroft config check` runs
+  every declaration through the resolver that will run at start-up, opening
+  nothing, so an upgrade fails in a pipeline instead of at a restart.
 - **Drift check before every release**, not only when something feels off.
   The 65-drift audit found capabilities present on one surface and missing,
   weaker or silently ignored on another — 55 of them failing with no signal
@@ -1591,7 +1808,9 @@ project.*
   docs vs code) with an adversarial verifier per dimension. `parity.rs` holds
   the line between audits; the audit is what finds what a fixed inventory
   cannot express.
-- Release flow: full Docker battery (always `--build`) → PR → CI green →
+- Release flow: full Docker battery (always `--build`) → **`UPGRADING.md`
+  updated if anything can stop a running deployment, and `undercroft config
+  check` able to detect it** → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
   post-merge CI green → Pages live-verified. Version bumps touch

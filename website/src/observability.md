@@ -69,7 +69,7 @@ Exposed series (all `undercroft_*`):
   query's candidates — the honest cost metric for anything fan-out
   shaped; a count, never a wing name),
   `drawer_writes_total{outcome}` (`created` / `deduped` / `quarantined` —
-  the third label since 1.0.0, because a diverted write was counted as
+  a third VALUE on its one `outcome` label since 1.0.0, because a diverted write was counted as
   `created` on every write arm, which is a durable signal that is *wrong*
   rather than merely missing; the counter and the live frame are now
   emitted from one function so they cannot be classified differently),
@@ -169,6 +169,17 @@ credentials — swap in Slack/email/PagerDuty in `alertmanager/alertmanager.yml`
 
 A firing tamper alert links straight to the [tamper runbook](runbook.md) —
 where it happened, and how to confirm, mitigate, fix, and prevent it.
+
+Every rule is aggregated `by (instance)`, so an alert names the process that
+is slow or erroring rather than reporting that somebody, somewhere, is — and
+Alertmanager's inhibition (a critical silences warnings **on that instance**)
+has a label to compare on. That detail is load-bearing: a label missing from
+both sides of an `equal:` counts as equal, so scoping an inhibition by a label
+no rule emits silences the entire fleet instead of one host. The shipped
+config did exactly that, and the only symptom was an alert that never
+arrived. `docker compose run --rm obs-config` now evaluates the rules with
+Prometheus's own `promtool`, asserts the exact label set each one emits, and
+fails if the inhibition equals on anything they do not all carry.
 
 ![A real PalaceTamperDetected alert firing in Grafana / Alertmanager after an
 on-disk drawer was corrupted.](images/grafana-tamper-alert.png)

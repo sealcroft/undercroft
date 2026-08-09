@@ -347,11 +347,18 @@ undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
 undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
+undercroft serve-mcp --read-only     # ...recall only: every write tool refused,
+                                     #    and the vault opened read-only
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
                                      # --read-only is a posture on the whole
                                      # process: both stores open read-only and
                                      # the route gate fails closed
 undercroft assert-header <vault>      # mint an X-Vault-Assertion (per-tenant auth)
+undercroft config check              # validate every UNDERCROFT_* declaration
+                                     # WITHOUT opening a vault or binding a port;
+                                     # exits non-zero if this environment would
+                                     # refuse to start. Run it in CI before an
+                                     # upgrade — see UPGRADING.md
 ```
 
 `serve-http` is both the shared team server (MCP over HTTP, bearer auth) and
@@ -433,7 +440,11 @@ docker compose run --rm e2e               # end-to-end UI/UX suite against the r
 docker compose run --rm orchestrator-e2e  # two engines + the control plane
 docker compose run --rm e2e-telemetry     # telemetry build + /metrics gating
 docker compose run --rm backends-e2e      # remote-index suite (five live vector DBs)
+docker compose run --rm obs-config        # alert rules + Alertmanager route (promtool/amtool)
+docker compose run --rm site              # build, assemble and check the website
 docker compose run --rm onnx-build        # compile check for the ONNX embedder feature
+
+bash tests/battery.sh                     # all eight suites, one tree, raw exit codes
 ```
 
 The e2e suite drives the actual CLI the way a user would — help text, happy
@@ -442,7 +453,11 @@ file, deliberate on-disk tampering (must be detected), a scripted attacker
 whose injection-shaped writes must land in quarantine and stay unreadable,
 and a scripted MCP JSON-RPC session. The backends suite runs the full
 push → remote search → verify flow against real Qdrant, Chroma,
-Postgres+pgvector, Milvus, and Weaviate servers.
+Postgres+pgvector, Milvus, and Weaviate servers. The `obs-config` suite runs
+Prometheus's own `promtool` and Alertmanager's `amtool`, at the versions the
+observability stack deploys, over the shipped alert rules — an alert rule can
+be perfectly valid and still never fire, and that suite exists because one
+was.
 
 ## Architecture
 
@@ -458,6 +473,7 @@ crates/
   undercroft-cli/     `undercroft` binary: CLI, MCP stdio, HTTP + /v1, admin UI
   undercroft-index/   remote vector backends as untrusted accelerators
   undercroft-llm/     local LLM runtimes + the HTTP-served embedder
+  undercroft-net/     the outbound transport policy: TLS or loopback, no override
   undercroft-obs/     observability shim: no-op and zero-dep by default
   undercroft-orchestrator/  optional multi-tenant control plane (own binary)
   undercroft-bench/   retrieval benchmark + synthetic-instrument harnesses

@@ -58,7 +58,13 @@ echo "== UX: help, version, error surfaces =="
 check "help shows purpose"        0 "hardened local-first AI memory" -- "$BIN" --help
 check "help lists commands"       0 "wake-up"                        -- "$BIN" --help
 check "version prints"            0 "undercroft"                      -- "$BIN" --version
-check "unknown cmd fails w/usage" 2 "Usage"                          -- "$BIN" frobnicate
+# **A usage error exits 1, and this check used to pin the opposite.** clap
+# defaults to 2, and 2 is this project's integrity verdict "on every
+# command" — so a typo or a renamed flag reached a compliance script as a
+# TAMPER VERDICT, and the suite asserted that it should. The doctrine is
+# the published one; the parser was the outlier.
+check "unknown cmd fails w/usage" 1 "Usage"                          -- "$BIN" frobnicate
+check "a bad flag value too"      1 "error"                          -- "$BIN" search x --limit nope
 check "search before init fails"  1 "not found"                      -- "$BIN" search anything
 
 echo "== Core flow: init → remember → search → wake-up =="
@@ -323,6 +329,81 @@ check "verify ok after rotate"    0 "VERIFY OK"                      -- "$BIN" v
 # through the CLI would mean writing to the database behind the binary.
 check "verify reports mirror leg" 0 "mirror drift:"                  -- "$BIN" verify
 check "search ok after rotate"    0 "eng/decisions"                  -- "$BIN" search "migrated the search stack"
+
+# **UNDERCROFT_TRUST_FLOOR — the declared VAULT floor, end to end.** The
+# REQUEST floor (`--min-trust`, `min_trust`) is exercised on `/v1` below;
+# the declared vault floor had ZERO occurrences under tests/ on any
+# surface, and it is the one that produced the last round's regression: a
+# floor above `standard` with no wing yet assigned that class empties
+# `recent` entirely, and `wake_up` then said "Palace is empty" over an
+# intact corpus. An exclusion nobody can see is worse than a refusal.
+#
+# `eng` was assigned `trusted` above; `floortest` below is assigned
+# nothing, so a `trusted` floor separates them. Both sides are asserted —
+# a floor that excluded everything would pass a one-sided check.
+check "floor fixture files a drawer" 0 "Filed drawer"                 -- \
+  "$BIN" remember "the floor fixture drawer about hydrofoils" --wing floortest --room r
+check "unfloored read sees it"    0 "hydrofoils"                      -- \
+  "$BIN" search "floor fixture hydrofoils"
+# **And it SAYS which.** A vault floor that empties a result was disclosed
+# on `wake-up` and silent on `search` and `list-drawers`, on all three
+# surfaces — an exclusion nobody can see, which is the same failure mode as
+# "Palace is empty over an intact corpus" one read over. The first version
+# of this very check asserted only the empty message, i.e. it PINNED the
+# silence. `Exclusions::measure` reads the EFFECTIVE floor now, not the
+# request's declared one.
+check "floor excludes below it"   0 "No memories matched."              -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search "floor fixture hydrofoils"
+check "and says a floor did it"   0 "below the trust floor"             -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search "floor fixture hydrofoils"
+# The premise: with no floor declared, nothing is disclosed — "you set no
+# floor" and "your floor excluded nothing" are different statements.
+UNFLOORED="$("$BIN" search "floor fixture hydrofoils" 2>&1)"
+if grep -qF "below the trust floor" <<<"$UNFLOORED"; then
+  echo "FAIL  an unfloored search must disclose nothing"; FAIL=$((FAIL+1))
+else
+  echo "ok    an unfloored search must disclose nothing"; PASS=$((PASS+1))
+fi
+check "a wing AT the floor answers" 0 "eng/decisions"                 -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search "migrated the search stack"
+# The regression itself: a read emptied BY THE FLOOR must say so. Saying
+# "Palace is empty" over an intact corpus is a false statement the caller
+# cannot see through.
+# A wing-scoped read is self-scoping and bypasses the VAULT floor by
+# design (`read_trust_clause`); pinned here rather than assumed.
+check "a named wing bypasses the vault floor" 0 "hydrofoils"          -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" wake-up --wing floortest
+# **The regression itself.** A read emptied BY THE FLOOR must say which;
+# "Palace is empty" over an intact corpus is a false statement the caller
+# cannot see through.
+#
+# Driven WITHOUT `--wing`, and that is not incidental: naming a wing
+# bypasses the vault floor, so a wing-scoped read is the one shape that
+# cannot reach this branch — the first version of this check used one
+# and measured nothing. `work` is the vault with no trust assignment at
+# all (`trusted` was assigned on `default`), so a `trusted` floor
+# resolves to `Allow([])` there and empties every read: precisely the
+# state that used to answer "Palace is empty".
+check "wake-up sees the work vault" 0 "BLUE HERON"                    -- \
+  "$BIN" wake-up --vault work
+check "an emptied-by-floor read says which" 0 "trust floor"           -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" wake-up --vault work
+WAKE="$(UNDERCROFT_TRUST_FLOOR=trusted "$BIN" wake-up --vault work 2>&1)"
+if grep -qF 'Palace is empty' <<<"$WAKE"; then
+  echo "FAIL  a floored read must not claim the palace is empty"; echo "$WAKE" | sed 's/^/      /'; FAIL=$((FAIL+1))
+elif grep -qF 'BLUE HERON' <<<"$WAKE"; then
+  echo "FAIL  premise: the floor must actually empty this read"; echo "$WAKE" | sed 's/^/      /'; FAIL=$((FAIL+1))
+else
+  echo "ok    a floored read must not claim the palace is empty"; PASS=$((PASS+1))
+fi
+# The floor is DECLARED, not guessed: a typo must REFUSE, never resolve to
+# no floor. `trust_rank` ranks an unknown class lowest, so an ignored floor
+# and a satisfied floor look identical from the outside — which is why this
+# one refuses at open rather than warning.
+check "a bogus floor refuses"     1 "trust vocabulary"                -- \
+  env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" search "floor fixture hydrofoils"
+check "declining the floor is declarable" 0 "hydrofoils"              -- \
+  env UNDERCROFT_TRUST_FLOOR=off "$BIN" search "floor fixture hydrofoils"
 check "kg survives rotate"        0 "triples"                        -- "$BIN" stats
 check "dup lookup after rotate"   0 "duplicate of"                   -- "$BIN" drawer check-dup "We migrated the search stack to Rust for speed and memory safety"
 check "second rotate idempotent"  0 "Rotated vault 'default'"        -- "$BIN" vault rotate default
@@ -345,6 +426,121 @@ if [ "$code" -eq 2 ] && grep -q "VERIFY FAILED" <<<"$out"; then
   echo "ok    tampered vault detected (exit 2, VERIFY FAILED)"; PASS=$((PASS+1))
 else
   echo "FAIL  tamper detection — exit $code"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# **The same verdict where a MACHINE can see it, on MCP.** The tool built
+# text ending `VERIFY FAILED` and returned it inside `"isError": false` —
+# the one machine-readable field in an MCP tool result — so an agent keying
+# on that field, which is what the field is for, read a tampered vault as a
+# successful check. Every other surface states this where a machine can
+# read it: the CLI exits 2, `/v1` answers `"ok": false`, the fleet's `ops
+# verify` exits 2. This transport was the outlier, and not for a protocol
+# reason.
+MCP_TAMPER="$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | "$BIN" serve-mcp --vault work 2>/dev/null)"
+if grep -qF '"isError":true' <<<"$MCP_TAMPER"; then
+  echo "ok    MCP verify on a tampered vault is isError:true"; PASS=$((PASS+1))
+else
+  echo "FAIL  MCP verify on a tampered vault is isError:true"; echo "$MCP_TAMPER" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# The whole report still travels — only the flag changed, from a statement
+# that was wrong to one that is right.
+if grep -qF 'VERIFY FAILED' <<<"$MCP_TAMPER"; then
+  echo "ok    and the report still travels with it"; PASS=$((PASS+1))
+else
+  echo "FAIL  and the report still travels with it"; echo "$MCP_TAMPER" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# The premise: a CLEAN vault is still isError:false. Without this arm a
+# tool that errored unconditionally would pass both checks above.
+MCP_CLEAN="$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_verify","arguments":{}}}' \
+  | "$BIN" serve-mcp 2>/dev/null)"
+if grep -qF 'VERIFY OK' <<<"$MCP_CLEAN" && ! grep -qF '"isError":true' <<<"$MCP_CLEAN"; then
+  echo "ok    a clean vault still verifies as a success"; PASS=$((PASS+1))
+else
+  echo "FAIL  a clean vault still verifies as a success"; echo "$MCP_CLEAN" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+
+echo "== config check: an upgrade fails in a pipeline, not at a restart =="
+# The refusals this project added are deliberate — a declaration that turns a
+# protection on must not fall back silently — but a refusal that arrives at
+# start-up arrives during a rolling restart, one node at a time. This is the
+# door that moves it earlier.
+check "clean env starts"          0 "This environment starts"        -- \
+  "$BIN" config-check
+check "opens nothing, and says so" 0 "no vault, no database"          -- \
+  "$BIN" config-check
+# A declaration that turns a protection on and does not parse: exit 1, named.
+check "a bad protection refuses"  1 "REFUSES"                         -- \
+  env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" config-check
+check "and it names the variable" 1 "UNDERCROFT_TRUST_FLOOR"          -- \
+  env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" config-check
+check "the admission screen too"  1 "UNDERCROFT_ADMISSION"            -- \
+  env UNDERCROFT_ADMISSION=quarantien "$BIN" config-check
+check "the semantic gate too"     1 "UNDERCROFT_SEMANTIC_GATE"        -- \
+  env UNDERCROFT_SEMANTIC_GATE=1.5 "$BIN" config-check
+check "a CA pin that pins nothing" 1 "UNDERCROFT_EMBED_CA"            -- \
+  env UNDERCROFT_EMBED_CA= "$BIN" config-check
+# A GOOD value passes — otherwise the checks above would pass on a command
+# that refused everything.
+check "a good value passes"       0 "This environment starts"         -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted UNDERCROFT_ADMISSION=quarantine "$BIN" config-check
+# **The verdict matches what the engine actually does.** The point of a
+# pre-flight is that it agrees with start-up; if it ever disagreed it would be
+# worse than nothing, because an operator would trust it.
+env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" search anything >/dev/null 2>&1
+ENGINE_CODE=$?
+env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" config-check >/dev/null 2>&1
+PRE_CODE=$?
+if [ "$ENGINE_CODE" -ne 0 ] && [ "$PRE_CODE" -ne 0 ]; then
+  ok "the pre-flight agrees with the engine (both refuse)"
+else
+  fail "the pre-flight agrees with the engine (both refuse)" \
+    "engine $ENGINE_CODE, preflight $PRE_CODE"
+fi
+env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search anything >/dev/null 2>&1
+ENGINE_OK=$?
+env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" config-check >/dev/null 2>&1
+PRE_OK=$?
+if [ "$ENGINE_OK" -eq 0 ] && [ "$PRE_OK" -eq 0 ]; then
+  ok "and agrees when the value is good (both accept)"
+else
+  fail "and agrees when the value is good (both accept)" \
+    "engine $ENGINE_OK, preflight $PRE_OK"
+fi
+# It must not overstate what it checked: a path has no parse to run.
+check "unvalidated is reported as such" 0 "has NOT"                   -- \
+  "$BIN" config-check
+
+echo "== Unattended mutations record themselves, and are fenced =="
+# `repair` rewrites the whole derived layer and re-stamps the embedder
+# identity — the second half of a forced model swap — and left no evidence
+# that it ran. `rotate` was given a self-record for this reason; so were the
+# two at-rest migrations. This is the surface arm: the record has to be
+# REACHABLE, not merely present in a table a unit test reads directly.
+check "repair runs"               0 ""                               -- "$BIN" repair --vault default
+check "operator history sees it"  0 "migrate/repair"                 -- "$BIN" history --limit 200
+# ...and the agent surface does NOT. `migrate/` is an operation ON the
+# integrity machinery, fenced for the reason `rotate/` is — and it reached
+# `undercroft_history` at agent scope the moment it started recording
+# itself, because a namespace is only fenced if somebody adds it.
+AGENT_HIST="$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_history","arguments":{"limit":200}}}' \
+  | "$BIN" serve-mcp 2>/dev/null)"
+if grep -qF 'migrate/repair' <<<"$AGENT_HIST"; then
+  echo "FAIL  the agent surface must not see a migration record"; FAIL=$((FAIL+1))
+else
+  echo "ok    the agent surface must not see a migration record"; PASS=$((PASS+1))
+fi
+# The premise: the agent surface DOES answer, so the check above is a fence
+# and not an empty reply.
+if grep -qF 'record(s)' <<<"$AGENT_HIST" || grep -qF 'kg/' <<<"$AGENT_HIST"; then
+  echo "ok    premise: the agent history answers"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: the agent history answers"; echo "$AGENT_HIST" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 
 echo "== Transcripts: render, import, daemon =="
@@ -751,6 +947,44 @@ mcp_check "search tool round-trips" 'mcp saved this memory'
 # A full page names its continuation; past the end says so instead of "no match".
 mcp_check "full page names continuation" 'deeper results may exist'
 mcp_check "past the end says so"    'no more memories past rank 5'
+
+# **`serve-mcp --read-only` — the wiring, not the shared logic.** The
+# refusal LOGIC is shared with `serve-http` and proven there; what this
+# flag added is stdio wiring, and that had no coverage on any surface. The
+# posture is not only about refusing tools: it reaches the OPEN, so a
+# read-only stdio server must not migrate the embedder or append a
+# read-audit record per search either.
+RO_MCP="$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"undercroft_save","arguments":{"content":"a read-only server must refuse this","wing":"agents"}}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"undercroft_search","arguments":{"query":"mcp saved"}}}' \
+  | "$BIN" serve-mcp --read-only 2>/dev/null)"
+if grep -qF 'server is read-only' <<<"$RO_MCP"; then
+  echo "ok    serve-mcp --read-only refuses a write tool"; PASS=$((PASS+1))
+else
+  echo "FAIL  serve-mcp --read-only refuses a write tool"; echo "$RO_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# A refusal must be a PROTOCOL error, not prose inside a success — the
+# machine-readable field is the only one a client keys on.
+if grep -qF '"isError":true' <<<"$RO_MCP"; then
+  echo "ok    the refusal is isError:true, not prose"; PASS=$((PASS+1))
+else
+  echo "FAIL  the refusal is isError:true, not prose"; echo "$RO_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# ...and it is a POSTURE, not a mute: reads still answer. Without this arm
+# a server that refused everything would pass the check above.
+if grep -qF 'mcp saved this memory' <<<"$RO_MCP"; then
+  echo "ok    serve-mcp --read-only still serves reads"; PASS=$((PASS+1))
+else
+  echo "FAIL  serve-mcp --read-only still serves reads"; echo "$RO_MCP" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# The write really did not happen — a refusal that still wrote would look
+# identical from the transcript above.
+if ! "$BIN" search "a read-only server must refuse this" 2>&1 | grep -qF 'read-only server must refuse'; then
+  echo "ok    the refused write is not in the vault"; PASS=$((PASS+1))
+else
+  echo "FAIL  the refused write is not in the vault"; FAIL=$((FAIL+1))
+fi
 
 echo "== Multi-tenant HTTP REST surface =="
 REST_HOME="$(mktemp -d)"

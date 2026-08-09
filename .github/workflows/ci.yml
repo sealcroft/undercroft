@@ -44,18 +44,82 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+  suites:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      # **Every suite runs even when one fails.** Serially, a failure in the
+      # second step meant the remaining five never ran, so one broken suite
+      # hid the state of the rest and a fix landed blind. The point of a
+      # battery is the whole verdict, not the first word of it.
+      fail-fast: false
+      matrix:
+        # Same names as the compose services and as `tests/battery.sh`, so
+        # what CI runs and what a maintainer runs locally cannot drift into
+        # different sets.
+        #
+        #   obs-config       alert rules + route (promtool/amtool) — no cargo
+        #   test             cargo unit + integration
+        #   e2e              UI/UX suite against the release binary
+        #   orchestrator-e2e two engines + the control plane
+        #   e2e-telemetry    the ONLY job compiling `--features telemetry`;
+        #                    without it `undercroft-obs/src/imp.rs` — the whole
+        #                    real telemetry implementation — is never built in
+        #                    CI at all and could stop compiling on `main` with
+        #                    every check green
+        #   backends-e2e     five live vector DBs over TLS
+        #   onnx-build       ONNX embedder + reranker compile check
+        suite:
+          - obs-config
+          - test
+          - e2e
+          - orchestrator-e2e
+          - e2e-telemetry
+          - backends-e2e
+          - onnx-build
+    steps:
+      - uses: actions/checkout@v5
+      - name: ${{ matrix.suite }}
+        run: docker compose run --rm ${{ matrix.suite }}
+
+  # The aggregate. Kept under the name `test` because that is what any
+  # required status check on `main` is configured against — renaming the
+  # job that carries the verdict would silently un-gate the branch, which
+  # is the same class of defect as an alert on a series nobody exports.
   test:
+    name: Suites (aggregate)
+    runs-on: ubuntu-latest
+    needs: suites
+    if: always()
+    steps:
+      - name: Every suite must have passed
+        run: |
+          result='${{ needs.suites.result }}'
+          echo "matrix result: $result"
+          # `needs.<job>.result` folds the whole matrix: `success` only when
+          # every leg succeeded. Anything else — failure, cancelled, skipped
+          # — is not a green battery and must not read as one.
+          if [ "$result" != "success" ]; then
+            echo "one or more suites did not pass; see the individual jobs above"
+            exit 1
+          fi
+          echo "every suite passed"
+
+  site:
+    name: Site build + assembly checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Unit + integration tests (Docker)
-        run: docker build --target test -t undercroft-test . && docker run --rm undercroft-test
-      - name: E2E UI/UX suite (Docker)
-        run: docker compose run --rm e2e
-      - name: Remote backends suite (qdrant/chroma/pgvector/milvus)
-        run: docker compose run --rm backends-e2e
-      - name: ONNX embedder compile check
-        run: docker compose run --rm onnx-build
+      # Same mdBook version as pages.yml and the compose `site` service —
+      # three callers, one version, or the preview and the deploy differ.
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: "0.5.4"
+      # The deploy runs this exact script. Running it on pull requests is
+      # what makes a broken site a failing check instead of a broken page:
+      # pages.yml only fires on `main`, so until now nothing built the book
+      # before it was already published.
+      - run: bash website/build-site.sh _site
 
   trivy-image:
     name: Trivy scan (runtime image)

@@ -429,7 +429,11 @@ impl Vault {
     /// rollback (an anchor the database chain never produced) and heals by
     /// fast-forwarding — a power loss is not a tamper alarm, a restored old
     /// database still is.
-    pub fn anchor_manifest(&mut self, head_hex: &str, writes: u64) -> Result<(), VaultError> {
+    /// Returns how many chain RECORDS this anchor committed — the value the
+    /// counter advances by. Returned so it can be asserted: it is otherwise
+    /// only observable through a metric that is a no-op in a default build,
+    /// which is why the two-handle over-count was invisible to every test.
+    pub fn anchor_manifest(&mut self, head_hex: &str, writes: u64) -> Result<u64, VaultError> {
         // How many chain RECORDS this anchor commits. One anchor is not
         // one record: `upsert_many` appends per drawer inside one
         // transaction and anchors once at the end (256 records, one
@@ -439,7 +443,25 @@ impl Vault {
         // `/v1 …/import` and 4 through `undercroft import`, on a counter
         // whose own contract says "once per mutation" — so the counter
         // advances by the delta, which is exactly the chain's growth.
-        let records = writes.saturating_sub(self.manifest.writes);
+        //
+        // **The subtrahend is read from DISK, not from this handle's cached
+        // field.** `self.manifest.writes` is only ever written by this
+        // handle's own `anchor_manifest`, so with two handles on one vault —
+        // which is exactly what `serve-http` runs, and the reason
+        // `audit_chain_height` was already moved off the cached manifest —
+        // each one measured the OTHER's growth from its own stale baseline
+        // and counted it again. Steady state was 2× with two handles, worse
+        // with more: a durable signal that was wrong rather than missing.
+        //
+        // The on-disk manifest is the last anchor ANY handle committed, so
+        // the delta against it is the chain's real growth since then. A crash
+        // between commit and anchor leaves records unanchored and the next
+        // anchor counts them — the behaviour this comment already claims for
+        // read-audit records. Unreadable or unparseable falls back to the
+        // cached field, i.e. the previous behaviour: a counter must never be
+        // the reason a write fails.
+        let committed = self.anchored_writes().unwrap_or(self.manifest.writes);
+        let records = writes.saturating_sub(committed);
         self.manifest.chain_head_hex = head_hex.to_string();
         self.manifest.writes = writes;
         self.save_manifest()?;
@@ -448,7 +470,7 @@ impl Vault {
         // write can be counted.
         undercroft_obs::chain_commit(records);
         undercroft_obs::event_chain_commit(self.id(), records);
-        Ok(())
+        Ok(records)
     }
 
     /// Recompute the audit chain from an ordered list of record tags and
@@ -602,6 +624,61 @@ impl Vault {
             keys::sync_dir(&self.dir)?;
         }
         Ok(())
+    }
+
+    /// The chain head of the manifest currently ON DISK, **MAC-verified**.
+    ///
+    /// This is what a tamper decision must read. `chain_head_hex()` returns
+    /// this handle's cached copy, written only by its own `anchor_manifest`
+    /// and never reloaded — so on `serve-http`, which holds two handles on
+    /// one vault, `reconcile_chain` and `verify` compared the database
+    /// against an anchor a DIFFERENT handle had already moved, and neither
+    /// could see a `vault.json` swapped on disk until a fresh open.
+    /// `chain_state` was moved off the cached manifest for exactly this
+    /// reason, and then the chain-commit counter was too — which left the
+    /// least security-relevant consumer reading fresh while the two that
+    /// decide `ManifestTampered` and `chain_ok` read stale.
+    ///
+    /// **MAC-verified, unlike [`anchored_writes`](Self::anchored_writes).**
+    /// That one feeds a telemetry delta and a forged value can misreport a
+    /// count and reach nothing else; this one decides whether a vault is
+    /// declared tampered, so an unverifiable manifest is itself the verdict.
+    /// A missing or unreadable file falls back to the cached head rather
+    /// than inventing one — the anchor is allowed to lag, and a read failure
+    /// is not evidence of tampering.
+    pub fn anchored_head(&self) -> Result<String, VaultError> {
+        let Ok(raw) = fs::read(self.dir.join("vault.json")) else {
+            return Ok(self.manifest.chain_head_hex.clone());
+        };
+        let m: Manifest =
+            serde_json::from_slice(&raw).map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        if m.id != self.id {
+            return Err(VaultError::CorruptManifest("manifest id mismatch".into()));
+        }
+        let stored = hex::decode(&m.manifest_mac_hex)
+            .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        if verify_hmac(&self.manifest_key, &m.canonical(), &stored).is_err() {
+            undercroft_obs::hmac_verify_failed("manifest");
+            undercroft_obs::event_hmac_fail(self.id(), "manifest");
+            return Err(VaultError::ManifestTampered);
+        }
+        Ok(m.chain_head_hex)
+    }
+
+    /// The `writes` height of the manifest currently ON DISK — the last
+    /// anchor any handle on this vault committed.
+    ///
+    /// Deliberately unauthenticated and deliberately not fatal: its only
+    /// consumer is the chain-commit counter's delta, which is telemetry. A
+    /// forged value can misreport a count and can reach nothing else, so
+    /// verifying the MAC here would trade a real failure mode (a write that
+    /// cannot complete because a metrics subtrahend would not load) for a
+    /// signal that is already outside HMAC coverage by construction.
+    fn anchored_writes(&self) -> Option<u64> {
+        let raw = fs::read(self.dir.join("vault.json")).ok()?;
+        serde_json::from_slice::<Manifest>(&raw)
+            .ok()
+            .map(|m| m.writes)
     }
 
     fn save_manifest(&mut self) -> Result<(), VaultError> {
@@ -1075,6 +1152,106 @@ mod tests {
     /// `Connection::open` carries `SQLITE_OPEN_CREATE`, so by the time it has
     /// a connection the difference is gone and a half-copied backup answers
     /// every read empty with no error.
+    /// **The chain-commit delta is measured against the vault, not against
+    /// this handle's memory of it.**
+    ///
+    /// `records = writes - self.manifest.writes`, where the subtrahend was
+    /// only ever written by this handle's own anchor. `serve-http` holds TWO
+    /// handles on one vault, so each measured the other's growth from its
+    /// own stale baseline and counted it again — steady state 2× with two
+    /// handles. `audit_chain_height` was explicitly moved off the cached
+    /// manifest for this exact reason; the commit DELTA was not.
+    ///
+    /// Invisible to every existing test because the only consumer is a
+    /// counter that is a no-op without the telemetry feature, which is why
+    /// `anchor_manifest` returns the number now.
+    /// **The tamper decision reads the manifest on DISK, MAC-verified.**
+    ///
+    /// `chain_head_hex()` is this handle's cached copy, written only by its
+    /// own anchor. With two handles on one vault — what `serve-http` runs —
+    /// `reconcile_chain` and `verify` compared the database against an
+    /// anchor a different handle had already moved, and neither could see a
+    /// `vault.json` swapped underneath them until a fresh open.
+    ///
+    /// Both halves: it FOLLOWS another handle's anchor, and it REFUSES a
+    /// manifest whose MAC does not verify — the second is what makes it a
+    /// tamper decision rather than just a fresher read.
+    #[test]
+    fn the_anchored_head_is_read_from_disk_and_mac_verified() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("two-handles", SecurityLevel::Sealed).unwrap();
+        let mut a = mgr.unlock("two-handles").unwrap();
+        let b = mgr.unlock("two-handles").unwrap();
+
+        // Handle A moves the anchor. B's cached copy is stale by
+        // construction — that staleness is the defect.
+        a.anchor_manifest("aa11", 5).unwrap();
+        assert_eq!(
+            b.chain_head_hex(),
+            Vault::chain_genesis_hex(),
+            "premise: B's cached head is stale"
+        );
+        assert_eq!(
+            b.anchored_head().unwrap(),
+            "aa11",
+            "the decision must follow the anchor ANY handle committed"
+        );
+
+        // And a manifest edited offline is the verdict, not a fresher read.
+        let path = dir.path().join("vaults/two-handles/vault.json");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("aa11"), "premise: the head is in the file");
+        std::fs::write(&path, raw.replace("aa11", "bb22")).unwrap();
+        assert!(
+            matches!(b.anchored_head(), Err(VaultError::ManifestTampered)),
+            "an offline edit must fail the MAC, not be adopted"
+        );
+    }
+
+    #[test]
+    fn the_chain_commit_delta_counts_each_record_once_across_handles() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("two-handles", SecurityLevel::Sealed).unwrap();
+        let mut a = mgr.unlock("two-handles").unwrap();
+        let mut b = mgr.unlock("two-handles").unwrap();
+
+        // Handle A commits five records.
+        assert_eq!(a.anchor_manifest("aa", 5).unwrap(), 5);
+        // Handle B commits ONE more. Its own cached baseline is still 0, so
+        // this is the line that used to answer 6.
+        assert_eq!(
+            b.anchor_manifest("bb", 6).unwrap(),
+            1,
+            "the delta is against the last anchor ANY handle committed, not \
+             against this handle's memory of one"
+        );
+        // ...and back again, in both directions, because a fix that simply
+        // moved the staleness to the other handle would pass a one-way test.
+        assert_eq!(a.anchor_manifest("cc", 9).unwrap(), 3);
+        assert_eq!(b.anchor_manifest("dd", 10).unwrap(), 1);
+
+        // The total is the chain's real growth, which is the counter's
+        // whole contract.
+        let mut c = mgr.unlock("two-handles").unwrap();
+        assert_eq!(c.anchor_manifest("ee", 11).unwrap(), 1);
+
+        // A crash between commit and anchor leaves records unanchored; the
+        // NEXT anchor counts them. That is the same rule read-audit records
+        // already rely on, and it must survive this change.
+        assert_eq!(c.anchor_manifest("ff", 14).unwrap(), 3);
+
+        // Single-handle behaviour is untouched — the case every existing
+        // deployment is in.
+        let dir2 = tempdir().unwrap();
+        let mgr2 = VaultManager::open(dir2.path(), None).unwrap();
+        mgr2.create("one-handle", SecurityLevel::Sealed).unwrap();
+        let mut only = mgr2.unlock("one-handle").unwrap();
+        assert_eq!(only.anchor_manifest("11", 1).unwrap(), 1);
+        assert_eq!(only.anchor_manifest("22", 257).unwrap(), 256);
+    }
+
     #[test]
     fn a_missing_database_is_distinguishable_from_an_empty_one() {
         let dir = tempdir().unwrap();

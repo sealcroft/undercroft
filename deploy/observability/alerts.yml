@@ -4,12 +4,27 @@
 # record, KG triple, tunnel, or vault manifest failed its integrity tag on
 # read — i.e. on-disk tampering was caught. The `surface` label says WHERE.
 # See RUNBOOK.md (published at /docs/runbook.html) for how to respond.
+#
+# **Every rule below preserves `instance`, and that is load-bearing rather
+# than cosmetic.** `alertmanager.yml` inhibits warnings while a critical is
+# firing and has to compare the two on *something*; Alertmanager treats a
+# label absent from BOTH sides as equal, so an `equal:` on a label no
+# expression emits does not scope the inhibition — it makes it global, and
+# one tamper alert anywhere silences every warning fleet-wide. A bare
+# `sum(...)` drops `instance` along with everything else, which is how five
+# of these six rules came to emit no shared label at all. Aggregate `by
+# (instance)`, and check any new rule against `alerts_test.yml`, which
+# asserts the exact label set each one produces.
+#
+# The per-instance form is also the more useful alert: it names the process
+# that is slow or erroring instead of reporting that somebody, somewhere, is.
 
 groups:
   - name: undercroft-integrity
     rules:
       - alert: PalaceTamperDetected
-        # Fire the instant a verify failure is observed, per surface.
+        # Fire the instant a verify failure is observed, per surface. No
+        # aggregation, so `job`, `instance` and `surface` all survive.
         expr: increase(undercroft_hmac_verify_failures_total[2m]) > 0
         for: 0m
         labels:
@@ -25,7 +40,9 @@ groups:
 
       - alert: AuditChainStalled
         # Writes are landing but the tamper-evident chain isn't advancing.
-        expr: sum(rate(undercroft_drawer_writes_total[5m])) > 0 and sum(rate(undercroft_chain_commits_total[5m])) == 0
+        # Both sides of the `and` aggregate by the same label, or the vector
+        # match finds no counterpart and the rule never fires.
+        expr: sum by (instance) (rate(undercroft_drawer_writes_total[5m])) > 0 and sum by (instance) (rate(undercroft_chain_commits_total[5m])) == 0
         for: 10m
         labels:
           severity: warning
@@ -49,7 +66,9 @@ groups:
           description: "Prometheus cannot scrape undercroft:8765/metrics for 1m."
 
       - alert: HighSearchLatencyP95
-        expr: histogram_quantile(0.95, sum by (le) (rate(undercroft_search_duration_seconds_bucket[5m]))) > 0.5
+        # `le` must survive the sum for the quantile to mean anything;
+        # `histogram_quantile` then consumes it and returns the rest.
+        expr: histogram_quantile(0.95, sum by (instance, le) (rate(undercroft_search_duration_seconds_bucket[5m]))) > 0.5
         for: 10m
         labels:
           severity: warning
@@ -58,7 +77,7 @@ groups:
           description: "p95 search latency has exceeded 500ms for 10m ({{ $value | printf \"%.3f\" }}s)."
 
       - alert: HttpServerErrors
-        expr: sum(rate(undercroft_http_requests_total{status=~"5.."}[5m])) > 0
+        expr: sum by (instance) (rate(undercroft_http_requests_total{status=~"5.."}[5m])) > 0
         for: 5m
         labels:
           severity: warning
@@ -67,7 +86,7 @@ groups:
           description: "5xx responses observed for 5m — the server is erroring on some requests."
 
       - alert: AuthRejectionsSpike
-        expr: sum(rate(undercroft_auth_rejections_total[5m])) > 0.2
+        expr: sum by (instance) (rate(undercroft_auth_rejections_total[5m])) > 0.2
         for: 10m
         labels:
           severity: warning

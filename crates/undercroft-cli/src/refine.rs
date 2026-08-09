@@ -69,6 +69,19 @@ pub(crate) struct RefineReport {
     /// Facts the note's own words support (the rest rest on the model's
     /// background knowledge; both are wanted, the difference is recorded).
     pub stated: u32,
+    /// Fact mirrors the admission screen DIVERTED. The fact itself is in
+    /// the graph and `kg_query` serves it, but the searchable mirror sits
+    /// in the reserved review wing, excluded from `search`, `recent` and
+    /// `list_drawers`.
+    ///
+    /// This was the last save arm on the bare `upsert`, which returns "was
+    /// the id new" and throws the landing away — so both surfaces printed
+    /// "mirrored into room 'facts'" over an arbitrary number of drawers
+    /// that were not there. Reachable with entirely clean content: the
+    /// rate screen and the tier-2 advisor never see the KG's own
+    /// object-string screen, and every mirror is written under one
+    /// `added_by` with no agent claim, so they share a rate bucket.
+    pub quarantined: u32,
     /// `(subject, predicate, object)` for a dry run, in extraction order.
     /// Empty otherwise.
     pub preview: Vec<(String, String, String)>,
@@ -222,7 +235,10 @@ pub(crate) fn refine(
             // second refine run re-derived ids starting at 0 again and
             // silently overwrote the first run's fact-drawers.
             let idx = store.next_append_index()? as u32;
-            store.upsert(
+            // `upsert_screened`, not `upsert`: the screen's verdict is the
+            // difference between "mirrored into room 'facts'" being true
+            // and being a claim about a write that landed in quarantine.
+            let landed = store.upsert_screened(
                 &Drawer::new(
                     &d.meta.wing,
                     opts.fact_room,
@@ -233,6 +249,9 @@ pub(crate) fn refine(
                 )
                 .with_content_date(fact_date),
             )?;
+            if landed.quarantined {
+                rep.quarantined += 1;
+            }
             rep.facts += 1;
         }
     }

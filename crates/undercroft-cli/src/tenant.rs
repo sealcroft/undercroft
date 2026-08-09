@@ -184,6 +184,15 @@ enum Body {
 struct RestError {
     code: u16,
     message: String,
+    /// A machine-readable class for the errors whose STATUS is ambiguous.
+    ///
+    /// Only `"integrity"` today, and only for the family the CLI exits 2
+    /// on: an HMAC that does not verify, an attestation that does not
+    /// describe this vault, a tampered or unparseable manifest, a manifest
+    /// whose database is absent. All of those answer 409 — and so does a
+    /// co-resident refusal and a wrong read-only posture, which are not
+    /// integrity verdicts and must not page anyone.
+    class: Option<&'static str>,
 }
 
 impl RestError {
@@ -191,6 +200,16 @@ impl RestError {
         Self {
             code,
             message: message.into(),
+            class: None,
+        }
+    }
+
+    /// Mark this error as an integrity verdict — the class a scripted
+    /// operator exits 2 on.
+    fn integrity(self) -> Self {
+        Self {
+            class: Some("integrity"),
+            ..self
         }
     }
 }
@@ -284,12 +303,21 @@ impl Tenancy {
         match reply {
             Ok((code, Body::Json(v))) => respond(req, code, &v.to_string(), "application/json"),
             Ok((code, Body::Ndjson(s))) => respond(req, code, &s, "application/x-ndjson"),
-            Err(e) => respond(
-                req,
-                e.code,
-                &json!({ "error": e.message }).to_string(),
-                "application/json",
-            ),
+            Err(e) => {
+                // `class` is additive and present only for the integrity
+                // family. Status alone cannot carry it: 409 is also how a
+                // co-resident refusal and a wrong read-only posture answer,
+                // so a client keying alerting on the status cannot tell
+                // "the vault contradicts itself" from "that request was
+                // not allowed here". The engine's own CLI has always made
+                // this distinction (exit 2 vs 1); every other `/v1` client
+                // had to guess from the message text.
+                let payload = match e.class {
+                    Some(c) => json!({ "error": e.message, "class": c }),
+                    None => json!({ "error": e.message }),
+                };
+                respond(req, e.code, &payload.to_string(), "application/json")
+            }
         }
     }
 
@@ -440,7 +468,6 @@ impl Tenancy {
         let store = self.store_for(id)?;
         let full = store.stats().map_err(store_err)?;
         let external = store.is_external();
-        let vault = store.vault();
         undercroft_obs::set_gauge("drawers", id, full.records as f64);
         // The COMMITTED height (`PalaceStats`, i.e. `chain_meta`), never
         // this handle's cached manifest: in `serve-http` the MCP store is
@@ -457,7 +484,12 @@ impl Tenancy {
             Body::Json(json!({
                 "id": id,
                 "drawers": full.records,
-                "level": vault.level().to_string(),
+                // The REPORT's field, not `vault.level()`. Same value
+                // today, and that is the point: a hand projection that
+                // reads a different object cannot follow the struct when
+                // the struct changes, and the gate could not tell the two
+                // apart until it stopped matching method calls.
+                "level": full.level,
                 "external": external,
                 "writes": full.writes,
                 "chain_head": full.chain_head,
@@ -936,7 +968,10 @@ impl Tenancy {
         let under_assertions = self.requires_assertion();
         let named_wing = query_param(req, "wing");
         let store = self.store_for(id)?;
-        if store.is_quarantine_pending(drawer_id).map_err(store_err)? {
+        if store
+            .is_quarantine_pending_for_read(drawer_id)
+            .map_err(store_err)?
+        {
             review_door(under_assertions, named_wing.as_deref())?;
         }
         match store.get(drawer_id).map_err(store_err)? {
@@ -1347,9 +1382,24 @@ impl Tenancy {
                 .count();
             summary.insert(verdict.into(), json!(n));
         }
+        // **`ok` — the field the integrity classifier reads.** This route
+        // reported `summary.tampered` and nothing else, so a scripted
+        // `ops <tenant> supersessions` over a vault with a forged receipt
+        // exited 0: `is_integrity_verdict` keys on `"ok": false` for a 200,
+        // and there was no `ok`. The gap was recorded honestly in a code
+        // comment on the classifier and nowhere a machine could act on it.
+        //
+        // A tampered supersession IS an integrity verdict — the receipt is
+        // a keyed claim about what replaced what — so it answers the same
+        // shape `verify` does rather than a second convention.
+        let tampered = summary
+            .get("tampered")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         Ok((
             200,
             Body::Json(json!({
+                "ok": tampered == 0,
                 "supersessions": serde_json::to_value(&links).unwrap_or_else(|_| json!([])),
                 "summary": summary,
             })),
@@ -1376,8 +1426,26 @@ impl Tenancy {
         if ids.is_empty() {
             return Err(RestError::new(400, "ids must be a non-empty array"));
         }
+        // **`backend` — the capability this route did not have.** The CLI
+        // could delete the named drawers from a remote mirror and attest it;
+        // `/v1` and the fleet's `ops <t> forget` could only receive the
+        // attestation's WARNING that a mirror copy may survive, with no
+        // surface able to act on it. An operator running a fleet is exactly
+        // the operator who has pushed a mirror.
+        //
+        // Optional, so the request contract is unchanged when it is absent.
+        let backend = body.get("backend").and_then(Value::as_str);
         let store = self.store_for(id)?;
-        let att = store.forget_with_proof(&ids).map_err(store_err)?;
+        let att = match backend {
+            Some(b) => {
+                let mut index = undercroft_index::from_env(b)
+                    .map_err(|e| RestError::new(400, e.to_string()))?;
+                store
+                    .forget_with_proof_mirrored(&ids, index.as_mut())
+                    .map_err(store_err)?
+            }
+            None => store.forget_with_proof(&ids).map_err(store_err)?,
+        };
         Ok((
             200,
             Body::Json(serde_json::to_value(&att).unwrap_or_else(|_| json!({}))),
@@ -1614,6 +1682,17 @@ impl Tenancy {
             .get("limit")
             .and_then(Value::as_u64)
             .unwrap_or(1_000_000) as usize;
+        // **`dry_run` — the capability this route did not have.** The CLI
+        // has had `--dry-run` since refine existed and prints the triples it
+        // WOULD add; this route hard-coded `false`, so the one surface a
+        // fleet operator drives could not preview a distillation before
+        // committing it to the graph. Found by the hand-projection gate,
+        // which reported `preview` as a field `/v1` never reads — correctly,
+        // because the route could never produce one.
+        let dry_run = body
+            .get("dry_run")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         // Distillation reads through `recent(wing, ..)`, which opts back
         // into the reserved wing the moment one is named — so scoping a
         // refine at the queue lifts pending evidence out of it and writes it
@@ -1653,7 +1732,7 @@ impl Tenancy {
                 room,
                 fact_room,
                 limit,
-                dry_run: false,
+                dry_run,
             },
         )
         .map_err(store_err)?;
@@ -1677,6 +1756,19 @@ impl Tenancy {
                 // the second is what lets the graph answer across notes.
                 "stated": rep.stated,
                 "background": rep.facts.saturating_sub(rep.stated),
+                // Mirrors the admission screen diverted. `fact_room` below
+                // says where the mirrors went; without this the answer
+                // claims a location for drawers that are in the reserved
+                // review wing instead, unretrievable by any search.
+                "quarantined": rep.quarantined,
+                // The triples a dry run WOULD add, in extraction order.
+                // Empty on a committing run, exactly as on the CLI.
+                "dry_run": dry_run,
+                "preview": rep
+                    .preview
+                    .iter()
+                    .map(|(s, p, o)| json!({ "subject": s, "predicate": p, "object": o }))
+                    .collect::<Vec<_>>(),
                 "fact_room": fact_room,
                 "model": llm.model(),
             })),
@@ -1879,6 +1971,10 @@ impl Tenancy {
         // and the typed KG/tunnel records make those two different numbers.
         let at = |n: usize, e: RestError| RestError {
             code: e.code,
+            // The class travels with the error: an import that fails on a
+            // tampered record is still an integrity verdict, and adding the
+            // record's position must not launder it into a plain refusal.
+            class: e.class,
             message: format!(
                 "record {} ({}): {}",
                 n + 1,
@@ -2349,7 +2445,22 @@ fn vault_err(e: undercroft_vault::VaultError) -> RestError {
         V::BadName(_) => 400,
         _ => 500,
     };
-    RestError::new(code, e.to_string())
+    let err = RestError::new(code, e.to_string());
+    // **Classed here too, and this arm is the one that matters most.**
+    // `integrity_verdict` on the CLI walks the error chain and matches a
+    // BARE `VaultError` as well as a wrapped `StoreError::Vault(...)`; the
+    // first version of the class field mirrored only the wrapped arm. But
+    // `store_for` unlocks through THIS function, and an unlock fails before
+    // anything reaches `store_err` — so a manifest edited offline, which is
+    // the fixture every `/v1` tamper test in this tree uses, answered 409
+    // with no class, and the fleet's `ops … verify` exited 1 while the
+    // engine's own `verify` exited 2 on the same bytes. Two surfaces
+    // stating different doctrines about one vault is the thing the class
+    // exists to prevent.
+    match &e {
+        V::ManifestTampered | V::CorruptManifest(_) => err.integrity(),
+        _ => err,
+    }
 }
 
 fn store_err(e: StoreError) -> RestError {
@@ -2393,7 +2504,22 @@ fn store_err(e: StoreError) -> RestError {
         StoreError::NotFound(_) => 404,
         _ => 500,
     };
-    RestError::new(code, e.to_string())
+    // The integrity family, named for machines. This is the SAME set the
+    // engine's own CLI exits 2 on (`integrity_verdict` in main.rs) — kept
+    // deliberately identical, including the exclusion of
+    // `ReadOnlyUnmigrated`, which is an intact vault and a wrong posture
+    // rather than a verdict about stored evidence.
+    let err = RestError::new(code, e.to_string());
+    match &e {
+        StoreError::Integrity(_)
+        | StoreError::Attestation(_)
+        | StoreError::DatabaseMissing { .. }
+        | StoreError::Vault(
+            undercroft_vault::VaultError::ManifestTampered
+            | undercroft_vault::VaultError::CorruptManifest(_),
+        ) => err.integrity(),
+        _ => err,
+    }
 }
 
 /// How a failing import record is NAMED in an error.

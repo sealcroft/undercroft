@@ -6,6 +6,11 @@
 !Cargo.lock
 !crates
 !crates/**
+# The observability stack's configs: `cargo test` checks the alert rules and
+# the dashboard against the series the binary actually exports, and that gate
+# fails rather than skips when the tree is missing.
+!deploy
+!deploy/**
 !tests/e2e.sh
 !tests/e2e-backends.sh
 !docs

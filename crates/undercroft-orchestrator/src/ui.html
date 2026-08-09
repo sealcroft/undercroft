@@ -130,7 +130,7 @@
         <div class="h">REGISTER INSTANCE</div>
         <div class="mini">
           <input id="iName" placeholder="name" style="width:90px">
-          <input id="iUrl" placeholder="http://engine:8765" style="flex:1;min-width:140px">
+          <input id="iUrl" placeholder="https://engine:8765" style="flex:1;min-width:140px">
         </div>
         <div class="mini" style="margin-top:6px">
           <input id="iBearer" type="password" placeholder="engine bearer" style="flex:1;min-width:110px">
@@ -288,8 +288,12 @@ async function sweep() {
   await Promise.all(state.instances.map(async i => {
     try {
       const r = await api("GET", "/admin/instances/" + encodeURIComponent(i.name) + "/health");
-      state.health[i.name] = !!r.healthy;
-    } catch (_) { state.health[i.name] = false; }
+      // Keep the verdict, not just the boolean: a REFUSED instance is this
+      // process declining to speak to it (cleartext URL, unresolvable CA
+      // pin), and showing that as DOWN sent operators to inspect an engine
+      // that was fine.
+      state.health[i.name] = { up: !!r.healthy, state: r.state || (r.healthy ? "healthy" : "unhealthy"), why: r.refused || "" };
+    } catch (_) { state.health[i.name] = { up:false, state:"unreachable", why:"" }; }
   }));
   await Promise.all(state.tenants.map(async t => {
     try {
@@ -302,7 +306,7 @@ async function sweep() {
   $("fTick").textContent = new Date().toLocaleTimeString();
 }
 function renderTotals() {
-  const up = state.instances.filter(i => state.health[i.name] === true).length;
+  const up = state.instances.filter(i => state.health[i.name]?.up === true).length;
   $("fInst").textContent = up + "/" + state.instances.length;
   $("fTen").textContent = state.tenants.length;
   let drawers = 0, bytes = 0, seen = 0;
@@ -325,11 +329,18 @@ async function refresh() {
 function renderInstances() {
   const rows = state.instances.map(i => {
     const h = state.health[i.name];
-    const lamp = h === true ? "<span class='pill ok'>UP</span>"
-               : h === false ? "<span class='pill bad'>DOWN</span>" : "—";
+    // REFUSED is its own lamp. It is not an outage — it is a local
+    // configuration verdict, and it is the only one of the three an
+    // operator can act on from this console, so it says which.
+    const lamp = !h ? "—"
+               : h.up ? "<span class='pill ok'>UP</span>"
+               : h.state === "refused" ? "<span class='pill bad' title='" + esc(h.why) + "'>REFUSED</span>"
+               : h.state === "unhealthy" ? "<span class='pill bad'>UNHEALTHY</span>"
+               : "<span class='pill bad'>DOWN</span>";
+    const why = (h && h.state === "refused" && h.why) ? "<div class='kv'>" + esc(h.why) + "</div>" : "";
     return "<tr><td><span class='pill inst'>" + esc(i.name) + "</span><div class='kv'>" + esc(i.url || "") + "</div></td>" +
       "<td>" + (i.tenants ?? "—") + "</td>" +
-      "<td>" + lamp + "</td>" +
+      "<td>" + lamp + why + "</td>" +
       "<td><button class='ctl danger' data-rm='" + esc(i.name) + "'>✕</button></td></tr>";
   });
   $("instRows").innerHTML = rows.join("") || "<tr><td colspan=4 class='kv'>no instances registered</td></tr>";

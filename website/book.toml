@@ -6,6 +6,15 @@ src = "src"
 
 [output.html]
 git-repository-url = "https://github.com/sealcroft/undercroft"
+# Where the book is actually served. mdBook needs this to build the 404
+# page's asset and navigation links, because a 404 is rendered for a URL at
+# any depth and relative links from it resolve against wherever the browser
+# thinks it is. Without it the generated 404 loaded its CSS and JS as if the
+# book sat at the domain root — i.e. from `sealcroft.com/css/…` — so the one
+# page a lost visitor sees was the one page with no stylesheet.
+# `pages.yml` assembles the landing page at `/undercroft/` and copies the
+# book into `/undercroft/docs/`; these two must not drift.
+site-url = "/undercroft/docs/"
 default-theme = "ayu"
 preferred-dark-theme = "ayu"
 additional-css = ["assets/undercroft.css"]

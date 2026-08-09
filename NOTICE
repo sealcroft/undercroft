@@ -69,3 +69,25 @@ the Unicode Consortium as part of the ICU4X project.
 Undercroft delegates only the calendar arithmetic. Deciding WHICH calendar
 counted a year is Undercroft's own read-time `Locale::calendar`, declared by
 the caller and never inferred from the text.
+
+--------------------------------------------------------------------------
+
+Web fonts bundled with the documentation site
+
+The published website self-hosts its typefaces rather than loading them
+from a third party, so no page transmits a visitor's address to anyone.
+The files live in website/landing/assets/fonts/ and each family's licence
+text sits beside them.
+
+  IBM Plex Sans and IBM Plex Mono
+    Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"
+    SIL Open Font License 1.1 — OFL-ibmplexsans.txt, OFL-ibmplexmono.txt
+
+  GFS Didot
+    Copyright (c) 2007 Greek Font Society
+    SIL Open Font License 1.1 — OFL-gfsdidot.txt
+
+The SIL Open Font License permits this redistribution and requires the
+licence to travel with the fonts, which is what those files are for. The
+fonts are bundled with the website only; no Undercroft binary contains or
+links them.

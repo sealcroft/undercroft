@@ -984,8 +984,72 @@ impl PalaceStore {
             "CREATE INDEX IF NOT EXISTS idx_kg_triples_canonical ON kg_triples(canonical_key)",
             [],
         )?;
-        self.blind_existing_kg_rows()?;
+        // **The A10 walk no longer runs from here.** It is a whole-vault
+        // mutation and it records itself on the chain, which needs a seeded
+        // `chain_meta` — and this function runs before `init_chain`. So
+        // `open_inner` drives it, after the chain exists. Schema creation and
+        // a corpus-wide re-tag are different operations and only one of them
+        // is auditable.
         Ok(())
+    }
+
+    /// Chain-record one at-rest migration.
+    ///
+    /// **The hole A19 closed for rotation, one class over.** The two at-rest
+    /// migrations re-tag every knowledge-graph row, re-key both stored
+    /// content fingerprints, re-tag every receipt and bulk-rewrite
+    /// `audit.record_id` — and they run AUTOMATICALLY at the next writable
+    /// open, with no operator command behind them. Until this, they appended
+    /// nothing: the two largest unattended mutations the engine performs left
+    /// no evidence that they had happened, against the standing invariant
+    /// that every write updates the chain atomically with its data.
+    ///
+    /// The counts are what an auditor needs and cannot reconstruct
+    /// afterwards, because the migration is idempotent and leaves a vault
+    /// that looks the same whether it moved 40,000 rows or none: how many
+    /// moved, and how many were SKIPPED for failing their own HMAC — the
+    /// number that means "this vault still holds readable-at-rest material
+    /// the migration would not launder".
+    ///
+    /// Appended INSIDE the caller's transaction, so a crash cannot separate
+    /// the record from the rows it describes. Returns the head and write
+    /// count for the caller's post-commit anchor.
+    /// [`audit_migration`](Self::audit_migration) for a caller that owns no
+    /// transaction: opens one, appends, commits, anchors.
+    ///
+    /// The two at-rest walks append inside a transaction they already hold.
+    /// `migrate_embedding_space` and `repair` do not — they commit their own
+    /// work first — so they get this, which keeps the record in ONE shape
+    /// rather than two hand-rolled ones.
+    pub(crate) fn audit_migration_standalone(
+        &mut self,
+        kind: &str,
+        version: &str,
+        moved: u64,
+        skipped: u64,
+    ) -> Result<(), StoreError> {
+        let at = crate::manage::now_rfc3339();
+        let tx = self.conn.unchecked_transaction()?;
+        let (head, writes) =
+            Self::audit_migration(&tx, &self.vault, kind, version, &at, moved, skipped)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        Ok(())
+    }
+
+    pub(crate) fn audit_migration(
+        tx: &rusqlite::Transaction<'_>,
+        vault: &undercroft_vault::Vault,
+        kind: &str,
+        version: &str,
+        at: &str,
+        moved: u64,
+        skipped: u64,
+    ) -> Result<(String, u64), StoreError> {
+        let canonical =
+            format!("migrate\u{1f}{kind}\u{1f}{version}\u{1f}{at}\u{1f}{moved}\u{1f}{skipped}");
+        let tag = vault.tag(canonical.as_bytes());
+        crate::chain_append(tx, vault, &format!("migrate/{kind}"), &tag, at)
     }
 
     /// Move a pre-A10 sealed graph onto the blind index, once.
@@ -1052,7 +1116,7 @@ impl PalaceStore {
     ///
     /// Idempotent and crash-safe: the marker is written LAST, inside the
     /// same transaction as the rows, so a crash mid-walk simply repeats it.
-    fn blind_existing_kg_rows(&self) -> Result<(), StoreError> {
+    pub(crate) fn blind_existing_kg_rows(&mut self) -> Result<(), StoreError> {
         if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
             return Ok(());
         }
@@ -1073,8 +1137,9 @@ impl PalaceStore {
         // which is R4's rule.
         // **No read-only branch here, deliberately.** There was one — an
         // `if self.read_only { warn; return }` — and it was DEAD: this
-        // function is reached only from `init_kg_schema`, called only from
-        // `open_inner`, which builds its store with `read_only = false`. So a
+        // function is reached only from `open_inner` (it used to be reached
+        // through `init_kg_schema`, until the chain record moved it after
+        // `init_chain`), which builds its store with `read_only = false`. So a
         // read-only open of a pre-A10 vault emitted no warning at all, while
         // the comment on that branch claimed "every read path falls back to
         // the columns when `terms`/`name_rest` is NULL" — true on a writable
@@ -1091,6 +1156,11 @@ impl PalaceStore {
         let secret = self.kg_secret()?;
         let tx = self.conn.unchecked_transaction()?;
         let mut skipped = 0usize;
+        // Counted for the chain record: how much this migration actually
+        // moved. It cannot be reconstructed afterwards — the walk is
+        // idempotent and a migrated vault looks identical whether it moved
+        // forty thousand rows or none.
+        let mut moved = 0u64;
         // Audit labels to carry with the rows whose ids move — see the
         // reasoning on this function. `(old_label, new_label)` pairs, applied
         // in ONE statement below.
@@ -1204,6 +1274,7 @@ impl PalaceStore {
                     row.id
                 ],
             )?;
+            moved += 1;
         }
 
         // ---- entities -----------------------------------------------------
@@ -1246,6 +1317,7 @@ impl PalaceStore {
                  WHERE id = ?5",
                 params![new_id, blind, new_tag.as_slice(), sealed, id],
             )?;
+            moved += 1;
         }
 
         // ---- audit labels -------------------------------------------------
@@ -1296,7 +1368,56 @@ impl PalaceStore {
             n
         };
 
+        // The record, inside the same transaction as the rows it describes
+        // — see `audit_migration`. Written only when the walk actually
+        // mutated something: a vault with an empty or already-migrated graph
+        // reaches here on every open until the marker lands, and appending
+        // a "migrated 0 rows" record per open would bury the one that
+        // matters under noise. `skipped` still forces a record when nothing
+        // moved, because "this vault holds material I refused to launder"
+        // is exactly the fact an auditor needs and the marker withholds.
+        // **`moved > 0` ALONE, and the first version of this guard also had
+        // `|| skipped > 0`, which was a defect of mine that the re-audit
+        // caught twice independently.** A row whose tag fails is SKIPPED and
+        // the completion marker is withheld, deliberately, so every writable
+        // open retries — and on each retry every already-migrated row hits
+        // its idempotence guard, so `moved` is 0 while `skipped` is
+        // unchanged. A `skipped` disjunct therefore appended a record on
+        // EVERY open, forever: unbounded chain growth, `chain_meta.writes`
+        // climbing on a vault that received no write, and the counter firing
+        // per open. It produced exactly the noise the paragraph above says it
+        // exists to avoid, permanently, on precisely the vaults an auditor is
+        // inspecting.
+        //
+        // A walk that moved nothing changed nothing, and a chain records
+        // writes. The unmigrated exposure is not lost — it is reported on
+        // `PalaceStats.unhealed` and warned at open, which is where a
+        // condition rather than an event belongs. `relabelled > 0` went with
+        // it: every relabel accompanies a move, so it was never a third
+        // trigger.
+        let anchor = if moved > 0 {
+            let at = crate::manage::now_rfc3339();
+            Some(Self::audit_migration(
+                &tx,
+                &self.vault,
+                "kg-blind",
+                KG_BLIND_VERSION,
+                &at,
+                moved,
+                skipped as u64,
+            )?)
+        } else {
+            None
+        };
         tx.commit()?;
+        // After the commit and before the VACUUM: a crash in between leaves
+        // the database ahead of the anchor, which `reconcile_chain` reads as
+        // a crash artifact and fast-forwards — the designed direction. The
+        // anchor running AHEAD of the database is the combination that would
+        // read as tampering, and it cannot happen from here.
+        if let Some((head, writes)) = anchor {
+            self.vault.anchor_manifest(&head, writes)?;
+        }
         // **The UPDATEs are not enough, and this is the part that is easy to
         // get wrong.** An in-place UPDATE leaves the old row image in a
         // freed page, so the words this migration exists to remove were
@@ -1404,7 +1525,7 @@ impl PalaceStore {
     /// rather than declared done. The retry is safe because the walk is
     /// idempotent per row: a keyed value carries [`CONTENT_FP_KEYED`] and is
     /// skipped on sight.
-    pub(crate) fn rekey_content_fingerprints(&self) -> Result<(), StoreError> {
+    pub(crate) fn rekey_content_fingerprints(&mut self) -> Result<(), StoreError> {
         // hmac-only vaults keep plaintext by the operator's explicit choice,
         // so a digest of it discloses nothing they have not already
         // accepted — and `keyed_fp_of_digest` is the identity there anyway.
@@ -1519,7 +1640,30 @@ impl PalaceStore {
             )?;
             moved += 1;
         }
+
+        // Same record, same reasoning as the A10 walk one function up: a
+        // whole-vault re-key that runs unattended at open must leave
+        // evidence that it ran, and how much it refused to touch.
+        // `moved > 0` alone — see the A10 walk's guard for why a `skipped`
+        // disjunct appends a record on every open, forever.
+        let anchor = if moved > 0 {
+            let at = crate::manage::now_rfc3339();
+            Some(Self::audit_migration(
+                &tx,
+                &self.vault,
+                "content-fp",
+                CONTENT_FP_VERSION,
+                &at,
+                moved as u64,
+                skipped as u64,
+            )?)
+        } else {
+            None
+        };
         tx.commit()?;
+        if let Some((head, writes)) = anchor {
+            self.vault.anchor_manifest(&head, writes)?;
+        }
 
         // The UPDATEs above leave the old row images — and therefore the
         // unkeyed digests this exists to remove — in freed pages, so the
@@ -3613,8 +3757,63 @@ mod tests {
              audit.record_id — the confirmation oracle A10 exists to close"
         );
 
+        // Premise for the chain arm: a pre-A10 vault carries no migration
+        // record, so what is asserted after the open is this open's doing.
+        {
+            let n: i64 = rusqlite::Connection::open(&db)
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'migrate/%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "premise: nothing has recorded a migration yet");
+        }
+
         // The next writable open migrates it.
         let mut s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+
+        // **The migration recorded ITSELF (the hole A19 closed for
+        // rotation).** This walk re-tags every graph row, re-derives every
+        // id and bulk-rewrites `audit.record_id`, unattended, at an open
+        // nobody asked for — and it appended nothing at all. Exactly one
+        // record, and its tag must verify as this vault's own over the
+        // counts it claims: a record whose canonical cannot be reproduced is
+        // decoration, not evidence.
+        let (at, tag): (String, Vec<u8>) = s
+            .conn
+            .query_row(
+                "SELECT at, tag FROM audit WHERE record_id = 'migrate/kg-blind'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("the A10 walk must leave a record");
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit WHERE record_id = 'migrate/kg-blind'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "one migration, one record");
+        // Two triples and one entity moved; nothing was skipped, because
+        // nothing in this fixture is tampered.
+        assert!(
+            s.vault
+                .verify_tag(
+                    format!(
+                        "migrate\u{1f}kg-blind\u{1f}{}\u{1f}{at}\u{1f}3\u{1f}0",
+                        super::KG_BLIND_VERSION
+                    )
+                    .as_bytes(),
+                    &tag,
+                )
+                .is_ok(),
+            "the record must bind what the walk actually did — 3 rows moved, 0 skipped"
+        );
+
         let facts = s.kg_query_entity("alice", None, "outgoing").unwrap();
         assert_eq!(facts.len(), 2, "both facts still read back: {facts:?}");
         assert!(facts.iter().any(|t| t.object == "acme"));
@@ -5534,6 +5733,31 @@ mod tests {
                 s.unhealed().is_empty(),
                 "a clean walk leaves nothing pending: {:?}",
                 s.unhealed()
+            );
+            // The same self-record as the A10 walk: a whole-vault re-key
+            // that runs unattended must leave evidence that it ran, bound to
+            // how much it moved and how much it refused to launder.
+            let (at, tag): (String, Vec<u8>) = s
+                .conn
+                .query_row(
+                    "SELECT at, tag FROM audit WHERE record_id = 'migrate/content-fp'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .expect("the U12 walk must leave a record");
+            // One supersession fingerprint and one knowledge-graph citation.
+            assert!(
+                s.vault
+                    .verify_tag(
+                        format!(
+                            "migrate\u{1f}content-fp\u{1f}{}\u{1f}{at}\u{1f}2\u{1f}0",
+                            super::CONTENT_FP_VERSION
+                        )
+                        .as_bytes(),
+                        &tag,
+                    )
+                    .is_ok(),
+                "the record must bind what the walk actually did"
             );
             let marker: String = s
                 .conn
