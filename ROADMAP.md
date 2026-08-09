@@ -11,6 +11,11 @@ layer (isolated vaults, XChaCha20-Poly1305 encryption, HMAC integrity).
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
 
+**Status 2026-08-09: O2, O3 and O4 are CLOSED, each with an executed gate
+(below). O5 stands as a decision. What remains open is O1's second half and
+O6 — both are clicks in the GitHub web UI that no REST endpoint exposes, so
+no amount of engineering closes them from here.**
+
 ### O1 — PARTLY CLOSED 2026-08-09: binaries shipped, the image is still private
 The `v1.0.0` release workflow completed successfully and **20 assets** are
 published, correctly named `undercroft-v1.0.0-<target>[-ort].tar.gz` plus
@@ -23,8 +28,17 @@ first push, so `docker pull ghcr.io/sealcroft/undercroft:1.0.0` — the first
 command in the landing page's install walkthrough — fails for everyone who is
 not the owner. **Shape:** flip the package to public (Packages → undercroft →
 Package settings → Change visibility). **Gate:** an anonymous
-`ghcr.io/token` + `tags/list` must return 200, not 403; the check is in this
-session's transcript and takes one curl.
+`ghcr.io/token` + `tags/list` must return 200, not 403 — one curl:
+
+```bash
+T=$(curl -s "https://ghcr.io/token?scope=repository:sealcroft/undercroft:pull&service=ghcr.io" | sed -E 's/.*"token":"([^"]+)".*/\1/'); curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $T" https://ghcr.io/v2/sealcroft/undercroft/tags/list
+```
+
+**Re-verified 2026-08-09: still 403.** And it cannot be closed from a shell:
+GitHub's Packages REST API exposes get / delete / restore and **no
+visibility endpoint at all**, so the web UI is the only route. (The local
+`gh` token additionally carries only `gist, read:org, repo, workflow` — no
+`read:packages` — so it cannot even read the package's current visibility.)
 
 ### O2 — the site loads three font families from Google
 `website/landing/index.html` head and `website/assets/undercroft.css:6`
@@ -34,50 +48,179 @@ not touch the binary and the "0 bytes phoned home" figure is a claim about the
 product, which remains true. Two separate reasons to close it anyway: serving
 Google Fonts to EU visitors has adverse case law (LG Munchen, 2022 — the
 visitor's IP is transmitted), and `GFS Didot` is a Greek Font Society face
-chosen to set Greek that no longer exists on the page. **Shape:** self-host
-`.woff2` under `website/landing/assets/fonts/`; `pages.yml` already does
-`cp -r website/landing/. _site/`, so no workflow change. **Gate:** grep the
-built `_site/` for `fonts.g` and require zero.
+chosen to set Greek that no longer exists on the page.
 
-### O3 — five pre-existing defects the rename audit surfaced, unfixed
-Found by the 8-agent audit, none caused by the rename, none yet closed:
-- `deploy/observability/alertmanager/alertmanager.yml:49` inhibits on
-  `equal: ["vault"]` and **no alert expression emits a `vault` label** — all
-  six are `sum()`/`up{}`/`sum by (le)` over counters. Absent-on-both reads as
-  equal, so **one critical `PalaceTamperDetected` silences every warning
-  fleet-wide**. The comment says "for it"; the behaviour is global.
-- `crates/undercroft-cli/src/main.rs:951` reads `HOME` only, never
-  `USERPROFILE`, falling back to `"."` — the released **Windows** binary
-  creates its palace in the current working directory.
-- `crates/undercroft-cli/src/ui.html` guards only `UNDERCROFT-BUNDLE-1`, so a
-  **v2 hybrid PQ bundle bypasses the browser importer's refusal** and is
-  posted as NDJSON.
-- `SECURITY.md` "Out of scope" still lists three **closed** gaps (R1, R4, and
-  a `POST …/verify` anchor effect that does not occur per A31). A security
+**CLOSED 2026-08-09.** All three families are vendored under
+`website/landing/assets/fonts/` — **20 `.woff2` faces, 482 KB including the
+three SIL OFL 1.1 licence texts**, attributed in `NOTICE`.
+`website/tools/vendor-fonts.sh` regenerates them and is run **by hand, never
+by the build**: a build step that fetched fonts would defeat the point
+exactly. It rewrites only the `src:` URLs and passes every `unicode-range`
+through unchanged, so coverage for a vendored subset is identical to what the
+site served before — hand-authoring those blocks is how a vendoring pass
+silently drops a script.
+
+**Only the subsets rendered text actually uses are vendored**, and that is
+measured rather than assumed. The API offers seven; `latin`, `greek` and
+`cyrillic` appear in rendered pages and `latin-ext`, `greek-ext`,
+`cyrillic-ext` and `vietnamese` do not — 23 faces and 357 KB not shipped.
+The distinction is not visible to a naive scan: characters from all seven
+appear in the built site, because `mermaid.min.js` carries Unicode parser
+tables and `mark.min.js` a diacritic map. Those are data inside a script,
+never glyphs a browser paints, which is why the check scans **rendered
+`.html` only**.
+
+**Gates:** `website/build-site.sh` greps the assembled site for both font
+hosts and fails on any hit; it scans every rendered page for characters in
+the dropped ranges (recorded with their ranges in `dropped-subsets.txt`) and
+fails naming the file, so a future page with Polish or Vietnamese on it is a
+failing build rather than a silent fallback. Verified additionally in a
+browser: all 8 distinct faces report `status: "loaded"`, `h1` computes to
+`GFS Didot`, and the page lists **zero** external resource references.
+
+**That second gate was born broken and its own premise probe is what caught
+it.** The first version built a regex character class in the shell, `sed` ate
+the backslashes, `perl` died on `[x{0102}-…]`, and `2>/dev/null` swallowed
+the error — so it reported "no dropped subset is used" having examined
+nothing, and passed a counterfactual with real Vietnamese and Polish text on
+the page. It is numeric now, suppresses no stderr, treats a tool failure as a
+FAIL, and **probes itself against a range that must match before its
+zero-results are believed** — which then also caught that the site image
+carries `perl-base`, with neither `File::Find` nor `PerlIO`. Three silent
+failures, one probe.
+
+### O3 — five pre-existing defects the rename audit surfaced — CLOSED 2026-08-09
+Found by the 8-agent audit, none caused by the rename. All five closed:
+- **The fleet-wide alert inhibition.**
+  `deploy/observability/alertmanager/alertmanager.yml` inhibited on
+  `equal: ["vault"]` and **no alert expression emitted a `vault` label** — all
+  six were `sum()`/`up{}`/`sum by (le)` over counters. Absent-on-both reads as
+  equal, so one critical `PalaceTamperDetected` silenced every warning
+  fleet-wide. Now every rule aggregates `by (instance)` (which is also the
+  more useful alert — it names the process) and the inhibition equals on
+  `instance`. **Gate:** the new `obs-config` suite —
+  `deploy/observability/alerts_test.yml` asserts the exact label set and
+  annotations of every rule under `promtool test rules` (real PromQL
+  evaluation plus a negative-control block where a healthy instance fires
+  nothing), `amtool check-config` validates the route, and
+  `tests/obs-config.sh` joins the two by requiring every `equal:` label to
+  appear in every tested alert and every rule to have a test block.
+  **Counterfactual executed**: with `equal: ["vault"]` restored on a scratch
+  copy the suite exits 1 naming all six alerts; with the fix, 0.
+- **The Windows palace location.** `data_dir` read `HOME` only and fell back
+  to `"."`, so the released Windows binary created its palace in the current
+  working directory — a different palace per shell, none found again, no
+  error. `home_dir()` now takes `HOME` then `USERPROFILE`, treating an empty
+  value as absent, and `expand_home` (`~/`) shares it. **Gate:**
+  `the_home_directory_falls_back_to_userprofile`, driven through a pure
+  lookup function rather than `set_var` (which would race every other test in
+  the binary); four arms, and the second fails before the fix.
+- **The browser importer's bundle guard.** `ui.html` tested for
+  `UNDERCROFT-BUNDLE-1` exactly, so a v2 hybrid PQ bundle walked past it and
+  was POSTed as NDJSON — a parse error where the product had a sentence ready.
+  It now guards the shared prefix. **Gate:**
+  `the_browser_importer_refuses_every_bundle_version` reads the magics out of
+  `undercroft-vault`'s own source and requires the guard to equal their
+  longest common prefix, so it fails both for a version-pinned guard and for
+  one loosened past the shared stem, and a `BUNDLE_MAGIC_V3` is in scope the
+  moment it is declared.
+- **`SECURITY.md` "Out of scope".** It listed three closed gaps (R1, R4, and a
+  `POST …/verify` anchor effect that does not occur per A31) — a security
   policy telling researchers not to look at surfaces that are now boundaries.
-- `website/book.toml` has no `site-url`, so the generated 404 page resolves
-  its assets as if the book were at the domain root.
+  Each was re-verified in code before editing (`may_build_indexes()` guards
+  every prefilter tier; `verify` is `&self` and no `anchor_manifest` call site
+  is inside it), the in-scope side now states the read-only posture
+  positively, and what remains out of scope is the genuine residual: the
+  anchor lag on audited reads, named together with the explicit closer
+  (`undercroft vault anchor` / `POST …/anchor`), plus the WAL scaffolding a
+  read-only open materialises.
+- **`website/book.toml` had no `site-url`**, so the generated 404 resolved its
+  assets as if the book were at the domain root — the one page a lost visitor
+  sees was the one page with no stylesheet. Set to `/undercroft/docs/`.
+  **Gate:** `build-site.sh` requires `404.html` to reference it, which is only
+  checkable on the assembled tree.
 
-### O4 — two gates that do not exist
-- `GAUGE_NAMES` is cross-checked for the five **codebook** gauges only
-  (`undercroft-store/src/lib.rs:12361`). The other five — `drawers`,
-  `audit_chain_height`, `kg_triples`, `kg_entities`, `store_bytes` — are set
-  by bare literal in `tenant.rs` with nothing pinning them, and an unlisted
-  name is **silently dropped** with no error at any level.
-- Nothing compares the **emitted metric set** against `alerts.yml` and the
-  Grafana dashboard. An alert naming a series the binary does not export never
-  fires and never errors. Worse, **CI never builds `--features telemetry`**,
-  so `undercroft-obs/src/imp.rs` is not compiled in CI at all.
+### O4 — two gates that do not exist — CLOSED 2026-08-09
+- `GAUGE_NAMES` was cross-checked for the five **codebook** gauges only. The
+  other five — `drawers`, `audit_chain_height`, `kg_triples`, `kg_entities`,
+  `store_bytes` — were set by bare literal in `tenant.rs` with nothing pinning
+  them, and an unlisted name is **silently dropped** with no error at any
+  level. Now `every_gauge_name_is_registered_and_every_registered_name_is_emitted`
+  covers all ten in both directions: the codebook names computed as production
+  computes them, the rest scanned out of the workspace's sources (comment
+  lines dropped, calls found across rustfmt line breaks, non-literal
+  forwarding calls skipped), with a premise assertion so a broken extractor
+  fails instead of passing vacuously. Its first version matched **its own
+  source** and reported a fragment of its own loop as an unregistered gauge —
+  fixed with the `concat!` needle-splitting idiom already used one file over.
+- Nothing compared the **emitted metric set** against `alerts.yml` and the
+  Grafana dashboard; an alert naming a series the binary does not export never
+  fires and never errors. `undercroft-obs` now publishes the whole inventory
+  (`COUNTER_NAMES`, `HISTOGRAM_NAMES`, `GAUGE_NAMES`, `series_names()`), pinned
+  to its emit sites by `the_series_inventory_matches_the_emit_sites` in both
+  directions — which is what makes the second gate,
+  `every_series_the_deployment_configs_name_is_one_the_binary_exports`, mean
+  anything. That one reads `deploy/observability/` (hence `COPY deploy` in the
+  Dockerfile and the `.dockerignore` allowance) and is deliberately
+  one-directional: every series a config names must exist, never the reverse.
+  Histogram `_bucket`/`_sum`/`_count` suffixes are resolved to their stem;
+  `undercroft_*` in prose is skipped as a wildcard.
+- **CI never built `--features telemetry`**, so `undercroft-obs/src/imp.rs`
+  was not compiled in CI at all. The `test` job now runs `obs-config`,
+  `orchestrator-e2e` and `e2e-telemetry`, and a new `site` job builds and
+  checks the site on pull requests — `pages.yml` only fires on `main`, so
+  until now nothing built the book before it was already published.
 
-### O5 — terminology decision, argued and deliberately not taken
-`palace` is ~779 occurrences and the audit's recommendation was **keep it**:
-`palace.db` has one construction site but a bare rename presents as a false
-integrity verdict (`DatabaseMissing`, 409 / exit 2) on every existing vault;
-`"diary"` is a room-name literal inside `meta_json`, therefore inside the HMAC
-canonical and the drawer-id recipe — migrating it re-derives every id, which
-is the A10 failure by name. `PalaceStore`/`PalaceStats` are the only free
-moves (serde emits field names, not the struct name, so the wire is
-unaffected). Recorded as a decision with its argument rather than left silent.
+### O5 — terminology decision, RE-OPENED 2026-08-09: its premise was wrong
+The recorded argument for keeping `palace` rested on two data hazards: a bare
+`palace.db` rename presents as a false integrity verdict (`DatabaseMissing`,
+409 / exit 2) on every existing vault, and `"diary"` is a room-name literal
+inside `meta_json` — therefore inside the HMAC canonical and the drawer-id
+recipe — so migrating it re-derives every id, the A10 failure by name.
+
+**Both hazards are about EXISTING DATA, and there is none.** The maintainer
+confirmed the vaults in question were test vaults, disposable. So the
+decision was taken against a constraint that does not apply, and the analysis
+is redone here from measurement rather than from that argument.
+
+**Measured 2026-08-09** — 948 occurrences: crates 507, website 310, docs 86,
+deploy 26, architecture 19. Of the 507 in crates, 251 are the type names
+`PalaceStore`/`PalaceStats`, 188 sit in comments, 67 in string literals
+(help text and errors) and 34 are the filename.
+
+**What it does NOT touch, each checked rather than assumed:**
+- the crypto domain separation — no HKDF info string, AEAD AAD prefix or
+  keycheck marker contains it (those carry the *project* name and moved at
+  the rename);
+- any audit-chain record namespace (`kg/{id}`, `trust/{wing}`, … — none);
+- the wire: no serde field name, no JSON key, no public struct field. Only
+  type names, and serde emits fields, not the struct;
+- MCP: no tool is named for it. The single hit in `parity.rs` is prose.
+
+**Two load-bearing points, and that is all:**
+1. **`palace.db`** — one production construction site,
+   `Vault::db_path` in `undercroft-vault/src/lib.rs`, plus 34 test references
+   and 14 in `tests/e2e.sh`, `docs/AGENTS.md`, `docs/MULTI_TENANCY.md`,
+   `docs/remote-server.md`, `docs/security.md`, `website/src/runbook.md` and
+   `architecture/index.html`.
+2. **`diary`** — both a CLI subcommand (`Command::Diary`) and a room-name
+   literal written into `meta_json` (`manage.rs`) and filtered on read. The
+   id hazard is real but empty without data; the *surface* rename is not, and
+   is a separate decision from the noun.
+
+**A coherence finding the first analysis missed, and it argues the other
+way:** `palace.db` is **per-vault** — `Vault::db_path()` joins it onto one
+vault's directory — while "palace" elsewhere names the whole installation
+(the master key is the palace master key; the data directory is the palace).
+The term is already doing duty at two levels of the hierarchy, which is a
+defect in its own right and independent of the rename.
+
+**The constraint that actually remains is vocabulary, not data.** The
+obvious replacement is `vault`, and `vault` is already the name of a
+different concept — the isolation and crypto unit — so reusing it would be
+worse than the status quo. **Blocked on a target word, which is the
+maintainer's call**, not on risk. `PalaceStore`/`PalaceStats` remain free
+moves whatever is chosen.
 
 ### O6 — brand assets need two manual uploads
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only
@@ -85,6 +228,18 @@ on the orgs API) or repo social previews. `assets/brand/` holds the marks;
 `sealcroft.github.io/assets/` holds the house mark. Org avatar wants the
 512x512 square, the repo social preview wants the **1280x640** card — they are
 not interchangeable.
+
+**Assets re-verified 2026-08-09** by reading each PNG's IHDR rather than
+trusting its filename: `undercroft-mark-512.png` is 512×512 and
+`undercroft-social-1280x640.png` is 1280×640. Both are ready to upload; the
+upload itself remains a click.
+
+- Org avatar → <https://github.com/organizations/sealcroft/settings/profile>
+  → Upload a picture → `assets/brand/undercroft-mark-512.png` (or the house
+  mark from `sealcroft.github.io/assets/`, which is the better choice for the
+  ORG — the house is not the product).
+- Repo social preview → <https://github.com/sealcroft/undercroft/settings> →
+  Social preview → Edit → `assets/brand/undercroft-social-1280x640.png`.
 
 
 ---

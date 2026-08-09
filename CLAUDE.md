@@ -646,7 +646,23 @@ Consequences that are binding, not advisory:
   signal that was *wrong* rather than missing. Gated by a SOURCE count
   (`write_telemetry_has_exactly_one_emitter`), because the counter is a
   no-op without the telemetry feature and no test that merely drives a
-  save could ever have seen it
+  save could ever have seen it. **The exported series are an INVENTORY,
+  and the whole of it is now counted (2026-08-09, ROADMAP O4)**:
+  `GAUGE_NAMES` + `COUNTER_NAMES` + `HISTOGRAM_NAMES`, pinned to the emit
+  sites by `the_series_inventory_matches_the_emit_sites` (both
+  directions), and consumed by two gates that could not exist before it.
+  `every_gauge_name_is_registered_and_every_registered_name_is_emitted`
+  (in `undercroft-store`, where `CODEBOOK_ARTIFACTS` lives) covers all
+  **ten** gauges — it covered the five codebook ones and the other five
+  were bare literals in `tenant.rs` with nothing pinning them, i.e. the
+  exact arrangement whose first instance shipped five dead names; a gauge
+  outside `GAUGE_NAMES` is dropped with no error at any level.
+  `every_series_the_deployment_configs_name_is_one_the_binary_exports`
+  reads `deploy/observability/` (hence the Dockerfile's `COPY deploy`)
+  and is deliberately ONE-directional: every series a config names must
+  exist, never the reverse — an alert on a series the binary does not
+  export stays `inactive` forever and a panel merely looks empty, and
+  nothing in the stack reports either
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
   Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
@@ -803,7 +819,25 @@ Consequences that are binding, not advisory:
   threshold headroom, plus the true-positive arm where every committed
   fixture must trip; deterministic, no vault, no model)
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
-  stack (see its README.md + RUNBOOK.md)
+  stack (see its README.md + RUNBOOK.md). **Every rule is aggregated `by
+  (instance)` and that is load-bearing, not cosmetic**: Alertmanager's
+  inhibition scopes itself with `equal:`, and a label absent from BOTH the
+  source and the target counts as EQUAL — so equalling on a label no rule
+  emits does not narrow the inhibition, it makes it global. The shipped
+  config equalled on `vault`, which nothing emitted (every rule was a
+  `sum()`, an `up{}` or a `sum by (le)`), so one critical
+  `PalaceTamperDetected` silenced every warning in the fleet for as long
+  as it fired, and the only symptom of that class is an alert that never
+  arrives. Gated by the `obs-config` suite: `promtool test rules` over
+  `alerts_test.yml` asserts the exact label set each rule emits — real
+  PromQL evaluation, so it cannot agree with the rules by construction the
+  way a second copy of the expressions would — and `tests/obs-config.sh`
+  then requires every `equal:` label to be present in all of them, and
+  every rule to have a test block. Adding a rule means adding a block
+- `deploy/observability/Dockerfile.config-check` — the `obs-config` image:
+  `promtool` and `amtool` lifted from the pinned Prometheus/Alertmanager
+  images onto debian. Pinning matters — a check that runs a different
+  version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
   which inlines them and documents every layer plus all **77**
@@ -834,9 +868,37 @@ Consequences that are binding, not advisory:
   so that with JS off every section stays visible and the document still
   reads end to end
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
-  under `src/`
+  under `src/`. **`build-site.sh` is the ONE assembly**, run by both
+  `pages.yml` and `docker compose run --rm site`; the two used to carry
+  their own `cp` lines, so the local preview could not exercise the
+  deployed layout — which is the only place the cross-directory paths
+  resolve at all. Landing goes to the root and the book to `/docs`, so
+  the manual's skin reaches the fonts via `../../assets/fonts/` and the
+  404's links resolve only under `book.toml`'s `site-url`
+  (`/undercroft/docs/`; unset, mdBook built them as if the book were at
+  the domain root, so the one page a lost visitor sees was the one page
+  with no stylesheet). **The three font families are vendored**, under
+  `landing/assets/fonts/` with their OFL texts — regenerate with
+  `tools/vendor-fonts.sh`, which is run BY HAND and never by the build,
+  since a build step that fetched fonts would defeat the point. It passes
+  every `unicode-range` through unchanged rather than hand-authoring the
+  `@font-face` blocks, which is how a vendoring pass silently drops a
+  script. **Only the subsets rendered text uses are shipped** — `latin`,
+  `greek`, `cyrillic`; the other four are 357 KB nothing needs — and that
+  is MEASURED over rendered `.html` only, because a scan that includes the
+  vendored scripts finds all seven (`mermaid.min.js` carries Unicode parser
+  tables, `mark.min.js` a diacritic map: data inside a script, never glyphs
+  a browser paints). `build-site.sh` fails if the assembled site references
+  a font CDN at all, and fails if rendered text needs a dropped subset —
+  that second check was born broken (a shell-built regex class, `sed` ate
+  the backslashes, `2>/dev/null` ate perl's death) and reported a clean
+  result having scanned nothing, which is why it now **probes itself
+  against a range that must match before its zero-results are believed**.
+  The probe then also caught that the site image carries `perl-base`, with
+  neither `File::Find` nor `PerlIO`
 - `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,
-  `tests/e2e-orchestrator.sh` — end-to-end suites (run in Docker)
+  `tests/e2e-orchestrator.sh`, `tests/obs-config.sh` — end-to-end and
+  config suites (run in Docker)
 - `docs/AGENTS.md` — the scenario-driven agent implementation guide
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
@@ -894,8 +956,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (656 run,
-                                      # 4 #[ignore]d = 660 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (660 run,
+                                      # 4 #[ignore]d = 664 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -915,12 +977,37 @@ docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 ch
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
+docker compose run --rm obs-config    # the observability CONFIG suite (10 checks):
+                                      # promtool check/test rules + amtool
+                                      # check-config at the versions the stack
+                                      # deploys, plus the join between them —
+                                      # every label alertmanager's `equal:` names
+                                      # must be one the alerts actually emit. It
+                                      # equalled on a label NOTHING emitted, and
+                                      # alertmanager reads absent-on-both as
+                                      # equal, so one critical silenced every
+                                      # warning fleet-wide. The only symptom of
+                                      # that class is an alert that never
+                                      # arrives, which is why it needs a suite
 docker compose run --rm onnx-build    # compile-check the ONNX embedder+reranker feature
 docker compose run --rm ort-build    # compile-check CLI with --features onnx,ort
                                       # (CI clippy never sees non-default features —
                                       # clippy ort-gated code here explicitly)
-docker compose run --rm site          # build the mdBook docs (mdbook pinned 0.5.4;
-                                      # mermaid via vendored website/assets/mermaid.min.js)
+docker compose run --rm site          # build AND ASSEMBLE the site (7 checks) via
+                                      # website/build-site.sh — the same script
+                                      # pages.yml deploys with, because the
+                                      # checks that matter are true only of the
+                                      # assembled tree: the manual's skin reaches
+                                      # the fonts by a path that leaves the book
+                                      # and re-enters the landing assets, and the
+                                      # 404's links resolve only under site-url.
+                                      # Fails if any page references a font CDN.
+                                      # (mdbook pinned 0.5.4; mermaid via
+                                      # vendored website/assets/mermaid.min.js;
+                                      # fonts vendored under
+                                      # website/landing/assets/fonts — regenerate
+                                      # with website/tools/vendor-fonts.sh, which
+                                      # is run BY HAND and never by the build)
 docker build -t undercroft .           # runtime image
 
 # A quantized text embedder on the compose network, CPU only — so a
@@ -982,7 +1069,7 @@ one for code.** Applying it blindly across a 7-way merge spliced away closing
 braces in three `.rs` files. Resolve code conflicts on their merits; reserve
 union for additive prose.
 
-**Run the battery with `bash tests/battery.sh`** (all seven suites, or name a
+**Run the battery with `bash tests/battery.sh`** (all eight suites, or name a
 subset). It exists because two mistakes on 2026-08-06 were the same defect —
 a verdict taken from something other than the thing that decides it:
 a summary built by piping `cargo test` through `awk` reported `failed=0` from
@@ -1003,8 +1090,11 @@ text-mode edits on Windows converted eleven files and `tests/e2e.sh` died with
 CLAUDE.md change show as 1,415 lines, which is how a real defect hides in an
 unreadable diff). `crates/` is gated by
 `no_source_file_has_crlf_line_endings` (complete inside every image, since the
-test image COPYs exactly that subtree); everything else — `tests/`, `docs/`,
-`website/`, compose files — by the `tests/battery.sh` preflight, host-side,
+test image COPYs that whole subtree — it also COPYs `deploy/`, deliberately
+NOT in this gate's scope: that is YAML and JSON no shell executes, and a gate
+widened to whatever happens to be in the image is a gate whose stated scope
+has stopped matching its real one); everything else — `tests/`, `deploy/`,
+`docs/`, `website/`, compose files — by the `tests/battery.sh` preflight, host-side,
 via `git ls-files --eol` (git owns the concept, so ask git rather than
 hand-rolling byte detection: three hand-rolled attempts each failed, twice as
 a false negative and once declaring the whole repo corrupt). **Write files in
@@ -1531,9 +1621,9 @@ had and was still bypassable on the surface most deployments use.
    architecture/index.html, website/ carry the claim you changed. A claim
    lives on every surface that states it.
 5. **The full Docker battery** at the final tree, with raw exit codes:
-   `test`, `lint`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`, `backends-e2e`,
-   `site`. `cargo build -p <crate>` does **not** compile integration tests —
-   `--tests` does.
+   `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
+   `backends-e2e`, `site`. `cargo build -p <crate>` does **not** compile
+   integration tests — `--tests` does.
 
 ## Session-end hygiene — leave no debt, drift or stale
 

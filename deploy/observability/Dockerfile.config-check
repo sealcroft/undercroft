@@ -1,0 +1,24 @@
+# The image `tests/obs-config.sh` runs in: Prometheus's `promtool` and
+# Alertmanager's `amtool`, at the exact versions the stack deploys, on a base
+# with a real shell and coreutils.
+#
+# Both are static Go binaries, so copying them onto debian works and keeps
+# the check honest: the tool that validates the rules is the same build that
+# will evaluate them in production. Pinning matters — a rule file valid for
+# one Prometheus minor can be rejected by another, and a check that runs a
+# different version than the deployment is a check of something else.
+#
+# Versions must match docker-compose.observability.yml.
+FROM prom/prometheus:v2.55.1 AS prom
+FROM prom/alertmanager:v0.27.0 AS am
+
+FROM debian:bookworm-slim
+COPY --from=prom /bin/promtool /usr/local/bin/promtool
+COPY --from=am /bin/amtool /usr/local/bin/amtool
+WORKDIR /src
+# Non-root, like the runtime image. The suite only READS the mounted
+# `deploy/` tree and its own script — it writes nothing anywhere — so it has
+# no reason to hold root, and CI's Trivy gate fails HIGH findings, which is
+# how this line came to exist.
+USER nobody
+ENTRYPOINT ["bash", "/src/tests/obs-config.sh"]

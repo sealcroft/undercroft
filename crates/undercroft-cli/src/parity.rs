@@ -177,8 +177,13 @@ mod tests {
     ///
     /// **Scope: `crates/` only, and that boundary is deliberate.** No
     /// container image carries the whole repo — the `test`/`lint` image
-    /// COPYs `Cargo.toml`, `Cargo.lock` and `crates/` and nothing else, and
-    /// each e2e service bind-mounts its single script. A test that walked the
+    /// COPYs `Cargo.toml`, `Cargo.lock`, `crates/` and `deploy/` (the last
+    /// so `undercroft-obs` can gate the alert rules against the series it
+    /// exports) and nothing else, and each e2e service bind-mounts its
+    /// single script. `deploy/` is deliberately NOT added to this gate's
+    /// scope: it is YAML and JSON that no shell executes, and widening a
+    /// gate to whatever happens to be in the image is how its stated scope
+    /// stops matching its real one. A test that walked the
     /// repo root would therefore scan 82 files in the battery and pass while
     /// seeing none of `tests/`, which is a gate that silently does not run —
     /// the failure mode this project spends its time closing. So this owns
@@ -502,6 +507,90 @@ mod tests {
             checked > 0,
             "examined no WRITE_TOOLS entries — the extraction, not the \
              surface, is broken"
+        );
+    }
+
+    /// **The browser importer must refuse every encrypted bundle, not the
+    /// one version that existed when the guard was written.**
+    ///
+    /// `ui.html` reads the chosen file and, when it looks like a bundle,
+    /// says so and stops: the file is recipient-encrypted and `/v1`'s import
+    /// route takes NDJSON, so only the CLI with an identity key can open it.
+    /// The guard tested for the v1 magic *exactly*, so the hybrid
+    /// post-quantum v2 bundle introduced by C3.4 walked past it and was
+    /// POSTed as NDJSON — the operator got a parse failure where the product
+    /// had a sentence ready telling them what to do.
+    ///
+    /// The gate does not compare the guard against a **copy** of the magic.
+    /// It reads the magics out of `undercroft-vault`'s own source and
+    /// requires the guard to be exactly their longest common prefix, so it
+    /// fails in both directions: a guard pinned to one version (the defect)
+    /// refuses to be a prefix of the others, and a guard loosened past the
+    /// shared stem stops equalling it. A `BUNDLE_MAGIC_V3` declared tomorrow
+    /// is in scope the moment it exists, with no list here to update.
+    #[test]
+    fn the_browser_importer_refuses_every_bundle_version() {
+        // Every `pub const BUNDLE_MAGIC*` the vault crate declares, read from
+        // the source rather than imported, so a magic that is not `pub` — or
+        // is declared and not yet wired — still counts. Comment lines are
+        // skipped: bundle.rs documents both layouts in its module header.
+        let bundle_rs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("undercroft-vault")
+            .join("src")
+            .join("bundle.rs");
+        let src = std::fs::read_to_string(&bundle_rs)
+            .expect("the vault crate's sources sit beside this one");
+        let magics: Vec<&str> = src
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| !l.starts_with("//"))
+            .filter(|l| l.contains("const BUNDLE_MAGIC"))
+            .filter_map(|l| l.split_once("b\"")?.1.split_once('"').map(|(m, _)| m))
+            .collect();
+        // The premise. One magic found would make "every magic starts with
+        // the guard" true of the v1-only guard this test exists to fail.
+        assert!(
+            magics.len() >= 2,
+            "found {} bundle magic(s) in {} — the extraction is broken, and \
+             with fewer than two this assertion could not distinguish a \
+             version-pinned guard from a version-agnostic one",
+            magics.len(),
+            bundle_rs.display()
+        );
+
+        // The guard as the shipped page actually spells it.
+        let ui = include_str!("ui.html");
+        let guards: Vec<&str> = ui
+            .match_indices("startsWith(\"UNDERCROFT")
+            .filter_map(|(i, _)| ui[i..].split_once('"')?.1.split_once('"').map(|(g, _)| g))
+            .collect();
+        assert_eq!(
+            guards.len(),
+            1,
+            "expected exactly one bundle guard in ui.html, found {guards:?}"
+        );
+
+        // Longest common prefix, sliced on a character boundary rather than
+        // on a count — the magics are ASCII today and nothing says the next
+        // one has to be.
+        let common = magics.iter().skip(1).fold(magics[0], |acc, m| {
+            let end = acc
+                .char_indices()
+                .zip(m.chars())
+                .take_while(|((_, a), b)| a == b)
+                .map(|((i, a), _)| i + a.len_utf8())
+                .last()
+                .unwrap_or(0);
+            &acc[..end]
+        });
+        assert_eq!(
+            guards[0], common,
+            "ui.html guards {:?} but the bundle formats declared in \
+             undercroft-vault are {:?}, whose shared prefix is {:?}. A guard \
+             narrower than that lets a bundle through the browser importer; \
+             a guard wider than it refuses files that are not bundles",
+            guards[0], magics, common
         );
     }
 }

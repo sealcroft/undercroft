@@ -23,6 +23,9 @@ Thumbs.db
 
 # mdBook build output
 website/book/
+# The assembled site, written by website/build-site.sh. Derived from
+# website/landing + website/book, and what pages.yml deploys.
+_site/
 
 # Browser automation artifacts
 .playwright-mcp/

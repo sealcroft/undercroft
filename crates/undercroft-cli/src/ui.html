@@ -1187,7 +1187,13 @@ async function runImport() {
   if (!f) { toast("choose a file first", true); return; }
   try {
     const text = await f.text();
-    if (text.startsWith("UNDERCROFT-BUNDLE-1")) {
+    // The version-agnostic prefix, not one version's magic. Guarding
+    // `UNDERCROFT-BUNDLE-1` exactly meant the hybrid post-quantum v2 bundle
+    // walked past this and was POSTed as NDJSON, so the operator got a parse
+    // error instead of the sentence telling them what to do.
+    // `the_browser_importer_refuses_every_bundle_version` pins this literal
+    // against the magics declared in undercroft-vault.
+    if (text.startsWith("UNDERCROFT-BUNDLE-")) {
       toast("this is an encrypted bundle — import it with the CLI and your identity key", true);
       return;
     }

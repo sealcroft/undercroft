@@ -60,6 +60,18 @@ A firing tamper alert links to the [**runbook**](RUNBOOK.md) (published at
 `/docs/runbook.html`) — where it happened, and how to confirm, mitigate, fix,
 and prevent it.
 
+**Every rule is aggregated `by (instance)`, and the inhibition depends on it.**
+Alertmanager silences warnings while a critical is firing on the *same*
+instance, scoping that with `equal: ["instance"]`. A label absent from both the
+source and the target counts as **equal**, so an `equal:` naming a label no
+rule emits does not narrow the inhibition — it makes it global. This config
+equalled on `vault`, which nothing emitted, so one PalaceTamperDetected
+anywhere muted every warning in the fleet, and the only symptom was an alert
+that never arrived. If you add a rule, keep `instance` (a bare `sum()` drops
+it) and give it a block in `alerts_test.yml`; `docker compose run --rm
+obs-config` runs `promtool test rules` over that file, asserts the exact label
+set each rule emits, and fails if the `equal:` labels are not among them.
+
 ## Generating some data
 
 ```bash

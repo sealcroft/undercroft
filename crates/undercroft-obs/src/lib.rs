@@ -293,6 +293,52 @@ pub const GAUGE_NAMES: &[&str] = &[
     "codebook_generation_tok_codebook",
 ];
 
+/// Full names of the counter series this build exports.
+///
+/// Unlike [`GAUGE_NAMES`] this list registers nothing — counters are built
+/// per call from a literal at the emit site. It is an **inventory**, kept so
+/// that something outside this crate can ask *what series does the binary
+/// actually export?* without running it under the `telemetry` feature and
+/// scraping. `the_series_inventory_matches_the_emit_sites` counts it against
+/// those literals in both directions, so it cannot rot into decoration.
+pub const COUNTER_NAMES: &[&str] = &[
+    "undercroft_auth_rejections_total",
+    "undercroft_chain_commits_total",
+    "undercroft_drawer_deletes_total",
+    "undercroft_drawer_writes_total",
+    "undercroft_hmac_verify_failures_total",
+    "undercroft_http_requests_total",
+    "undercroft_kg_writes_total",
+    "undercroft_search_prefiltered_total",
+    "undercroft_search_total",
+    "undercroft_search_wings_probed_total",
+    "undercroft_vault_opens_total",
+];
+
+/// Full names of the histogram series this build exports. Each renders as
+/// three Prometheus series — `<name>_bucket`, `<name>_sum`, `<name>_count` —
+/// which is why a consumer looking one of these up has to strip the suffix
+/// first. Same inventory contract as [`COUNTER_NAMES`].
+pub const HISTOGRAM_NAMES: &[&str] = &[
+    "undercroft_http_request_duration_seconds",
+    "undercroft_search_duration_seconds",
+    "undercroft_search_hits",
+];
+
+/// Every series name this build can export, gauges included and fully
+/// qualified. The deployment configs under `deploy/observability/` are
+/// checked against this: an alert or dashboard panel naming a series the
+/// binary does not export never fires and never errors, which is a monitor
+/// that reads healthy because it is looking at nothing.
+pub fn series_names() -> Vec<String> {
+    COUNTER_NAMES
+        .iter()
+        .chain(HISTOGRAM_NAMES)
+        .map(|s| s.to_string())
+        .chain(GAUGE_NAMES.iter().map(|g| format!("undercroft_{g}")))
+        .collect()
+}
+
 /// Set a gauge value for a vault. Atomic-backed and Send-safe; read on
 /// scrape by both the Prometheus renderer and the OTLP observable gauges.
 /// `name` must be one of [`GAUGE_NAMES`] — anything else is dropped without
@@ -523,6 +569,180 @@ mod tests {
             "decisions",
             &["imperative-instruction"],
             false,
+        );
+    }
+
+    /// Every `undercroft_…` series literal in this crate's production code,
+    /// read from the source. `imp.rs` compiles only under the `telemetry`
+    /// feature but the file is on disk either way, which is the point: the
+    /// inventory has to be checkable in the build everyone actually runs.
+    fn emitted_series_literals() -> Vec<String> {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        for file in ["lib.rs", "imp.rs"] {
+            let text = std::fs::read_to_string(src.join(file))
+                .expect("this crate's own sources are readable");
+            // Production half only. The test module below asserts on rendered
+            // metric text using deliberately TRUNCATED names, which would
+            // otherwise enter the inventory as series that do not exist.
+            let prod = text.split("#[cfg(test)]").next().unwrap_or(&text);
+            for line in prod.lines() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                    continue;
+                }
+                let mut rest = line;
+                while let Some(i) = rest.find("\"undercroft_") {
+                    let after = &rest[i + 1..];
+                    let Some(end) = after.find('"') else { break };
+                    let name = &after[..end];
+                    // `format!("undercroft_{name}")` builds the gauge names
+                    // from GAUGE_NAMES and is not a series literal.
+                    if name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                    {
+                        out.push(name.to_string());
+                    }
+                    rest = &after[end + 1..];
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// **The series inventory is counted against the emit sites, both ways.**
+    ///
+    /// [`COUNTER_NAMES`] and [`HISTOGRAM_NAMES`] exist so that something
+    /// outside this crate can ask what the binary exports without building it
+    /// under the `telemetry` feature and scraping it. A hand-written list
+    /// that answers that question is worth exactly as much as its accuracy,
+    /// and nothing was checking it — so a counter added at a call site would
+    /// have been absent from the inventory, and the deployment-config gate
+    /// that consumes the inventory would then have called a perfectly good
+    /// alert a reference to a non-existent series.
+    ///
+    /// Both directions, because each failure is real and they are different
+    /// failures: a name emitted but not listed under-reports what exists, and
+    /// a name listed but not emitted is a series the configs may reference
+    /// and that will never appear.
+    #[test]
+    fn the_series_inventory_matches_the_emit_sites() {
+        let emitted = emitted_series_literals();
+        // The premise. Every assertion below is a loop, and a broken
+        // extractor makes all of them vacuous at once.
+        assert!(
+            emitted.len() >= 10,
+            "extracted only {} series literals from this crate's sources — \
+             the extraction is broken, not the inventory: {emitted:?}",
+            emitted.len()
+        );
+        let inventory: Vec<&str> = COUNTER_NAMES
+            .iter()
+            .chain(HISTOGRAM_NAMES)
+            .copied()
+            .collect();
+        for name in &emitted {
+            assert!(
+                inventory.contains(&name.as_str()),
+                "{name} is emitted but is in neither COUNTER_NAMES nor \
+                 HISTOGRAM_NAMES, so anything reading the inventory does not \
+                 know this series exists"
+            );
+        }
+        for name in &inventory {
+            assert!(
+                emitted.iter().any(|e| e == name),
+                "{name} is in the inventory but nothing emits it — a config \
+                 may reference it and the series will never appear"
+            );
+        }
+    }
+
+    /// **Nothing under `deploy/observability/` may name a series the binary
+    /// does not export.**
+    ///
+    /// An alert whose expression names a series that does not exist never
+    /// fires and never errors: Prometheus evaluates it to an empty vector
+    /// forever, the rule shows as `inactive`, and the monitor reads healthy
+    /// because it is looking at nothing. A dashboard panel does the same
+    /// thing and merely looks empty. Nothing in the stack reports either
+    /// case, which is why this is a build-time check and not an operational
+    /// one.
+    ///
+    /// **Deliberately one-directional.** Every series a config names must
+    /// exist; the reverse — that every exported series appears in some
+    /// dashboard — is not a requirement and must not become one, or adding a
+    /// counter would force a panel nobody asked for.
+    #[test]
+    fn every_series_the_deployment_configs_name_is_one_the_binary_exports() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let files = [
+            "deploy/observability/alerts.yml",
+            "deploy/observability/alerts_test.yml",
+            "deploy/observability/grafana/dashboards/undercroft.json",
+            "deploy/observability/RUNBOOK.md",
+            "deploy/observability/README.md",
+        ];
+
+        let known = series_names();
+        let mut checked = 0usize;
+        for rel in files {
+            let path = root.join(rel);
+            // Absent is a failure, not a skip: this gate lives in a crate the
+            // test image builds from a partial COPY, and the whole point is
+            // that it must not pass by seeing nothing.
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "{} is not readable ({e}). The deploy tree must be in the \
+                     build context for this gate to mean anything",
+                    path.display()
+                )
+            });
+
+            let bytes = text.as_bytes();
+            let mut i = 0;
+            while let Some(p) = text[i..].find("undercroft_") {
+                let start = i + p;
+                let mut end = start;
+                while end < bytes.len()
+                    && (bytes[end].is_ascii_lowercase()
+                        || bytes[end].is_ascii_digit()
+                        || bytes[end] == b'_')
+                {
+                    end += 1;
+                }
+                let name = &text[start..end];
+                i = end.max(start + 1);
+                // `undercroft_*` in prose is a wildcard, not a series.
+                if name.ends_with('_') {
+                    continue;
+                }
+                checked += 1;
+                // A histogram renders as three series; the configs name the
+                // rendered ones.
+                let stem = ["_bucket", "_sum", "_count"]
+                    .iter()
+                    .find_map(|suf| name.strip_suffix(suf))
+                    .unwrap_or(name);
+                assert!(
+                    known.iter().any(|k| k == name) || HISTOGRAM_NAMES.contains(&stem),
+                    "{rel} names the series {name:?}, which this build does \
+                     not export. An alert on it would stay inactive forever \
+                     and a panel would stay empty, with no error anywhere. \
+                     Exported series: {known:?}"
+                );
+            }
+        }
+        assert!(
+            checked >= 8,
+            "found only {checked} series references across the deployment \
+             configs — the extraction is broken, and every assertion above \
+             it was vacuous"
         );
     }
 

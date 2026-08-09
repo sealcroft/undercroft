@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Order matters: the cheap suites that fail fastest come first, so a broken
 # tree is reported in a minute instead of forty.
-ALL=(lint test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
+ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
 SUITES=("${@:-}")
 if [ -z "${SUITES[0]:-}" ]; then SUITES=("${ALL[@]}"); fi
 
@@ -129,7 +129,17 @@ for i in "${!NAMES[@]}"; do
                   END { printf "%d passed, %d failed, %d ignored (summed over %s targets)", p, f, g, "all" }' \
              ".battery/$n.log" 2>/dev/null)
   else
-    detail=$(grep -hoE '^([a-z-]* ?e2e results: [0-9]+ passed, [0-9]+ failed)' \
+    # Widened past `…e2e results:` when `obs-config` and `site` joined the
+    # battery — the old pattern hard-coded `e2e` and silently printed nothing
+    # for them, which reads as a suite that ran no checks.
+    #
+    # The character class must include DIGITS. The first widening used
+    # `[a-z-]+`, which cannot match `e2e` — so it fixed the two new suites
+    # and blanked the four existing ones, and the battery still said OK
+    # because this line has never decided anything. A reporting line that
+    # quietly stops reporting is the same defect as a summary read from an
+    # empty field; it is only cheaper.
+    detail=$(grep -hoE '^[a-z0-9-]+( [a-z0-9-]+)* results: [0-9]+ passed, [0-9]+ failed' \
                ".battery/$n.log" 2>/dev/null | tail -1)
   fi
   printf ' %-18s exit %-3s %s\n' "$n" "$c" "${detail:-}"

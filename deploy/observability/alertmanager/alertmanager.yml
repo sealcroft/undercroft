@@ -11,7 +11,11 @@ global:
 
 route:
   receiver: alert-sink
-  group_by: ["alertname", "surface", "vault"]
+  # `vault` was in this list and no alert expression emits it — grouping on
+  # a label nothing produces silently collapses every alert into one group.
+  # `instance` is the label every rule in alerts.yml is aggregated by;
+  # `surface` exists only on the tamper alert, which is where it belongs.
+  group_by: ["alertname", "instance", "surface"]
   group_wait: 10s
   group_interval: 30s
   repeat_interval: 1h
@@ -43,7 +47,23 @@ receivers:
   #       smarthost: "smtp.example.com:587"
 
 inhibit_rules:
-  # A critical tamper alert on a vault silences noisier warnings for it.
+  # A critical alert on an instance silences noisier warnings FOR THAT
+  # INSTANCE.
+  #
+  # This said `equal: ["vault"]` and no alert expression emitted a `vault`
+  # label — every rule was a `sum()`, an `up{}` or a `sum by (le)` over
+  # counters that carry no vault at all. **Alertmanager treats a label
+  # missing from both source and target as equal**, so the rule matched
+  # every warning in the fleet: one PalaceTamperDetected anywhere muted
+  # every HighSearchLatencyP95, HttpServerErrors, AuthRejectionsSpike and
+  # AuditChainStalled everywhere, for as long as it fired. The comment said
+  # "for it"; the behaviour was global, and nothing distinguished the two
+  # because the label was absent rather than mismatched.
+  #
+  # `instance` is emitted by all six rules — the aggregations in alerts.yml
+  # keep it deliberately — and `alerts_test.yml` asserts each one's exact
+  # label set through `promtool test rules`, so a new rule that drops it is
+  # a failing suite rather than a silent widening of this inhibition.
   - source_matchers: [severity = "critical"]
     target_matchers: [severity = "warning"]
-    equal: ["vault"]
+    equal: ["instance"]

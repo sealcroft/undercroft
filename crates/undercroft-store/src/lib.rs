@@ -1633,9 +1633,10 @@ impl PalaceStore {
     /// The telemetry gauge name for `artifact`. A gauge set under a name that
     /// `undercroft_obs::GAUGE_NAMES` does not list is silently dropped, so the
     /// mapping is one function and
-    /// `every_codebook_gauge_name_is_registered_in_obs` pins it against that
-    /// list — the first version of this call emitted five names none of which
-    /// were registered, and looked live at the call site.
+    /// `every_gauge_name_is_registered_and_every_registered_name_is_emitted`
+    /// pins it against that list — the first version of this call emitted five
+    /// names none of which were registered, and looked live at the call site.
+    /// That gate covers every gauge the workspace sets, not just these.
     pub(crate) fn codebook_gauge_name(artifact: &str) -> String {
         format!("codebook_generation_{}", artifact.replace('-', "_"))
     }
@@ -12358,15 +12359,115 @@ mod tests {
     /// "surfaced as a telemetry gauge". This makes that unrepeatable, and it
     /// works in a build without the `telemetry` feature because the name list
     /// is a plain const.
+    ///
+    /// **It used to cover the five codebook gauges and only those.** The
+    /// other five — `drawers`, `audit_chain_height`, `kg_triples`,
+    /// `kg_entities`, `store_bytes` — are set from bare literals in the CLI's
+    /// `tenant.rs`, one hop outside this crate, with nothing pinning them at
+    /// all: exactly the arrangement whose first instance shipped five dead
+    /// names. Half an inventory checked is an inventory that reports on the
+    /// half nobody was going to get wrong.
+    ///
+    /// So both halves are here, and the check runs in **both directions**:
+    /// every emitted name must be registered, and every registered name must
+    /// be emitted by something (a registered gauge nothing sets is a panel
+    /// that renders "No data" forever). The emitted set is read out of the
+    /// workspace's sources rather than listed here, so a new `set_gauge` call
+    /// site is in scope the moment it is written.
     #[test]
-    fn every_codebook_gauge_name_is_registered_in_obs() {
-        for artifact in CODEBOOK_ARTIFACTS {
-            let name = PalaceStore::codebook_gauge_name(artifact);
+    fn every_gauge_name_is_registered_and_every_registered_name_is_emitted() {
+        // Leg 1: the names built dynamically from CODEBOOK_ARTIFACTS. These
+        // never appear as a literal at a call site, so the source scan below
+        // cannot see them — they are computed here the same way production
+        // computes them.
+        let mut emitted: Vec<String> = CODEBOOK_ARTIFACTS
+            .iter()
+            .map(|a| PalaceStore::codebook_gauge_name(a))
+            .collect();
+
+        // Leg 2: every literal `set_gauge("…"` in the workspace. `crates/` is
+        // complete inside the test image, so this cannot under-run silently.
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .canonicalize()
+            .expect("the crates directory is one level up from this crate");
+        let mut sites = 0usize;
+        let mut stack = vec![crates.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the workspace is readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    // `target/` is build output, and a vendored dependency is
+                    // not our emit site.
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    if name != "target" {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                // Comment lines dropped first, then scanned as one string:
+                // the call may be split across lines by rustfmt, and a
+                // line-anchored scan would miss exactly the call sites a
+                // formatter chose to wrap.
+                let text: String = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                // Split so the needle does not match this line itself. It
+                // did: the scan found its own literal inside this file,
+                // read the next quoted string after it, and reported a
+                // fragment of this very loop as an unregistered gauge. A
+                // gate whose own text is part of what it measures is the
+                // trap `write_telemetry_has_exactly_one_emitter` splits its
+                // needles for, one file over.
+                const CALL: &str = concat!("set_gauge", "(");
+                let mut rest = text.as_str();
+                while let Some(i) = rest.find(CALL) {
+                    rest = &rest[i + CALL.len()..];
+                    // A literal argument or nothing. `fn set_gauge(name: &str`
+                    // and `imp::set_gauge(name, …)` forward a variable and are
+                    // not emit sites; taking "the next string in the file"
+                    // would invent a name from hundreds of lines away.
+                    let arg = rest.trim_start();
+                    let Some(lit) = arg.strip_prefix('"') else {
+                        continue;
+                    };
+                    let Some(end) = lit.find('"') else { continue };
+                    sites += 1;
+                    emitted.push(lit[..end].to_string());
+                }
+            }
+        }
+        // The premise. Both loops below are silent when the extraction finds
+        // nothing, and a gate that examines nothing passes forever.
+        assert!(
+            sites >= 5,
+            "found {sites} literal set_gauge call sites in the workspace — \
+             the extraction is broken, not the inventory"
+        );
+        emitted.sort();
+        emitted.dedup();
+
+        for name in &emitted {
             assert!(
                 undercroft_obs::GAUGE_NAMES.contains(&name.as_str()),
-                "gauge {name:?} (for artifact {artifact:?}) is not in \
-                 undercroft_obs::GAUGE_NAMES, so setting it is a no-op. Add it \
-                 there or stop claiming this artifact is observable"
+                "gauge {name:?} is not in undercroft_obs::GAUGE_NAMES, so \
+                 setting it is a no-op: the value accumulates in a map no \
+                 observable gauge reads, absent from /metrics and OTLP while \
+                 the call site looks live. Add it there or stop setting it"
+            );
+        }
+        for name in undercroft_obs::GAUGE_NAMES {
+            assert!(
+                emitted.iter().any(|e| e == name),
+                "gauge {name:?} is registered in undercroft_obs but nothing \
+                 in the workspace sets it — it is exported empty, and a panel \
+                 or alert on it reads as healthy silence"
             );
         }
     }

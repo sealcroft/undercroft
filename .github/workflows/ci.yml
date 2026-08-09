@@ -48,14 +48,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Cheapest first: no cargo, and it catches a class nothing else can
+      # see (an alert rule that is valid, parses, and never fires).
+      - name: Observability config suite (promtool + amtool)
+        run: docker compose run --rm obs-config
       - name: Unit + integration tests (Docker)
         run: docker build --target test -t undercroft-test . && docker run --rm undercroft-test
       - name: E2E UI/UX suite (Docker)
         run: docker compose run --rm e2e
+      - name: Multi-tenant orchestrator suite
+        run: docker compose run --rm orchestrator-e2e
+      # The ONLY job that compiles `--features telemetry`. Without it
+      # `undercroft-obs/src/imp.rs` — the entire real telemetry
+      # implementation, Prometheus renderer and SSE broker included — was
+      # never built in CI at all, so it could stop compiling on `main` and
+      # every check would still be green.
+      - name: Telemetry build + /metrics gating
+        run: docker compose run --rm e2e-telemetry
       - name: Remote backends suite (qdrant/chroma/pgvector/milvus)
         run: docker compose run --rm backends-e2e
       - name: ONNX embedder compile check
         run: docker compose run --rm onnx-build
+
+  site:
+    name: Site build + assembly checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Same mdBook version as pages.yml and the compose `site` service —
+      # three callers, one version, or the preview and the deploy differ.
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: "0.5.4"
+      # The deploy runs this exact script. Running it on pull requests is
+      # what makes a broken site a failing check instead of a broken page:
+      # pages.yml only fires on `main`, so until now nothing built the book
+      # before it was already published.
+      - run: bash website/build-site.sh _site
 
   trivy-image:
     name: Trivy scan (runtime image)

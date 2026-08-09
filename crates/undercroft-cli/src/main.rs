@@ -947,13 +947,46 @@ fn report_quarantined(quarantined: usize) {
     }
 }
 
+/// The user's home directory — the anchor for the default palace and for
+/// `~/` expansion.
+///
+/// **`HOME` alone is a Unix assumption and the released Windows binary paid
+/// for it.** Native Windows sets `USERPROFILE` and not `HOME`, so
+/// [`data_dir`] fell through to `"."` and every vault landed in whatever
+/// directory the user happened to be standing in: a different palace per
+/// shell, none of them found again, and no error at any point. It survived
+/// because every environment this was ever exercised in — Linux, macOS, the
+/// Docker battery, and Git Bash or WSL on a Windows host — sets `HOME`. The
+/// one configuration that does not is the one the release ships a binary for.
+fn home_dir() -> Option<PathBuf> {
+    // A concrete signature, not `std::env::var_os` passed bare: that is
+    // generic over `AsRef<OsStr>`, so the fn item it names is bound to one
+    // specific lifetime and does not satisfy the higher-ranked `Fn(&str)`
+    // the parameter asks for.
+    fn from_env(key: &str) -> Option<std::ffi::OsString> {
+        std::env::var_os(key)
+    }
+    home_dir_from(from_env)
+}
+
+/// The lookup itself, split from the environment so it can be tested without
+/// mutating process state — `set_var` races every other test in the binary.
+///
+/// An **empty** value is treated as absent. `HOME=` set to nothing is not a
+/// home directory, and taking it would skip the fallback that exists for
+/// exactly the case where the first variable is not usable.
+fn home_dir_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(&get)
+        .find(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 fn data_dir(cli: &Cli) -> PathBuf {
-    cli.data_dir.clone().unwrap_or_else(|| {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| ".".into());
-        home.join(".undercroft")
-    })
+    cli.data_dir
+        .clone()
+        .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".into()).join(".undercroft"))
 }
 
 fn passphrase() -> Option<String> {
@@ -3354,8 +3387,11 @@ fn sweep_path(
 
 fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
+        // Same lookup as the default palace: `~/` meant nothing on native
+        // Windows for the same reason, and a watch path that silently stayed
+        // literal (`./~/notes`) is the same class of quiet wrong answer.
+        if let Some(home) = home_dir() {
+            return home.join(rest);
         }
     }
     PathBuf::from(path)
@@ -3550,7 +3586,55 @@ fn collect_files(path: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use tempfile::TempDir;
+
+    /// The default palace must resolve on a machine that sets `USERPROFILE`
+    /// and not `HOME` — i.e. on native Windows, which is a target the
+    /// release publishes a binary for.
+    ///
+    /// Driven through [`home_dir_from`] rather than the environment: a test
+    /// that called `set_var` would race every other test in this binary, and
+    /// the failure it introduces is intermittent and blamed elsewhere.
+    ///
+    /// Four arms, because only the second one fails before the fix and a
+    /// single-arm test would also pass if the order were inverted — which
+    /// would break every Unix host instead.
+    #[test]
+    fn the_home_directory_falls_back_to_userprofile() {
+        let one = |want: &'static str, value: &'static str| {
+            move |k: &str| (k == want).then(|| OsString::from(value))
+        };
+
+        // Both set: `HOME` wins. Git Bash and WSL set both, and taking
+        // `USERPROFILE` there would move an existing palace.
+        assert_eq!(
+            home_dir_from(|k| match k {
+                "HOME" => Some(OsString::from("/home/a")),
+                "USERPROFILE" => Some(OsString::from("C:\\Users\\a")),
+                _ => None,
+            }),
+            Some(PathBuf::from("/home/a"))
+        );
+        // `USERPROFILE` only — the native Windows case, and the one that
+        // resolved to `"."` before this fix.
+        assert_eq!(
+            home_dir_from(one("USERPROFILE", "C:\\Users\\a")),
+            Some(PathBuf::from("C:\\Users\\a"))
+        );
+        // An empty `HOME` is not a home directory; the fallback still runs.
+        assert_eq!(
+            home_dir_from(|k| match k {
+                "HOME" => Some(OsString::new()),
+                "USERPROFILE" => Some(OsString::from("C:\\Users\\a")),
+                _ => None,
+            }),
+            Some(PathBuf::from("C:\\Users\\a"))
+        );
+        // Neither: the caller decides. `data_dir` keeps its historical `"."`,
+        // so this fix changes no behaviour where `HOME` is set.
+        assert_eq!(home_dir_from(|_| None), None);
+    }
 
     /// **An integrity verdict on a READ path exited 1**, the code
     /// docs/AGENTS.md reserves for "the run failed, retry it".
