@@ -6,7 +6,7 @@ adversaries it defends against, the mechanism that defeats each one, and
 document a security reviewer should be handed alongside
 [SECURITY.md](../SECURITY.md) (the disclosure policy and scope list),
 the [security model](security.md) (the mechanism reference), and
-[SECURITY_COMPARISON.md](https://sealcroft.github.io/undercroft/docs/security-comparison.html) (the market context).
+[SECURITY_COMPARISON.md](https://sealcroft.com/undercroft/docs/security-comparison.html) (the market context).
 Nothing here is aspirational: every defensive claim names the shipping
 mechanism, and planned work is labeled as planned.
 
@@ -66,7 +66,7 @@ pages, codebooks, ColBERT token matrices, FDE vectors, and the knowledge
 graph's objects **and its subjects, predicates and entity names** — are
 encrypted with XChaCha20-Poly1305 before touching disk, each under an
 AAD that binds the vault id and the artifact's identity. Those last three
-were clear TEXT until v0.47.0 (ROADMAP A10): the columns now hold a
+were clear TEXT before 1.0.0 (ROADMAP A10): the columns now hold a
 truncated keyed HMAC so SQL equality still works, the words are sealed
 beside them, and the graph's two ids — previously unkeyed SHA-256 digests
 of the same words — are keyed as well. Every record
@@ -130,7 +130,7 @@ the above as public labels until this is closed. Closing it means a
 keyed blind index (truncated HMAC, as `fingerprint()` already does) for
 the fields that need SQL equality, and a sealed blob plus a RAM cache
 for the rest — which is exactly what the knowledge graph's subjects,
-predicates and entity names got in v0.47.0 (ROADMAP A10, unit 1 of 3),
+predicates and entity names got in 1.0.0 (ROADMAP A10, unit 1 of 3),
 and the pattern the remaining two units follow. **The blind-index key is
 long-lived and separate from the vault's rotatable keys**, which is the
 standard searchable-encryption separation and is not optional here: the
@@ -210,7 +210,7 @@ into every ciphertext, so a blob copied from vault A into vault B
 could have a bug, it is rejected by the cipher. Vault, wing, and room
 names pass a path-traversal guard (`validate_name`). This is the
 property that makes vault-per-customer multi-tenancy defensible; every
-competitor surveyed in [SECURITY_COMPARISON.md](https://sealcroft.github.io/undercroft/docs/security-comparison.html)
+competitor surveyed in [SECURITY_COMPARISON.md](https://sealcroft.com/undercroft/docs/security-comparison.html)
 isolates tenants with a metadata filter.
 
 ### A4 — Network adversary (reaching the served surface)
@@ -261,7 +261,7 @@ while the identical capability over `/mcp` in the same process answered
 the decision moved to the one place every request passes through.
 
 `--read-only` bounds the **open** as well as the request surface, since
-v0.47.0 (ROADMAP R4; this paragraph used to record the opposite). The
+1.0.0 (ROADMAP R4; this paragraph used to record the opposite). The
 connection is `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON` — so a
 write that was *missed* fails loudly instead of happening quietly — and the
 schema is checked rather than created, a lagging manifest anchor is reported
@@ -464,7 +464,7 @@ open — the replica precedent: warn and serve, never silently pretend.
 And read records are appended **without advancing the manifest anchor**;
 they anchor at the next store open, so a stripped unanchored tail is
 indistinguishable from a crash until then. A long-lived server never
-re-opens, so since v0.47.0 the window has an explicit closer —
+re-opens, so since 1.0.0 the window has an explicit closer —
 `POST /v1/vaults/{id}/anchor`, a write, refused on a read-only handle
 (ROADMAP R3). It is deliberately **not** an MCP tool: it fsyncs the
 out-of-database manifest a rollback is detected against, and the surface
@@ -475,7 +475,7 @@ says.
 
 The market treats "what to store" as a quality trade-off. It is also a
 security decision, and the measured benchmark rows make the stakes
-concrete ([BENCHMARKS_VS.md](https://sealcroft.github.io/undercroft/docs/benchmarks-vs.html)): extraction pipelines
+concrete ([BENCHMARKS_VS.md](https://sealcroft.com/undercroft/docs/benchmarks-vs.html)): extraction pipelines
 retained 55 memories from 177 ingested chunks — content their rubric
 judged uninteresting simply ceased to exist. Applied to security:
 
@@ -611,7 +611,7 @@ cannot *enforce* them, and says so:
 - **Data-not-instructions delivery** — retrieval returns memory as a
   result payload, never as instruction/system text, and the assembly
   pattern (the standard spotlighting defense against prompt injection)
-  is documented in [AGENTS.md §7.1](https://sealcroft.github.io/undercroft/docs/agents.html). Stated exactly, because
+  is documented in [AGENTS.md §7.1](https://sealcroft.com/undercroft/docs/agents.html). Stated exactly, because
   this bullet previously overstated it in two ways. First, it cited an
   AGENTS.md section that **did not exist**; §7.1 was written to close
   that, on 2026-08-05. Second, it claimed retrieval carries "the
@@ -725,7 +725,7 @@ straight, each carrying what it actually is.
   X25519 + ML-KEM-768 by default (`bundle keygen`), with legacy
   identities fully supported and downgrade refused in every direction.
   Full inventory, compat matrix, and deployment guidance in
-  [PQ.md](https://sealcroft.github.io/undercroft/docs/pq.html). No "quantum" marketing beyond this paragraph.
+  [PQ.md](https://sealcroft.com/undercroft/docs/pq.html). No "quantum" marketing beyond this paragraph.
 
 ## 10. Audit us
 

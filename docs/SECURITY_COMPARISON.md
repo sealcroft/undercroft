@@ -67,7 +67,7 @@ undercroft's answers are structural, not bolted on:
   exist in default builds.
 
 The one place these properties are visible in *performance* terms is
-the [head-to-head benchmark](https://sealcroft.github.io/undercroft/docs/benchmarks-vs.html): the sealed,
+the [head-to-head benchmark](https://sealcroft.com/undercroft/docs/benchmarks-vs.html): the sealed,
 audit-chained, zero-model configuration is not a premium tier we
 benchmark around — it *is* the measured row.
 

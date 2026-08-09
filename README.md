@@ -5,7 +5,7 @@
 
 **Hardened, local-first AI memory: encrypted, integrity-verified memory vaults with verbatim recall.**
 
-[Website](https://sealcroft.github.io/undercroft/) · [Documentation](https://sealcroft.github.io/undercroft/docs/) · [Agents implementation guide](https://sealcroft.github.io/undercroft/docs/agents.html) · [Security model](https://sealcroft.github.io/undercroft/docs/security.html)
+[Website](https://sealcroft.com/undercroft/) · [Documentation](https://sealcroft.com/undercroft/docs/) · [Agents implementation guide](https://sealcroft.com/undercroft/docs/agents.html) · [Security model](https://sealcroft.com/undercroft/docs/security.html)
 
 > **Implementing with an AI agent?** Point it at
 > [docs/AGENTS.md](https://github.com/sealcroft/undercroft/blob/main/docs/AGENTS.md) —
@@ -173,7 +173,7 @@ row** — declaring German merges `flow`/`flower`, Italian merges `pesca`/`pesce
 real search at realistic drawer length: 49 pairs that must stay apart, plus
 9 that already meet and are pinned as the known price, so a cost that
 disappears gets reported rather than absorbed. See
-[docs/agents.html](https://sealcroft.github.io/undercroft/docs/agents.html).
+[docs/agents.html](https://sealcroft.com/undercroft/docs/agents.html).
 
 Note this is **within-language**. Cross-lingual retrieval needs one thing: a
 multilingual model via `onnx`/`ort`/`http` — the default hashed embedder
@@ -214,7 +214,7 @@ set, after which `undercroft repair` re-embeds every drawer.
   `embeddings-tls` terminator ships the infra). The stated trade: the
   endpoint reads your text in plaintext — the in-process backends above
   close that. The full posture guide is
-  [docs/EMBEDDERS.md](https://sealcroft.github.io/undercroft/docs/embedders.html).
+  [docs/EMBEDDERS.md](https://sealcroft.com/undercroft/docs/embedders.html).
 
 ### Cross-encoder reranker (optional, `onnx` / `ort` features)
 

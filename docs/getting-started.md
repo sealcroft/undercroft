@@ -1,7 +1,7 @@
 # Getting started
 
 > Implementing with (or as) an AI agent? The
-> [agents implementation guide](https://sealcroft.github.io/undercroft/docs/agents.html)
+> [agents implementation guide](https://sealcroft.com/undercroft/docs/agents.html)
 > is the scenario-driven version of this page: pick a deployment shape
 > (single agent, team server, multi-tenant engine, fleet), follow its
 > steps, and verify with the checklist.

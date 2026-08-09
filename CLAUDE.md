@@ -5,6 +5,15 @@ Verbatim drawers filed into wings/rooms, stored in isolated **vaults** with
 per-vault HKDF-derived keys, XChaCha20-Poly1305 content sealing, and
 HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
+Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
+`https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
+(repo `sealcroft/sealcroft.github.io`). Current release **1.0.0** — the
+version reset when the project was renamed; every earlier tag and release
+belonged to it under its former name and was withdrawn. `main` is branch
+protected on both repos: force pushes and deletions blocked, admins exempt.
+Forking cannot be disabled while the repos are public, and they must stay
+public — GitHub Free will not serve Pages from a private repo.
+
 ## Who works on this project — the role every agent takes
 
 **Every agent on this project — the session agent and every subagent it
@@ -1285,6 +1294,40 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   candidate set moves). A rebuild that reuses the stored codebook is not a new
   generation. The counter is outside HMAC coverage, so it is evidence about
   ambiguity, never about tampering.
+- **A search cannot verify its own blind spot. If a sweep matched a pattern,
+  a checker built on that same pattern proves nothing.** The 2026-08-08 rename
+  replaced three Latin-script spellings of the former name. Three separate
+  verifiers then reported the tree clean — because all three searched for
+  those same three strings. They agreed with each other by construction, and
+  four whole classes sat untouched beneath the agreement:
+  1. **A different script.** The former name also existed in Greek capitals,
+     which share no byte with the Latin form. It was the first text on the
+     landing page, a constant raining the old brand down the hero canvas, and
+     the monogram on every documentation page.
+  2. **A truncated root.** An identifier used the first five letters as a
+     stem. The sweep matched whole words, so it survived — and it named the
+     class created inside a user's *live* Weaviate instance.
+  3. **An encoding.** A pinned test certificate carried the name inside
+     base64-encoded DER, while the comment directly above it asserted the new
+     one. A doc claim is not verification, restated as bytes.
+  4. **The identity without the spelling.** A mythological epithet named the
+     old project precisely and contained none of its letters. No string search
+     of any kind could see it.
+  One layer down, the same shape: **17 historical PDF blobs passed a clean
+  `grep`** while still carrying the name inside Flate-compressed content
+  streams — invisible to a byte scan, plainly visible to git's own
+  `astextplain` textconv and to anyone who opened the file. The maintainer
+  found the Greek by *looking at the rendered page*, which is the check nobody
+  had run.
+  So: any claim that a string is gone must **decompress rather than grep**,
+  must cover **non-Latin scripts and truncated roots**, and must hunt the
+  **identity** as well as the spelling — six independent classes, failing on
+  any hit. The general rule outlives this rename: **a negative result is only
+  as good as the widest question you thought to ask, so "none found" is a
+  claim about the method, never about the tree.** Note that writing this
+  lesson down is itself the trap — the first draft quoted every string it
+  warned about and reintroduced the name into the guide. Describe the class,
+  never the token.
 - **A capability missing from one surface is a boundary or a drift, and
   which one has to be written down.** A 14-agent audit of CLI vs MCP vs
   `/v1` found **65 confirmed drifts** — a capability present on one

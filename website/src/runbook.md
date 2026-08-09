@@ -63,7 +63,7 @@ forge the chain MAC).
    ```bash
    cp -a "$UNDERCROFT_HOME/vaults/<vault>" "/tmp/<vault>.evidence.$(date +%s)"
    ```
-   Since v0.47.0 a read-only open no longer touches any of those (see step 2),
+   Since 1.0.0 a read-only open no longer touches any of those (see step 2),
    so this is no longer a race you can lose. Take the copy anyway: it is the
    only thing that survives a *writable* process someone else starts, and a
    forensic copy costs seconds.
@@ -81,7 +81,7 @@ forge the chain MAC).
    **not** fast-forward the manifest anchor (an earlier version of this step
    said it did).
 
-   **The open is a read too, since v0.47.0.** It used to be the one write
+   **The open is a read too, since 1.0.0.** It used to be the one write
    `--read-only` did not bound, and the worst of it ran on the very path this
    step recommends: rotation reconciliation happened before the
    read-only/read-write split, so the first request against a cold handle

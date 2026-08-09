@@ -10,7 +10,7 @@ paraphrased.
 
 Links are absolute so this page reads correctly anywhere:
 repository <https://github.com/sealcroft/undercroft>, rendered docs
-<https://sealcroft.github.io/undercroft/docs/>.
+<https://sealcroft.com/undercroft/docs/>.
 
 ---
 
@@ -59,7 +59,7 @@ HKDF-derived keys). When you build on it:
 5. **Integrity is enforced, not assumed.** Every read verifies an HMAC;
    every write advances a tamper-evident audit chain in the same
    transaction. If `verify` fails, treat it as an incident (see the
-   [tamper runbook](https://sealcroft.github.io/undercroft/docs/runbook.html)),
+   [tamper runbook](https://sealcroft.com/undercroft/docs/runbook.html)),
    not as noise.
 6. **Names are validated.** Vault/wing/room names go through a
    path-traversal guard — expect errors on `../`-style input rather than
@@ -177,7 +177,7 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   `POST .../verify`, so a route added later is refused until it is
   deliberately classified. (`POST .../verify` is classified as a read because
   it only walks HMACs and replays the chain — it takes `&self` and writes
-  nothing. Since v0.47.0 the **open** is a read too: the connection is
+  nothing. Since 1.0.0 the **open** is a read too: the connection is
   `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema is checked
   rather than created, a lagging manifest anchor is reported rather than
   fast-forwarded, and an interrupted rotation is honoured in memory with its
@@ -256,7 +256,7 @@ Two options worth knowing:
   screen diverts that save, **the refresh did not happen**: the response is
   `202 {"deduped": false, "quarantined": true}` with the quarantine id, and
   the matched drawer still holds its previous text. It answered
-  `200 {"deduped": true}` against the matched id until v0.47.0 — a claim
+  `200 {"deduped": true}` against the matched id before 1.0.0 — a claim
   about a write to a drawer nothing had touched.
 
 Export lines carry vectors and ColBERT token artifacts, so
@@ -312,7 +312,7 @@ per vault on first write, and a model swap is refused unless you set
 
 **Embedder tiers** (`UNDERCROFT_EMBEDDER`; the full posture guide with
 setup recipes, the model-export procedure, and the security trades is
-[docs/EMBEDDERS.md](https://sealcroft.github.io/undercroft/docs/embedders.html) — published as the "Choosing an
+[docs/EMBEDDERS.md](https://sealcroft.com/undercroft/docs/embedders.html) — published as the "Choosing an
 embedder posture" chapter. Since the posture-configs unit, releases ship
 the `ort` posture ready-made: a `…-x86_64-unknown-linux-gnu-ort.tar.gz`
 binary asset and a `ghcr.io/sealcroft/undercroft:<tag>-ort` image, both
@@ -630,7 +630,7 @@ other than a tombstone inside the attested interval) each reach the verdict
 through their own checking. But a rolled-back database, or a manifest edited
 offline, is detected **when the vault opens** — before any command's own
 checks begin — so `search`, `stats`, `recent` and `drawer get` reach it too,
-and since v0.47.0 they exit 2 as well. They used to exit 1, i.e. the same
+and since 1.0.0 they exit 2 as well. They used to exit 1, i.e. the same
 code as "no such vault", which a compliance script retries forever against a
 palace whose answer will never change. Exit 1 stays what it always was: the
 run itself failed — bad arguments, a missing file, an unreadable vault. A
@@ -647,7 +647,7 @@ is, and the message has always said "possible tampering".
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record
   always is**. On `VERIFY FAILED`, follow the
-  [runbook](https://sealcroft.github.io/undercroft/docs/runbook.html).
+  [runbook](https://sealcroft.com/undercroft/docs/runbook.html).
 - **Key rotation** — `undercroft vault rotate <name>`: fresh derived keys,
   every sealed blob re-encrypted and every tag re-keyed in one
   transaction, crash-safe at any instant. Do it on key-exposure suspicion
@@ -684,7 +684,7 @@ undercroft import palace.bundle --identity ops.key --sender <sender-hex>
   (X25519 + ML-KEM-768, `pq1`-prefixed strings) and seals v2 bundles that
   close harvest-now-decrypt-later; legacy bare-hex X25519 identities keep
   working in both directions, and nothing downgrades silently — the full
-  posture and compat matrix live in [PQ.md](https://sealcroft.github.io/undercroft/docs/pq.html).
+  posture and compat matrix live in [PQ.md](https://sealcroft.com/undercroft/docs/pq.html).
 
 - Durability is real: SQLite runs WAL + `synchronous=FULL`, the manifest
   anchor and key files are fsynced — an acknowledged write is on disk.
@@ -798,7 +798,7 @@ classifies it deliberately:
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`); the quarantine wing is excluded unless you name it, as on `search` and `recent` |
 | GET | `/v1/vaults/{id}/drawers/{drawer_id}` | one full drawer, verbatim. **A quarantine-pending drawer needs the reviewer's door declared**: `?wing=quarantine-pending`, because an id names nothing and reading pending evidence is the reviewer's act — 403 without it, and 403 *with* it under per-vault assertions (an assertion authorizes one vault; it does not make the caller this deployment's reviewer). The three surfaces differ here **on purpose**: MCP refuses outright (the quarantine fence), `/v1` requires the door, and the CLI operator seat reads it by id with no door at all — `undercroft drawer get <id>` is the way to read the text you are about to rule on, and it is the local operator's own terminal. `undercroft admission list` prints ids, wings, signal codes and timestamps and **no content**. Verbatim otherwise: `drawer` is byte-faithful to what is stored, so a fetch and an export never disagree about the record; when this build reads its times differently from the sealed reading, `live_time_mentions` and `mentions_restated: true` are added alongside |
 | PUT | `/v1/vaults/{id}/drawers/{drawer_id}` | replace content (`text`); screened like a save when admission is on — a flagged update answers 202 `{quarantined: true}` and the drawer keeps its previous content. The update re-stamps `added_by` with the updating surface first, so an untrusted surface cannot ride the original writer's standing; quarantine-pending drawers are not editable |
-| POST | `/v1/vaults/{id}/search` | search (`query`, `limit` — **default 5**, one page size for every surface; it was 10 here until v0.47.0, so a client relying on ten hits must now say `limit: 10` — opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `min_trust`, and the four reading conventions of §5; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
+| POST | `/v1/vaults/{id}/search` | search (`query`, `limit` — **default 5**, one page size for every surface; it was 10 here before 1.0.0, so a client relying on ten hits must now say `limit: 10` — opt `vector`; opt `kind` to filter by declared record kind — while set, the response's `unlabeled_excluded` counts in-scope drawers with no declared kind, so thin labeling is never mistaken for a thin corpus; opt `min_trust`, and the four reading conventions of §5; opt `offset` + `ranked_at` to page — the response returns `next_offset` and the `ranked_at` it ranked at, and repeating both continues the same ranking instead of re-asking it) |
 | DELETE | `/v1/vaults/{id}/drawers/{drawer_id}` | delete drawer. **404 when the id is not here** — it answered 200 `{"deleted": false}` until 2026-08-04, so a client checking only the status was told a typo'd or stale id had been deleted. "That record is not here" is 404 on every route now, including `forget` and `admission`, which used to raise it as 400. A quarantine-pending drawer is **400, not deleted**: rule on it with `…/admission` instead |
 | GET | `/v1/vaults/{id}/taxonomy` | wing → room tree with counts |
 | GET | `/v1/vaults/{id}/kg/stats` | entity/triple/active/closed counts |
@@ -808,7 +808,7 @@ classifies it deliberately:
 | GET | `/v1/vaults/{id}/kg/canonical/{key}` | the exact-authority door: the one active, approved, canonical fact for the key, or 404 — consult before semantic recall for exact/high-risk asks |
 | POST | `/v1/vaults/{id}/kg/authority` | place a fact on the authority tier (`triple_id`, `authority_class`, `review_state`, opt `canonical_key`); audited, HMAC-covered. A value outside the closed vocabulary, or a `triple_id` that names no fact, is **400** |
 | GET | `/v1/vaults/{id}/kg/receipts` | every distilled fact's receipt verdict against its cited verbatim source (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — the KG half of "alert on `tampered` without walking the list"; `GET …/supersessions` below is the drawer-level analogue |
-| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none. **`undercroft refine` is the same code path** (`--wing`/`--room`/`--fact-room`/`--limit`/`--dry-run`), so the two surfaces build the same vault from the same `UNDERCROFT_LLM_*` configuration; before v0.47.0 the CLI wrote no fact date, no grounding verdict and no searchable mirror |
+| POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none. **`undercroft refine` is the same code path** (`--wing`/`--room`/`--fact-room`/`--limit`/`--dry-run`), so the two surfaces build the same vault from the same `UNDERCROFT_LLM_*` configuration; before 1.0.0 the CLI wrote no fact date, no grounding verdict and no searchable mirror |
 | POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | integrity verdict, **five legs**: HMAC every record, replay the audit chain, check every drawer supersession receipt, resolve every knowledge-graph audit label, and compare every mirror column against the HMAC-covered meta. `ok` covers all five — the same verdict CLI `verify` exits 2 on and MCP prints as VERIFY FAILED — plus `records_checked`, `bad_records`, `chain_ok`, a `supersessions` count breakdown, `bad_supersessions` (links whose receipt failed its HMAC), `orphan_labels` (an audit label naming no live graph record — `record_id` is outside the chain hash, so a relabel passes every other leg) and `mirror_drift` (a clear `wing`/`room`/`kind`/`supersedes` column disagreeing with the covered copy — the record is intact, the column was edited offline) |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
@@ -952,7 +952,7 @@ long-lived server never re-opens — `store_for` caches the handle — so
 close the window explicitly with `POST /v1/vaults/{id}/anchor` (or
 `undercroft vault anchor <name>`) on a cadence of your own. **Not**
 `POST …/verify`: it is a genuine read and does not anchor, and this
-paragraph told you otherwise until v0.47.0.
+paragraph told you otherwise before 1.0.0.
 Exports are chain-audited unconditionally — one `egress/export` record
 binding surface, recipient, counts and the export's own manifest digest —
 with no variable to set) ·
@@ -1015,7 +1015,7 @@ local default means drawer text leaves the machine).
 `UNDERCROFT_INDEX_CA` (PEM whose certificates become the ONLY trust roots
 for every remote vector-index connection — the same pin, one more client
 over; one file may carry several roots). The index backends obey the same
-transport rule as of v0.47.0: **TLS or loopback, no override**, refused at
+transport rule as of 1.0.0: **TLS or loopback, no override**, refused at
 construction. It applies there because every push carries **embeddings**,
 and an embedding is plaintext-derived — the sealed-vault invariant seals
 vectors at rest for exactly that reason. `UNDERCROFT_PGVECTOR_DSN` must

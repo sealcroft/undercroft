@@ -12,7 +12,7 @@ see "License lineage" below), updated 2026-08-05.
 | `sqlite_exact` backend | `undercroft-store` (SQLite system of record) |
 | Chroma/Qdrant/pgvector server backends | `undercroft-index` — **sealed client-side** (MemPalace sent plaintext) |
 | Embedder + identity tracking (RFC 001) | `Embedder` trait + per-vault identity enforcement (a swap is refused, not silently ranked; only hash→hash migrates automatically) |
-| Model embeddings (sentence-transformers) | four postures — `undercroft-embed-onnx` (tract, pure Rust), `undercroft-embed-ort` (ONNX Runtime, ~2.5×/forward + int8), `http` (any served model, TLS-or-loopback enforced), or caller-supplied `external:<name>@<dim>`. Models are user-supplied throughout; see [EMBEDDERS.md](https://sealcroft.github.io/undercroft/docs/embedders.html) |
+| Model embeddings (sentence-transformers) | four postures — `undercroft-embed-onnx` (tract, pure Rust), `undercroft-embed-ort` (ONNX Runtime, ~2.5×/forward + int8), `http` (any served model, TLS-or-loopback enforced), or caller-supplied `external:<name>@<dim>`. Models are user-supplied throughout; see [EMBEDDERS.md](https://sealcroft.com/undercroft/docs/embedders.html) |
 | File miner | `mine --mode files` |
 | Conversation miner (`--mode convos`) | `mine --mode convos` |
 | Sweep (per-message drawers) | `sweep` (idempotent via keyed fingerprints) |
@@ -74,12 +74,12 @@ this project, which is why the two codebases share concepts but not code
   still parse and still receive openable v1 bundles, and a hybrid identity
   opens old v1 backups with its curve half — but a hybrid recipient never
   silently downgrades, and an X25519-only secret gets a typed refusal on a
-  v2 bundle (pinned by test). Posture page: [PQ.md](https://sealcroft.github.io/undercroft/docs/pq.html).
+  v2 bundle (pinned by test). Posture page: [PQ.md](https://sealcroft.com/undercroft/docs/pq.html).
 - **Signed bundle manifests** — Ed25519 sender attestation beside the
   recipient flow: encryption says who may READ, the signature says who
   WROTE. Scope, trust claim, expiry, counts, provenance, and an
   unconditionally-checked payload digest. A sender-declared trust label is
-  a **claim, never a boundary** ([LABELS.md](https://sealcroft.github.io/undercroft/docs/labels.html)); legacy payloads
+  a **claim, never a boundary** ([LABELS.md](https://sealcroft.com/undercroft/docs/labels.html)); legacy payloads
   import unattested and say so.
 - **Write-path admission control** — a deterministic tier-1 screen over a
   closed signal vocabulary (offsets, never content) plus attack-fixture
@@ -155,7 +155,7 @@ this project, which is why the two codebases share concepts but not code
   traces (with header auth), structured logs, live SSE, the Palace
   Monitor UI, and a full Grafana/Alertmanager/Loki/Tempo deploy stack
   with a tamper runbook. Zero telemetry deps in default builds.
-- Scenario-driven [agents implementation guide](https://sealcroft.github.io/undercroft/docs/agents.html)
+- Scenario-driven [agents implementation guide](https://sealcroft.com/undercroft/docs/agents.html)
   covering every deployment shape with the complete tool/route/env
   reference.
 

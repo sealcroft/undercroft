@@ -48,7 +48,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `POST /v1/vaults` | create a vault (`sealed` or `hmac-only`; optional `external:<name>@<dim>` embedder identity) |
 | `GET /v1/vaults` | list vault ids (bearer-gated; disabled under per-vault assertions) |
 | `DELETE /v1/vaults/{id}` | delete a vault (409 for the vault the same process serves over `/mcp`) |
-| `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup). **Admission-screened on every arm**; on the default arm a diverted save answers **202** with `quarantined: true` and the id the drawer actually landed under on **every** arm, including `dedup_threshold` and external-vault saves, which reported clean until v0.47.0 (§5) |
+| `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup). **Admission-screened on every arm**; on the default arm a diverted save answers **202** with `quarantined: true` and the id the drawer actually landed under on **every** arm, including `dedup_threshold` and external-vault saves, which reported clean before 1.0.0 (§5) |
 | `POST /v1/vaults/{id}/search` | hybrid search (cosine + BM25, optional reranker); declared read-time parameters (`language`, `calendar`, `date_order`, `wing`, `room`, `kind`, `min_trust`, `offset`, `ranked_at`) |
 | `DELETE /v1/vaults/{id}/drawers/{drawer_id}` | delete a drawer (refused for quarantine-pending evidence — ruling on it is `admission allow`/`deny`) |
 | `GET /v1/vaults/{id}/stats` · `.../stats/history` | stats (records, wings, rooms, kg, tunnels, db size, chain head, codebook generations) + sample ring |
@@ -95,7 +95,7 @@ What it means now:
   `GET .../export` is a read here too — the egress chain record it would
   otherwise write is skipped, and the server **warns and serves** rather
   than refusing the export.
-- **The open is a read too** (v0.47.0, ROADMAP R4 — this bullet used to
+- **The open is a read too** (1.0.0, ROADMAP R4 — this bullet used to
   record the opposite as a residual). The connection is
   `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`; no schema is
   created or altered, no `chain_meta` seeded, no anchor fast-forwarded,
@@ -259,7 +259,7 @@ What Undercroft does instead:
   the dedup path reached the raw writer. Both the refresh and the fresh
   insert now go through the same choke point, so declaring a dedup
   threshold changes what a write *collapses*, never what it is allowed to
-  say. **And it reports the verdict now** (v0.47.0, ROADMAP R5): that gap
+  say. **And it reports the verdict now** (1.0.0, ROADMAP R5): that gap
   stood here as "screens but does not yet report" — `save_with_dedup_vec`
   discarded the write's landing, so a diverted dedup save answered 200
   with `quarantined: false` and the aimed-at id, contained but unstated.

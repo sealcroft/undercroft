@@ -59,10 +59,10 @@ Palace Monitor beacon all fire on the same real signal — never synthetically.
 how to confirm, mitigate, fix, and prevent it.
 
 Details are documented in `crates/undercroft-vault/src/lib.rs` and the
-[security model](https://sealcroft.github.io/undercroft/docs/security.html);
+[security model](https://sealcroft.com/undercroft/docs/security.html);
 the formal adversary-class treatment — what each layer defeats and the
 honest non-goals — is the
-[threat-model whitepaper](https://sealcroft.github.io/undercroft/docs/threat-model.html)
+[threat-model whitepaper](https://sealcroft.com/undercroft/docs/threat-model.html)
 (docs/THREAT_MODEL.md).
 
 ## Scope

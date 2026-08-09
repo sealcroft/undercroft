@@ -130,7 +130,7 @@ A route added later is refused until someone deliberately names it. This
 paragraph used to say "only reads (stats, search, export) are served",
 which under-listed the reads and omitted `verify` entirely.
 
-**The open is covered too, since v0.47.0.** This paragraph used to name it
+**The open is covered too, since 1.0.0.** This paragraph used to name it
 as the thing `--read-only` did not cover — opening a store created schema,
 initialised the chain, and ran a rotation reconcile that could promote or
 delete a staged `vault.json.next`, all lazily on the first request against a
