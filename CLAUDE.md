@@ -1738,7 +1738,22 @@ project.*
   **"accepted" is not a resting state**. Nothing broken or half-baked stays a
   gap; if it is genuinely not worth fixing, that is a decision with an
   argument, written down, not a line item that quietly never moves.
-- **A handover** stating what is unmerged, unreleased, unrun and undecided.
+- **A handover, and it is part of the UNIT — not a follow-up.**
+  `.handover/SESSION_START.md` is the prompt a new session is handed: reading
+  order, the state as verified, an index into this file's doctrine, every
+  governance / architecture / doc surface, and what is left. It ships in the
+  same commit as the work it describes, because a handover written after the
+  merge describes a tree nobody reviewed. `.handover/NEXT_SESSION.md` (project
+  state) and `.handover/AUDIT_CONTINUATION.md` (audit state) travel with it.
+  This was learned by getting it wrong: the handover and a stale ROADMAP
+  heading were both left for a follow-up commit after PR #115 merged.
+- **Every ROADMAP entry states its own status in its HEADING**, matching its
+  body. `O2`'s heading read "the site loads three font families from Google"
+  while its own body said CLOSED, and a handover was nearly written around an
+  item that did not exist — the "a heading is the most expensive artifact this
+  project produces" rule, on the file that plans the work. Gated in
+  `tests/battery.sh`'s preflight, host-side beside the line-ending check,
+  because no image carries `ROADMAP.md` so no `cargo test` can read it.
 
 ## Conventions
 

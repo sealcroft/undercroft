@@ -256,7 +256,13 @@ visibility endpoint at all**, so the web UI is the only route. (The local
 `gh` token additionally carries only `gist, read:org, repo, workflow` — no
 `read:packages` — so it cannot even read the package's current visibility.)
 
-### O2 — the site loads three font families from Google
+### O2 — the site loaded three font families from Google — CLOSED 2026-08-09
+*(Heading corrected 2026-08-10: it still read as an open problem while the
+body below said CLOSED. Its siblings carry their status in the heading and
+this one did not, which is the "a heading is the most expensive artifact
+this project produces" trap — found while verifying a handover rather than
+by a gate. Verified against the tree: 20 vendored `.woff2` files, and zero
+references to `fonts.googleapis` in the landing page or the stylesheet.)*
 `website/landing/index.html` head and `website/assets/undercroft.css:6`
 (`@import`) fetch `GFS Didot`, `IBM Plex Mono` and `IBM Plex Sans` from
 `fonts.googleapis.com`, on the landing page **and every docs page**. This does

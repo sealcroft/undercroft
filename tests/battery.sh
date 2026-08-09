@@ -82,6 +82,43 @@ if [ -n "$CRLF_HITS" ]; then
 fi
 echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 
+# ── preflight: a ROADMAP heading must state its own status ──────────────────
+# `CLAUDE.md`: "a heading, a doc claim, a CHANGELOG bullet and a test NAME are
+# not verification — headings here have been wrong repeatedly and are the most
+# expensive artifact this project produces."
+#
+# `O2`'s heading read "the site loads three font families from Google" for a
+# day while its own body said **CLOSED**, so a handover was nearly written
+# around an item that did not exist. Its siblings carry their status in the
+# heading; that one did not, and nothing could say so.
+#
+# Host-side with the line-ending check, for the same reason: no image carries
+# `ROADMAP.md`, so a `cargo test` cannot read it. Cheap, and it makes "do not
+# forget" mechanical instead of remembered — which is this project's whole
+# position on inventories versus prose.
+echo "═══ preflight: ROADMAP headings ═══"
+ROADMAP_DRIFT=$(awk '
+  /^### [A-Z][0-9]+/ {
+    if (sec != "" && body ~ /CLOSED/ && sec !~ /CLOSED/) print sec
+    sec = $0; body = ""; next
+  }
+  /^## / { if (sec != "" && body ~ /CLOSED/ && sec !~ /CLOSED/) print sec; sec = ""; body = "" }
+  { if (sec != "") body = body "
+" $0 }
+  END { if (sec != "" && body ~ /CLOSED/ && sec !~ /CLOSED/) print sec }
+' ROADMAP.md)
+if [ -n "$ROADMAP_DRIFT" ]; then
+  echo "FAIL  these ROADMAP entries say CLOSED in the body and not in the heading."
+  echo "      A reader skims headings; one that contradicts its own section is"
+  echo "      how an item that does not exist ends up in a handover:"
+  printf '        %s
+' "$ROADMAP_DRIFT"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    every closed ROADMAP entry says so in its heading"
+
 for suite in "${SUITES[@]}"; do
   # `tests/e2e-backends.sh` asserts exact record counts and therefore assumes
   # FRESH backends; a second run against warm volumes flakes. Documented in
