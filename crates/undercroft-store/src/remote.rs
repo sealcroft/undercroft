@@ -166,12 +166,26 @@ impl PalaceStore {
         let now = time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 now");
-        let content = match plaintext {
-            PlaintextPush::Allow => "plaintext",
-            PlaintextPush::Refuse => "sealed",
+        // Derived from what the vault IS, never from what the caller was
+        // ALLOWED to do. `PlaintextPush::Allow` is a permission, and nothing
+        // restricts it to hmac-only vaults — so reading the flag recorded
+        // "plaintext" for a sealed vault pushed with `--allow-plaintext`,
+        // and the bench harness passes `Allow` unconditionally. The CLI's
+        // own stdout on the same push already reads the level; two
+        // statements about one egress from two different inputs, one line
+        // apart in the call stack, is the drift this record exists to
+        // prevent. The declaration is bound separately: what left, and
+        // what the operator authorised, are different facts.
+        let content = match self.vault.level() {
+            undercroft_vault::SecurityLevel::HmacOnly => "plaintext",
+            _ => "sealed",
+        };
+        let declared = match plaintext {
+            PlaintextPush::Allow => "plaintext-allowed",
+            PlaintextPush::Refuse => "sealed-only",
         };
         let canonical = format!(
-            "egress\u{1f}index-push\u{1f}{backend}\u{1f}{collection}\u{1f}{pushed}\u{1f}{}\u{1f}{content}\u{1f}{now}",
+            "egress\u{1f}index-push\u{1f}{backend}\u{1f}{collection}\u{1f}{pushed}\u{1f}{}\u{1f}{content}\u{1f}{declared}\u{1f}{now}",
             self.embedder.model_name(),
         );
         let tag = self.vault.tag(canonical.as_bytes());

@@ -29,6 +29,59 @@ read-only posture; a non-constant-time bearer comparison. Each is described
 with its evidence and its gate in CHANGELOG under "the drift audit that gated
 the merge".
 
+**D9-D14 - the RE-AUDIT of the fixed tree, 2026-08-09.** The seven
+dimensions were re-run against the D1-D8 fixes, each auditor also asked to
+check adversarially whether the fix closed its drift and whether it
+introduced one. **It found four defects in the fix round itself**, which is
+the finding that matters more than any single item:
+
+- `vault_err` was never given the integrity class, so the fix's own headline
+  case - a manifest edited offline, the fixture every `/v1` tamper test uses
+  - still answered 409 unclassed and the fleet's `ops verify` still exited 1.
+  `integrity_verdict` matches a BARE `VaultError` as well as a wrapped one;
+  only the wrapped arm was mirrored. FIXED.
+- `audit_index_push` derived its plaintext field from the caller's PERMISSION
+  flag rather than the vault's level, so a sealed vault pushed with
+  `--allow-plaintext` chain-recorded "plaintext". The CLI's own stdout on the
+  same push reads the level. FIXED; the declaration is bound separately.
+- The trust-floor widening empties `recent` whenever the floor is above
+  `standard` and no wing is yet assigned that class - an ordinary state - and
+  `wake_up` then said "Palace is empty" over an intact corpus. An exclusion
+  nobody can see is the silence LABELS.md forbids. FIXED with a
+  `trust_floor()` accessor and honest messages on CLI and MCP.
+- The landing page's test count was set to 660 by the same commit that added
+  four tests. FIXED to 664 compiled / 660 run.
+
+Also found and FIXED: `dedup`'s survivor rewrite was on the bare `upsert`
+(reported in the FIRST audit and omitted from the eight by mistake) - a
+diverted survivor kept its old occurrences while the duplicates were deleted
+anyway and the report claimed `dates_kept` for dates never written; it now
+screens, skips the deletes for that group, and reports `quarantined`.
+`HAND_PROJECTED` gained the `PalaceStats` x `/v1` entry the doctrine
+requires.
+
+**Recorded, NOT fixed** - each needs its own unit and none is a boundary:
+the remote path's quarantine fence decides inclusion off the CLEAR mirror
+column (A28 inverted; the trust leg is correct); `UNDERCROFT_ORCH_ENGINE_CA`
+is resolved per outbound call rather than at startup, so a bad pin binds the
+port and 502s per request, and a policy refusal renders as "engine is down"
+on the health surface; a cleartext instance URL is accepted at registration
+and refused at request time; `undercroft_chain_commits_total` over-counts in
+a two-handle `serve-http` because the record delta comes from the handle's
+own stale manifest baseline; the two at-rest migrations (A10, U12) are
+whole-vault mutations with no chain record, which is the hole A19 closed for
+rotation; `forget` attests a destruction the remote mirror never hears about
+(`VectorIndex::delete` has zero callers); a partially-successful `index push`
+records zero rather than what left; `RefineReport` is hand-projected on both
+surfaces and is structurally outside `HAND_PROJECTED`'s reach; that gate's
+4000-char window can pass on a neighbouring handler's text; MCP returns a
+verify verdict as prose inside `isError: false`; `migrate` has no exit-code
+doctrine; `WRITE_TOOLS` fails OPEN behind a name heuristic. Docs still
+stating superseded claims: the egress record (THREAT_MODEL, AGENTS,
+architecture, CLAUDE), the trust floor's reach, `serve-mcp --read-only`,
+`RefineReport.quarantined`, the new CA variable, and MULTI_TENANCY's framing
+of the engine hop as advice.
+
 **Still open from the docs-vs-code dimension** (found, verified in part, not
 yet fixed — recorded here rather than left in a transcript): `undercroft-net`
 is absent from `README.md`'s crate map and from `docs/architecture.md`; ~23

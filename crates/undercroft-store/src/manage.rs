@@ -84,6 +84,14 @@ pub struct DedupReport {
     /// than deleted with their rows. Reported because it is the difference
     /// between collapsing text and losing history.
     pub dates_kept: u64,
+    /// Groups whose SURVIVOR rewrite was diverted by the admission screen.
+    ///
+    /// Nothing was deleted for these: the duplicates still hold the only
+    /// copies of the occurrence dates the survivor did not receive, so
+    /// removing them would destroy history to collapse text that was never
+    /// collapsed. Reported because the alternative is a report claiming
+    /// `dates_kept` for dates that were never written.
+    pub quarantined: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -910,6 +918,7 @@ impl PalaceStore {
             .collect::<Result<_, _>>()?;
         let mut removed = Vec::new();
         let mut dates_kept = 0u64;
+        let mut quarantined = 0u64;
         for (fp, _) in &groups {
             let ids: Vec<String> = self
                 .conn
@@ -929,18 +938,44 @@ impl PalaceStore {
                 if let (Some(keep), Some(gone)) = (survivor.as_mut(), self.get(id)?) {
                     keep.absorb_occurrences_of(&gone);
                 }
-                removed.push(id.clone());
             }
+            let mut diverted = false;
             if let (Some(keep), Some(before)) = (survivor.as_ref(), before) {
                 let gained = keep.all_occurrences().len().saturating_sub(before);
-                dates_kept += gained as u64;
                 if apply && gained > 0 {
                     // Rewrite the survivor before removing the rows it now
                     // speaks for, so a crash between the two leaves the dates
                     // recorded rather than lost.
-                    self.upsert(keep)?;
+                    //
+                    // **`upsert_screened`, and the verdict decides whether
+                    // the deletes run.** This was the bare `upsert`, which
+                    // returns "was the id new" and discards the landing —
+                    // and when the screen diverts, `write_drawer` writes
+                    // ONLY the quarantine copy and leaves the aimed-at row
+                    // untouched. So the survivor kept its old occurrences,
+                    // the duplicates were deleted anyway, and the report
+                    // claimed `dates_kept` for dates that were never
+                    // written: the exact invariant the comment above states,
+                    // broken by the line under it. Reachable without any
+                    // poisoned content — an operator-`allow`ed drawer is
+                    // re-screened here and re-diverted, and a declared rate
+                    // screen counts a burst of duplicates from one agent,
+                    // which is the corpus `dedup --apply` is run against.
+                    diverted = self.upsert_screened(keep)?.quarantined;
+                }
+                if !diverted {
+                    dates_kept += gained as u64;
                 }
             }
+            if diverted {
+                // The duplicates still hold the only copies of the
+                // occurrence dates the survivor did not receive. Deleting
+                // them now would destroy history to collapse text that was
+                // never collapsed.
+                quarantined += 1;
+                continue;
+            }
+            removed.extend(drop_ids.iter().cloned());
             if apply {
                 for id in drop_ids {
                     self.delete_drawer(id)?;
@@ -952,6 +987,7 @@ impl PalaceStore {
             removed,
             applied: apply,
             dates_kept,
+            quarantined,
         })
     }
 

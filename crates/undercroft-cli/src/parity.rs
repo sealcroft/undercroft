@@ -160,6 +160,17 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
     // live omissions on the CLI (`chain_head`, `read_only`), which is what
     // an inventory nobody counts against looks like from the inside.
     ("manage.rs", "PalaceStats", "main.rs", "Command::Stats"),
+    // And `/v1`, which hand-projects it too and says so in its own
+    // comment. The first version of this entry added ONE line for a
+    // struct the same commit described as hand-projected on TWO
+    // surfaces — the rule three lines up spells out why that is not
+    // enough.
+    (
+        "manage.rs",
+        "PalaceStats",
+        "tenant.rs",
+        "fn stats(&mut self",
+    ),
     // MCP serializes `DedupReport` whole and the CLI hand-projects it, so
     // `dates_kept` — "the difference between collapsing text and losing
     // history", by its own doc comment — reached one surface only. `/v1`

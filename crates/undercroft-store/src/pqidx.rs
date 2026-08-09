@@ -404,6 +404,19 @@ impl PalaceStore {
     /// Declare the vault-level trust floor programmatically (the env
     /// `UNDERCROFT_TRUST_FLOOR` resolved at open is the deployment's way).
     /// `None` = no floor. An invalid class is rejected, never coerced.
+    /// The vault's declared trust floor, if any.
+    ///
+    /// A surface needs this to tell "this vault is empty" from "nothing in
+    /// it meets the floor you declared". Since the floor began governing
+    /// `recent` and `list_drawers`, an `Allow([])` clause -- a floor above
+    /// `standard` with no wing yet assigned that class, which is an ordinary
+    /// state -- empties those reads, and `wake_up` said "Palace is empty"
+    /// over an intact corpus. An exclusion nobody can see is the silence
+    /// this project's own label doctrine forbids.
+    pub fn trust_floor(&self) -> Option<&str> {
+        self.trust_floor.as_deref()
+    }
+
     pub fn set_trust_floor(&mut self, floor: Option<String>) -> Result<(), StoreError> {
         if let Some(f) = floor.as_deref() {
             undercroft_core::validate_trust(f).map_err(|e| StoreError::Invalid(e.to_string()))?;

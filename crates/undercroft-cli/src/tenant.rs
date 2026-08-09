@@ -2386,7 +2386,22 @@ fn vault_err(e: undercroft_vault::VaultError) -> RestError {
         V::BadName(_) => 400,
         _ => 500,
     };
-    RestError::new(code, e.to_string())
+    let err = RestError::new(code, e.to_string());
+    // **Classed here too, and this arm is the one that matters most.**
+    // `integrity_verdict` on the CLI walks the error chain and matches a
+    // BARE `VaultError` as well as a wrapped `StoreError::Vault(...)`; the
+    // first version of the class field mirrored only the wrapped arm. But
+    // `store_for` unlocks through THIS function, and an unlock fails before
+    // anything reaches `store_err` — so a manifest edited offline, which is
+    // the fixture every `/v1` tamper test in this tree uses, answered 409
+    // with no class, and the fleet's `ops … verify` exited 1 while the
+    // engine's own `verify` exited 2 on the same bytes. Two surfaces
+    // stating different doctrines about one vault is the thing the class
+    // exists to prevent.
+    match &e {
+        V::ManifestTampered | V::CorruptManifest(_) => err.integrity(),
+        _ => err,
+    }
 }
 
 fn store_err(e: StoreError) -> RestError {

@@ -139,7 +139,9 @@ const EXIT_INTEGRITY: u8 = 2;
 /// Classify an engine reply for the scripted operator door.
 ///
 /// Two shapes carry an integrity verdict and neither is the status alone:
-/// a 200 whose body says `"ok": false` (verify, supersessions), and an
+/// a 200 whose body says `"ok": false` (verify — and ONLY verify; the
+/// supersessions route reports `summary.tampered` with no `ok` field, so it
+/// is NOT covered here and is recorded as open), and an
 /// error whose body carries `"class": "integrity"` — which the engine
 /// emits precisely because 409 is also how a co-resident refusal and a
 /// wrong read-only posture answer, and those must not page anyone.

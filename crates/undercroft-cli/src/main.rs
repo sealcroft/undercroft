@@ -1938,7 +1938,20 @@ fn run(cli: Cli) -> Result<()> {
             let store = open_store(&cli, vault)?;
             let recent = store.recent(wing.as_deref(), 15)?;
             if recent.is_empty() {
-                println!("Palace is empty. File memories with: undercroft remember / mine");
+                // "Empty" only when it IS empty. A declared trust floor above
+                // `standard` with no wing yet assigned that class empties
+                // this read entirely, and saying "empty" over an intact
+                // corpus is a false statement the caller cannot see through.
+                match store.trust_floor() {
+                    Some(f) => println!(
+                        "No drawers meet the declared trust floor '{f}' — the palace is NOT \
+                         empty. Assign wing trust with `undercroft trust set`, or lower \
+                         UNDERCROFT_TRUST_FLOOR."
+                    ),
+                    None => {
+                        println!("Palace is empty. File memories with: undercroft remember / mine")
+                    }
+                }
             }
             for d in recent {
                 println!(
@@ -3119,6 +3132,14 @@ fn run(cli: Cli) -> Result<()> {
                 println!(
                     "{} occurrence date(s) absorbed into the surviving drawer(s)",
                     report.dates_kept
+                );
+            }
+            if report.quarantined > 0 {
+                println!(
+                    "{} group(s) LEFT INTACT — the surviving drawer's rewrite tripped the \
+                     admission screen, so nothing was deleted and no dates were absorbed \
+                     for them. Review with `undercroft admission list`.",
+                    report.quarantined
                 );
             }
         }

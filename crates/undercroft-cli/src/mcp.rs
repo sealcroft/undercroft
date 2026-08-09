@@ -268,6 +268,20 @@ impl McpHandler {
 /// expected to have opened the store read-only as well — the flag alone
 /// would leave the open-time writes (embedder migration, read-audit
 /// records) happening on a server that says it does not write.
+/// Why a content read came back with nothing: genuinely empty, or emptied
+/// by a declared trust floor the caller cannot see. Saying "empty" for the
+/// second is a false statement about the vault, and it is the regression
+/// the trust-floor widening introduced: a floor above `standard` with no
+/// wing yet assigned that class empties `recent` entirely.
+fn empty_reason(store: &PalaceStore) -> String {
+    match store.trust_floor() {
+        Some(f) => format!(
+            "no drawers meet the declared trust floor '{f}' - the vault is not empty. \n             Assign wing trust, or lower UNDERCROFT_TRUST_FLOOR."
+        ),
+        None => "palace is empty".into(),
+    }
+}
+
 pub fn serve(store: PalaceStore, read_only: bool) -> Result<()> {
     let mut handler = McpHandler::new(store, read_only);
     let stdin = std::io::stdin();
@@ -642,7 +656,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let wing = args.get("wing").and_then(Value::as_str);
             let recent = store.recent(wing, 15)?;
             if recent.is_empty() {
-                return Ok("palace is empty".into());
+                return Ok(empty_reason(store));
             }
             let mut out = String::from("recent essential memories:\n");
             for d in recent {
@@ -844,7 +858,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
         "undercroft_get_closet_index" => {
             let lines = store.closet_index(opt_str(args, "wing"))?;
             if lines.is_empty() {
-                return Ok("palace is empty".into());
+                return Ok(empty_reason(store));
             }
             Ok(lines.join("\n"))
         }
