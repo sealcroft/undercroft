@@ -168,10 +168,13 @@ release cannot contain.
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
 
-**Status 2026-08-10: O1, O2, O3 and O4 are CLOSED, each with an executed gate
-(below). O5 is RE-OPENED — its blocker turned out not to apply. What remains
-open is O6 alone — a click in the GitHub web UI that no REST endpoint
-exposes, so no amount of engineering closes it from here.**
+**Status 2026-08-10: O1, O2, O3, O4 and O5 are CLOSED** — O1 with an executed
+gate, O5 by maintainer's ruling (the components keep their names; the only
+constraint is that nothing carries the former project name or `MemPalace`,
+and that was tested, not assumed). **What remains open is O6** — a click in
+the GitHub web UI that no REST endpoint exposes, so no amount of engineering
+closes it from here — **and O7**, split out of O5 so the ruling is not
+mistaken for having closed a defect it does not touch.
 
 **D1–D8 — the pre-merge drift audit, CLOSED 2026-08-09.** The
 seven-dimension audit this file's own conventions require before a release
@@ -439,7 +442,42 @@ Found by the 8-agent audit, none caused by the rename. All five closed:
   checks the site on pull requests — `pages.yml` only fires on `main`, so
   until now nothing built the book before it was already published.
 
-### O5 — terminology decision, RE-OPENED 2026-08-09: its premise was wrong
+### O5 — terminology decision, CLOSED 2026-08-10: `palace` stays
+**Maintainer's ruling, 2026-08-10: the architectural components keep their
+names. The only naming constraint is that nothing is called by the former
+project name or by `MemPalace`.** `palace` is neither — it is an ordinary
+noun from the memory-palace metaphor, not a borrowed brand, and no rename is
+owed. This closes the item as a DECISION with an argument, which is the only
+way "accepted" is a resting state in this file.
+
+**The condition was tested rather than assumed**, because it is testable:
+
+- **The former name** — `.handover/verify-no-trace.py` over all 367 tracked
+  files reports **0** across all six classes (Latin, truncated root, Greek,
+  base64, mythic identity, inside-a-certificate). The scanner was itself
+  probed first: every pattern sourced out of the file fires on a
+  known-positive and none fires on clean text (`mnemonic` is correctly
+  excluded by the `(?!nic)` lookahead), so the zero is a working scanner
+  reporting a clean tree rather than a broken one reporting nothing — the
+  distinction this project has paid for twice.
+- **`MemPalace`** — present, and correctly so: `NOTICE`'s MIT heritage
+  attribution, `docs/PARITY.md`, and code comments citing what was ported.
+  Licence-adjacent; do not remove.
+
+**What this ruling does NOT settle**, stated plainly rather than absorbed
+into the closure: `palace` still names two different levels of the hierarchy
+— `Vault::db_path()` joins `palace.db` onto ONE vault's directory
+(`undercroft-vault/src/lib.rs:217`), while "the palace" elsewhere means the
+whole installation (`keys.rs:60` "the palace master key"; `main.rs:68`
+"Initialize the palace"). That is a coherence defect **independent of any
+rename** and it survives this decision untouched. It is cosmetic — internal
+vocabulary, no wire, no crypto domain, no id recipe — and it is recorded here
+so it is not mistaken for something the ruling closed. Filed as **O7** below.
+
+The measurement that informed the ruling is kept for the record.
+
+---
+
 The recorded argument for keeping `palace` rested on two data hazards: a bare
 `palace.db` rename presents as a false integrity verdict (`DatabaseMissing`,
 409 / exit 2) on every existing vault, and `"diary"` is a room-name literal
@@ -483,12 +521,11 @@ vault's directory — while "palace" elsewhere names the whole installation
 The term is already doing duty at two levels of the hierarchy, which is a
 defect in its own right and independent of the rename.
 
-**The constraint that actually remains is vocabulary, not data.** The
-obvious replacement is `vault`, and `vault` is already the name of a
-different concept — the isolation and crypto unit — so reusing it would be
-worse than the status quo. **Blocked on a target word, which is the
-maintainer's call**, not on risk. `PalaceStore`/`PalaceStats` remain free
-moves whatever is chosen.
+**The constraint that actually remained was vocabulary, not data.** The
+obvious replacement was `vault`, and `vault` already names a different
+concept — the isolation and crypto unit — so reusing it would have been worse
+than the status quo. That search is over: the ruling above is that no target
+word is needed, because no rename is owed.
 
 ### O6 — brand assets need two manual uploads
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only
@@ -509,6 +546,42 @@ upload itself remains a click.
 - Repo social preview → <https://github.com/sealcroft/undercroft/settings> →
   Social preview → Edit → `assets/brand/undercroft-social-1280x640.png`.
 
+### O7 — `palace` names two levels of the hierarchy
+Split out of O5 on 2026-08-10 so the ruling that closed O5 (the components
+keep their names) is not mistaken for having closed this too. **It is a
+separate defect and the ruling does not touch it**: the objection here is not
+*which* word, it is that ONE word denotes two different things.
+
+- `Vault::db_path()` joins `palace.db` onto a **single vault's** directory —
+  `crates/undercroft-vault/src/lib.rs:217`.
+- Everywhere else "the palace" is the **whole installation**: the palace
+  master key (`crates/undercroft-vault/src/keys.rs:60`), `Initialize the
+  palace` (`crates/undercroft-cli/src/main.rs:68`), `Mine a directory into
+  the palace`, `Export the palace`.
+
+So a reader is told the palace contains vaults, and also that each vault
+contains a palace. That is confusing on its own terms and would still be
+confusing under any replacement noun.
+
+**Scope — this is cosmetic, and the boundary is what makes it cheap.** It
+touches no wire format, no serde field, no crypto domain separation, no
+audit-chain namespace and no id recipe (all four re-checked under O5 above).
+The per-vault filename is the only on-disk artifact, and renaming a file
+that an existing vault already carries presents as `DatabaseMissing` —
+409 / exit 2, an integrity verdict — so it is **not** a free move on a
+populated vault even though the vocabulary change is trivial.
+
+**Shape of a fix:** rename the per-vault artifact, not the installation-level
+noun — the installation sense is the older and more widely written one. A
+migration would have to open the vault, rename within the same directory, and
+leave the anchor untouched.
+
+**Gate:** whatever lands, a vault created before the change must still open
+without an integrity verdict, and `verify` must stay green across it.
+
+**Not scheduled.** Filed because a gap is a gap; if it is judged not worth
+doing, that is a decision with an argument and belongs here in writing rather
+than as an item that quietly never moves.
 
 ---
 
