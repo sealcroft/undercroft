@@ -1069,7 +1069,12 @@ docker build -t undercroft .           # runtime image
 docker compose up -d embeddings embeddings-tls
 docker compose run --rm embed-pull    # one-time model fetch into a volume
 #   then run cli/bench with (project-prefixed volume name — a bare
-#   undercroft-embed-tls mounts a fresh empty volume silently):
+#   undercroft-embed-tls mounts a fresh empty volume silently. The
+#   `undercroft_` prefix is TRUE because every compose file now DECLARES
+#   `name:`; until 2026-08-10 none did, Compose derived the project from the
+#   clone's DIRECTORY, and on the maintainer's machine this line named a
+#   volume that did not exist — the silent-empty-mount failure the sentence
+#   before it warns about):
 #     -v undercroft_undercroft-embed-tls:/tls:ro
 #     UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=https://embeddings-tls
 #     UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt
@@ -1131,6 +1136,14 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
+**`bash tests/battery.sh --preflight-only` runs the five host-side preflights
+and no suite**, which is what CI invokes. The script is the one thing that
+runs on the host rather than in a container, and it has to be: it *drives*
+Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
+`git ls-files --eol` over the WHOLE tree — none of which any image carries.
+Everything a preflight cannot do with git, awk and grep belongs in a
+container it launches, not in a host interpreter: a gate that needs Python on
+the host is a gate that does not run on the next machine.
 
 **A SCRIPTED EDIT IS A CHANGE YOU HAVE NOT READ.** Four defects in one
 session, all the same root — a `python`/`sed` edit that matched its anchor and
@@ -1213,17 +1226,35 @@ images either; mount the repo instead:
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
-**The seven compose suites run as a `fail-fast: false` MATRIX, one job each**,
-named from the same strings `tests/battery.sh` uses so CI and a local battery
-cannot drift into different sets. Two properties are load-bearing: the legs
-are independent, so wall-clock is the slowest suite rather than their sum;
-and **every suite runs even when one fails**, where the old serial job
-stopped at the first failure and hid the state of the five behind it — a fix
-then landed blind. The verdict is an aggregate job kept under the name
-`test`, because that is what a required status check on `main` resolves
-against: renaming the job that carries the verdict would silently un-gate the
-branch, which is the same class of defect as an alert on a series nobody
-exports.
+**Seven compose suites run as a `fail-fast: false` MATRIX, one job each.** Two
+properties are load-bearing: the legs are independent, so wall-clock is the
+slowest suite rather than their sum; and **every suite runs even when one
+fails**, where the old serial job stopped at the first failure and hid the
+state of the five behind it — a fix then landed blind.
+**The verdict is the `verdict` job, published as the context `CI verdict`, and
+that is the one context a required status check is configured against.** It
+`needs:` every job and inspects every entry of `toJSON(needs)`, so `skipped`
+and `cancelled` fail it too; it asserts its own upstream COUNT, so a narrowed
+`needs:` fails closed; and `tests/battery.sh`'s CI-inventory preflight counts
+the workflow's jobs against that `needs:` in both directions, because a
+workflow cannot enumerate its own jobs and the other direction — a new job
+nobody wired in — is invisible from inside it.
+**Three claims that stood here until 2026-08-10 were false, and the shape of
+the error is the lesson.** (1) *"the aggregate is kept under the name `test`
+because that is what a required status check resolves against"* — **no repo
+had `required_status_checks` at all** (verified against the API on both), so
+the rule protected a configuration that did not exist, and the published
+context is a job's `name`, which was `Suites (aggregate)` and never `test`,
+while the matrix leg published one literally called `test`. (2) *"needs:
+suites"* left five jobs outside the verdict. (3) *"named from the same strings
+`tests/battery.sh` uses so CI and a local battery cannot drift into different
+sets"* — measured, the sets differ in BOTH directions and always have: the
+matrix carries `onnx-build` and the battery does not, the battery carries
+`lint` and `site` which CI runs as their own jobs, and `ort-build` is a
+compose service **run by neither** while `release.yml` ships an `ort` binary
+for five targets. Each survived because it was asserted in prose beside the
+thing it described and nothing counted it — *a comment is not a gate*, which
+is this file's own first rule applied to this file.
 Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 (host bind-mounted `target/` SIGBUSes under memory pressure).
 
@@ -1503,6 +1534,21 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   4. **The identity without the spelling.** A mythological epithet named the
      old project precisely and contained none of its letters. No string search
      of any kind could see it.
+  5. **The name that is in no file at all** (found 2026-08-10, and it is the
+     one that had branded every build artifact for two days). `docker-compose
+     .yml` declared no `name:` key, so Compose derived the project name from
+     the **DIRECTORY the clone sits in** — still the former name — and
+     prefixed every container, image, volume and network with it:
+     `<former>-site`, `<former>-lint`, `<former>_default`. It appears in zero
+     tracked bytes, so a content scan of all 367 files reports six clean
+     classes and is *correct*, and useless. It also silently falsified a doc:
+     this file's own volume-mount recipe named an `undercroft_`-prefixed
+     volume that did not exist on the maintainer's machine, one sentence
+     after warning that a wrong volume name mounts a fresh empty volume with
+     no error. **A derived identifier is a name too.** Ask what the tooling
+     computes from the environment — directory names, hostnames, image tags,
+     registry paths, cache keys — not only what the files say. Gated by the
+     compose-project-name preflight in `tests/battery.sh`, counted both ways.
   One layer down, the same shape: **17 historical PDF blobs passed a clean
   `grep`** while still carrying the name inside Flate-compressed content
   streams — invisible to a byte scan, plainly visible to git's own
@@ -1510,9 +1556,14 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   found the Greek by *looking at the rendered page*, which is the check nobody
   had run.
   So: any claim that a string is gone must **decompress rather than grep**,
-  must cover **non-Latin scripts and truncated roots**, and must hunt the
-  **identity** as well as the spelling — six independent classes, failing on
-  any hit. The general rule outlives this rename: **a negative result is only
+  must cover **non-Latin scripts and truncated roots**, must hunt the
+  **identity** as well as the spelling, and must ask what the TOOLING DERIVES
+  from the environment. `.handover/verify-no-trace.py` covers the six classes
+  a file-content scan can reach and fails on any hit; class 5 above is
+  **outside its reach by construction** and needs a different mechanism —
+  which is the compose preflight, not a wider regex. Do not "extend" the
+  verifier to cover it; extend the QUESTION.
+  The general rule outlives this rename: **a negative result is only
   as good as the widest question you thought to ask, so "none found" is a
   claim about the method, never about the tree.** Note that writing this
   lesson down is itself the trap — the first draft quoted every string it

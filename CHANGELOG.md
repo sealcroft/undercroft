@@ -2,6 +2,129 @@
 
 ## Unreleased — 1.1.0
 
+### nothing gated a pull request, and the comment saying otherwise was the reason
+
+`tests/battery.sh` was invoked by **no CI workflow** — `ci.yml` named it only
+inside comments — so all four host-side preflights gated a local run and
+nothing on a pull request. Every gate the round-four fix queue proposes is a
+preflight, so all of them would have bought nothing.
+
+Three defects compounded it, and they are one shape: **a claim about CI,
+asserted in a comment beside the thing it described, that nothing counted.**
+
+* The aggregate carried a comment saying it was *"kept under the name `test`
+  because that is what any required status check on `main` is configured
+  against"*. **No repo had `required_status_checks` at all** — measured
+  against the API on both `sealcroft/undercroft` and
+  `sealcroft/sealcroft.github.io`. The rule protected a configuration that did
+  not exist. Worse, the published status context is a job's `name`, not its
+  id, so the context was `Suites (aggregate)` and never `test` — while the
+  matrix leg published one **literally called `test`**, for one cargo suite
+  out of seven. The obvious required check would have bound to that.
+* `needs: suites` left `lint`, `audit`, `trivy-fs`, `site` and `trivy-image`
+  outside the verdict — five jobs free to go red under a green aggregate.
+* The matrix comment claimed its names are *"the same strings
+  `tests/battery.sh` uses so CI and a local battery cannot drift into
+  different sets"*. The sets differ in **both** directions and always have.
+
+**Fixed.** A `preflight` job runs the new `bash tests/battery.sh
+--preflight-only`. The aggregate is the `verdict` job, published as **`CI
+verdict`**, a context no leg can collide with; matrix legs are `suite
+(<name>)`. It `needs:` every job and inspects **every entry** of
+`toJSON(needs)` instead of naming the ones it checks, so `skipped` and
+`cancelled` fail it too, and it asserts its upstream COUNT so a narrowed
+`needs:` fails closed.
+
+**Gate, and it is deliberately two mechanisms because one cannot see both
+directions.** A workflow cannot enumerate its own jobs, so the count-assert
+above closes only narrowing; a new job nobody wired in is invisible from
+inside it. `tests/battery.sh` gained a fifth preflight that reads `ci.yml` and
+counts its jobs against the verdict's `needs:` **both ways**. Counterfactuals
+executed in both (a job dropped from `needs:`; a `needs:` entry that is no
+job), the file restored byte-identically and re-verified after each. The
+verdict step itself was driven through four synthetic states — 7 green, one
+`failure`, one `skipped`, a narrowed 6 — with the script **extracted out of
+`ci.yml`** and run in a container, never a retyped copy, per the lesson that a
+counterfactual must exercise the artifact.
+
+**The premise probe earned itself on first run:** job ids are keys at two
+spaces, and so are `push:` and `pull_request:` under `on:` — an unanchored
+scan reports two jobs that do not exist, then "finds" them missing from
+`needs:`.
+
+**Still open, and it cannot be done from the repo:** the required status check
+must be configured to `CI verdict`, and this workflow has never run, so no
+context exists to bind to yet. Filed as ROADMAP **O9** with the gate: verified
+by observation on a real pull request, not by reading the workflow. The suite
+sets are corrected in prose and **not** reconciled — which set is canonical is
+a decision about CI cost, filed rather than made silently.
+
+**PATCH.** No documented contract changes. Status contexts move, which matters
+only to a configuration that does not exist yet.
+
+### the compose project name was derived from the clone's directory
+
+Every container, image, volume and network this repo built carried the
+project's **former name**, because no compose file declared a `name:` key and
+Compose falls back to the directory the clone sits in. Observed in battery
+logs as `<former>-site`, `<former>-lint-run-*`, `<former>_default`,
+`<former>_undercroft-backends-tls`.
+
+**The trace verifier could not have found it, and was right not to.**
+`.handover/verify-no-trace.py` reports 0 hits across six classes over 367
+tracked files. The name was in **no file**: it was computed at runtime from
+the environment. CLAUDE.md now carries this as a fifth class — *a derived
+identifier is a name too* — and states explicitly that the verifier cannot be
+widened to cover it, because the fix is a different question, not a wider
+regex.
+
+**It had already falsified a document.** CLAUDE.md's volume-mount recipe named
+`undercroft_undercroft-embed-tls`, a volume that did not exist on a
+`<former>_`-prefixed machine — one sentence after warning that a wrong volume
+name mounts a fresh empty volume silently. The doc handed you the failure it
+was warning about. Declaring the name makes the recipe true.
+
+Fixed by declaring `name:` in all four compose files — `undercroft`,
+`undercroft-server`, `undercroft-observability`, `undercroft-bench-vs`.
+Distinct on purpose: one shared project would let `docker compose down -v` in
+the repo destroy a running team server's or observability stack's volumes.
+
+**Gate:** a `tests/battery.sh` preflight, counted BOTH ways — a compose file
+with no `name:` fails, and a declared name outside the expected set fails, so
+a future file cannot quietly pick a colliding or former-name project. It
+carries a premise probe that refuses to pass on fewer than three compose
+files, because a glob matching nothing reports what a clean tree reports.
+Counterfactuals executed in both directions. **The gate found
+`deploy/bench-vs/docker-compose.yml` immediately — a file the hand
+enumeration written minutes earlier had missed**, which is the case for an
+inventory over a listed set, made against its own author.
+
+**Residual, stated rather than implied:** this preflight sits in
+`tests/battery.sh`, which **no CI workflow invokes** — `ci.yml` names it only
+in comments. It gates a local battery and nothing on a pull request, exactly
+like the three preflights beside it. Filed as ROADMAP **O9** with the
+aggregate-job and required-status-check defects it travels with.
+
+**The comment written to explain all this put the former name back into a
+tracked file.** `docker-compose.yml`'s new note quoted the prefix while
+explaining that quoting it is how the name returns — the trap CLAUDE.md
+records against itself (*describe the class, never the token*), recurring
+inside the change that documents the class. `.handover/verify-no-trace.py`
+exited 1 naming two classes on one line; the full battery was green across it,
+because **nothing in the repository runs that verifier.** It is run by hand,
+it lives in a gitignored directory a fresh clone does not carry, and no suite,
+preflight or workflow invokes it. The comment now describes the class, and the
+missing gate is filed as ROADMAP **O10** with the two constraints that decide
+its design: a tracked scanner scans itself, so its patterns must be
+needle-split rather than path-excluded; and it needs a premise probe, because
+it has only ever been probed by hand, in a session, which is a property of
+that session and not of the artifact.
+
+This is a **PATCH**: no documented contract changes, no surface is renamed or
+removed, and no value that was accepted stops being accepted. Volume names do
+move, so anything holding data under the old prefix is orphaned — on the
+maintainer's machine those were disposable test volumes, purged deliberately.
+
 ### correction: `a60b342`'s message claims the handover shipped; it did not
 
 **And the gate that commit added never worked.** `a60b342`'s ROADMAP-heading

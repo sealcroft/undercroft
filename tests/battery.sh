@@ -30,7 +30,26 @@ cd "$(dirname "$0")/.."
 # Order matters: the cheap suites that fail fastest come first, so a broken
 # tree is reported in a minute instead of forty.
 ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
-SUITES=("${@:-}")
+
+# `--preflight-only` exists so CI can run the host-side preflights without
+# Docker. They are host-side because no image carries `ROADMAP.md`, the
+# compose files or `.gitattributes`' whole scope — and until this flag existed
+# they therefore ran NOWHERE on a pull request, since `ci.yml` named this
+# script only inside comments. A gate that runs only where its author
+# remembers to run it is a gate the next person does not have.
+PREFLIGHT_ONLY=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --preflight-only) PREFLIGHT_ONLY=1 ;;
+    # Exit 1, never 2. Exit 2 is this project's integrity verdict on every
+    # command; a mistyped flag borrowing it is the defect T11 closed in the
+    # binaries, and it would be no less wrong here.
+    -*) echo "unknown option: $a" >&2; exit 1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+SUITES=("${ARGS[@]:-}")
 if [ -z "${SUITES[0]:-}" ]; then SUITES=("${ALL[@]}"); fi
 
 declare -a NAMES=() CODES=()
@@ -133,6 +152,53 @@ if [ -n "$ROADMAP_DRIFT" ]; then
 fi
 echo "ok    every closed ROADMAP entry says so in its heading"
 
+# ── preflight: every compose file DECLARES its project name ────────────────
+# Undeclared, Compose derives the project from the DIRECTORY, so every
+# container, image, volume and network inherits whatever the clone is called.
+# On the maintainer's machine that was the project's FORMER name, which
+# branded every build artifact while appearing in NO tracked file — invisible
+# to `.handover/verify-no-trace.py`, which scans file CONTENTS. That is the
+# seventh class of name occurrence and the reason this check reads the FILES
+# rather than trusting the verifier's zero.
+#
+# Host-side with its siblings: no image carries the compose files, so no
+# `cargo test` can read them. Counted BOTH ways — a compose file with no
+# `name:` fails, and a declared name that is not in the expected set fails
+# too, so a future file cannot quietly pick a colliding project.
+echo "═══ preflight: compose project names ═══"
+COMPOSE_FILES=$(git ls-files | grep -E '(^|/)docker-compose[a-z.-]*\.ya?ml$' || true)
+# PREMISE PROBE. A glob that matches nothing reports exactly what a clean tree
+# reports. This check is worthless unless it found compose files to examine.
+COMPOSE_N=$(printf '%s\n' "$COMPOSE_FILES" | grep -c . || true)
+if [ "${COMPOSE_N:-0}" -lt 3 ]; then
+  echo "FAIL  the compose scan found $COMPOSE_N file(s); at least 3 are tracked."
+  echo "      The scanner is broken, not the tree — a checker that cannot run"
+  echo "      reports exactly what a clean tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+COMPOSE_BAD=""
+for f in $COMPOSE_FILES; do
+  # `name:` at column 0 — a `name:` nested under a service is a different key.
+  n=$(grep -m1 '^name:[[:space:]]*' "$f" | sed 's/^name:[[:space:]]*//' | tr -d '\r')
+  case "$n" in
+    undercroft|undercroft-server|undercroft-observability|undercroft-bench-vs) ;;
+    "") COMPOSE_BAD="$COMPOSE_BAD\n        $f — declares no project name" ;;
+    *)  COMPOSE_BAD="$COMPOSE_BAD\n        $f — declares unexpected name '$n'" ;;
+  esac
+done
+if [ -n "$COMPOSE_BAD" ]; then
+  echo "FAIL  every compose file must DECLARE its project name, or Compose"
+  echo "      derives it from the directory and brands every artifact with"
+  echo "      whatever the clone is called:"
+  printf "$COMPOSE_BAD\n"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    all $COMPOSE_N compose files declare a project name"
+
 # ── preflight: the handover has not drifted ────────────────────────────────
 # `.handover/` is gitignored on purpose and MUST stay so — 1.6 GB of working
 # material including the 269 MB pre-rename bundle. It is still a governance
@@ -148,6 +214,11 @@ echo "ok    every closed ROADMAP entry says so in its heading"
 # It fires only when the working tree is CLEAN, i.e. at the moment you would
 # be finishing. During work the tree is dirty and a lagging handover is
 # normal, so this stays quiet instead of crying wolf until it is ignored.
+#
+# This comment sat fifty lines above its own code for the length of one
+# session: the compose block was inserted BETWEEN the comment and the `echo`
+# it describes, which is CLAUDE.md's "read what is ADJACENT to the anchor"
+# hazard landing on the very file that mechanises the other hazards.
 echo "═══ preflight: handover freshness ═══"
 HANDOVER_DIR=".handover"
 HANDOVER_FILES="SESSION_START.md NEXT_SESSION.md AUDIT_CONTINUATION.md"
@@ -189,6 +260,85 @@ else
     exit 1
   fi
   echo "ok    handover is current with HEAD ($HEAD_SHA)"
+fi
+
+# ── preflight: the CI verdict job depends on EVERY job ─────────────────────
+# A required status check resolves against ONE context. That context is the
+# aggregate, and the aggregate is only worth requiring if failing anything
+# fails it. `needs: suites` alone left `lint`, `audit`, `trivy-fs`, `site` and
+# `trivy-image` outside the verdict entirely — five jobs that could go red
+# under a green required check.
+#
+# The workflow half of this fails CLOSED on its own: the verdict step counts
+# its upstreams and refuses a narrowed `needs:`. That direction cannot see the
+# other one — a NEW job nobody added to `needs:` — because a workflow cannot
+# enumerate its own jobs. This reads the file and closes it, counted both
+# ways, which is the same inventory idiom `parity.rs` uses on the MCP surface.
+echo "═══ preflight: CI verdict covers every job ═══"
+CI=".github/workflows/ci.yml"
+VERDICT_JOB="verdict"
+if [ ! -f "$CI" ]; then
+  echo "FAIL  $CI is absent. The verdict inventory has nothing to read, and a"
+  echo "      scanner with no input reports what a clean tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+# Job ids are the keys at exactly two spaces INSIDE the `jobs:` mapping.
+# Anchoring on `jobs:` is load-bearing and was found the expensive way: `on:`
+# carries `push:` and `pull_request:` at the very same indent, so an
+# unanchored scan reports two jobs that do not exist and then "finds" them
+# missing from `needs:`.
+CI_JOBS=$(awk '
+  /^jobs:/            { inj = 1; next }
+  inj && /^[^ #]/     { inj = 0 }
+  inj && /^  [a-z0-9_-]+:$/ { gsub(/[ :]/, ""); print }
+' "$CI")
+CI_N=$(printf '%s\n' "$CI_JOBS" | grep -c . || true)
+# The verdict job's own `needs:`, as a bare word list.
+CI_NEEDS=$(awk -v j="^  ${VERDICT_JOB}:\$" '
+  $0 ~ j                    { inv = 1; next }
+  inv && /^  [a-z0-9_-]+:$/ { inv = 0 }
+  inv && /^    needs:/      { print }
+' "$CI" | sed -e 's/.*needs:[[:space:]]*//' -e 's/^\[//' -e 's/\]//' -e 's/,/ /g')
+CI_NEEDS_N=$(printf '%s\n' $CI_NEEDS | grep -c . || true)
+# PREMISE PROBE, both halves. Either extractor returning nothing looks exactly
+# like a tree where everything already agrees.
+if [ "${CI_N:-0}" -lt 5 ] || [ "${CI_NEEDS_N:-0}" -lt 4 ]; then
+  echo "FAIL  the CI scan found $CI_N job(s) and $CI_NEEDS_N need(s); the"
+  echo "      workflow has at least 5 and the verdict at least 4. The scanner"
+  echo "      is broken, or '$VERDICT_JOB' is not the verdict job's id."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+CI_BAD=""
+for j in $CI_JOBS; do
+  [ "$j" = "$VERDICT_JOB" ] && continue
+  case " $CI_NEEDS " in
+    *" $j "*) ;;
+    *) CI_BAD="$CI_BAD\n        job '$j' is outside ${VERDICT_JOB}'s needs: it can go red under a green verdict" ;;
+  esac
+done
+for n in $CI_NEEDS; do
+  case " $(printf '%s ' $CI_JOBS) " in
+    *" $n "*) ;;
+    *) CI_BAD="$CI_BAD\n        ${VERDICT_JOB} needs '$n', which is not a job in $CI" ;;
+  esac
+done
+if [ -n "$CI_BAD" ]; then
+  echo "FAIL  the CI verdict does not cover every job:"
+  printf "$CI_BAD\n"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $VERDICT_JOB needs all $CI_NEEDS_N other job(s) of $CI_N"
+
+if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
+  echo ""
+  echo "preflights only — no suite was run, by request (--preflight-only)"
+  exit 0
 fi
 
 for suite in "${SUITES[@]}"; do

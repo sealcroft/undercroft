@@ -17,6 +17,15 @@
 # (nginx/Caddy/Traefik) and only expose the proxy. The server refuses to
 # start on a non-loopback bind without the bearer token.
 
+# Declared, not derived — see the note in the repo-root docker-compose.yml.
+# It matters MORE here than there: this file is run with `-f` from wherever an
+# operator happens to have put it, so undeclared the project name is whatever
+# their working directory is called, and two operators get different volume
+# names for the same deployment. A distinct name from the test harness is
+# deliberate: sharing one would make `docker compose down -v` in the repo
+# destroy a running team server's data.
+name: undercroft-server
+
 services:
   qdrant:
     image: qdrant/qdrant:v1.12.4

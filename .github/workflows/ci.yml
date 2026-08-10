@@ -8,6 +8,19 @@ permissions:
   contents: read
 
 jobs:
+  # The host-side preflights. They live in `tests/battery.sh` because no image
+  # carries `ROADMAP.md`, the compose files, or `.gitattributes`' whole scope —
+  # and until this job existed the script was named in this workflow only
+  # inside comments, so every one of them gated a local run and NOTHING on a
+  # pull request. Cheapest job here and the fastest to fail: no Docker, no
+  # cargo, seconds.
+  preflight:
+    name: Preflights (line endings, ROADMAP, compose, CI inventory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash tests/battery.sh --preflight-only
+
   lint:
     name: Lint (rustfmt + clippy)
     runs-on: ubuntu-latest
@@ -45,7 +58,12 @@ jobs:
           ignore-unfixed: true
 
   suites:
-    name: ${{ matrix.suite }}
+    # The leg is named `suite (<name>)`, never the bare suite name. A job's
+    # `name` IS the status context GitHub publishes, so with `name: ${{
+    # matrix.suite }}` one leg published a context literally called `test` —
+    # colliding with the id of the aggregate below, and making the obvious
+    # required check ("test") resolve to one cargo suite out of seven.
+    name: suite (${{ matrix.suite }})
     runs-on: ubuntu-latest
     strategy:
       # **Every suite runs even when one fails.** Serially, a failure in the
@@ -54,9 +72,16 @@ jobs:
       # battery is the whole verdict, not the first word of it.
       fail-fast: false
       matrix:
-        # Same names as the compose services and as `tests/battery.sh`, so
-        # what CI runs and what a maintainer runs locally cannot drift into
-        # different sets.
+        # These are compose service names. This comment used to claim they are
+        # "the same strings `tests/battery.sh` uses, so CI and a local battery
+        # cannot drift into different sets" — measured, the sets differ in BOTH
+        # directions and always have: the matrix has `onnx-build` and the
+        # battery does not; the battery has `lint` and `site`, which CI runs as
+        # their own jobs; and `ort-build` is a compose service run by neither,
+        # while `release.yml` ships an `ort` binary for all five targets.
+        # Nothing counted them, so the claim survived by assertion. The
+        # reconciliation is filed in ROADMAP O9 — what is fixed here is the
+        # verdict, not yet the sets.
         #
         #   obs-config       alert rules + route (promtool/amtool) — no cargo
         #   test             cargo unit + integration
@@ -82,28 +107,58 @@ jobs:
       - name: ${{ matrix.suite }}
         run: docker compose run --rm ${{ matrix.suite }}
 
-  # The aggregate. Kept under the name `test` because that is what any
-  # required status check on `main` is configured against — renaming the
-  # job that carries the verdict would silently un-gate the branch, which
-  # is the same class of defect as an alert on a series nobody exports.
-  test:
-    name: Suites (aggregate)
+  # THE VERDICT. This is the one context a required status check should be
+  # configured against, and everything about its old shape was wrong:
+  #
+  #   * its comment said it was "kept under the name `test` because that is
+  #     what any required status check on `main` is configured against". No
+  #     repo had `required_status_checks` at all — verified against the API on
+  #     both `undercroft` and `sealcroft.github.io` — so it gated nothing and
+  #     the sentence describing why it must not be renamed was protecting a
+  #     configuration that did not exist;
+  #   * the published context is a job's `name`, not its id, so the context was
+  #     `Suites (aggregate)` and never `test` in the first place, while the
+  #     matrix leg above published one literally called `test`;
+  #   * `needs: suites` left `lint`, `audit`, `trivy-fs`, `site` and
+  #     `trivy-image` outside the verdict entirely — five jobs free to go red
+  #     under a green aggregate.
+  #
+  # Named `CI verdict` now: a context no leg can collide with, and one that
+  # says what requiring it means.
+  verdict:
+    name: CI verdict
     runs-on: ubuntu-latest
-    needs: suites
+    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image]
     if: always()
     steps:
-      - name: Every suite must have passed
+      - name: Every job must have passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          result='${{ needs.suites.result }}'
-          echo "matrix result: $result"
-          # `needs.<job>.result` folds the whole matrix: `success` only when
-          # every leg succeeded. Anything else — failure, cancelled, skipped
-          # — is not a green battery and must not read as one.
-          if [ "$result" != "success" ]; then
-            echo "one or more suites did not pass; see the individual jobs above"
+          set -euo pipefail
+          printf '%s\n' "$NEEDS"
+          n=$(printf '%s' "$NEEDS" | jq 'length')
+          # PREMISE PROBE, and the half a workflow can enforce on itself. A
+          # narrowed `needs:` cannot quietly shrink the verdict — the count is
+          # asserted, not assumed. The other direction (a NEW job nobody added
+          # to `needs:`) is unreachable from here, because a workflow cannot
+          # enumerate its own jobs; `tests/battery.sh`'s CI-inventory preflight
+          # reads the file and closes it.
+          if [ "$n" -lt 7 ]; then
+            echo "the verdict covers only $n job(s) and must cover 7 —"
+            echo "someone narrowed needs:, which is how a green tick stops meaning anything"
             exit 1
           fi
-          echo "every suite passed"
+          # Every upstream is inspected. Reading `needs.suites.result` alone is
+          # what let five jobs sit in the workflow and outside the verdict:
+          # naming the ones you check is an inventory maintained by memory.
+          bad=$(printf '%s' "$NEEDS" | jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"')
+          if [ -n "$bad" ]; then
+            echo "not green — see the individual jobs above:"
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+          echo "all $n upstream jobs succeeded"
 
   site:
     name: Site build + assembly checks

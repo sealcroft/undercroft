@@ -2,6 +2,13 @@
 # See README.md — competitor servers themselves are launched from their
 # own published compose/self-host paths and pinned by digest at run
 # time, so this file stays minimal and stable.
+
+# Declared, not derived — see the note in the repo-root docker-compose.yml.
+# Undeclared this one took the name `bench-vs` from its own directory, which
+# is generic enough to collide with any other project on the same host. Its
+# own project keeps a competitor benchmark's volumes away from the harness's.
+name: undercroft-bench-vs
+
 services:
   ollama:
     image: ollama/ollama:latest

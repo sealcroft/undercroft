@@ -25,6 +25,11 @@
 # anything beyond localhost. The exposed Docker-less services (Loki/Tempo/
 # Alertmanager) are unauthenticated; keep this stack on localhost.
 
+# Declared, not derived — see the note in the repo-root docker-compose.yml.
+# Its own name, because this stack is brought up ALONGSIDE the others and
+# sharing a project would let `down -v` on one destroy another's volumes.
+name: undercroft-observability
+
 services:
   undercroft:
     build:

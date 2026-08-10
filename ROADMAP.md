@@ -171,10 +171,24 @@ Nothing here is broken. Each is a decision or a gap with a known shape, and
 **Status 2026-08-10: O1, O2, O3, O4 and O5 are CLOSED** — O1 with an executed
 gate, O5 by maintainer's ruling (the components keep their names; the only
 constraint is that nothing carries the former project name or `MemPalace`,
-and that was tested, not assumed). **What remains open is O6** — a click in
-the GitHub web UI that no REST endpoint exposes, so no amount of engineering
-closes it from here — **and O7**, split out of O5 so the ruling is not
-mistaken for having closed a defect it does not touch.
+and that was tested, not assumed), **and O8 is CLOSED** — the compose project
+name is declared rather than derived from the clone's directory, with a
+preflight counted both ways. **What remains open is O6** — a click in the
+GitHub web UI that no REST endpoint exposes, so no amount of engineering
+closes it from here — **O7**, split out of O5 so the ruling is not mistaken
+for having closed a defect it does not touch, **O9**, that no CI workflow
+invokes `tests/battery.sh`, so all four preflights gate a local run and
+nothing on a pull request, and **O10**, that the former-name trace verifier is
+invoked by nothing and lives outside the tree — which is how O8's own unit put
+the former name back into a tracked file with the battery green.
+
+**Round four (2026-08-10) found 70 verified defects** across eleven
+dimensions — 2 critical, 20 high, and **67 of 70 failing silently**. Full
+findings and all 70 fix plans in `.handover/SWEEP4_FINDINGS.json` and
+`.handover/SWEEP4_FIX_PLAN.md`; the synthesis groups them into ten units by
+shared choke point. O8 above is the first of those units to land. Nothing
+else from that sweep is applied yet, and no plan is a fix until it carries a
+test that was run against the reverted code and observed to fail.
 
 **D1–D8 — the pre-merge drift audit, CLOSED 2026-08-09.** The
 seven-dimension audit this file's own conventions require before a release
@@ -574,6 +588,116 @@ curl -sL https://github.com/sealcroft/undercroft | grep -oE '<meta[^>]*og:image[
 That host distinction is the whole test, and it is conclusive — unlike the
 avatar, no rendering is needed.
 
+### O8 — the compose project name was derived, not declared — CLOSED 2026-08-10
+Found by the round-four sweep (dimension D8, the maintainer's explicit ask).
+No compose file declared a `name:` key, so Compose derived the project name
+from **the directory the clone sits in** — on the maintainer's machine, still
+the project's former name. Every container, image, volume and network the repo
+built was branded with it: `<former>-site`, `<former>-lint`,
+`<former>_default`, `<former>_undercroft-backends-tls`.
+
+**Why nothing caught it.** `.handover/verify-no-trace.py` scans tracked file
+CONTENTS across six classes and reported **0 hits over 367 files** — a correct
+answer to the wrong question. The name was in no file. It is the fifth class
+in CLAUDE.md's list now: *a derived identifier is a name too.*
+
+**It had already falsified a document.** CLAUDE.md's volume-mount recipe named
+`undercroft_undercroft-embed-tls`, which did not exist on a `<former>_`-prefixed
+machine — one sentence after warning that a wrong volume name mounts a fresh
+empty volume with no error. The doc handed you the failure it was warning about.
+
+**Closed:** `name:` declared in all four compose files — `undercroft`,
+`undercroft-server`, `undercroft-observability`, `undercroft-bench-vs`. Distinct
+on purpose: sharing one project would let `docker compose down -v` in the repo
+destroy a running team server's or observability stack's volumes.
+
+**Gate:** a `tests/battery.sh` preflight counted BOTH ways — a compose file with
+no `name:` fails, and a declared name outside the expected set fails, so a future
+file cannot quietly pick a colliding or former-name project. It carries a premise
+probe that refuses to pass if it found fewer than three compose files, because a
+glob matching nothing reports exactly what a clean tree reports. Counterfactuals
+executed in both directions on scratch copies. **The gate immediately found
+`deploy/bench-vs/docker-compose.yml`, which the hand enumeration that preceded it
+had missed** — the argument for an inventory over a listed set, demonstrated on
+its own author.
+
+**Residual, stated:** this preflight lives in `tests/battery.sh`, which **no CI
+workflow invokes** (`ci.yml` mentions it only in comments). So it gates a local
+battery and not a pull request, exactly like the three preflights beside it.
+That is the round-four sweep's Unit 0 and is filed as **O9**.
+
+Artifacts carrying the former name were purged from the maintainer's machine
+after the maintainer confirmed the data was disposable test data: 13 containers,
+10 volumes, 3 networks and ~35 images, each classified by its
+`com.docker.compose.project` label and its mounts rather than by its name — a
+first pass that classified by name alone mislabelled five of this project's own
+ad-hoc containers as another project's.
+
+### O9 — the workflow half is fixed; nothing gates a pull request until the required check is configured
+Found by the round-four synthesis, which no single dimension filed. `ci.yml`
+mentioned `battery.sh` only inside comments, so **all four preflights** (line
+endings, ROADMAP headings, handover freshness, compose project names) were
+local-only and gated nothing on a pull request. Compounding it, the aggregate
+verdict job declared `needs: suites` alone, leaving `lint`, `audit`,
+`trivy-fs`, `site` and `trivy-image` outside the verdict; its `name: Suites
+(aggregate)` put the status context somewhere other than `test`, while the
+matrix leg `name: ${{ matrix.suite }}` emitted a context literally called
+`test` for one suite of seven, so the obvious required check would have bound
+to a single cargo suite. The comment above it warned that renaming the job
+"would silently un-gate the branch" — protecting a configuration that has
+never existed.
+
+**Fixed 2026-08-10, and each part was executed rather than reasoned about:**
+
+- A `preflight` job runs `bash tests/battery.sh --preflight-only`, a new entry
+  point that runs the host-side preflights and no suite. Unknown options exit
+  1, never 2 — exit 2 is this project's integrity verdict.
+- The aggregate is the `verdict` job, published as the context **`CI verdict`**
+  — one no matrix leg can collide with. The matrix legs are `suite (<name>)`.
+- `needs:` lists every job, and the step inspects **every entry** of
+  `toJSON(needs)` rather than naming the ones it checks, so `skipped` and
+  `cancelled` fail it too. Driven through four synthetic states — 7 green,
+  one `failure`, one `skipped`, and a narrowed 6 — using the script
+  **extracted out of `ci.yml`**, in a container, not a retyped copy.
+- The step asserts its upstream COUNT, so a narrowed `needs:` fails closed.
+  That is the only direction a workflow can enforce on itself: it cannot
+  enumerate its own jobs, so a NEW job nobody wired in is invisible from
+  inside it. `tests/battery.sh`'s CI-inventory preflight reads the file and
+  closes that direction, counted both ways — counterfactuals executed in both
+  (a job dropped from `needs:`; a `needs:` entry that is no job), with the
+  file restored byte-identically and re-verified after each.
+- The premise probe on that preflight earned itself immediately: job ids are
+  keys at two spaces, and so are `push:` and `pull_request:` under `on:`, so
+  an unanchored scan reports two jobs that do not exist.
+
+**What remains open, and it cannot be done from the repo:**
+
+1. **Configure the required status check** on `main` to `CI verdict`, on
+   `sealcroft/undercroft`. Verified 2026-08-10 against the API: neither repo
+   carries `required_status_checks` at all, so nothing is gated today
+   regardless of what the workflow says.
+2. **The check has never run.** The workflow above is unpushed, so no run
+   exists to bind a required context to. A context that has never been
+   reported cannot be selected in the UI and, if set by API, blocks every PR
+   as permanently pending.
+
+**Gate:** the required check must resolve to `CI verdict`, and a red suite
+must block a merge — **verified by observation on a real pull request**, not
+by reading the workflow. That is the same standard O1 was held to, where an
+anonymous probe with a negative control settled a question that reading
+settled wrongly twice.
+
+**Also filed here rather than absorbed:** CI and the battery run **different
+suite sets**, in both directions, under a comment that asserted they cannot.
+The matrix carries `onnx-build` and the battery does not; the battery carries
+`lint` and `site`, which CI runs as their own jobs; and `ort-build` is a
+compose service run by **neither**, while `release.yml` ships an `ort` binary
+for all five targets — so nothing automated ever compile-checks that feature.
+The comment is corrected; the sets are not reconciled. Reconciling them is a
+decision about CI cost, not a defect to fix silently: state which set is
+canonical, then count them against each other in the preflight that already
+reads both files.
+
 ### O7 — `palace` names two levels of the hierarchy
 Split out of O5 on 2026-08-10 so the ruling that closed O5 (the components
 keep their names) is not mistaken for having closed this too. **It is a
@@ -610,6 +734,55 @@ without an integrity verdict, and `verify` must stay green across it.
 **Not scheduled.** Filed because a gap is a gap; if it is judged not worth
 doing, that is a decision with an argument and belongs here in writing rather
 than as an item that quietly never moves.
+
+### O10 — the former-name trace verifier is invoked by nothing
+`.handover/verify-no-trace.py` is the only check the tree has for the six
+file-content classes of the former project name (Latin, truncated root,
+non-Latin script, base64, mythic identity, inside a certificate). It is run
+**by hand**. It sits in a gitignored directory, so a fresh clone does not
+carry it at all, and no suite, no `tests/battery.sh` preflight and no workflow
+invokes it.
+
+**This is not hypothetical, and the instance is from the unit that closed
+O8.** The comment written into `docker-compose.yml` to explain the derived-name
+defect **quoted the former name** while explaining that quoting it is how it
+gets back into the tree. The verifier exited 1 naming two classes on one line;
+nothing else in the repository could have seen it, and the battery was green
+across it. That is the trap CLAUDE.md records against itself — *describe the
+class, never the token* — recurring inside the change that documents the class,
+which is the same shape as a gate written in the round that was fixing the
+gate's own defect class.
+
+**Shape of a fix, and two constraints decide the design.** Track the scanner
+in the repo and invoke it from a preflight:
+
+1. **A tracked scanner scans itself.** Its patterns must be needle-split (the
+   `concat!` idiom `undercroft-obs`'s gauge gate already uses) so the file
+   holds no matchable literal. Excluding it by path instead is the
+   unfalsifiable-second-direction defect round three found, where the file
+   holding the inventory sat inside the tree the gate scanned.
+2. **It needs a premise probe.** Every pattern must fire on a synthesized
+   known-positive and none on clean text before a zero-hit result is believed.
+   The script has no probe today; it was probed by hand, once, in a session —
+   which is a property of that session and not of the artifact.
+
+It must run **in a container**, not on a host interpreter — this project
+builds and tests in Docker, and a gate that needs Python on the host is a gate
+that does not run on the next machine. A preflight that *skips* when its
+interpreter is absent reports exactly what a clean tree reports, so the
+container is the fix and detection is not.
+
+**Land it with Unit 3, not alone.** The round-four synthesis groups the
+preflight family into one unit precisely because scanners landed one at a time
+produce differently-broken scanners — this tree has already shipped two.
+
+**Gate:** the counterfactual executed by hand on 2026-08-10 becomes the
+self-test — restore the token on a scratch copy and the preflight exits
+non-zero naming file and line; remove it and it exits 0; empty the pattern set
+and the premise probe fails rather than passing vacuously.
+
+**Residual, the same one O9 carries:** a preflight in `tests/battery.sh` gates
+a local run and nothing on a pull request until O9 lands.
 
 ---
 
