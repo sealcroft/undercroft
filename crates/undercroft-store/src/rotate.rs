@@ -1430,24 +1430,76 @@ mod tests {
             concat!("content", "_at_rest("),
             concat!("index", "_at_rest("),
             concat!("tokens", "_at_rest("),
+            // **`embedding_at_rest` was missing from this list entirely.**
+            // Its domain is the bare record id today, so it contributes no
+            // static prefix and adding it changes no current result — which
+            // is exactly why its absence was invisible. A future call sealing
+            // under a literal domain would have been unseen by this gate.
+            concat!("embedding", "_at_rest("),
         ];
+        // **Scanned over the whole text, not line by line, and that is the
+        // defect this rewrite fixes.** The extractor used to `find` a needle
+        // within one line and then take the first string literal ON THAT
+        // LINE — so a rustfmt-wrapped call, whose domain sits on the next
+        // line, silently contributed nothing. `pqpage/` is exactly that
+        // shape (`pqidx.rs`, the literal on its own line), so the one tier
+        // whose artifacts are sealed pages had NEVER been checked by the gate
+        // that exists to check it. Rotation does cover `pqpage/` — by luck,
+        // not by this gate, which is the distinction that matters.
         let mut domains: std::collections::BTreeSet<String> = Default::default();
-        for line in all.lines() {
-            let t = line.trim_start();
-            if t.starts_with("//") || t.starts_with("///") || t.starts_with("*") {
-                continue;
-            }
-            for needle in seals {
-                let Some(at) = line.find(needle) else {
+        for needle in seals {
+            let mut from = 0usize;
+            while let Some(rel) = all[from..].find(needle) {
+                let at = from + rel;
+                from = at + needle.len();
+                // Skip a needle that sits on a comment line.
+                let line_start = all[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let lead = all[line_start..at].trim_start();
+                if lead.starts_with("//") || lead.starts_with('*') {
                     continue;
-                };
-                let rest = &line[at + needle.len()..];
-                // The domain is the first string literal on the line after
-                // the call: `"kg/blind-secret"` or `&format!("kg/{id}")`.
-                let Some(q) = rest.find('"') else { continue };
-                let after = &rest[q + 1..];
-                let Some(end) = after.find('"') else { continue };
-                let lit = &after[..end];
+                }
+                // The first string literal INSIDE THIS CALL's argument list,
+                // across newlines — bounded by the matching close paren, not
+                // by a character count. A fixed window was the first
+                // rewrite's bug and its own premise probe caught it: a call
+                // with no literal domain (`embedding_at_rest(id, &emb)`) let
+                // the scan run on and adopt the next statement's SQL string,
+                // so `UPDATE drawers SET embedding = ?1 …` was recorded as an
+                // AAD domain. Parens inside a string literal do not count,
+                // which is why this tracks quoting rather than just depth.
+                let mut depth = 1i32;
+                let mut in_str = false;
+                let mut esc = false;
+                let mut lit: Option<String> = None;
+                let mut buf = String::new();
+                for c in all[from..].chars() {
+                    if in_str {
+                        if esc {
+                            esc = false;
+                        } else if c == '\\' {
+                            esc = true;
+                        } else if c == '"' {
+                            lit = Some(std::mem::take(&mut buf));
+                            break;
+                        } else {
+                            buf.push(c);
+                        }
+                        continue;
+                    }
+                    match c {
+                        '"' => in_str = true,
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let Some(lit) = lit else { continue };
+                let lit = lit.as_str();
                 // Reduce to the leading static prefix: everything before the
                 // first `{`. A bare `"{id}"`-style domain reduces to empty
                 // and is skipped — the drawer content domain is the record id
@@ -1459,10 +1511,20 @@ mod tests {
                 domains.insert(prefix);
             }
         }
-        assert!(
-            domains.len() >= 8,
-            "premise: the extractor actually found the sealed domains, got {domains:?}"
-        );
+        // **The premise measures the extractor against GROUND TRUTH, not
+        // against itself.** It used to assert `domains.len() >= 8` — a count
+        // of what the extractor had just produced, which passes for a broken
+        // extractor that finds 8 of 12 and is precisely the "measure the
+        // observable the defect moves" rule this tree keeps relearning. These
+        // four are verified present by grep and span all three call shapes:
+        // same-line literal, rustfmt-wrapped literal, and `format!`.
+        for known in ["pqpage/", "fde/", "kg/", "tok/codebook"] {
+            assert!(
+                domains.contains(known),
+                "premise: the extractor missed the known domain {known:?} — it is \
+                 broken, not the tree. Found: {domains:?}"
+            );
+        }
         let missing: Vec<&String> = domains
             .iter()
             .filter(|d| !rotate_src.contains(d.as_str()))

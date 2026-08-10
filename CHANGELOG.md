@@ -2,6 +2,43 @@
 
 ## Unreleased — 1.1.0
 
+### the gate certifying rotation completeness had never checked the sealed page tier
+
+CLAUDE.md calls rotation completeness *"ENFORCED, not remembered"* — every
+sealed AAD domain must be named in `rotate.rs`, or a rotation leaves those
+artifacts under retired keys and they become unreadable. The gate that
+enforces it was blind in three ways at once, and each is a different flavour
+of measuring the wrong thing.
+
+* **Line-anchored extraction.** It found a `*_at_rest(` call inside one line
+  and then took the first string literal *on that line*, so any
+  rustfmt-wrapped call — literal on the next line — contributed nothing.
+  **`pqpage/` is exactly that shape**, so the tier whose artifacts are sealed
+  pages had never been evaluated by the gate that exists to evaluate it.
+  Rotation does cover `pqpage/`, at `rotate.rs`; it was covered by luck, and
+  the distinction is the whole point of having a gate.
+* **A premise probe that measured its own output.** `domains.len() >= 8`
+  asserts a count of what the extractor just produced, so an extractor that
+  finds 8 of 12 passes. Replaced with ground truth: four domains verified
+  present by grep, spanning all three call shapes (same-line literal,
+  wrapped literal, `format!`).
+* **`embedding_at_rest` was not in the needle list at all.** Its domain is
+  the bare record id today, so adding it changes no current result — which is
+  precisely why its absence was invisible, and why a future call sealing
+  under a literal domain would have gone unseen.
+
+**Fixed** by scanning the whole text and bounding each domain to its own
+call's argument list, tracking string quoting so parens inside SQL do not
+confuse the depth count. **The new premise probe caught a bug in that
+rewrite immediately**: a first version used a fixed 200-character window,
+which ran past calls with no literal domain (`embedding_at_rest(id, &emb)`)
+and adopted the next statement's SQL string — `UPDATE drawers SET embedding
+= ?1 …` was being recorded as an AAD domain. The paren-bounded scan reports
+nine clean domains and no SQL.
+
+**Counterfactual executed:** removing `pqpage/` from the rotation path now
+fails the gate naming it. Before this change it passed.
+
 ### a forged fact receipt passed `verify` on every surface, and got archived
 
 **The detector existed the whole time. Nothing called it.**

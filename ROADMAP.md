@@ -912,6 +912,67 @@ deliberately excluded (an agent asserting its own provenance), and the e2e
 arm above upgraded from "the leg is quiet" to "the leg renders and a forged
 one fails".
 
+### O13 — a genuine forgetting attestation reports FORGED after any key rotation
+Round-four finding #2, **CRITICAL**, and the analysis below goes past the
+sweep's plan because the fix is not the one-line key swap it looks like.
+Filed rather than half-landed: this changes a security VERDICT, and a
+half-correct verdict is worse than a known-wrong one.
+
+**The mechanism, read in the code.** `verify_forget_attestation`
+(`forget.rs`) re-checks each tombstone with `self.vault.verify_tag(b"del\x1f{id}", tag)`
+and replays the chain with `self.vault.chain_next_hex` — both under the
+**current** MAC key. `Vault::rotate` writes a fresh salt, which re-derives all
+four subkeys including the MAC key, and re-keys the chain over preserved
+`audit.tag` bytes. So after a routine rotation:
+
+- every tombstone tag in the attestation fails `verify_tag` → the error is
+  *"tombstone tag for {id} is not this vault's"* → `StoreError::Attestation`
+  → **exit 2**, this project's tamper verdict;
+- and `head_before`/`head_after` no longer correspond to the re-keyed chain,
+  so the head comparison cannot pass either.
+
+"We destroyed your data, here is the proof" becomes "this proof is forged",
+the first time an operator does the thing the security model tells them to do
+routinely. There is **no test coverage**: `verify-forgetting` appears nowhere
+in `tests/` outside unrotated fixtures, so nothing would have caught it and
+nothing will catch a regression in the fix.
+
+**The blast radius is bounded and the boundary is the useful part.** The
+third-party path is *unaffected*: `verify_detached(sender, att.canonical(),
+sig)` checks the operator's Ed25519 signature and touches no vault key. So a
+recipient holding the signed document still verifies it after any rotation —
+it is the VAULT's own keyed replay that breaks. That asymmetry is already
+documented ("third parties verify the operator's SIGNATURE, not the replay")
+and it means this is a false alarm, never a lost proof.
+
+**The fix is the doctrine's, not a key swap.** Old keys are destroyed by
+rotation — that is the point of rotation — so the keyed replay is genuinely
+unavailable, and the honest answer is a third state rather than a verdict:
+`stated`/`background`/`unevaluated` exist because "we did not look" and "we
+looked and found nothing" are different claims, and `Unreceipted` exists
+because it says something different from `Dangling`. Three outcomes:
+
+1. tag verifies under the current key and the heads chain → **verified**, as
+   today;
+2. tag FAILS `verify_tag` **but equals the tag stored in this vault's own
+   `audit` row for `del/{id}`** — which rotation preserves verbatim — → the
+   evidence is real and the replay is unavailable. A distinct verdict,
+   **not** forged, **not** exit 2;
+3. tag fails both → **forged**, exit 2, as today.
+
+Note (2) needs no change to the attestation format and no new field to go
+stale: the vault already holds the bytes, and comparing them is a structural
+proof that the document names evidence this vault actually recorded. A
+`key_generation` field was considered and rejected for that reason — it would
+have to be optional for legacy documents, and an optional provenance field is
+exactly the claim a verifier cannot rely on.
+
+**Gate:** create an attestation, rotate the vault, verify → must report the
+distinct verdict, must NOT say forged, must NOT exit 2; a tag forged after
+the rotation must still fail with exit 2; and the third-party signature path
+must verify across the rotation unchanged. All three arms, or the fix has
+merely moved which case is wrong.
+
 ---
 
 ## Beyond 2.0.0 — the competitive track
