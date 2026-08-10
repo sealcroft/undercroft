@@ -1799,7 +1799,35 @@ had and was still bypassable on the surface most deployments use.
 5. **The full Docker battery** at the final tree, with raw exit codes:
    `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
    `backends-e2e`, `site`. `cargo build -p <crate>` does **not** compile
-   integration tests — `--tests` does.
+   integration tests — `--tests` does. **Every time, never a subset** — and
+   never piped: a pipeline's status is its LAST command's, so `| tail` reports
+   success over a failing battery. Confirm it ran AFTER the last edit rather
+   than assuming; `.battery/*.log` mtimes settle it in one line.
+6. **Load a real corpus and drive the change through it.** A fixture proves
+   logic and is structurally blind to cost, to schema ordering, and to
+   anything that only appears at N > 3. Corpora on hand:
+   `.handover/bench-data/` (LoCoMo, LongMemEval), `.handover/locomo_feed.txt`
+   (minable), `crates/undercroft-store/testdata/*_50k.txt`,
+   `benchmarks/model_eval/datasets/` (10 languages). Mining the LoCoMo feed
+   into N wings gives a few thousand real drawers in seconds.
+   **This is not belt-and-braces; it is the only thing that caught two
+   defects on 2026-08-10, both written minutes earlier and both invisible to a
+   green battery**: a `verify` leg issuing one query PER DRAWER against an
+   unindexed column (fine on two rows, O(N) with an unindexed inner scan on a
+   corpus), and a `CREATE INDEX` placed above its own `CREATE TABLE` in an
+   ordered batch, which broke `init` outright — every command dead, and no
+   unit test reached that path. Measure the thing you changed: `verify` went
+   14→21 ms with deletions unindexed, 13→13 ms with the index.
+7. **Count the renderers, not the surfaces.** The drift doctrine names four
+   {CLI, MCP, `/v1`, orchestrator}, and that list is not the same as "everything
+   that renders this struct". `ui.html` and the orchestrator console are
+   `include_str!`'d `/v1` CLIENTS served at `GET /ui`: a new report field
+   reaches their wire for free and stops dead. `VerifyReport` gained a leg on
+   three gated surfaces and silently missed the fourth — and when `ui.html`
+   was finally added to `parity.rs::HAND_PROJECTED`, the entry immediately
+   found TWO legs it had never rendered (`orphan_labels`, `mirror_drift`),
+   both of which drive the verdict tick it prints. Ask what else reads the
+   struct before believing the gate covers it.
 
 ## Session-end hygiene — leave no debt, drift or stale
 
