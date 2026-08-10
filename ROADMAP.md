@@ -168,10 +168,10 @@ release cannot contain.
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
 
-**Status 2026-08-09: O2, O3 and O4 are CLOSED, each with an executed gate
+**Status 2026-08-10: O1, O2, O3 and O4 are CLOSED, each with an executed gate
 (below). O5 is RE-OPENED — its blocker turned out not to apply. What remains
-open is O1's second half and O6 — both are clicks in the GitHub web UI that
-no REST endpoint exposes, so no amount of engineering closes them from here.**
+open is O6 alone — a click in the GitHub web UI that no REST endpoint
+exposes, so no amount of engineering closes it from here.**
 
 **D1–D8 — the pre-merge drift audit, CLOSED 2026-08-09.** The
 seven-dimension audit this file's own conventions require before a release
@@ -232,29 +232,75 @@ against the reverted code and observed to fail — see CHANGELOG, "the
 merge-blocker list is empty". What the round-three audit found in those fixes,
 and what it found fresh, is above under **OPEN after the round-three audit**.
 
-### O1 — PARTLY CLOSED 2026-08-09: binaries shipped, the image is still private
+### O1 — CLOSED 2026-08-10: binaries shipped and the image is public
 The `v1.0.0` release workflow completed successfully and **20 assets** are
 published, correctly named `undercroft-v1.0.0-<target>[-ort].tar.gz` plus
 `.sha256` — five targets, both variants. The release button on the landing
 page is now honest.
 
-**What remains:** `ghcr.io/sealcroft/undercroft` answers **HTTP 403 to an
+**What was wrong:** `ghcr.io/sealcroft/undercroft` answered **HTTP 403 to an
 anonymous pull token**. GHCR packages default to *private* visibility on
-first push, so `docker pull ghcr.io/sealcroft/undercroft:1.0.0` — the first
-command in the landing page's install walkthrough — fails for everyone who is
-not the owner. **Shape:** flip the package to public (Packages → undercroft →
-Package settings → Change visibility). **Gate:** an anonymous
-`ghcr.io/token` + `tags/list` must return 200, not 403 — one curl:
+first push, so `docker pull ghcr.io/sealcroft/undercroft:latest` — the first
+command in every install path (`README.md`, `docs/getting-started.md`,
+`docs/AGENTS.md`, the landing page's install tab) — failed for everyone who
+was not the owner. **The owner could not see it**, because their own pull is
+authenticated: it failed only for the people the project is trying to reach,
+none of whom would report it.
+
+**What closed it, and the first attempt did not work.** Flipping the package
+alone is not enough when the ORG forbids public packages: the package's own
+visibility control renders greyed out with *"Setting is disabled by
+organization administrators"* — shown even to the org owner, which is what
+makes it read as a permissions problem rather than a policy one. Two steps,
+in order:
+
+1. **Organization → Packages policy** —
+   <https://github.com/organizations/sealcroft/settings/packages> → **Package
+   creation** → tick **Public**. Note the path is `/organizations/`
+   (settings), not `/orgs/` (browsing).
+2. **Package → visibility** —
+   <https://github.com/orgs/sealcroft/packages/container/undercroft/settings>
+   → Danger Zone → **Change visibility** → Public. The control is only
+   active once step 1 has been applied.
+
+Neither step has a REST endpoint: GitHub's Packages API exposes get / delete
+/ restore and **no visibility endpoint at all**, and the org package-creation
+policy is not in the orgs API response either. The web UI is the only route.
+(The local `gh` token additionally carries only `gist, read:org, repo,
+workflow` — no `read:packages` — so it cannot even read the package's
+visibility.)
+
+**Gate — EXECUTED 2026-08-10, anonymous throughout:**
+
+| Check | Result |
+|---|---|
+| `tags/list` with an anonymous pull token | **200** (was 403) |
+| Manifest fetch for `:latest` — what `docker pull` does | **200** |
+| Architectures in that manifest list | `linux/amd64`, `linux/arm64` (the third, `unknown`, is the buildx attestation) |
+| `v1.0.0-ort` manifest | **200** |
+| **Negative control** — a package that does not exist | **403** |
+
+The negative control is load-bearing: without it a 200 could mean the check
+was answering 200 to everything, which is this project's standing rule that a
+broken checker and a clean tree are indistinguishable.
+
+**A correction this closure forced.** The paragraph above used to say the
+walkthrough pulls `ghcr.io/sealcroft/undercroft:1.0.0`. It does not, and that
+tag has never existed — measured **404**, because the release tags are
+`v`-prefixed (`v1.0.0`). Every shipped install path uses `:latest`, which
+resolves. The claim was wrong in the entry, not in the product, and it
+survived because nobody ran it.
+
+**Gate:** an anonymous `ghcr.io/token` + `tags/list` must return 200, not
+403 — one curl:
 
 ```bash
 T=$(curl -s "https://ghcr.io/token?scope=repository:sealcroft/undercroft:pull&service=ghcr.io" | sed -E 's/.*"token":"([^"]+)".*/\1/'); curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $T" https://ghcr.io/v2/sealcroft/undercroft/tags/list
 ```
 
-**Re-verified 2026-08-09: still 403.** And it cannot be closed from a shell:
-GitHub's Packages REST API exposes get / delete / restore and **no
-visibility endpoint at all**, so the web UI is the only route. (The local
-`gh` token additionally carries only `gist, read:org, repo, workflow` — no
-`read:packages` — so it cannot even read the package's current visibility.)
+**Re-run it after any change to the org's package policy**, since that policy
+governs the package's visibility control and nothing in the repo does. A 403
+here means step 1 above was not applied, or was reverted.
 
 ### O2 — the site loaded three font families from Google — CLOSED 2026-08-09
 *(Heading corrected 2026-08-10: it still read as an open problem while the
