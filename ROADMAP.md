@@ -527,24 +527,52 @@ concept — the isolation and crypto unit — so reusing it would have been wors
 than the status quo. That search is over: the ruling above is that no target
 word is needed, because no rename is owed.
 
-### O6 — brand assets need two manual uploads
+### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only
-on the orgs API) or repo social previews. `assets/brand/` holds the marks;
-`sealcroft.github.io/assets/` holds the house mark. Org avatar wants the
-512x512 square, the repo social preview wants the **1280x640** card — they are
-not interchangeable.
+on the orgs API) or repo social previews, which is why neither can be closed
+from a shell. `assets/brand/` holds the marks; `sealcroft.github.io/assets/`
+holds the house mark. The org avatar wants the 512x512 square, the social
+preview the **1280x640** card — they are not interchangeable.
 
 **Assets re-verified 2026-08-09** by reading each PNG's IHDR rather than
 trusting its filename: `undercroft-mark-512.png` is 512×512 and
-`undercroft-social-1280x640.png` is 1280×640. Both are ready to upload; the
-upload itself remains a click.
+`undercroft-social-1280x640.png` is 1280×640.
 
-- Org avatar → <https://github.com/organizations/sealcroft/settings/profile>
-  → Upload a picture → `assets/brand/undercroft-mark-512.png` (or the house
-  mark from `sealcroft.github.io/assets/`, which is the better choice for the
-  ORG — the house is not the product).
+**The org avatar is DONE — verified 2026-08-10, and this entry was stale.**
+`https://avatars.githubusercontent.com/u/314753270` serves the **Sealcroft
+house mark**, byte-for-byte the design at
+`sealcroft.com/assets/sealcroft-mark-512.png` — which is the right choice of
+the two, since the house is not the product. Nobody could have noticed from
+inside the repo: an upload leaves no trace here.
+
+**Note the two halves needed DIFFERENT checks, and only one was conclusive
+from a URL.** A custom org avatar and a default identicon are served from the
+same `avatars.githubusercontent.com/u/<id>` form, so the URL proves nothing;
+file size hinted (33 KB at 460×460, where an identicon is flat geometry at
+1–3 KB) and **rendering the image settled it**. That is the same lesson as
+the Greek spelling on the landing page: the check nobody had run was looking
+at it.
+
+**What remains — the repo social preview.** `og:image` on
+<https://github.com/sealcroft/undercroft> still resolves to
+`opengraph.githubassets.com/…`, GitHub's auto-generated card, not to
+`repository-images.githubusercontent.com/…` where a custom upload lands. So
+every link shared to Slack, Discord, X or LinkedIn renders the generic card.
+It fails **silently** — nothing breaks, the project just looks unbranded at
+exactly the moment someone is deciding whether to look at it.
+
 - Repo social preview → <https://github.com/sealcroft/undercroft/settings> →
   Social preview → Edit → `assets/brand/undercroft-social-1280x640.png`.
+
+**Gate:** `og:image` on the repo page must point at
+`repository-images.githubusercontent.com`, not `opengraph.githubassets.com`:
+
+```bash
+curl -sL https://github.com/sealcroft/undercroft | grep -oE '<meta[^>]*og:image[^>]*>'
+```
+
+That host distinction is the whole test, and it is conclusive — unlike the
+avatar, no rendering is needed.
 
 ### O7 — `palace` names two levels of the hierarchy
 Split out of O5 on 2026-08-10 so the ruling that closed O5 (the components
