@@ -1432,9 +1432,18 @@ const EXIT_FAILURE: u8 = 1;
 /// answer will never change.
 ///
 /// So the decision moves to the one place every command returns through. The
-/// classes are deliberately the SAME SET `/v1` answers 409 for
+/// classes are deliberately the same set `/v1` marks **`class: "integrity"`**
 /// (`tenant::store_err` / `tenant::vault_err`), so the two surfaces cannot
 /// state different doctrines about the same bytes.
+///
+/// **Not "the set `/v1` answers 409 for", which is what this line said until
+/// 2026-08-10 and is false.** `ReadOnlyUnmigrated` answers 409 and is
+/// deliberately not a verdict here — an intact vault under a wrong posture —
+/// and so does a co-resident refusal. That is precisely why the `class`
+/// marker exists rather than the status carrying the meaning, and a claim
+/// pinned to the status could hold while the doctrine drifted. The two sets
+/// are counted against each other by
+/// `tenant::tests::the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`.
 ///
 /// **The stated cost**: a wrong `UNDERCROFT_PASSPHRASE` derives a different
 /// manifest key, so the MAC fails and this reports an integrity verdict for
@@ -2039,6 +2048,31 @@ fn run(cli: Cli) -> Result<()> {
                 );
                 for l in links.iter().filter(|l| l.verdict == V::Tampered) {
                     println!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
+                }
+            }
+            // The sixth leg, and the same story one level up: a fact's
+            // receipt binds it to the verbatim drawer it was distilled
+            // from, keyed, in columns no drawer HMAC covers. It rides
+            // inside the report now — until it did, `VERIFY OK` printed
+            // over a forged citation and `backup create` archived it.
+            let receipts = &report.receipts;
+            if !receipts.is_empty() {
+                use undercroft_store::ReceiptVerdict as V;
+                let count = |v: V| receipts.iter().filter(|r| r.verdict == v).count();
+                println!(
+                    "fact receipts:   {} verified · {} source-changed · {} dangling · \
+                     {} unreceipted · {} tampered",
+                    count(V::Verified),
+                    count(V::SourceChanged),
+                    count(V::Dangling),
+                    count(V::Unreceipted),
+                    report.tampered_receipts()
+                );
+                for r in receipts.iter().filter(|r| r.verdict == V::Tampered) {
+                    println!(
+                        "  TAMPERED RECEIPT: {} ← {}",
+                        r.triple_id, r.source_drawer_id
+                    );
                 }
             }
             if report.ok() {
@@ -2811,12 +2845,21 @@ fn run(cli: Cli) -> Result<()> {
                          {} unreceipted · {} tampered",
                         counts[0], counts[1], counts[2], counts[4], counts[3]
                     );
-                    // A tampered receipt is a hard integrity failure.
+                    // A tampered receipt is a hard integrity failure, and it
+                    // exits 2 — the code `verify`, `repair`, `backup create`
+                    // and `verify-forgetting` all reserve for "tampering
+                    // detected". `bail!` exits 1, which this CLI's own
+                    // documented doctrine gives to bad arguments and
+                    // ordinary run errors, so a compliance script that
+                    // retries a 1 retried a forged citation and then moved
+                    // on. Exactly the defect `verify-forgetting` records
+                    // fixing in its own arm, on the same class of artifact.
                     if counts[3] > 0 {
-                        bail!(
+                        println!(
                             "{} fact receipt(s) failed integrity — vault tampering",
                             counts[3]
                         );
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                 }
                 KgAction::Authority {
@@ -3866,8 +3909,20 @@ mod tests {
     /// Stated as its own test because the *set* is the decision: widen it and
     /// exit 2 stops meaning "tampering"; narrow it and a verdict goes back to
     /// looking retryable. Both directions asserted.
+    ///
+    /// **Renamed 2026-08-10 to what it actually proves.** It was
+    /// `…_are_exactly_the_ones_v1_answers_409_for`, which was wrong twice:
+    /// `/v1` answers 409 for `ReadOnlyUnmigrated` too, which is deliberately
+    /// NOT a verdict, and nothing here read `/v1`'s side at all — both sets
+    /// were hand-written literals in different files. It also omitted
+    /// `DatabaseMissing`, so it could not have failed if either surface
+    /// dropped the newest member of the set. The cross-surface equality now
+    /// lives in `tenant::tests::the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`,
+    /// which calls both classifiers; what stays here is this surface's own
+    /// membership plus the context-walking behaviour that has no analogue on
+    /// the other side.
     #[test]
-    fn the_integrity_classes_are_exactly_the_ones_v1_answers_409_for() {
+    fn the_integrity_verdict_set_is_pinned_on_this_surface() {
         use undercroft_store::StoreError as S;
         use undercroft_vault::VaultError as V;
         for e in [
@@ -3877,6 +3932,11 @@ mod tests {
             anyhow::Error::from(S::Vault(V::CorruptManifest("truncated".into()))),
             anyhow::Error::from(V::ManifestTampered),
             anyhow::Error::from(V::CorruptManifest("truncated".into())),
+            // The member the old list did not have.
+            anyhow::Error::from(S::DatabaseMissing {
+                id: "acme".into(),
+                path: "/vaults/acme/palace.db".into(),
+            }),
         ] {
             assert!(integrity_verdict(&e), "must be a verdict: {e:?}");
         }
@@ -3885,6 +3945,12 @@ mod tests {
             anyhow::Error::from(S::Invalid("unknown kind".into())),
             anyhow::Error::from(S::NotFound("drawer".into())),
             anyhow::Error::from(V::Io(std::io::Error::other("disk"))),
+            // 409 on `/v1`, and deliberately not a verdict: the vault is
+            // intact and the posture is wrong for it. The pair above and
+            // below is the whole reason the set is not the 409 set.
+            anyhow::Error::from(S::ReadOnlyUnmigrated {
+                missing: "kg_triples.terms".into(),
+            }),
             anyhow::anyhow!("plain failure"),
         ] {
             assert!(!integrity_verdict(&e), "must stay exit 1: {e:?}");

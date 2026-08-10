@@ -747,14 +747,33 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     sup_tampered
                 )
             };
+            // The sixth leg. Same shape as `sup_line` directly above, and
+            // omitted for the same reason it would have been: the check
+            // existed one call away and no verify path made it.
+            let receipts = &report.receipts;
+            let rec_line = if receipts.is_empty() {
+                String::new()
+            } else {
+                let count = |v: V| receipts.iter().filter(|r| r.verdict == v).count();
+                format!(
+                    "\nfact receipts: {} verified, {} source-changed, {} dangling, \
+                     {} unreceipted, {} tampered",
+                    count(V::Verified),
+                    count(V::SourceChanged),
+                    count(V::Dangling),
+                    count(V::Unreceipted),
+                    report.tampered_receipts()
+                )
+            };
             let text = format!(
-                "records checked: {}\nhmac failures: {}\naudit chain: {}\norphan labels: {}\nmirror drift: {}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\naudit chain: {}\norphan labels: {}\nmirror drift: {}{}{}\nresult: {}",
                 report.records_checked,
                 report.bad_records.len(),
                 if report.chain_ok { "ok" } else { "BROKEN" },
                 report.orphan_labels.len(),
                 report.mirror_drift.len(),
                 sup_line,
+                rec_line,
                 if report.ok() {
                     "VERIFY OK"
                 } else {

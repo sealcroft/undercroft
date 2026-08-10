@@ -299,6 +299,23 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/tenant.rs",
         "fn verify(&mut self",
     ),
+    // **The FOURTH renderer, and the doctrine's four surfaces do not name
+    // it.** `ui.html` is `include_str!`'d into every build and served at
+    // `GET /ui`; it is a `/v1` CLIENT, so a new leg reaches its wire for free
+    // and stops dead unless someone renders it by hand. That is this gate's
+    // exact shape one layer out, and it sat outside the gate.
+    //
+    // Adding the entry immediately found two legs the console had NEVER
+    // shown — `orphan_labels` and `mirror_drift`, both of which drive the
+    // ✔/✘ verdict it prints — so it could report FAILED while its own
+    // breakdown named nothing. Which is the argument for the entry, made by
+    // the entry.
+    (
+        "undercroft-store/src/lib.rs",
+        "VerifyReport",
+        "undercroft-cli/src/ui.html",
+        "async function runVerify()",
+    ),
     // `PalaceStats` is the struct CLAUDE.md names as the FIRST one this
     // class of drift bit, and it was the one struct missing from this list
     // — so the gate written after it went straight past it. Added with two
@@ -631,6 +648,12 @@ mod tests {
                         "\n        Command::",
                         "\n    fn ",
                         concat!("\n        \"under", "croft_"),
+                        // `ui.html`'s sibling construct. Without it the
+                        // window runs from `runVerify` to end of file — every
+                        // field "found" somewhere in 400 lines of unrelated
+                        // console code, which is a gate that cannot fail.
+                        "\nasync function ",
+                        "\nfunction ",
                     ]
                     .iter()
                     .filter_map(|b| tail.find(b)),

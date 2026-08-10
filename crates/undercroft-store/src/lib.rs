@@ -1112,16 +1112,29 @@ pub struct VerifyReport {
     /// any row and every other leg still passes. A relabel onto a subject
     /// that does not exist is what this catches.
     ///
-    /// Scoped to `kg/{id}`, `kg/{id}/authority` and `kg-entity/{id}` **on
-    /// purpose**: nothing in this crate deletes from `kg_triples` or
-    /// `kg_entities` (invalidation closes a validity window, it does not
-    /// remove a row), so those labels must always resolve. Every other
-    /// namespace has a legitimate path to an absent subject — `del/{id}`
-    /// names a destroyed drawer by definition, a denied admission destroys
-    /// its drawer, `retention-clear/{wing}` removes the policy row
+    /// Covers `kg/{id}`, `kg/{id}/authority`, `kg-entity/{id}` — nothing in
+    /// this crate deletes from `kg_triples` or `kg_entities` (invalidation
+    /// closes a validity window, it does not remove a row), so those labels
+    /// must always resolve — **and bare drawer ids, which is a widening
+    /// (O11) rather than the original scope.**
+    ///
+    /// The prefixed namespaces stay out and the reason still holds: each has
+    /// a legitimate path to an absent subject — `del/{id}` names a destroyed
+    /// drawer by definition, `retention-clear/{wing}` removes the policy row
     /// `retention/{wing}` described, and `read/`, `egress/` and `rotate/`
-    /// name no row at all. Including them would make this alarm on ordinary
-    /// operation, which is worse than not having it.
+    /// name no row at all. Alarming on those would be noise, which is worse
+    /// than not having the leg.
+    ///
+    /// **A bare drawer id is the case that reason did not describe**, and it
+    /// discriminates because destruction is a choke point: the crate has one
+    /// `DELETE FROM drawers` (`delete_drawer_ruled`) and it appends
+    /// `del/{id}` in the same transaction, inherited by all three callers —
+    /// the public delete, admission deny, and `forget_with_proof`, which the
+    /// retention sweep and `delete_by_source` ride. So no live row AND no
+    /// tombstone is unreachable legitimately; it is a relabel onto a drawer
+    /// nothing destroyed. Enumerated from every `chain_append` call site,
+    /// which is also what establishes that a label with no `/` can only be a
+    /// drawer id.
     pub orphan_labels: Vec<String>,
     /// Clear mirror columns that disagree with the HMAC-covered `meta_json`.
     ///
@@ -1146,6 +1159,31 @@ pub struct VerifyReport {
     /// ERASED from the mirror while the covered meta still declares it was
     /// invisible to it.
     pub mirror_drift: Vec<String>,
+    /// Every knowledge-graph fact receipt with its verdict (empty when no
+    /// fact cites a drawer).
+    ///
+    /// **The sixth leg, and it is `supersessions` one level up — same
+    /// columns, same keyed binding, same reason, and it was missing.**
+    /// `receipt_tag` and `source_fp` live in `kg_triples`, outside any
+    /// drawer's HMAC and outside the chain — and, the part worth stating
+    /// because it is the surprising one, **outside the FACT's own tag as
+    /// well**: `kg_verify` walks every triple's `tag` and a forged receipt
+    /// leaves it verifying, which is why `bad_records` stays empty over
+    /// exactly this tampering (asserted, not assumed — see
+    /// `a_forged_fact_receipt_fails_the_vault_verdict`, which pins all five
+    /// other legs clean so the verdict is attributable to this one). `kg_verify_receipts` could see
+    /// it and was called by `kg receipts`, `/v1 …/kg/receipts` and the bench
+    /// — **by nothing inside `verify()`**. So the product's headline promise
+    /// returned a green tick over a forged citation on every surface at once:
+    /// CLI exit 0 and `VERIFY OK`, `/v1` `"ok": true`, MCP `isError: false`,
+    /// the fleet's `ops … verify` exit 0 — and `backup create` gates on this
+    /// very verdict, so the forgery was archived as clean.
+    ///
+    /// The fix is the one the tree had already made for drawer
+    /// supersessions, whose doc four fields up states the reason in the same
+    /// words. One walk, one verdict; a surface cannot assemble a narrower one
+    /// by forgetting a call, because there is no second call to forget.
+    pub receipts: Vec<crate::kg::ReceiptStatus>,
 }
 
 impl VerifyReport {
@@ -1156,6 +1194,7 @@ impl VerifyReport {
             && self.tampered_supersessions() == 0
             && self.orphan_labels.is_empty()
             && self.mirror_drift.is_empty()
+            && self.tampered_receipts() == 0
     }
 
     /// Supersession links whose keyed receipt failed its HMAC. The other
@@ -1167,6 +1206,19 @@ impl VerifyReport {
         self.supersessions
             .iter()
             .filter(|l| l.verdict == crate::kg::ReceiptVerdict::Tampered)
+            .count()
+    }
+
+    /// Fact receipts whose keyed binding failed its HMAC. Exactly the rule
+    /// `tampered_supersessions` applies, and for the same reason: a source
+    /// that was edited (`SourceChanged`), deleted (`Dangling`) or never bound
+    /// (`Unreceipted`) are states a legitimate vault reaches, and treating
+    /// any of them as tampering would make `verify` alarm on ordinary
+    /// operation — which is how a leg gets ignored and then removed.
+    pub fn tampered_receipts(&self) -> usize {
+        self.receipts
+            .iter()
+            .filter(|r| r.verdict == crate::kg::ReceiptVerdict::Tampered)
             .count()
     }
 }
@@ -1939,7 +1991,23 @@ impl PalaceStore {
                  record_id TEXT NOT NULL,
                  tag       BLOB NOT NULL,
                  at        TEXT NOT NULL
-             );",
+             );
+             -- AFTER the table, which is not pedantry: this batch is executed
+             -- in order, and the first version of this line sat above the
+             -- CREATE TABLE and made `init` fail outright with
+             -- \"no such table: main.audit\". A fixture would not have caught
+             -- it; loading a corpus did, immediately.
+             --
+             -- `audit.record_id` is filtered by equality on two hot paths and
+             -- was indexed for neither: `history(subject)` matches it, and
+             -- `verify`'s orphan-label leg probes `del/{id}` once per
+             -- destroyed drawer. Unindexed, that probe is a full scan of a
+             -- table that grows with every write, read and export, so the
+             -- cost is deletions x audit rows -- invisible on a fixture, and
+             -- a retention sweep makes both factors large. Measured on a real
+             -- 2,040-drawer corpus: verify 14 ms clean, 21 ms after 60
+             -- deletions unindexed.
+             CREATE INDEX IF NOT EXISTS idx_audit_record_id ON audit(record_id);",
         )?;
         let vault = Self::reconcile_rotation(&conn, vault)?;
         let mut store = Self::assemble(conn, vault, embedder, false)?;
@@ -5359,19 +5427,63 @@ impl PalaceStore {
             Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
             Err(e) => return Err(e),
         };
+        // The sixth leg, on the same terms as the fifth directly above: the
+        // receipt binding a distilled FACT to its verbatim source is keyed,
+        // and it lives in `kg_triples` columns that no drawer HMAC and no
+        // chain step covers. `kg_verify_receipts` reads each cited drawer
+        // through `get`, so it raises `Integrity` on a row whose own HMAC
+        // fails — a row the drawer walk has already put in `bad_records`,
+        // which is why the swallow is conditional on that alarm standing.
+        // A `verify` that returns an ERROR instead of a verdict is the
+        // failure this function exists to prevent.
+        let receipts = match self.kg_verify_receipts() {
+            Ok(rs) => rs,
+            Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
+            Err(e) => return Err(e),
+        };
         // The fourth leg: every graph label resolves to a live record. See
         // `VerifyReport::orphan_labels` for why only these namespaces.
         let mut orphan_labels = Vec::new();
         {
             let mut stmt = self.conn.prepare(
                 "SELECT DISTINCT record_id FROM audit \
-                 WHERE record_id LIKE 'kg/%' OR record_id LIKE 'kg-entity/%'",
+                 WHERE record_id LIKE 'kg/%' OR record_id LIKE 'kg-entity/%' \
+                    OR record_id NOT LIKE '%/%'",
             )?;
             let labels: Vec<String> = stmt
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<Result<_, _>>()?;
             drop(stmt);
             for label in labels {
+                // **A label with no `/` is a DRAWER id**, and it is the only
+                // bare namespace this store mints — every other label carries
+                // a prefix (`kg/`, `kg-entity/`, `del/`, `admission/`,
+                // `trust/`, `retention/`, `retention-clear/`, `egress/`,
+                // `read/`, `rotate/`, `migrate/`, `tunnel/`). Enumerated from
+                // every `chain_append` call site rather than assumed.
+                //
+                // The leg used to stop at the graph, and the reason on file
+                // was that "every other namespace has a legitimate path to an
+                // absent subject". True of the prefixed ones, and NOT true of
+                // this one — which nobody separated out. A drawer label is
+                // discriminating because deletion is a choke point:
+                // `delete_drawer_ruled` holds the only `DELETE FROM drawers`
+                // in the crate and appends `del/{id}` in the SAME transaction,
+                // and its three callers (the public delete, admission deny,
+                // `forget_with_proof` — which the retention sweep and
+                // `delete_by_source` ride) all inherit it.
+                //
+                // So: no live row AND no tombstone is not ordinary operation.
+                // It is a relabel onto a drawer that was never destroyed —
+                // and `record_id` is the one part of an audit row the chain
+                // does not authenticate, which is why this leg exists at all.
+                if !label.contains('/') {
+                    // Resolved in ONE set-based query below, not here — see
+                    // the note on that statement for why the obvious
+                    // per-label loop is a performance defect on a real
+                    // corpus.
+                    continue;
+                }
                 let (table, id) = match label.strip_prefix("kg-entity/") {
                     Some(id) => ("kg_entities", id.to_string()),
                     None => (
@@ -5395,6 +5507,35 @@ impl PalaceStore {
                     orphan_labels.push(label);
                 }
             }
+            // **The drawer half, as ONE query rather than a loop, and that is
+            // a correctness-of-cost decision rather than style.** A bare
+            // label exists per drawer WRITE, so the loop above would issue at
+            // least one round trip per drawer on every `verify` — invisible
+            // on a test fixture and O(N) on a real corpus — and `audit` has
+            // no index on `record_id`, so each tombstone probe would be a
+            // full scan of a table that grows with every write, read and
+            // export. Two full scans of `audit` plus an indexed probe of
+            // `drawers` per candidate is what that costs set-based, and
+            // SQLite resolves the first `NOT EXISTS` on the `drawers`
+            // primary key, so the second runs only for labels whose drawer is
+            // already gone.
+            //
+            // Found by loading a real corpus rather than by reading, which is
+            // the only reason it is not in this commit as a defect.
+            {
+                let mut stmt = self.conn.prepare(
+                    "SELECT DISTINCT a.record_id FROM audit a \
+                     WHERE a.record_id NOT LIKE '%/%' \
+                       AND NOT EXISTS (SELECT 1 FROM drawers d WHERE d.id = a.record_id) \
+                       AND NOT EXISTS (SELECT 1 FROM audit t \
+                                        WHERE t.record_id = 'del/' || a.record_id)",
+                )?;
+                let bare: Vec<String> = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()?;
+                drop(stmt);
+                orphan_labels.extend(bare);
+            }
             orphan_labels.sort();
         }
         Ok(VerifyReport {
@@ -5404,6 +5545,7 @@ impl PalaceStore {
             supersessions,
             orphan_labels,
             mirror_drift,
+            receipts,
         })
     }
 

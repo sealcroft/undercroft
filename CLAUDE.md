@@ -417,7 +417,21 @@ Consequences that are binding, not advisory:
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
   HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`),
-  verify, knowledge graph (kg.rs — incl. the golden-values authority
+  verify (**`VerifyReport` is the whole verdict and it has SIX legs**: record
+  HMACs, the chain replay, drawer supersession receipts, **KG fact
+  receipts**, orphan graph labels, mirror drift. The rule that keeps growing
+  it: *a keyed claim living in columns no drawer HMAC and no chain step
+  covers must have a leg, or nothing sees it.* Supersessions got one for
+  exactly that reason and the identical structure one table over —
+  `kg_triples.receipt_tag` / `source_fp` — did not until 2026-08-10, so
+  `kg_verify_receipts` was reachable from `kg receipts`, `/v1 …/kg/receipts`
+  and the bench and **from no verify path at all**: a forged citation
+  answered `VERIFY OK` on every surface, and `backup create` gates on this
+  verdict, so it archived the forgery as clean. A detector nobody calls is
+  not a check. `parity.rs::HAND_PROJECTED` lists `VerifyReport` × CLI × MCP ×
+  `/v1`, so a new leg fails the build until all three project it — note the
+  admin console at `ui.html` is a FOURTH renderer and outside that gate),
+  knowledge graph (kg.rs — incl. the golden-values authority
   tier: `authority_class`/`review_state`/`canonical_key` DECLARED on
   closed vocabulary, HMAC-covered via a canonical extension on the
   `support` precedent so untouched facts keep byte-identical canonicals;
@@ -1017,7 +1031,16 @@ docker compose run --rm test          # cargo unit + integration tests (689 run,
                                       # neighbours were adding in parallel. Sum
                                       # the `test result:` lines of a full run.
                                       # The 4 ignored are 3 measurements needing
-                                      # testdata/*_50k.txt plus one in lib.rs; the
+                                      # testdata/*_50k.txt plus one in lib.rs. Run
+                                      # them with `cargo test --release -- --ignored`:
+                                      # 3 pass, and `measure_relation_promiscuity`
+                                      # FAILS on missing data, not on logic — it
+                                      # wants ar/el/he word lists and the tree
+                                      # carries ar/de/en, so two are simply absent
+                                      # (hermitdave/FrequencyWords, MIT, gitignored
+                                      # corpora). Verified 2026-08-10. It is not a
+                                      # measurement anyone can reproduce here until
+                                      # those two lists are fetched; the
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings

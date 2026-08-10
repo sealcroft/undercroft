@@ -4377,6 +4377,150 @@ mod tests {
         assert_eq!(r[0].verdict, ReceiptVerdict::Tampered);
     }
 
+    /// **A relabelled drawer audit row is caught; a legitimately destroyed
+    /// one is not.** Both arms, because this leg is only worth having if it
+    /// discriminates — `record_id` is outside the chain hash, so an offline
+    /// writer can relabel any row and every other leg still passes, but
+    /// `del/{id}` naming a destroyed drawer is ordinary operation and
+    /// alarming on it would retire the leg by making it noise.
+    ///
+    /// The premise that makes this safe was enumerated rather than assumed:
+    /// `delete_drawer_ruled` holds the crate's only `DELETE FROM drawers` and
+    /// appends `del/{id}` in the same transaction, so "no row and no
+    /// tombstone" is unreachable by any legitimate path.
+    #[test]
+    fn a_relabelled_drawer_audit_row_is_an_orphan_and_a_deleted_one_is_not() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        // Distinct `chunk_index`, because the id recipe is
+        // (wing, room, source, chunk_index, normalize_version) and content is
+        // deliberately NOT in it — `src_drawer` fixes the other four, so two
+        // calls to it are the same drawer written twice, not two drawers.
+        // The premise probe below caught exactly that.
+        let keep =
+            undercroft_core::Drawer::new("w", "r", "the kestrel roosts".into(), None, 0, "t");
+        let gone =
+            undercroft_core::Drawer::new("w", "r", "the ledger was signed".into(), None, 1, "t");
+        let gone_id = gone.id.clone();
+        assert_ne!(keep.id, gone.id, "premise: two distinct drawers");
+        s.upsert(&keep).unwrap();
+        s.upsert(&gone).unwrap();
+
+        // ORDINARY OPERATION: a destroyed drawer leaves a bare label behind
+        // and a `del/` tombstone beside it. This must stay green.
+        assert!(s.delete_drawer(&gone_id).unwrap());
+        let after_delete = s.verify().unwrap();
+        assert!(
+            after_delete.orphan_labels.is_empty(),
+            "a legitimately destroyed drawer is not an orphan: {:?}",
+            after_delete.orphan_labels
+        );
+        assert!(after_delete.ok(), "{after_delete:?}");
+        drop(s);
+
+        // TAMPERING: relabel the surviving drawer's audit row onto an id no
+        // drawer ever had. No live row, and no tombstone, because nothing
+        // destroyed it.
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let moved = db
+            .execute(
+                "UPDATE audit SET record_id = 'ffffffffffffffffffffffffffffffff' \
+                 WHERE record_id = ?1",
+                rusqlite::params![keep.id],
+            )
+            .unwrap();
+        assert_eq!(moved, 1, "premise: the relabel must have moved a row");
+        drop(db);
+
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let after = s2.verify().unwrap();
+        assert_eq!(
+            after.orphan_labels,
+            vec!["ffffffffffffffffffffffffffffffff".to_string()],
+            "a relabel onto a drawer that never existed must be an orphan"
+        );
+        assert!(!after.ok(), "and it must fail the verdict: {after:?}");
+        // Attribution: the relabel moves no tag, so every other leg is clean
+        // and `ok()` went false because of this one.
+        assert!(after.bad_records.is_empty(), "{after:?}");
+        assert!(after.chain_ok, "{after:?}");
+        assert!(after.mirror_drift.is_empty(), "{after:?}");
+        assert_eq!(after.tampered_receipts(), 0, "{after:?}");
+    }
+
+    /// **`verify()` must SEE a forged receipt, not merely be able to.**
+    ///
+    /// The test above proves `kg_verify_receipts` detects the forgery, and
+    /// that was true the whole time the defect existed: nothing inside
+    /// `verify()` called it, so `VerifyReport::ok()` — the verdict every
+    /// surface prints and `backup create` gates on — returned TRUE over this
+    /// exact vault. A test that exercises the detector without exercising
+    /// the verdict is the shape that let it ship.
+    ///
+    /// Both arms are asserted so this cannot pass for the wrong reason: the
+    /// same vault verifies clean before the forgery and fails after, and the
+    /// failure is attributed to the receipts leg specifically rather than to
+    /// any of the other five.
+    #[test]
+    fn a_forged_fact_receipt_fails_the_vault_verdict() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        let src = src_drawer("source words for the receipt");
+        let src_id = src.id.clone();
+        s.upsert(&src).unwrap();
+        s.kg_add_receipted(
+            "a",
+            "rel",
+            "b",
+            None,
+            None,
+            0.8,
+            (&src_id, &src.content),
+            None,
+        )
+        .unwrap();
+
+        // PREMISE. Intact, this vault verifies — otherwise the arm below
+        // proves nothing about receipts.
+        let before = s.verify().unwrap();
+        assert!(
+            before.ok(),
+            "premise: an intact vault must verify clean, got {before:?}"
+        );
+        assert_eq!(
+            before.receipts.len(),
+            1,
+            "premise: the leg must actually carry the receipted fact"
+        );
+        assert_eq!(before.receipts[0].verdict, ReceiptVerdict::Verified);
+        drop(s);
+
+        // Offline attacker rewrites the citation binding — the same forgery
+        // as `receipt_tamper_is_detected`, judged by the whole-vault verdict.
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        db.execute(
+            "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let after = s2.verify().unwrap();
+        assert_eq!(after.tampered_receipts(), 1);
+        assert!(
+            !after.ok(),
+            "a forged fact receipt must fail the vault verdict: {after:?}"
+        );
+        // Attribution: the other five legs are undisturbed, so `ok()` went
+        // false BECAUSE of the receipt and not for some incidental reason.
+        assert!(after.bad_records.is_empty(), "{after:?}");
+        assert!(after.chain_ok, "{after:?}");
+        assert_eq!(after.tampered_supersessions(), 0, "{after:?}");
+        assert!(after.orphan_labels.is_empty(), "{after:?}");
+        assert!(after.mirror_drift.is_empty(), "{after:?}");
+    }
+
     #[test]
     fn the_authority_door_answers_by_key_and_only_when_approved() {
         for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {

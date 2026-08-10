@@ -992,14 +992,35 @@ async function runVerify() {
     const s = r.supersessions || {};
     const sup = (s.verified || 0) + (s.source_changed || 0) + (s.dangling || 0) +
                 (s.unreceipted || 0) + (s.tampered || 0);
+    // The sixth leg. This console is a `/v1` CLIENT and the drift doctrine's
+    // four surfaces do not name it, so a leg added to the report reaches the
+    // wire for free and stops here unless someone renders it — which is the
+    // hand-projection defect one layer out from the code that gates it.
+    // It is inside `parity.rs::HAND_PROJECTED` now, and the moment it went in
+    // the gate found TWO legs this console had never shown: `orphan_labels`
+    // (2026-08-06) and `mirror_drift` (A28). Both drive the ✔/✘ above, so the
+    // console could report FAILED while its own breakdown named nothing —
+    // exactly the silence a report exists to prevent.
+    const k = r.receipts || {};
+    const rec = (k.verified || 0) + (k.source_changed || 0) + (k.dangling || 0) +
+                (k.unreceipted || 0) + (k.tampered || 0);
+    const orphans = r.orphan_labels || [];
+    const drift = r.mirror_drift || [];
     $("verifyReport").textContent =
       "records checked: " + r.records_checked +
       "\nchain ok:        " + r.chain_ok +
       "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none") +
+      "\norphan labels:   " + (orphans.length ? "\n  ORPHANED: " + orphans.join("\n  ORPHANED: ") : "none") +
+      "\nmirror drift:    " + (drift.length ? "\n  MIRROR: " + drift.join("\n  MIRROR: ") : "none") +
       (sup ? "\nsupersessions:   " + (s.verified || 0) + " verified · " + (s.source_changed || 0) +
              " source-changed · " + (s.dangling || 0) + " dangling · " + (s.unreceipted || 0) +
              " unreceipted · " + (s.tampered || 0) + " tampered" +
              ((r.bad_supersessions || []).length ? "\n  TAMPERED LINK: " + r.bad_supersessions.join("\n  TAMPERED LINK: ") : "")
+          : "") +
+      (rec ? "\nfact receipts:   " + (k.verified || 0) + " verified · " + (k.source_changed || 0) +
+             " source-changed · " + (k.dangling || 0) + " dangling · " + (k.unreceipted || 0) +
+             " unreceipted · " + (k.tampered || 0) + " tampered" +
+             ((r.bad_receipts || []).length ? "\n  TAMPERED RECEIPT: " + r.bad_receipts.join("\n  TAMPERED RECEIPT: ") : "")
           : "");
   } catch (e) { $("verifyMsg").textContent = ""; toast("verify failed — " + e.message, true); }
 }

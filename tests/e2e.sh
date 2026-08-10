@@ -259,6 +259,21 @@ check "kg stats"                  0 "triples: 2"                     -- "$BIN" k
 # `kg add` with a source, or an import whose payload lacked the cited drawer,
 # since a keyed fingerprint cannot be recomputed at a destination).
 check "kg receipts name unreceipted" 0 "unreceipted"                 -- "$BIN" kg receipts
+# **`verify` consults the fact receipts at all.** `kg_verify_receipts` was
+# reachable from `kg receipts`, `/v1 …/kg/receipts` and the bench — and from
+# nothing inside `verify()`, so a forged citation returned VERIFY OK on every
+# surface and `backup create` archived it.
+#
+# **What this fixture can reach, stated because the first version got it
+# wrong.** It asserted the CLI printing `fact receipts:` HERE and failed —
+# correctly. That line renders only when some fact CITES a drawer, and no
+# fact in THIS vault does: `kg add` has no `--source` flag. The check was
+# asserting a state its own fixture cannot enter. A real receipted fact is
+# built further down (search: "receipt fixture") through `import`, which is
+# the one non-model producer; what is asserted here is what is true here —
+# the leg stays quiet on an ordinary vault, and the receipts door exits 0.
+check "a clean vault with facts still verifies" 0 "VERIFY OK"        -- "$BIN" verify
+check "kg receipts exits 0 when nothing is forged" 0 "receipts:"     -- "$BIN" kg receipts
 
 echo "== Drawer management =="
 DRAWER_ID="$("$BIN" drawer list --wing eng --limit 1 | awk '{print $1}')"
@@ -627,6 +642,66 @@ else
   echo "FAIL  supersession receipt survives export/import"
   UNDERCROFT_HOME="$U12_DEST" "$BIN" verify | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+
+# **`verify` reads the KG fact receipts, judged on a REAL receipt.**
+# `kg_verify_receipts` was reachable from `kg receipts`, `/v1 …/kg/receipts`
+# and the bench — and from nothing inside `verify()` — so a forged citation
+# answered VERIFY OK on every surface and `backup create` archived it. The
+# leg rides inside the report now.
+#
+# Building the fixture is the interesting part, and it is why an earlier
+# version of this check FAILED: nothing interactive can write a fact that
+# CITES a drawer. `kg add` has no `--source`, `/v1` has no KG write route,
+# and `refine` needs a model this suite cannot reach. Import can, so this
+# builds the payload by hand:
+#   * the manifest line is DROPPED — its payload digest is checked
+#     unconditionally and we are rewriting the payload;
+#   * the fact is pointed at the drawer's real, derived id;
+#   * `source_fp` is added as a CLAIM. Its value is irrelevant and
+#     deliberately not stored: since U12 the fingerprint is keyed with the
+#     SOURCE vault's own secret, so a destination could never recompute it
+#     and every restored backup would read `source-changed` forever. The
+#     destination re-derives from the drawer it just imported; the traveling
+#     value survives only as the claim that a receipt existed, which is what
+#     separates "no citation" from "a citation we could not bind".
+KGR_SRC="$(mktemp -d)"
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" remember \
+  "Kestrel signed off on the Vaduz ledger." --wing sup --room r >/dev/null 2>&1
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" kg add kestrel signed vaduz-ledger >/dev/null 2>&1
+KGR_EXPORT="$(mktemp)"
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" export > "$KGR_EXPORT"
+KGR_DID="$(grep -m1 '^{"drawer"' "$KGR_EXPORT" | grep -o '"id":"[0-9a-f]\{32\}"' | head -1 | cut -d'"' -f4)"
+KGR_PAYLOAD="$(mktemp)"
+grep -v '^{"undercroft_manifest"' "$KGR_EXPORT" \
+  | sed "s/\"source_drawer_id\":null/\"source_drawer_id\":\"$KGR_DID\"/" \
+  | sed '/^{"triple"/s/}}}$/},"source_fp":"aa"}}/' > "$KGR_PAYLOAD"
+# PREMISE. If the rewrite silently matched nothing, everything below would
+# pass by describing a vault with no receipt in it — which is exactly how the
+# first version of this check went green in principle and red in practice.
+if [ -n "$KGR_DID" ] && grep -q "\"source_drawer_id\":\"$KGR_DID\"" "$KGR_PAYLOAD" \
+   && grep -q '"source_fp":"aa"' "$KGR_PAYLOAD"; then
+  echo "ok    receipt fixture: the fact cites the drawer and claims a receipt"; PASS=$((PASS+1))
+else
+  echo "FAIL  receipt fixture was not built — the rest proves nothing"
+  sed 's/^/      /' "$KGR_PAYLOAD"; FAIL=$((FAIL+1))
+fi
+KGR_DEST="$(mktemp -d)"
+UNDERCROFT_HOME="$KGR_DEST" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$KGR_DEST" "$BIN" import "$KGR_PAYLOAD" >/dev/null 2>&1
+if UNDERCROFT_HOME="$KGR_DEST" "$BIN" verify | grep -qE "fact receipts:[[:space:]]+1 verified"; then
+  echo "ok    verify reports a verified fact receipt"; PASS=$((PASS+1))
+else
+  echo "FAIL  verify reports a verified fact receipt"
+  UNDERCROFT_HOME="$KGR_DEST" "$BIN" verify | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# And the vault is still GREEN — a leg that alarmed on an ordinary receipt
+# would fail every vault that ever ran `refine`, and the arm above would not
+# notice.
+check "a vault with a real receipt still verifies" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$KGR_DEST" "$BIN" verify
+check "kg receipts exits 0 on a verified receipt" 0 "1 verified" -- \
+  env UNDERCROFT_HOME="$KGR_DEST" "$BIN" kg receipts
 
 # Mempalace-format line imports too.
 MEMPAL_FILE="$(mktemp)"
@@ -1089,6 +1164,18 @@ rest_body "superseded drawer kept" '"the retro is on thursdays at four"' -- \
 # that does not add up to the list beside it.
 rest_body "kg receipts summary complete" '"unreceipted"' -- \
   "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
+# **`ok` — the field the fleet's integrity classifier reads.** This route
+# reported `summary.tampered` and no verdict, so a scripted
+# `ops <tenant> kg receipts` over a vault with a forged citation exited 0:
+# `is_integrity_verdict` keys on `"ok": false` for a 200 and there was no
+# `ok`. Its self-described analogue `/supersessions` gained the field and
+# this one did not, in the same file.
+rest_body "kg receipts carries a verdict" '"ok":true' -- \
+  "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
+# The verify route reports the sixth leg too, so a caller can see WHY a
+# vault failed rather than only that it did.
+rest_body "verify reports the receipts leg" '"receipts"' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
 
 # Deployment-assigned wing trust (C3.3): assigned by the operator surface,
 # a floored search excludes below-floor wings BEFORE candidates, and the

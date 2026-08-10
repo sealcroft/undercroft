@@ -139,12 +139,18 @@ const EXIT_INTEGRITY: u8 = 2;
 /// Classify an engine reply for the scripted operator door.
 ///
 /// Two shapes carry an integrity verdict and neither is the status alone:
-/// a 200 whose body says `"ok": false` (verify — and ONLY verify; the
-/// supersessions route reports `summary.tampered` with no `ok` field, so it
-/// is NOT covered here and is recorded as open), and an
+/// a 200 whose body says `"ok": false`, and an
 /// error whose body carries `"class": "integrity"` — which the engine
 /// emits precisely because 409 is also how a co-resident refusal and a
 /// wrong read-only posture answer, and those must not page anyone.
+///
+/// **The `"ok": false` arm used to say "verify — and ONLY verify", naming
+/// the supersessions route as a recorded gap.** That gap was closed in the
+/// same campaign that wrote the comment: `/v1 …/supersessions` answers `ok`
+/// now, and since 2026-08-10 so does `/v1 …/kg/receipts`, which had the
+/// identical hole and was described in its own doc as the analogue of the
+/// route that got the fix. A classifier documenting a gap its own engine has
+/// closed under-reports forever, silently, and reads as deliberate scope.
 fn is_integrity_verdict(status: u16, body: &[u8]) -> bool {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
         return false;

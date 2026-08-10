@@ -2,6 +2,176 @@
 
 ## Unreleased — 1.1.0
 
+### a forged fact receipt passed `verify` on every surface, and got archived
+
+**The detector existed the whole time. Nothing called it.**
+`kg_verify_receipts` checks each distilled fact's keyed citation against the
+verbatim drawer it was derived from, and it was reachable from
+`undercroft kg receipts`, `GET /v1/…/kg/receipts` and the bench — and from
+**no verify path anywhere**. `VerifyReport::ok()` had five terms and none was
+receipts. So a fact whose receipt binding had been rewritten offline answered:
+
+| Surface | What it said |
+|---|---|
+| `undercroft verify` | exit 0, `VERIFY OK` |
+| `POST /v1/…/verify` | `"ok": true` |
+| MCP `undercroft_verify` | `isError: false` |
+| `undercroft-orchestrator ops … verify` | exit 0 |
+| `undercroft backup create` | **archived the vault** — it gates on this exact verdict |
+
+The receipt columns (`kg_triples.receipt_tag`, `source_fp`) sit outside every
+drawer's HMAC, outside the chain, and — the part that makes this invisible
+rather than merely unchecked — **outside the fact's own tag too**. `verify`
+does walk every KG and tunnel tag (`kg_verify`, `tunnels_verify`, both
+feeding `bad_records`), so the natural assumption is that a forged citation
+would surface there. It does not: the triple keeps verifying. The new test
+pins all five other legs clean over the forgery, so the verdict is
+attributable to the receipt and to nothing else. **That is the same sentence
+the tree already wrote about drawer supersessions**, on the field it added to
+fix it — the identical structure one table over did not get the leg.
+
+**Fixed:** `VerifyReport` gains a sixth leg, `receipts`, populated inside
+`verify()` and covered by `ok()` via `tampered_receipts()`. Only `Tampered`
+fails; `SourceChanged`, `Dangling` and `Unreceipted` are states a legitimate
+vault reaches, exactly as for supersessions — a leg that alarms on ordinary
+operation is a leg that gets ignored and then removed. The `Integrity` swallow
+mirrors the supersession leg's, conditional on a drawer alarm already
+standing, because a `verify` that returns an *error* instead of a verdict is
+the failure the function exists to prevent.
+
+**The drift check came free and then charged for one more surface.**
+`parity.rs::HAND_PROJECTED` already lists `VerifyReport` × CLI × MCP × `/v1`,
+so the build failed until all three projected the new field.
+
+**The admin console is a FOURTH renderer, and it is inside the gate now.**
+`ui.html` is `include_str!`'d into every build and served at `GET /ui`; being
+a `/v1` client rather than one of the doctrine's four surfaces, a new leg
+reaches its wire for free and stops dead unless somebody renders it by hand.
+Adding the entry immediately found two legs the console had **never** shown —
+`orphan_labels` (2026-08-06) and `mirror_drift` (A28) — both of which drive
+the ✔/✘ verdict it prints, so it could report FAILED while its own breakdown
+named nothing. An operator reading that console over a vault with a flipped
+mirror column saw a red tick and no reason. Both render now, and the gate
+carries a `ui.html` window boundary (`\nasync function ` / `\nfunction `)
+because without one the window ran to end-of-file and every field would have
+been "found" somewhere in 400 lines of unrelated console code — a gate that
+cannot fail. Counterfactual executed: dropping `mirror_drift` from the
+console fails the build naming it.
+
+**Two more defects on the same route family, both confirmed by reading:**
+
+* **`GET /v1/…/kg/receipts` had no `ok` field.** Its self-described analogue
+  `GET …/supersessions` gained one in the same campaign, with a comment
+  explaining that `is_integrity_verdict` keys on `"ok": false` for a 200 —
+  and the route it names as its twin, in the same file, did not get it. A
+  scripted `ops <tenant> kg receipts` over a forged citation exited 0 with
+  `summary.tampered` sitting unread in the body.
+* **`undercroft kg receipts` exited 1 on a tampered receipt.** Exit 2 is this
+  CLI's integrity verdict; 1 means "the run failed, retry it". `bail!` gave 1.
+  This is verbatim the defect `verify-forgetting` records fixing in its own
+  arm, on the same class of artifact — a compliance script that retries a 1
+  retried a forged citation and moved on.
+
+**And the fleet classifier was documenting a gap its own engine had closed.**
+`is_integrity_verdict`'s doc said the `"ok": false` arm covers "verify — and
+ONLY verify", naming `/supersessions` as a recorded gap; that route answers
+`ok` now, and so does `/kg/receipts`. A classifier scoped by a stale comment
+under-reports forever and reads as deliberate.
+
+**The integrity-class inventory now counts both surfaces.** The test named
+`the_integrity_classes_are_exactly_the_ones_v1_answers_409_for` was wrong
+three ways: it listed six errors on ONE surface with the other side written
+out by hand in a different file; it **omitted `DatabaseMissing`**, so it could
+not have failed if either surface dropped the newest member; and its name
+asserted equivalence with the 409 set, which is false — `ReadOnlyUnmigrated`
+is a 409 and deliberately not a verdict (an intact vault under a wrong
+posture), which is precisely why the `class` marker exists instead of the
+status carrying the meaning. Replaced by
+`the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`, which runs each
+error through **both** classifiers and requires them to agree, with the
+expected verdict pinned as a third opinion so the two cannot drift together.
+Counterfactual executed: dropping `DatabaseMissing` from `/v1`'s arm fails it
+by name.
+
+**Gates, all run against the reverted code and observed to fail.**
+`a_forged_fact_receipt_fails_the_vault_verdict` forges the binding and judges
+it by the whole-vault verdict rather than by the detector — the distinction
+that let this ship, since `receipt_tamper_is_detected` passed throughout.
+Both halves of the defect were reproduced separately and each failed
+differently: with the `ok()` term removed it fails on the verdict, with
+`verify()` not consulting the detector it fails on the premise arm. Surface
+arms in `tests/e2e.sh` cover the CLI rendering the leg, a clean vault still
+verifying, `/v1` reporting it, and `kg/receipts` carrying `ok`.
+
+**The orphan-label leg now covers drawers (O11).** It resolved graph labels
+only, and the reason on file — "every other namespace has a legitimate path
+to an absent subject" — is true of `del/`, `retention-clear/`, `read/`,
+`egress/` and `rotate/`, and **not** of a bare drawer id, the one case nobody
+separated out. `record_id` is the one part of an audit row outside the chain
+hash, so a relabel onto a drawer passed every other leg.
+
+It had been filed rather than fixed because it rested on an unanswered
+question: does every path that destroys a drawer write `del/{id}`? If not,
+the check alarms on ordinary operation. Answered by enumeration — the crate
+holds **exactly one** `DELETE FROM drawers`, inside `delete_drawer_ruled`, a
+declared delete choke point that appends `del/{id}` in the same transaction,
+and its three callers (the public delete, admission deny, and
+`forget_with_proof`, which the retention sweep and `delete_by_source` ride)
+all inherit it. `&drawer.id` is also the only no-slash `record_id` the store
+mints. So no live row and no tombstone is unreachable legitimately.
+
+Both arms gated: a legitimately deleted drawer keeps `verify` green, and a
+relabel onto an id no drawer ever had fails it by name with the other legs
+pinned clean. Counterfactual: graph-only makes the relabel invisible.
+**The premise probe earned itself on the first run** — the fixture asserted
+one relabelled row and moved two, because the id recipe excludes content by
+design, so two `src_drawer` calls are one drawer written twice.
+
+**A hand-declared citation is declined by doctrine (O12).** `ROADMAP` C3.1
+defines a receipt as the citation of a **derivation**; the architecture
+reference's "a model may point, not assert" is the engine checking each span
+against the note it came from; `docs/LABELS.md` holds that a self-declared
+label is never a trust boundary. A declared citation has no derivation to
+check, so its best possible verdict would be `Verified` meaning something
+weaker than that word carries — laundering, which this tree answers by
+distinguishing (`stated`/`background`/`unevaluated`, `Unreceipted` vs
+`Dangling`) and never by absorbing. Applied backwards it changes nothing in
+the good sense: the tree already behaves this way. What would reopen it, and
+the three-part shape it would then have to take, is recorded in O12.
+
+**The surface coverage was found by a check of mine that failed, not by
+reasoning.** The first e2e arm asserted the CLI printing its fact-receipt
+line and went red: that line renders only when a fact CITES a drawer, and no
+fact in that fixture does — `undercroft kg add` has no `--source` flag and
+`/v1` has no KG write route. The check was asserting a state its own fixture
+cannot enter.
+
+The suite now **builds a genuine receipted fact with no model**, through
+`import`: export a vault, point the fact at the drawer's derived id, add a
+`source_fp` CLAIM, drop the manifest line whose payload digest would refuse
+the edit, import. The claim's value is irrelevant and deliberately not
+stored — since U12 the fingerprint is keyed with the SOURCE vault's secret,
+so a destination could never recompute it and every restored backup would
+read `source-changed` forever; the destination re-derives from the drawer it
+just imported, and the traveling value survives only as evidence that a
+receipt existed. `verify` then reports `1 verified`. That path goes through
+the **batch gate** (`upsert_batched` → `upsert_many`), which is the more
+valuable of the two: a batch owns its transaction, so it cannot reach
+`write_drawer` and screens through its own `admission_divert` loop —
+the second implementation ROADMAP R5 exists to collapse. `/v1` import is the
+record-by-record gate; KG facts have no batch gate on either surface.
+
+**Residual, stated:** the FORGED receipt stays a unit test. This suite
+tampers with `perl` against text anchors and a keyed 32-byte column has none.
+And an earlier draft of this entry claimed the machinery was "unreachable by
+hand" — corrected: there is no *interactive* path, but `import` is a path,
+which is a smaller claim. Filed as ROADMAP **O12**, an open question, since a
+`--source` flag would let a caller assert a provenance nothing derived.
+
+**PATCH.** A vault that verified before and is not forged verifies now; no
+documented value stops being accepted. What changes is that a forged citation
+stops answering green — which is a defect being gone, not a contract moving.
+
 ### nothing gated a pull request, and the comment saying otherwise was the reason
 
 `tests/battery.sh` was invoked by **no CI workflow** — `ci.yml` named it only

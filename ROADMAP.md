@@ -180,7 +180,11 @@ for having closed a defect it does not touch, **O9**, that no CI workflow
 invokes `tests/battery.sh`, so all four preflights gate a local run and
 nothing on a pull request, and **O10**, that the former-name trace verifier is
 invoked by nothing and lives outside the tree — which is how O8's own unit put
-the former name back into a tracked file with the battery green.
+the former name back into a tracked file with the battery green. **O11 and
+O12 were opened and closed on 2026-08-10**: the orphan-label leg now covers
+bare drawer ids (the deletion-path enumeration that had blocked it is done),
+and a hand-declared fact citation is declined by doctrine rather than left as
+a question.
 
 **Round four (2026-08-10) found 70 verified defects** across eleven
 dimensions — 2 critical, 20 high, and **67 of 70 failing silently**. Full
@@ -783,6 +787,130 @@ and the premise probe fails rather than passing vacuously.
 
 **Residual, the same one O9 carries:** a preflight in `tests/battery.sh` gates
 a local run and nothing on a pull request until O9 lands.
+
+### O11 — CLOSED 2026-08-10: the orphan-label leg now covers drawers too
+Raised by the round-four sweep as a defect; **reclassified here as an open
+question with an argument, because it is a recorded boundary and not a
+drift.** `VerifyReport::orphan_labels` resolves audit labels only for
+`kg/{id}`, `kg/{id}/authority` and `kg-entity/{id}`, and its doc comment
+scopes that deliberately: nothing in the crate deletes from `kg_triples` or
+`kg_entities`, so those labels must always resolve, while every other
+namespace has a legitimate path to an absent subject — `del/{id}` names a
+destroyed drawer *by definition*, a denied admission destroys its drawer,
+`retention-clear/{wing}` removes the row `retention/{wing}` described, and
+`read/`, `egress/` and `rotate/` name no row at all. Including them would
+alarm on ordinary operation, which is worse than not having the leg.
+
+**What the written reason does not address, and this is the real finding:**
+a *discriminating* check is possible for drawers and was never considered —
+a bare drawer-id label, zero live rows, **and no `del/{id}` record** is not
+ordinary operation, it is a relabel onto a drawer that was never destroyed.
+`record_id` is the one part of an audit row outside the chain hash, which is
+the whole reason this leg exists; the argument for scoping it to the graph
+is an argument about false positives, not about coverage.
+
+**The enumeration was the work, and it came before the code.** The question
+was whether every path that destroys a drawer writes `del/{id}`; if any did
+not, the discriminating check would alarm on ordinary operation exactly as
+the doc predicted. Answered by reading, 2026-08-10:
+
+| | |
+|---|---|
+| Statements removing a drawer row in production | **exactly one** — `manage.rs`, inside `delete_drawer_ruled`. Every other `DELETE` touches a derived index table (`drawer_fde`, `drawer_pq`, `drawer_pq_wing`, `drawers_fts`); the one in `lib.rs` is inside a `#[test]` |
+| Its shape | a declared **delete choke point** — *"a new delete path does not compile until its author decides"* |
+| Callers | three, all of them: the public `delete_drawer`, admission **deny**, and `forget_with_proof` — which the retention sweep and `delete_by_source` ride |
+| The record | `del/{id}`, appended **in the same transaction** as the delete |
+| Bare labels | `&drawer.id` is the ONLY no-slash `record_id` the store mints — enumerated from every `chain_append` call site |
+
+So "no live row and no tombstone" is unreachable legitimately, and the check
+discriminates. **Closed by widening the leg**, not by a new one.
+
+**Gate, both arms executed:**
+`a_relabelled_drawer_audit_row_is_an_orphan_and_a_deleted_one_is_not` deletes
+a drawer through the API and requires `verify` to stay green, then relabels a
+surviving drawer's audit row onto an id no drawer ever had and requires the
+verdict to fail naming it — with the other four legs pinned clean so the
+failure is attributable. Counterfactual: reverting the leg to graph-only
+makes the relabel invisible (`orphan_labels: []`). **Its premise probe earned
+itself immediately** — the first fixture asserted one relabelled row and
+moved two, because `src_drawer` fixes wing/room/source/chunk_index and the id
+recipe deliberately excludes content, so two calls to it are one drawer
+written twice.
+
+### O12 — CLOSED by doctrine: a citation is DERIVED, never declared
+Found on 2026-08-10 by an e2e check that FAILED: it asserted `undercroft
+verify` printing its fact-receipt line, on a fixture where no fact cites
+anything. `undercroft kg add` takes subject, predicate, object, `--from`,
+`--to` and `--confidence` and **has no `--source`**; `/v1` has no KG write
+route at all (browse plus `kg/authority`); so the only producers of a citing
+fact are `refine`, which needs an LLM, and `import`.
+
+**A correction to this entry's own first draft**, which said the machinery
+was "unreachable by hand". It is not: `import` reaches it with no model at
+all, and the e2e now does exactly that — export a vault, point the fact at
+the drawer's derived id, add a `source_fp` CLAIM (the value is irrelevant and
+deliberately not stored; the destination re-derives from the drawer it just
+imported), drop the manifest line whose payload digest would otherwise
+refuse the edit, and import. The result is a genuine keyed receipt reading
+`1 verified`. So the true claim is narrower and still worth recording: there
+is **no interactive path**, only a payload-construction one.
+
+**The decision comes from the documents, not from preference, and they
+settle it.** Three passages, in order of authority:
+
+1. **`ROADMAP` C3.1** says what a receipt is FOR: "every fact carries an
+   HMAC-verified citation to its verbatim source drawer … their pitch (smart
+   memory) becomes our subset; our pitch (**provable** memory) stays
+   exclusive."
+2. **`architecture/index.html`, "A model may point, not assert"**: distillation
+   "is asked for quotations … and the engine checks each span against the
+   note it supposedly came from. A span the note does not literally contain
+   is not evidence and contributes nothing." A receipt is the residue of a
+   **derivation the engine checked**.
+3. **`docs/LABELS.md`**: "a **self-declared label is never a trust
+   boundary**", and "trust labeling belongs to deployment-assigned facts …
+   controlled by the principal, not by the content's author."
+
+A declared citation produces no derivation to check. The strongest verdict it
+could ever earn is "someone asserted this, and that drawer's text has not
+changed since" — a weaker claim wearing `Verified`, the word carrying the one
+guarantee C3.1 calls exclusive. **That is laundering, and this tree's
+standing answer to laundering is to distinguish, never absorb**: grounding is
+`stated` / `background` / `unevaluated` because "we did not look" and "we
+looked and found nothing" are different claims, and `Unreceipted` exists
+because it "says something different" from `Dangling`. A `--source` flag as
+proposed would have collapsed exactly that distinction.
+
+**So: declined. `kg add` gains no `--source`.** The absence is a boundary,
+not a drift, and it is recorded here as one.
+
+**Applied backwards, as `CLAUDE.md` requires of any rule written down here,
+it changes nothing — in the first sense, the good one.** The tree already
+behaves this way everywhere: `kg add` never had the flag; a hand-added fact
+records no extractor identity while a distilled one carries it inside the
+fact's HMAC; trust assignment is refused on MCP for the same "not the
+content's author" reason. The rule describes what is already done, which is
+the outcome that validates it rather than the one that leaves it untested.
+
+**What would REOPEN it, stated so this is a decision and not a wall.** If a
+product case appears for hand-declared provenance, the doctrine already fixes
+its shape and all three parts are mandatory:
+
+- a **distinct verdict** (`Declared`, beside `Verified`), because the
+  existing word means derived-and-checked;
+- the **declarer's identity inside the fact's HMAC**, the extractor-identity
+  precedent — `LABELS.md` requires identity and receipts before any surface
+  may filter on a claim;
+- **operator surfaces only, never MCP**, since an agent asserting its own
+  provenance is precisely the content's author declaring its own trust.
+
+Anything less re-opens the laundering this closure refuses.
+
+**Settle it before adding the flag**, and record which way. If it lands:
+`kg add --source <drawer-id>` writing through `kg_add_receipted`, MCP
+deliberately excluded (an agent asserting its own provenance), and the e2e
+arm above upgraded from "the leg is quiet" to "the leg renders and a forged
+one fails".
 
 ---
 
