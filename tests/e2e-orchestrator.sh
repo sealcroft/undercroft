@@ -77,6 +77,31 @@ body_has "register engine-a" '"added":"engine-a"' -- -X POST "${ADMIN[@]}" \
 body_has "register engine-b" '"added":"engine-b"' -- -X POST "${ADMIN[@]}" \
   -d "{\"name\":\"engine-b\",\"url\":\"http://127.0.0.1:$PORT_B\",\"bearer\":\"$BEARER_B\",\"assertion_secret\":\"$SECRET_B\"}" \
   "$O/admin/instances"
+# **A registration whose assertion secret names no secret is refused, on the
+# SERVER door.** `ui.html` blocked an empty secret client-side only, which is
+# exactly why the server gap stayed invisible: every hand-driven registration
+# was stopped and nothing else was. `proxy.rs` calls its path guard and the
+# assertion MAC "two independent barriers, because one silent misconfiguration
+# must not remove the only one" — an empty secret removed one of them at
+# registration, and the instance then routed and reported healthy.
+# Whitespace is the arm a fix mapping empty-to-absent would miss: it is not
+# empty, so it would be stored and used as a real key.
+code_is  "empty assertion secret is 400"      400 -- -X POST "${ADMIN[@]}" \
+  -d "{\"name\":\"engine-x\",\"url\":\"http://127.0.0.1:$PORT_A\",\"bearer\":\"b\",\"assertion_secret\":\"\"}" \
+  "$O/admin/instances"
+code_is  "whitespace assertion secret is 400" 400 -- -X POST "${ADMIN[@]}" \
+  -d "{\"name\":\"engine-x\",\"url\":\"http://127.0.0.1:$PORT_A\",\"bearer\":\"b\",\"assertion_secret\":\"   \"}" \
+  "$O/admin/instances"
+# A refusal must not half-register: the name stays absent from the list.
+if curl -s "${ADMIN[@]}" "$O/admin/instances" | grep -q 'engine-x'; then
+  # The message must not collide with the check at the bottom of this file,
+  # which carries the same words for a DIFFERENT refusal — a failure line is
+  # the only thing a reader gets, so two of them reading alike sends someone
+  # to the wrong test.
+  echo "FAIL  a secretless registration must not appear in the list"; FAIL=$((FAIL+1))
+else
+  echo "ok    a secretless registration is not registered"; PASS=$((PASS+1))
+fi
 body_has "instance list has both"  '"engine-b"'      -- "${ADMIN[@]}" "$O/admin/instances"
 body_has "instance health probes"  '"healthy":true'  -- "${ADMIN[@]}" "$O/admin/instances/engine-a/health"
 

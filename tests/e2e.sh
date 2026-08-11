@@ -578,6 +578,33 @@ check "assert-header refuses it"  1 "names no secret"                 -- \
   env UNDERCROFT_ASSERTION_SECRET= "$BIN" assert-header default
 check "assert-header mints"       0 ":"                               -- \
   env UNDERCROFT_ASSERTION_SECRET=s3cret "$BIN" assert-header default
+# **The claim `UPGRADING.md` makes to operators, gated.** "On `serve-http`
+# this happens before the port is bound" was asserted in the upgrade notes
+# and backed by nothing repeatable — the surface that matters most for this
+# variable is the SERVER, because that is where the boundary silently ceased
+# to exist. Both halves are checked: it refuses, AND it never bound.
+for BADSEC in "" "   "; do
+  LBL=$([ -z "$BADSEC" ] && echo empty || echo whitespace)
+  env UNDERCROFT_ASSERTION_SECRET="$BADSEC" "$BIN" serve-http --host 127.0.0.1 --port 18799 \
+    >"$UNDERCROFT_HOME/assert-refuse.log" 2>&1
+  RC=$?
+  if [ "$RC" -ne 0 ] && grep -q "names no secret" "$UNDERCROFT_HOME/assert-refuse.log"; then
+    echo "ok    a $LBL assertion secret refuses to start"; PASS=$((PASS+1))
+  else
+    echo "FAIL  a $LBL assertion secret must refuse to start (rc=$RC)"
+    sed 's/^/      /' "$UNDERCROFT_HOME/assert-refuse.log" | tail -3; FAIL=$((FAIL+1))
+  fi
+  if curl -s -m 2 "http://127.0.0.1:18799/healthz" >/dev/null 2>&1; then
+    echo "FAIL  a $LBL assertion secret bound the port anyway"; FAIL=$((FAIL+1))
+  else
+    echo "ok    a $LBL assertion secret never bound the port"; PASS=$((PASS+1))
+  fi
+done
+# And UNSET is still not a declaration — the contract a single-tenant
+# deployment relies on. Without this arm the two above would pass on a build
+# that refused to start under every configuration.
+env UNDERCROFT_ASSERTION_SECRET= "$BIN" config-check >/dev/null 2>&1
+check "unset still starts"        0 "This environment starts"         -- "$BIN" config-check
 # A GOOD value passes — otherwise the checks above would pass on a command
 # that refused everything.
 check "a good value passes"       0 "This environment starts"         -- \

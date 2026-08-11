@@ -1166,6 +1166,18 @@ empty, whitespace-only and a real secret, with the real-secret arms present so
 the refusals cannot pass by refusing everything. `UPGRADING.md` carries the
 entry, since this can stop a misconfigured deployment at start-up.
 
+**The two surfaces that matter most are GATED now, not probed once
+(2026-08-11).** The original gate list covered `config check` and
+`assert-header`; the SERVER refusal — the claim `UPGRADING.md` makes to
+operators, *"on `serve-http` this happens before the port is bound"* — was
+verified by a one-off container run that nothing would ever repeat, and the
+orchestrator door not at all. Both are `tests/` checks now: `e2e.sh` asserts
+that an empty and a whitespace secret each refuse to start AND never bind the
+port, with an unset control so the pair cannot pass on a build that refuses
+every configuration; `e2e-orchestrator.sh` asserts `POST /admin/instances`
+answers 400 for both and that a refused registration does not appear in the
+instance list. A verification that runs once is not a gate.
+
 **Residual, stated:** an empty `bearer` is accepted at the same orchestrator
 door and is the same shape one variable over. It is NOT the same boundary —
 the bearer authenticates to the engine rather than separating tenants — so it
