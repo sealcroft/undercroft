@@ -483,7 +483,19 @@ enum Command {
         #[command(subcommand)]
         action: BackupAction,
     },
-    /// Print auto-save hook settings for an agent client
+    /// Configuration: validate this environment's `UNDERCROFT_*` declarations
+    ///
+    /// **The spelling every doc publishes.** `UPGRADING.md`'s own pre-upgrade
+    /// command, the release flow in `CLAUDE.md`, `README`, `docs/AGENTS.md`
+    /// and the architecture page all write `undercroft config check` with a
+    /// SPACE, while clap derived `config-check` from the variant name — so
+    /// the command an operator was told to run before every upgrade did not
+    /// exist. A clap `alias` cannot express it (aliases are one token), so
+    /// the two-word form is a subcommand group.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Validate every `UNDERCROFT_*` declaration in this environment
     /// WITHOUT opening a vault or binding a port — so an upgrade is tested
     /// in a pipeline rather than discovered at restart.
@@ -491,15 +503,39 @@ enum Command {
     /// Exit 1 if any declaration that turns a protection on would refuse to
     /// start; exit 0 otherwise. Warnings do not fail the run: those are
     /// declarations whose default is already the conservative choice.
+    ///
+    /// Kept beside `config check` rather than replaced: this is the spelling
+    /// that has always WORKED, so removing it would break the scripts that
+    /// found the doc wrong and adapted.
     ConfigCheck {
         /// Also print the declarations that resolve cleanly
         #[arg(long)]
         verbose: bool,
     },
+    /// Print auto-save hook settings for an agent client
+    ///
+    /// This doc comment sat above `ConfigCheck` for as long as that variant
+    /// existed: something was inserted BETWEEN a doc comment and the thing it
+    /// documented, so `config-check --help` described hooks and `hooks` had
+    /// no help at all. Nothing in this tree can see that class — clap accepts
+    /// it, rustfmt accepts it, and no gate reads help strings — which is why
+    /// it is gated below by `every_subcommand_has_its_own_about`.
     Hooks {
         /// Client: claude-code
         #[arg(default_value = "claude-code")]
         client: String,
+    },
+}
+
+/// `config check` — the two-word spelling every doc publishes.
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Validate every `UNDERCROFT_*` declaration in this environment
+    /// WITHOUT opening a vault or binding a port
+    Check {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -1432,9 +1468,18 @@ const EXIT_FAILURE: u8 = 1;
 /// answer will never change.
 ///
 /// So the decision moves to the one place every command returns through. The
-/// classes are deliberately the SAME SET `/v1` answers 409 for
+/// classes are deliberately the same set `/v1` marks **`class: "integrity"`**
 /// (`tenant::store_err` / `tenant::vault_err`), so the two surfaces cannot
 /// state different doctrines about the same bytes.
+///
+/// **Not "the set `/v1` answers 409 for", which is what this line said until
+/// 2026-08-10 and is false.** `ReadOnlyUnmigrated` answers 409 and is
+/// deliberately not a verdict here — an intact vault under a wrong posture —
+/// and so does a co-resident refusal. That is precisely why the `class`
+/// marker exists rather than the status carrying the meaning, and a claim
+/// pinned to the status could hold while the doctrine drifted. The two sets
+/// are counted against each other by
+/// `tenant::tests::the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`.
 ///
 /// **The stated cost**: a wrong `UNDERCROFT_PASSPHRASE` derives a different
 /// manifest key, so the MAC fails and this reports an integrity verdict for
@@ -2041,6 +2086,31 @@ fn run(cli: Cli) -> Result<()> {
                     println!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
                 }
             }
+            // The sixth leg, and the same story one level up: a fact's
+            // receipt binds it to the verbatim drawer it was distilled
+            // from, keyed, in columns no drawer HMAC covers. It rides
+            // inside the report now — until it did, `VERIFY OK` printed
+            // over a forged citation and `backup create` archived it.
+            let receipts = &report.receipts;
+            if !receipts.is_empty() {
+                use undercroft_store::ReceiptVerdict as V;
+                let count = |v: V| receipts.iter().filter(|r| r.verdict == v).count();
+                println!(
+                    "fact receipts:   {} verified · {} source-changed · {} dangling · \
+                     {} unreceipted · {} tampered",
+                    count(V::Verified),
+                    count(V::SourceChanged),
+                    count(V::Dangling),
+                    count(V::Unreceipted),
+                    report.tampered_receipts()
+                );
+                for r in receipts.iter().filter(|r| r.verdict == V::Tampered) {
+                    println!(
+                        "  TAMPERED RECEIPT: {} ← {}",
+                        r.triple_id, r.source_drawer_id
+                    );
+                }
+            }
             if report.ok() {
                 println!("{}", tr("verify-ok"));
             } else {
@@ -2105,30 +2175,61 @@ fn run(cli: Cli) -> Result<()> {
             // script that retries run errors retried a forged document
             // and ignored it. Only the attestation verdict takes exit 2;
             // an I/O or SQLite failure stays an ordinary error.
-            if let Err(e) = store.verify_forget_attestation(&att) {
-                match e {
-                    undercroft_store::StoreError::Attestation(why) => {
-                        println!("ATTESTATION FAILED: {why}");
-                        std::process::exit(EXIT_INTEGRITY.into());
-                    }
-                    other => return Err(other.into()),
+            let verdict = match store.verify_forget_attestation(&att) {
+                Ok(v) => v,
+                Err(undercroft_store::StoreError::Attestation(why)) => {
+                    println!("ATTESTATION FAILED: {why}");
+                    std::process::exit(EXIT_INTEGRITY.into());
+                }
+                Err(other) => return Err(other.into()),
+            };
+            // Attestation fields come from a caller-supplied JSON file;
+            // byte-slicing them panics on a multi-byte boundary, and these
+            // lines run while printing a verdict.
+            let before: String = att.head_before.chars().take(12).collect();
+            let after: String = att.head_after.chars().take(12).collect();
+            let signature = if att.sig.is_some() {
+                "; sender signature verified"
+            } else {
+                "; unsigned"
+            };
+            match verdict {
+                undercroft_store::AttestationVerdict::Verified => println!(
+                    "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
+                     {before}… and {after}…, nothing else changed{signature}",
+                    att.drawers.len()
+                ),
+                // **A third verdict, and it exits 0** (ROADMAP O13). It is
+                // not a failure: the run succeeded and the evidence is real.
+                // Exit 1 would tell a compliance script "retry", and no
+                // retry will ever change this answer — the key that would
+                // change it was destroyed on purpose. Exit 2 is the tamper
+                // verdict and this is not tampering. The verdict WORD leads
+                // the line, so a script matching on `ATTESTATION VERIFIED`
+                // still tells the two apart.
+                undercroft_store::AttestationVerdict::Recorded { rotations_since } => {
+                    let rotations = match rotations_since {
+                        0 => String::new(),
+                        n => format!(
+                            " This vault records {n} key rotation(s) after the \
+                             attested interval."
+                        ),
+                    };
+                    println!(
+                        "ATTESTATION RECORDED (keyed replay unavailable): {} drawer(s) \
+                         destroyed; this vault's audit trail holds exactly these \
+                         tombstones, contiguously and in order, and the drawers are \
+                         gone{signature}. The MAC key that made them is not this \
+                         vault's current one — a key rotation destroys it by \
+                         design.{rotations} NOT re-checked: that those bytes are \
+                         genuine tags, and the recorded heads {before}…/{after}…, \
+                         so \"nothing else changed\" narrows to \"nothing else \
+                         happened between the first and last attested record\". \
+                         Run `undercroft verify` to check the trail itself.",
+                        att.drawers.len()
+                    )
                 }
             }
-            println!(
-                "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
-                 {}… and {}…, nothing else changed{}",
-                att.drawers.len(),
-                // Attestation fields come from a caller-supplied JSON file;
-                // byte-slicing them panics on a multi-byte boundary, and
-                // this line runs while printing "ATTESTATION VERIFIED".
-                att.head_before.chars().take(12).collect::<String>(),
-                att.head_after.chars().take(12).collect::<String>(),
-                if att.sig.is_some() {
-                    "; sender signature verified"
-                } else {
-                    "; unsigned"
-                }
-            );
         }
         Command::Admission { action, vault } => {
             let mut store = open_store(&cli, vault)?;
@@ -2397,7 +2498,7 @@ fn run(cli: Cli) -> Result<()> {
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only)
+            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only)?
                 // `/v1` must know which vault the `/mcp` handle above holds:
                 // rotating or deleting it from under a second live handle is
                 // the one thing two handles in one process cannot survive.
@@ -2408,10 +2509,14 @@ fn run(cli: Cli) -> Result<()> {
             http::serve_http(store, tenancy, host, *port, *read_only)?;
         }
         Command::AssertHeader { vault } => {
-            let secret = std::env::var("UNDERCROFT_ASSERTION_SECRET")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("UNDERCROFT_ASSERTION_SECRET is not set"))?;
+            // The SAME resolver the enforcing side runs. These were two
+            // inline copies of one decision and they disagreed: this side
+            // hard-errored on an empty value while `Tenancy::new` read it as
+            // "assertions off" and let every bearer address every vault.
+            let secret = undercroft_store::resolve_assertion_secret(
+                std::env::var("UNDERCROFT_ASSERTION_SECRET").ok().as_deref(),
+            )?
+            .ok_or_else(|| anyhow::anyhow!("UNDERCROFT_ASSERTION_SECRET is not set"))?;
             let now = time::OffsetDateTime::now_utc().unix_timestamp();
             println!("{}", assertion::header_value(secret.as_bytes(), vault, now));
         }
@@ -2811,12 +2916,21 @@ fn run(cli: Cli) -> Result<()> {
                          {} unreceipted · {} tampered",
                         counts[0], counts[1], counts[2], counts[4], counts[3]
                     );
-                    // A tampered receipt is a hard integrity failure.
+                    // A tampered receipt is a hard integrity failure, and it
+                    // exits 2 — the code `verify`, `repair`, `backup create`
+                    // and `verify-forgetting` all reserve for "tampering
+                    // detected". `bail!` exits 1, which this CLI's own
+                    // documented doctrine gives to bad arguments and
+                    // ordinary run errors, so a compliance script that
+                    // retries a 1 retried a forged citation and then moved
+                    // on. Exactly the defect `verify-forgetting` records
+                    // fixing in its own arm, on the same class of artifact.
                     if counts[3] > 0 {
-                        bail!(
+                        println!(
                             "{} fact receipt(s) failed integrity — vault tampering",
                             counts[3]
                         );
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                 }
                 KgAction::Authority {
@@ -3337,7 +3451,15 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::ConfigCheck { verbose } => {
+        // **Both spellings, ONE implementation.** `config check` is what every
+        // doc publishes and `config-check` is what has always run; binding
+        // them to the same arm is the point, because two arms would be two
+        // places for the verdict to drift — the defect class this tree spends
+        // its time closing.
+        Command::Config {
+            action: ConfigAction::Check { verbose },
+        }
+        | Command::ConfigCheck { verbose } => {
             println!("Checking every UNDERCROFT_* declaration in this environment.");
             println!(
                 "Nothing is opened: no vault, no database, no socket, no outbound call.
@@ -3756,6 +3878,79 @@ mod tests {
     use std::ffi::OsString;
     use tempfile::TempDir;
 
+    /// **Every advertised subcommand carries its OWN help text, and the
+    /// documented two-word `config check` runs.**
+    ///
+    /// Two defects in one clap block, both invisible to every other gate in
+    /// this tree. `ConfigCheck` was inserted BETWEEN `Hooks`'s doc comment
+    /// and `Hooks`, so clap attached that comment to the wrong variant:
+    /// `config-check --help` opened with "Print auto-save hook settings for
+    /// an agent client" and `hooks` had no help at all. Nothing could see it
+    /// — clap does not care which variant a comment lands on, rustfmt does
+    /// not reformat doc comments, and no test reads help strings.
+    ///
+    /// And `undercroft config check` — the spelling in `UPGRADING.md`'s
+    /// pre-upgrade command, the release flow, the README, `docs/AGENTS.md`
+    /// and the architecture page — did not exist, because clap derives
+    /// `config-check` from the variant name. The command an operator is told
+    /// to run before every upgrade returned a usage error.
+    ///
+    /// Driven through clap's own rendered help, not through the source: a
+    /// gate that re-read the doc comments would agree with them by
+    /// construction and could not see which variant they attach to.
+    #[test]
+    fn every_subcommand_has_its_own_about_and_config_check_runs() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+
+        // Both spellings parse. `config check` is the documented one; the
+        // hyphenated form stays because it is what has always worked.
+        assert!(
+            Cli::try_parse_from(["undercroft", "config", "check"]).is_ok(),
+            "`undercroft config check` is the spelling every doc publishes \
+             and it must run"
+        );
+        assert!(
+            Cli::try_parse_from(["undercroft", "config-check"]).is_ok(),
+            "the hyphenated spelling has always worked and must keep working"
+        );
+
+        // No two subcommands may share an `about`, and none may be missing
+        // one — a stolen doc comment produces exactly those two symptoms at
+        // once, on the pair either side of the insertion.
+        let mut seen: std::collections::HashMap<String, String> = Default::default();
+        for sub in cmd.get_subcommands() {
+            let name = sub.get_name().to_string();
+            let about = sub
+                .get_about()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            assert!(
+                !about.is_empty(),
+                "subcommand `{name}` advertises no help text — the usual cause \
+                 is a variant inserted between a doc comment and the variant it \
+                 documented, which leaves this one bare and the other one wearing \
+                 two"
+            );
+            if let Some(other) = seen.insert(about.clone(), name.clone()) {
+                panic!(
+                    "`{name}` and `{other}` advertise the SAME help text {about:?} — \
+                     one of them has taken the other's doc comment"
+                );
+            }
+        }
+        // Premise: the walk actually examined the surface. An empty or tiny
+        // subcommand list would satisfy every assertion above.
+        assert!(
+            cmd.get_subcommands().count() > 30,
+            "premise: this gate must have walked the real command surface, \
+             found {}",
+            cmd.get_subcommands().count()
+        );
+    }
+
     /// The default palace must resolve on a machine that sets `USERPROFILE`
     /// and not `HOME` — i.e. on native Windows, which is a target the
     /// release publishes a binary for.
@@ -3866,8 +4061,20 @@ mod tests {
     /// Stated as its own test because the *set* is the decision: widen it and
     /// exit 2 stops meaning "tampering"; narrow it and a verdict goes back to
     /// looking retryable. Both directions asserted.
+    ///
+    /// **Renamed 2026-08-10 to what it actually proves.** It was
+    /// `…_are_exactly_the_ones_v1_answers_409_for`, which was wrong twice:
+    /// `/v1` answers 409 for `ReadOnlyUnmigrated` too, which is deliberately
+    /// NOT a verdict, and nothing here read `/v1`'s side at all — both sets
+    /// were hand-written literals in different files. It also omitted
+    /// `DatabaseMissing`, so it could not have failed if either surface
+    /// dropped the newest member of the set. The cross-surface equality now
+    /// lives in `tenant::tests::the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`,
+    /// which calls both classifiers; what stays here is this surface's own
+    /// membership plus the context-walking behaviour that has no analogue on
+    /// the other side.
     #[test]
-    fn the_integrity_classes_are_exactly_the_ones_v1_answers_409_for() {
+    fn the_integrity_verdict_set_is_pinned_on_this_surface() {
         use undercroft_store::StoreError as S;
         use undercroft_vault::VaultError as V;
         for e in [
@@ -3877,6 +4084,11 @@ mod tests {
             anyhow::Error::from(S::Vault(V::CorruptManifest("truncated".into()))),
             anyhow::Error::from(V::ManifestTampered),
             anyhow::Error::from(V::CorruptManifest("truncated".into())),
+            // The member the old list did not have.
+            anyhow::Error::from(S::DatabaseMissing {
+                id: "acme".into(),
+                path: "/vaults/acme/palace.db".into(),
+            }),
         ] {
             assert!(integrity_verdict(&e), "must be a verdict: {e:?}");
         }
@@ -3885,6 +4097,12 @@ mod tests {
             anyhow::Error::from(S::Invalid("unknown kind".into())),
             anyhow::Error::from(S::NotFound("drawer".into())),
             anyhow::Error::from(V::Io(std::io::Error::other("disk"))),
+            // 409 on `/v1`, and deliberately not a verdict: the vault is
+            // intact and the posture is wrong for it. The pair above and
+            // below is the whole reason the set is not the 409 set.
+            anyhow::Error::from(S::ReadOnlyUnmigrated {
+                missing: "kg_triples.terms".into(),
+            }),
             anyhow::anyhow!("plain failure"),
         ] {
             assert!(!integrity_verdict(&e), "must stay exit 1: {e:?}");

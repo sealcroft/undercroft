@@ -417,7 +417,21 @@ Consequences that are binding, not advisory:
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
   HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`),
-  verify, knowledge graph (kg.rs — incl. the golden-values authority
+  verify (**`VerifyReport` is the whole verdict and it has SIX legs**: record
+  HMACs, the chain replay, drawer supersession receipts, **KG fact
+  receipts**, orphan graph labels, mirror drift. The rule that keeps growing
+  it: *a keyed claim living in columns no drawer HMAC and no chain step
+  covers must have a leg, or nothing sees it.* Supersessions got one for
+  exactly that reason and the identical structure one table over —
+  `kg_triples.receipt_tag` / `source_fp` — did not until 2026-08-10, so
+  `kg_verify_receipts` was reachable from `kg receipts`, `/v1 …/kg/receipts`
+  and the bench and **from no verify path at all**: a forged citation
+  answered `VERIFY OK` on every surface, and `backup create` gates on this
+  verdict, so it archived the forgery as clean. A detector nobody calls is
+  not a check. `parity.rs::HAND_PROJECTED` lists `VerifyReport` × CLI × MCP ×
+  `/v1`, so a new leg fails the build until all three project it — note the
+  admin console at `ui.html` is a FOURTH renderer and outside that gate),
+  knowledge graph (kg.rs — incl. the golden-values authority
   tier: `authority_class`/`review_state`/`canonical_key` DECLARED on
   closed vocabulary, HMAC-covered via a canonical extension on the
   `support` precedent so untouched facts keep byte-identical canonicals;
@@ -575,7 +589,30 @@ Consequences that are binding, not advisory:
   provable forgetting (forget.rs — C3.2 phase 1: `forget`/
   `verify-forgetting`, chain-attested destruction with heads + tombstone
   interval + unkeyed content fps; vault-verifiable by keyed replay, third
-  parties verify the operator's Ed25519 signature),
+  parties verify the operator's Ed25519 signature. **The keyed replay has a
+  SHORTER LIFETIME than the document it checks, and pretending otherwise was
+  a CRITICAL** (O13): rotation destroys the mac key that made the tombstones,
+  so every genuine receipt reported `ATTESTATION FAILED` at exit 2 — the
+  tamper verdict — the first time an operator rotated. `AttestationVerdict::
+  {Verified, Recorded{rotations_since}}` is the fix and the third state is
+  the point, not a softened second one: `Recorded` = the replay is
+  unavailable AND this vault's *preserved* audit trail holds exactly these
+  tombstones as a **contiguous run** in order with the drawers gone, exit 0.
+  Contiguity is what survives of "nothing else changed" once the heads are
+  unverifiable strings, and tag equality alone would have admitted a document
+  omitting a record from the middle of its own interval; the lookup is a
+  candidate WALK because a drawer id is deterministic, so destroy/re-mine/
+  destroy writes two tombstones sharing `record_id` *and* tag bytes.
+  `rotations_since` is corroboration that never decides — a pre-A19 rotation
+  appended no record, so reading zero as "no rotation, therefore forged"
+  recreates the defect for the oldest vaults. Residual, stated: `Recorded`
+  cannot separate a preserved genuine tag from a preserved forged one,
+  because the key that could is destroyed — narrow, witnessed by `verify`'s
+  chain replay on an unrotated vault, and traded against a CERTAIN false
+  alarm on the routine path. The enum is `#[must_use]` so a third verdict
+  could not silently weaken an existing `.unwrap();` that meant "verified",
+  and the CLI's exhaustive `match` gates the projection better than an
+  inventory entry would),
   retention policies (retention.rs — C3.2 phase 2: per wing/room on the
   wing-trust pattern, operator-only + HMAC-tagged + audited, flip fails
   list AND sweep; enforcement is an **explicit sweep** through
@@ -1006,23 +1043,55 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (689 run,
-                                      # 4 #[ignore]d = 693 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (699 run,
+                                      # 4 #[ignore]d = 703 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
                                       # 556 here from its own worktree, which was
                                       # 551 plus the five tests it had added and
                                       # blind to the forty-five its seven
-                                      # neighbours were adding in parallel. Sum
-                                      # the `test result:` lines of a full run.
+                                      # neighbours were adding in parallel.
+                                      # **Do NOT sum the `test result:` lines of
+                                      # the log**, which is what this line said
+                                      # until 2026-08-11: `docker compose run`
+                                      # SOMETIMES replays the tail of the
+                                      # container's stream, leaving `.battery/
+                                      # test.log` with a duplicated block
+                                      # (visible as a `test result:` with no
+                                      # `Running`/`Doc-tests` header above it),
+                                      # and summing such a file gives 1016/8 for
+                                      # a run that executed 694/4. INTERMITTENT —
+                                      # two batteries the same hour on the same
+                                      # tree produced one duplicated log and one
+                                      # clean one, which is worse than a constant
+                                      # error: nobody re-derives a number that
+                                      # looked right last time. Pair each target
+                                      # HEADER with the result that follows it —
+                                      # 18 targets, 11 binaries + 7 doc-tests —
+                                      # and treat an orphan as a PREMISE FAILURE,
+                                      # since it is the only visible symptom of
+                                      # the replay. `tests/battery.sh`'s own
+                                      # summary sums the file and inherits this;
+                                      # it is informational (the script decides on
+                                      # EXIT CODES, never on parsed output, by
+                                      # design) and is filed as ROADMAP O15.
                                       # The 4 ignored are 3 measurements needing
-                                      # testdata/*_50k.txt plus one in lib.rs; the
+                                      # testdata/*_50k.txt plus one in lib.rs. Run
+                                      # them with `cargo test --release -- --ignored`:
+                                      # 3 pass, and `measure_relation_promiscuity`
+                                      # FAILS on missing data, not on logic — it
+                                      # wants ar/el/he word lists and the tree
+                                      # carries ar/de/en, so two are simply absent
+                                      # (hermitdave/FrequencyWords, MIT, gitignored
+                                      # corpora). Verified 2026-08-10. It is not a
+                                      # measurement anyone can reproduce here until
+                                      # those two lists are fetched; the
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (290 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (95 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (317 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -1069,7 +1138,12 @@ docker build -t undercroft .           # runtime image
 docker compose up -d embeddings embeddings-tls
 docker compose run --rm embed-pull    # one-time model fetch into a volume
 #   then run cli/bench with (project-prefixed volume name — a bare
-#   undercroft-embed-tls mounts a fresh empty volume silently):
+#   undercroft-embed-tls mounts a fresh empty volume silently. The
+#   `undercroft_` prefix is TRUE because every compose file now DECLARES
+#   `name:`; until 2026-08-10 none did, Compose derived the project from the
+#   clone's DIRECTORY, and on the maintainer's machine this line named a
+#   volume that did not exist — the silent-empty-mount failure the sentence
+#   before it warns about):
 #     -v undercroft_undercroft-embed-tls:/tls:ro
 #     UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=https://embeddings-tls
 #     UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt
@@ -1131,6 +1205,14 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
+**`bash tests/battery.sh --preflight-only` runs the five host-side preflights
+and no suite**, which is what CI invokes. The script is the one thing that
+runs on the host rather than in a container, and it has to be: it *drives*
+Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
+`git ls-files --eol` over the WHOLE tree — none of which any image carries.
+Everything a preflight cannot do with git, awk and grep belongs in a
+container it launches, not in a host interpreter: a gate that needs Python on
+the host is a gate that does not run on the next machine.
 
 **A SCRIPTED EDIT IS A CHANGE YOU HAVE NOT READ.** Four defects in one
 session, all the same root — a `python`/`sed` edit that matched its anchor and
@@ -1204,6 +1286,24 @@ verify anything it says against the code.
 fresh**: probe it for a symbol only the new code has (`--help | grep -c
 <new-flag>`). A stale binary passes every old test by construction.
 
+**The specific way that happens here, because it produced a FALSE DEFECT
+REPORT on 2026-08-11:** an ad-hoc container that mounts the target volume
+(`-v undercroft_undercroft-target:/build`) but forgets
+`-e CARGO_TARGET_DIR=/build` builds into `/src/target` while the script runs
+`/build/release/<binary>` — so `cargo build` succeeds, prints `Finished`, and
+the run exercises a binary from before the change. The session concluded a
+fix "worked in the store's tests but not through the CLI", wrote it up as an
+unresolved CLI-vs-store discrepancy, and stopped the unit. There was no
+discrepancy. Worse, the `cargo clean --release -p …` run used to TEST the
+stale-artifact hypothesis had the same missing flag, so it changed nothing
+and appeared to refute it. The same omission separately made an orchestrator
+arm print "binary absent — skipped", which reads as benign.
+**So: always pair the volume mount with `CARGO_TARGET_DIR`, give every
+ad-hoc arm a premise probe that fails when the binary lacks the new
+behaviour, and never let "absent" be a skip.** One missing flag produced one
+invented defect, one silent skip, and a corpus measurement that proved
+nothing (subjects were unscreened in the binary that "passed" it).
+
 **Always pass `--build`.** The battery images COPY the source, they do not
 mount it — `docker compose run --rm test` without `--build` silently
 re-runs whatever was baked into the last image, so a "green" run can be
@@ -1213,17 +1313,35 @@ images either; mount the repo instead:
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
-**The seven compose suites run as a `fail-fast: false` MATRIX, one job each**,
-named from the same strings `tests/battery.sh` uses so CI and a local battery
-cannot drift into different sets. Two properties are load-bearing: the legs
-are independent, so wall-clock is the slowest suite rather than their sum;
-and **every suite runs even when one fails**, where the old serial job
-stopped at the first failure and hid the state of the five behind it — a fix
-then landed blind. The verdict is an aggregate job kept under the name
-`test`, because that is what a required status check on `main` resolves
-against: renaming the job that carries the verdict would silently un-gate the
-branch, which is the same class of defect as an alert on a series nobody
-exports.
+**Seven compose suites run as a `fail-fast: false` MATRIX, one job each.** Two
+properties are load-bearing: the legs are independent, so wall-clock is the
+slowest suite rather than their sum; and **every suite runs even when one
+fails**, where the old serial job stopped at the first failure and hid the
+state of the five behind it — a fix then landed blind.
+**The verdict is the `verdict` job, published as the context `CI verdict`, and
+that is the one context a required status check is configured against.** It
+`needs:` every job and inspects every entry of `toJSON(needs)`, so `skipped`
+and `cancelled` fail it too; it asserts its own upstream COUNT, so a narrowed
+`needs:` fails closed; and `tests/battery.sh`'s CI-inventory preflight counts
+the workflow's jobs against that `needs:` in both directions, because a
+workflow cannot enumerate its own jobs and the other direction — a new job
+nobody wired in — is invisible from inside it.
+**Three claims that stood here until 2026-08-10 were false, and the shape of
+the error is the lesson.** (1) *"the aggregate is kept under the name `test`
+because that is what a required status check resolves against"* — **no repo
+had `required_status_checks` at all** (verified against the API on both), so
+the rule protected a configuration that did not exist, and the published
+context is a job's `name`, which was `Suites (aggregate)` and never `test`,
+while the matrix leg published one literally called `test`. (2) *"needs:
+suites"* left five jobs outside the verdict. (3) *"named from the same strings
+`tests/battery.sh` uses so CI and a local battery cannot drift into different
+sets"* — measured, the sets differ in BOTH directions and always have: the
+matrix carries `onnx-build` and the battery does not, the battery carries
+`lint` and `site` which CI runs as their own jobs, and `ort-build` is a
+compose service **run by neither** while `release.yml` ships an `ort` binary
+for five targets. Each survived because it was asserted in prose beside the
+thing it described and nothing counted it — *a comment is not a gate*, which
+is this file's own first rule applied to this file.
 Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 (host bind-mounted `target/` SIGBUSes under memory pressure).
 
@@ -1503,6 +1621,21 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   4. **The identity without the spelling.** A mythological epithet named the
      old project precisely and contained none of its letters. No string search
      of any kind could see it.
+  5. **The name that is in no file at all** (found 2026-08-10, and it is the
+     one that had branded every build artifact for two days). `docker-compose
+     .yml` declared no `name:` key, so Compose derived the project name from
+     the **DIRECTORY the clone sits in** — still the former name — and
+     prefixed every container, image, volume and network with it:
+     `<former>-site`, `<former>-lint`, `<former>_default`. It appears in zero
+     tracked bytes, so a content scan of all 367 files reports six clean
+     classes and is *correct*, and useless. It also silently falsified a doc:
+     this file's own volume-mount recipe named an `undercroft_`-prefixed
+     volume that did not exist on the maintainer's machine, one sentence
+     after warning that a wrong volume name mounts a fresh empty volume with
+     no error. **A derived identifier is a name too.** Ask what the tooling
+     computes from the environment — directory names, hostnames, image tags,
+     registry paths, cache keys — not only what the files say. Gated by the
+     compose-project-name preflight in `tests/battery.sh`, counted both ways.
   One layer down, the same shape: **17 historical PDF blobs passed a clean
   `grep`** while still carrying the name inside Flate-compressed content
   streams — invisible to a byte scan, plainly visible to git's own
@@ -1510,14 +1643,36 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   found the Greek by *looking at the rendered page*, which is the check nobody
   had run.
   So: any claim that a string is gone must **decompress rather than grep**,
-  must cover **non-Latin scripts and truncated roots**, and must hunt the
-  **identity** as well as the spelling — six independent classes, failing on
-  any hit. The general rule outlives this rename: **a negative result is only
+  must cover **non-Latin scripts and truncated roots**, must hunt the
+  **identity** as well as the spelling, and must ask what the TOOLING DERIVES
+  from the environment. `.handover/verify-no-trace.py` covers the six classes
+  a file-content scan can reach and fails on any hit; class 5 above is
+  **outside its reach by construction** and needs a different mechanism —
+  which is the compose preflight, not a wider regex. Do not "extend" the
+  verifier to cover it; extend the QUESTION.
+  The general rule outlives this rename: **a negative result is only
   as good as the widest question you thought to ask, so "none found" is a
   claim about the method, never about the tree.** Note that writing this
   lesson down is itself the trap — the first draft quoted every string it
   warned about and reintroduced the name into the guide. Describe the class,
   never the token.
+- **A SCREEN'S SCOPE MUST MATCH THE SCOPE OF THE READ IT GUARDS, and a screen
+  that names the fields it ignores reads as though it covered them.**
+  `screen_kg_object` ran the detector on `object` alone and consumed
+  `subject`/`predicate` only to build its error message — so the signature
+  said "record" while the body said "field", and its doc comment claimed
+  "this is the screen on it". The read it stands in front of is
+  record-scoped: `kg_query_entity` returns `Triple` and serde serializes it
+  WHOLE, so a poisoned subject reached the next session verbatim beside a
+  clean object, with `validate_name` the only guard — and that admits any
+  128-byte string free of control characters and path separators, which every
+  `IMPERATIVE_MARKERS` phrase fits. The scope had been chosen by which field
+  someone thought of as content. So: **ask what the READ returns, not what
+  the writer considers content**, and make the covered set an INVENTORY
+  checked in both directions — a table-driven test proving every listed field
+  is screened, plus an assertion inside the screen proving no call site can
+  name a field the inventory omits, which is the half a test cannot do
+  (`KG_SCREENED_FIELDS`, O17).
 - **A capability missing from one surface is a boundary or a drift, and
   which one has to be written down.** A 14-agent audit of CLI vs MCP vs
   `/v1` found **65 confirmed drifts** — a capability present on one
@@ -1725,13 +1880,64 @@ had and was still bypassable on the surface most deployments use.
 5. **The full Docker battery** at the final tree, with raw exit codes:
    `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
    `backends-e2e`, `site`. `cargo build -p <crate>` does **not** compile
-   integration tests — `--tests` does.
+   integration tests — `--tests` does. **Every time, never a subset** — and
+   never piped: a pipeline's status is its LAST command's, so `| tail` reports
+   success over a failing battery. Confirm it ran AFTER the last edit rather
+   than assuming; `.battery/*.log` mtimes settle it in one line.
+6. **Load a real corpus and drive the change through it.** A fixture proves
+   logic and is structurally blind to cost, to schema ordering, and to
+   anything that only appears at N > 3. Corpora on hand:
+   `.handover/bench-data/` (LoCoMo, LongMemEval), `.handover/locomo_feed.txt`
+   (minable), `crates/undercroft-store/testdata/*_50k.txt`,
+   `benchmarks/model_eval/datasets/` (10 languages). Mining the LoCoMo feed
+   into N wings gives a few thousand real drawers in seconds.
+   **This is not belt-and-braces; it is the only thing that caught two
+   defects on 2026-08-10, both written minutes earlier and both invisible to a
+   green battery**: a `verify` leg issuing one query PER DRAWER against an
+   unindexed column (fine on two rows, O(N) with an unindexed inner scan on a
+   corpus), and a `CREATE INDEX` placed above its own `CREATE TABLE` in an
+   ordered batch, which broke `init` outright — every command dead, and no
+   unit test reached that path. Measure the thing you changed: `verify` went
+   14→21 ms with deletions unindexed, 13→13 ms with the index.
+7. **Count the renderers, not the surfaces.** The drift doctrine names four
+   {CLI, MCP, `/v1`, orchestrator}, and that list is not the same as "everything
+   that renders this struct". `ui.html` and the orchestrator console are
+   `include_str!`'d `/v1` CLIENTS served at `GET /ui`: a new report field
+   reaches their wire for free and stops dead. `VerifyReport` gained a leg on
+   three gated surfaces and silently missed the fourth — and when `ui.html`
+   was finally added to `parity.rs::HAND_PROJECTED`, the entry immediately
+   found TWO legs it had never rendered (`orphan_labels`, `mirror_drift`),
+   both of which drive the verdict tick it prints. Ask what else reads the
+   struct before believing the gate covers it.
 
 ## Session-end hygiene — leave no debt, drift or stale
 
 Run this before ending a session, and record the result. The rule from the
 maintainer: *we don't leave debts or drifts or even stales anywhere in this
 project.*
+
+**The working cycle, and the context-budget rule that bounds it.** Work is
+**read → fix → test → commit**, one unit at a time, repeating until the queue
+is done; the full Docker battery runs at every unit and a real corpus is
+loaded at every unit (definition of done, items 5 and 6). **When the context
+window reaches roughly 90%, STOP TAKING NEW UNITS and spend what is left
+updating every governance surface** — CHANGELOG, ROADMAP, this file, whichever
+docs carry the claim you changed, and the three `.handover/` files with the
+marker re-pointed at `HEAD`.
+
+That is not tidiness, it is arithmetic. A session that spends its last tokens
+half-landing one more fix leaves the next session a tree it cannot trust and a
+handover describing a different one; a session that spends them on the
+handover leaves an accurate map and one clearly-stated next action. The second
+is worth more than the fix, because the fix survives being deferred and the
+map does not.
+
+**Never half-land a change that alters a security verdict, an on-disk format,
+or an id recipe.** File it instead — with its mechanism, the alternatives you
+rejected and why, and its gate. ROADMAP `O13` is the worked example: round
+four's second CRITICAL, analysed far enough to establish that the fix is a
+THIRD verdict state rather than a corrected one, and deliberately left
+unwritten because a half-correct verdict is worse than a known-wrong one.
 
 - **Docs vs code**: every number, tool table, route table and `UNDERCROFT_*`
   variable in README, CLAUDE.md, docs/*.md, architecture/index.html and
@@ -1839,6 +2045,25 @@ project.*
   not compile until someone classifies it; `undercroft config check` runs
   every declaration through the resolver that will run at start-up, opening
   nothing, so an upgrade fails in a pipeline instead of at a restart.
+  **The class is not the whole rule: a declaration is either a CLOSED
+  VOCABULARY or OPAQUE PAYLOAD, and that decides what EMPTY means and whether
+  the value may be TRIMMED.** A vocabulary variable (`UNDERCROFT_ADMISSION`)
+  may legitimately read empty as a third spelling of its default, and is
+  trimmed so a trailing newline from `$(cat …)` or a YAML block scalar cannot
+  change its meaning. Payload — `UNDERCROFT_ASSERTION_SECRET`, a CA path, a
+  token — has no vocabulary, so empty cannot express intent: it is always a
+  failed interpolation and must REFUSE, and it must **not** be trimmed,
+  because trimming changes the value itself and for a secret that means
+  changing the KEY and silently invalidating every header already minted.
+  Nothing encoded this, so each call site answered for itself, and
+  `UNDERCROFT_ASSERTION_SECRET` was resolved by `!s.is_empty()` in two inline
+  copies that DISAGREED: the minting side (`assert-header`) hard-errored on
+  empty while the ENFORCING side read it as "assertions off" and answered 200
+  to any bearer on every `/v1` route and `POST /mcp`. That one line also
+  failed in **two opposite directions** — `""` turned the boundary off
+  silently, and `" "` is not empty so it was accepted as a real one-byte key
+  while the banner truthfully reported assertions required. A fix that only
+  maps empty to absent closes the first and leaves the second.
 - **Drift check before every release**, not only when something feels off.
   The 65-drift audit found capabilities present on one surface and missing,
   weaker or silently ignored on another — 55 of them failing with no signal

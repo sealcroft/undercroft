@@ -27,7 +27,7 @@ pub mod retention;
 mod rotate;
 
 pub use admission::{PendingAdmission, QUARANTINE_WING};
-pub use forget::{ForgetAttestation, MirrorDelete};
+pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel, UpdateOutcome};
 pub use pqidx::WING_PQ_MIN_DEFAULT;
@@ -180,8 +180,69 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
                     None => "no pin".into(),
                 })
             }),
+        "UNDERCROFT_ASSERTION_SECRET" => resolve_assertion_secret(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|s| {
+                described(match s {
+                    Some(_) => "per-vault assertions are REQUIRED on /v1 and POST /mcp".into(),
+                    None => "no per-vault assertions".into(),
+                })
+            }),
         _ => Ok(None),
     }
+}
+
+/// `UNDERCROFT_ASSERTION_SECRET`: the MAC key for per-vault assertions.
+///
+/// **`Protects`, so a declaration that names no secret REFUSES rather than
+/// falling back.** Unset is not a declaration and leaves assertions off — a
+/// single-tenant deployment that never declared one sees no change at all.
+///
+/// **An empty or whitespace-only value IS a declaration and names no secret,
+/// so it refuses**, which is `undercroft_net::declared_pin`'s ruling applied
+/// to the payload variables it was never extended to. It closes TWO holes
+/// that point in OPPOSITE directions, and only the first was filed:
+///
+/// * `""` — the old filter was `!s.is_empty()`, so an empty value became
+///   `None` and every `/v1` assertion gate plus the `POST /mcp` transport
+///   gate turned into a no-op **silently**: the start-up banner did not say
+///   "assertions off", it merely omitted the clause that says they are on.
+///   `docs/remote-server.md` ships `UNDERCROFT_ASSERTION_SECRET:
+///   ${ASSERTION_SECRET}` in its recommended compose file, and an unset
+///   shell variable interpolates to empty rather than absent — so the
+///   isolation boundary ceased to exist in a configuration the shipped
+///   documentation produces.
+/// * `" "` — worse, and invisible to a fix that only maps empty to absent:
+///   `" ".is_empty()` is FALSE, so a whitespace-only value was accepted as a
+///   REAL secret. Assertions were enforced, the banner truthfully said so,
+///   and the key was one guessable byte.
+///
+/// **The value is NOT trimmed, and that is the opposite of what the closed-
+/// vocabulary variables do.** `UPGRADING.md` records that those are trimmed
+/// so a trailing newline from `$(cat …)` stops changing their meaning —
+/// correct there, because the value is a WORD from a fixed set. Here the
+/// value is opaque PAYLOAD: trimming changes the KEY, which would silently
+/// invalidate every header already minted by a deployment whose secret
+/// really does end in whitespace. So whitespace-only refuses, and content
+/// with real characters is taken byte for byte.
+///
+/// That distinction — closed vocabulary versus opaque payload — is why
+/// `UNDERCROFT_ADMISSION` may legitimately read empty as `off` (empty is a
+/// third spelling of a value in its vocabulary) while this one may not.
+/// Nothing in the tree encoded it, so each call site answered for itself.
+pub fn resolve_assertion_secret(env: Option<&str>) -> Result<Option<String>, StoreError> {
+    let Some(v) = env else { return Ok(None) };
+    if v.trim().is_empty() {
+        return Err(StoreError::Invalid(
+            "UNDERCROFT_ASSERTION_SECRET is set but names no secret (it is empty or only \
+             whitespace). It is most often an unset shell variable interpolated into a \
+             compose file. Per-vault assertions are what stop one bearer token from \
+             addressing every vault, so there is no silent fallback: set a real secret, \
+             or unset the variable to run without assertions"
+                .into(),
+        ));
+    }
+    Ok(Some(v.to_string()))
 }
 
 /// `UNDERCROFT_ADMISSION`: `quarantine` turns the write-path screen on;
@@ -1112,16 +1173,29 @@ pub struct VerifyReport {
     /// any row and every other leg still passes. A relabel onto a subject
     /// that does not exist is what this catches.
     ///
-    /// Scoped to `kg/{id}`, `kg/{id}/authority` and `kg-entity/{id}` **on
-    /// purpose**: nothing in this crate deletes from `kg_triples` or
-    /// `kg_entities` (invalidation closes a validity window, it does not
-    /// remove a row), so those labels must always resolve. Every other
-    /// namespace has a legitimate path to an absent subject — `del/{id}`
-    /// names a destroyed drawer by definition, a denied admission destroys
-    /// its drawer, `retention-clear/{wing}` removes the policy row
+    /// Covers `kg/{id}`, `kg/{id}/authority`, `kg-entity/{id}` — nothing in
+    /// this crate deletes from `kg_triples` or `kg_entities` (invalidation
+    /// closes a validity window, it does not remove a row), so those labels
+    /// must always resolve — **and bare drawer ids, which is a widening
+    /// (O11) rather than the original scope.**
+    ///
+    /// The prefixed namespaces stay out and the reason still holds: each has
+    /// a legitimate path to an absent subject — `del/{id}` names a destroyed
+    /// drawer by definition, `retention-clear/{wing}` removes the policy row
     /// `retention/{wing}` described, and `read/`, `egress/` and `rotate/`
-    /// name no row at all. Including them would make this alarm on ordinary
-    /// operation, which is worse than not having it.
+    /// name no row at all. Alarming on those would be noise, which is worse
+    /// than not having the leg.
+    ///
+    /// **A bare drawer id is the case that reason did not describe**, and it
+    /// discriminates because destruction is a choke point: the crate has one
+    /// `DELETE FROM drawers` (`delete_drawer_ruled`) and it appends
+    /// `del/{id}` in the same transaction, inherited by all three callers —
+    /// the public delete, admission deny, and `forget_with_proof`, which the
+    /// retention sweep and `delete_by_source` ride. So no live row AND no
+    /// tombstone is unreachable legitimately; it is a relabel onto a drawer
+    /// nothing destroyed. Enumerated from every `chain_append` call site,
+    /// which is also what establishes that a label with no `/` can only be a
+    /// drawer id.
     pub orphan_labels: Vec<String>,
     /// Clear mirror columns that disagree with the HMAC-covered `meta_json`.
     ///
@@ -1146,6 +1220,31 @@ pub struct VerifyReport {
     /// ERASED from the mirror while the covered meta still declares it was
     /// invisible to it.
     pub mirror_drift: Vec<String>,
+    /// Every knowledge-graph fact receipt with its verdict (empty when no
+    /// fact cites a drawer).
+    ///
+    /// **The sixth leg, and it is `supersessions` one level up — same
+    /// columns, same keyed binding, same reason, and it was missing.**
+    /// `receipt_tag` and `source_fp` live in `kg_triples`, outside any
+    /// drawer's HMAC and outside the chain — and, the part worth stating
+    /// because it is the surprising one, **outside the FACT's own tag as
+    /// well**: `kg_verify` walks every triple's `tag` and a forged receipt
+    /// leaves it verifying, which is why `bad_records` stays empty over
+    /// exactly this tampering (asserted, not assumed — see
+    /// `a_forged_fact_receipt_fails_the_vault_verdict`, which pins all five
+    /// other legs clean so the verdict is attributable to this one). `kg_verify_receipts` could see
+    /// it and was called by `kg receipts`, `/v1 …/kg/receipts` and the bench
+    /// — **by nothing inside `verify()`**. So the product's headline promise
+    /// returned a green tick over a forged citation on every surface at once:
+    /// CLI exit 0 and `VERIFY OK`, `/v1` `"ok": true`, MCP `isError: false`,
+    /// the fleet's `ops … verify` exit 0 — and `backup create` gates on this
+    /// very verdict, so the forgery was archived as clean.
+    ///
+    /// The fix is the one the tree had already made for drawer
+    /// supersessions, whose doc four fields up states the reason in the same
+    /// words. One walk, one verdict; a surface cannot assemble a narrower one
+    /// by forgetting a call, because there is no second call to forget.
+    pub receipts: Vec<crate::kg::ReceiptStatus>,
 }
 
 impl VerifyReport {
@@ -1156,6 +1255,7 @@ impl VerifyReport {
             && self.tampered_supersessions() == 0
             && self.orphan_labels.is_empty()
             && self.mirror_drift.is_empty()
+            && self.tampered_receipts() == 0
     }
 
     /// Supersession links whose keyed receipt failed its HMAC. The other
@@ -1167,6 +1267,19 @@ impl VerifyReport {
         self.supersessions
             .iter()
             .filter(|l| l.verdict == crate::kg::ReceiptVerdict::Tampered)
+            .count()
+    }
+
+    /// Fact receipts whose keyed binding failed its HMAC. Exactly the rule
+    /// `tampered_supersessions` applies, and for the same reason: a source
+    /// that was edited (`SourceChanged`), deleted (`Dangling`) or never bound
+    /// (`Unreceipted`) are states a legitimate vault reaches, and treating
+    /// any of them as tampering would make `verify` alarm on ordinary
+    /// operation — which is how a leg gets ignored and then removed.
+    pub fn tampered_receipts(&self) -> usize {
+        self.receipts
+            .iter()
+            .filter(|r| r.verdict == crate::kg::ReceiptVerdict::Tampered)
             .count()
     }
 }
@@ -1939,7 +2052,23 @@ impl PalaceStore {
                  record_id TEXT NOT NULL,
                  tag       BLOB NOT NULL,
                  at        TEXT NOT NULL
-             );",
+             );
+             -- AFTER the table, which is not pedantry: this batch is executed
+             -- in order, and the first version of this line sat above the
+             -- CREATE TABLE and made `init` fail outright with
+             -- \"no such table: main.audit\". A fixture would not have caught
+             -- it; loading a corpus did, immediately.
+             --
+             -- `audit.record_id` is filtered by equality on two hot paths and
+             -- was indexed for neither: `history(subject)` matches it, and
+             -- `verify`'s orphan-label leg probes `del/{id}` once per
+             -- destroyed drawer. Unindexed, that probe is a full scan of a
+             -- table that grows with every write, read and export, so the
+             -- cost is deletions x audit rows -- invisible on a fixture, and
+             -- a retention sweep makes both factors large. Measured on a real
+             -- 2,040-drawer corpus: verify 14 ms clean, 21 ms after 60
+             -- deletions unindexed.
+             CREATE INDEX IF NOT EXISTS idx_audit_record_id ON audit(record_id);",
         )?;
         let vault = Self::reconcile_rotation(&conn, vault)?;
         let mut store = Self::assemble(conn, vault, embedder, false)?;
@@ -5359,19 +5488,63 @@ impl PalaceStore {
             Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
             Err(e) => return Err(e),
         };
+        // The sixth leg, on the same terms as the fifth directly above: the
+        // receipt binding a distilled FACT to its verbatim source is keyed,
+        // and it lives in `kg_triples` columns that no drawer HMAC and no
+        // chain step covers. `kg_verify_receipts` reads each cited drawer
+        // through `get`, so it raises `Integrity` on a row whose own HMAC
+        // fails — a row the drawer walk has already put in `bad_records`,
+        // which is why the swallow is conditional on that alarm standing.
+        // A `verify` that returns an ERROR instead of a verdict is the
+        // failure this function exists to prevent.
+        let receipts = match self.kg_verify_receipts() {
+            Ok(rs) => rs,
+            Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
+            Err(e) => return Err(e),
+        };
         // The fourth leg: every graph label resolves to a live record. See
         // `VerifyReport::orphan_labels` for why only these namespaces.
         let mut orphan_labels = Vec::new();
         {
             let mut stmt = self.conn.prepare(
                 "SELECT DISTINCT record_id FROM audit \
-                 WHERE record_id LIKE 'kg/%' OR record_id LIKE 'kg-entity/%'",
+                 WHERE record_id LIKE 'kg/%' OR record_id LIKE 'kg-entity/%' \
+                    OR record_id NOT LIKE '%/%'",
             )?;
             let labels: Vec<String> = stmt
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<Result<_, _>>()?;
             drop(stmt);
             for label in labels {
+                // **A label with no `/` is a DRAWER id**, and it is the only
+                // bare namespace this store mints — every other label carries
+                // a prefix (`kg/`, `kg-entity/`, `del/`, `admission/`,
+                // `trust/`, `retention/`, `retention-clear/`, `egress/`,
+                // `read/`, `rotate/`, `migrate/`, `tunnel/`). Enumerated from
+                // every `chain_append` call site rather than assumed.
+                //
+                // The leg used to stop at the graph, and the reason on file
+                // was that "every other namespace has a legitimate path to an
+                // absent subject". True of the prefixed ones, and NOT true of
+                // this one — which nobody separated out. A drawer label is
+                // discriminating because deletion is a choke point:
+                // `delete_drawer_ruled` holds the only `DELETE FROM drawers`
+                // in the crate and appends `del/{id}` in the SAME transaction,
+                // and its three callers (the public delete, admission deny,
+                // `forget_with_proof` — which the retention sweep and
+                // `delete_by_source` ride) all inherit it.
+                //
+                // So: no live row AND no tombstone is not ordinary operation.
+                // It is a relabel onto a drawer that was never destroyed —
+                // and `record_id` is the one part of an audit row the chain
+                // does not authenticate, which is why this leg exists at all.
+                if !label.contains('/') {
+                    // Resolved in ONE set-based query below, not here — see
+                    // the note on that statement for why the obvious
+                    // per-label loop is a performance defect on a real
+                    // corpus.
+                    continue;
+                }
                 let (table, id) = match label.strip_prefix("kg-entity/") {
                     Some(id) => ("kg_entities", id.to_string()),
                     None => (
@@ -5395,6 +5568,35 @@ impl PalaceStore {
                     orphan_labels.push(label);
                 }
             }
+            // **The drawer half, as ONE query rather than a loop, and that is
+            // a correctness-of-cost decision rather than style.** A bare
+            // label exists per drawer WRITE, so the loop above would issue at
+            // least one round trip per drawer on every `verify` — invisible
+            // on a test fixture and O(N) on a real corpus — and `audit` has
+            // no index on `record_id`, so each tombstone probe would be a
+            // full scan of a table that grows with every write, read and
+            // export. Two full scans of `audit` plus an indexed probe of
+            // `drawers` per candidate is what that costs set-based, and
+            // SQLite resolves the first `NOT EXISTS` on the `drawers`
+            // primary key, so the second runs only for labels whose drawer is
+            // already gone.
+            //
+            // Found by loading a real corpus rather than by reading, which is
+            // the only reason it is not in this commit as a defect.
+            {
+                let mut stmt = self.conn.prepare(
+                    "SELECT DISTINCT a.record_id FROM audit a \
+                     WHERE a.record_id NOT LIKE '%/%' \
+                       AND NOT EXISTS (SELECT 1 FROM drawers d WHERE d.id = a.record_id) \
+                       AND NOT EXISTS (SELECT 1 FROM audit t \
+                                        WHERE t.record_id = 'del/' || a.record_id)",
+                )?;
+                let bare: Vec<String> = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()?;
+                drop(stmt);
+                orphan_labels.extend(bare);
+            }
             orphan_labels.sort();
         }
         Ok(VerifyReport {
@@ -5404,6 +5606,7 @@ impl PalaceStore {
             supersessions,
             orphan_labels,
             mirror_drift,
+            receipts,
         })
     }
 
@@ -9602,7 +9805,10 @@ mod tests {
         s.upsert(&d2).unwrap();
         let qid2 = s.admission_pending().unwrap()[0].id.clone();
         let att = s.admission_deny(&qid2).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, qid2);
         assert!(s.get(&qid2).unwrap().is_none());
@@ -10167,7 +10373,10 @@ mod tests {
         // And the ruling paths still destroy — the refusal is about the
         // absence of a verdict, not about the wing being immortal.
         let att = s.admission_deny(&qid).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert!(s.get(&qid).unwrap().is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok());
@@ -10296,7 +10505,10 @@ mod tests {
         s.admission_ruling_for_test(&qid2, "denied").unwrap();
         assert!(s.get(&qid2).unwrap().is_some(), "premise: content survives");
         let att = s.admission_deny(&qid2).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert_eq!(att.drawers.len(), 1);
         assert!(s.get(&qid2).unwrap().is_none());
         assert!(s.admission_pending().unwrap().is_empty());
@@ -10584,6 +10796,68 @@ mod tests {
         assert_eq!(s.get(&after.id).unwrap().unwrap().meta.wing, "w");
     }
 
+    /// **A declared assertion secret that names no secret refuses, in BOTH
+    /// of the two directions the old filter failed in.**
+    ///
+    /// `Tenancy::new` used `.filter(|s| !s.is_empty())`, which produced two
+    /// opposite silent failures from one line — and a fix that merely maps
+    /// empty to absent closes only the first:
+    ///
+    /// * `""` → `None` → every `/v1` assertion gate and the `POST /mcp`
+    ///   transport gate became a no-op, with no warning; the banner omitted
+    ///   the clause rather than saying assertions were off. Reachable from
+    ///   the compose recipe in `docs/remote-server.md`, because an unset
+    ///   shell variable interpolates to empty rather than absent.
+    /// * `" "` → `Some(b" ")` → assertions ENFORCED with a one-byte
+    ///   guessable key, and the banner truthfully said they were required.
+    ///
+    /// The last two arms are the one that is easy to get backwards: this is
+    /// opaque PAYLOAD, not a word from a closed vocabulary, so it is **not
+    /// trimmed** — trimming would change the KEY and silently invalidate
+    /// every header a deployment had already minted.
+    #[test]
+    fn a_declared_assertion_secret_that_names_no_secret_refuses() {
+        // Unset is not a declaration: a deployment that never declared one
+        // must see no change at all.
+        assert_eq!(resolve_assertion_secret(None).unwrap(), None);
+
+        for names_nothing in ["", " ", "\t", "\n", "  \r\n "] {
+            let e = resolve_assertion_secret(Some(names_nothing)).unwrap_err();
+            assert!(
+                matches!(e, StoreError::Invalid(ref m) if m.contains("names no secret")),
+                "{names_nothing:?} names no secret and must REFUSE, not silently \
+                 disable per-vault isolation: got {e:?}"
+            );
+        }
+
+        // Real content is taken byte for byte, whitespace included.
+        assert_eq!(
+            resolve_assertion_secret(Some("s3cret")).unwrap().as_deref(),
+            Some("s3cret")
+        );
+        assert_eq!(
+            resolve_assertion_secret(Some("s3cret\n"))
+                .unwrap()
+                .as_deref(),
+            Some("s3cret\n"),
+            "a secret is opaque payload, so it must NOT be trimmed — trimming \
+             changes the key and invalidates every header already minted"
+        );
+
+        // And `config check` must reach the same verdict, or the pre-flight
+        // whose whole job is catching a `Protects` misdeclaration before a
+        // restart passes the very environment that has lost isolation. It
+        // reported `Accepted` ("no parse to run") until this arm existed.
+        assert!(check_declaration("UNDERCROFT_ASSERTION_SECRET", "").is_err());
+        assert!(check_declaration("UNDERCROFT_ASSERTION_SECRET", " ").is_err());
+        assert!(
+            check_declaration("UNDERCROFT_ASSERTION_SECRET", "s3cret")
+                .unwrap()
+                .is_some(),
+            "a good secret must DESCRIBE itself, not fall through to Accepted"
+        );
+    }
+
     /// `UNDERCROFT_ADMISSION_RATE` parses `<count>/<seconds>` or REFUSES
     /// to open — a deployment that declared a rate believes floods
     /// divert, so an unreadable declaration must never silently run
@@ -10629,7 +10903,10 @@ mod tests {
         let mut att = s
             .forget_with_proof(&[gone1.id.clone(), gone2.id.clone()])
             .unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert!(s.get(&gone1.id).unwrap().is_none());
         assert!(s.get(&gone2.id).unwrap().is_none());
         assert!(s.get(&keep.id).unwrap().is_some(), "nothing else changed");
@@ -10640,7 +10917,7 @@ mod tests {
         // exit-2 integrity code on this variant, so a forgery arriving as
         // `Invalid` would exit 1 — the code that also means "no such
         // file", i.e. "retry the run" to a compliance script.
-        let forgery = |r: Result<(), StoreError>, what: &str| match r {
+        let forgery = |r: Result<crate::AttestationVerdict, StoreError>, what: &str| match r {
             Err(StoreError::Attestation(_)) => {}
             other => panic!("{what}: expected StoreError::Attestation, got {other:?}"),
         };
@@ -10648,7 +10925,10 @@ mod tests {
         // Signed: verifies; a flipped field then fails on the signature.
         let (secret, _) = undercroft_vault::bundle::sign_keygen();
         att.sign(&secret).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         let mut forged = att.clone();
         forged.drawers[0].content_fp = "00".repeat(32);
         forgery(
@@ -10734,7 +11014,10 @@ mod tests {
         let sweep = s.retention_sweep(false).unwrap();
         assert_eq!(sweep.destroyed, 1);
         let att = sweep.attestation.expect("a destroying sweep attests");
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, old.id);
         assert!(s.get(&old.id).unwrap().is_none());

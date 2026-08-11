@@ -66,6 +66,43 @@ Values are trimmed now, so a trailing newline from `$(cat …)` or a YAML block
 scalar no longer changes the meaning. That silent case is part of what this
 change closes.
 
+### An assertion secret that names no secret is refused
+
+**Affects:** `UNDERCROFT_ASSERTION_SECRET` on `undercroft serve-http` and
+`undercroft assert-header`; the `assertion_secret` argument to
+`undercroft-orchestrator instance-add` and `POST /admin/instances`.
+
+**Symptom:** the process exits at start-up naming the variable, or the
+registration answers HTTP 400. On `serve-http` this happens before the port
+is bound. `undercroft config check` reports it too, which it previously did
+not.
+
+**Cause:** the value was resolved with `!s.is_empty()`, which failed in two
+opposite directions from one line. An **empty** value became "no secret
+declared", so every `/v1` assertion gate and the `POST /mcp` transport gate
+turned into a no-op — silently, because the start-up banner does not say
+"assertions off", it merely omits the clause saying they are on. A
+**whitespace-only** value is not empty, so it was accepted as a real secret:
+assertions enforced, banner truthfully saying so, key one guessable byte.
+
+The empty case is reachable from the compose recipe in
+`docs/remote-server.md`, which ships `UNDERCROFT_ASSERTION_SECRET:
+${ASSERTION_SECRET}` — an unset shell variable interpolates to the empty
+string, and the variable IS then set in the container.
+
+**Fix:** set a real secret, or **unset the variable** to run without
+assertions. Unset is still not a declaration and still means assertions off,
+so a single-tenant deployment that never declared one is unaffected.
+
+```bash
+UNDERCROFT_ASSERTION_SECRET=<a real secret>   # or unset it entirely
+```
+
+**The value is deliberately not trimmed.** Unlike the closed-vocabulary
+variables above, a secret is opaque payload: trimming would change the key
+and silently invalidate every header already minted. Only a value that is
+*entirely* whitespace is refused.
+
 ### A cleartext engine URL is refused at registration
 
 **Affects:** `undercroft-orchestrator instance-add`, `POST /admin/instances`.

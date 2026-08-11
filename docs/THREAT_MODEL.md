@@ -240,9 +240,12 @@ silently. The REST gate sits **in front of dispatch**, not at the top
 of each mutating handler, and it **fails closed**: every non-GET is
 refused unless it is on a two-entry allowlist (`POST …/search`, and
 `POST …/verify` — which walks every record's HMAC, replays the whole
-audit chain, checks every supersession receipt, resolves every graph audit
-label and compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta (five legs
-since 2026-08-06), and is a POST for cost, not for effect: it takes `&self`
+audit chain, checks every supersession receipt, checks every
+knowledge-graph fact receipt, resolves every graph audit
+label and compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta (**six** legs
+since 1.1.0; five from 2026-08-06 — the fact-receipt leg arrived last, and
+until it did, a forged citation answered `VERIFY OK` on every surface while
+`backup create` archived it as clean), and is a POST for cost, not for effect: it takes `&self`
 and writes nothing at all). Said plainly, because an earlier draft of
 this page said the opposite: verify does **not** fast-forward the
 manifest anchor. `anchor_manifest` needs `&mut`; the fast-forward
@@ -701,7 +704,12 @@ straight, each carrying what it actually is.
   handed to a data subject who checks it against content they already
   hold, without the vault key — and it names content the vault no longer
   has, rather than sitting at rest beside content it does;
-  `verify-forgetting` replays it with the key in hand. Retention
+  `verify-forgetting` replays it with the key in hand — **while that key
+  exists**: a key rotation destroys it by design, so from then on the
+  same command reports the reduced verdict (the preserved audit trail
+  holds those tombstones contiguously and the drawers are gone) rather
+  than a replay, at exit 0. Reporting that case as forged, with the
+  tamper exit code, was ROADMAP O13. Retention
   policies per wing/room ride the wing-trust pattern — operator-only,
   HMAC-tagged, chain-audited, and enforced by an **explicit sweep**
   through the same attested path, never on a timer and never at open.

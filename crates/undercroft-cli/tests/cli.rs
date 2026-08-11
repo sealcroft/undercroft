@@ -905,3 +905,127 @@ fn cli_search_can_declare_the_language_its_morphology_uses() {
          undeclared:\n{undeclared}\ndeclared:\n{declared}"
     );
 }
+
+/// **A forged fact receipt must fail the CLI, and the exit code must be the
+/// integrity one.** Both halves matter and neither had a test at any level.
+///
+/// The store-level verdict is unit-tested (`a_forged_fact_receipt_fails_the
+/// _vault_verdict`), and `tests/e2e.sh` covers the clean path — but forging a
+/// keyed 32-byte column needs a byte-level edit, and that suite tampers with
+/// `perl` against text anchors. So the FAILING branch of two fixes was gated
+/// by nothing: `kg receipts` exiting 2 rather than 1 (exit 2 is this CLI's
+/// integrity verdict; 1 means "the run failed, retry it"), and `verify`
+/// reporting the receipt leg at all.
+///
+/// This is the right home for it: `rusqlite` is already a dev-dependency
+/// here, so the test can forge the column and then drive the REAL binary.
+///
+/// Building the fixture is the interesting part, because nothing interactive
+/// can write a fact that CITES a drawer — `kg add` has no `--source`, which
+/// is a decision, not an oversight (ROADMAP O12). `import` can, so this
+/// exports a vault, points the fact at the drawer's derived id, adds a
+/// `source_fp` claim (the value is irrelevant and deliberately not stored;
+/// the destination re-derives from the drawer it just imported) and drops the
+/// manifest line, whose payload digest is checked unconditionally.
+#[test]
+fn a_forged_fact_receipt_fails_the_cli_with_the_integrity_exit_code() {
+    let src = TempDir::new().unwrap();
+    cmd(&src).args(["init"]).assert().success();
+    cmd(&src)
+        .args([
+            "remember",
+            "Kestrel signed off on the Vaduz ledger.",
+            "--wing",
+            "sup",
+            "--room",
+            "r",
+        ])
+        .assert()
+        .success();
+    cmd(&src)
+        .args(["kg", "add", "kestrel", "signed", "vaduz-ledger"])
+        .assert()
+        .success();
+
+    let exported = cmd(&src).args(["export"]).output().unwrap().stdout;
+    let exported = String::from_utf8(exported).unwrap();
+    let drawer_line = exported
+        .lines()
+        .find(|l| l.starts_with("{\"drawer\""))
+        .expect("the export must carry the drawer");
+    let did = drawer_line
+        .split("\"id\":\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("the drawer record must carry an id")
+        .to_string();
+    assert_eq!(did.len(), 32, "premise: a derived drawer id, got {did:?}");
+
+    let payload: String = exported
+        .lines()
+        .filter(|l| !l.starts_with("{\"undercroft_manifest\""))
+        .map(|l| {
+            let l = l.replace(
+                "\"source_drawer_id\":null",
+                &format!("\"source_drawer_id\":\"{did}\""),
+            );
+            // `{"triple":{"triple":{INNER}}}` — of the three trailing braces
+            // only two are the wrappers; the first closes INNER and must
+            // survive. Strip three, put one back, then re-close both wrappers.
+            if l.starts_with("{\"triple\"") && l.ends_with("}}}") {
+                format!("{}}},\"source_fp\":\"aa\"}}}}\n", &l[..l.len() - 3])
+            } else {
+                format!("{l}\n")
+            }
+        })
+        .collect();
+    assert!(
+        payload.contains(&format!("\"source_drawer_id\":\"{did}\""))
+            && payload.contains("\"source_fp\":\"aa\""),
+        "premise: the fixture rewrite matched nothing:\n{payload}"
+    );
+    let file = src.path().join("payload.ndjson");
+    std::fs::write(&file, &payload).unwrap();
+
+    let dest = TempDir::new().unwrap();
+    cmd(&dest).args(["init"]).assert().success();
+    cmd(&dest)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // PREMISE. Without this the forged arms below could pass over a vault
+    // that never held a receipt at all.
+    cmd(&dest)
+        .args(["kg", "receipts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 verified"));
+    cmd(&dest).args(["verify"]).assert().success();
+
+    // The forgery: rewrite the keyed citation binding offline.
+    let db = rusqlite::Connection::open(dest.path().join("vaults/default/palace.db")).unwrap();
+    let moved = db
+        .execute(
+            "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",
+            [],
+        )
+        .unwrap();
+    assert_eq!(moved, 1, "premise: the forgery must have rewritten a row");
+    drop(db);
+
+    // `kg receipts` — exit 2, the integrity verdict, not 1.
+    cmd(&dest)
+        .args(["kg", "receipts"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("1 tampered"));
+
+    // And `verify` fails, names the leg, and exits 2 as well.
+    cmd(&dest)
+        .args(["verify"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("TAMPERED RECEIPT"))
+        .stdout(predicate::str::contains("1 tampered"));
+}

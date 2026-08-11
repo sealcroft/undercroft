@@ -259,6 +259,21 @@ check "kg stats"                  0 "triples: 2"                     -- "$BIN" k
 # `kg add` with a source, or an import whose payload lacked the cited drawer,
 # since a keyed fingerprint cannot be recomputed at a destination).
 check "kg receipts name unreceipted" 0 "unreceipted"                 -- "$BIN" kg receipts
+# **`verify` consults the fact receipts at all.** `kg_verify_receipts` was
+# reachable from `kg receipts`, `/v1 …/kg/receipts` and the bench — and from
+# nothing inside `verify()`, so a forged citation returned VERIFY OK on every
+# surface and `backup create` archived it.
+#
+# **What this fixture can reach, stated because the first version got it
+# wrong.** It asserted the CLI printing `fact receipts:` HERE and failed —
+# correctly. That line renders only when some fact CITES a drawer, and no
+# fact in THIS vault does: `kg add` has no `--source` flag. The check was
+# asserting a state its own fixture cannot enter. A real receipted fact is
+# built further down (search: "receipt fixture") through `import`, which is
+# the one non-model producer; what is asserted here is what is true here —
+# the leg stays quiet on an ordinary vault, and the receipts door exits 0.
+check "a clean vault with facts still verifies" 0 "VERIFY OK"        -- "$BIN" verify
+check "kg receipts exits 0 when nothing is forged" 0 "receipts:"     -- "$BIN" kg receipts
 
 echo "== Drawer management =="
 DRAWER_ID="$("$BIN" drawer list --wing eng --limit 1 | awk '{print $1}')"
@@ -315,6 +330,37 @@ check "trust assigned pre-rotate" 0 "assigned trust class"           -- \
 check "history sees operator ns"   0 "trust/eng"                     -- "$BIN" history --limit 200
 check "retention pre-rotate"      0 "audited"                        -- \
   "$BIN" retention set eng --days 3650
+# **ROADMAP O13 — a forgetting attestation, on BOTH sides of a rotation.**
+# `verify-forgetting` had zero occurrences under tests/ on any surface, and
+# what that hid is the worst shape available: a GENUINE attestation reported
+# `ATTESTATION FAILED` with exit 2 — this project's tamper verdict — the
+# first time an operator did the thing the security model tells them to do
+# routinely. "We destroyed your data, here is the proof" became "this proof
+# is forged", by rotating.
+#
+# The replay is KEYED and rotation destroys the key that made the tombstones,
+# so no key swap restores it and the honest answer is a third verdict. The
+# whole defect lives in the transition, so the attestation is created here,
+# BEFORE the rotate below, and re-verified after it. The third-party
+# signature half (unaffected by rotation, since `verify_detached` takes no
+# vault key) is gated in the unit suite, which can call it directly.
+FORGET_ME="$("$BIN" remember "a note the data subject will later ask us to erase" \
+  --wing eng --room tmp | sed -n 's/^Filed drawer \([0-9a-f]*\) .*/\1/p')"
+ATT="$UNDERCROFT_HOME/o13-attestation.json"
+check "forget attests"            0 "attestation written to"        -- \
+  "$BIN" forget "$FORGET_ME" --out "$ATT"
+# Premise, asserted rather than assumed: a parse that silently produced an
+# empty id, or a `forget` that wrote nothing, would leave every check below
+# measuring a file that is not there — and `verify-forgetting` on a missing
+# file exits 1, which is neither of the codes this block is about.
+if [ -n "$FORGET_ME" ] && [ -s "$ATT" ]; then
+  echo "ok    o13 premise: a drawer was destroyed and attested"; PASS=$((PASS+1))
+else
+  echo "FAIL  o13 premise — id='$FORGET_ME', attestation at $ATT is empty or absent"
+  FAIL=$((FAIL+1))
+fi
+check "attestation verifies"      0 "ATTESTATION VERIFIED"          -- \
+  "$BIN" verify-forgetting "$ATT"
 # One rotation, and the pattern is the POLICY-TAG line rather than the banner:
 # that line prints only on a successful rotate, so it proves the rotation ran
 # AND that the two tag-only tables were swept. The banner string stays
@@ -329,6 +375,24 @@ check "verify ok after rotate"    0 "VERIFY OK"                      -- "$BIN" v
 # through the CLI would mean writing to the database behind the binary.
 check "verify reports mirror leg" 0 "mirror drift:"                  -- "$BIN" verify
 check "search ok after rotate"    0 "eng/decisions"                  -- "$BIN" search "migrated the search stack"
+# **The O13 verdict.** Exit 0 is half the assertion and it is the half that
+# was broken: this printed `ATTESTATION FAILED` and exited 2 before the fix.
+check "attestation survives rotate" 0 "ATTESTATION RECORDED"         -- \
+  "$BIN" verify-forgetting "$ATT"
+# It says what it did NOT re-check, rather than implying a full replay.
+check "the reduced verdict is honest" 0 "NOT re-checked"             -- \
+  "$BIN" verify-forgetting "$ATT"
+# ...and the fallback is not a rubber stamp: a tag this vault never wrote is
+# still the tamper verdict, on the same rotated vault.
+sed 's/"tag": "[0-9a-f]*"/"tag": "00"/' "$ATT" > "$ATT.forged"
+if cmp -s "$ATT" "$ATT.forged"; then
+  echo "FAIL  o13 forgery premise — the edit changed nothing, so the check below asserts nothing"
+  FAIL=$((FAIL+1))
+else
+  echo "ok    o13 forgery premise: the attestation was modified"; PASS=$((PASS+1))
+fi
+check "forged tag still exits 2"  2 "ATTESTATION FAILED"             -- \
+  "$BIN" verify-forgetting "$ATT.forged"
 
 # **UNDERCROFT_TRUST_FLOOR — the declared VAULT floor, end to end.** The
 # REQUEST floor (`--min-trust`, `min_trust`) is exercised on `/v1` below;
@@ -408,6 +472,12 @@ check "kg survives rotate"        0 "triples"                        -- "$BIN" s
 check "dup lookup after rotate"   0 "duplicate of"                   -- "$BIN" drawer check-dup "We migrated the search stack to Rust for speed and memory safety"
 check "second rotate idempotent"  0 "Rotated vault 'default'"        -- "$BIN" vault rotate default
 check "verify ok after 2nd rotate" 0 "VERIFY OK"                     -- "$BIN" verify
+# The rotation count in the O13 verdict is READ from this vault's own audit
+# trail, never assumed: two rotations have now happened after the attested
+# interval, and the line has to say two. A hard-coded 1 passes every check
+# above and dies here.
+check "the verdict counts rotations" 0 "records 2 key rotation(s)"   -- \
+  "$BIN" verify-forgetting "$ATT"
 
 echo "== Backups & repair =="
 check "backup create"             0 "Backup created"                 -- "$BIN" backup create
@@ -468,6 +538,16 @@ echo "== config check: an upgrade fails in a pipeline, not at a restart =="
 # protection on must not fall back silently — but a refusal that arrives at
 # start-up arrives during a rolling restart, one node at a time. This is the
 # door that moves it earlier.
+# **The spelling every doc publishes, driven as an operator would type it.**
+# `UPGRADING.md`'s pre-upgrade command, the release flow in `CLAUDE.md`, the
+# README, `docs/AGENTS.md` and the architecture page all write it with a
+# SPACE, while clap derived `config-check` from the variant name — so the one
+# command an operator is told to run before every upgrade returned a usage
+# error. Both spellings are checked: the documented one because it is what
+# gets typed, the hyphenated one because it is what has always worked and
+# scripts adapted to it.
+check "the documented spelling runs" 0 "This environment starts"     -- \
+  "$BIN" config check
 check "clean env starts"          0 "This environment starts"        -- \
   "$BIN" config-check
 check "opens nothing, and says so" 0 "no vault, no database"          -- \
@@ -483,6 +563,58 @@ check "the semantic gate too"     1 "UNDERCROFT_SEMANTIC_GATE"        -- \
   env UNDERCROFT_SEMANTIC_GATE=1.5 "$BIN" config-check
 check "a CA pin that pins nothing" 1 "UNDERCROFT_EMBED_CA"            -- \
   env UNDERCROFT_EMBED_CA= "$BIN" config-check
+# **An assertion secret that names no secret.** This is the pre-flight whose
+# whole purpose is catching a `Protects` misdeclaration before a restart, and
+# it reported this one `Accepted` ("no parse to run") — on the very
+# environment that had silently lost per-vault isolation. `docs/remote-server
+# .md` ships `${ASSERTION_SECRET}` in its recommended compose file, and an
+# unset shell variable interpolates to EMPTY rather than absent.
+check "an empty assertion secret" 1 "UNDERCROFT_ASSERTION_SECRET"     -- \
+  env UNDERCROFT_ASSERTION_SECRET= "$BIN" config-check
+# The second hole, which points the OTHER way and which "treat empty as
+# absent" does not close: whitespace is not empty, so it was accepted as a
+# REAL secret — assertions enforced with a one-byte guessable key, and the
+# banner truthfully saying they were required.
+check "a whitespace-only secret"  1 "names no secret"                 -- \
+  env UNDERCROFT_ASSERTION_SECRET="   " "$BIN" config-check
+# ...and a real secret passes, so the two above are not passing because the
+# variable is refused unconditionally.
+check "a real secret passes"      0 "This environment starts"         -- \
+  env UNDERCROFT_ASSERTION_SECRET=s3cret "$BIN" config-check
+# The MINTING side runs the same resolver now. It always refused an empty
+# value while the ENFORCING side accepted it — one decision, two inline
+# copies, opposite answers.
+check "assert-header refuses it"  1 "names no secret"                 -- \
+  env UNDERCROFT_ASSERTION_SECRET= "$BIN" assert-header default
+check "assert-header mints"       0 ":"                               -- \
+  env UNDERCROFT_ASSERTION_SECRET=s3cret "$BIN" assert-header default
+# **The claim `UPGRADING.md` makes to operators, gated.** "On `serve-http`
+# this happens before the port is bound" was asserted in the upgrade notes
+# and backed by nothing repeatable — the surface that matters most for this
+# variable is the SERVER, because that is where the boundary silently ceased
+# to exist. Both halves are checked: it refuses, AND it never bound.
+for BADSEC in "" "   "; do
+  LBL=$([ -z "$BADSEC" ] && echo empty || echo whitespace)
+  env UNDERCROFT_ASSERTION_SECRET="$BADSEC" "$BIN" serve-http --host 127.0.0.1 --port 18799 \
+    >"$UNDERCROFT_HOME/assert-refuse.log" 2>&1
+  RC=$?
+  if [ "$RC" -ne 0 ] && grep -q "names no secret" "$UNDERCROFT_HOME/assert-refuse.log"; then
+    echo "ok    a $LBL assertion secret refuses to start"; PASS=$((PASS+1))
+  else
+    echo "FAIL  a $LBL assertion secret must refuse to start (rc=$RC)"
+    sed 's/^/      /' "$UNDERCROFT_HOME/assert-refuse.log" | tail -3; FAIL=$((FAIL+1))
+  fi
+  if curl -s -m 2 "http://127.0.0.1:18799/healthz" >/dev/null 2>&1; then
+    echo "FAIL  a $LBL assertion secret bound the port anyway"; FAIL=$((FAIL+1))
+  else
+    echo "ok    a $LBL assertion secret never bound the port"; PASS=$((PASS+1))
+  fi
+done
+# And UNSET is still not a declaration — the contract a single-tenant
+# deployment relies on. Without this arm the two above would pass on a build
+# that refused to start under every configuration.
+env UNDERCROFT_ASSERTION_SECRET= "$BIN" config-check >/dev/null 2>&1
+check "unset still starts"        0 "This environment starts"         -- "$BIN" config-check
 # A GOOD value passes — otherwise the checks above would pass on a command
 # that refused everything.
 check "a good value passes"       0 "This environment starts"         -- \
@@ -627,6 +759,66 @@ else
   echo "FAIL  supersession receipt survives export/import"
   UNDERCROFT_HOME="$U12_DEST" "$BIN" verify | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+
+# **`verify` reads the KG fact receipts, judged on a REAL receipt.**
+# `kg_verify_receipts` was reachable from `kg receipts`, `/v1 …/kg/receipts`
+# and the bench — and from nothing inside `verify()` — so a forged citation
+# answered VERIFY OK on every surface and `backup create` archived it. The
+# leg rides inside the report now.
+#
+# Building the fixture is the interesting part, and it is why an earlier
+# version of this check FAILED: nothing interactive can write a fact that
+# CITES a drawer. `kg add` has no `--source`, `/v1` has no KG write route,
+# and `refine` needs a model this suite cannot reach. Import can, so this
+# builds the payload by hand:
+#   * the manifest line is DROPPED — its payload digest is checked
+#     unconditionally and we are rewriting the payload;
+#   * the fact is pointed at the drawer's real, derived id;
+#   * `source_fp` is added as a CLAIM. Its value is irrelevant and
+#     deliberately not stored: since U12 the fingerprint is keyed with the
+#     SOURCE vault's own secret, so a destination could never recompute it
+#     and every restored backup would read `source-changed` forever. The
+#     destination re-derives from the drawer it just imported; the traveling
+#     value survives only as the claim that a receipt existed, which is what
+#     separates "no citation" from "a citation we could not bind".
+KGR_SRC="$(mktemp -d)"
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" remember \
+  "Kestrel signed off on the Vaduz ledger." --wing sup --room r >/dev/null 2>&1
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" kg add kestrel signed vaduz-ledger >/dev/null 2>&1
+KGR_EXPORT="$(mktemp)"
+UNDERCROFT_HOME="$KGR_SRC" "$BIN" export > "$KGR_EXPORT"
+KGR_DID="$(grep -m1 '^{"drawer"' "$KGR_EXPORT" | grep -o '"id":"[0-9a-f]\{32\}"' | head -1 | cut -d'"' -f4)"
+KGR_PAYLOAD="$(mktemp)"
+grep -v '^{"undercroft_manifest"' "$KGR_EXPORT" \
+  | sed "s/\"source_drawer_id\":null/\"source_drawer_id\":\"$KGR_DID\"/" \
+  | sed '/^{"triple"/s/}}}$/},"source_fp":"aa"}}/' > "$KGR_PAYLOAD"
+# PREMISE. If the rewrite silently matched nothing, everything below would
+# pass by describing a vault with no receipt in it — which is exactly how the
+# first version of this check went green in principle and red in practice.
+if [ -n "$KGR_DID" ] && grep -q "\"source_drawer_id\":\"$KGR_DID\"" "$KGR_PAYLOAD" \
+   && grep -q '"source_fp":"aa"' "$KGR_PAYLOAD"; then
+  echo "ok    receipt fixture: the fact cites the drawer and claims a receipt"; PASS=$((PASS+1))
+else
+  echo "FAIL  receipt fixture was not built — the rest proves nothing"
+  sed 's/^/      /' "$KGR_PAYLOAD"; FAIL=$((FAIL+1))
+fi
+KGR_DEST="$(mktemp -d)"
+UNDERCROFT_HOME="$KGR_DEST" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$KGR_DEST" "$BIN" import "$KGR_PAYLOAD" >/dev/null 2>&1
+if UNDERCROFT_HOME="$KGR_DEST" "$BIN" verify | grep -qE "fact receipts:[[:space:]]+1 verified"; then
+  echo "ok    verify reports a verified fact receipt"; PASS=$((PASS+1))
+else
+  echo "FAIL  verify reports a verified fact receipt"
+  UNDERCROFT_HOME="$KGR_DEST" "$BIN" verify | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# And the vault is still GREEN — a leg that alarmed on an ordinary receipt
+# would fail every vault that ever ran `refine`, and the arm above would not
+# notice.
+check "a vault with a real receipt still verifies" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$KGR_DEST" "$BIN" verify
+check "kg receipts exits 0 on a verified receipt" 0 "1 verified" -- \
+  env UNDERCROFT_HOME="$KGR_DEST" "$BIN" kg receipts
 
 # Mempalace-format line imports too.
 MEMPAL_FILE="$(mktemp)"
@@ -1089,6 +1281,18 @@ rest_body "superseded drawer kept" '"the retro is on thursdays at four"' -- \
 # that does not add up to the list beside it.
 rest_body "kg receipts summary complete" '"unreceipted"' -- \
   "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
+# **`ok` — the field the fleet's integrity classifier reads.** This route
+# reported `summary.tampered` and no verdict, so a scripted
+# `ops <tenant> kg receipts` over a vault with a forged citation exited 0:
+# `is_integrity_verdict` keys on `"ok": false` for a 200 and there was no
+# `ok`. Its self-described analogue `/supersessions` gained the field and
+# this one did not, in the same file.
+rest_body "kg receipts carries a verdict" '"ok":true' -- \
+  "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
+# The verify route reports the sixth leg too, so a caller can see WHY a
+# vault failed rather than only that it did.
+rest_body "verify reports the receipts leg" '"receipts"' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
 
 # Deployment-assigned wing trust (C3.3): assigned by the operator surface,
 # a floored search excludes below-floor wings BEFORE candidates, and the

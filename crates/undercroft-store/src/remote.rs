@@ -974,7 +974,10 @@ mod tests {
             "the mirror must no longer offer a drawer whose destruction was attested"
         );
         // And the attestation still verifies as this vault's own.
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
 
         // A typo'd id destroys nothing, anywhere: the existence check runs
         // before the remote delete, so a bad batch cannot strip the mirror

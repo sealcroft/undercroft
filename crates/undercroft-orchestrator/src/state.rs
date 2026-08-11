@@ -325,6 +325,33 @@ impl Orch {
         // `undercroft-net`'s own, so it names the fix.
         undercroft_net::require_secure_transport("an engine instance", url)
             .map_err(|e| StateError::Invalid(e.to_string()))?;
+        // **Same door, same moment, same decision as the URL above.** An
+        // assertion secret that names no secret was accepted here on BOTH
+        // routes — the CLI `instance-add` and `POST /admin/instances` —
+        // while `ui.html` refused it CLIENT-side only, which is exactly why
+        // the server gap was invisible: every hand-driven registration was
+        // blocked and nothing else was.
+        //
+        // `proxy.rs`'s own path-climb guard names this dependency and calls
+        // the two checks "two independent barriers, because one silent
+        // misconfiguration must not remove the only one". An empty secret
+        // removes one of them at registration time, silently, and the
+        // instance then routes and reports as healthy.
+        //
+        // Whitespace-only is refused for the reason the engine-side resolver
+        // spells out: it is not empty, so it would otherwise be stored as a
+        // real key. The value is NOT trimmed — it is opaque payload that has
+        // to match the engine's own `UNDERCROFT_ASSERTION_SECRET` byte for
+        // byte, and trimming here would mint headers the engine rejects.
+        if assertion_secret.trim().is_empty() {
+            return Err(StateError::Invalid(
+                "assertion secret names no secret (it is empty or only whitespace). It must \
+                 match the engine's UNDERCROFT_ASSERTION_SECRET byte for byte; without it \
+                 the per-vault assertion barrier is gone and only the proxy's path check \
+                 separates tenants"
+                    .into(),
+            ));
+        }
         let cred = serde_json::json!({ "bearer": bearer, "assertion_secret": assertion_secret });
         let blob = self.seal(
             &format!("orch/instance/{name}"),
@@ -671,6 +698,55 @@ mod tests {
         o.instance_add("tls", "https://engine.internal:8800", "b", "s")
             .expect("https is allowed");
         assert_eq!(o.instance_list().unwrap().len(), 2);
+    }
+
+    /// **An assertion secret that names no secret is refused at the same
+    /// door, for the same reason.**
+    ///
+    /// It was accepted on BOTH server routes — the CLI `instance-add` and
+    /// `POST /admin/instances` — while `ui.html` refused it CLIENT-side
+    /// only, which is precisely why the server gap stayed invisible: every
+    /// hand-driven registration was blocked and nothing else was.
+    ///
+    /// `proxy.rs`'s path-climb guard calls itself and the assertion MAC
+    /// "two independent barriers, because one silent misconfiguration must
+    /// not remove the only one". An empty secret removed one of them at
+    /// registration, and the instance then routed and reported healthy.
+    ///
+    /// Whitespace is the arm that a fix mapping empty-to-absent would miss:
+    /// `" "` is not empty, so it would be stored and used as a real key.
+    /// The value is NOT trimmed — it has to match the engine's own
+    /// `UNDERCROFT_ASSERTION_SECRET` byte for byte, so trimming here would
+    /// mint headers the engine rejects.
+    #[test]
+    fn registering_an_instance_without_an_assertion_secret_is_refused() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let o = Orch::open(&dir.path().join("orch.db"), KEY).unwrap();
+
+        for names_nothing in ["", " ", "\t", "\n"] {
+            let err = o
+                .instance_add("alpha", "https://engine.internal:8800", "b", names_nothing)
+                .expect_err("a secret that names nothing must be refused at the door");
+            assert!(matches!(err, StateError::Invalid(_)), "{err:?}");
+            assert_eq!(err.status(), 400, "a malformed value is a bad request");
+            assert!(
+                err.to_string().contains("names no secret"),
+                "the refusal must say what is wrong: {err}"
+            );
+            // Refused means NOT registered.
+            assert!(o.instance_list().unwrap().is_empty());
+        }
+
+        // A real secret still registers, and is stored byte for byte —
+        // otherwise this gate would pass by refusing everything, and a
+        // trimmed secret would silently stop matching the engine's.
+        o.instance_add("alpha", "https://engine.internal:8800", "b", " s3cret ")
+            .expect("a real secret registers");
+        assert_eq!(
+            &*o.instance_creds("alpha").unwrap().assertion_secret,
+            " s3cret ",
+            "an assertion secret is opaque payload and must not be trimmed"
+        );
     }
 
     #[test]

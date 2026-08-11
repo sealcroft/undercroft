@@ -140,7 +140,9 @@ tenant*:
    non-loopback bind, gates every authenticated route (MCP and REST).
    Proves the caller reached the right server; it does not distinguish
    vaults, so on its own whoever holds it can address every vault.
-2. **Per-vault assertion** (`UNDERCROFT_ASSERTION_SECRET`, optional) — when
+2. **Per-vault assertion** (`UNDERCROFT_ASSERTION_SECRET`, optional — but a
+   declaration that names no secret **refuses to start** since 1.1.0, rather
+   than silently disabling this whole layer; unset it to decline it) — when
    set, every `/v1` request **and every `POST /mcp` call** must carry
    `X-Vault-Assertion: <ts>:<HMAC-SHA256(secret, "<ts>|<vault_id>")>` for
    the exact vault it addresses. The vault id is bound into the MAC, so an
