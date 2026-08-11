@@ -728,6 +728,25 @@ Consequences that are binding, not advisory:
   rather than re-deriving the host, because a hand-rolled predicate
   inverted this gate twice (`http://127.0.0.1:8080@evil.com/` read as
   loopback)
+- **The OTLP traces hop was the one outbound client that never obeyed any of
+  this, and the gate could not see it (round-four #8).** `undercroft-obs`
+  built its span exporter on `opentelemetry-otlp`'s `reqwest-blocking-client`
+  feature, so it went through a second HTTP library `undercroft-net` knew
+  nothing about — no cleartext refusal, no loopback check, no pin — while
+  `UNDERCROFT_OTLP_HEADERS` is documented to carry a bearer token and spans
+  carry vault ids and route labels. Worse, that feature set linked reqwest
+  with **no TLS backend at all**, so `https://` could not work and the
+  builder failure was swallowed by an `if let Ok(..)`: no traces, no error.
+  The exporter now runs on the policed `ureq` agent through
+  `opentelemetry-http`'s `HttpClient` trait, and `UNDERCROFT_OTLP_CA` pins
+  its root. **The gate is the lesson**:
+  `no_crate_but_undercroft_net_builds_its_own_http_client` scans source for
+  ureq's builder token — the observable this defect does not move, since the
+  client was somebody else's library. Its sibling
+  `no_second_http_client_is_linked_into_the_workspace` reads the DEPENDENCY
+  EDGE out of `Cargo.lock` instead, which is why dropping that feature (so
+  reqwest leaves the lock entirely) is part of the fix rather than tidying.
+  Third instance of *ask what a gate can SEE, not what it asserts.*
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
   OTLP traces (metadata-only spans), and the live SSE broker. Two contracts
@@ -955,14 +974,17 @@ Consequences that are binding, not advisory:
   version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all **78**
-  `UNDERCROFT_*` variables the engine honours — 63 written out in full
-  across the env table's 59 rows, plus 15 siblings abbreviated to a
+  which inlines them and documents every layer plus all **79**
+  `UNDERCROFT_*` variables the engine honours — 64 written out in full
+  across the env table's 60 rows, plus 15 siblings abbreviated to a
   suffix inside the row that owns them (`_TOKENIZER` three times, one
   per model role), which is why grepping the page for full names
   undercounts it. (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
   pin for the orchestrator→engine hop, which had no transport policy at
-  all until the post-1.0.0 drift audit.) Count the truth, never a number in prose:
+  all until the post-1.0.0 drift audit; 79/64/60 since
+  `UNDERCROFT_OTLP_CA`, the pin for the traces hop, which had none
+  either and whose exporter could not do TLS at all.) Count the truth,
+  never a number in prose:
   `grep -rhoE '"UNDERCROFT_[A-Z0-9_]+"' crates/ | sort -u` over every
   crate except `undercroft-bench`, whose `UNDERCROFT_VS_*`/`UNDERCROFT_TEST_*`
   belong to the harness rather than the engine.
@@ -1073,8 +1095,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (707 run,
-                                      # 4 #[ignore]d = 711 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (708 run,
+                                      # 4 #[ignore]d = 712 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1122,7 +1144,7 @@ docker compose run --rm test          # cargo unit + integration tests (707 run,
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (321 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (28 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)

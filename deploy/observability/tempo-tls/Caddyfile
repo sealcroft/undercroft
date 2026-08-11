@@ -1,0 +1,25 @@
+# The shipped TLS terminator for the OTLP traces path.
+#
+# The engine refuses cleartext http to any non-loopback host — no override
+# exists — and since round-four #8 that rule finally reaches the OTLP
+# exporter too, which had been an unpoliced second HTTP client with no TLS
+# backend linked at all. `tempo` is a compose-network host, not loopback, so
+# the hop runs through this terminator.
+#
+# Caddy's internal CA issues the certificate; the CA root lands on the
+# `tempo-tls-data` volume at
+# /data/caddy/pki/authorities/local/root.crt, which the engine mounts
+# read-only and PINS via UNDERCROFT_OTLP_CA. A declared pin REPLACES the
+# public roots — that is the point of pinning an internal CA.
+#
+# The same shape works in production: any TLS front (Caddy, nginx, HAProxy)
+# plus a declared root. This mirrors deploy/embeddings-tls/ exactly, which is
+# the precedent it was modelled on.
+{
+	auto_https disable_redirects
+}
+
+https://tempo-tls {
+	tls internal
+	reverse_proxy tempo:4318
+}

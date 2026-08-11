@@ -142,12 +142,76 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.is_empty())
 }
 
-pub(crate) fn init() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(real_init);
+/// The OTLP exporter's HTTP client — the policed `ureq` agent
+/// `undercroft-net` built, wearing `opentelemetry-http`'s trait.
+///
+/// It exists so the exporter cannot reach the network by any other route.
+/// `undercroft-net`'s own doc says it is "the only implementation" of the
+/// transport rules; a `--features telemetry` build used to falsify that
+/// sentence, and no gate could see it because the gate scans for `ureq`'s
+/// builder token and this client was somebody else's library.
+#[derive(Debug)]
+struct PolicedOtlpClient {
+    agent: ureq::Agent,
 }
 
-fn real_init() {
+#[async_trait::async_trait]
+impl opentelemetry_http::HttpClient for PolicedOtlpClient {
+    async fn send(
+        &self,
+        request: opentelemetry_http::Request<Vec<u8>>,
+    ) -> Result<
+        opentelemetry_http::Response<opentelemetry_http::Bytes>,
+        opentelemetry_http::HttpError,
+    > {
+        // Blocking inside an `async fn` is correct HERE and would not be
+        // elsewhere: this stack is deliberately runtime-free — a
+        // `SimpleSpanProcessor` exporting per span — which is exactly what
+        // reqwest's BLOCKING client was doing before. There is no executor
+        // to starve.
+        let (parts, body) = request.into_parts();
+        let mut req = self.agent.post(&parts.uri.to_string());
+        for (name, value) in parts.headers.iter() {
+            if let Ok(v) = value.to_str() {
+                req = req.set(name.as_str(), v);
+            }
+        }
+        let resp = match req.send_bytes(&body) {
+            Ok(r) => r,
+            // A 4xx/5xx IS a response, and the exporter interprets the
+            // status itself. Turning it into a transport error here would
+            // hide a collector's own "429 slow down" behind "send failed".
+            Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => return Err(Box::new(e)),
+        };
+        let status = resp.status();
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut resp.into_reader(), &mut buf)?;
+        Ok(opentelemetry_http::Response::builder()
+            .status(status)
+            .body(opentelemetry_http::Bytes::from(buf))?)
+    }
+}
+
+/// Bring up telemetry, or say why it cannot come up.
+///
+/// Fallible since the OTLP endpoint is an OUTWARD PATH: under this project's
+/// configuration doctrine a declaration that turns one on must REFUSE rather
+/// than fall back, because a silent fallback removes exactly what the
+/// operator asked for.
+pub(crate) fn init() -> Result<(), String> {
+    static ONCE: Once = Once::new();
+    // The verdict is memoized beside the `Once`, so a second call gets the
+    // SAME answer rather than a silent `Ok` — `call_once` runs the body once
+    // and would otherwise discard the only report of a refused transport.
+    static RESULT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    ONCE.call_once(|| {
+        let _ = RESULT.set(real_init());
+    });
+    RESULT.get().cloned().unwrap_or(Ok(()))
+}
+
+fn real_init() -> Result<(), String> {
     let service_name = env("UNDERCROFT_SERVICE_NAME").unwrap_or_else(|| "undercroft".to_string());
     let resource = Resource::new(vec![KeyValue::new("service.name", service_name)]);
 
@@ -196,20 +260,39 @@ fn real_init() {
                     .collect()
             })
             .unwrap_or_default();
-        if let Ok(span_exporter) = opentelemetry_otlp::SpanExporter::builder()
+        // **The hop obeys the one transport policy**, like every other
+        // outbound client in this workspace: TLS or loopback, nothing else,
+        // no override, plus an optional pinned root. This used to be an
+        // unpoliced `reqwest` client that `undercroft-net` knew nothing
+        // about — and worse, the feature set linked reqwest with NO TLS
+        // backend, so an `https://` collector could not work at all and
+        // failed silently inside the span processor. The headers this
+        // exporter sends are documented to carry a bearer token, and the
+        // spans carry vault ids and route labels.
+        let agent = undercroft_net::agent_from_env(
+            "the OTLP collector",
+            &traces_endpoint,
+            "UNDERCROFT_OTLP_CA",
+            std::time::Duration::from_secs(30),
+        )
+        .map_err(|e| e.to_string())?;
+        // A builder failure used to be swallowed by `if let Ok(..)`, so an
+        // operator got no traces and no message. Telemetry that silently
+        // does not export is worse than telemetry that refuses to start.
+        let span_exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
             .with_endpoint(traces_endpoint)
             .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
             .with_headers(headers)
+            .with_http_client(PolicedOtlpClient { agent })
             .build()
-        {
-            tracer_provider = Some(
-                TracerProvider::builder()
-                    .with_simple_exporter(span_exporter)
-                    .with_resource(resource)
-                    .build(),
-            );
-        }
+            .map_err(|e| format!("OTLP span exporter: {e}"))?;
+        tracer_provider = Some(
+            TracerProvider::builder()
+                .with_simple_exporter(span_exporter)
+                .with_resource(resource)
+                .build(),
+        );
     }
 
     let meter_provider = mp.build();
@@ -245,6 +328,7 @@ fn real_init() {
         global::set_tracer_provider(tp.clone());
         let _ = TRACER_PROVIDER.set(tp);
     }
+    Ok(())
 }
 
 fn register_gauges() {

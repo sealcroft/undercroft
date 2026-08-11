@@ -373,11 +373,35 @@ impl Drop for TelemetryGuard {
 /// Reads: `UNDERCROFT_LOG` (EnvFilter directives), `UNDERCROFT_LOG_FORMAT`
 /// (`json`|`text`), `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ no network egress),
 /// `UNDERCROFT_SERVICE_NAME`, `UNDERCROFT_OTLP_HEADERS`.
-pub fn init() -> TelemetryGuard {
+pub fn init() -> Result<TelemetryGuard, ObsError> {
     #[cfg(feature = "telemetry")]
-    imp::init();
-    TelemetryGuard(())
+    imp::init().map_err(ObsError::Transport)?;
+    Ok(TelemetryGuard(()))
 }
+
+/// Why telemetry could not come up.
+///
+/// A `String` payload rather than a `NetError` on purpose: the non-telemetry
+/// build must keep this crate's "zero dependencies by default" invariant, and
+/// `undercroft-net` is optional. The text is the transport crate's own
+/// verbatim message, so it still names the fix and still says there is no
+/// override.
+#[derive(Debug)]
+pub enum ObsError {
+    /// The outbound OTLP hop was refused by the transport policy, or the
+    /// exporter could not be built.
+    Transport(String),
+}
+
+impl std::fmt::Display for ObsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObsError::Transport(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for ObsError {}
 
 /// Render the current metrics in Prometheus text exposition format.
 /// Returns `None` when built without the `telemetry` feature, so callers

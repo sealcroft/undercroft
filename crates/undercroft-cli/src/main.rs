@@ -1515,9 +1515,6 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
 }
 
 fn main() -> std::process::ExitCode {
-    // Telemetry is a no-op unless built with `--features telemetry`. The
-    // guard flushes providers on any return path (including `?` out of `run`).
-    let _telemetry = undercroft_obs::init();
     // `fn main() -> Result<()>` let the std `Termination` impl choose the
     // code, and it only knows one failure: 1. Everything this CLI wants to
     // say about a failure has to be said here.
@@ -1532,6 +1529,38 @@ fn main() -> std::process::ExitCode {
         let _ = e.print();
         std::process::exit(if e.use_stderr() { 1 } else { 0 });
     });
+    // Telemetry is a no-op unless built with `--features telemetry`. The
+    // guard flushes providers on any return path (including `?` out of `run`).
+    //
+    // It runs AFTER the parse because it can now FAIL — the OTLP endpoint is
+    // an outward path, so a cleartext non-loopback collector is refused
+    // rather than silently exported to in the clear. Nothing between the two
+    // emits a span, so no signal is lost by the move.
+    let _telemetry = match undercroft_obs::init() {
+        Ok(g) => Some(g),
+        // `config check` is EXEMPT, and the exemption is the point of the
+        // command: it exists to diagnose an environment that will not start,
+        // so a version of it that cannot itself start in that environment is
+        // useless. It carries on without telemetry and reports the same
+        // declaration as a finding of its own.
+        // BOTH spellings, because `config check` and `config-check` are two
+        // variants bound to one dispatch arm (see `Command::Config`) and
+        // matching only the hyphenated one would exempt the spelling every
+        // doc publishes from nothing at all.
+        Err(e)
+            if matches!(
+                parsed.command,
+                Command::ConfigCheck { .. } | Command::Config { .. }
+            ) =>
+        {
+            eprintln!("warning: telemetry disabled — {e}");
+            None
+        }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return std::process::ExitCode::from(EXIT_FAILURE);
+        }
+    };
     match run(parsed) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {

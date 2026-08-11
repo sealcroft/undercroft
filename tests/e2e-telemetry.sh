@@ -208,6 +208,42 @@ grep -q '"quarantined":1' <<<"$iresp" && pass "import reports the diversion coun
 kill "$S4" 2>/dev/null
 wait "$S4" 2>/dev/null
 
+echo "== OTLP export obeys the transport policy (round-four #8) =="
+# The export path had NO end-to-end coverage at all before this, which is why
+# "https cannot work" was never observable: the exporter was an unpoliced
+# reqwest client with no TLS backend linked, and its build failure was
+# swallowed. These four drive the real binary.
+otlp_out=$(env UNDERCROFT_OTLP_ENDPOINT=http://collector.invalid:4318 "$BIN" stats 2>&1)
+otlp_code=$?
+if [ "$otlp_code" -eq 1 ] && printf '%s' "$otlp_out" | grep -q "no override"; then
+  pass "cleartext to a non-loopback collector is refused"
+else
+  fail "cleartext OTLP collector was not refused" "exit=$otlp_code out=$otlp_out"
+fi
+
+env UNDERCROFT_OTLP_ENDPOINT=http://127.0.0.1:4318 "$BIN" stats >/dev/null 2>&1
+if [ $? -ne 1 ]; then
+  pass "a loopback collector is allowed"
+else
+  fail "a loopback collector was refused — cleartext on loopback is legal"
+fi
+
+# `config check` is EXEMPT from the start-up refusal, deliberately: a command
+# whose job is diagnosing an environment that will not start has to run in
+# one. It must still REPORT the declaration rather than pass it.
+cc_out=$(env UNDERCROFT_OTLP_ENDPOINT=http://collector.invalid:4318 "$BIN" config check 2>&1)
+cc_code=$?
+if printf '%s' "$cc_out" | grep -q "warning: telemetry disabled"; then
+  pass "config check runs in an environment that refuses to start"
+else
+  fail "config check was not exempt from the OTLP refusal" "exit=$cc_code out=$cc_out"
+fi
+if [ "$cc_code" -eq 1 ]; then
+  pass "config check reports the OTLP endpoint as fatal"
+else
+  fail "config check did not fail on a refused OTLP endpoint" "exit=$cc_code"
+fi
+
 echo
 echo "telemetry e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

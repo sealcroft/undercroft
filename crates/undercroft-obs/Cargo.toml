@@ -22,9 +22,24 @@ telemetry = [
     "dep:tracing-opentelemetry",
     "dep:serde",
     "dep:serde_json",
+    # The OTLP hop is an OUTBOUND client, so it obeys the one transport
+    # policy like every other. Optional and listed here so the default
+    # build still pulls nothing.
+    "dep:undercroft-net",
+    "dep:ureq",
+    "dep:opentelemetry-http",
+    "dep:async-trait",
 ]
 
 [dependencies]
+# The OTLP exporter's transport. `undercroft-net` is the ONE implementation
+# of "TLS or loopback, nothing else, no override" plus CA pinning; `ureq` is
+# named directly because that is how every other consumer of that crate holds
+# its policed agent (see `undercroft-llm/src/embed.rs`).
+undercroft-net = { path = "../undercroft-net", optional = true }
+ureq = { version = "2.10", optional = true }
+opentelemetry-http = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }

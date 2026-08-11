@@ -1167,7 +1167,10 @@ is refused by `index push` unless the operator passes
 `--allow-plaintext`.
 
 Telemetry builds: `UNDERCROFT_LOG` · `UNDERCROFT_LOG_FORMAT` (`json`) ·
-`UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process) ·
+`UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process; an outward
+path, so TLS or loopback, nothing else, no override) ·
+`UNDERCROFT_OTLP_CA` (pin a private CA for the collector; the declared root
+replaces the public ones) ·
 `UNDERCROFT_OTLP_HEADERS` (comma-separated `key=value` export headers,
 e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 `UNDERCROFT_SERVICE_NAME`.

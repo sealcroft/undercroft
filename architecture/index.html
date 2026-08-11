@@ -1951,7 +1951,8 @@
   <tbody>
     <tr><td><code>UNDERCROFT_METRICS</code></td><td>Serve a Prometheus <code>/metrics</code> endpoint (behind the bearer)</td></tr>
     <tr><td><code>UNDERCROFT_LOG</code> · <code>UNDERCROFT_LOG_FORMAT</code></td><td>Log filter; <code>json</code> for structured output</td></tr>
-    <tr><td><code>UNDERCROFT_OTLP_ENDPOINT</code></td><td>OTLP trace destination. <strong>Unset means nothing leaves the process.</strong></td></tr>
+    <tr><td><code>UNDERCROFT_OTLP_ENDPOINT</code></td><td>OTLP trace destination. <strong>Unset means nothing leaves the process.</strong> An outward path, so it obeys the one transport policy: TLS or loopback, nothing else, no override</td></tr>
+    <tr><td><code>UNDERCROFT_OTLP_CA</code></td><td>Pin a private CA for the OTLP collector. The declared root <strong>replaces</strong> the public roots; a file that pins nothing refuses rather than falling back</td></tr>
     <tr><td><code>UNDERCROFT_OTLP_HEADERS</code></td><td>Comma-separated <code>key=value</code> export headers, e.g. for an authenticated collector</td></tr>
     <tr><td><code>UNDERCROFT_SERVICE_NAME</code> · <code>UNDERCROFT_SAMPLE_INTERVAL_MS</code></td><td>Service label; gauge sampling interval (2000 ms)</td></tr>
   </tbody>

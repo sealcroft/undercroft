@@ -82,7 +82,17 @@ predicates = "3"
 # loose-pin convention above. Never pulled into a default build.
 opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["metrics", "trace"] }
-opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "metrics", "http-proto", "reqwest-blocking-client"] }
+# NO `reqwest-blocking-client`. That feature linked a SECOND outbound HTTP
+# client into a `--features telemetry` build — one `undercroft-net` knew
+# nothing about, so it obeyed neither the cleartext refusal nor the CA pin —
+# and reqwest resolved with no TLS backend at all, so an `https://` collector
+# could not work and failed silently inside the span processor. The exporter
+# now runs on the policed `ureq` agent through `opentelemetry-http`'s
+# `HttpClient` trait. Removing this feature is what makes reqwest's absence
+# from `Cargo.lock` a byte-readable fact a gate can assert.
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "metrics", "http-proto"] }
+opentelemetry-http = "0.27"
+async-trait = "0.1"
 opentelemetry-prometheus = "0.27"
 prometheus = "0.13"
 tracing = "0.1"

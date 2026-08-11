@@ -2,6 +2,74 @@
 
 ## Unreleased — 1.1.0
 
+### the traces hop was the one outbound client obeying no transport policy, and it could not do TLS at all
+
+Round-four finding #8 (D1). Silent, and it had **no end-to-end coverage of
+any kind** — which is why "https cannot work" was never observable.
+
+`undercroft-net`'s own doc says *"Every Undercroft client that leaves this
+machine obeys the same two rules, and this crate is the only implementation
+of them."* A `--features telemetry` build falsified that sentence.
+`undercroft-obs` built its OTLP span exporter on `opentelemetry-otlp`'s
+`reqwest-blocking-client` feature — a second HTTP library, with no cleartext
+refusal, no loopback check and no CA pin. `UNDERCROFT_OTLP_HEADERS` is
+documented to carry `authorization=Bearer …`, and spans carry vault ids and
+route labels, so that credential crossed the wire in the clear to any
+non-loopback collector.
+
+**And TLS was not merely unpoliced, it was absent.** The shipped feature set
+resolved reqwest with **no TLS crate in its dependency list at all**, so an
+`https://` endpoint could not work — and the resulting builder failure was
+swallowed by `if let Ok(span_exporter) = …`. An operator who did the secure
+thing got no traces and no error.
+
+Both halves are fixed together, which is why the refusal can appear now:
+before, there was no secure configuration to move to.
+
+- The exporter runs on the **policed `ureq` agent** through
+  `opentelemetry-http`'s `HttpClient` trait — one `agent_from_env` call
+  giving the cleartext refusal, the loopback allowance and CA pinning,
+  identical to the index and embedder hops. A 4xx/5xx is passed back as a
+  *response*, not converted into a transport error, so a collector's own
+  "429 slow down" is not hidden behind "send failed".
+- `reqwest-blocking-client` is dropped, so **reqwest leaves `Cargo.lock`
+  entirely** — a byte-readable outcome a gate can assert.
+- The swallow is gone: a builder failure now says so.
+- `UNDERCROFT_OTLP_CA` pins a private CA (79 engine variables now, counted
+  both ways against `ENGINE_ENV_VARS`).
+- `UNDERCROFT_OTLP_ENDPOINT` is reclassified `Tunes` → **`Protects`**, which
+  is what makes `undercroft config check` report it fatal instead of printing
+  "keeps the conservative default" for a value that now stops the process,
+  and it gains a `check_declaration` arm running the same policy the engine
+  runs. It had none: it fell through to "no parse to run; the consumer
+  validates it", and no consumer validated anything.
+- **`config check` is exempt from the start-up refusal**, deliberately: a
+  command whose whole job is diagnosing an environment that will not start is
+  useless if it cannot run in one. It warns, runs, and reports the same
+  declaration as a finding.
+- The **shipped observability stack** used `http://tempo:4318`, which this
+  refuses, so it would have shipped broken. It now bundles a `tempo-tls`
+  Caddy terminator mirroring `deploy/embeddings-tls/`, and the engine pins
+  its internal CA root off a shared volume.
+
+**The gate is the part worth carrying.**
+`no_crate_but_undercroft_net_builds_its_own_http_client` scans every `.rs`
+under `crates/` for ureq's builder token — precisely the observable this
+defect does not move, because the client was somebody else's library. Its new
+sibling `no_second_http_client_is_linked_into_the_workspace` reads the
+dependency edge out of `Cargo.lock`, with a premise probe so a truncated lock
+cannot pass by containing nothing. Counterfactual executed: restoring the
+`reqwest-blocking-client` feature makes it fail.
+
+Four e2e-telemetry checks now drive the real binary: cleartext non-loopback
+refused (exit 1), loopback allowed, `config check` exempt, `config check`
+fatal. The export path had zero coverage before.
+
+**Version: MINOR** — `UNDERCROFT_OTLP_CA` is new capability. The refusal
+itself is a fix: the transport policy always said this, and the OTLP hop was
+simply never routed through it. It can still stop a running deployment, so it
+has an `UPGRADING.md` entry and is detectable in advance by `config check`.
+
 ### two diverted drawers shared one queue slot, and the second ate the first
 
 Round-four finding #7 (D2). Silent, and it destroyed a record by writing a

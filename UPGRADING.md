@@ -40,6 +40,51 @@ why every one is listed here and detectable in advance by
 `undercroft config check`. If that command exits 0 against your environment,
 none of this affects you.
 
+### The OTLP traces endpoint obeys the transport policy — cleartext to a non-loopback collector is refused
+
+**Affects:** `UNDERCROFT_OTLP_ENDPOINT`, on `--features telemetry` builds
+only. **This one can stop a deployment that was genuinely working**, so read
+it even if the rest of this section does not apply to you.
+
+**Symptom:** the process exits 1 at start-up with
+`the OTLP collector is configured with cleartext http to a non-loopback host
+(…). Drawer-derived data would cross the network in the clear. … There is no
+override.`
+
+**Cause:** the OTLP span exporter was the one outbound client in the
+workspace that never went through `undercroft-net`, so it obeyed neither the
+cleartext refusal nor CA pinning — while `UNDERCROFT_OTLP_HEADERS` is
+documented to carry a bearer token and spans carry vault ids and route
+labels. It also had **no TLS backend linked at all**, so an `https://`
+collector could not work even if you declared one, and the failure was
+swallowed inside the span processor: no traces, no error. Both are fixed
+together, which is why the refusal appears now — before, there was no secure
+configuration to move to.
+
+**Fix, in order of preference:**
+
+1. Terminate TLS in front of the collector and declare it:
+   `UNDERCROFT_OTLP_ENDPOINT=https://collector` plus
+   `UNDERCROFT_OTLP_CA=/path/to/root.crt` if it uses a private CA. A declared
+   root **replaces** the public roots — that is what pinning means.
+   `deploy/observability/tempo-tls/` is a working example, and the shipped
+   observability stack was converted to it in this release.
+2. Bind the collector to loopback and point at `http://127.0.0.1:4318`.
+   Loopback cleartext is allowed, unchanged.
+3. Unset `UNDERCROFT_OTLP_ENDPOINT`. Traces stop; metrics and logs are
+   unaffected.
+
+**Detectable in advance:** yes. `undercroft config check` runs the same
+transport policy the process runs, and now reports this variable as fatal
+rather than as an unparsed string. `config check` itself is deliberately
+exempt from the start-up refusal — a command whose job is diagnosing an
+environment that will not start has to run in one.
+
+**If you ran the shipped observability stack**, `docker compose pull` and
+bring it up again: it now includes a `tempo-tls` terminator and the engine
+pins its CA. No data migration, no volume change beyond the new
+`tempo-tls-data`.
+
 ### A declaration that turns a protection on now refuses when it does not parse
 
 **Affects:** `UNDERCROFT_TRUST_FLOOR`, `UNDERCROFT_ADMISSION`,

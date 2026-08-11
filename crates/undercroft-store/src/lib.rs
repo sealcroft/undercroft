@@ -167,11 +167,24 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
                     None => "no rate screen".into(),
                 })
             }),
-        // The four CA pins share one resolver, and its refusal is the one
+        // An OUTWARD PATH, so the pre-flight runs the same transport policy
+        // the process will run at start-up — deliberately NOT feature-gated:
+        // one binary name ships in both build variants, and an operator must
+        // not get a different verdict from a different build. Before this
+        // arm the variable fell to `_ => Ok(None)` and `config check`
+        // reported "no parse to run; the consumer validates it", when the
+        // consumer validated nothing at all.
+        "UNDERCROFT_OTLP_ENDPOINT" => {
+            undercroft_net::require_secure_transport("the OTLP collector", raw)
+                .map_err(|e| e.to_string())
+                .and_then(|()| described("traces export to this collector".into()))
+        }
+        // The five CA pins share one resolver, and its refusal is the one
         // that matters most here: a pin that does not load un-pins a hop.
         "UNDERCROFT_EMBED_CA"
         | "UNDERCROFT_LLM_CA"
         | "UNDERCROFT_INDEX_CA"
+        | "UNDERCROFT_OTLP_CA"
         | "UNDERCROFT_ORCH_ENGINE_CA" => undercroft_net::declared_pin("this hop", Some(raw))
             .map_err(|e| e.to_string())
             .and_then(|p| {

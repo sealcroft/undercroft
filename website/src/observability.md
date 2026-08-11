@@ -106,14 +106,27 @@ verification — i.e. tamper was detected on read.
 Set an endpoint to export traces and metrics over OTLP/HTTP:
 
 ```bash
+# Loopback cleartext is allowed — the collector never leaves the machine.
 UNDERCROFT_OTLP_ENDPOINT=http://localhost:4318 \
+UNDERCROFT_SERVICE_NAME=undercroft \
+undercroft serve-http
+```
+
+For a collector on another host, TLS is required and there is no override —
+the headers this exporter sends are documented to carry a bearer token, and
+the spans carry vault ids and route labels:
+
+```bash
+UNDERCROFT_OTLP_ENDPOINT=https://collector.internal \
+UNDERCROFT_OTLP_CA=/etc/undercroft/collector-ca.crt \
 UNDERCROFT_SERVICE_NAME=undercroft \
 undercroft serve-http
 ```
 
 | Variable | Meaning |
 |---|---|
-| `UNDERCROFT_OTLP_ENDPOINT` | OTLP/HTTP collector base URL. **Unset ⇒ no network egress.** |
+| `UNDERCROFT_OTLP_ENDPOINT` | OTLP/HTTP collector base URL. **Unset ⇒ no network egress.** An outward path: **TLS or loopback, nothing else, no override** — cleartext `http://` to a non-loopback host is refused at start-up. |
+| `UNDERCROFT_OTLP_CA` | Pin a private CA for the collector. The declared root **replaces** the public roots; a file that pins nothing refuses rather than falling back. |
 | `UNDERCROFT_SERVICE_NAME` | `service.name` resource attribute (default `undercroft`). |
 | `UNDERCROFT_OTLP_HEADERS` | Optional headers for the exporter. |
 

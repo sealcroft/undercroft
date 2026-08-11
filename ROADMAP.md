@@ -74,7 +74,15 @@ contract:
 
 The twenty defects on the pre-merge blocker list, the eleven regressions the
 third audit round found inside those fixes, and T1–T15. All described in
-CHANGELOG under `## Unreleased`. The four worth naming:
+CHANGELOG under `## Unreleased`. The five worth naming:
+
+* **The OTLP traces hop obeyed no transport policy and could not do TLS**
+  (round-four #8). A second HTTP client `undercroft-net` knew nothing about,
+  carrying a documented bearer token in the clear — and reqwest resolved with
+  no TLS backend, so `https` silently exported nothing. Now on the policed
+  agent, `UNDERCROFT_OTLP_CA` pins its root, `UNDERCROFT_OTLP_ENDPOINT` is
+  `Protects`, and the shipped stack gained a TLS terminator. The gate that
+  missed it scanned source for ureq's token; its sibling reads `Cargo.lock`.
 
 * **Two diverted drawers shared one queue slot** (round-four #7). The
   quarantine id substituted a CONSTANT for the wing, collapsing one of the
@@ -201,7 +209,10 @@ filed while closing O13: **O14**, `/v1` can MINT a forgetting attestation and
 cannot check one, and **O15**, the battery's own test count over-reports
 because `docker compose run` replays the tail of the stream. **O19** was filed
 while closing round-four #6: a wing-scoped query still materializes a
-membership set the per-wing PQ tier does not need.
+membership set the per-wing PQ tier does not need. **O20** was filed while
+closing #8: the orchestrator links no observability crate at all, so the
+control plane fronting every fleet request emits nothing — a drift, not a
+boundary, and it was recorded as neither until now.
 
 **O13 is CLOSED 2026-08-11** — round four's second CRITICAL. A genuine
 forgetting attestation reported FORGED with exit 2 after any key rotation;
@@ -1333,6 +1344,37 @@ MCP.
 `/v1` on both sides of a rotation, and the CLI and the route are shown to
 agree on one attestation — the same document, the same verdict, from both
 doors.
+
+---
+
+### O20 — the orchestrator emits no telemetry at all, and nothing recorded that
+
+Found while closing round-four #8, and filed rather than fixed because it is a
+different question with a different answer.
+
+`crates/undercroft-orchestrator/Cargo.toml` has no `undercroft-obs`
+dependency — verified, it lists `undercroft-net` and nothing
+observability-shaped. So the control plane that fronts **every request in a
+fleet** exports no traces, no metrics and no logs: no `/metrics`, no OTLP, no
+spans. A tenant request that is proxied through `/t/*` appears in the engine's
+telemetry with no record of the hop that routed it.
+
+Under this project's own rule — *a capability missing from one surface is a
+boundary or a drift, and which one has to be written down* — that absence was
+recorded in neither form. **Read: it is a DRIFT, not a boundary.** Nothing
+about a control plane argues against observing it; the engine's own telemetry
+is metadata-only and opt-in behind a feature, and the same shape would apply
+here. The orchestrator is a pure `/v1` client, so it would need its own
+`telemetry` feature rather than inheriting one.
+
+**Not scheduled**, and deliberately not folded into #8: that unit was about a
+transport obeying a policy, and this is about a surface having a capability at
+all. Bolting it on would have doubled the unit and hidden the argument.
+
+**Gate:** `undercroft-orchestrator --features telemetry` exposes `/metrics`
+behind the same bearer as the engine, `e2e-orchestrator.sh` asserts a
+non-empty exposition, and `parity.rs` records the decision either way — so a
+future reader finds a ruling rather than an absence.
 
 ---
 
