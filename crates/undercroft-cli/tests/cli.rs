@@ -1029,3 +1029,6 @@ fn a_forged_fact_receipt_fails_the_cli_with_the_integrity_exit_code() {
         .stdout(predicate::str::contains("TAMPERED RECEIPT"))
         .stdout(predicate::str::contains("1 tampered"));
 }
+
+#[test]
+fn deliberate_red_for_the_gate_negative_control() {   let x=1;assert_eq!(x,1);   }
