@@ -483,7 +483,19 @@ enum Command {
         #[command(subcommand)]
         action: BackupAction,
     },
-    /// Print auto-save hook settings for an agent client
+    /// Configuration: validate this environment's `UNDERCROFT_*` declarations
+    ///
+    /// **The spelling every doc publishes.** `UPGRADING.md`'s own pre-upgrade
+    /// command, the release flow in `CLAUDE.md`, `README`, `docs/AGENTS.md`
+    /// and the architecture page all write `undercroft config check` with a
+    /// SPACE, while clap derived `config-check` from the variant name — so
+    /// the command an operator was told to run before every upgrade did not
+    /// exist. A clap `alias` cannot express it (aliases are one token), so
+    /// the two-word form is a subcommand group.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Validate every `UNDERCROFT_*` declaration in this environment
     /// WITHOUT opening a vault or binding a port — so an upgrade is tested
     /// in a pipeline rather than discovered at restart.
@@ -491,15 +503,39 @@ enum Command {
     /// Exit 1 if any declaration that turns a protection on would refuse to
     /// start; exit 0 otherwise. Warnings do not fail the run: those are
     /// declarations whose default is already the conservative choice.
+    ///
+    /// Kept beside `config check` rather than replaced: this is the spelling
+    /// that has always WORKED, so removing it would break the scripts that
+    /// found the doc wrong and adapted.
     ConfigCheck {
         /// Also print the declarations that resolve cleanly
         #[arg(long)]
         verbose: bool,
     },
+    /// Print auto-save hook settings for an agent client
+    ///
+    /// This doc comment sat above `ConfigCheck` for as long as that variant
+    /// existed: something was inserted BETWEEN a doc comment and the thing it
+    /// documented, so `config-check --help` described hooks and `hooks` had
+    /// no help at all. Nothing in this tree can see that class — clap accepts
+    /// it, rustfmt accepts it, and no gate reads help strings — which is why
+    /// it is gated below by `every_subcommand_has_its_own_about`.
     Hooks {
         /// Client: claude-code
         #[arg(default_value = "claude-code")]
         client: String,
+    },
+}
+
+/// `config check` — the two-word spelling every doc publishes.
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Validate every `UNDERCROFT_*` declaration in this environment
+    /// WITHOUT opening a vault or binding a port
+    Check {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -3415,7 +3451,15 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::ConfigCheck { verbose } => {
+        // **Both spellings, ONE implementation.** `config check` is what every
+        // doc publishes and `config-check` is what has always run; binding
+        // them to the same arm is the point, because two arms would be two
+        // places for the verdict to drift — the defect class this tree spends
+        // its time closing.
+        Command::Config {
+            action: ConfigAction::Check { verbose },
+        }
+        | Command::ConfigCheck { verbose } => {
             println!("Checking every UNDERCROFT_* declaration in this environment.");
             println!(
                 "Nothing is opened: no vault, no database, no socket, no outbound call.
@@ -3833,6 +3877,79 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use tempfile::TempDir;
+
+    /// **Every advertised subcommand carries its OWN help text, and the
+    /// documented two-word `config check` runs.**
+    ///
+    /// Two defects in one clap block, both invisible to every other gate in
+    /// this tree. `ConfigCheck` was inserted BETWEEN `Hooks`'s doc comment
+    /// and `Hooks`, so clap attached that comment to the wrong variant:
+    /// `config-check --help` opened with "Print auto-save hook settings for
+    /// an agent client" and `hooks` had no help at all. Nothing could see it
+    /// — clap does not care which variant a comment lands on, rustfmt does
+    /// not reformat doc comments, and no test reads help strings.
+    ///
+    /// And `undercroft config check` — the spelling in `UPGRADING.md`'s
+    /// pre-upgrade command, the release flow, the README, `docs/AGENTS.md`
+    /// and the architecture page — did not exist, because clap derives
+    /// `config-check` from the variant name. The command an operator is told
+    /// to run before every upgrade returned a usage error.
+    ///
+    /// Driven through clap's own rendered help, not through the source: a
+    /// gate that re-read the doc comments would agree with them by
+    /// construction and could not see which variant they attach to.
+    #[test]
+    fn every_subcommand_has_its_own_about_and_config_check_runs() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+
+        // Both spellings parse. `config check` is the documented one; the
+        // hyphenated form stays because it is what has always worked.
+        assert!(
+            Cli::try_parse_from(["undercroft", "config", "check"]).is_ok(),
+            "`undercroft config check` is the spelling every doc publishes \
+             and it must run"
+        );
+        assert!(
+            Cli::try_parse_from(["undercroft", "config-check"]).is_ok(),
+            "the hyphenated spelling has always worked and must keep working"
+        );
+
+        // No two subcommands may share an `about`, and none may be missing
+        // one — a stolen doc comment produces exactly those two symptoms at
+        // once, on the pair either side of the insertion.
+        let mut seen: std::collections::HashMap<String, String> = Default::default();
+        for sub in cmd.get_subcommands() {
+            let name = sub.get_name().to_string();
+            let about = sub
+                .get_about()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            assert!(
+                !about.is_empty(),
+                "subcommand `{name}` advertises no help text — the usual cause \
+                 is a variant inserted between a doc comment and the variant it \
+                 documented, which leaves this one bare and the other one wearing \
+                 two"
+            );
+            if let Some(other) = seen.insert(about.clone(), name.clone()) {
+                panic!(
+                    "`{name}` and `{other}` advertise the SAME help text {about:?} — \
+                     one of them has taken the other's doc comment"
+                );
+            }
+        }
+        // Premise: the walk actually examined the surface. An empty or tiny
+        // subcommand list would satisfy every assertion above.
+        assert!(
+            cmd.get_subcommands().count() > 30,
+            "premise: this gate must have walked the real command surface, \
+             found {}",
+            cmd.get_subcommands().count()
+        );
+    }
 
     /// The default palace must resolve on a machine that sets `USERPROFILE`
     /// and not `HOME` — i.e. on native Windows, which is a target the

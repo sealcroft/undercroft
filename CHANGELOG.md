@@ -2,6 +2,42 @@
 
 ## Unreleased — 1.1.0
 
+### the documented pre-upgrade command did not exist, and one variant wore another's help
+
+Round-four findings #10 and #41, both in the same clap block, both proven by
+running the binary rather than by reading it.
+
+**`undercroft config check` returned a usage error.** clap derives
+`config-check` from `Command::ConfigCheck`, while `UPGRADING.md`'s own
+pre-upgrade command, the release flow in `CLAUDE.md`, the README,
+`docs/AGENTS.md` and the architecture page all publish the two-word spelling.
+The command an operator is told to run before every upgrade — the one whose
+whole purpose is finding a misdeclaration in a pipeline instead of during a
+rolling restart — did not run. A clap `alias` cannot fix it, aliases being a
+single token, so `config check` is a subcommand group bound to the SAME arm
+as `config-check`; two arms would be two places for the verdict to drift.
+The hyphenated spelling stays, because it is the one that has always worked
+and scripts adapted to it. **No documentation changed: the docs were right
+and the code was wrong.**
+
+**`config-check --help` described hooks.** `ConfigCheck` had been inserted
+BETWEEN `Hooks`'s doc comment and `Hooks`, so clap attached that comment to
+the wrong variant — `config-check` opened with "Print auto-save hook settings
+for an agent client" and `hooks` advertised no help at all.
+
+Nothing in this tree could see that: clap does not care which variant a
+comment lands on, rustfmt does not reformat doc comments, and no test read
+help strings. So `every_subcommand_has_its_own_about_and_config_check_runs`
+now walks clap's own RENDERED help — not the source, which would agree with
+the doc comments by construction and could not tell which variant they attach
+to — and fails on a subcommand with no `about` or on two sharing one, which
+are the two symptoms a stolen comment produces at once. It carries a premise
+assertion that the walk saw a real command surface.
+
+**Counterfactual executed:** the doc comment moved back above `ConfigCheck`,
+and the gate failed with *"subcommand `hooks` advertises no help text"*, then
+passed on revert.
+
 ### the knowledge graph's screen covered one field of three
 
 Round-four finding #5, **HIGH**. `screen_kg_object` ran the tier-1 detector

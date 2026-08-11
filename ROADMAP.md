@@ -1057,6 +1057,47 @@ path (33 ms vs 32 ms end to end), and nothing multiplies by record count.
 
 ---
 
+### O18 — CLOSED 2026-08-11: the documented pre-upgrade command runs, and every subcommand owns its help
+Round-four findings **#10** and **#41**, closed together because they live in
+one clap block and share a cause: nothing in this tree reads what the CLI
+*advertises*.
+
+**#10.** clap derived `config-check`; `UPGRADING.md`'s pre-upgrade command,
+the release flow in `CLAUDE.md`, `README`, `docs/AGENTS.md` and
+`architecture/index.html` all publish `undercroft config check`. The command
+an operator is told to run before every upgrade returned a usage error. Fixed
+as a subcommand group bound to the SAME dispatch arm as `config-check` — an
+alias cannot express a two-token spelling, and a second arm would be a second
+place for the verdict to drift. The hyphenated form stays; it is what has
+always worked. **No doc changed — the docs were right and the code was wrong.**
+
+**#41.** `ConfigCheck` had been inserted between `Hooks`'s doc comment and
+`Hooks`, so `config-check --help` described hooks and `hooks` had none.
+
+**Why it needed a gate rather than a fix.** This class is invisible to
+everything the tree already runs: clap accepts a comment on any variant,
+rustfmt does not reformat doc comments, and no test read help strings. The
+gate walks clap's own RENDERED help — deliberately not the source, which
+would agree with the doc comments by construction and could not tell which
+variant they attach to — and fails on a subcommand with no `about` or on two
+sharing one, the two symptoms a stolen comment produces simultaneously. A
+premise assertion requires it to have walked a real surface (>30 subcommands).
+
+**This also corrects the applied-list.** `.handover` recorded #10 as applied
+and it was not; that was found by running `--help`, not by reading the list.
+The other ten entries were then checked against code — #1, #3, #11, #12, #13,
+#14, #15, #16 and #32 are genuinely applied — so the list had exactly one
+wrong entry, now made true rather than annotated.
+
+**Gate:** `every_subcommand_has_its_own_about_and_config_check_runs`
+(main.rs), plus an `e2e.sh` check driving `undercroft config check` as an
+operator types it. **Counterfactual executed:** the doc comment restored to
+its wrong position, gate failed naming `hooks`, passed on revert. Verified
+from the built binary: `config check` exits 0, `config-check` still works,
+`hooks` has its help back.
+
+---
+
 ### O17 — CLOSED 2026-08-11: the graph's screen is record-scoped, not object-scoped
 Round-four finding **#5**, HIGH and silent.
 

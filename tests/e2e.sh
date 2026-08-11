@@ -538,6 +538,16 @@ echo "== config check: an upgrade fails in a pipeline, not at a restart =="
 # protection on must not fall back silently — but a refusal that arrives at
 # start-up arrives during a rolling restart, one node at a time. This is the
 # door that moves it earlier.
+# **The spelling every doc publishes, driven as an operator would type it.**
+# `UPGRADING.md`'s pre-upgrade command, the release flow in `CLAUDE.md`, the
+# README, `docs/AGENTS.md` and the architecture page all write it with a
+# SPACE, while clap derived `config-check` from the variant name — so the one
+# command an operator is told to run before every upgrade returned a usage
+# error. Both spellings are checked: the documented one because it is what
+# gets typed, the hyphenated one because it is what has always worked and
+# scripts adapted to it.
+check "the documented spelling runs" 0 "This environment starts"     -- \
+  "$BIN" config check
 check "clean env starts"          0 "This environment starts"        -- \
   "$BIN" config-check
 check "opens nothing, and says so" 0 "no vault, no database"          -- \
