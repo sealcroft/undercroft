@@ -1143,7 +1143,12 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore
         }
         Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
         Ok(other) => {
-            bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, http, onnx, ort)")
+            // The message comes from the SAME validator `config check` runs,
+            // so the pre-flight and the start-up can never disagree about
+            // what is legal. The named arms above matched every legal value,
+            // so this is an error by construction.
+            bail!(check_embedder(other)
+                .expect_err("every legal embedder name is matched by an arm above"))
         }
     };
     attach_reranker(&mut store)?;
@@ -1165,26 +1170,73 @@ pub(crate) fn attach_admission_advisor(store: &mut PalaceStore) -> Result<()> {
     Ok(())
 }
 
+/// The `UNDERCROFT_EMBEDDER` vocabulary, and what THIS BUILD can honour.
+///
+/// **One implementation, two callers**: the open path below and
+/// `undercroft config check`. The parse used to live only inside that
+/// path's `match`, so the pre-flight had nothing to call — `check_declaration`
+/// fell through to its catch-all and the command printed *"no parse to run;
+/// the consumer validates it"* about a value that bails before the port is
+/// bound. Round-four #9: the pre-flight said "This environment starts" for
+/// environments that do not.
+///
+/// Validates the NAME only. It must not construct anything — `config check`
+/// opens nothing and makes no outbound call, and loading a model is both.
+pub(crate) fn check_embedder(raw: &str) -> Result<(), String> {
+    match raw {
+        "" | "hash" | "http" | "external" => Ok(()),
+        "onnx" if !cfg!(feature = "onnx") => Err(
+            "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
+             (cargo build -p undercroft-cli --features onnx)"
+                .to_string(),
+        ),
+        "ort" if !cfg!(feature = "ort") => Err(
+            "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
+             (cargo build -p undercroft-cli --features ort)"
+                .to_string(),
+        ),
+        "onnx" | "ort" => Ok(()),
+        other => Err(format!(
+            "unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx, ort, http)"
+        )),
+    }
+}
+
+/// The `UNDERCROFT_RETRIEVAL` vocabulary, and what this build can honour.
+/// Same shape and same reason as [`check_embedder`].
+pub(crate) fn check_retrieval(raw: &str) -> Result<(), String> {
+    match raw {
+        "" | "pq" | "fde" => Ok(()),
+        "hnsw" if !cfg!(feature = "hnsw") => Err(
+            "UNDERCROFT_RETRIEVAL=hnsw requires a build with the 'hnsw' feature \
+             (cargo build -p undercroft-cli --features hnsw)"
+                .to_string(),
+        ),
+        "hnsw" => Ok(()),
+        other => Err(format!(
+            "unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, fde, hnsw)"
+        )),
+    }
+}
+
 /// Select the candidate-generation strategy via `UNDERCROFT_RETRIEVAL`
 /// (same contract as the bench harness). Unset ⇒ the default full scan with
 /// the FTS prefilter. `pq` enables the on-disk PQ/IVF prefilter — plain
 /// codes on hmac-only vaults, AEAD-sealed rows + a decrypt-once RAM cache
 /// on sealed vaults.
 fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
-    match std::env::var("UNDERCROFT_RETRIEVAL").as_deref() {
-        Ok("pq") => store.set_pq(true),
-        Ok("fde") => store.set_fde(true),
-        Ok("hnsw") => {
-            #[cfg(feature = "hnsw")]
-            store.set_hnsw(true);
-            #[cfg(not(feature = "hnsw"))]
-            bail!(
-                "UNDERCROFT_RETRIEVAL=hnsw requires a build with the 'hnsw' feature \
-                 (cargo build -p undercroft-cli --features hnsw)"
-            );
-        }
-        Ok("") | Err(_) => {}
-        Ok(other) => bail!("unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, fde, hnsw)"),
+    let raw = std::env::var("UNDERCROFT_RETRIEVAL").unwrap_or_default();
+    // The vocabulary is decided ONCE, by the same function `config check`
+    // runs, so the pre-flight and the start-up cannot disagree about what is
+    // legal. Everything below is application, not validation — which is why
+    // the final arm can be a bare `_` with no second error message.
+    check_retrieval(&raw).map_err(|e| anyhow::anyhow!(e))?;
+    match raw.as_str() {
+        "pq" => store.set_pq(true),
+        "fde" => store.set_fde(true),
+        #[cfg(feature = "hnsw")]
+        "hnsw" => store.set_hnsw(true),
+        _ => {}
     }
     Ok(())
 }

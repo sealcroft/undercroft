@@ -2,6 +2,61 @@
 
 ## Unreleased — 1.1.0
 
+### `config check` said "This environment starts" about environments that do not
+
+Round-four finding #9 (D1+D11). The pre-flight is what `UPGRADING.md` tells
+operators to trust — *"if that command exits 0 against your environment, none
+of this affects you"* — and for three `Protects` variables that sentence was
+false.
+
+**Measured against the binary, not read off the plan.** For each variable, a
+garbage value, `config check`'s exit code beside the actual run's:
+
+| | `config check` | actual run |
+|---|---|---|
+| `UNDERCROFT_RETRIEVAL` | 0 | 1 |
+| `UNDERCROFT_EMBEDDER` | 0 | 1 |
+| `UNDERCROFT_ADMISSION_LLM` | 0 | 1 |
+
+**Cause, and it is structural rather than three forgotten arms.**
+`check_declaration` lives in `undercroft-store`, and these three parses live
+in `undercroft-cli` and `undercroft-llm` — crates the store cannot depend on.
+So they fell through its `_ => Ok(None)` catch-all and were rendered
+`Accepted`, printed as *"no parse to run; the consumer validates it"*. That
+is indistinguishable from a variable which genuinely has no parse, which is
+why nothing could tell.
+
+Each now has an arm in `config_check::check_one` calling the **same function
+the engine calls** — `check_embedder`, `check_retrieval`,
+`advisor::check_mode`, each extracted so the vocabulary has exactly one
+implementation. `attach_retrieval`'s application `match` lost its error text
+entirely as a result: validation happens once, up front, so the arm that
+applies the value ends in a bare `_`. None of the three validators constructs
+anything, because this command opens nothing and makes no outbound call — a
+model is never loaded to find out whether its name is legal.
+
+**The gate is the deliverable.** `PREFLIGHT_EXEMPT` lists the `Protects`
+variables this command legitimately cannot pre-flight, each with its reason,
+and `every_protects_variable_is_pre_flighted_or_exempt` counts it against the
+code in **both** directions: a `Protects` variable with no parse fails the
+build unless it is listed, and a listed variable that becomes checkable fails
+it too, so the exemption cannot rot. It carries a premise assertion, since a
+filter matching nothing would report a clean tree. Counterfactual executed:
+removing one arm makes it name that variable.
+
+Two things the exempt list makes visible that were not visible before.
+Credentials (`UNDERCROFT_PASSPHRASE`, `UNDERCROFT_MCP_HTTP_TOKEN`) cannot be
+pre-flighted at all — any string is well-formed, and whether it is the right
+one is learned by decrypting, which this command must not do. And three
+variables belong to a **different binary**: the orchestrator has no
+pre-flight command, so the promise in `UPGRADING.md` is narrower than it reads
+for anyone running a fleet. Filed as ROADMAP **O21** rather than papered over.
+
+A fourth variable the sweep named did not survive verification.
+`UNDERCROFT_PASSPHRASE` looked like a liar under the same probe — `config
+check` 0, run 2 — but a wrong passphrase is a bad credential, not a malformed
+declaration, and exit 2 is the integrity verdict working correctly.
+
 ### the traces hop was the one outbound client obeying no transport policy, and it could not do TLS at all
 
 Round-four finding #8 (D1). Silent, and it had **no end-to-end coverage of

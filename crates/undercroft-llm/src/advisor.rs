@@ -41,6 +41,27 @@ pub struct LlmAdmissionAdvisor {
     client: LlmClient,
 }
 
+/// The `UNDERCROFT_ADMISSION_LLM` vocabulary — `advisory`, `off`, or unset.
+///
+/// **One implementation, two callers**: [`LlmAdmissionAdvisor::from_env`] and
+/// `undercroft config check`. The parse used to live only inside `from_env`,
+/// so the pre-flight had nothing to call: `check_declaration` fell through to
+/// its catch-all and the command reported *"no parse to run; the consumer
+/// validates it"* for a value that refuses to open. Round-four #9.
+///
+/// Validates the MODE only — it constructs no client and makes no outbound
+/// call, because `config check` opens nothing.
+pub fn check_mode(raw: &str) -> Result<(), LlmError> {
+    if raw.eq_ignore_ascii_case("advisory") || raw.eq_ignore_ascii_case("off") || raw.is_empty() {
+        return Ok(());
+    }
+    Err(LlmError::Refused(format!(
+        "UNDERCROFT_ADMISSION_LLM={raw:?} — the only mode is 'advisory' \
+         (the classifier can push a write toward quarantine, never \
+         admit one; there is deliberately no gating mode)"
+    )))
+}
+
 impl LlmAdmissionAdvisor {
     /// Build when the deployment declared `UNDERCROFT_ADMISSION_LLM=advisory`
     /// — the model itself comes from the existing
@@ -50,15 +71,9 @@ impl LlmAdmissionAdvisor {
     /// refusal to start).
     pub fn from_env() -> Result<Option<Self>, LlmError> {
         match std::env::var("UNDERCROFT_ADMISSION_LLM") {
+            Ok(v) if check_mode(&v).is_err() => return Err(check_mode(&v).unwrap_err()),
             Ok(v) if v.eq_ignore_ascii_case("advisory") => {}
-            Ok(v) if v.eq_ignore_ascii_case("off") || v.is_empty() => return Ok(None),
-            Ok(v) => {
-                return Err(LlmError::Refused(format!(
-                    "UNDERCROFT_ADMISSION_LLM={v:?} — the only mode is 'advisory' \
-                     (the classifier can push a write toward quarantine, never \
-                     admit one; there is deliberately no gating mode)"
-                )))
-            }
+            Ok(_) => return Ok(None),
             Err(_) => return Ok(None),
         }
         // Transport policy (TLS or loopback, UNDERCROFT_LLM_CA pin) is the

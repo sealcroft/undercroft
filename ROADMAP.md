@@ -74,7 +74,16 @@ contract:
 
 The twenty defects on the pre-merge blocker list, the eleven regressions the
 third audit round found inside those fixes, and T1–T15. All described in
-CHANGELOG under `## Unreleased`. The five worth naming:
+CHANGELOG under `## Unreleased`. The six worth naming:
+
+* **`config check` said "This environment starts" about environments that do
+  not** (round-four #9). Three `Protects` variables had their parse in crates
+  `check_declaration` cannot reach, so they rendered as "no parse to run" —
+  indistinguishable from having none. Each now calls the same function the
+  engine calls, and `PREFLIGHT_EXEMPT` + a both-directions gate make the class
+  checkable instead of trusting that someone remembered. **O21** filed: the
+  orchestrator's three declarations belong to a binary with no pre-flight at
+  all, so `UPGRADING.md`'s promise is narrower than it reads for a fleet.
 
 * **The OTLP traces hop obeyed no transport policy and could not do TLS**
   (round-four #8). A second HTTP client `undercroft-net` knew nothing about,
@@ -1344,6 +1353,35 @@ MCP.
 `/v1` on both sides of a rotation, and the CLI and the route are shown to
 agree on one attestation — the same document, the same verdict, from both
 doors.
+
+---
+
+### O21 — `config check` cannot pre-flight the orchestrator's own declarations
+
+Found while closing round-four #9, and it is the honest residue of that fix
+rather than a new defect.
+
+`undercroft config check` runs the ENGINE's resolvers. Three `Protects`
+variables are read by a different binary — `UNDERCROFT_ORCH_ADMIN_TOKEN`,
+`UNDERCROFT_ORCH_KEY` and `UNDERCROFT_ORCH_RATE_LIMIT`, all consumed by
+`undercroft-orchestrator` — and that binary has no pre-flight command at all.
+They are on `config_check::PREFLIGHT_EXEMPT` with this entry named as the
+reason, so the exemption is argued rather than forgotten.
+
+Why it matters: `UPGRADING.md` tells an operator that if `config check` exits
+0, none of its entries affect them. For a fleet running the control plane that
+promise is narrower than it reads, and nothing on the surface says so.
+
+**Shape of the fix.** `undercroft-orchestrator config check`, built the same
+way: one `check_one`-shaped function per declaration calling the SAME resolver
+the serve path calls, never a second copy, opening nothing. The engine's
+command should then say plainly that it covers the engine, so an operator
+knows to run both.
+
+**Gate:** the orchestrator's own `every_protects_variable_is_pre_flighted_or_exempt`
+over its half of `ENGINE_ENV_VARS`, plus a check in `e2e-orchestrator.sh` that
+a garbage `UNDERCROFT_ORCH_RATE_LIMIT` is refused by the pre-flight and by the
+serve path with the same exit code — the agreement that is the whole point.
 
 ---
 

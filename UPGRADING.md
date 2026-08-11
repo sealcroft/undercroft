@@ -20,6 +20,16 @@ Run it in a pipeline against the deployment's real environment. That is the
 difference between finding out in CI and finding out during a rolling
 restart, one node at a time.
 
+**Two limits on "exit 0 means it starts", stated because they are real.** It
+covers the **engine**: `undercroft-orchestrator` reads three declarations of
+its own and has no pre-flight command yet (ROADMAP O21), so a fleet should not
+read this command's exit code as covering the control plane. And it cannot
+check a **credential** — any string is a well-formed passphrase or token, and
+whether it is the right one is only learned by decrypting a vault or being
+refused by a peer, neither of which this command does. Everything else that
+can refuse is pre-flighted, and that is enforced by a test counting the
+inventory in both directions rather than by anyone remembering.
+
 It reports **validated** and **accepted** separately, and the distinction
 matters: only some variables have a parse to run. A path, a URL, a token or a
 model name is validated by the thing that consumes it, and this command says
@@ -84,6 +94,21 @@ environment that will not start has to run in one.
 bring it up again: it now includes a `tempo-tls` terminator and the engine
 pins its CA. No data migration, no volume change beyond the new
 `tempo-tls-data`.
+
+**Why there is no warn-first release, since this is the one entry here that
+can stop a deployment that was genuinely working.** Considered and rejected,
+with the reasons, so this reads as a ruling rather than an oversight. A
+release that warns instead of refusing is a release where the bearer token
+this exporter is documented to carry still crosses the network in the clear —
+the warning names the harm while continuing to do it, for everyone who does
+not read start-up logs. That is worse than a refusal, not gentler. It also
+contradicts the configuration doctrine this project already applies
+everywhere else: where a declaration turns a protection on, a silent fallback
+removes exactly what the operator asked for, so garbage refuses rather than
+degrades. And the substitute for a deprecation window already exists and is
+better than one — `undercroft config check` runs the same policy the process
+runs, opens nothing, and belongs in a pipeline, so the failure lands in CI
+rather than one node at a time during a rolling restart.
 
 ### A declaration that turns a protection on now refuses when it does not parse
 

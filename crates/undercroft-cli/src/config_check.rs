@@ -101,6 +101,42 @@ fn check_one(name: &str, raw: &str) -> Finding {
         .find(|(n, _)| *n == name)
         .map(|(_, c)| *c)
         .unwrap_or(ConfigClass::Tunes);
+    // **Declarations this crate owns are checked here, not in the store.**
+    // `check_declaration` lives in `undercroft-store`, which cannot reach a
+    // parse that lives in the CLI or in `undercroft-llm` — so those fell
+    // through its catch-all and this command printed "no parse to run; the
+    // consumer validates it" about values that stop start-up. Measured
+    // against the binary: `config check` exited 0 while the same environment
+    // failed to run, for all three below (round-four #9).
+    //
+    // Each arm calls the SAME function the engine calls. None of them
+    // constructs anything — this command opens nothing and makes no outbound
+    // call, so a model is never loaded to find out whether its name is legal.
+    let owned: Option<Result<String, String>> = match name {
+        "UNDERCROFT_EMBEDDER" => Some(
+            crate::check_embedder(raw).map(|()| "selects the vector space for this vault".into()),
+        ),
+        "UNDERCROFT_RETRIEVAL" => {
+            Some(crate::check_retrieval(raw).map(|()| "selects the candidate generator".into()))
+        }
+        "UNDERCROFT_ADMISSION_LLM" => Some(
+            undercroft_llm::advisor::check_mode(raw)
+                .map(|()| "tier-2 advisory screen, toward quarantine only".into())
+                .map_err(|e| e.to_string()),
+        ),
+        _ => None,
+    };
+    if let Some(result) = owned {
+        return match result {
+            Ok(what) => Finding::Ok(what),
+            Err(why) => match class {
+                ConfigClass::Protects => Finding::Fatal(why),
+                ConfigClass::Tunes => Finding::Warn(format!(
+                    "{why}; this one keeps the conservative default rather than refusing"
+                )),
+            },
+        };
+    }
     match undercroft_store::check_declaration(name, raw) {
         Ok(Some(what)) => Finding::Ok(what),
         Ok(None) => Finding::Accepted,
@@ -113,9 +149,103 @@ fn check_one(name: &str, raw: &str) -> Finding {
     }
 }
 
+/// `Protects` variables this command legitimately cannot pre-flight, each
+/// with the reason it is exempt rather than forgotten.
+///
+/// A `Protects` variable is one whose refusal is FATAL, so an operator is
+/// told to trust `config check`'s exit code — `UPGRADING.md` says in as many
+/// words that if it exits 0, none of its entries affect you. Anything on this
+/// list is a place where that promise is narrower than it sounds, so the list
+/// is short, argued, and counted against the code in BOTH directions by
+/// [`tests::every_protects_variable_is_pre_flighted_or_exempt`].
+///
+/// `#[cfg(test)]` because it is inventory, not behaviour — the same shape as
+/// `mcp::WRITE_TOOLS`, which survives as the other half of a count and is
+/// referenced by nothing at run time.
+#[cfg(test)]
+const PREFLIGHT_EXEMPT: &[(&str, &str)] = &[
+    // Opaque payload: any non-empty string is a well-formed value, and
+    // whether it is the RIGHT one can only be learned by decrypting a vault
+    // — which this command must not do.
+    ("UNDERCROFT_PASSPHRASE", "a credential, not a syntax"),
+    ("UNDERCROFT_MCP_HTTP_TOKEN", "a credential, not a syntax"),
+    // Owned by a DIFFERENT BINARY. `undercroft config check` runs the
+    // engine's resolvers; these are read by `undercroft-orchestrator`, which
+    // has no pre-flight command of its own. Filed as ROADMAP O21 rather than
+    // silently narrowed, because an operator running a fleet reads this
+    // command's exit code and would not guess it skipped a whole surface.
+    ("UNDERCROFT_ORCH_ADMIN_TOKEN", "orchestrator-owned (O21)"),
+    ("UNDERCROFT_ORCH_KEY", "orchestrator-owned (O21)"),
+    ("UNDERCROFT_ORCH_RATE_LIMIT", "orchestrator-owned (O21)"),
+    // Flags, not vocabularies: any value that is not the enabling one leaves
+    // the conservative default in place, so there is nothing that can fail
+    // to parse. Verified against the binary — a garbage value runs.
+    (
+        "UNDERCROFT_FORCE_EMBEDDER",
+        "a flag; no value can fail to parse",
+    ),
+    (
+        "UNDERCROFT_ADMIT_TRUSTED_SOURCES",
+        "a flag; no value can fail to parse",
+    ),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Round-four #9's gate. **Every `Protects` variable is either
+    /// pre-flighted or on the exempt list, and the list cannot go stale
+    /// because it is counted in both directions.**
+    ///
+    /// The defect this closes is not "three arms were missing" — it is that
+    /// nothing could tell. `check_declaration`'s catch-all renders an
+    /// unknown name as `Accepted`, printed as *"no parse to run; the
+    /// consumer validates it"*, which is indistinguishable from a variable
+    /// that genuinely has no parse. Measured against the binary,
+    /// `config check` exited 0 for `UNDERCROFT_RETRIEVAL`,
+    /// `UNDERCROFT_EMBEDDER` and `UNDERCROFT_ADMISSION_LLM` while the same
+    /// environment failed to start — and `UPGRADING.md` tells operators that
+    /// exit 0 means none of its entries affect them.
+    #[test]
+    fn every_protects_variable_is_pre_flighted_or_exempt() {
+        let exempt: std::collections::BTreeMap<&str, &str> =
+            PREFLIGHT_EXEMPT.iter().copied().collect();
+        let mut unchecked = Vec::new();
+        let mut protects = 0usize;
+        for (name, class) in ENGINE_ENV_VARS {
+            if *class != ConfigClass::Protects {
+                continue;
+            }
+            protects += 1;
+            // A value no vocabulary can contain. `Accepted` here means this
+            // command ran no parse at all for a variable whose refusal is
+            // fatal.
+            let accepted = matches!(check_one(name, "\u{1}not-a-legal-value"), Finding::Accepted);
+            match (accepted, exempt.contains_key(name)) {
+                (true, false) => unchecked.push(format!(
+                    "  {name} — Protects, but this command runs no parse for it. \
+                     Give it an arm, or add it to PREFLIGHT_EXEMPT with a reason."
+                )),
+                (false, true) => unchecked.push(format!(
+                    "  {name} — listed in PREFLIGHT_EXEMPT but IS pre-flighted now. \
+                     Good news: delete the exemption."
+                )),
+                _ => {}
+            }
+        }
+        // PREMISE. A filter that matched nothing would report a clean tree.
+        assert!(
+            protects >= 20,
+            "premise failed: only {protects} Protects variables found — the \
+             inventory is not being read"
+        );
+        assert!(
+            unchecked.is_empty(),
+            "`config check` and the Protects class disagree:\n{}",
+            unchecked.join("\n")
+        );
+    }
 
     /// **The validator calls the engine's own resolvers, and this is the
     /// test that would notice if it ever stopped.**
