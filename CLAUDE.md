@@ -378,7 +378,7 @@ Consequences that are binding, not advisory:
   dynamically at rotation since a fixed list cannot enumerate them);
   below the floor a scoped query full-scans its wing — bounded by the
   floor, exact, and still starvation-free. **Every other declared filter
-  is scope-resolved before candidates are drawn** (`scope_seqs` →
+  is scope-resolved before candidates are drawn** (`resolve_seq_filter` →
   `*_candidates_in`): `room` was a plain `WHERE` over globally generated
   candidates — the wing defect with no tier and no fallback — and the FTS
   prefilter shared the shape (both were recorded gaps, both closed
@@ -387,7 +387,29 @@ Consequences that are binding, not advisory:
   gets membership-filtered candidates (PQ/wing-PQ/FDE filter during
   selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
   filter their top-k and surrender to the bounded exact scan when the
-  scope's share cannot fill the page), pools SIZED BY THE SCOPE
+  scope's share cannot fill the page), pools SIZED BY THE SCOPE.
+  **A NARROWING and an EXCLUSION are not the same relation and
+  `SeqFilter::{Only,AllBut}` is what keeps them apart** — one
+  representation served both until 2026-08-11 and it was always the wrong
+  one for half its callers. A declared `wing`/`room`/`kind` (or a trust
+  `Allow`) is small relative to the corpus, so materializing its MEMBERS is
+  the cheap side and its cardinality is a real population to size pools by.
+  A bare trust `Exclude` — the shape the quarantine fence and a `standard`
+  floor BOTH produce — is the complement of a small set, so materializing
+  its in-scope side is O(corpus) **per query** and its cardinality is the
+  corpus wearing a scope's name. One diverted drawer therefore reclassified
+  every search on a prefilter-enabled vault as scoped: measured on a
+  1,190-drawer real corpus under `UNDERCROFT_RETRIEVAL=pq`, **76 → 140
+  ms/q** from a single quarantined row, and 77 → 69 (noise) once `AllBut`
+  answered `narrows()` with `false`. So: **the scoped floors below apply to
+  narrowings only**, `SeqFilter::admits` is the one membership door and
+  `scope_population` the one geometry door, and the fence is unchanged —
+  the SQL clause was always the accelerator and `verified_meta_admits` the
+  boundary (A28). Note what the arithmetic hides: `scoped_pool_k` and the
+  unscoped `max(hydrate_k, live/64)` coincide **exactly at live = 131,072**,
+  which is the floor of the pqscale/scopescale grid, so every checkpoint
+  either instrument measures reads 1.0× and neither could ever have seen
+  this. Measure a scope-geometry claim at ~10³–10⁴, not on the grid.
   (`scoped_pool_k`/`scoped_keep`: stage 1 ≥ `min(scope, 2048)`,
   hydration ≥ `min(scope, 1024)`, floors measured by scopescale — the
   corpus divisors collapse to the fixed 256 floor exactly at wing sizes,
@@ -564,7 +586,15 @@ Consequences that are binding, not advisory:
   saves sealed into the reserved `quarantine-pending` wing, excluded from
   **every read that returns content** and not from `search` alone:
   `search` through `resolve_search_policy` (pre-candidate, so poison
-  cannot crowd or starve), `recent` — which is what `wake_up` and the
+  cannot crowd or starve — carried as a `SeqFilter::AllBut` over the
+  EXCLUDED rows, which is what makes it cheap; see the retrieval bullet
+  above for why the complement is the only affordable side). **The fence
+  is raised by the ROWS, not by the flag**: `resolve_search_policy`'s
+  `EXISTS` is not gated on `UNDERCROFT_ADMISSION`, so turning admission
+  back off does not lower it while diverted rows exist — only ruling them
+  does, which is correct (content the screen diverted must not become
+  retrievable by flipping a setting) and is worth knowing before anyone
+  reads a cost back to configuration), `recent` — which is what `wake_up` and the
   closet index call, i.e. the two surfaces whose whole job is loading
   context at session start, exactly where injected text wants to be —
   and `list_drawers`. Naming the wing is how the reviewer opts back in,
@@ -1043,8 +1073,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (699 run,
-                                      # 4 #[ignore]d = 703 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (703 run,
+                                      # 4 #[ignore]d = 707 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1090,7 +1120,7 @@ docker compose run --rm test          # cargo unit + integration tests (699 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (317 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (320 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate

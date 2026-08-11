@@ -216,7 +216,11 @@ flat, because **a declared filter is resolved into the candidate draw rather tha
 applied to it afterwards** — `room` used to be a plain `WHERE` over globally
 generated candidates, which is the wing-starvation defect one level down. A
 scope that fits the hydration budget is scanned exactly; a larger one gets
-membership-filtered candidates and a pool sized by the scope.
+membership-filtered candidates and a pool sized by the scope — where "scope"
+means a **narrowing** you declared, never an exclusion. Excluding a quarantined
+row or a low-trust wing removes a handful of drawers and leaves the searched
+population unchanged, so it takes the unscoped geometry; treating it as a scope
+cost 76 → 140 ms/q on a 1,190-drawer vault with a single drawer in review.
 
 Three findings worth carrying away, because each cost a belief:
 

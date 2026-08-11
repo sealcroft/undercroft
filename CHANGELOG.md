@@ -2,6 +2,75 @@
 
 ## Unreleased — 1.1.0
 
+### one quarantined drawer made every search a scoped search
+
+Round-four finding #6 (sweep dimension D3). Silent, and it charged the vaults
+that had turned a security feature ON.
+
+**What happened.** `resolve_search_policy` folds the reserved wing into a
+`TrustClause::Exclude` the moment one diverted row exists. Scope resolution
+had exactly ONE representation — *the set of seqs that are IN scope* — and two
+different relations were being pushed through it. A declared `wing`/`room`/
+`kind` is small relative to the corpus: materializing its members is the cheap
+side, and its cardinality is a real population to size pools by. A bare
+`Exclude` is the **complement** of a small set, so the same code materialized
+an O(corpus) `HashSet` per query and then read its cardinality as a "scope
+population", pinning stage 1 and hydration at floors `scopescale` measured for
+the 10³–10⁵ band.
+
+**Measured, on a real corpus rather than a fixture.** 1,190 LoCoMo-mined
+drawers under `UNDERCROFT_RETRIEVAL=pq`, one drawer diverted by the screen:
+
+| | clean vault | one row quarantined |
+|---|---|---|
+| before | 76 ms/q | **140 ms/q** |
+| after | 77 ms/q | 69 ms/q (noise) |
+
+Phase trace before: `scope-resolve` 0.00 → 0.13 ms, `sql-fetch` 0.37 → 1.25,
+`hydrate` 5.30 → 14.51. After: `scope-resolve` 0.00 → 0.01, `hydrate` 4.41 →
+5.57.
+
+**The fix is a type, at the one place every consumer passes through.**
+`SeqFilter::{Only, AllBut}` with three doors and no fourth: `admits` (the only
+membership test), `narrows` (the only geometry test), `materialized` (rows
+pulled from the table — deliberately not `len()`, because for `AllBut` that
+number means the opposite thing). `resolve_seq_filter` replaces `scope_seqs`:
+anything positive present resolves to `Only` over byte-identical SQL; a bare
+non-empty `Exclude` resolves to `AllBut` over the excluded wings, O(excluded).
+The complement is rendered by `TrustClause::sql` itself rather than by a
+second copy of the wing-list mapping. `scope_population` is the single
+geometry door both `scope_scan` and `scope_live` now ask, so they cannot
+disagree about what counts as a scope. The `pqidx` divisor gates move from
+`scope.is_some()` to `scope.is_some_and(|f| f.narrows())` — not optional:
+leaving them would pin stage 1 at the caller's fixed floor and reinstate the
+measured recall leak.
+
+**Nothing about the fence changed.** The SQL clause was always the
+accelerator and `verified_meta_admits` the boundary (A28); the exact-scan arm
+renders `TrustClause::sql` for itself either way. `resolve_search_policy`
+keeps its signature, so the remote path is provably untouched. No public
+surface, no on-disk format, no new variable.
+
+**Two things this unit got wrong before it got them right, both recorded
+because the pattern is the point.** The first draft of the end-to-end test
+asserted that a diversion **re-ranks** results, reasoning that `bm25_raw`
+takes its IDF corpus size from the pool (`n = cands.len()`). It passed
+against the reverted code: IDF is a per-term constant that scales every
+candidate alike, so a pool-size change does not by itself reorder a fixed
+candidate set. The second draft asserted **reachability** — a drawer the
+wider pool newly admits — and also passed, because such a drawer still has to
+out-score 1,200 competitors to reach the page. That test is kept and labelled
+what it is, a regression guard that passes on both trees; the counterfactual
+is `a_pure_exclusion_is_not_a_declared_scope`, where one quarantined row
+materializes **64 seqs before the fix and 1 after**.
+
+**And the reason no existing instrument could have found this.**
+`scoped_pool_k(hk, live)` and the unscoped `max(hk, live/64)` coincide
+*exactly* at `live = 131,072` — which is the first checkpoint of both
+`pqscale` and `scopescale`. Every scale measurement this project runs would
+have read 1.0× and reported nothing. Scope-geometry claims belong at
+10³–10⁴, and that is now written into `CLAUDE.md`.
+
 ### the documented pre-upgrade command did not exist, and one variant wore another's help
 
 Round-four findings #10 and #41, both in the same clap block, both proven by

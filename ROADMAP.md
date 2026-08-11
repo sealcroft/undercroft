@@ -74,8 +74,17 @@ contract:
 
 The twenty defects on the pre-merge blocker list, the eleven regressions the
 third audit round found inside those fixes, and T1–T15. All described in
-CHANGELOG under `## Unreleased`. The two worth naming:
+CHANGELOG under `## Unreleased`. The three worth naming:
 
+* **One quarantined drawer made every search a scoped search** (round-four
+  #6). Scope resolution had one representation for two relations, so a bare
+  `TrustClause::Exclude` materialized its COMPLEMENT — an O(corpus) seq set
+  per query whose cardinality was then read as a scope population. Closed by
+  `SeqFilter::{Only, AllBut}` with one membership door (`admits`) and one
+  geometry door (`scope_population`). Measured 76 → 140 ms/q from a single
+  diverted row on 1,190 real drawers; 77 → 69 (noise) after. The fence is
+  unchanged — the SQL clause was always the accelerator, `verified_meta_admits`
+  the boundary.
 * **The remote search path decided the quarantine fence off the CLEAR mirror
   column** (A28 inverted) — one offline `UPDATE drawers SET wing = 'notes'`
   and `search_with_index` returned diverted content that `search` drops.
@@ -181,7 +190,9 @@ invoked by nothing and lives outside the tree — which is how O8's own unit put
 the former name back into a tracked file with the battery green — and two
 filed while closing O13: **O14**, `/v1` can MINT a forgetting attestation and
 cannot check one, and **O15**, the battery's own test count over-reports
-because `docker compose run` replays the tail of the stream.
+because `docker compose run` replays the tail of the stream. **O19** was filed
+while closing round-four #6: a wing-scoped query still materializes a
+membership set the per-wing PQ tier does not need.
 
 **O13 is CLOSED 2026-08-11** — round four's second CRITICAL. A genuine
 forgetting attestation reported FORGED with exit 2 after any key rotation;
@@ -1313,6 +1324,38 @@ MCP.
 `/v1` on both sides of a rotation, and the CLI and the route are shown to
 agree on one attestation — the same document, the same verdict, from both
 doors.
+
+---
+
+### O19 — a wing-scoped query still materializes a set the wing tier does not need
+
+Split out of round-four #6 rather than folded into it, because it is a second
+decision with its own recall argument and closing #6 did not touch it.
+
+When a query names a `wing` **and** a bare `TrustClause::Exclude` is in force
+(the quarantine fence, or a vault trust floor), `search_inner`'s scope match
+takes the first arm — trust is `Some` — so `resolve_seq_filter` runs and
+returns `Only(wing minus excluded)`. That is correct and it is not free: the
+per-wing PQ tier already generates candidates INSIDE the wing, so for a wing
+whose own index serves the query the membership set is a set the generator
+never needed. The exclusion still has to be applied, but it could ride as an
+`AllBut` over the excluded rows — O(excluded) — while the wing tier keeps its
+fast path, instead of an `Only` over the whole wing.
+
+Not a defect: answers are correct, and a wing is bounded by
+`UNDERCROFT_WING_PQ_MIN` so the cost is bounded too. It is a gap, filed as one.
+
+**Shape of the fix.** In the scope match, treat "positive narrowing that the
+wing tier already covers, plus a pure exclusion" as the `AllBut` case rather
+than the `Only` case — i.e. let `wing_tier_covers_it` participate in the
+decision it currently only guards the *second* arm with.
+
+**Gate:** a test on a wing above `UNDERCROFT_WING_PQ_MIN` with one quarantined
+row asserting `materialized()` equals the excluded count and not the wing's
+population, plus the existing `scoped_pools_are_sized_by_the_scope` staying
+green — and a recall arm, because the wing tier's `k` currently comes from
+`scope_live` and dropping that would re-open the question the scoped floors
+were measured to answer.
 
 ---
 

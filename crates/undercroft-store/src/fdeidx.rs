@@ -803,7 +803,7 @@ impl PalaceStore {
         &self,
         query: &str,
         k: usize,
-        scope: Option<&std::collections::HashSet<i64>>,
+        scope: Option<&crate::SeqFilter>,
     ) -> Result<Option<Vec<i64>>, StoreError> {
         let Some(late) = &self.late else {
             return Ok(None);
@@ -894,7 +894,7 @@ impl PalaceStore {
                         lists.push(-1);
                         let probed = scan(Some(&lists));
                         let enough = match scope {
-                            Some(s) => probed.iter().filter(|(_, q)| s.contains(q)).count() >= k,
+                            Some(s) => probed.iter().filter(|(_, q)| s.admits(q)).count() >= k,
                             None => probed.len() >= k,
                         };
                         if enough {
@@ -909,7 +909,7 @@ impl PalaceStore {
             _ => return Ok(None),
         };
         if let Some(s) = scope {
-            scored.retain(|(_, seq)| s.contains(seq));
+            scored.retain(|(_, seq)| s.admits(seq));
         }
         if scored.len() > k {
             scored.select_nth_unstable_by(k - 1, |a, b| {
