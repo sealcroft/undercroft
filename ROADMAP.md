@@ -1057,6 +1057,59 @@ path (33 ms vs 32 ms end to end), and nothing multiplies by record count.
 
 ---
 
+### O17 — CLOSED 2026-08-11: the graph's screen is record-scoped, not object-scoped
+Round-four finding **#5**, HIGH and silent.
+
+**A field-scoped screen standing in front of a record-scoped read.**
+`screen_kg_object` ran the detector on `object` alone and used
+`subject`/`predicate` only for its error message, so it read as though it
+covered the fact — and its doc comment said "this is the screen on it". Those
+two fields had only `validate_name`, which admits any 128-byte string free of
+control characters and path separators; every `IMPERATIVE_MARKERS` phrase
+fits. `kg_query_entity` returns `Triple` serialized WHOLE, so a poisoned
+subject reached the next session verbatim beside a clean object.
+`kg_import_entity` screened nothing at all.
+
+**Fixed at the choke point**: `screen_kg_record` over every field a read
+returns, named by `KG_SCREENED_FIELDS`; import additionally screens
+`canonical_key` and `extractor`, which arrive off the wire and are serialized
+back by `kg_query`. **The inventory is bidirectional** — a table-driven test
+proves every listed field is screened, and a `debug_assert` in the screen
+proves no call site can name a field the inventory omits, which is the half a
+test cannot do.
+
+Wider than the finding stated: all three public add variants funnel through
+`kg_add_inner`, so **`refine` is covered** — the LLM-distillation path, where
+subject and predicate are model output over drawer text that may itself be
+injected.
+
+Deliberately unchanged: the size bound stays `object`-only (the rest are
+already 128-byte bounded, and `validate_name` on an object would be a real
+contract break); a flagged field is REFUSED, not diverted, because the graph
+still has no review queue; and an undeclared vault is byte-identical, pinned
+by `an_undeclared_vault_screens_no_kg_field` — without which the main gate
+would pass on a screen that refused everything.
+
+**Counterfactual executed:** the object-only scope restored in place, the gate
+failed on the `subject` row (`got Ok(())`), passed on revert. No surface code
+changed: every write reaches the graph through four store functions, and
+`StoreError::Invalid` preserves CLI exit 1, MCP `isError` and `/v1` 400.
+
+**Verified at the CLI and on a real corpus**: poisoned subject, predicate and
+object each refuse naming the field; a clean fact still writes; 200 LoCoMo
+candidates as all three fields with screening declared give 0 false
+positives, behind a premise probe. That last arm matters — the FIRST corpus
+run reported 0 false positives against a stale binary in which subjects were
+not screened at all, so it measured nothing. The premise probe is what makes
+a zero mean something.
+
+**Filed, not bundled:** the tunnel `label` (`manage.rs`) is unvalidated,
+unbounded, unscreened free text an agent writes and another reads back
+verbatim via `list_tunnels` — the same class, found while scoping this, and
+it is round-four finding #21 in its own right.
+
+---
+
 ### O16 — CLOSED 2026-08-11: an empty assertion secret no longer removes per-vault isolation
 Round-four finding **#4**, HIGH, and the only finding in the set where a
 security boundary *silently ceased to exist in a configuration the shipped

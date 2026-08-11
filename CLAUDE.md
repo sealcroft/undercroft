@@ -1286,6 +1286,24 @@ verify anything it says against the code.
 fresh**: probe it for a symbol only the new code has (`--help | grep -c
 <new-flag>`). A stale binary passes every old test by construction.
 
+**The specific way that happens here, because it produced a FALSE DEFECT
+REPORT on 2026-08-11:** an ad-hoc container that mounts the target volume
+(`-v undercroft_undercroft-target:/build`) but forgets
+`-e CARGO_TARGET_DIR=/build` builds into `/src/target` while the script runs
+`/build/release/<binary>` — so `cargo build` succeeds, prints `Finished`, and
+the run exercises a binary from before the change. The session concluded a
+fix "worked in the store's tests but not through the CLI", wrote it up as an
+unresolved CLI-vs-store discrepancy, and stopped the unit. There was no
+discrepancy. Worse, the `cargo clean --release -p …` run used to TEST the
+stale-artifact hypothesis had the same missing flag, so it changed nothing
+and appeared to refute it. The same omission separately made an orchestrator
+arm print "binary absent — skipped", which reads as benign.
+**So: always pair the volume mount with `CARGO_TARGET_DIR`, give every
+ad-hoc arm a premise probe that fails when the binary lacks the new
+behaviour, and never let "absent" be a skip.** One missing flag produced one
+invented defect, one silent skip, and a corpus measurement that proved
+nothing (subjects were unscreened in the binary that "passed" it).
+
 **Always pass `--build`.** The battery images COPY the source, they do not
 mount it — `docker compose run --rm test` without `--build` silently
 re-runs whatever was baked into the last image, so a "green" run can be
@@ -1638,6 +1656,23 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   lesson down is itself the trap — the first draft quoted every string it
   warned about and reintroduced the name into the guide. Describe the class,
   never the token.
+- **A SCREEN'S SCOPE MUST MATCH THE SCOPE OF THE READ IT GUARDS, and a screen
+  that names the fields it ignores reads as though it covered them.**
+  `screen_kg_object` ran the detector on `object` alone and consumed
+  `subject`/`predicate` only to build its error message — so the signature
+  said "record" while the body said "field", and its doc comment claimed
+  "this is the screen on it". The read it stands in front of is
+  record-scoped: `kg_query_entity` returns `Triple` and serde serializes it
+  WHOLE, so a poisoned subject reached the next session verbatim beside a
+  clean object, with `validate_name` the only guard — and that admits any
+  128-byte string free of control characters and path separators, which every
+  `IMPERATIVE_MARKERS` phrase fits. The scope had been chosen by which field
+  someone thought of as content. So: **ask what the READ returns, not what
+  the writer considers content**, and make the covered set an INVENTORY
+  checked in both directions — a table-driven test proving every listed field
+  is screened, plus an assertion inside the screen proving no call site can
+  name a field the inventory omits, which is the half a test cannot do
+  (`KG_SCREENED_FIELDS`, O17).
 - **A capability missing from one surface is a boundary or a drift, and
   which one has to be written down.** A 14-agent audit of CLI vs MCP vs
   `/v1` found **65 confirmed drifts** — a capability present on one
