@@ -74,7 +74,16 @@ contract:
 
 The twenty defects on the pre-merge blocker list, the eleven regressions the
 third audit round found inside those fixes, and T1–T15. All described in
-CHANGELOG under `## Unreleased`. The three worth naming:
+CHANGELOG under `## Unreleased`. The four worth naming:
+
+* **Two diverted drawers shared one queue slot** (round-four #7). The
+  quarantine id substituted a CONSTANT for the wing, collapsing one of the
+  four components `drawer_id` is injective over, and `ON CONFLICT(id) DO
+  UPDATE` let the second diversion eat the first — content, signals and the
+  `intended_wing` review restores from. Closed by a second id space with a
+  domain tag (`ids::quarantine_drawer_id`) keyed on the wing the write was
+  aimed at. No migration: `audit.record_id` and `admission/{id}/{verdict}`
+  hold live quarantine ids, so moving one orphans both (A10).
 
 * **One quarantined drawer made every search a scoped search** (round-four
   #6). Scope resolution had one representation for two relations, so a bare

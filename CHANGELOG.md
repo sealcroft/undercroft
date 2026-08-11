@@ -2,6 +2,54 @@
 
 ## Unreleased — 1.1.0
 
+### two diverted drawers shared one queue slot, and the second ate the first
+
+Round-four finding #7 (D2). Silent, and it destroyed a record by writing a
+different one.
+
+`admission_divert` derived the diverted drawer's id as
+`drawer_id(QUARANTINE_WING, room, source, chunk_index)` — substituting a
+**constant** for one of the four components the recipe is injective over. Two
+drawers differing only in wing therefore derived one id, and the write path's
+`ON CONFLICT(id) DO UPDATE` replaced the first row wholesale: its content, its
+tier-1 signal codes, and the `intended_wing` that `admission allow` restores
+from. The reviewer saw one pending entry where two writes had been diverted,
+and re-filing sent it to the second wing only.
+
+`undercroft mine ./docs --wing team-a` then `--wing team-b` is the ordinary
+operation that produces it — `room_for_file` and the chunk index are both
+functions of the file, so the wing is the only knob. `import_record` takes
+wing/room/source/chunk verbatim, so every backup restore and the
+orchestrator's tenant migration were collision-prone too. Plain `remember`
+saves were not: those carry `next_append_index`, which is unique per call —
+the same defect this is, one level up, already solved.
+
+**The fix is a second id space with a domain tag**, `ids::quarantine_drawer_id`,
+keeping all four components and keying the queue slot on the wing the write
+was AIMED at — which is also what `admission_allow` restores from, so the
+inverse derivation is unchanged. The tag is load-bearing rather than
+decorative: without it the diverted id would equal the id of the very drawer
+being screened, and the diversion would overwrite the legitimate row.
+
+Both recipes now share one body (`id_over`), so the ordinary drawer id cannot
+drift while the new one is edited. That refactor is pinned to an
+**independently derived** literal: the recipe was re-implemented in Python
+from the code as committed and run, and its output
+(`f95019f45b6f49ad9e1f42c4864f7ce6`) matched — byte-identity proved rather
+than inferred from "the tests still pass", which they would have done either
+way, every other test in that file comparing the function to itself.
+
+**No migration, and that is a decision with an argument.** `audit.record_id`
+holds the quarantine id for the diversion write, and `admission/{id}/{verdict}`
+for every ruling. Moving a live quarantine id orphans both — the A10 rule
+verbatim. Existing rows keep their ids and keep verifying; the new recipe
+applies to new diversions only.
+
+Counterfactual run: with the old call site restored, two diversions differing
+only in wing produced the identical id `0d2de85da3f2bead6655aae166e10df7` and
+one row. The e2e arm drives the real reproduction through `undercroft mine`
+twice and reads `admission list`.
+
 ### one quarantined drawer made every search a scoped search
 
 Round-four finding #6 (sweep dimension D3). Silent, and it charged the vaults

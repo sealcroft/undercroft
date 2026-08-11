@@ -1073,8 +1073,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (703 run,
-                                      # 4 #[ignore]d = 707 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (707 run,
+                                      # 4 #[ignore]d = 711 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1120,7 +1120,7 @@ docker compose run --rm test          # cargo unit + integration tests (703 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (320 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (321 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -1399,6 +1399,27 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   not idempotent, and collapsing repeats is dedup's job. Never index an
   append with `count()` — it decreases on delete, and a reused index derives
   an id that already exists, silently overwriting an unrelated drawer.
+  **The same failure has a second form, and it cost round-four #7: never
+  SUBSTITUTE A CONSTANT for one of the recipe's components.** The admission
+  screen derived a diverted drawer's id as
+  `drawer_id(QUARANTINE_WING, room, source, chunk)`, which collapses one of
+  the four dimensions the recipe is injective over — so two diversions
+  differing only in wing derived ONE id and `ON CONFLICT(id) DO UPDATE`
+  replaced the first row wholesale, taking its content, its signal codes and
+  the `intended_wing` that `admission allow` restores from. `mine ./docs
+  --wing team-a` then `--wing team-b` is the ordinary operation that produces
+  it. A second id space gets a DOMAIN TAG and keeps every component
+  (`ids::quarantine_drawer_id`); the tag is load-bearing, because without it
+  the diverted id would equal the id of the very drawer being screened and
+  the diversion would overwrite the legitimate row. One shared recipe body
+  (`id_over`) so the ordinary id cannot drift, pinned to an INDEPENDENTLY
+  derived literal — the refactor's byte-identity was proved by
+  re-implementing the recipe in Python and running it, not by observing that
+  the tests still passed, which they would have either way. **No migration:
+  existing quarantine ids are held by `audit.record_id` for the diversion
+  write and by `admission/{id}/{verdict}` for every ruling, so moving a live
+  one orphans both — A10 verbatim. The new recipe applies to new diversions
+  only, and that is a decision with an argument, not a gap.**
 - Sealed vaults must never persist plaintext or plaintext-derived data **in
   clear** on disk: FTS never exists for them; embeddings, PQ code rows/pages
   and codebooks, and ColBERT token matrices are AEAD-sealed under distinct

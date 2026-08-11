@@ -238,14 +238,24 @@ impl PalaceStore {
                 Some(false) | None => return None,
             }
         }
+        // The wing the write was AIMED at, captured BEFORE any mutation and
+        // held in a local. Deliberately not read back out of
+        // `d.meta.intended_wing` with a fallback: a future reordering of the
+        // mutations below would then quietly fall back to the reserved
+        // constant and restore the collision with every test still green.
+        let origin_wing = drawer.meta.wing.clone();
         let mut d = drawer.clone();
         d.meta.intended_wing = Some(d.meta.wing.clone());
         d.meta.intended_room = Some(d.meta.room.clone());
         d.meta.admission_signals = signals;
         d.meta.wing = QUARANTINE_WING.to_string();
         let source = d.meta.source_file.as_deref().unwrap_or("(direct)");
-        d.id = undercroft_core::ids::drawer_id(
-            QUARANTINE_WING,
+        // Keyed on the ORIGIN wing, in its own id space. Passing
+        // `QUARANTINE_WING` here substituted a constant for one of the four
+        // components the recipe is injective over, so two diversions
+        // differing only in wing became one row.
+        d.id = undercroft_core::ids::quarantine_drawer_id(
+            &origin_wing,
             &d.meta.room,
             source,
             d.meta.chunk_index,
