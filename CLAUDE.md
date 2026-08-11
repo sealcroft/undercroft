@@ -589,7 +589,30 @@ Consequences that are binding, not advisory:
   provable forgetting (forget.rs — C3.2 phase 1: `forget`/
   `verify-forgetting`, chain-attested destruction with heads + tombstone
   interval + unkeyed content fps; vault-verifiable by keyed replay, third
-  parties verify the operator's Ed25519 signature),
+  parties verify the operator's Ed25519 signature. **The keyed replay has a
+  SHORTER LIFETIME than the document it checks, and pretending otherwise was
+  a CRITICAL** (O13): rotation destroys the mac key that made the tombstones,
+  so every genuine receipt reported `ATTESTATION FAILED` at exit 2 — the
+  tamper verdict — the first time an operator rotated. `AttestationVerdict::
+  {Verified, Recorded{rotations_since}}` is the fix and the third state is
+  the point, not a softened second one: `Recorded` = the replay is
+  unavailable AND this vault's *preserved* audit trail holds exactly these
+  tombstones as a **contiguous run** in order with the drawers gone, exit 0.
+  Contiguity is what survives of "nothing else changed" once the heads are
+  unverifiable strings, and tag equality alone would have admitted a document
+  omitting a record from the middle of its own interval; the lookup is a
+  candidate WALK because a drawer id is deterministic, so destroy/re-mine/
+  destroy writes two tombstones sharing `record_id` *and* tag bytes.
+  `rotations_since` is corroboration that never decides — a pre-A19 rotation
+  appended no record, so reading zero as "no rotation, therefore forged"
+  recreates the defect for the oldest vaults. Residual, stated: `Recorded`
+  cannot separate a preserved genuine tag from a preserved forged one,
+  because the key that could is destroyed — narrow, witnessed by `verify`'s
+  chain replay on an unrotated vault, and traded against a CERTAIN false
+  alarm on the routine path. The enum is `#[must_use]` so a third verdict
+  could not silently weaken an existing `.unwrap();` that meant "verified",
+  and the CLI's exhaustive `match` gates the projection better than an
+  inventory entry would),
   retention policies (retention.rs — C3.2 phase 2: per wing/room on the
   wing-trust pattern, operator-only + HMAC-tagged + audited, flip fails
   list AND sweep; enforcement is an **explicit sweep** through
@@ -1020,16 +1043,39 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (689 run,
-                                      # 4 #[ignore]d = 693 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (694 run,
+                                      # 4 #[ignore]d = 698 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
                                       # 556 here from its own worktree, which was
                                       # 551 plus the five tests it had added and
                                       # blind to the forty-five its seven
-                                      # neighbours were adding in parallel. Sum
-                                      # the `test result:` lines of a full run.
+                                      # neighbours were adding in parallel.
+                                      # **Do NOT sum the `test result:` lines of
+                                      # the log**, which is what this line said
+                                      # until 2026-08-11: `docker compose run`
+                                      # SOMETIMES replays the tail of the
+                                      # container's stream, leaving `.battery/
+                                      # test.log` with a duplicated block
+                                      # (visible as a `test result:` with no
+                                      # `Running`/`Doc-tests` header above it),
+                                      # and summing such a file gives 1016/8 for
+                                      # a run that executed 694/4. INTERMITTENT —
+                                      # two batteries the same hour on the same
+                                      # tree produced one duplicated log and one
+                                      # clean one, which is worse than a constant
+                                      # error: nobody re-derives a number that
+                                      # looked right last time. Pair each target
+                                      # HEADER with the result that follows it —
+                                      # 18 targets, 11 binaries + 7 doc-tests —
+                                      # and treat an orphan as a PREMISE FAILURE,
+                                      # since it is the only visible symptom of
+                                      # the replay. `tests/battery.sh`'s own
+                                      # summary sums the file and inherits this;
+                                      # it is informational (the script decides on
+                                      # EXIT CODES, never on parsed output, by
+                                      # design) and is filed as ROADMAP O15.
                                       # The 4 ignored are 3 measurements needing
                                       # testdata/*_50k.txt plus one in lib.rs. Run
                                       # them with `cargo test --release -- --ignored`:
@@ -1044,7 +1090,7 @@ docker compose run --rm test          # cargo unit + integration tests (689 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (290 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (306 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (95 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate

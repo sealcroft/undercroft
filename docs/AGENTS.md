@@ -674,8 +674,11 @@ caller from concatenating a drawer straight into a system prompt.
 Daily/CI:
 
 ```bash
-undercroft verify           # HMAC every record + replay the audit chain
-                           # + check every supersession receipt; exit 2 on failure
+undercroft verify           # six legs: HMAC every record, replay the audit
+                           # chain, check every supersession receipt, check
+                           # every knowledge-graph fact receipt, resolve every
+                           # graph audit label, compare every mirror column
+                           # against the covered meta; exit 2 on failure
 undercroft backup create    # verified snapshot, keeps last 10
 ```
 
@@ -684,9 +687,22 @@ ones that check on purpose. `verify` (a bad record, a broken chain or a
 tampered supersession link), `repair` (same, after backfilling), `backup
 create` (it refuses to archive a palace that failed verification) and
 `verify-forgetting` (the attestation does not describe what this vault did —
-a forged signature, a tombstone tag that is not this vault's, or something
+a forged signature, a tombstone tag this vault never recorded, or something
 other than a tombstone inside the attested interval) each reach the verdict
-through their own checking. But a rolled-back database, or a manifest edited
+through their own checking.
+
+**`verify-forgetting` has THREE outcomes, not two, and the third is exit 0.**
+The replay it runs is keyed, and `vault rotate` destroys the key that made
+the tombstones — that is what a rotation is. So after any rotation it prints
+`ATTESTATION RECORDED (keyed replay unavailable)`: this vault's preserved
+audit trail holds exactly those tombstones, contiguously and in order, and
+the drawers are gone, but the tags cannot be re-derived. That is a reduced
+claim, not a failure, and the line says what it did not re-check. Until
+1.1.0 this case printed `ATTESTATION FAILED` and exited 2, so a routine
+rotation turned every receipt an operator had issued into a tamper verdict.
+The third-party posture never changed: the operator's Ed25519 signature is
+verified without any vault key, so a data subject's own check is unaffected
+by rotation. But a rolled-back database, or a manifest edited
 offline, is detected **when the vault opens** — before any command's own
 checks begin — so `search`, `stats`, `recent` and `drawer get` reach it too,
 and since 1.0.0 they exit 2 as well. They used to exit 1, i.e. the same

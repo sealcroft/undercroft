@@ -330,6 +330,37 @@ check "trust assigned pre-rotate" 0 "assigned trust class"           -- \
 check "history sees operator ns"   0 "trust/eng"                     -- "$BIN" history --limit 200
 check "retention pre-rotate"      0 "audited"                        -- \
   "$BIN" retention set eng --days 3650
+# **ROADMAP O13 — a forgetting attestation, on BOTH sides of a rotation.**
+# `verify-forgetting` had zero occurrences under tests/ on any surface, and
+# what that hid is the worst shape available: a GENUINE attestation reported
+# `ATTESTATION FAILED` with exit 2 — this project's tamper verdict — the
+# first time an operator did the thing the security model tells them to do
+# routinely. "We destroyed your data, here is the proof" became "this proof
+# is forged", by rotating.
+#
+# The replay is KEYED and rotation destroys the key that made the tombstones,
+# so no key swap restores it and the honest answer is a third verdict. The
+# whole defect lives in the transition, so the attestation is created here,
+# BEFORE the rotate below, and re-verified after it. The third-party
+# signature half (unaffected by rotation, since `verify_detached` takes no
+# vault key) is gated in the unit suite, which can call it directly.
+FORGET_ME="$("$BIN" remember "a note the data subject will later ask us to erase" \
+  --wing eng --room tmp | sed -n 's/^Filed drawer \([0-9a-f]*\) .*/\1/p')"
+ATT="$UNDERCROFT_HOME/o13-attestation.json"
+check "forget attests"            0 "attestation written to"        -- \
+  "$BIN" forget "$FORGET_ME" --out "$ATT"
+# Premise, asserted rather than assumed: a parse that silently produced an
+# empty id, or a `forget` that wrote nothing, would leave every check below
+# measuring a file that is not there — and `verify-forgetting` on a missing
+# file exits 1, which is neither of the codes this block is about.
+if [ -n "$FORGET_ME" ] && [ -s "$ATT" ]; then
+  echo "ok    o13 premise: a drawer was destroyed and attested"; PASS=$((PASS+1))
+else
+  echo "FAIL  o13 premise — id='$FORGET_ME', attestation at $ATT is empty or absent"
+  FAIL=$((FAIL+1))
+fi
+check "attestation verifies"      0 "ATTESTATION VERIFIED"          -- \
+  "$BIN" verify-forgetting "$ATT"
 # One rotation, and the pattern is the POLICY-TAG line rather than the banner:
 # that line prints only on a successful rotate, so it proves the rotation ran
 # AND that the two tag-only tables were swept. The banner string stays
@@ -344,6 +375,24 @@ check "verify ok after rotate"    0 "VERIFY OK"                      -- "$BIN" v
 # through the CLI would mean writing to the database behind the binary.
 check "verify reports mirror leg" 0 "mirror drift:"                  -- "$BIN" verify
 check "search ok after rotate"    0 "eng/decisions"                  -- "$BIN" search "migrated the search stack"
+# **The O13 verdict.** Exit 0 is half the assertion and it is the half that
+# was broken: this printed `ATTESTATION FAILED` and exited 2 before the fix.
+check "attestation survives rotate" 0 "ATTESTATION RECORDED"         -- \
+  "$BIN" verify-forgetting "$ATT"
+# It says what it did NOT re-check, rather than implying a full replay.
+check "the reduced verdict is honest" 0 "NOT re-checked"             -- \
+  "$BIN" verify-forgetting "$ATT"
+# ...and the fallback is not a rubber stamp: a tag this vault never wrote is
+# still the tamper verdict, on the same rotated vault.
+sed 's/"tag": "[0-9a-f]*"/"tag": "00"/' "$ATT" > "$ATT.forged"
+if cmp -s "$ATT" "$ATT.forged"; then
+  echo "FAIL  o13 forgery premise — the edit changed nothing, so the check below asserts nothing"
+  FAIL=$((FAIL+1))
+else
+  echo "ok    o13 forgery premise: the attestation was modified"; PASS=$((PASS+1))
+fi
+check "forged tag still exits 2"  2 "ATTESTATION FAILED"             -- \
+  "$BIN" verify-forgetting "$ATT.forged"
 
 # **UNDERCROFT_TRUST_FLOOR — the declared VAULT floor, end to end.** The
 # REQUEST floor (`--min-trust`, `min_trust`) is exercised on `/v1` below;
@@ -423,6 +472,12 @@ check "kg survives rotate"        0 "triples"                        -- "$BIN" s
 check "dup lookup after rotate"   0 "duplicate of"                   -- "$BIN" drawer check-dup "We migrated the search stack to Rust for speed and memory safety"
 check "second rotate idempotent"  0 "Rotated vault 'default'"        -- "$BIN" vault rotate default
 check "verify ok after 2nd rotate" 0 "VERIFY OK"                     -- "$BIN" verify
+# The rotation count in the O13 verdict is READ from this vault's own audit
+# trail, never assumed: two rotations have now happened after the attested
+# interval, and the line has to say two. A hard-coded 1 passes every check
+# above and dies here.
+check "the verdict counts rotations" 0 "records 2 key rotation(s)"   -- \
+  "$BIN" verify-forgetting "$ATT"
 
 echo "== Backups & repair =="
 check "backup create"             0 "Backup created"                 -- "$BIN" backup create

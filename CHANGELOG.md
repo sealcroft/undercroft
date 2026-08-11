@@ -2,6 +2,82 @@
 
 ## Unreleased — 1.1.0
 
+### a key rotation made a genuine forgetting attestation report FORGED
+
+Round four's second CRITICAL (ROADMAP **O13**). `forget` hands the operator
+a signed document saying "we destroyed this content, here is the proof".
+`verify-forgetting` re-checked each tombstone with `verify_tag` and replayed
+the recorded heads with `chain_next_hex` — **both under the CURRENT mac key**
+— and `vault rotate` derives a fresh key and re-keys the chain over preserved
+`audit.tag` bytes. So the first time an operator did the thing the security
+model tells them to do routinely, every genuine receipt they had ever issued
+started printing `ATTESTATION FAILED` and exiting **2**, this project's
+tamper verdict.
+
+There was **no test coverage of any kind**: `verify-forgetting` had zero
+occurrences under `tests/` on any surface, so nothing caught it and nothing
+would have caught a regression in a fix.
+
+**It is not a key swap, and that is why it was filed for a day rather than
+half-landed.** Rotation destroys the old key deliberately — the keyed replay
+is genuinely unavailable afterwards and no amount of plumbing brings it back.
+The honest answer is a third verdict, on the `stated`/`background`/
+`unevaluated` and `Unreceipted`-vs-`Dangling` precedent: "we did not look"
+and "we looked and found nothing" are different claims and must not share a
+word.
+
+`verify_forget_attestation` now returns `AttestationVerdict::{Verified,
+Recorded{rotations_since}}`. `Recorded` means the keyed replay is unavailable
+AND this vault's own preserved audit trail holds exactly these tombstones, as
+a **contiguous run**, in this order, with the drawers gone — exit **0**, its
+own verdict word, never the tamper code. Contiguity is not decoration: tag
+equality alone would admit a document that quietly omits a record from the
+middle of its own interval, which is precisely the claim the head replay
+carries on the keyed path. It is a candidate walk rather than a lookup,
+because a drawer id is deterministic — mine, destroy, re-mine, destroy writes
+two tombstones sharing both `record_id` and tag bytes.
+
+The heads are honestly unverifiable on that path, so the CLI **narrows its
+own claim** instead of repeating "nothing else changed": it prints what was
+not re-checked and points at `undercroft verify` for the trail itself.
+`rotations_since` is read from the trail and is corroboration that never
+decides the verdict — a rotation before A19 appended no record, so a legacy
+vault legitimately reports zero, and reading zero as "no rotation, therefore
+forged" would recreate the defect for exactly the oldest vaults.
+
+**The blast radius was bounded and the boundary is the useful part**:
+`verify_detached` checks the operator's Ed25519 signature and touches no
+vault key, so a data subject holding the signed document always verified it.
+This was a false alarm, never a lost proof — but a false alarm indistinguishable
+from a real one is the thing this project exists to remove.
+
+**The enum is `#[must_use]`**, which turned every existing
+`verify_forget_attestation(…).unwrap();` in the tree into a compile error
+until each stated WHICH verdict it meant — so a third state could not
+silently weaken assertions that used to mean "verified". The CLI's `match` is
+exhaustive for the same reason, which is a stronger gate than an inventory
+entry.
+
+**Counterfactual executed:** the pre-O13 refusal was restored in place and
+the new test failed at arm 1 with `Attestation("tombstone tag for … is not
+this vault's")`, then passed on revert. **Gate:** all three ROADMAP arms plus
+contiguity and a rotation-count arm in the unit suite, and `tests/e2e.sh`
+now drives `verify-forgetting` through the CLI on both sides of a real
+`vault rotate` — including that a tag forged AFTER the rotation still exits
+2. **Real corpus:** 4,080 audit records mined from LoCoMo; the recorded path
+costs ~1 ms over the failing path and nothing multiplies by record count.
+
+Filed while closing it: **O14** — `/v1` can mint a forgetting attestation and
+cannot check one — and **O15**, found while counting the tree for this entry:
+`docker compose run` sometimes replays the tail of the container's stream, so
+summing `.battery/test.log`'s `test result:` lines reports 1016/8 for a run
+that executed 694/4 — **intermittently**, which is the part worth fixing: two
+batteries the same hour on the same tree produced one duplicated log and one
+clean one. `battery.sh` decides on exit codes and never on parsed
+output, so no verdict was ever wrong; the inflated figure is what a session
+copies into a governance surface, and this release corrects the count and the
+counting instruction with it.
+
 ### the gate certifying rotation completeness had never checked the sealed page tier
 
 CLAUDE.md calls rotation completeness *"ENFORCED, not remembered"* — every

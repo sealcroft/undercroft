@@ -2139,30 +2139,61 @@ fn run(cli: Cli) -> Result<()> {
             // script that retries run errors retried a forged document
             // and ignored it. Only the attestation verdict takes exit 2;
             // an I/O or SQLite failure stays an ordinary error.
-            if let Err(e) = store.verify_forget_attestation(&att) {
-                match e {
-                    undercroft_store::StoreError::Attestation(why) => {
-                        println!("ATTESTATION FAILED: {why}");
-                        std::process::exit(EXIT_INTEGRITY.into());
-                    }
-                    other => return Err(other.into()),
+            let verdict = match store.verify_forget_attestation(&att) {
+                Ok(v) => v,
+                Err(undercroft_store::StoreError::Attestation(why)) => {
+                    println!("ATTESTATION FAILED: {why}");
+                    std::process::exit(EXIT_INTEGRITY.into());
+                }
+                Err(other) => return Err(other.into()),
+            };
+            // Attestation fields come from a caller-supplied JSON file;
+            // byte-slicing them panics on a multi-byte boundary, and these
+            // lines run while printing a verdict.
+            let before: String = att.head_before.chars().take(12).collect();
+            let after: String = att.head_after.chars().take(12).collect();
+            let signature = if att.sig.is_some() {
+                "; sender signature verified"
+            } else {
+                "; unsigned"
+            };
+            match verdict {
+                undercroft_store::AttestationVerdict::Verified => println!(
+                    "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
+                     {before}… and {after}…, nothing else changed{signature}",
+                    att.drawers.len()
+                ),
+                // **A third verdict, and it exits 0** (ROADMAP O13). It is
+                // not a failure: the run succeeded and the evidence is real.
+                // Exit 1 would tell a compliance script "retry", and no
+                // retry will ever change this answer — the key that would
+                // change it was destroyed on purpose. Exit 2 is the tamper
+                // verdict and this is not tampering. The verdict WORD leads
+                // the line, so a script matching on `ATTESTATION VERIFIED`
+                // still tells the two apart.
+                undercroft_store::AttestationVerdict::Recorded { rotations_since } => {
+                    let rotations = match rotations_since {
+                        0 => String::new(),
+                        n => format!(
+                            " This vault records {n} key rotation(s) after the \
+                             attested interval."
+                        ),
+                    };
+                    println!(
+                        "ATTESTATION RECORDED (keyed replay unavailable): {} drawer(s) \
+                         destroyed; this vault's audit trail holds exactly these \
+                         tombstones, contiguously and in order, and the drawers are \
+                         gone{signature}. The MAC key that made them is not this \
+                         vault's current one — a key rotation destroys it by \
+                         design.{rotations} NOT re-checked: that those bytes are \
+                         genuine tags, and the recorded heads {before}…/{after}…, \
+                         so \"nothing else changed\" narrows to \"nothing else \
+                         happened between the first and last attested record\". \
+                         Run `undercroft verify` to check the trail itself.",
+                        att.drawers.len()
+                    )
                 }
             }
-            println!(
-                "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
-                 {}… and {}…, nothing else changed{}",
-                att.drawers.len(),
-                // Attestation fields come from a caller-supplied JSON file;
-                // byte-slicing them panics on a multi-byte boundary, and
-                // this line runs while printing "ATTESTATION VERIFIED".
-                att.head_before.chars().take(12).collect::<String>(),
-                att.head_after.chars().take(12).collect::<String>(),
-                if att.sig.is_some() {
-                    "; sender signature verified"
-                } else {
-                    "; unsigned"
-                }
-            );
         }
         Command::Admission { action, vault } => {
             let mut store = open_store(&cli, vault)?;

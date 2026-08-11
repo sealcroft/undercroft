@@ -27,7 +27,7 @@ pub mod retention;
 mod rotate;
 
 pub use admission::{PendingAdmission, QUARANTINE_WING};
-pub use forget::{ForgetAttestation, MirrorDelete};
+pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel, UpdateOutcome};
 pub use pqidx::WING_PQ_MIN_DEFAULT;
@@ -9744,7 +9744,10 @@ mod tests {
         s.upsert(&d2).unwrap();
         let qid2 = s.admission_pending().unwrap()[0].id.clone();
         let att = s.admission_deny(&qid2).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, qid2);
         assert!(s.get(&qid2).unwrap().is_none());
@@ -10309,7 +10312,10 @@ mod tests {
         // And the ruling paths still destroy — the refusal is about the
         // absence of a verdict, not about the wing being immortal.
         let att = s.admission_deny(&qid).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert!(s.get(&qid).unwrap().is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok());
@@ -10438,7 +10444,10 @@ mod tests {
         s.admission_ruling_for_test(&qid2, "denied").unwrap();
         assert!(s.get(&qid2).unwrap().is_some(), "premise: content survives");
         let att = s.admission_deny(&qid2).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert_eq!(att.drawers.len(), 1);
         assert!(s.get(&qid2).unwrap().is_none());
         assert!(s.admission_pending().unwrap().is_empty());
@@ -10771,7 +10780,10 @@ mod tests {
         let mut att = s
             .forget_with_proof(&[gone1.id.clone(), gone2.id.clone()])
             .unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert!(s.get(&gone1.id).unwrap().is_none());
         assert!(s.get(&gone2.id).unwrap().is_none());
         assert!(s.get(&keep.id).unwrap().is_some(), "nothing else changed");
@@ -10782,7 +10794,7 @@ mod tests {
         // exit-2 integrity code on this variant, so a forgery arriving as
         // `Invalid` would exit 1 — the code that also means "no such
         // file", i.e. "retry the run" to a compliance script.
-        let forgery = |r: Result<(), StoreError>, what: &str| match r {
+        let forgery = |r: Result<crate::AttestationVerdict, StoreError>, what: &str| match r {
             Err(StoreError::Attestation(_)) => {}
             other => panic!("{what}: expected StoreError::Attestation, got {other:?}"),
         };
@@ -10790,7 +10802,10 @@ mod tests {
         // Signed: verifies; a flipped field then fails on the signature.
         let (secret, _) = undercroft_vault::bundle::sign_keygen();
         att.sign(&secret).unwrap();
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         let mut forged = att.clone();
         forged.drawers[0].content_fp = "00".repeat(32);
         forgery(
@@ -10876,7 +10891,10 @@ mod tests {
         let sweep = s.retention_sweep(false).unwrap();
         assert_eq!(sweep.destroyed, 1);
         let att = sweep.attestation.expect("a destroying sweep attests");
-        s.verify_forget_attestation(&att).unwrap();
+        assert_eq!(
+            s.verify_forget_attestation(&att).unwrap(),
+            crate::AttestationVerdict::Verified
+        );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, old.id);
         assert!(s.get(&old.id).unwrap().is_none());

@@ -176,14 +176,17 @@ name is declared rather than derived from the clone's directory, with a
 preflight counted both ways. **What remains open is O6** — a click in the
 GitHub web UI that no REST endpoint exposes, so no amount of engineering
 closes it from here — **O7**, split out of O5 so the ruling is not mistaken
-for having closed a defect it does not touch, and **O10**, that the former-name trace verifier is
+for having closed a defect it does not touch, **O10**, that the former-name trace verifier is
 invoked by nothing and lives outside the tree — which is how O8's own unit put
-the former name back into a tracked file with the battery green — and
-**O13**, round four's second CRITICAL: a genuine forgetting attestation
-reports FORGED with exit 2 after any key rotation. O13 is the next thing to
-do; it is fully analysed and was deliberately left unimplemented, because it
-changes a security VERDICT and a half-correct verdict is worse than a
-known-wrong one.
+the former name back into a tracked file with the battery green — and two
+filed while closing O13: **O14**, `/v1` can MINT a forgetting attestation and
+cannot check one, and **O15**, the battery's own test count over-reports
+because `docker compose run` replays the tail of the stream.
+
+**O13 is CLOSED 2026-08-11** — round four's second CRITICAL. A genuine
+forgetting attestation reported FORGED with exit 2 after any key rotation;
+the fix is the third verdict the entry specifies, not the key swap the sweep's
+plan described, and all three gate arms plus contiguity were executed.
 
 **O9 is CLOSED 2026-08-11** — the required status check on `main` resolves to
 `CI verdict`, and a red suite was **observed** to block a merge on a
@@ -932,11 +935,12 @@ deliberately excluded (an agent asserting its own provenance), and the e2e
 arm above upgraded from "the leg is quiet" to "the leg renders and a forged
 one fails".
 
-### O13 — a genuine forgetting attestation reports FORGED after any key rotation
+### O13 — CLOSED 2026-08-11: a rotation makes the replay unavailable, not the attestation forged
 Round-four finding #2, **CRITICAL**, and the analysis below goes past the
 sweep's plan because the fix is not the one-line key swap it looks like.
-Filed rather than half-landed: this changes a security VERDICT, and a
-half-correct verdict is worse than a known-wrong one.
+Filed rather than half-landed on 2026-08-10: this changes a security VERDICT,
+and a half-correct verdict is worse than a known-wrong one. Closed the
+following day, along the shape the analysis specified.
 
 **The mechanism, read in the code.** `verify_forget_attestation`
 (`forget.rs`) re-checks each tombstone with `self.vault.verify_tag(b"del\x1f{id}", tag)`
@@ -992,6 +996,154 @@ distinct verdict, must NOT say forged, must NOT exit 2; a tag forged after
 the rotation must still fail with exit 2; and the third-party signature path
 must verify across the rotation unchanged. All three arms, or the fix has
 merely moved which case is wrong.
+
+**What closed it, and the two places the shipped fix goes past the analysis
+above.** `verify_forget_attestation` returns `AttestationVerdict::{Verified,
+Recorded{rotations_since}}` instead of `Result<(), _>`; `Recorded` is exit 0
+with its own verdict word, never exit 2. The enum is `#[must_use]`, which is
+not decoration — it turned every existing `verify_forget_attestation(…)
+.unwrap();` in the tree into a compile error until each one stated WHICH
+verdict it meant, so the third state could not silently weaken an assertion
+that used to mean "verified". The CLI's `match` is exhaustive for the same
+reason: a fourth verdict cannot be added without the operator surface
+failing to build, which is a stronger gate than an entry in `HAND_PROJECTED`
+and is why one was not added.
+
+1. **Contiguity, which the analysis did not ask for and the claim needs.**
+   Checking only that each tag equals a stored `audit` row admits a document
+   that omits a record from the MIDDLE of its own interval — exactly the
+   claim the head replay provides on the keyed path. So the attested records
+   must be a contiguous run of this vault's own trail, in order, every column
+   compared. A candidate walk rather than a lookup, because a drawer id is
+   deterministic: mine → destroy → re-mine → destroy writes two tombstones
+   with the same `record_id` AND the same tag bytes.
+2. **The heads are honestly unverifiable on this path**, so the CLI narrows
+   its own claim rather than repeating "nothing else changed": it prints what
+   was NOT re-checked, and points at `undercroft verify` for the trail
+   itself.
+
+`rotations_since` is read from the trail (`record_id LIKE 'rotate/%'` after
+the run) and is **corroboration that never decides the verdict** — a rotation
+before A19 appended no record, so a legacy vault legitimately reports zero,
+and a check reading zero as "no rotation, therefore forged" would recreate
+the defect for exactly the oldest vaults.
+
+**Residual, stated rather than absorbed.** `Recorded` cannot separate a
+preserved genuine tag from a preserved forged one — the key that could is
+destroyed, which is a property of rotation and not of this check. An offline
+writer who inserted a tombstone-shaped `audit` row and destroyed the drawer
+reaches `Recorded` where the old code said forged. It is not unwitnessed: on
+an unrotated vault that row breaks `verify`'s chain replay; on a rotated one
+the operator's own rotation re-keyed the chain over it, which nothing here or
+anywhere else can undo. The trade is a narrow ambiguity against a **certain**
+false alarm on the routine path.
+
+**Gate executed 2026-08-11**, all three arms plus two the entry did not ask
+for. Unit: `a_key_rotation_makes_the_replay_unavailable_never_the_attestation_forged`
+(forget.rs) — premise (unrotated → `Verified`), arm 1 (rotated genuine →
+`Recorded{1}`), arm 2 (tag forged after the rotation, re-signed so the
+signature is not what refuses it → `StoreError::Attestation`), arm 3
+(`verify_detached` across the rotation, untouched), arm 4 (a record omitted
+from the middle, refused on BOTH postures), and the count moving to 2 on a
+second rotation so it cannot be hard-coded. **Counterfactual run:** the
+pre-O13 refusal was restored in place and the test failed at arm 1 with
+`Attestation("tombstone tag for … is not this vault's")`, then passed on
+revert. Surface: `tests/e2e.sh` drives the CLI on both sides of a real
+`vault rotate` — `verify-forgetting` had **zero occurrences under `tests/` on
+any surface** before this, which is why nothing caught it and nothing would
+have caught a regression. Real corpus: 4,080 audit records mined from
+`.handover/locomo_feed.txt`; the recorded path costs ~1 ms over the forged
+path (33 ms vs 32 ms end to end), and nothing multiplies by record count.
+
+---
+
+### O15 — the battery's own test count over-reports by a replayed tail
+Found while counting the tree for O13's governance update, which is the only
+way this class ever gets found: the number is only wrong when someone counts.
+
+`docker compose run` **sometimes replays the tail of the container's
+stream**, so `.battery/test.log` ends with a duplicated block — the giveaway
+is a `test result:` line with no `Running`/`Doc-tests` header above it. Both
+`tests/battery.sh`'s summary and CLAUDE.md's own instruction ("sum the
+`test result:` lines") sum the whole file, so a run that executed **694
+passed / 4 ignored** is reported as **1016 / 8**.
+
+**It is INTERMITTENT, and that is the part that makes it worth fixing rather
+than the arithmetic.** Two full batteries were run back to back on
+2026-08-11, same tree, same command: the first log carried the duplicated
+tail and summed to 1016/8, the second did not and summed to 694/4. A figure
+that is sometimes right is far harder to catch than one that is always
+wrong — nobody re-derives a number that looked plausible last time — and it
+is why the fix below counts an orphan rather than quietly skipping it. The
+first draft of this entry described the duplication as deterministic; the
+re-run falsified that within the hour, which is the same lesson one level up:
+**a defect observed once is not thereby characterised.**
+
+**Counterfactual, run against the real artifacts** (the two `.battery/
+test.log` files from 2026-08-11, not copies of them): summing every
+`test result:` line gives 1016/8 on the first and 694/4 on the second;
+pairing each target HEADER with the result that follows it gives 694/4 over
+18 targets (11 binaries + 7 doc-tests) on **both**. 694 is independently
+corroborated — it is the previous session's 693 plus the single test O13
+added.
+
+**It is not a verdict defect and that is exactly why it survived.**
+`battery.sh` decides on **exit codes** and never parses output to reach a
+pass/fail — deliberately, and written up in `CLAUDE.md` as the lesson that
+built the script. So this line has always been decoration, and decoration is
+what nobody checks. Its cost is real anyway: it is the number a session
+copies into `CLAUDE.md`, and a governance surface carrying an inflated count
+is a doc claim that cannot be reproduced.
+
+**Filed rather than fixed in O13's unit, deliberately.** It is two lines of
+`awk`, but it changes the tooling every other verdict in this session was
+taken from, and validating its own output means another full battery — so
+landing it beside a security-verdict change would muddy both. Not an excuse
+for leaving it: the mechanism, the artifact and the counterfactual are all
+above, so it is minutes of work for whoever takes it.
+
+**Shape of the fix:** in the summary reader, pair `^ *(Running|Doc-tests)`
+with the next `^test result:` and sum only paired results; count an orphan as
+a **premise failure** rather than dropping it silently, since an orphan is the
+only visible symptom of the replay and a reader that quietly ignores one would
+stop being able to report that the stream was duplicated at all.
+
+**Gate:** the summary reports 694/4 for the run whose log is on disk now, and
+a synthetic log with a hand-appended duplicate tail reports the same figure as
+the same log without it — plus the orphan counted and named.
+
+---
+
+### O14 — `/v1` can mint a forgetting attestation and cannot check one
+Found while closing O13, and filed rather than absorbed because it is the
+drift shape this project keeps paying for: a capability present on one
+surface and absent on another, with nothing able to say so.
+
+`POST /v1/vaults/{id}/forget` destroys drawers and returns the attestation.
+Nothing on `/v1` verifies one — `verify_forget_attestation` has exactly one
+non-test caller in the tree, `Command::VerifyForgetting`. So an operator
+driving the HTTP plane can MINT a receipt they cannot check through the same
+surface, and the multi-tenant deployment (where `/v1` is the only door an
+operator has) cannot check one at all.
+
+It is not obviously a drift rather than a boundary, which is why it is filed
+and not fixed in O13's unit: verification takes a caller-supplied document,
+and every other `/v1` operator route acts on state the vault already holds.
+That is an argument to be made or refused, not assumed.
+
+**Shape of the fix:** `POST /v1/vaults/{id}/verify-forgetting` taking the
+attestation JSON as its body, answering the verdict as a typed field rather
+than a string — `{"verdict":"verified"|"recorded","rotations_since":n}` —
+with the tamper verdict as **409 + `class: "integrity"`**, which is the set
+`integrity_verdict` and `tenant::store_err` are already counted against, so
+the two surfaces cannot state different doctrines about the same bytes. It is
+an operator route, so it belongs beside `rotate` and `forget` and never on
+MCP.
+
+**Gate:** the route answers all three verdicts, `e2e.sh` drives each through
+`/v1` on both sides of a rotation, and the CLI and the route are shown to
+agree on one attestation — the same document, the same verdict, from both
+doors.
 
 ---
 

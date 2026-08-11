@@ -101,8 +101,11 @@ position on both is deliberate:
   this review rejected was *deletion workflows*; what C3.2 shipped instead
   is **attested** destruction: `forget` / `verify-forgetting` produce a
   chain-attested receipt (heads + tombstone interval + unkeyed content
-  fingerprints) that the vault verifies by keyed replay and a third party
-  verifies through the operator's Ed25519 signature. Retention policies
+  fingerprints) that the vault verifies by keyed replay — until its next
+  key rotation destroys the key that made the tombstones, after which it
+  reports a reduced verdict off the preserved audit trail instead of a
+  replay — and that a third party verifies through the operator's Ed25519
+  signature, which no rotation touches. Retention policies
   exist too, per wing/room on the wing-trust pattern — operator-only,
   HMAC-tagged, audited — but enforcement is an **explicit sweep** through
   the same receipted path: nothing expires on a timer, every sweep leaves
