@@ -1835,6 +1835,29 @@ Run this before ending a session, and record the result. The rule from the
 maintainer: *we don't leave debts or drifts or even stales anywhere in this
 project.*
 
+**The working cycle, and the context-budget rule that bounds it.** Work is
+**read → fix → test → commit**, one unit at a time, repeating until the queue
+is done; the full Docker battery runs at every unit and a real corpus is
+loaded at every unit (definition of done, items 5 and 6). **When the context
+window reaches roughly 90%, STOP TAKING NEW UNITS and spend what is left
+updating every governance surface** — CHANGELOG, ROADMAP, this file, whichever
+docs carry the claim you changed, and the three `.handover/` files with the
+marker re-pointed at `HEAD`.
+
+That is not tidiness, it is arithmetic. A session that spends its last tokens
+half-landing one more fix leaves the next session a tree it cannot trust and a
+handover describing a different one; a session that spends them on the
+handover leaves an accurate map and one clearly-stated next action. The second
+is worth more than the fix, because the fix survives being deferred and the
+map does not.
+
+**Never half-land a change that alters a security verdict, an on-disk format,
+or an id recipe.** File it instead — with its mechanism, the alternatives you
+rejected and why, and its gate. ROADMAP `O13` is the worked example: round
+four's second CRITICAL, analysed far enough to establish that the fix is a
+THIRD verdict state rather than a corrected one, and deliberately left
+unwritten because a half-correct verdict is worse than a known-wrong one.
+
 - **Docs vs code**: every number, tool table, route table and `UNDERCROFT_*`
   variable in README, CLAUDE.md, docs/*.md, architecture/index.html and
   website/ verified against the code — counted, not remembered. Landing-page
