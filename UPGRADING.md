@@ -110,6 +110,45 @@ better than one — `undercroft config check` runs the same policy the process
 runs, opens nothing, and belongs in a pipeline, so the failure lands in CI
 rather than one node at a time during a rolling restart.
 
+### An empty `UNDERCROFT_PASSPHRASE` refuses instead of writing a key to disk
+
+**Affects:** `UNDERCROFT_PASSPHRASE`, when it is declared but resolves to an
+empty or whitespace-only value.
+
+**Symptom:** the process exits 1 with `UNDERCROFT_PASSPHRASE is set but names
+no passphrase …`.
+
+**Cause:** the value was resolved with `.filter(|p| !p.is_empty())`, so an
+empty declaration became *no declaration* and the palace fell back to a random
+`master.key` on disk. Declaring a passphrase is exactly the request that **no
+key material be written to disk**, so the fallback granted the opposite of what
+was asked — and said nothing. `vault status` printed the `master.key` path, and
+that only reads as wrong if you already suspected it.
+
+The path is not hypothetical: `docs/remote-server.md` shipped
+`UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE}`, and Compose interpolates an
+unset shell variable to the empty string and then *sets* it in the container.
+That recipe now uses the `:?` form so it fails in Compose instead.
+
+**Fix:** set a real passphrase, or unset the variable to use the on-disk master
+key deliberately. Whitespace-only is refused too, for the same reason.
+
+**A vault created under the fallback still opens** — it has a real
+`master.key` and nothing about it changed. What changes is that the ambiguity
+is now refused at start-up rather than resolved silently in the wrong
+direction. If that is your deployment, unset the variable and you keep exactly
+the behaviour you have.
+
+**The value is not trimmed.** Whitespace decides only whether a passphrase was
+*named*; a passphrase that legitimately contains leading or trailing spaces
+still reaches Argon2id byte-for-byte, because trimming would change the key and
+silently make an existing vault underivable.
+
+**Detectable in advance:** yes — `undercroft config check` now runs this
+resolver. It previously could not: the variable was exempt from the pre-flight
+on the argument that a passphrase is a credential rather than a syntax, which
+is true of a *wrong* passphrase and false of an *absent* one.
+
 ### A declaration that turns a protection on now refuses when it does not parse
 
 **Affects:** `UNDERCROFT_TRUST_FLOOR`, `UNDERCROFT_ADMISSION`,

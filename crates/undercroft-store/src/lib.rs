@@ -193,6 +193,19 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
                     None => "no pin".into(),
                 })
             }),
+        // The passphrase's EMPTINESS is checkable even though its
+        // CORRECTNESS is not — the two questions are different, and only the
+        // second needs a vault open. Before this arm the variable was
+        // exempt from the pre-flight entirely, which was right for a wrong
+        // passphrase and wrong for an absent one.
+        "UNDERCROFT_PASSPHRASE" => resolve_passphrase(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|p| {
+                described(match p {
+                    Some(_) => "master key derived with Argon2id; none written to disk".into(),
+                    None => "on-disk master key".into(),
+                })
+            }),
         "UNDERCROFT_ASSERTION_SECRET" => resolve_assertion_secret(Some(raw))
             .map_err(|e| e.to_string())
             .and_then(|s| {
@@ -243,6 +256,39 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
 /// `UNDERCROFT_ADMISSION` may legitimately read empty as `off` (empty is a
 /// third spelling of a value in its vocabulary) while this one may not.
 /// Nothing in the tree encoded it, so each call site answered for itself.
+/// `UNDERCROFT_PASSPHRASE`: derive the master key with Argon2id, so no key
+/// material is written to disk at all. Unset is the documented default — a
+/// random `master.key` at 0600.
+///
+/// **Set-but-empty REFUSES**, and this is the same defect as
+/// [`resolve_assertion_secret`] one level up in value. `passphrase()` used to
+/// be `env::var(..).ok().filter(|p| !p.is_empty())`, so an empty declaration
+/// became `None` and the palace silently fell back to writing a random key
+/// FILE — the precise opposite of what declaring a passphrase asks for. An
+/// operator whose `${SECRET}` failed to interpolate got key material on disk
+/// and no signal: `vault status` said `master.key`, and it is only wrong if
+/// you knew to look.
+///
+/// Whitespace-only counts as naming no secret, but the value itself is
+/// **never trimmed** — it is opaque payload, and trimming would change the
+/// KEY, silently making every existing vault underivable. That distinction is
+/// doctrine in `CLAUDE.md`, earned by this variable's sibling.
+pub fn resolve_passphrase(env: Option<&str>) -> Result<Option<String>, StoreError> {
+    let Some(v) = env else { return Ok(None) };
+    if v.trim().is_empty() {
+        return Err(StoreError::Invalid(
+            "UNDERCROFT_PASSPHRASE is set but names no passphrase (it is empty or only \
+             whitespace). It is most often an unset shell variable interpolated into a \
+             compose file or a systemd unit. Declaring it is what keeps key material OFF \
+             DISK, so there is no silent fallback — falling back writes a random \
+             master.key and hands you the opposite of what you asked for. Set a real \
+             passphrase, or unset the variable to use the on-disk master key deliberately"
+                .into(),
+        ));
+    }
+    Ok(Some(v.to_string()))
+}
+
 pub fn resolve_assertion_secret(env: Option<&str>) -> Result<Option<String>, StoreError> {
     let Some(v) = env else { return Ok(None) };
     if v.trim().is_empty() {
@@ -10964,6 +11010,51 @@ mod tests {
     /// opaque PAYLOAD, not a word from a closed vocabulary, so it is **not
     /// trimmed** — trimming would change the KEY and silently invalidate
     /// every header a deployment had already minted.
+    /// Round-four #18 — the same defect as its sibling above, on the highest
+    /// value secret in the system.
+    ///
+    /// `passphrase()` was `env::var(..).ok().filter(|p| !p.is_empty())`, so
+    /// a declaration that named nothing became `None` and the palace fell
+    /// back to writing a random `master.key` to disk. Declaring a passphrase
+    /// is precisely the request that NO key material be written to disk, so
+    /// the fallback hands back the opposite of what was asked, silently:
+    /// verified against the binary before the fix, `UNDERCROFT_PASSPHRASE=`
+    /// produced a `master.key` on disk and `config check` exited 0.
+    #[test]
+    fn a_declared_passphrase_that_names_nothing_refuses() {
+        // Unset is not a declaration. The documented default is untouched.
+        assert!(matches!(resolve_passphrase(None), Ok(None)));
+
+        // Set-but-empty, and whitespace-only, both name no passphrase.
+        for bad in ["", " ", "\t", "\n  \n"] {
+            let err = resolve_passphrase(Some(bad))
+                .expect_err("a declaration naming no passphrase must refuse");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("names no passphrase"),
+                "the refusal must say what is wrong: {msg}"
+            );
+            assert!(
+                msg.contains("unset the variable"),
+                "and must name the fix, since there is no override: {msg}"
+            );
+        }
+
+        // **NOT TRIMMED.** Opaque payload, not a word from a vocabulary:
+        // trimming changes the KEY, which would make every vault already
+        // derived from a padded passphrase silently underivable. The
+        // whitespace check above decides only whether a secret was NAMED.
+        assert_eq!(
+            resolve_passphrase(Some(" correct horse ")).unwrap(),
+            Some(" correct horse ".to_string()),
+            "the passphrase must reach Argon2id byte-for-byte as declared"
+        );
+        assert_eq!(
+            resolve_passphrase(Some("x")).unwrap(),
+            Some("x".to_string())
+        );
+    }
+
     #[test]
     fn a_declared_assertion_secret_that_names_no_secret_refuses() {
         // Unset is not a declaration: a deployment that never declared one

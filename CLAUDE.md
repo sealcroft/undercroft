@@ -1095,8 +1095,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (709 run,
-                                      # 4 #[ignore]d = 713 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (710 run,
+                                      # 4 #[ignore]d = 714 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1142,7 +1142,7 @@ docker compose run --rm test          # cargo unit + integration tests (709 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (321 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (325 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (28 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -2137,6 +2137,19 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   silently, and `" "` is not empty so it was accepted as a real one-byte key
   while the banner truthfully reported assertions required. A fix that only
   maps empty to absent closes the first and leaves the second.
+  **The rule was written from one instance and there were at least two.**
+  `UNDERCROFT_PASSPHRASE` carried the identical `.filter(|p| !p.is_empty())`
+  for the whole time the doctrine sat in this file, on a higher-value secret:
+  an empty declaration became "no passphrase" and the palace wrote a random
+  `master.key` to DISK — the exact opposite of what declaring a passphrase
+  asks for, granted silently, reachable through a compose recipe the docs
+  shipped. So when a rule like this lands, **grep for the pattern it names
+  rather than trusting that the instance which taught it was the only one**;
+  `!is_empty()` over a declared secret is a two-minute search and it would
+  have found this the same day. Note also the shape of the exemption that
+  hid it: a later unit listed the passphrase as unpre-flightable because "a
+  passphrase is a credential, not a syntax" — true of a WRONG one, false of
+  an ABSENT one. Two questions, one answer, and the wrong one.
 - **Drift check before every release**, not only when something feels off.
   The 65-drift audit found capabilities present on one surface and missing,
   weaker or silently ignored on another — 55 of them failing with no signal

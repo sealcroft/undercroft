@@ -217,7 +217,12 @@ services:
     command: ["serve-http", "--host", "0.0.0.0", "--port", "8765"]
     environment:
       # Master key material — inject from your secret store, never bake in.
-      UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE}
+      # Same interpolation hazard as the assertion secret below, and the
+      # consequence is worse: an empty value used to mean "no passphrase",
+      # so the palace wrote a random master.key to DISK — the opposite of
+      # what declaring a passphrase asks for. Since 1.1.0 it REFUSES. The
+      # `:?` form fails in compose before the container ever starts.
+      UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE:?set TENANT_PASSPHRASE}
       UNDERCROFT_MCP_HTTP_TOKEN: ${PALACE_BEARER}
       # Compose interpolates an UNSET shell variable to the empty string, and
       # the variable is then SET in the container. Since 1.1.0 an empty (or

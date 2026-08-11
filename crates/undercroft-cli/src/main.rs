@@ -1054,15 +1054,17 @@ fn data_dir(cli: &Cli) -> PathBuf {
         .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".into()).join(".undercroft"))
 }
 
-fn passphrase() -> Option<String> {
-    std::env::var("UNDERCROFT_PASSPHRASE")
-        .ok()
-        .filter(|p| !p.is_empty())
+/// The declared passphrase, through the ONE resolver `config check` also
+/// runs — never `.filter(|p| !p.is_empty())`, which is what silently turned a
+/// failed interpolation into "no passphrase" and wrote a key to disk.
+fn passphrase() -> Result<Option<String>> {
+    let raw = std::env::var("UNDERCROFT_PASSPHRASE").ok();
+    undercroft_store::resolve_passphrase(raw.as_deref()).map_err(|e| anyhow::anyhow!(e))
 }
 
 fn manager(cli: &Cli) -> Result<VaultManager> {
     let dir = data_dir(cli);
-    let pw = passphrase();
+    let pw = passphrase()?;
     VaultManager::open(&dir, pw.as_deref())
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
@@ -1659,7 +1661,7 @@ fn run(cli: Cli) -> Result<()> {
                         ]
                     )
                 );
-                if passphrase().is_some() {
+                if passphrase()?.is_some() {
                     println!("Master key: derived from UNDERCROFT_PASSPHRASE (Argon2id)");
                 } else {
                     println!("Master key: {}/master.key (0600)", mgr.root().display());

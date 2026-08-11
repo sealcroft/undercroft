@@ -1853,7 +1853,7 @@
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
     <tr><td><code>UNDERCROFT_HOME</code></td><td><code>~/.undercroft</code></td><td>Palace data directory</td></tr>
-    <tr><td><code>UNDERCROFT_PASSPHRASE</code></td><td>unset</td><td>Passphrase-wrapped master key</td></tr>
+    <tr><td><code>UNDERCROFT_PASSPHRASE</code></td><td>unset</td><td>Passphrase-wrapped master key (Argon2id; no key material on disk). Unset is the documented default — a random <code>master.key</code> at 0600. <strong>Set but empty REFUSES</strong>: declaring it is the request that nothing be written to disk, so falling back would grant the opposite</td></tr>
     <tr><td><code>UNDERCROFT_LANG</code></td><td>system</td><td>CLI output language</td></tr>
   </tbody>
 </table>

@@ -74,7 +74,14 @@ contract:
 
 The twenty defects on the pre-merge blocker list, the eleven regressions the
 third audit round found inside those fixes, and T1–T15. All described in
-CHANGELOG under `## Unreleased`. The six worth naming:
+CHANGELOG under `## Unreleased`. The seven worth naming:
+
+* **An empty `UNDERCROFT_PASSPHRASE` wrote a key to disk and called it
+  success** (round-four #18) — the same defect as #4/O16 on the highest-value
+  secret there is. `.filter(|p| !p.is_empty())` turned a failed interpolation
+  into "no passphrase", so the palace granted the opposite of the request it
+  was given, silently, through a recipe `docs/remote-server.md` shipped. One
+  resolver now serves the CLI and `config check`; the value is never trimmed.
 
 * **`config check` said "This environment starts" about environments that do
   not** (round-four #9). Three `Protects` variables had their parse in crates
@@ -1353,6 +1360,41 @@ MCP.
 `/v1` on both sides of a rotation, and the CLI and the route are shown to
 agree on one attestation — the same document, the same verdict, from both
 doors.
+
+---
+
+### O22 — an empty `UNDERCROFT_MCP_HTTP_TOKEN` removes a bearer gate on loopback
+
+Found by applying the rule that closing round-four #18 added to `CLAUDE.md` —
+*grep for the pattern a doctrine names rather than trusting the instance that
+taught it was the only one*. The search took two minutes and returned a third
+`.filter(|t| !t.is_empty())` over a declared secret, at
+`crates/undercroft-cli/src/http.rs:59`.
+
+**Filed rather than folded into #18, because the boundary is genuinely
+different and that difference is the whole argument.** A non-loopback bind
+with no token already refuses outright (`http.rs:63`) — the network-exposed
+case, which is the dangerous one, is closed. What remains is a **loopback**
+server where the operator declared a bearer and silently gets none: `/mcp` and
+`/v1` serve any caller on the local host. That is a real downgrade of a
+declared protection, and it is bounded by the loopback binding in a way the
+passphrase and assertion-secret cases were not.
+
+Precedent for filing rather than folding: closing #4 found an empty `bearer`
+at the orchestrator's `instance_add` door and filed it for the same reason —
+same shape, different boundary, so it owes its own argument.
+
+**Shape of the fix.** The same one twice proven: a `resolve_mcp_token`
+returning `Result`, empty and whitespace-only refusing, the value never
+trimmed, called by `serve_http` and by `check_declaration` so `config check`
+catches it. `UNDERCROFT_MCP_HTTP_TOKEN` then leaves
+`config_check::PREFLIGHT_EXEMPT`, and the both-directions gate added in #9
+forces that deletion rather than leaving it to rot.
+
+**Gate:** a unit test on the resolver (empty refuses, whitespace refuses,
+untrimmed round-trip), plus an `e2e.sh` check that a loopback `serve-http`
+with an empty token refuses to start — asserted at the RUN, not only at the
+pre-flight, since the bind is where the gate would have been lost.
 
 ---
 

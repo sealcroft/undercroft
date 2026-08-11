@@ -166,8 +166,14 @@ fn check_one(name: &str, raw: &str) -> Finding {
 const PREFLIGHT_EXEMPT: &[(&str, &str)] = &[
     // Opaque payload: any non-empty string is a well-formed value, and
     // whether it is the RIGHT one can only be learned by decrypting a vault
-    // — which this command must not do.
-    ("UNDERCROFT_PASSPHRASE", "a credential, not a syntax"),
+    // or being refused by a peer — which this command must not do.
+    //
+    // `UNDERCROFT_PASSPHRASE` was here too and it was too broad. Its
+    // CORRECTNESS is uncheckable; its EMPTINESS is not, and an empty
+    // declaration silently wrote key material to disk. Two different
+    // questions, and listing the variable answered both with "cannot".
+    // It has an arm now, so the both-directions half of the gate below is
+    // what forced this entry to be deleted rather than left to rot.
     ("UNDERCROFT_MCP_HTTP_TOKEN", "a credential, not a syntax"),
     // Owned by a DIFFERENT BINARY. `undercroft config check` runs the
     // engine's resolvers; these are read by `undercroft-orchestrator`, which

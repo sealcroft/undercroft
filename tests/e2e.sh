@@ -627,6 +627,22 @@ check "a whitespace-only secret"  1 "names no secret"                 -- \
 # variable is refused unconditionally.
 check "a real secret passes"      0 "This environment starts"         -- \
   env UNDERCROFT_ASSERTION_SECRET=s3cret "$BIN" config-check
+# **The same defect on the highest-value secret there is** (round-four #18).
+# `passphrase()` filtered empty to `None`, so a failed interpolation stopped
+# meaning "derive the master key, write nothing to disk" and started meaning
+# "write a random master.key" — the opposite request, granted silently. The
+# refusal must reach the RUN, not only the pre-flight, since that is where the
+# key would have been written.
+check "an empty passphrase refuses" 1 "names no passphrase"           -- \
+  env UNDERCROFT_PASSPHRASE= "$BIN" config-check
+check "at the run, not just check" 1 "names no passphrase"            -- \
+  env UNDERCROFT_PASSPHRASE= "$BIN" vault list
+check "whitespace-only too"       1 "names no passphrase"             -- \
+  env UNDERCROFT_PASSPHRASE="   " "$BIN" config-check
+# ...and a real one passes, so the three above are not passing because the
+# variable is refused unconditionally.
+check "a real passphrase passes"  0 "This environment starts"         -- \
+  env UNDERCROFT_PASSPHRASE="correct horse" "$BIN" config-check
 # The MINTING side runs the same resolver now. It always refused an empty
 # value while the ENFORCING side accepted it — one decision, two inline
 # copies, opposite answers.

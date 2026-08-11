@@ -2,6 +2,53 @@
 
 ## Unreleased — 1.1.0
 
+### an empty passphrase wrote a key to disk and called it success
+
+Round-four finding #18 (D1). The same defect as #4 — closed earlier in this
+release as O16 — applied to the highest-value secret in the system.
+
+`passphrase()` was `env::var("UNDERCROFT_PASSPHRASE").ok().filter(|p|
+!p.is_empty())`. An empty declaration therefore became `None`, and `None`
+means the documented default: derive nothing, write a random `master.key` to
+disk at 0600. **Declaring a passphrase is precisely the request that no key
+material be written to disk**, so the fallback granted the opposite of what
+was asked, silently. `vault status` printed the key path, which only reads as
+wrong if you already suspected it.
+
+Measured against the binary before the fix:
+
+```
+UNDERCROFT_PASSPHRASE=   →  master.key EXISTS on disk
+undercroft config check  →  exit 0
+```
+
+`undercroft_store::resolve_passphrase` is the fix, mirroring
+`resolve_assertion_secret` line for line: one resolver, two consumers — the
+CLI's `passphrase()` and `check_declaration`, so `config check` catches it
+before a restart rather than after one. Whitespace-only refuses too. **The
+value is never trimmed**: whitespace decides only whether a passphrase was
+*named*, and trimming would change the KEY, silently making a vault derived
+from a padded passphrase underivable. That is the closed-vocabulary versus
+opaque-payload distinction #4 earned, now applied a second time.
+
+**Reachable through a shipped recipe**, exactly as #4 was.
+`docs/remote-server.md` carried `UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE}`,
+and Compose interpolates an unset shell variable to the empty string and then
+*sets* it in the container. That line now uses `${TENANT_PASSPHRASE:?…}` so it
+fails in Compose before a container starts.
+
+**It also narrowed a claim this release made three commits earlier.** #9 put
+`UNDERCROFT_PASSPHRASE` on `PREFLIGHT_EXEMPT` as "a credential, not a syntax".
+That is right about a *wrong* passphrase and wrong about an *absent* one — two
+different questions, and the exemption answered both with "cannot". The entry
+is deleted, and the both-directions half of #9's own gate is what would have
+failed had it been left: a listed variable that becomes checkable fails the
+build too.
+
+Counterfactual executed: with the old filter restored, the unit test reports
+`None` where it demanded a refusal, and `UNDERCROFT_PASSPHRASE= undercroft
+init` writes `master.key` to disk again.
+
 ### `config check` said "This environment starts" about environments that do not
 
 Round-four finding #9 (D1+D11). The pre-flight is what `UPGRADING.md` tells
