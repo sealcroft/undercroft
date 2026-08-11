@@ -1043,8 +1043,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (696 run,
-                                      # 4 #[ignore]d = 700 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (698 run,
+                                      # 4 #[ignore]d = 702 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1090,8 +1090,8 @@ docker compose run --rm test          # cargo unit + integration tests (696 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (311 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (95 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (316 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
