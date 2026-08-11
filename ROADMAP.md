@@ -1057,6 +1057,69 @@ path (33 ms vs 32 ms end to end), and nothing multiplies by record count.
 
 ---
 
+### O16 — CLOSED 2026-08-11: an empty assertion secret no longer removes per-vault isolation
+Round-four finding **#4**, HIGH, and the only finding in the set where a
+security boundary *silently ceased to exist in a configuration the shipped
+documentation produces*.
+
+**One line, failing in two opposite directions.** `Tenancy::new` resolved the
+secret with `.filter(|s| !s.is_empty())`. `""` became `None`, and
+`assert_or_401` returns `Ok(())` unconditionally on `None`, so every `/v1`
+assertion gate, the `POST /mcp` transport gate and the SSE gate became no-ops
+— with no warning, the banner merely omitting the clause that says assertions
+are on. `" "` is **not** empty, so a whitespace-only value was stored as a
+real secret: enforcement on, banner truthful, key one guessable byte. The
+sweep filed only the first; a fix mapping empty to absent would have left the
+second in place.
+
+**Reachable from the shipped recipe.** `docs/remote-server.md` recommends
+`UNDERCROFT_ASSERTION_SECRET: ${ASSERTION_SECRET}`; an unset shell variable
+interpolates to empty and the variable IS then set in the container. The
+recipe now uses `${ASSERTION_SECRET:?…}` so compose fails first.
+
+**One resolver, three consumers.** `undercroft_store::resolve_assertion_secret`
+is called by the enforcing side (`Tenancy::new`, now fallible), the MINTING
+side (`assert-header`, which already hard-errored on empty while the enforcing
+side accepted it — one decision, two inline copies, opposite answers) and
+`check_declaration`, so `config check` catches it before a restart. It had
+reported this variable `Accepted` — "no parse to run" — on exactly the
+environment that had lost isolation, which is the one job that pre-flight has.
+
+**The root cause was a distinction the doctrine implied and never stated**,
+now written into `CLAUDE.md`: a declaration is either a **closed vocabulary**
+or **opaque payload**. Vocabulary may read empty as a spelling of its default
+and is trimmed; payload cannot express intent when empty and must never be
+trimmed, because trimming changes the value — for a secret, the KEY, silently
+invalidating every header already minted. That is why `UNDERCROFT_ADMISSION`
+may read empty as `off` and this may not.
+
+**Same decision, second door, closed in the same unit.** `instance_add`
+accepted an empty `assertion_secret` on BOTH orchestrator routes while
+`ui.html` refused it client-side only — which is why the server gap was
+invisible: every hand-driven registration was blocked and nothing else was.
+`proxy.rs` calls its path guard and the assertion MAC "two independent
+barriers, because one silent misconfiguration must not remove the only one";
+an empty secret removed one at registration and the instance then routed and
+reported healthy.
+
+**Counterfactual executed:** the pre-fix filter restored in place, the gate
+failed on the `""` arm, passed on revert. **Gates:**
+`a_declared_assertion_secret_that_names_no_secret_refuses` (both directions,
+the no-trim rule, and the `check_declaration` arm);
+`registering_an_instance_without_an_assertion_secret_is_refused` (four
+whitespace shapes refused at the door, a real secret stored UNTRIMMED);
+`tests/e2e.sh` drives `config-check` and `assert-header` through the CLI for
+empty, whitespace-only and a real secret, with the real-secret arms present so
+the refusals cannot pass by refusing everything. `UPGRADING.md` carries the
+entry, since this can stop a misconfigured deployment at start-up.
+
+**Residual, stated:** an empty `bearer` is accepted at the same orchestrator
+door and is the same shape one variable over. It is NOT the same boundary —
+the bearer authenticates to the engine rather than separating tenants — so it
+is named here rather than folded in silently, and it wants its own argument.
+
+---
+
 ### O15 — the battery's own test count over-reports by a replayed tail
 Found while counting the tree for O13's governance update, which is the only
 way this class ever gets found: the number is only wrong when someone counts.

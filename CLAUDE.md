@@ -1043,8 +1043,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (694 run,
-                                      # 4 #[ignore]d = 698 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (696 run,
+                                      # 4 #[ignore]d = 700 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1090,7 +1090,7 @@ docker compose run --rm test          # cargo unit + integration tests (694 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (306 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (311 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (95 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -2010,6 +2010,25 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   not compile until someone classifies it; `undercroft config check` runs
   every declaration through the resolver that will run at start-up, opening
   nothing, so an upgrade fails in a pipeline instead of at a restart.
+  **The class is not the whole rule: a declaration is either a CLOSED
+  VOCABULARY or OPAQUE PAYLOAD, and that decides what EMPTY means and whether
+  the value may be TRIMMED.** A vocabulary variable (`UNDERCROFT_ADMISSION`)
+  may legitimately read empty as a third spelling of its default, and is
+  trimmed so a trailing newline from `$(cat …)` or a YAML block scalar cannot
+  change its meaning. Payload — `UNDERCROFT_ASSERTION_SECRET`, a CA path, a
+  token — has no vocabulary, so empty cannot express intent: it is always a
+  failed interpolation and must REFUSE, and it must **not** be trimmed,
+  because trimming changes the value itself and for a secret that means
+  changing the KEY and silently invalidating every header already minted.
+  Nothing encoded this, so each call site answered for itself, and
+  `UNDERCROFT_ASSERTION_SECRET` was resolved by `!s.is_empty()` in two inline
+  copies that DISAGREED: the minting side (`assert-header`) hard-errored on
+  empty while the ENFORCING side read it as "assertions off" and answered 200
+  to any bearer on every `/v1` route and `POST /mcp`. That one line also
+  failed in **two opposite directions** — `""` turned the boundary off
+  silently, and `" "` is not empty so it was accepted as a real one-byte key
+  while the banner truthfully reported assertions required. A fix that only
+  maps empty to absent closes the first and leaves the second.
 - **Drift check before every release**, not only when something feels off.
   The 65-drift audit found capabilities present on one surface and missing,
   weaker or silently ignored on another — 55 of them failing with no signal

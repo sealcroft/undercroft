@@ -180,8 +180,69 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
                     None => "no pin".into(),
                 })
             }),
+        "UNDERCROFT_ASSERTION_SECRET" => resolve_assertion_secret(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|s| {
+                described(match s {
+                    Some(_) => "per-vault assertions are REQUIRED on /v1 and POST /mcp".into(),
+                    None => "no per-vault assertions".into(),
+                })
+            }),
         _ => Ok(None),
     }
+}
+
+/// `UNDERCROFT_ASSERTION_SECRET`: the MAC key for per-vault assertions.
+///
+/// **`Protects`, so a declaration that names no secret REFUSES rather than
+/// falling back.** Unset is not a declaration and leaves assertions off — a
+/// single-tenant deployment that never declared one sees no change at all.
+///
+/// **An empty or whitespace-only value IS a declaration and names no secret,
+/// so it refuses**, which is `undercroft_net::declared_pin`'s ruling applied
+/// to the payload variables it was never extended to. It closes TWO holes
+/// that point in OPPOSITE directions, and only the first was filed:
+///
+/// * `""` — the old filter was `!s.is_empty()`, so an empty value became
+///   `None` and every `/v1` assertion gate plus the `POST /mcp` transport
+///   gate turned into a no-op **silently**: the start-up banner did not say
+///   "assertions off", it merely omitted the clause that says they are on.
+///   `docs/remote-server.md` ships `UNDERCROFT_ASSERTION_SECRET:
+///   ${ASSERTION_SECRET}` in its recommended compose file, and an unset
+///   shell variable interpolates to empty rather than absent — so the
+///   isolation boundary ceased to exist in a configuration the shipped
+///   documentation produces.
+/// * `" "` — worse, and invisible to a fix that only maps empty to absent:
+///   `" ".is_empty()` is FALSE, so a whitespace-only value was accepted as a
+///   REAL secret. Assertions were enforced, the banner truthfully said so,
+///   and the key was one guessable byte.
+///
+/// **The value is NOT trimmed, and that is the opposite of what the closed-
+/// vocabulary variables do.** `UPGRADING.md` records that those are trimmed
+/// so a trailing newline from `$(cat …)` stops changing their meaning —
+/// correct there, because the value is a WORD from a fixed set. Here the
+/// value is opaque PAYLOAD: trimming changes the KEY, which would silently
+/// invalidate every header already minted by a deployment whose secret
+/// really does end in whitespace. So whitespace-only refuses, and content
+/// with real characters is taken byte for byte.
+///
+/// That distinction — closed vocabulary versus opaque payload — is why
+/// `UNDERCROFT_ADMISSION` may legitimately read empty as `off` (empty is a
+/// third spelling of a value in its vocabulary) while this one may not.
+/// Nothing in the tree encoded it, so each call site answered for itself.
+pub fn resolve_assertion_secret(env: Option<&str>) -> Result<Option<String>, StoreError> {
+    let Some(v) = env else { return Ok(None) };
+    if v.trim().is_empty() {
+        return Err(StoreError::Invalid(
+            "UNDERCROFT_ASSERTION_SECRET is set but names no secret (it is empty or only \
+             whitespace). It is most often an unset shell variable interpolated into a \
+             compose file. Per-vault assertions are what stop one bearer token from \
+             addressing every vault, so there is no silent fallback: set a real secret, \
+             or unset the variable to run without assertions"
+                .into(),
+        ));
+    }
+    Ok(Some(v.to_string()))
 }
 
 /// `UNDERCROFT_ADMISSION`: `quarantine` turns the write-path screen on;
@@ -10733,6 +10794,68 @@ mod tests {
         let after = drawer("w", "r", "note after the rate is cleared", 9);
         s.upsert(&after).unwrap();
         assert_eq!(s.get(&after.id).unwrap().unwrap().meta.wing, "w");
+    }
+
+    /// **A declared assertion secret that names no secret refuses, in BOTH
+    /// of the two directions the old filter failed in.**
+    ///
+    /// `Tenancy::new` used `.filter(|s| !s.is_empty())`, which produced two
+    /// opposite silent failures from one line — and a fix that merely maps
+    /// empty to absent closes only the first:
+    ///
+    /// * `""` → `None` → every `/v1` assertion gate and the `POST /mcp`
+    ///   transport gate became a no-op, with no warning; the banner omitted
+    ///   the clause rather than saying assertions were off. Reachable from
+    ///   the compose recipe in `docs/remote-server.md`, because an unset
+    ///   shell variable interpolates to empty rather than absent.
+    /// * `" "` → `Some(b" ")` → assertions ENFORCED with a one-byte
+    ///   guessable key, and the banner truthfully said they were required.
+    ///
+    /// The last two arms are the one that is easy to get backwards: this is
+    /// opaque PAYLOAD, not a word from a closed vocabulary, so it is **not
+    /// trimmed** — trimming would change the KEY and silently invalidate
+    /// every header a deployment had already minted.
+    #[test]
+    fn a_declared_assertion_secret_that_names_no_secret_refuses() {
+        // Unset is not a declaration: a deployment that never declared one
+        // must see no change at all.
+        assert_eq!(resolve_assertion_secret(None).unwrap(), None);
+
+        for names_nothing in ["", " ", "\t", "\n", "  \r\n "] {
+            let e = resolve_assertion_secret(Some(names_nothing)).unwrap_err();
+            assert!(
+                matches!(e, StoreError::Invalid(ref m) if m.contains("names no secret")),
+                "{names_nothing:?} names no secret and must REFUSE, not silently \
+                 disable per-vault isolation: got {e:?}"
+            );
+        }
+
+        // Real content is taken byte for byte, whitespace included.
+        assert_eq!(
+            resolve_assertion_secret(Some("s3cret")).unwrap().as_deref(),
+            Some("s3cret")
+        );
+        assert_eq!(
+            resolve_assertion_secret(Some("s3cret\n"))
+                .unwrap()
+                .as_deref(),
+            Some("s3cret\n"),
+            "a secret is opaque payload, so it must NOT be trimmed — trimming \
+             changes the key and invalidates every header already minted"
+        );
+
+        // And `config check` must reach the same verdict, or the pre-flight
+        // whose whole job is catching a `Protects` misdeclaration before a
+        // restart passes the very environment that has lost isolation. It
+        // reported `Accepted` ("no parse to run") until this arm existed.
+        assert!(check_declaration("UNDERCROFT_ASSERTION_SECRET", "").is_err());
+        assert!(check_declaration("UNDERCROFT_ASSERTION_SECRET", " ").is_err());
+        assert!(
+            check_declaration("UNDERCROFT_ASSERTION_SECRET", "s3cret")
+                .unwrap()
+                .is_some(),
+            "a good secret must DESCRIBE itself, not fall through to Accepted"
+        );
     }
 
     /// `UNDERCROFT_ADMISSION_RATE` parses `<count>/<seconds>` or REFUSES

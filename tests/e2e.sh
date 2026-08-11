@@ -553,6 +553,31 @@ check "the semantic gate too"     1 "UNDERCROFT_SEMANTIC_GATE"        -- \
   env UNDERCROFT_SEMANTIC_GATE=1.5 "$BIN" config-check
 check "a CA pin that pins nothing" 1 "UNDERCROFT_EMBED_CA"            -- \
   env UNDERCROFT_EMBED_CA= "$BIN" config-check
+# **An assertion secret that names no secret.** This is the pre-flight whose
+# whole purpose is catching a `Protects` misdeclaration before a restart, and
+# it reported this one `Accepted` ("no parse to run") — on the very
+# environment that had silently lost per-vault isolation. `docs/remote-server
+# .md` ships `${ASSERTION_SECRET}` in its recommended compose file, and an
+# unset shell variable interpolates to EMPTY rather than absent.
+check "an empty assertion secret" 1 "UNDERCROFT_ASSERTION_SECRET"     -- \
+  env UNDERCROFT_ASSERTION_SECRET= "$BIN" config-check
+# The second hole, which points the OTHER way and which "treat empty as
+# absent" does not close: whitespace is not empty, so it was accepted as a
+# REAL secret — assertions enforced with a one-byte guessable key, and the
+# banner truthfully saying they were required.
+check "a whitespace-only secret"  1 "names no secret"                 -- \
+  env UNDERCROFT_ASSERTION_SECRET="   " "$BIN" config-check
+# ...and a real secret passes, so the two above are not passing because the
+# variable is refused unconditionally.
+check "a real secret passes"      0 "This environment starts"         -- \
+  env UNDERCROFT_ASSERTION_SECRET=s3cret "$BIN" config-check
+# The MINTING side runs the same resolver now. It always refused an empty
+# value while the ENFORCING side accepted it — one decision, two inline
+# copies, opposite answers.
+check "assert-header refuses it"  1 "names no secret"                 -- \
+  env UNDERCROFT_ASSERTION_SECRET= "$BIN" assert-header default
+check "assert-header mints"       0 ":"                               -- \
+  env UNDERCROFT_ASSERTION_SECRET=s3cret "$BIN" assert-header default
 # A GOOD value passes — otherwise the checks above would pass on a command
 # that refused everything.
 check "a good value passes"       0 "This environment starts"         -- \

@@ -217,12 +217,28 @@ impl RestError {
 type RestResult = Result<(u16, Body), RestError>;
 
 impl Tenancy {
-    pub fn new(manager: VaultManager, factory: EmbedderFactory, read_only: bool) -> Self {
-        let secret = std::env::var("UNDERCROFT_ASSERTION_SECRET")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(String::into_bytes);
-        Self {
+    /// **Fallible, because the assertion secret is a `Protects` declaration
+    /// and this is the one place `/v1`, `POST /mcp` and the SSE gate all get
+    /// it from.** The resolution moved out to
+    /// [`undercroft_store::resolve_assertion_secret`] so the enforcing side,
+    /// the MINTING side (`undercroft assert-header`) and `config check`
+    /// cannot disagree about what an empty value means — they did: the
+    /// minting side hard-errored on it while this side treated it as
+    /// "assertions off" and answered 200 to everyone.
+    ///
+    /// Constructing it is where the refusal belongs, not each of the ~35
+    /// `assert_or_401` call sites: a new one is written by someone who is
+    /// thinking about a route, not about configuration.
+    pub fn new(
+        manager: VaultManager,
+        factory: EmbedderFactory,
+        read_only: bool,
+    ) -> Result<Self, StoreError> {
+        let secret = undercroft_store::resolve_assertion_secret(
+            std::env::var("UNDERCROFT_ASSERTION_SECRET").ok().as_deref(),
+        )?
+        .map(String::into_bytes);
+        Ok(Self {
             manager,
             factory,
             reranker: None,
@@ -231,7 +247,7 @@ impl Tenancy {
             mcp_vault: None,
             secret,
             window: assertion::DEFAULT_WINDOW_SECS,
-        }
+        })
     }
 
     /// Declare the vault this process also serves over `/mcp`, so the two
@@ -2777,7 +2793,7 @@ mod tests {
             assert_eq!(pending.len(), 1, "premise: the screen diverted the poison");
             pending[0].id.clone()
         };
-        let mut tenancy = Tenancy::new(mgr, embedder_factory(), false);
+        let mut tenancy = Tenancy::new(mgr, embedder_factory(), false).expect("no secret declared");
         if assertions {
             tenancy = tenancy.with_assertion_secret(SECRET);
         }

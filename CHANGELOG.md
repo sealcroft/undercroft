@@ -2,6 +2,66 @@
 
 ## Unreleased — 1.1.0
 
+### an empty assertion secret silently removed per-vault isolation
+
+Round-four finding #4, **HIGH**, and the only finding in the set where a
+security boundary *silently ceases to exist in a configuration the shipped
+documentation produces*. `docs/remote-server.md` recommends a compose file
+containing `UNDERCROFT_ASSERTION_SECRET: ${ASSERTION_SECRET}`; an unset shell
+variable interpolates to the **empty string**, and the variable is then set
+in the container.
+
+`Tenancy::new` resolved it with `.filter(|s| !s.is_empty())`, so empty became
+`None`, and `assert_or_401` returns `Ok(())` unconditionally on `None` — every
+`/v1` assertion gate, the `POST /mcp` transport gate and the SSE gate became
+no-ops at once. The only signal was an **absence**: the start-up banner does
+not say "assertions off", it simply omits the clause that says they are on.
+Anyone holding the palace bearer reached every tenant's vault, with a 200.
+
+**One line failed in two opposite directions, and only the first was filed.**
+`""` → assertions silently **off**. `" "` → `is_empty()` is false, so a
+whitespace-only value was accepted as a **real secret**: assertions enforced,
+banner truthfully saying so, key one guessable byte. A fix that merely maps
+empty to absent closes the first and leaves the second.
+
+Both refuse now, through **one resolver** —
+`undercroft_store::resolve_assertion_secret` — called by the enforcing side
+(`Tenancy::new`, now fallible), the **minting** side (`undercroft
+assert-header`, which already hard-errored on empty while the enforcing side
+accepted it — one decision, two inline copies, opposite answers), and
+`check_declaration`, so `undercroft config check` catches it before a
+restart. It previously reported this variable `Accepted` — "no parse to run"
+— on the very environment that had lost isolation, which is the one job that
+pre-flight exists to do.
+
+**The value is deliberately NOT trimmed**, which is the opposite of what the
+closed-vocabulary variables do and the thing that is easy to get backwards.
+`UPGRADING.md` records that those are trimmed so a stray newline stops
+changing their meaning — right there, because the value is a word from a
+fixed set. A secret is opaque **payload**: trimming changes the key and would
+silently invalidate every header a deployment had already minted. So
+whitespace-only refuses and real content is taken byte for byte. That
+distinction — closed vocabulary versus opaque payload — is why
+`UNDERCROFT_ADMISSION` may legitimately read empty as `off` and this may not,
+and nothing in the tree had encoded it.
+
+**The same decision at the orchestrator's door**, closed in the same unit:
+`instance_add` accepted an empty `assertion_secret` on **both** server routes
+(CLI `instance-add` and `POST /admin/instances`) while `ui.html` refused it
+**client-side only** — which is exactly why the server gap stayed invisible,
+since every hand-driven registration was blocked and nothing else was.
+`proxy.rs`'s path-climb guard calls itself and the assertion MAC "two
+independent barriers, because one silent misconfiguration must not remove the
+only one"; an empty secret removed one of them at registration, and the
+instance then routed and reported healthy.
+
+**Counterfactual executed:** the pre-fix filter was restored in place and the
+new test failed on the `""` arm, then passed on revert. Gates: a resolver test
+pinning both directions plus the no-trim rule and the `config check` arm;
+`tests/e2e.sh` drives `config-check` and `assert-header` through the CLI for
+empty, whitespace-only and a real secret; an orchestrator test refusing four
+whitespace shapes at the door and proving a real secret is stored untrimmed.
+
 ### a key rotation made a genuine forgetting attestation report FORGED
 
 Round four's second CRITICAL (ROADMAP **O13**). `forget` hands the operator

@@ -2462,7 +2462,7 @@ fn run(cli: Cli) -> Result<()> {
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only)
+            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only)?
                 // `/v1` must know which vault the `/mcp` handle above holds:
                 // rotating or deleting it from under a second live handle is
                 // the one thing two handles in one process cannot survive.
@@ -2473,10 +2473,14 @@ fn run(cli: Cli) -> Result<()> {
             http::serve_http(store, tenancy, host, *port, *read_only)?;
         }
         Command::AssertHeader { vault } => {
-            let secret = std::env::var("UNDERCROFT_ASSERTION_SECRET")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("UNDERCROFT_ASSERTION_SECRET is not set"))?;
+            // The SAME resolver the enforcing side runs. These were two
+            // inline copies of one decision and they disagreed: this side
+            // hard-errored on an empty value while `Tenancy::new` read it as
+            // "assertions off" and let every bearer address every vault.
+            let secret = undercroft_store::resolve_assertion_secret(
+                std::env::var("UNDERCROFT_ASSERTION_SECRET").ok().as_deref(),
+            )?
+            .ok_or_else(|| anyhow::anyhow!("UNDERCROFT_ASSERTION_SECRET is not set"))?;
             let now = time::OffsetDateTime::now_utc().unix_timestamp();
             println!("{}", assertion::header_value(secret.as_bytes(), vault, now));
         }

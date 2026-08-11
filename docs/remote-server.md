@@ -219,7 +219,14 @@ services:
       # Master key material — inject from your secret store, never bake in.
       UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE}
       UNDERCROFT_MCP_HTTP_TOKEN: ${PALACE_BEARER}
-      UNDERCROFT_ASSERTION_SECRET: ${ASSERTION_SECRET}
+      # Compose interpolates an UNSET shell variable to the empty string, and
+      # the variable is then SET in the container. Since 1.1.0 an empty (or
+      # whitespace-only) assertion secret REFUSES to start rather than
+      # silently running with per-vault assertions disabled — which is what
+      # this recipe used to produce. Use `${ASSERTION_SECRET:?set it}` to
+      # fail in compose instead, or unset the line entirely to run without
+      # assertions deliberately. `undercroft config check` catches it too.
+      UNDERCROFT_ASSERTION_SECRET: ${ASSERTION_SECRET:?set ASSERTION_SECRET}
     volumes:
       - tenant-data:/data          # palace: vaults, keys, audit chain
     # Front with a TLS-terminating reverse proxy; /healthz for probes.
