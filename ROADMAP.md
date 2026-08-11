@@ -176,15 +176,22 @@ name is declared rather than derived from the clone's directory, with a
 preflight counted both ways. **What remains open is O6** — a click in the
 GitHub web UI that no REST endpoint exposes, so no amount of engineering
 closes it from here — **O7**, split out of O5 so the ruling is not mistaken
-for having closed a defect it does not touch, **O9**, that no CI workflow
-invokes `tests/battery.sh`, so all four preflights gate a local run and
-nothing on a pull request, and **O10**, that the former-name trace verifier is
+for having closed a defect it does not touch, and **O10**, that the former-name trace verifier is
 invoked by nothing and lives outside the tree — which is how O8's own unit put
-the former name back into a tracked file with the battery green. **O11 and
-O12 were opened and closed on 2026-08-10**: the orphan-label leg now covers
-bare drawer ids (the deletion-path enumeration that had blocked it is done),
-and a hand-declared fact citation is declined by doctrine rather than left as
-a question.
+the former name back into a tracked file with the battery green — and
+**O13**, round four's second CRITICAL: a genuine forgetting attestation
+reports FORGED with exit 2 after any key rotation. O13 is the next thing to
+do; it is fully analysed and was deliberately left unimplemented, because it
+changes a security VERDICT and a half-correct verdict is worse than a
+known-wrong one.
+
+**O9 is CLOSED 2026-08-11** — the required status check on `main` resolves to
+`CI verdict`, and a red suite was **observed** to block a merge on a
+throwaway pull request rather than inferred from the workflow. **O11 and O12
+were opened and closed on 2026-08-10**: the orphan-label leg now covers bare
+drawer ids (the deletion-path enumeration that had blocked it is done), and a
+hand-declared fact citation is declined by doctrine rather than left as a
+question.
 
 **Round four (2026-08-10) found 70 verified defects** across eleven
 dimensions — 2 critical, 20 high, and **67 of 70 failing silently**. Full
@@ -637,7 +644,7 @@ after the maintainer confirmed the data was disposable test data: 13 containers,
 first pass that classified by name alone mislabelled five of this project's own
 ad-hoc containers as another project's.
 
-### O9 — the workflow half is fixed; nothing gates a pull request until the required check is configured
+### O9 — CLOSED 2026-08-11: the required check is configured and observed to block
 Found by the round-four synthesis, which no single dimension filed. `ci.yml`
 mentioned `battery.sh` only inside comments, so **all four preflights** (line
 endings, ROADMAP headings, handover freshness, compose project names) were
@@ -674,22 +681,35 @@ never existed.
   keys at two spaces, and so are `push:` and `pull_request:` under `on:`, so
   an unanchored scan reports two jobs that do not exist.
 
-**What remains open, and it cannot be done from the repo:**
+**CLOSED 2026-08-11, and every arm was executed rather than read.** The branch
+was pushed and PR #116 opened — note that pushing alone triggers nothing,
+since `ci.yml` fires on `push` to `main` and on `pull_request`, so a PR is
+what makes CI run at all. That run reported **14/14 green**, including
+`suite (onnx-build)`, which CI runs and the local battery does not.
 
-1. **Configure the required status check** on `main` to `CI verdict`, on
-   `sealcroft/undercroft`. Verified 2026-08-10 against the API: neither repo
-   carries `required_status_checks` at all, so nothing is gated today
-   regardless of what the workflow says.
-2. **The check has never run.** The workflow above is unpushed, so no run
-   exists to bind a required context to. A context that has never been
-   reported cannot be selected in the UI and, if set by API, blocks every PR
-   as permanently pending.
+| Arm | Evidence |
+|---|---|
+| Preflights gate a PR | `Preflights (line endings, ROADMAP, compose, CI inventory)` — pass, 7 s |
+| Legs cannot collide with the verdict | contexts are `suite (test)` etc.; no bare `test` |
+| Required check configured | `PUT …/branches/main/protection` → read back `contexts: ["CI verdict"]`, every other setting preserved |
+| It binds to a REPORTED context | #116 reads `MERGEABLE` / `CLEAN` — not the permanent-pending deadlock |
+| **A red suite blocks a merge** | **negative-control PR #117**: deliberate rustfmt violation → `Lint` fail → `CI verdict` fail → merge state **BLOCKED**, the verdict job logging *"not green — see the individual jobs above: lint"*. Closed and its branch deleted immediately |
 
-**Gate:** the required check must resolve to `CI verdict`, and a red suite
-must block a merge — **verified by observation on a real pull request**, not
-by reading the workflow. That is the same standard O1 was held to, where an
-anonymous probe with a negative control settled a question that reading
-settled wrongly twice.
+The negative control is the arm that could not be established by reading, and
+this branch had already found three claims about CI that were false when
+read. **Cost worth recording: it makes the repository's CI go red on purpose,
+and the maintainer saw that before being told.** Announce it first next time —
+an alarm nobody can distinguish from a real failure is the thing this project
+exists to remove.
+
+**Live residual until #116 merges:** `main`'s `ci.yml` has no `CI verdict`
+job, so any OTHER pull request branched from `main` blocks on a check that
+can never report. `enforce_admins` is false — deliberately preserved — so an
+admin can still merge; that is the escape hatch, not the design.
+
+**Still not reconciled, and filed rather than fixed:** CI and the battery run
+different suite sets in both directions, and `ort-build` is run by neither
+while `release.yml` ships an `ort` binary for five targets.
 
 **Also filed here rather than absorbed:** CI and the battery run **different
 suite sets**, in both directions, under a comment that asserted they cannot.
