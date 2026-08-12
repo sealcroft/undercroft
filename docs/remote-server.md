@@ -15,6 +15,13 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
 ```
 
 - The server refuses non-loopback binds without the token.
+- It also refuses a token that is **empty** or ends in **whitespace**. The
+  second is the one that bites: `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
+  /run/secrets/token)` over a file ending in a newline used to start a server
+  that refused every client forever, because HTTP strips a header value's
+  trailing whitespace so the declared token could never be presented. Strip it
+  at the source — `$(tr -d '\n' < /run/secrets/token)`. Leading and internal
+  whitespace are fine; they are presentable.
 - `--read-only` exposes recall without write access (see the compose file).
 - `/healthz` is unauthenticated for probes.
 - Plain HTTP: terminate TLS in a reverse proxy for anything beyond a

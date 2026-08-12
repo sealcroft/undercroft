@@ -10,6 +10,9 @@ export. It is built to preserve the project's stance:
 - **Local-first / no phone-home.** Nothing leaves the process unless you
   explicitly point it somewhere: `/metrics` is served only when you ask,
   and OTLP export happens only when `UNDERCROFT_OTLP_ENDPOINT` is set.
+  *Set* means set to an endpoint — a declaration that names none refuses to
+  start rather than exporting nothing silently, since a collector you
+  configured and never receive spans from is the harder failure to notice.
 - **Metadata only.** Every signal is a count, a rate, a latency, or an
   aggregate gauge. Drawer content, drawer names beyond what `stats`
   already exposes, and key material are **never** emitted. Sealed vaults

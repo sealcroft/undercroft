@@ -2168,6 +2168,44 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   hid it: a later unit listed the passphrase as unpre-flightable because "a
   passphrase is a credential, not a syntax" — true of a WRONG one, false of
   an ABSENT one. Two questions, one answer, and the wrong one.
+  **The sweep was finally run on 2026-08-12 and returned two more**, which is
+  the doctrine paying for itself twice: `UNDERCROFT_MCP_HTTP_TOKEN` (a bearer
+  gate removed on loopback) and `UNDERCROFT_OTLP_ENDPOINT` — the second inside
+  the *previous commit's own* code, wrong in BOTH directions at once, the
+  runtime reading empty as "off" while the pre-flight handed the empty string
+  to the transport policy, which parses it, fails, and reports an unparseable
+  URL as CLEARTEXT. Four instances, one pattern, and the only one anybody
+  found by thinking about it was the first.
+- **A declaration that CANNOT WORK is refused, never quietly adjusted into one
+  that can — and "cannot work" is measured, not reasoned about.** Emptiness is
+  not the only way a declared value fails to be one. A bearer ending in
+  whitespace is a perfectly good string that **no client can ever present**:
+  HTTP strips a header field value's trailing whitespace, so the token that
+  arrives is always the trimmed one, and `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
+  /run/secrets/token)` over a file ending in a newline starts a healthy server
+  that refuses every request forever — 401 naming no cause on one side,
+  nothing in the log on the other. The tempting fix is to trim it; that is
+  wrong, because it authenticates a key the operator did not declare, and a
+  server whose key silently differs from the file it was configured from is
+  the whole failure class restated.
+  Two disciplines, both earned here. **Measure which spellings actually break
+  before writing the guard**: leading and internal whitespace answer 200 and
+  trailing whitespace answers 401, so the guard is `trim_end() != value` and
+  not `trim() != value` — the wider version would refuse legitimate values in
+  the name of a defect they do not have. And **a real corpus is how this class
+  is found at all**: every unit test compares a resolver to itself, so no test
+  in this tree could see it; the live `serve-http` over 1,360 mined drawers
+  that the definition of done demands is what returned the 401. Ask of any
+  declared value not only *"can this be empty?"* but *"is there a spelling of
+  this that the surface consuming it cannot carry?"*
+  Applied backwards, as this file requires of a new RULE: it reclassifies
+  nothing and adds one case. The CA pin, the cleartext refusal and the two
+  Argon2id/HMAC secrets all keep their current answers — a passphrase or an
+  HMAC key with trailing whitespace WORKS, both sides using the same bytes, so
+  the rule correctly declines to touch them. Only a value that must survive a
+  transport it cannot survive is caught. That is the healthy outcome for a
+  doctrine (mostly describes the tree, one genuine addition), and the addition
+  is the only history it has: **untested against anything older than itself.**
 - **Drift check before every release**, not only when something feels off.
   The 65-drift audit found capabilities present on one surface and missing,
   weaker or silently ignored on another — 55 of them failing with no signal

@@ -2,6 +2,80 @@
 
 ## Unreleased — 1.1.0
 
+### an empty declaration is a failed interpolation, and a bearer nobody can present is not a bearer
+
+ROADMAP **O22**, plus two defects the work found — one of them in the previous
+commit's own code, one that only a real corpus could see.
+
+**The pattern sweep the doctrine asked for.** Closing round-four #18 added a
+rule to `CLAUDE.md`: *grep for the pattern a rule names rather than trusting
+that the instance which taught it was the only one.* Run over `.filter(|x|
+!x.is_empty())` on a declared value, it returns exactly two live sites, and
+both are fixed here.
+
+**`UNDERCROFT_MCP_HTTP_TOKEN` (O22).** A non-loopback bind with no token
+already refuses, so the network-exposed case was never open. What an empty
+declaration produced was a **loopback** server on which the operator declared
+a bearer and got none — `/mcp` and `/v1` serving any process on the host.
+`resolve_mcp_token` refuses empty and whitespace-only, is called by
+`serve_http` and by `config check`, and the variable leaves
+`PREFLIGHT_EXEMPT` — a deletion the both-directions gate **forces**: re-adding
+the entry fails the build with *"listed in PREFLIGHT\_EXEMPT but IS
+pre-flighted now"*, run and confirmed.
+
+**`UNDERCROFT_OTLP_ENDPOINT`, which this branch broke two commits earlier.**
+The transport fix for round-four #8 left the empty case wrong in **both**
+directions at once. The exporter read the value through a helper that maps
+empty to unset and started with **traces silently off** — four lines above its
+own comment saying that is worse than refusing to start. `config check`
+handed the same empty string to `require_secure_transport`, which parses it,
+fails, and reports an unparseable URL as **cleartext** — so the pre-flight
+refused an environment that ran, and told the operator to configure https for
+a value naming no host. The empty parenthesis in `…non-loopback host ()` was
+the only tell. One resolver, `undercroft_net::declared_endpoint`, is now held
+by both callers, so the pre-flight and the run cannot answer differently.
+
+**And a bearer that no client can present, found by the corpus run.** The
+definition of done requires driving a change through a real corpus, and that
+is the only thing that could have seen this: **HTTP strips a header field
+value's trailing whitespace**, so a token ending in a space or newline never
+equals the declared one. The server starts cleanly and refuses every request
+forever — a 401 naming no cause on one side, nothing in the log on the other.
+`UNDERCROFT_MCP_HTTP_TOKEN=$(cat /run/secrets/token)` over a file ending in a
+newline is the ordinary way to produce it.
+
+Measured against a live `serve-http` over 1,360 mined LoCoMo drawers rather
+than reasoned about: plain, **leading** and **internal** whitespace answer
+200; **trailing** space and newline answer 401. So trailing whitespace is
+refused and the other two are values — the guard is exactly as wide as the
+defect, which a `trim() != value` version of it would not have been.
+
+It is **not trimmed for you**, and that is the decision rather than an
+oversight: trimming would authenticate a key the operator did not declare, and
+a server whose key silently differs from the file it was configured from is
+the failure this whole class is about. A declaration that cannot work is
+refused; it is never quietly adjusted into one that can.
+
+The same shape exists one binary over — `UNDERCROFT_ORCH_ADMIN_TOKEN` passes a
+16-character floor that a trailing newline satisfies, and the orchestrator
+compares its bearer the same way. It is **not** fixed here, deliberately: the
+orchestrator has no resolver to put it in, and adding a bare guard would be
+the second implementation this project spends its time removing. Recorded in
+**O21**, which builds that resolver.
+
+`UPGRADING.md` gains three entries. Its "cannot check a credential" caveat is
+corrected in the same unit — true of a *wrong* credential, false of an
+*absent* or *unusable* one, and no variable is exempt from the pre-flight for
+being a credential any more.
+
+Gates: `an_empty_endpoint_is_a_failed_interpolation_not_a_cleartext_url`
+asserts the **diagnosis**, not merely a refusal, because the pre-fix command
+did refuse — with the wrong one, so a bare "it refuses" assertion would have
+passed against the defect. `an_empty_bearer_declaration_refuses_and_a_real_one_is_never_trimmed`
+pins the untrimmed round-trip and the guard order. Five new `e2e.sh` checks
+(325 → 330) drive the loopback bind, which is where the gate was lost, and two
+new `e2e-telemetry.sh` checks (28 → 30) drive the exporter.
+
 ### a flaky test of my own, caught by CI rather than by the battery
 
 The regression guard added with #6 asserted the whole ranked id list before and

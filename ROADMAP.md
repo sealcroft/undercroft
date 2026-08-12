@@ -1403,7 +1403,7 @@ answer may not.
 
 ---
 
-### O22 — an empty `UNDERCROFT_MCP_HTTP_TOKEN` removes a bearer gate on loopback
+### O22 — CLOSED 2026-08-12: an empty bearer refuses, and so does one nobody could present
 
 Found by applying the rule that closing round-four #18 added to `CLAUDE.md` —
 *grep for the pattern a doctrine names rather than trusting the instance that
@@ -1436,6 +1436,37 @@ untrimmed round-trip), plus an `e2e.sh` check that a loopback `serve-http`
 with an empty token refuses to start — asserted at the RUN, not only at the
 pre-flight, since the bind is where the gate would have been lost.
 
+**CLOSED exactly as filed**, and the filed shape was right in every
+particular: `resolve_mcp_token` returning `Result`, both callers holding it,
+the variable deleted from `PREFLIGHT_EXEMPT` — a deletion the both-directions
+gate **forces** rather than invites, run and confirmed (re-adding the entry
+fails the build).
+
+**What the plan could not have known, and the corpus run found.** The
+definition of done's real-corpus rule produced a defect no unit test in this
+tree could see: **HTTP strips a header field value's trailing whitespace**, so
+a token ending in a space or newline never equals the declared one. The server
+starts cleanly and refuses every client forever — 401 with no cause, and
+nothing in the log. `$(cat /run/secrets/token)` over a file ending in a
+newline is the ordinary way to produce it.
+
+Measured against a live server over 1,360 mined drawers, not reasoned about:
+plain, **leading** and **internal** whitespace answer 200; **trailing** space
+and newline answer 401. So trailing whitespace refuses and the other two stay
+values — the guard is as wide as the defect and no wider, which a
+`trim() != value` version would not have been. Not trimmed for the operator:
+that authenticates a key they did not declare.
+
+**Residue, filed rather than left implied:** the identical shape exists in
+`undercroft-orchestrator`. `UNDERCROFT_ORCH_ADMIN_TOKEN` is checked only for a
+16-character floor, which `"0123456789abcdef\n"` satisfies, and `proxy.rs`
+compares its bearer with the same `strip_prefix("Bearer ")` — so a trailing
+newline there produces the same unreachable-but-healthy admin plane. It is
+**not** fixed here on purpose: that binary has no resolver to put the check
+in, and a bare guard beside the length floor would be the second
+implementation of one decision. It is written into **O21**, which builds the
+resolver, and O21's gate now carries it.
+
 ---
 
 ### O21 — `config check` cannot pre-flight the orchestrator's own declarations
@@ -1460,10 +1491,29 @@ the serve path calls, never a second copy, opening nothing. The engine's
 command should then say plainly that it covers the engine, so an operator
 knows to run both.
 
+**One defect to fix while building it, inherited from O22 (2026-08-12).**
+`UNDERCROFT_ORCH_ADMIN_TOKEN` is validated by a 16-character floor and nothing
+else, and `proxy.rs:476` compares the bearer with `strip_prefix("Bearer ")`
+against a header value the HTTP parser has already trimmed. So a token ending
+in a newline — `$(cat /run/secrets/token)`, the ordinary way to load one —
+passes the floor at 17 characters and can never be presented: the admin plane
+starts cleanly and refuses every request forever, 401 with no cause. Measured
+on the engine's identical path, not assumed: leading and internal whitespace
+answer 200, trailing space and newline answer 401.
+
+It is deliberately not fixed as a bare guard beside the length floor, which
+would be a second implementation of a decision the engine's
+`resolve_mcp_token` already owns. It belongs in this entry's resolver, refused
+rather than trimmed for the same reason: trimming authenticates a key the
+operator did not declare.
+
 **Gate:** the orchestrator's own `every_protects_variable_is_pre_flighted_or_exempt`
 over its half of `ENGINE_ENV_VARS`, plus a check in `e2e-orchestrator.sh` that
 a garbage `UNDERCROFT_ORCH_RATE_LIMIT` is refused by the pre-flight and by the
 serve path with the same exit code — the agreement that is the whole point.
+Plus, for the admin token: empty refuses, trailing whitespace refuses naming
+the cause, and leading/internal whitespace still authenticates — asserted at
+the RUN against a live `/admin` request, since the header is where it is lost.
 
 ---
 

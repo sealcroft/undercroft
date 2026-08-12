@@ -20,15 +20,21 @@ Run it in a pipeline against the deployment's real environment. That is the
 difference between finding out in CI and finding out during a rolling
 restart, one node at a time.
 
-**Two limits on "exit 0 means it starts", stated because they are real.** It
+**One limit on "exit 0 means it starts", stated because it is real.** It
 covers the **engine**: `undercroft-orchestrator` reads three declarations of
 its own and has no pre-flight command yet (ROADMAP O21), so a fleet should not
-read this command's exit code as covering the control plane. And it cannot
-check a **credential** — any string is a well-formed passphrase or token, and
-whether it is the right one is only learned by decrypting a vault or being
-refused by a peer, neither of which this command does. Everything else that
-can refuse is pre-flighted, and that is enforced by a test counting the
+read this command's exit code as covering the control plane. Everything else
+that can refuse is pre-flighted, and that is enforced by a test counting the
 inventory in both directions rather than by anyone remembering.
+
+**There used to be a second limit here and it was too broad**: *"it cannot
+check a credential — any string is a well-formed passphrase or token."* That
+is true of a WRONG credential and false of an ABSENT or UNUSABLE one, which
+are different questions with different answers. A credential's **correctness**
+is still uncheckable without decrypting a vault or being refused by a peer.
+Its **emptiness** is checkable and is always a failed interpolation; and for a
+bearer, so is whether it could ever be presented at all. Both are checked now,
+and no variable is exempt from this command for being a credential.
 
 It reports **validated** and **accepted** separately, and the distinction
 matters: only some variables have a parse to run. A path, a URL, a token or a
@@ -148,6 +154,84 @@ silently make an existing vault underivable.
 resolver. It previously could not: the variable was exempt from the pre-flight
 on the argument that a passphrase is a credential rather than a syntax, which
 is true of a *wrong* passphrase and false of an *absent* one.
+
+### An empty `UNDERCROFT_MCP_HTTP_TOKEN` refuses instead of removing the bearer gate
+
+**Affects:** `UNDERCROFT_MCP_HTTP_TOKEN`, when it is declared but resolves to
+an empty or whitespace-only value, on `serve-http`.
+
+**Symptom:** the process exits 1 with `UNDERCROFT_MCP_HTTP_TOKEN is set but
+names no token …`.
+
+**Cause:** the same `.filter(|t| !t.is_empty())` as the passphrase above, on a
+narrower boundary — which is why it is a separate entry rather than a line in
+that one. A **non-loopback** bind with no token already refused outright, so
+the network-exposed case was never open. What an empty declaration silently
+produced was a **loopback** server on which the operator asked for a bearer
+and got none: `/mcp` and `/v1` served any process on the host.
+
+**Fix:** set a real token, or unset the variable to run without one
+deliberately. The refusal only fires where a declaration exists.
+
+**If you bind non-loopback, nothing changes for you** except the wording of a
+refusal you were already getting. `deploy/docker-compose.server.yml` uses
+Compose's `:?` form and fails before the container starts, as before.
+
+**Detectable in advance:** yes.
+
+### A `UNDERCROFT_MCP_HTTP_TOKEN` ending in whitespace refuses instead of 401-ing every client
+
+**Affects:** `UNDERCROFT_MCP_HTTP_TOKEN` with a trailing space, tab or
+newline. `UNDERCROFT_MCP_HTTP_TOKEN=$(cat /run/secrets/token)` over a file
+ending in a newline is the ordinary way to produce one.
+
+**Symptom:** the process exits 1 with `UNDERCROFT_MCP_HTTP_TOKEN ends in
+whitespace, and no client could ever present it …`.
+
+**Cause:** HTTP strips a header field value's trailing whitespace, so the
+bearer that ARRIVES is always the trimmed one and never equals the declared
+token. The server started cleanly and refused every request forever, with a
+401 naming no cause on one side and nothing in the log on the other. Measured
+against a live server: leading and internal whitespace answer 200, a trailing
+space or newline answers 401.
+
+**Fix:** strip it at the source — `$(tr -d '\n' < /run/secrets/token)` — or
+use a token without trailing whitespace. **It is deliberately not trimmed for
+you**: that would authenticate a key you did not declare, and a server whose
+key silently differs from the file it was configured from is the failure this
+whole class is about.
+
+**Leading and internal whitespace are still accepted**, because they are
+presentable and therefore values rather than typos. The refusal is exactly as
+wide as the defect.
+
+**If your token has no trailing whitespace, nothing changes for you.** If it
+does, your server was already unreachable — this tells you why.
+
+**Detectable in advance:** yes.
+
+### An empty `UNDERCROFT_OTLP_ENDPOINT` refuses instead of silently exporting nothing
+
+**Affects:** `UNDERCROFT_OTLP_ENDPOINT` on `--features telemetry` builds, when
+it is declared but resolves to an empty or whitespace-only value.
+
+**Symptom:** the process exits 1 with `the OTLP collector is set but names no
+endpoint …`.
+
+**Cause:** the exporter read the value through a helper that maps empty to
+unset, so a declared collector produced **no traces and no message**. That is
+the failure the transport fix in this same release exists to prevent, one case
+further along. `undercroft config check` meanwhile handed the empty string
+straight to the transport policy, which parses it, fails, and reports an
+unparseable URL as CLEARTEXT — so the pre-flight refused the environment while
+the process started, and told the operator to configure https for a value that
+names no host. Both halves are closed by one resolver both callers now hold.
+
+**Fix:** set a real endpoint, or unset the variable to export nothing
+deliberately.
+
+**Detectable in advance:** yes, and with the right diagnosis now rather than a
+cleartext one.
 
 ### A declaration that turns a protection on now refuses when it does not parse
 

@@ -1926,7 +1926,7 @@
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td><code>UNDERCROFT_MCP_HTTP_TOKEN</code></td><td>required off-loopback</td><td>Palace-wide bearer token</td></tr>
+    <tr><td><code>UNDERCROFT_MCP_HTTP_TOKEN</code></td><td>required off-loopback</td><td>Palace-wide bearer token. A declaration that names no token refuses to start; so does one ending in whitespace, which HTTP strips from a header value and no client could present</td></tr>
     <tr><td><code>UNDERCROFT_ASSERTION_SECRET</code></td><td>unset</td><td>When set, every vault-addressing request must carry a valid time-boxed <code>X-Vault-Assertion</code></td></tr>
     <tr><td><code>UNDERCROFT_ORCH_ADDR</code> · <code>_DB</code> · <code>_KEY</code> · <code>_ADMIN_TOKEN</code> · <code>_RATE_LIMIT</code></td><td>—</td><td>Orchestrator listen address, state database, sealing key, admin plane token, per-process rate limit</td></tr>
   </tbody>
@@ -1951,7 +1951,7 @@
   <tbody>
     <tr><td><code>UNDERCROFT_METRICS</code></td><td>Serve a Prometheus <code>/metrics</code> endpoint (behind the bearer)</td></tr>
     <tr><td><code>UNDERCROFT_LOG</code> · <code>UNDERCROFT_LOG_FORMAT</code></td><td>Log filter; <code>json</code> for structured output</td></tr>
-    <tr><td><code>UNDERCROFT_OTLP_ENDPOINT</code></td><td>OTLP trace destination. <strong>Unset means nothing leaves the process.</strong> An outward path, so it obeys the one transport policy: TLS or loopback, nothing else, no override</td></tr>
+    <tr><td><code>UNDERCROFT_OTLP_ENDPOINT</code></td><td>OTLP trace destination. <strong>Unset means nothing leaves the process.</strong> An outward path, so it obeys the one transport policy: TLS or loopback, nothing else, no override. Declared-but-empty is a failed interpolation, not a third state, and refuses rather than exporting nothing silently</td></tr>
     <tr><td><code>UNDERCROFT_OTLP_CA</code></td><td>Pin a private CA for the OTLP collector. The declared root <strong>replaces</strong> the public roots; a file that pins nothing refuses rather than falling back</td></tr>
     <tr><td><code>UNDERCROFT_OTLP_HEADERS</code></td><td>Comma-separated <code>key=value</code> export headers, e.g. for an authenticated collector</td></tr>
     <tr><td><code>UNDERCROFT_SERVICE_NAME</code> · <code>UNDERCROFT_SAMPLE_INTERVAL_MS</code></td><td>Service label; gauge sampling interval (2000 ms)</td></tr>

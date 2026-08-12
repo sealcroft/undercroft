@@ -969,6 +969,42 @@ fi
 echo "== HTTP MCP server =="
 # Non-loopback bind without token must be refused.
 check "http refuses tokenless 0.0.0.0" 1 "UNDERCROFT_MCP_HTTP_TOKEN" -- "$BIN" serve-http --host 0.0.0.0 --port 18765
+# ROADMAP O22, asserted at the RUN rather than only at the pre-flight — the
+# BIND is where this gate was lost. An empty declaration used to read as "no
+# token", and a LOOPBACK bind does not refuse a tokenless server, so /mcp and
+# /v1 served every process on the host while the configuration said a bearer
+# was required. The loopback case is the whole finding: the 0.0.0.0 case above
+# was always refused, and a check that only covered it would pass on the
+# defect.
+#
+# Assigned with `export` on its own line rather than as a `VAR= check …`
+# prefix: bash leaves a prefix assignment on a FUNCTION set after the call in
+# some versions and not others, so the tidier spelling would make the next
+# check's environment depend on the shell.
+export UNDERCROFT_MCP_HTTP_TOKEN=""
+check "http refuses an empty token on loopback" 1 "names no token" \
+  -- "$BIN" serve-http --host 127.0.0.1 --port 18766
+# …and the pre-flight agrees. The two agreeing is the property that makes the
+# exit code worth gating a deployment pipeline on.
+check "config check refuses an empty bearer" 1 "names no token" -- "$BIN" config-check
+export UNDERCROFT_MCP_HTTP_TOKEN="   "
+check "http refuses a whitespace token on loopback" 1 "names no token" \
+  -- "$BIN" serve-http --host 127.0.0.1 --port 18766
+# A token ending in whitespace can never be PRESENTED: HTTP strips a field
+# value's trailing whitespace, so the server started clean and refused every
+# client forever with a 401 naming no cause. `$(cat /run/secrets/token)` over
+# a file ending in a newline is how it happens. Found by driving the unit
+# through a real corpus, which is the only thing that could see it — every
+# unit test here compares the resolver to itself.
+export UNDERCROFT_MCP_HTTP_TOKEN="e2e-secret-token
+"
+check "http refuses a token ending in a newline" 1 "ends in whitespace" \
+  -- "$BIN" serve-http --host 127.0.0.1 --port 18766
+# Leading and INTERNAL whitespace ARE presentable (measured: both answer 200),
+# so they are values and must NOT be refused — the guard is exactly as wide as
+# the defect, which a `trim() != value` version of it would not have been.
+export UNDERCROFT_MCP_HTTP_TOKEN=" e2e secret"
+check "config check accepts a presentable token with whitespace in it" 0 "" -- "$BIN" config-check
 export UNDERCROFT_MCP_HTTP_TOKEN="e2e-secret-token"
 "$BIN" serve-http --host 127.0.0.1 --port 18765 &
 HTTP_PID=$!

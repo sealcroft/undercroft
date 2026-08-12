@@ -174,10 +174,19 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
         // arm the variable fell to `_ => Ok(None)` and `config check`
         // reported "no parse to run; the consumer validates it", when the
         // consumer validated nothing at all.
+        // …through `declared_endpoint`, NOT `require_secure_transport`
+        // directly. The policy call alone answered the wrong question for an
+        // empty value: it parses the string, fails, and reports an
+        // unparseable URL as CLEARTEXT — so `config check` refused
+        // `UNDERCROFT_OTLP_ENDPOINT=` by telling the operator to use https
+        // about a value naming no host, while the exporter read the same
+        // value as unset and started with traces silently off. Both callers
+        // hold the one resolver now, which is the only way a pre-flight and a
+        // run cannot disagree.
         "UNDERCROFT_OTLP_ENDPOINT" => {
-            undercroft_net::require_secure_transport("the OTLP collector", raw)
+            undercroft_net::declared_endpoint("the OTLP collector", Some(raw))
                 .map_err(|e| e.to_string())
-                .and_then(|()| described("traces export to this collector".into()))
+                .and_then(|_| described("traces export to this collector".into()))
         }
         // The five CA pins share one resolver, and its refusal is the one
         // that matters most here: a pin that does not load un-pins a hop.

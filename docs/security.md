@@ -140,6 +140,13 @@ tenant*:
    non-loopback bind, gates every authenticated route (MCP and REST).
    Proves the caller reached the right server; it does not distinguish
    vaults, so on its own whoever holds it can address every vault.
+   Since 1.1.0 a declaration that **names no token** refuses to start rather
+   than silently serving without a gate (which on a loopback bind meant every
+   process on the host), and so does one ending in **whitespace** — HTTP
+   strips a header value's trailing whitespace, so such a token can never be
+   presented and the server would refuse every client forever with an
+   unexplained 401. Neither is trimmed for you: that would authenticate a key
+   you did not declare.
 2. **Per-vault assertion** (`UNDERCROFT_ASSERTION_SECRET`, optional — but a
    declaration that names no secret **refuses to start** since 1.1.0, rather
    than silently disabling this whole layer; unset it to decline it) — when

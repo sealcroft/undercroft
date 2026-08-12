@@ -124,6 +124,17 @@ fn check_one(name: &str, raw: &str) -> Finding {
                 .map(|()| "tier-2 advisory screen, toward quarantine only".into())
                 .map_err(|e| e.to_string()),
         ),
+        // Its CORRECTNESS is uncheckable — any non-empty string is a
+        // well-formed token and only a client can say whether it is the right
+        // one. Its EMPTINESS is not, and that was the whole of ROADMAP O22:
+        // an empty declaration served /mcp and /v1 to any caller on the
+        // loopback host while the operator's configuration said a bearer was
+        // required. Two different questions, and the exemption this replaces
+        // answered both with "a credential, not a syntax".
+        "UNDERCROFT_MCP_HTTP_TOKEN" => Some(
+            crate::http::resolve_mcp_token(Some(raw))
+                .map(|_| "bearer required on /mcp and /v1".into()),
+        ),
         _ => None,
     };
     if let Some(result) = owned {
@@ -164,17 +175,19 @@ fn check_one(name: &str, raw: &str) -> Finding {
 /// referenced by nothing at run time.
 #[cfg(test)]
 const PREFLIGHT_EXEMPT: &[(&str, &str)] = &[
-    // Opaque payload: any non-empty string is a well-formed value, and
-    // whether it is the RIGHT one can only be learned by decrypting a vault
-    // or being refused by a peer — which this command must not do.
+    // `UNDERCROFT_PASSPHRASE` was here, and then `UNDERCROFT_MCP_HTTP_TOKEN`
+    // was, and both were too broad in the same way: a credential's
+    // CORRECTNESS is uncheckable without decrypting a vault or being refused
+    // by a peer, but its EMPTINESS is checkable here and is always a failed
+    // interpolation. Listing the variable answered both questions with
+    // "cannot" — and the silent halves were key material written to disk and
+    // a bearer gate removed from a loopback server. Each has an arm now, and
+    // the both-directions half of the gate below is what forced these entries
+    // to be deleted rather than left to rot.
     //
-    // `UNDERCROFT_PASSPHRASE` was here too and it was too broad. Its
-    // CORRECTNESS is uncheckable; its EMPTINESS is not, and an empty
-    // declaration silently wrote key material to disk. Two different
-    // questions, and listing the variable answered both with "cannot".
-    // It has an arm now, so the both-directions half of the gate below is
-    // what forced this entry to be deleted rather than left to rot.
-    ("UNDERCROFT_MCP_HTTP_TOKEN", "a credential, not a syntax"),
+    // Nothing is exempt for being a credential any more. If a future one is,
+    // say which of the two questions is unanswerable and why.
+    //
     // Owned by a DIFFERENT BINARY. `undercroft config check` runs the
     // engine's resolvers; these are read by `undercroft-orchestrator`, which
     // has no pre-flight command of its own. Filed as ROADMAP O21 rather than

@@ -244,6 +244,34 @@ else
   fail "config check did not fail on a refused OTLP endpoint" "exit=$cc_code"
 fi
 
+# An EMPTY endpoint, which the four checks above are blind to and which the
+# fix for #8 left behind in both directions at once. The exporter read it
+# through a helper that maps empty to unset and started with traces silently
+# off; `config check` handed the same empty string to the transport policy,
+# which parses it, fails, and reports an unparseable URL as CLEARTEXT — so an
+# operator was told to configure https for a value naming no host.
+#
+# Both halves are asserted, and the second is why a bare "it refuses" check
+# would not have caught this: the pre-fix command DID refuse, with the wrong
+# diagnosis, so the DIAGNOSIS is the observable.
+empty_out=$(env UNDERCROFT_OTLP_ENDPOINT= "$BIN" stats 2>&1)
+empty_code=$?
+if [ "$empty_code" -eq 1 ] && printf '%s' "$empty_out" | grep -q "names no endpoint"; then
+  pass "an empty OTLP endpoint refuses to start rather than exporting nothing"
+else
+  fail "empty OTLP endpoint was read as unset" "exit=$empty_code out=$empty_out"
+fi
+
+ecc_out=$(env UNDERCROFT_OTLP_ENDPOINT= "$BIN" config check 2>&1)
+ecc_code=$?
+if [ "$ecc_code" -eq 1 ] \
+  && printf '%s' "$ecc_out" | grep -q "names no endpoint" \
+  && ! printf '%s' "$ecc_out" | grep -q "cleartext http to a non-loopback host ()"; then
+  pass "the pre-flight diagnoses an empty endpoint as a failed interpolation"
+else
+  fail "empty OTLP endpoint diagnosed as cleartext" "exit=$ecc_code out=$ecc_out"
+fi
+
 echo
 echo "telemetry e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

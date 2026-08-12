@@ -138,6 +138,20 @@ pub(crate) fn diag(level: DiagLevel, args: std::fmt::Arguments<'_>) {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+/// An env read that treats an empty declaration as unset.
+///
+/// **Correct only for the variables it is still used for, and that is the
+/// whole of its contract**: `UNDERCROFT_SERVICE_NAME` (a label with a
+/// documented default), `UNDERCROFT_OTLP_HEADERS` (`Tunes` — no headers is a
+/// working configuration) and `UNDERCROFT_LOG_FORMAT` (a vocabulary, where
+/// empty is a third spelling of the default). For each, falling back grants
+/// the conservative default and costs the operator nothing they declared.
+///
+/// It is **not** correct for an outward path or a secret — those are opaque
+/// payload, where empty can only be a failed interpolation and a fallback
+/// removes what was asked for. `UNDERCROFT_OTLP_ENDPOINT` was read through
+/// here and is now resolved by `undercroft_net::declared_endpoint`; do not
+/// bring it, or anything of its class, back to this function.
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.is_empty())
 }
@@ -229,7 +243,18 @@ fn real_init() -> Result<(), String> {
         .with_reader(prom)
         .with_resource(resource.clone());
 
-    let otlp_endpoint = env("UNDERCROFT_OTLP_ENDPOINT");
+    // **Not `env()`.** That helper maps an empty declaration to `None`, which
+    // for a label like `UNDERCROFT_SERVICE_NAME` is a harmless fallback to a
+    // default and here silently disabled the whole export — the operator
+    // declared a collector, got no traces, and got no signal either, four
+    // lines above a comment saying that is worse than refusing to start.
+    // `declared_endpoint` is the one resolver `undercroft config check` runs,
+    // so the pre-flight's verdict and this one cannot differ.
+    let otlp_endpoint = undercroft_net::declared_endpoint(
+        "the OTLP collector",
+        std::env::var("UNDERCROFT_OTLP_ENDPOINT").ok().as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
     let mut tracer_provider: Option<TracerProvider> = None;
 
     // OTLP carries traces, exported synchronously per span (no async
