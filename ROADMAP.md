@@ -853,7 +853,7 @@ without an integrity verdict, and `verify` must stay green across it.
 doing, that is a decision with an argument and belongs here in writing rather
 than as an item that quietly never moves.
 
-### O10 — the former-name trace verifier is invoked by nothing
+### O10 — CLOSED 2026-08-12: the trace verifier is tracked, invoked, and probes itself
 `.handover/verify-no-trace.py` is the only check the tree has for the six
 file-content classes of the former project name (Latin, truncated root,
 non-Latin script, base64, mythic identity, inside a certificate). It is run
@@ -901,6 +901,52 @@ and the premise probe fails rather than passing vacuously.
 
 **Residual, the same one O9 carries:** a preflight in `tests/battery.sh` gates
 a local run and nothing on a pull request until O9 lands.
+
+**CLOSED, and the residual above is gone with it** — O9 landed, so `ci.yml`
+runs `--preflight-only` and this gates a pull request.
+
+`tests/no-trace/verify.py` is tracked, and the seventh preflight invokes it
+**in a container** with the tracked list piped in, so the image needs neither
+`git` nor an `apt-get`. Docker absent is a FAILURE, not a skip.
+
+**Both constraints the entry named are met and were verified by running, not
+by reading.** Every needle is assembled from fragments at run time, so the
+file holds no matchable literal — proved by scanning the scanner itself, which
+reports **0 hits**. And `probe()` runs before any scan: each pattern must fire
+on its own synthesized positive and must NOT fire on clean control text that
+deliberately includes the ordinary English word sharing the root. An empty
+pattern set is a hard failure.
+
+**Three counterfactuals executed:** a planted known-positive is caught at
+file:line (the preflight plants one on every run, before it trusts the
+scanner); the scanner finds nothing in itself; and with the pattern set
+emptied the preflight fails with *"the pattern set is EMPTY — this scanner
+would report any tree clean"* rather than passing vacuously.
+
+**Three defects of my own while closing it**, all found by running:
+
+1. The self-test's `if !` was inverted — it reported a working scanner as
+   broken. Inverted gates are the one kind that fail loudly, which is the only
+   reason this was cheap.
+2. The plant was written to a `mktemp -d` path and passed as a second Docker
+   mount. A Git Bash temp path does not resolve through `MSYS_NO_PATHCONV`, so
+   the file did not exist in the container and the scanner "found nothing" —
+   **a self-test that silently tested an empty directory**, the exact shape it
+   exists to prevent. It is written inside the mounted repo now.
+3. The failure headline said *"the former name is present in tracked
+   content"* for a PREMISE failure. A disarmed scanner is not a dirty tree,
+   and a message that misdescribes its own situation is this project's most
+   expensive artifact. It branches on the output now.
+
+**One gap found and NOT closed, recorded rather than absorbed:** the original
+skips `.pdf` via `SKIP_BIN` and the port keeps that, so the **Flate-compressed
+content stream** class — the one `CLAUDE.md` records as having passed a clean
+`grep` across 17 historical PDF blobs — is *not* covered by this scanner. The
+six classes in the entry's own list are the five text patterns plus the
+certificate; PDFs were never among them. Closing it means decompressing every
+`/FlateDecode` stream, which is a real dependency (`zlib` is stdlib, so it is
+tractable) and a separate decision about scope. Filed as **O26** so the
+absence is a decision with an argument rather than a silence.
 
 ### O11 — CLOSED 2026-08-10: the orphan-label leg now covers drawers too
 Raised by the round-four sweep as a defect; **reclassified here as an open
@@ -1439,6 +1485,36 @@ MCP.
 `/v1` on both sides of a rotation, and the CLI and the route are shown to
 agree on one attestation — the same document, the same verdict, from both
 doors.
+
+---
+
+### O26 — the trace scanner does not look inside PDFs
+
+Found while closing O10, by reading what its scanner skips rather than what it
+claims. `SKIP_BIN` excludes `.pdf`, so `tests/no-trace/verify.py` never opens
+one — and `CLAUDE.md` records the instance that matters: **17 historical PDF
+blobs passed a clean `grep` while carrying the former name inside
+Flate-compressed content streams**, invisible to a byte scan and plainly
+visible to anyone who opened the file. The rule that lesson produced is that
+such a claim must *decompress rather than grep*, and the scanner that
+implements the rule does not decompress.
+
+The six classes O10's entry lists are the five text patterns plus the
+certificate; PDFs were never among them, so this is a gap in the SCANNER's
+reach rather than a regression in it. `architecture/pdf/` carries eleven
+tracked PDFs today.
+
+**Shape of the fix.** Walk each tracked `.pdf` for `stream`/`endstream` pairs
+whose dictionary declares `/FlateDecode`, `zlib.decompress` each (stdlib, so
+no new dependency), and run the same needle set over the result. Tolerate
+failures per stream rather than aborting — a malformed or
+otherwise-encoded stream must be *reported as unexamined*, never skipped
+silently, or this reintroduces the defect one level down.
+
+**Gate:** the premise probe gains a synthesized PDF — a minimal object with a
+Flate-compressed stream containing a planted needle — which must be caught;
+and a count of streams examined versus streams skipped, printed on every run,
+so "0 hits" is never read as "0 hits in everything".
 
 ---
 

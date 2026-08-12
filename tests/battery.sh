@@ -215,6 +215,74 @@ else
   echo "ok    counts by pairing; a replayed tail is named, not absorbed"
 fi
 
+# ---------------------------------------------------------------------------
+# The former-name trace check, INVOKED (ROADMAP O10).
+#
+# `tests/no-trace/verify.py` covers six file-content classes a plain grep
+# cannot: a non-Latin spelling sharing no byte with the Latin one, a truncated
+# root used as an identifier stem, base64 inside a certificate, and the
+# identity carried without the name. It used to live in a gitignored directory
+# and was run BY HAND — so a fresh clone did not carry it and nothing invoked
+# it. A verifier nobody runs is a verifier you do not have, and the instance is
+# on record: a comment added to explain the derived-name defect quoted the
+# former name, the verifier would have caught it, and the battery was green.
+#
+# In a CONTAINER, because a gate needing Python on the host is a gate that does
+# not run on the next machine. The tracked list is piped in so the image needs
+# no `git` and no `apt-get`.
+#
+# **Docker absent is a FAILURE, not a skip** — a preflight that skips reports
+# exactly what a clean tree reports, which is the whole defect class this file
+# exists to close.
+echo "═══ preflight: former-name trace ═══"
+if ! command -v docker >/dev/null 2>&1; then
+  echo "FAIL  docker is not available, so this check cannot run — that is a"
+  echo "      failure and not a skip: a scanner that did not run reports what a"
+  echo "      clean tree reports"
+  exit 1
+fi
+NOTRACE_IMG="python:3-slim"
+# The self-test first, on synthetic input: a known-positive file must be
+# CAUGHT. Its content is assembled here from fragments for the same reason the
+# scanner's needles are — this script is scanned too.
+# The plant lives INSIDE the repo (in gitignored `.battery/`) rather than in a
+# second mount: a Git Bash `mktemp -d` path passed through `MSYS_NO_PATHCONV`
+# does not resolve for Docker, so the file simply did not exist in the
+# container and the scanner "found nothing" — a self-test that silently tested
+# an empty directory, which is the exact shape it exists to prevent.
+mkdir -p .battery
+NOTRACE_PROBE=".battery/notrace-probe.md"
+printf 'a clean line\nthe %s%s%s name\n' "mne" "mos" "yne" > "$NOTRACE_PROBE"
+# NOTE the sense: the scanner exits NON-ZERO when it finds something, so
+# catching the plant is a FAILING exit and this `if` fires on exit ZERO. The
+# first version of this line had the `!` and reported a working scanner as
+# broken — an inverted gate, which is the one kind that fails loudly rather
+# than silently, and the only reason it was cheap.
+if git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i \
+     -v "$(pwd):/r" -w /r "$NOTRACE_IMG" \
+     python tests/no-trace/verify.py --stdin "$NOTRACE_PROBE" >/dev/null 2>&1; then
+  echo "FAIL  the scanner did not catch a planted known-positive — it cannot be believed"
+  rm -f "$NOTRACE_PROBE"
+  exit 1
+fi
+rm -f "$NOTRACE_PROBE"
+# …then the tree itself.
+NOTRACE_OUT=$(git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i \
+  -v "$(pwd):/r" -w /r "$NOTRACE_IMG" python tests/no-trace/verify.py --stdin 2>&1)
+if [ $? -ne 0 ]; then
+  # Two different failures share this exit code, and saying the wrong one is
+  # its own defect: a disarmed scanner is not a dirty tree.
+  case "$NOTRACE_OUT" in
+    *"PREMISE FAILED"*)
+      echo "FAIL  the trace scanner cannot be believed — it did not check what it claims:" ;;
+    *)
+      echo "FAIL  the former name is present in tracked content:" ;;
+  esac
+  echo "$NOTRACE_OUT" | sed 's/^/      /'
+  exit 1
+fi
+echo "ok    ${NOTRACE_OUT#*files scanned: }" | sed 's/  (patterns probed/ files scanned (patterns probed/' | head -1
+
 echo "═══ preflight: ROADMAP headings ═══"
 ROADMAP_DRIFT=$(awk '
   function flush() {

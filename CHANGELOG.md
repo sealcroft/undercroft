@@ -2,6 +2,59 @@
 
 ## Unreleased — 1.1.0
 
+### the trace verifier is tracked, invoked, and probes itself
+
+ROADMAP **O10**, taken with O15 because both own `tests/battery.sh` and
+landing scanners one at a time is how this tree got two differently-broken
+ones.
+
+The former-name trace check covered six file-content classes a plain grep
+cannot see — a non-Latin spelling sharing no byte with the Latin one, a
+truncated root used as an identifier stem, base64 inside a certificate, the
+identity carried without the name. It was run **by hand**, from a gitignored
+directory a fresh clone does not carry, invoked by no suite, no preflight and
+no workflow. The instance is on record: a comment added to explain the
+derived-name defect **quoted the former name**, this check would have caught
+it, and the eight-suite battery was green across it.
+
+`tests/no-trace/verify.py` is tracked now and a seventh preflight invokes it
+**in a container** — a gate needing Python on the host is a gate that does not
+run on the next machine — with the tracked list piped in so the image needs
+neither `git` nor an `apt-get`. **Docker absent is a failure, not a skip.**
+
+Both constraints the entry named are met, and both were verified by running
+rather than reading. Every needle is assembled from fragments at run time, so
+the file holds no matchable literal: it **scans itself and reports 0 hits**,
+rather than being excluded by path — which would be the unfalsifiable
+second direction round three found. And a `probe()` runs before any scan:
+every pattern must fire on its own synthesized positive and stay silent on
+clean control text that deliberately includes the ordinary English word
+sharing the root.
+
+Three counterfactuals executed: a planted known-positive is caught at
+file:line (the preflight plants one on **every** run before trusting the
+scanner); the scanner finds nothing in itself; and with the pattern set
+emptied it fails with *"the pattern set is EMPTY — this scanner would report
+any tree clean"*.
+
+Three defects of my own, all found by running:
+
+1. The self-test's `if !` was inverted — a working scanner reported as broken.
+2. The plant was written to a `mktemp -d` path and passed as a second Docker
+   mount; a Git Bash temp path does not resolve through `MSYS_NO_PATHCONV`, so
+   the file never existed in the container and the scanner "found nothing" —
+   **a self-test that silently tested an empty directory**, the exact shape it
+   exists to prevent. It is written inside the mounted repo now.
+3. The failure headline said *"the former name is present"* for a PREMISE
+   failure. A disarmed scanner is not a dirty tree; it branches on the output.
+
+**One gap found and deliberately not closed:** the scanner skips `.pdf`, so
+the Flate-compressed content-stream class — the one `CLAUDE.md` records as
+having passed a clean `grep` across 17 historical PDF blobs — is unexamined.
+That class was never among the six, so it is a gap in reach rather than a
+regression, and it is filed as **O26** with its shape and gate rather than
+left as a silence.
+
 ### the battery's own count is read by pairing, and a replayed tail is named
 
 ROADMAP **O15**, taken first because the dependency map says so: every unit's

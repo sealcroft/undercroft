@@ -1305,7 +1305,7 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the six host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the seven host-side preflights
 and no suite**, which is what CI invokes. The script is the one thing that
 runs on the host rather than in a container, and it has to be: it *drives*
 Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
@@ -1766,8 +1766,17 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   So: any claim that a string is gone must **decompress rather than grep**,
   must cover **non-Latin scripts and truncated roots**, must hunt the
   **identity** as well as the spelling, and must ask what the TOOLING DERIVES
-  from the environment. `.handover/verify-no-trace.py` covers the six classes
-  a file-content scan can reach and fails on any hit; class 5 above is
+  from the environment. `tests/no-trace/verify.py` covers the six classes a
+  file-content scan can reach and fails on any hit. It is **tracked and run by
+  a preflight, in a container** since O10 — it was gitignored and hand-run
+  before, so a fresh clone did not carry it and nothing invoked it, which is
+  how a comment quoting the former name shipped under a green battery. Its
+  needles are assembled from fragments so it scans ITSELF clean rather than
+  being excluded by path, and a premise probe fires every pattern on a
+  known-positive (and requires silence on clean control text) before any zero
+  is believed. **PDF content streams are outside its reach** — it skips
+  `.pdf`, so the Flate-compressed class this very rule was written about is
+  unexamined; filed as O26 rather than left implied. Class 5 above is
   **outside its reach by construction** and needs a different mechanism —
   which is the compose preflight, not a wider regex. Do not "extend" the
   verifier to cover it; extend the QUESTION.
