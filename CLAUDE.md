@@ -1160,14 +1160,22 @@ docker compose run --rm test          # cargo unit + integration tests (722 run,
                                       # error: nobody re-derives a number that
                                       # looked right last time. Pair each target
                                       # HEADER with the result that follows it —
-                                      # 18 targets, 11 binaries + 7 doc-tests —
+                                      # 20 targets, 12 binaries + 8 doc-tests —
                                       # and treat an orphan as a PREMISE FAILURE,
                                       # since it is the only visible symptom of
-                                      # the replay. `tests/battery.sh`'s own
-                                      # summary sums the file and inherits this;
-                                      # it is informational (the script decides on
-                                      # EXIT CODES, never on parsed output, by
-                                      # design) and is filed as ROADMAP O15.
+                                      # the replay. **`tests/battery.sh` DOES
+                                      # this now (O15, closed 2026-08-12)**: its
+                                      # `test_summary` pairs headers with results
+                                      # and prints a loud PREMISE FAILURE naming
+                                      # the orphan count, so a replayed tail is
+                                      # reported rather than absorbed. It stays
+                                      # informational — the script decides on EXIT
+                                      # CODES, never on parsed output, by design —
+                                      # but the number it prints is now the one
+                                      # you can copy here. A host-side preflight
+                                      # exercises the reader itself on a synthetic
+                                      # replayed log, because the summary had
+                                      # never been checked by anything.
                                       # The 4 ignored are 3 measurements needing
                                       # testdata/*_50k.txt plus one in lib.rs. Run
                                       # them with `cargo test --release -- --ignored`:
@@ -1297,7 +1305,7 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the five host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the six host-side preflights
 and no suite**, which is what CI invokes. The script is the one thing that
 runs on the host rather than in a container, and it has to be: it *drives*
 Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and

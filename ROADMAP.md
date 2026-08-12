@@ -1317,7 +1317,7 @@ is named here rather than folded in silently, and it wants its own argument.
 
 ---
 
-### O15 — the battery's own test count over-reports by a replayed tail
+### O15 — CLOSED 2026-08-12: the count is read by pairing, and a replay is named
 Found while counting the tree for O13's governance update, which is the only
 way this class ever gets found: the number is only wrong when someone counts.
 
@@ -1371,6 +1371,41 @@ stop being able to report that the stream was duplicated at all.
 **Gate:** the summary reports 694/4 for the run whose log is on disk now, and
 a synthetic log with a hand-appended duplicate tail reports the same figure as
 the same log without it — plus the orphan counted and named.
+
+**CLOSED as filed, and the gate is the deliverable.** `tests/battery.sh` grew
+a `test_summary` function that pairs each `Running`/`Doc-tests` header with the
+result beneath it and sums only paired results; an unpaired result is printed
+as a loud **PREMISE FAILURE** naming the orphan count, never dropped. A reader
+that examined nothing says so instead of printing a clean zero.
+
+It is a FUNCTION rather than inline awk because a new host-side preflight runs
+**the same code** on synthetic input: a clean three-target log, the same log
+with a duplicated tail appended, and `/dev/null`. A gate that re-implements
+what it checks agrees with itself by construction — this script's own first
+ROADMAP-heading check shipped broken for exactly that reason.
+
+**Counterfactual run, not assumed:** with the orphan branch emptied so replays
+are absorbed as before, the preflight fails with *"the replay was absorbed
+silently"* and the battery exits 1.
+
+**Two defects of my own while closing it**, both caught by mechanisms rather
+than care, and both the shapes this file already documents:
+
+1. The failure path was `FAIL=$((FAIL + 1))` — a counter this script does not
+   have. Every other preflight ends in `exit 1`. So the gate would have
+   printed its complaint and let the battery continue: **a checker that cannot
+   fail, inside the gate written to catch that class.** Found by grepping how
+   the neighbouring preflights actually fail rather than assuming.
+2. The block was anchored on `echo "═══ preflight: line endings ═══"` and
+   inserted above it — which orphaned that preflight's twelve-line explanatory
+   comment onto my section. *Read what is ADJACENT to the anchor.* Relocated
+   after the line-endings preflight, with the rejoining asserted before the
+   move was written.
+
+**Measured at this tree:** the log now reports `722 passed, 0 failed, 4
+ignored over 20 targets`, which matches a hand-derived pairing exactly. The 20
+is 12 binaries + 8 doc-tests, counted from the log — `undercroft-config` added
+one of each, which is also why the previously-recorded 18 was already stale.
 
 ---
 

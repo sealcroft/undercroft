@@ -115,6 +115,106 @@ echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 # `ROADMAP.md`, so a `cargo test` cannot read it. Cheap, and it makes "do not
 # forget" mechanical instead of remembered — which is this project's whole
 # position on inventories versus prose.
+# ---------------------------------------------------------------------------
+# The `test` suite's count, read by PAIRING rather than by summing (ROADMAP
+# O15).
+#
+# `docker compose run` SOMETIMES replays the tail of the container's stream,
+# so `.battery/test.log` ends with a duplicated block. Summing every
+# `test result:` line then reports a run that executed 694/4 as 1016/8. It is
+# INTERMITTENT — two batteries the same hour on the same tree produced one
+# duplicated log and one clean one — which is worse than a constant error,
+# because nobody re-derives a number that looked right last time.
+#
+# So: pair each target HEADER (`Running …` / `Doc-tests …`) with the result
+# that follows it, and sum only paired results. A duplicated tail has no
+# header above it, so its result lines are ORPHANS.
+#
+# **An orphan is reported as a PREMISE FAILURE, never dropped.** It is the
+# only visible symptom of the replay; a reader that quietly ignored one would
+# be unable to say the stream had been duplicated at all, which is the same
+# defect one level down from the one this fixes.
+#
+# A function, not inline awk, because the gate below runs the SAME code on
+# synthetic input. A gate that re-implements what it checks agrees with itself
+# by construction — this file's own first ROADMAP-heading check shipped broken
+# for exactly that reason.
+test_summary() { # test_summary <log>
+  awk '
+    /^[[:space:]]*(Running|Doc-tests)[[:space:]]/ { hdr = 1; next }
+    /^test result:/ {
+      if (hdr) {
+        for (i = 1; i <= NF; i++) {
+          if ($(i+1) ~ /^passed/)  p += $i
+          if ($(i+1) ~ /^failed/)  f += $i
+          if ($(i+1) ~ /^ignored/) g += $i
+        }
+        t++; hdr = 0
+      } else { orphan++ }
+    }
+    END {
+      if (t == 0 && orphan == 0) {
+        printf "no result lines found — this reader examined nothing"
+        exit
+      }
+      printf "%d passed, %d failed, %d ignored over %d targets", p, f, g, t
+      if (orphan > 0)
+        printf "  ** PREMISE FAILURE: %d orphan result line(s) — the log tail was replayed; this count is not trustworthy (ROADMAP O15) **", orphan
+    }' "$1" 2>/dev/null
+}
+
+# The gate for it, run host-side because no image carries this script. Both
+# arms come from the filed shape: a log reports the same figure with and
+# without a duplicated tail, and the orphan is counted and NAMED.
+echo "═══ preflight: the test-count reader ═══"
+SUM_TMP="$(mktemp -d)"
+cat >"$SUM_TMP/clean.log" <<'SUMEOF'
+     Running unittests src/lib.rs (target/release/deps/a-1)
+test result: ok. 10 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+     Running tests/cli.rs (target/release/deps/b-2)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+   Doc-tests undercroft_core
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
+# The replay: the tail block again, with NO header above it.
+cp "$SUM_TMP/clean.log" "$SUM_TMP/replayed.log"
+cat >>"$SUM_TMP/replayed.log" <<'SUMEOF'
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
+SUM_CLEAN=$(test_summary "$SUM_TMP/clean.log")
+SUM_REPLAY=$(test_summary "$SUM_TMP/replayed.log")
+SUM_EMPTY=$(test_summary /dev/null)
+SUM_FAIL=0
+case "$SUM_CLEAN" in
+  "16 passed, 0 failed, 2 ignored over 3 targets") ;;
+  *) echo "FAIL  the reader miscounts a clean log: $SUM_CLEAN"; SUM_FAIL=1 ;;
+esac
+case "$SUM_REPLAY" in
+  "16 passed, 0 failed, 2 ignored over 3 targets"*) ;;
+  *) echo "FAIL  a replayed tail changed the count: $SUM_REPLAY"; SUM_FAIL=1 ;;
+esac
+case "$SUM_REPLAY" in
+  *"PREMISE FAILURE: 1 orphan"*) ;;
+  *) echo "FAIL  the replay was absorbed silently: $SUM_REPLAY"; SUM_FAIL=1 ;;
+esac
+# A reader that examined nothing must say so rather than print a clean zero.
+case "$SUM_EMPTY" in
+  *"examined nothing"*) ;;
+  *) echo "FAIL  an empty log reported a count: $SUM_EMPTY"; SUM_FAIL=1 ;;
+esac
+rm -rf "$SUM_TMP"
+if [ "$SUM_FAIL" -ne 0 ]; then
+  echo "      the summary is reporting-only and decides nothing, but it is the"
+  echo "      number a session copies into CLAUDE.md — an unreproducible doc claim"
+  # `exit 1`, like every other preflight here. The first version of this line
+  # incremented a `FAIL` counter that does not exist in this script, so the
+  # gate would have printed its complaint and let the battery continue — a
+  # checker that cannot fail, inside the gate written to catch that class.
+  exit 1
+else
+  echo "ok    counts by pairing; a replayed tail is named, not absorbed"
+fi
+
 echo "═══ preflight: ROADMAP headings ═══"
 ROADMAP_DRIFT=$(awk '
   function flush() {
@@ -381,12 +481,7 @@ for i in "${!NAMES[@]}"; do
   # not measure what it appears to, which is the habit this file exists to
   # break. Summed instead.
   if [ "$n" = "test" ]; then
-    detail=$(awk '/^test result:/ { for (i=1;i<=NF;i++) {
-                    if ($(i+1) ~ /^passed/) p+=$i
-                    if ($(i+1) ~ /^failed/) f+=$i
-                    if ($(i+1) ~ /^ignored/) g+=$i } }
-                  END { printf "%d passed, %d failed, %d ignored (summed over %s targets)", p, f, g, "all" }' \
-             ".battery/$n.log" 2>/dev/null)
+    detail=$(test_summary ".battery/$n.log")
   else
     # Widened past `…e2e results:` when `obs-config` and `site` joined the
     # battery — the old pattern hard-coded `e2e` and silently printed nothing

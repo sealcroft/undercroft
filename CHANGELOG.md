@@ -2,6 +2,56 @@
 
 ## Unreleased — 1.1.0
 
+### the battery's own count is read by pairing, and a replayed tail is named
+
+ROADMAP **O15**, taken first because the dependency map says so: every unit's
+governance step reports a test count, and this defect corrupted it
+**intermittently** — two batteries the same hour on the same tree produced one
+duplicated log and one clean one. A figure that is sometimes right is harder
+to catch than one that is always wrong, because nobody re-derives a number
+that looked plausible last time.
+
+`docker compose run` sometimes replays the tail of the container's stream, so
+`.battery/test.log` ends with a duplicated block whose result lines have no
+`Running`/`Doc-tests` header above them. Summing every `test result:` line
+reported a run that executed 694/4 as **1016/8**.
+
+`tests/battery.sh` now pairs each target header with the result beneath it and
+sums only paired results. An unpaired result is printed as a loud **PREMISE
+FAILURE** naming the orphan count — never dropped, because it is the only
+visible symptom of the replay and a reader that absorbed it could no longer
+report that the stream had been duplicated at all. A reader that examined
+nothing says so rather than printing a clean zero.
+
+**The gate is the deliverable, and it is why this is a function rather than
+inline awk:** a new host-side preflight runs the SAME code on synthetic input
+— a clean three-target log, that log with a duplicated tail appended, and
+`/dev/null`. A gate that re-implements what it checks agrees with itself by
+construction, which is how this script's own first ROADMAP-heading check
+shipped broken. Counterfactual run rather than assumed: with the orphan branch
+emptied, the preflight fails with *"the replay was absorbed silently"* and the
+battery exits 1. CI already invokes `--preflight-only`, so it binds a pull
+request with no wiring.
+
+Two defects of my own while closing it, both caught by mechanisms:
+
+1. The failure path was `FAIL=$((FAIL + 1))` — a counter this script does not
+   have; every other preflight ends in `exit 1`. The gate would have printed
+   its complaint and let the battery continue: **a checker that cannot fail,
+   inside the gate written to catch that class.** Found by reading how the
+   neighbouring preflights actually fail instead of assuming.
+2. The block was anchored on the line-endings preflight's `echo` and inserted
+   above it, orphaning that preflight's twelve-line comment onto my section.
+   *Read what is adjacent to the anchor.* Relocated, with the comment
+   rejoining its own `echo` asserted before the move was written.
+
+Measured at this tree: `722 passed, 0 failed, 4 ignored over 20 targets`,
+matching a hand-derived pairing exactly. The 20 is 12 binaries + 8 doc-tests,
+counted from the log — `undercroft-config` added one of each, which is also
+why the recorded 18 was already stale. The preflight count in `CLAUDE.md` goes
+five → six for the same reason: a number that is written down is a number that
+has to be re-counted.
+
 ### the promise six surfaces made is kept, by sharing the parses rather than narrowing it
 
 ROADMAP **O24**, and the thirteenth crate.
