@@ -1958,7 +1958,7 @@ binding or opening, which is exactly the distinction the `validated` vs
 
 ---
 
-### O20 — the orchestrator emits no telemetry at all, and nothing recorded that
+### O20 — CLOSED 2026-08-12: the control plane emits telemetry, on its own listener
 
 Found while closing round-four #8, and filed rather than fixed because it is a
 different question with a different answer.
@@ -1986,6 +1986,80 @@ all. Bolting it on would have doubled the unit and hidden the argument.
 behind the same bearer as the engine, `e2e-orchestrator.sh` asserts a
 non-empty exposition, and `parity.rs` records the decision either way — so a
 future reader finds a ruling rather than an absence.
+
+---
+
+**CLOSED, and the maintainer's ruling is what shaped it.** `/metrics` is a
+**separate listener** (`UNDERCROFT_ORCH_METRICS_ADDR`, unset = off), not a path
+on the serving port. The reason is structural and was measured rather than
+assumed: `proxy::serve` binds ONE `Server::http(addr)` for `/healthz`, `/t/*`,
+`/admin/*` and `/ui`, and a fleet must expose that address to tenants — so a
+`/metrics` path there is network-exposed in every real deployment and
+"loopback is the gate" is a comfort production never gets. Splitting it lets
+the data plane sit on `0.0.0.0:8900` while metrics sit on `127.0.0.1:9900` for
+a sidecar scraper, and it is what makes `--read-replica` work unchanged: the
+replica resolves no admin token and needs none.
+
+Loopback needs no token; **anything else refuses to start** without
+`UNDERCROFT_ORCH_METRICS_TOKEN`, mirroring the engine's refuse-to-bind rule
+rather than inventing a second posture. Deliberately NOT the admin token: that
+credential creates tenants and reads engine bearers and assertion secrets, and
+a scrape target holds its credential in a file on every Prometheus host.
+
+**This entry's own filed gate line was unimplementable** — "behind the same
+bearer as the engine" named a credential the orchestrator does not have — and
+is superseded above.
+
+**Four counters and a histogram, `undercroft_orch_`-prefixed**, each an event
+no engine can see: `orch_requests_total{route,status}` (route is a CLASS from a
+closed set, never the URL — the forwarded query carries `wing=`/`room=`),
+`orch_auth_rejections_total{kind}` (three different secrets the engine's single
+`{kind="bearer"}` would have merged), `orch_rate_limited_total` (an operator
+who declared a limit had NO surface saying it fired), and
+`orch_engine_calls_total{outcome}` (including `refused`, which happens before a
+byte moves). The prefix is load-bearing: the shipped dashboard aggregates
+several engine series with no `job` filter and the route strings `healthz`,
+`ui` and `metrics` collide exactly between the two binaries.
+
+**No tenant-shaped label anywhere**, asserted in the suite. Tenant id, vault
+name and tenant name are identifiers whose value set is created BY USE, which
+the per-wing codebook precedent puts on a query surface rather than a metric
+label; per-tenant figures are already on `/admin/tenants/{id}/stats`.
+
+**Gauges deliberately omitted.** The observable-gauge callback hard-codes
+`KeyValue::new("vault", …)`, so a control-plane gauge would smuggle an
+instance name into a field named `vault`. Replication lag stays on `/healthz`
+where it already is. Closing that properly means a second gauge shape in
+`undercroft-obs` — filed as a follow-on rather than bodged here.
+
+**Three defects of my own, each caught by a mechanism:**
+
+1. **The binary never called `undercroft_obs::init()`.** Every emit site and
+   the listener were wired and the registry was never created, so `/metrics`
+   answered 503 *"build with --features telemetry"* on a binary that had the
+   feature. Caught by the e2e; the message conflated two causes and is
+   narrowed to the one it can mean.
+2. `histogram_record` was `pub(crate)` — caught at compile.
+3. **The ENGINE's `config check` had no arm for the two new variables**, caught
+   by O24's both-directions gate within minutes of classifying them. That gate
+   has now paid for itself twice.
+
+**Two residuals, stated:**
+
+- **No Prometheus scrape job or alert rules ship for the control plane.**
+  `deploy/observability/prometheus.yml` has one `job_name: undercroft` and
+  `alerts.yml:60` hard-codes `up{job="undercroft"}` with a message naming port
+  8765. A fleet must add its own job today. Adding one means adding rules, and
+  any rule needs an `alerts_test.yml` block or `obs-config` fails — a coherent
+  follow-on unit rather than a line here.
+- **The aggregate bound**, accepted on the maintainer's ruling and recorded
+  rather than engineered around: these are fleet aggregates, so at small fleet
+  sizes an aggregate approximates an individual — with two tenants, one who
+  knows their own load infers the other's by subtraction. Inherent to
+  publishing aggregates; the bound is fleet size and the mitigation is the
+  listener's gate. Suppressing by fleet size would make the metric surface
+  VARY with it, so dashboards and alerts that work at thirty tenants would
+  break at two.
 
 ---
 

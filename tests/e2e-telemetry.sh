@@ -123,6 +123,43 @@ grep -q 'vault=' <<<"$cout" \
 kill "$S4" 2>/dev/null
 wait "$S4" 2>/dev/null
 
+echo "== the CONTROL PLANE's metrics listener (ROADMAP O20) =="
+ORCH="${ORCH:-/build/release/undercroft-orchestrator}"
+[ -x "$ORCH" ] || ORCH=/src/target/release/undercroft-orchestrator
+export UNDERCROFT_ORCH_DB="$(mktemp -d)/orch.db"
+export UNDERCROFT_ORCH_KEY="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+export UNDERCROFT_ORCH_ADMIN_TOKEN="o20-admin-token-0123456789"
+
+# A NON-LOOPBACK metrics address without a token must refuse to start. This is
+# the whole reason the listener is separate: the orchestrator's serving port is
+# network-facing in every real fleet, so a `/metrics` path there could not be
+# gated by reachability. Asserted at the RUN, before any exposition question.
+out=$(UNDERCROFT_ORCH_METRICS_ADDR=0.0.0.0:9901 timeout 5 "$ORCH" serve --addr 127.0.0.1:18930 2>&1)
+if [ $? -ne 0 ] && grep -q "is required" <<<"$out"; then
+  pass "a networked metrics listener refuses to start without a token"
+else
+  fail "a networked metrics listener started ungated" "$out"
+fi
+
+# Loopback needs no token, and the exposition must carry the control plane's
+# OWN series — prefixed `undercroft_orch_` so they cannot blend with the
+# engine's in a dashboard that aggregates without a job filter.
+UNDERCROFT_ORCH_METRICS_ADDR=127.0.0.1:9902 "$ORCH" serve --addr 127.0.0.1:18931 >/tmp/orchm.log 2>&1 &
+OM=$!
+for _ in $(seq 1 60); do curl -sf http://127.0.0.1:18931/healthz >/dev/null 2>&1 && break; sleep 0.1; done
+# Drive traffic the control plane can actually count: a rejected tenant token.
+curl -s -o /dev/null -H "Authorization: Bearer nope" http://127.0.0.1:18931/t/search
+mout=$(curl -s http://127.0.0.1:9902/metrics)
+grep -q "# TYPE" <<<"$mout" && pass "the control plane exposes a Prometheus exposition"   || fail "no exposition from the metrics listener" "$mout$(cat /tmp/orchm.log)"
+grep -q "undercroft_orch_requests_total" <<<"$mout"   && pass "it carries the control plane's own request series"   || fail "orch_requests_total missing" "$mout"
+grep -q "undercroft_orch_auth_rejections_total" <<<"$mout"   && pass "a refused tenant token is counted at the hop that refused it"   || fail "orch_auth_rejections_total missing" "$mout"
+# The isolation rule: no tenant-shaped label anywhere.
+grep -qE "tenant=\"|vault=\"" <<<"$mout"   && fail "a tenant-shaped label reached the exposition" "$(grep -E 'tenant=|vault=' <<<"$mout" | head -3)"   || pass "no tenant-shaped label is exposed"
+# …and it must not answer on the SERVING port, which is the whole point.
+sc=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18931/metrics)
+[ "$sc" = "404" ] && pass "/metrics is not served on the data-plane port"   || fail "/metrics answered on the serving port ($sc)"
+kill "$OM" 2>/dev/null; wait "$OM" 2>/dev/null
+
 echo "== /metrics disabled (flag unset -> 404) =="
 UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
   "$BIN" serve-http --host 127.0.0.1 --port 8796 >/tmp/tserve2.log 2>&1 &

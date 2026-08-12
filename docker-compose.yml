@@ -188,7 +188,7 @@ services:
       target: builder
     entrypoint: ["bash", "-c"]
     command:
-      - "cargo build --release -p undercroft-cli --features telemetry && bash /src/tests/e2e-telemetry.sh"
+      - "cargo build --release -p undercroft-cli --features telemetry && cargo build --release -p undercroft-orchestrator --features telemetry && bash /src/tests/e2e-telemetry.sh"
     volumes:
       - ./tests/e2e-telemetry.sh:/src/tests/e2e-telemetry.sh:ro
 

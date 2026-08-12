@@ -972,6 +972,22 @@ Consequences that are binding, not advisory:
   contiguously it declares a variable called `UNDERCROFT_ORCH_`, the bare
   prefix, which the engine's own env-var inventory gate scans for and
   rejects. One gate's needle is another gate's input.
+  **Telemetry since O20**, behind its own `telemetry` feature (a pure `/v1`
+  client inherits nothing): four `undercroft_orch_*` counters and a histogram
+  for the events no engine can see — a refused tenant token, the rate screen
+  firing, a transport refusal that happens before a byte moves, and the
+  one-write-becomes-two-calls amplification of the drawer probe. **No
+  tenant-shaped label anywhere**, on the per-wing-codebook precedent: an
+  identifier whose value set is created BY USE belongs on a query surface, and
+  per-tenant figures are already on `/admin/tenants/{id}/stats`. The names are
+  `undercroft_orch_`-prefixed because the shipped dashboard aggregates several
+  engine series with no `job` filter and the route strings collide exactly.
+  **`/metrics` is a SEPARATE listener** (`UNDERCROFT_ORCH_METRICS_ADDR`),
+  which is a boundary rather than a drift from the engine: the engine's one
+  listener can legitimately be loopback-only, the control plane's cannot be
+  because tenants must reach it, so a `/metrics` path there would be
+  network-exposed in every real fleet. Loopback needs no token; anything else
+  refuses to start without `UNDERCROFT_ORCH_METRICS_TOKEN`.
   Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding),
@@ -1014,9 +1030,9 @@ Consequences that are binding, not advisory:
   version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all **79**
+  which inlines them and documents every layer plus all **81**
   `UNDERCROFT_*` variables the engine honours — 64 written out in full
-  across the env table's 60 rows, plus 15 siblings abbreviated to a
+  across the env table's 60 rows, plus 17 siblings abbreviated to a
   suffix inside the row that owns them (`_TOKENIZER` three times, one
   per model role), which is why grepping the page for full names
   undercounts it. (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
@@ -1135,8 +1151,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (722 run,
-                                      # 4 #[ignore]d = 726 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (723 run,
+                                      # 4 #[ignore]d = 727 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1192,7 +1208,7 @@ docker compose run --rm test          # cargo unit + integration tests (722 run,
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (335 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (107 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (36 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)

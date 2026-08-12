@@ -430,6 +430,36 @@ The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
 failure is a uniform 401. The CLI (`instance-add`, `tenant-create`,
 `migrate`, …) mirrors the admin plane for scripted use, plus `keygen`.
 
+**Observe the control plane** (ROADMAP O20, `--features telemetry` builds):
+
+```bash
+UNDERCROFT_ORCH_METRICS_ADDR=127.0.0.1:9900 undercroft-orchestrator serve
+```
+
+A **separate listener**, not a path on the serving port, and the reason is
+structural: the serving port carries `/t/*` and must be reachable by tenants,
+so a `/metrics` path there would be network-exposed in every real fleet.
+Splitting it lets the data plane sit on `0.0.0.0:8900` while metrics sit on
+loopback for a sidecar scraper — and it means a **read replica works
+unchanged**, since it has no admin credential and now needs none.
+
+Loopback needs no token. Any other address **refuses to start** without
+`UNDERCROFT_ORCH_METRICS_TOKEN` — deliberately not the admin token, which
+creates tenants and reads engine bearers, and which a scrape target would hold
+in a file on every Prometheus host.
+
+What it exports is **fleet-shaped, never tenant-shaped**: requests by route
+class and status, refused credentials by kind, the rate screen firing, and
+engine-call outcomes. There is no tenant, vault or tenant-name label — those
+identifiers are created by use, so they belong on a query surface, and
+per-tenant figures are already on `GET /admin/tenants/{id}/stats`. The series
+are `undercroft_orch_`-prefixed so they cannot blend with an engine's in a
+dashboard that aggregates without a job filter.
+
+Two things it does not do yet: no gauges (the shared gauge shape is
+vault-labelled, so replication lag stays on `/healthz`), and no scrape job or
+alert rules ship for it — a fleet adds its own.
+
 **Pre-flight the control plane before a restart**, exactly as you would an
 engine:
 

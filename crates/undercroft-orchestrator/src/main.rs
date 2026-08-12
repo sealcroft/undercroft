@@ -295,6 +295,25 @@ fn run() -> Result<()> {
         cli.command,
         Command::ConfigCheck { .. } | Command::Config { .. }
     );
+    // Telemetry comes up before anything is served (ROADMAP O20). It is a
+    // no-op without `--features telemetry`, and the guard is held for the
+    // process rather than dropped, because dropping it shuts the providers
+    // down.
+    //
+    // **Its own service name**: both binaries in this workspace defaulted to
+    // `"undercroft"`, so a fleet running an engine and a control plane under
+    // one env file produced traces that could not be told apart. A declared
+    // `UNDERCROFT_SERVICE_NAME` still wins.
+    //
+    // `config check` is exempt from a failure here for the same reason it is
+    // exempt from the engine-hop refusal below: a command whose job is
+    // diagnosing an environment that will not start is useless if it cannot
+    // start in one.
+    match undercroft_obs::init_as("undercroft-orchestrator") {
+        Ok(guard) => std::mem::forget(guard),
+        Err(e) if preflight => eprintln!("warning: telemetry disabled — {e}"),
+        Err(e) => return Err(anyhow::anyhow!(e)),
+    }
     match engine::init_transport() {
         Ok(()) => {}
         Err(e) if preflight => eprintln!("warning: engine hop unusable — {e}"),

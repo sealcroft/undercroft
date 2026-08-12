@@ -156,14 +156,22 @@ pub fn vault_request(
     } else {
         format!("{path}?{}", query.split('#').next().unwrap_or(""))
     };
-    let req = agent(&creds.url)?
-        .request(method, &path)
-        .set("Authorization", &format!("Bearer {}", &*creds.bearer))
-        .set(
-            "X-Vault-Assertion",
-            &mint_assertion(&creds.assertion_secret, vault),
-        )
-        .set("Content-Type", content_type);
+    // The transport refusal is an outcome no engine can see: it happens
+    // before a byte moves, so nothing downstream records it (ROADMAP O20).
+    let req = match agent(&creds.url) {
+        Ok(a) => a,
+        Err(e) => {
+            undercroft_obs::orch_engine_call("refused");
+            return Err(e);
+        }
+    }
+    .request(method, &path)
+    .set("Authorization", &format!("Bearer {}", &*creds.bearer))
+    .set(
+        "X-Vault-Assertion",
+        &mint_assertion(&creds.assertion_secret, vault),
+    )
+    .set("Content-Type", content_type);
     let result = if body.is_empty() && (method == "GET" || method == "DELETE") {
         req.call()
     } else {
@@ -173,9 +181,17 @@ pub fn vault_request(
         Ok(r) => r,
         // 4xx/5xx from the engine are still responses to relay.
         Err(ureq::Error::Status(_, r)) => r,
-        Err(ureq::Error::Transport(t)) => return Err(format!("engine unreachable: {t}")),
+        Err(ureq::Error::Transport(t)) => {
+            undercroft_obs::orch_engine_call("unreachable");
+            return Err(format!("engine unreachable: {t}"));
+        }
     };
     let status = resp.status();
+    // `ok` vs `status` rather than the code itself: a status label here would
+    // duplicate what the engine already counts, and the fact worth having at
+    // this hop is that ONE tenant write becomes TWO engine calls via the
+    // drawer probe — an amplification nothing else reports.
+    undercroft_obs::orch_engine_call(if status < 400 { "ok" } else { "status" });
     let content_type = resp.content_type().to_string();
     let mut body = Vec::new();
     use std::io::Read;

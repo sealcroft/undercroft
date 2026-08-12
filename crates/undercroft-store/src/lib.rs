@@ -193,6 +193,41 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
         "UNDERCROFT_ORCH_ADMIN_TOKEN" => undercroft_config::resolve_admin_token(Some(raw))
             .map_err(|e| e.to_string())
             .and_then(|_| described("bearer required on the orchestrator's /admin plane".into())),
+        // The control plane's metrics listener (O20). Reachable from here for
+        // the same reason the other three are — the parse lives in
+        // `undercroft-config`, which both binaries link — and the
+        // both-directions gate in `undercroft-cli` is what caught their
+        // absence the moment they were classified.
+        // The ADDRESS arm checks the TOKEN too: this command only iterates
+        // declarations that are SET, so a non-loopback address with no token
+        // declared would otherwise be invisible and the pre-flight would exit
+        // 0 for an environment that refuses to start.
+        "UNDERCROFT_ORCH_METRICS_ADDR" => undercroft_config::resolve_metrics_addr(Some(raw))
+            .and_then(|a| match a {
+                Some(a) => undercroft_config::resolve_metrics_token(
+                    &a,
+                    std::env::var("UNDERCROFT_ORCH_METRICS_TOKEN")
+                        .ok()
+                        .as_deref(),
+                )
+                .map(|t| match t {
+                    Some(_) => format!("control-plane metrics listener on {a}, behind a token"),
+                    None => format!("control-plane metrics listener on {a} (loopback, no token)"),
+                }),
+                None => Ok("no metrics listener".into()),
+            })
+            .map_err(|e| e.to_string())
+            .and_then(described),
+        // Checked against the ADDRESS it guards: "is a token required" is a
+        // question about the address, since loopback needs none and anything
+        // else does. Validating the string alone would miss the only rule
+        // that matters.
+        "UNDERCROFT_ORCH_METRICS_TOKEN" => undercroft_config::resolve_metrics_token(
+            &std::env::var("UNDERCROFT_ORCH_METRICS_ADDR").unwrap_or_default(),
+            Some(raw),
+        )
+        .map_err(|e| e.to_string())
+        .and_then(|_| described("bearer required on the control-plane metrics listener".into())),
         "UNDERCROFT_ORCH_RATE_LIMIT" => undercroft_config::resolve_rate_limit(Some(raw))
             .map_err(|e| e.to_string())
             .and_then(|n| {

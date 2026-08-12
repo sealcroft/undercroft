@@ -2,6 +2,91 @@
 
 ## Unreleased — 1.1.0
 
+### the control plane emits telemetry, on its own listener
+
+ROADMAP **O20** — the last of the pair O25 unblocked, and the maintainer's
+ruling is what shaped it.
+
+`crates/undercroft-orchestrator` had no `undercroft-obs` dependency at all: no
+`/metrics`, no OTLP, no spans. A tenant request proxied through `/t/*`
+appeared in an engine's telemetry with no record of the hop that routed it.
+
+**`/metrics` is a SEPARATE listener** (`UNDERCROFT_ORCH_METRICS_ADDR`, unset =
+off), not a path on the serving port, and the reason is structural rather than
+stylistic: `proxy::serve` binds ONE `Server::http(addr)` for `/healthz`,
+`/t/*`, `/admin/*` and `/ui`, and a fleet must expose that address to tenants
+— so a `/metrics` path there is network-exposed in every real deployment and
+"loopback is the gate" would be a comfort production never gets. Splitting it
+lets the data plane sit on `0.0.0.0:8900` with metrics on `127.0.0.1:9900` for
+a sidecar scraper, and it is what makes `serve --read-replica` work unchanged:
+the replica resolves no admin token and now needs none.
+
+Loopback needs no token; **any other address refuses to start** without
+`UNDERCROFT_ORCH_METRICS_TOKEN` — mirroring the engine's refuse-to-bind rule
+rather than inventing a second posture, and deliberately not the admin token,
+which creates tenants and reads engine bearers and would sit in a config file
+on every Prometheus host.
+
+**This differs from the engine deliberately and it is a boundary, not a
+drift**: the engine's single listener can legitimately be loopback-only, so
+path-gating `/metrics` behind its bearer is sufficient there. The control
+plane's cannot be.
+
+**Four counters and a histogram, `undercroft_orch_`-prefixed**, each an event
+no engine can see: requests by route CLASS and status (never the URL — the
+forwarded query carries `wing=`/`room=`), refused credentials by kind (three
+different secrets the engine's single `{kind="bearer"}` would have merged),
+the rate screen firing (an operator who declared a limit had **no surface
+saying it ever fired**), and engine-call outcomes including `refused`, which
+happens before a byte moves. The prefix is load-bearing: the shipped dashboard
+aggregates several engine series with no `job` filter and the route strings
+`healthz`, `ui`, `metrics` collide exactly between the two binaries.
+
+**No tenant-shaped label anywhere.** Tenant id, vault name and tenant name are
+identifiers whose value set is created BY USE, which the per-wing codebook
+precedent puts on a query surface rather than a metric label; per-tenant
+figures are already on `/admin/tenants/{id}/stats`. **Gauges are omitted**
+because the shared gauge callback hard-codes a `vault` label — replication lag
+stays on `/healthz` rather than being smuggled into a field named for
+something else.
+
+Verified over a **real fleet**: two tenants (`acme-corp`,
+`globex-industries`), an engine holding 1,360 mined drawers, the data plane on
+`0.0.0.0` and metrics on loopback. All four counters moved for real traffic,
+neither tenant's id, vault or NAME appears anywhere in the exposition,
+`/metrics` is absent from the data-plane port and the metrics port serves
+nothing else, and the engine's own exposition is unchanged and carries no
+`orch` series.
+
+**Four defects of my own, every one caught by a mechanism rather than by
+care:**
+
+1. **The binary never called `undercroft_obs::init()`** — every emit site and
+   the listener wired, and the thing that creates the registry forgotten. So
+   `/metrics` answered 503 *"build with --features telemetry"* on a binary
+   that had the feature. Caught by the e2e; the message conflated two causes
+   and is narrowed to the one it can mean.
+2. **`config check` could not see the token rule at all.** It only iterates
+   declarations that are SET, so a non-loopback address with no token declared
+   was invisible — the pre-flight exited 0 for an environment that refuses to
+   start, which is the exact promise it exists to keep. The ADDRESS arm checks
+   the token now, in both pre-flights. **Found by a premise probe on the
+   corpus run, not by any test.**
+3. `histogram_record` was `pub(crate)` — caught at compile.
+4. **The engine's `config check` had no arm for the two new variables**,
+   caught by O24's both-directions gate within minutes of classifying them.
+
+**Two residuals, stated rather than absorbed:** no Prometheus scrape job or
+alert rules ship for the control plane (`prometheus.yml` has one
+`job_name: undercroft` and `alerts.yml` hard-codes `up{job="undercroft"}`), and
+these are fleet aggregates, so at small fleet sizes an aggregate approximates
+an individual — inherent to publishing aggregates, bounded by fleet size, and
+accepted on the ruling that suppressing by fleet size would make the metric
+surface vary with it.
+
+No `UPGRADING.md` entry is owed: both variables are new, so nothing an
+existing deployment declares can change behaviour.
+
 ### `/metrics` stops reading across the assertion boundary
 
 ROADMAP **O25**, found by the adversarial review commissioned for O20 and

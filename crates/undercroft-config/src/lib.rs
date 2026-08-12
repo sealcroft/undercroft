@@ -127,6 +127,103 @@ pub fn resolve_admin_token(declared: Option<&str>) -> Result<String, ConfigError
     Ok(raw.to_string())
 }
 
+/// Whether a listen address is loopback.
+///
+/// Deliberately conservative and deliberately NOT a hand-rolled host parse:
+/// anything this cannot positively identify as loopback counts as exposed, so
+/// the refusal errs toward telling the operator their endpoint is reachable.
+/// `undercroft-net::is_loopback` answers the same question for outbound URLs
+/// by delegating to a URL parser; this is a bare `host:port` listen address,
+/// which has no scheme to parse, so the two cannot share an implementation.
+fn addr_is_loopback(addr: &str) -> bool {
+    let host = match addr.rsplit_once(':') {
+        // `[::1]:9900`
+        Some((h, _)) if h.starts_with('[') && h.ends_with(']') => &h[1..h.len() - 1],
+        Some((h, _)) => h,
+        None => addr,
+    };
+    host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+/// `UNDERCROFT_ORCH_METRICS_ADDR` — the control plane's **separate** metrics
+/// listener. Unset is off, and off is the default.
+///
+/// **A separate listener rather than a path on the serving port, and the
+/// reason is structural** (ROADMAP O20). The orchestrator serves `/healthz`,
+/// `/t/*`, `/admin/*` and `/ui` from ONE `Server::http(addr)`, and in any real
+/// fleet that address must be reachable by tenants — so an operator binds
+/// `0.0.0.0`. A `/metrics` path on that listener is therefore network-exposed
+/// in every real deployment, and "loopback is the gate" survives only in a
+/// single-host demo. Splitting the listener lets the data plane sit on
+/// `0.0.0.0:8900` while metrics sit on `127.0.0.1:9900` for a sidecar
+/// scraper. It is the shape etcd uses for the same reason
+/// (`--listen-metrics-urls`), and it is what makes `serve --read-replica`
+/// work unchanged: the replica resolves no admin token and now needs none.
+///
+/// **This differs from the engine deliberately**, and the difference is a
+/// boundary rather than a drift: the engine's single listener can legitimately
+/// be loopback-only (a personal agent's local server), so path-gating
+/// `/metrics` behind its bearer is sufficient there. The control plane's
+/// listener cannot be, because tenants must reach it.
+pub fn resolve_metrics_addr(declared: Option<&str>) -> Result<Option<String>, ConfigError> {
+    let Some(raw) = declared else { return Ok(None) };
+    let v = raw.trim();
+    if v.is_empty() {
+        return refuse(
+            "UNDERCROFT_ORCH_METRICS_ADDR is set but names no address (it is empty or only \
+             whitespace). It is most often an unset shell variable interpolated into a compose \
+             file or a systemd unit. Unset it to leave the metrics listener off",
+        );
+    }
+    if !v.contains(':') {
+        return refuse(format!(
+            "UNDERCROFT_ORCH_METRICS_ADDR={v:?} — expected host:port (e.g. 127.0.0.1:9900)"
+        ));
+    }
+    Ok(Some(v.to_string()))
+}
+
+/// The bearer for the metrics listener, **required when that listener is not
+/// loopback** and refused as pointless when it is not needed to be set.
+///
+/// Mirrors the engine's refuse-to-bind rule (`a network-exposed memory server
+/// must require a bearer token`) rather than inventing a second posture. It is
+/// deliberately NOT the admin token: that credential creates tenants and reads
+/// engine bearers and assertion secrets, and a scrape target holds its
+/// credential in a config file on every Prometheus host.
+///
+/// The same three guards as [`resolve_admin_token`], for the same measured
+/// reasons — empty is a failed interpolation, and a trailing newline can never
+/// be presented because HTTP strips it.
+pub fn resolve_metrics_token(
+    addr: &str,
+    declared: Option<&str>,
+) -> Result<Option<String>, ConfigError> {
+    let loopback = addr_is_loopback(addr);
+    match declared {
+        None if loopback => Ok(None),
+        None => refuse(format!(
+            "UNDERCROFT_ORCH_METRICS_ADDR={addr:?} is not loopback, so \
+             UNDERCROFT_ORCH_METRICS_TOKEN is required — a network-exposed metrics endpoint \
+             publishes a fleet's request rates, latencies and error counts to anyone who can \
+             reach it. Bind it to 127.0.0.1 for a sidecar scraper, or set a token"
+        )),
+        Some(t) if t.trim().is_empty() => refuse(
+            "UNDERCROFT_ORCH_METRICS_TOKEN is set but names no token (it is empty or only \
+             whitespace). It is most often an unset shell variable interpolated into a compose \
+             file or a systemd unit",
+        ),
+        Some(t) if t.trim_end() != t => refuse(
+            "UNDERCROFT_ORCH_METRICS_TOKEN ends in whitespace, and no client could ever present \
+             it: HTTP strips a header value's trailing whitespace, so the bearer that arrives is \
+             always the trimmed one and every scrape is refused. Strip it at the source \
+             (`tr -d '\\n'`). It is not trimmed here on purpose: that would authenticate a key \
+             you did not declare",
+        ),
+        Some(t) => Ok(Some(t.to_string())),
+    }
+}
+
 /// `UNDERCROFT_ORCH_RATE_LIMIT` — requests per minute per tenant, or `0`/`off`.
 ///
 /// A **closed vocabulary**, so empty legitimately means the default — the
@@ -217,6 +314,70 @@ mod tests {
         for real in [" 0123456789abcdef", "0123 456789 abcdef"] {
             assert_eq!(resolve_admin_token(Some(real)).unwrap(), real);
         }
+    }
+
+    /// The metrics listener's two declarations (ROADMAP O20).
+    ///
+    /// **The load-bearing arm is the non-loopback one**: it must REFUSE
+    /// without a token, because that is the case a path on the serving port
+    /// could not distinguish — the orchestrator's one listener is
+    /// network-facing in every real fleet, so "loopback is the gate" would
+    /// have been a comfort production never gets.
+    #[test]
+    fn a_networked_metrics_listener_refuses_without_a_token() {
+        // Off by default, and unset is not a refusal.
+        assert!(resolve_metrics_addr(None).unwrap().is_none());
+        for empty in ["", "  ", "\n"] {
+            assert!(resolve_metrics_addr(Some(empty))
+                .unwrap_err()
+                .to_string()
+                .contains("names no address"));
+        }
+        assert!(resolve_metrics_addr(Some("9900"))
+            .unwrap_err()
+            .to_string()
+            .contains("host:port"));
+        assert_eq!(
+            resolve_metrics_addr(Some(" 127.0.0.1:9900 "))
+                .unwrap()
+                .as_deref(),
+            Some("127.0.0.1:9900")
+        );
+
+        // Loopback in its three spellings needs no token.
+        for lo in ["127.0.0.1:9900", "localhost:9900", "[::1]:9900"] {
+            assert!(
+                resolve_metrics_token(lo, None).unwrap().is_none(),
+                "{lo} should be recognised as loopback"
+            );
+        }
+        // Anything else does, and the refusal names the two ways out.
+        for exposed in ["0.0.0.0:9900", "10.1.2.3:9900", "metrics.internal:9900"] {
+            let e = resolve_metrics_token(exposed, None)
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("is required"), "{exposed}: {e}");
+            assert!(
+                e.contains("127.0.0.1"),
+                "the refusal must name the loopback way out: {e}"
+            );
+        }
+        // …and the token's own guards, same three as the admin token.
+        assert!(resolve_metrics_token("0.0.0.0:9900", Some(""))
+            .unwrap_err()
+            .to_string()
+            .contains("names no token"));
+        assert!(
+            resolve_metrics_token("0.0.0.0:9900", Some("scrape-token\n"))
+                .unwrap_err()
+                .to_string()
+                .contains("ends in whitespace")
+        );
+        // Untrimmed round-trip: presentable whitespace is a value.
+        assert_eq!(
+            resolve_metrics_token("0.0.0.0:9900", Some(" scrape token")).unwrap(),
+            Some(" scrape token".to_string())
+        );
     }
 
     /// A closed vocabulary: empty is the default, not a failed interpolation.

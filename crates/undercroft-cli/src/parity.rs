@@ -130,6 +130,11 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass)] = &[
     ("UNDERCROFT_ORCH_DB", Tunes),
     ("UNDERCROFT_ORCH_ENGINE_CA", Protects),
     ("UNDERCROFT_ORCH_KEY", Protects),
+    // The control plane's metrics listener (O20). `_ADDR` is `Protects`
+    // because declaring it OPENS a network surface, and `_TOKEN` because it
+    // is what makes a non-loopback listener legal at all.
+    ("UNDERCROFT_ORCH_METRICS_ADDR", Protects),
+    ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects),
     ("UNDERCROFT_ORCH_RATE_LIMIT", Protects),
     ("UNDERCROFT_ORT_POOL", Tunes),
     // An OUTWARD PATH, and `architecture/index.html` has always named it as

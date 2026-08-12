@@ -56,7 +56,7 @@ pub(crate) fn counter_add(name: &'static str, value: u64, labels: &[(&str, &str)
         .add(value, &attrs(labels));
 }
 
-fn histogram_record(name: &'static str, value: f64, labels: &[(&str, &str)]) {
+pub(crate) fn histogram_record(name: &'static str, value: f64, labels: &[(&str, &str)]) {
     global::meter(METER_NAME)
         .f64_histogram(name)
         .build()
@@ -214,19 +214,30 @@ impl opentelemetry_http::HttpClient for PolicedOtlpClient {
 /// than fall back, because a silent fallback removes exactly what the
 /// operator asked for.
 pub(crate) fn init() -> Result<(), String> {
+    init_as("undercroft")
+}
+
+/// As [`init`], with the service name's DEFAULT supplied by the caller.
+///
+/// `UNDERCROFT_SERVICE_NAME` still wins when declared. The parameter exists
+/// because two binaries shipped from this workspace both defaulted to
+/// `"undercroft"`, so a fleet running an engine and a control plane under one
+/// env file produced traces that could not be told apart (ROADMAP O20).
+pub(crate) fn init_as(default_service: &str) -> Result<(), String> {
     static ONCE: Once = Once::new();
     // The verdict is memoized beside the `Once`, so a second call gets the
     // SAME answer rather than a silent `Ok` — `call_once` runs the body once
     // and would otherwise discard the only report of a refused transport.
     static RESULT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     ONCE.call_once(|| {
-        let _ = RESULT.set(real_init());
+        let _ = RESULT.set(real_init(default_service));
     });
     RESULT.get().cloned().unwrap_or(Ok(()))
 }
 
-fn real_init() -> Result<(), String> {
-    let service_name = env("UNDERCROFT_SERVICE_NAME").unwrap_or_else(|| "undercroft".to_string());
+fn real_init(default_service: &str) -> Result<(), String> {
+    let service_name =
+        env("UNDERCROFT_SERVICE_NAME").unwrap_or_else(|| default_service.to_string());
     let resource = Resource::new(vec![KeyValue::new("service.name", service_name)]);
 
     // --- metrics: Prometheus registry is always wired; OTLP is opt-in ---

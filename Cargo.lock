@@ -3638,11 +3638,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tiny_http",
  "undercroft-config",
  "undercroft-net",
+ "undercroft-obs",
  "ureq 2.12.1",
  "zeroize",
 ]

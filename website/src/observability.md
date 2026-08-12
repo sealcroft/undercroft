@@ -34,6 +34,19 @@ flowchart LR
     tempo --> graf
 ```
 
+## The control plane
+
+**The control plane has its own telemetry** since 1.1.0
+(`undercroft-orchestrator --features telemetry`), on a **separate listener**
+declared by `UNDERCROFT_ORCH_METRICS_ADDR`: its serving port must be reachable
+by tenants, so a `/metrics` path there would be exposed in every real fleet.
+Loopback needs no token; any other address refuses to start without
+`UNDERCROFT_ORCH_METRICS_TOKEN`. It exports `undercroft_orch_*` counters —
+requests by route class, refused credentials by kind, rate-screen firings,
+engine-call outcomes — and **carries no tenant, vault or tenant-name label**;
+per-tenant figures live on the admin plane. No scrape job or alert rules ship
+for it yet.
+
 ## Building with telemetry
 
 ```bash

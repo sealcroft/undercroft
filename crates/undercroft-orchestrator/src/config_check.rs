@@ -19,7 +19,10 @@
 //! floor was an `if` in the `serve` arm — none of them reachable without
 //! opening a database or binding a port.
 
-use undercroft_config::{resolve_admin_token, resolve_orch_key, resolve_rate_limit};
+use undercroft_config::{
+    resolve_admin_token, resolve_metrics_addr, resolve_metrics_token, resolve_orch_key,
+    resolve_rate_limit,
+};
 
 /// What a bad value does, per `CLAUDE.md`'s configuration doctrine.
 ///
@@ -51,6 +54,8 @@ pub(crate) const ORCH_ENV_VARS: &[(&str, ConfigClass)] = &[
     ("UNDERCROFT_ORCH_DB", Tunes),
     ("UNDERCROFT_ORCH_ENGINE_CA", Protects),
     ("UNDERCROFT_ORCH_KEY", Protects),
+    ("UNDERCROFT_ORCH_METRICS_ADDR", Protects),
+    ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects),
     ("UNDERCROFT_ORCH_RATE_LIMIT", Protects),
 ];
 
@@ -79,6 +84,44 @@ fn check_one(name: &str, raw: &str) -> Finding {
             resolve_admin_token(Some(raw))
                 .map(|_| "bearer required on the /admin plane".into())
                 .map_err(|e| e.to_string()),
+        ),
+        "UNDERCROFT_ORCH_METRICS_ADDR" => Some(
+            resolve_metrics_addr(Some(raw))
+                .and_then(|a| match a {
+                    Some(a) => {
+                        // **The ADDRESS arm checks the TOKEN too**, and that is not
+                        // redundancy. `config check` only iterates declarations that
+                        // are SET, so a non-loopback address with no token declared
+                        // was invisible to it — the pre-flight exited 0 for an
+                        // environment that refuses to start, which is the exact
+                        // promise it exists to keep. Found by a premise probe on the
+                        // corpus run, not by a test.
+                        resolve_metrics_token(
+                            &a,
+                            std::env::var("UNDERCROFT_ORCH_METRICS_TOKEN")
+                                .ok()
+                                .as_deref(),
+                        )
+                        .map(|t| match t {
+                            Some(_) => format!("metrics listener on {a}, behind a token"),
+                            None => format!("metrics listener on {a} (loopback, no token)"),
+                        })
+                    }
+                    None => Ok("no metrics listener".into()),
+                })
+                .map_err(|e| e.to_string()),
+        ),
+        // Checked against the address it guards, because "is a token
+        // required" is a question about the ADDRESS: loopback needs none and
+        // anything else does. Reading it alone would validate the string and
+        // miss the only rule that matters.
+        "UNDERCROFT_ORCH_METRICS_TOKEN" => Some(
+            resolve_metrics_token(
+                &std::env::var("UNDERCROFT_ORCH_METRICS_ADDR").unwrap_or_default(),
+                Some(raw),
+            )
+            .map(|_| "bearer required on the metrics listener".into())
+            .map_err(|e| e.to_string()),
         ),
         "UNDERCROFT_ORCH_RATE_LIMIT" => Some(
             resolve_rate_limit(Some(raw))
@@ -185,8 +228,8 @@ mod tests {
         }
         // PREMISE. A filter that matched nothing would report a clean tree.
         assert_eq!(
-            protects, 4,
-            "premise failed: expected 4 Protects variables, found {protects} — the \
+            protects, 6,
+            "premise failed: expected 6 Protects variables, found {protects} — the \
              inventory is not being read"
         );
         assert!(

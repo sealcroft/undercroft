@@ -202,6 +202,90 @@ pub fn hmac_verify_failed(surface: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Control plane (ROADMAP O20) — orchestrator-only events
+// ---------------------------------------------------------------------------
+//
+// **No tenant-shaped label appears anywhere below, and that is the design.**
+// A tenant id, a vault name and a tenant name are all identifiers whose value
+// set is created BY USE, so they belong on a query surface rather than a
+// metric label — the rule the per-wing codebook generations already follow
+// (`store/lib.rs`: dynamic `<wing>/pq-codebook` keys reach stats, never a
+// gauge, "because per-wing gauge cardinality is unbounded"). Per-tenant
+// figures live on `GET /admin/tenants/{id}/stats`, which is credential-gated.
+//
+// The consequence, stated rather than hidden: these are fleet aggregates, and
+// at small fleet sizes an aggregate approximates an individual — with two
+// tenants, one who knows their own load infers the other's by subtraction.
+// That is inherent to publishing aggregates at all; the bound is fleet size,
+// and the mitigation is the listener's own gate, not suppression. Suppressing
+// by fleet size would make the metric surface VARY with it, so dashboards and
+// alerts that work at thirty tenants would break at two.
+
+/// A request the control plane handled: route class, status, duration.
+///
+/// `route` is a CLASS from a closed set, never the URL — the forwarded query
+/// string carries `wing=` and `room=`, which is exactly what the engine's own
+/// telemetry suppresses for sealed vaults.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn orch_request(route: &str, status: u16, duration: std::time::Duration) {
+    #[cfg(feature = "telemetry")]
+    {
+        let code = status.to_string();
+        imp::counter_add(
+            "undercroft_orch_requests_total",
+            1,
+            &[("route", route), ("status", &code)],
+        );
+        imp::histogram_record(
+            "undercroft_orch_request_duration_seconds",
+            duration.as_secs_f64(),
+            &[("route", route)],
+        );
+    }
+}
+
+/// A credential the control plane refused. `kind` is `tenant`, `admin` or
+/// `metrics` — three different secrets that the engine's single
+/// `auth_rejections_total{kind="bearer"}` would have merged into one series.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn orch_auth_rejected(kind: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add(
+        "undercroft_orch_auth_rejections_total",
+        1,
+        &[("kind", kind)],
+    );
+}
+
+/// A request the per-tenant rate screen refused.
+///
+/// An operator who declared `UNDERCROFT_ORCH_RATE_LIMIT` had **no surface
+/// saying it took** — the refusal happened at the proxy and no engine ever
+/// saw the request. Deliberately unlabelled: which tenant is rate-limited is
+/// a per-tenant fact and belongs on the admin plane.
+pub fn orch_rate_limited() {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add("undercroft_orch_rate_limited_total", 1, &[]);
+}
+
+/// One outbound call to an engine, by outcome — `ok`, `refused` (the
+/// transport policy declined before a byte moved), `unreachable`, or
+/// `status`.
+///
+/// The engine cannot see any of this: `refused` never leaves the process, and
+/// a tenant write becomes TWO engine calls via the drawer probe, an
+/// amplification nothing else reports.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn orch_engine_call(outcome: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add(
+        "undercroft_orch_engine_calls_total",
+        1,
+        &[("outcome", outcome)],
+    );
+}
+
 /// Record a vault store open (cache miss in the multi-tenant server).
 pub fn vault_opened() {
     #[cfg(feature = "telemetry")]
@@ -313,6 +397,18 @@ pub const COUNTER_NAMES: &[&str] = &[
     "undercroft_search_total",
     "undercroft_search_wings_probed_total",
     "undercroft_vault_opens_total",
+    // ── the CONTROL PLANE's own series (ROADMAP O20) ────────────────────
+    // Prefixed `undercroft_orch_` and deliberately NOT reusing the engine's
+    // names. The shipped dashboard aggregates several engine series with no
+    // `by (instance)` and no `job` filter, and the route strings collide
+    // exactly — `healthz`, `ui`, `metrics` exist on both binaries — so a
+    // control plane emitting `undercroft_http_requests_total` would blend two
+    // populations into one number. These are also the events no engine can
+    // see, because they terminate at the proxy.
+    "undercroft_orch_requests_total",
+    "undercroft_orch_auth_rejections_total",
+    "undercroft_orch_rate_limited_total",
+    "undercroft_orch_engine_calls_total",
 ];
 
 /// Full names of the histogram series this build exports. Each renders as
@@ -323,6 +419,7 @@ pub const HISTOGRAM_NAMES: &[&str] = &[
     "undercroft_http_request_duration_seconds",
     "undercroft_search_duration_seconds",
     "undercroft_search_hits",
+    "undercroft_orch_request_duration_seconds",
 ];
 
 /// Every series name this build can export, gauges included and fully
@@ -374,8 +471,20 @@ impl Drop for TelemetryGuard {
 /// (`json`|`text`), `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ no network egress),
 /// `UNDERCROFT_SERVICE_NAME`, `UNDERCROFT_OTLP_HEADERS`.
 pub fn init() -> Result<TelemetryGuard, ObsError> {
+    init_as("undercroft")
+}
+
+/// As [`init`], naming the service this process reports as when
+/// `UNDERCROFT_SERVICE_NAME` is not declared.
+///
+/// Two binaries ship from this workspace and both defaulted to
+/// `"undercroft"`, so a fleet running an engine and a control plane under one
+/// env file could not tell their traces apart (ROADMAP O20). A declared
+/// `UNDERCROFT_SERVICE_NAME` still wins — this only moves the default.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn init_as(default_service: &str) -> Result<TelemetryGuard, ObsError> {
     #[cfg(feature = "telemetry")]
-    imp::init().map_err(ObsError::Transport)?;
+    imp::init_as(default_service).map_err(ObsError::Transport)?;
     Ok(TelemetryGuard(()))
 }
 
