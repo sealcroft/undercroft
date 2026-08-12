@@ -1234,7 +1234,10 @@ pub struct BulkOutcome {
 
 #[derive(Debug, Default, Clone)]
 pub struct SearchOptions {
-    /// Whose inflection applies. Declared, never detected — see [`MorphLang`].
+    /// Whose inflection applies. **A declaration outranks the text**; leaving
+    /// this `Undeclared` does NOT disable morphology — `language_of_drawer`
+    /// then decides per candidate from that drawer's own function words. See
+    /// [`MorphLang`].
     pub morph_lang: MorphLang,
     pub wing: Option<String>,
     pub room: Option<String>,
@@ -4615,11 +4618,18 @@ impl PalaceStore {
         // limit; that is clamped where the cast happens. The residue is a
         // cost, not a wrong answer: a very deep offset makes one request pay
         // a full scan. That is corpus-bounded — the same price a below-floor
-        // scope already pays by design — and is recorded as A17 rather than
-        // closed by breaking the contract.
+        // scope already pays by design — and is recorded as ROADMAP O23
+        // rather than closed by breaking the contract. (It cited `A17` until
+        // 2026-08-12, and the ROADMAP holds no `A`-numbered entries at all
+        // any more: the residue was pointing at a vanished id, so it was
+        // recorded NOWHERE. A citation is not a filing.)
         let depth = opts.offset.saturating_add(limit);
-        // Declared by the caller, never read off the text: German and English
-        // share a script, so nothing in the bytes says which endings are legal.
+        // What the caller DECLARED, which outranks the text. When they
+        // declared nothing this stays `Undeclared` and each candidate is
+        // resolved by `language_of_drawer` from its own function words — see
+        // the fusion loop. This comment used to say "never read off the
+        // text", which stopped being true when that detector shipped and sat
+        // here contradicting the code twenty lines below it.
         let lang = opts.morph_lang;
         let qterms: Vec<String> = tokenize(query);
 
@@ -11010,6 +11020,47 @@ mod tests {
     /// opaque PAYLOAD, not a word from a closed vocabulary, so it is **not
     /// trimmed** — trimming would change the KEY and silently invalidate
     /// every header a deployment had already minted.
+    /// Round-four #40 was a DOC defect: `CLAUDE.md` and two comments in this
+    /// file said morphology language is "declared, never detected" long after
+    /// `language_of_drawer` shipped — one of them sitting twenty lines above
+    /// the fusion loop that calls it. The claim is corrected; this pins the
+    /// behaviour it now describes, so the doc cannot quietly become wrong in
+    /// the other direction either.
+    #[test]
+    fn an_undeclared_language_is_read_off_the_drawer() {
+        let toks = |s: &str| -> Vec<String> { s.split_whitespace().map(String::from).collect() };
+
+        // Function words decide, and only closed-class ones vote.
+        assert_eq!(
+            language_of_drawer(&toks("der hund ist nicht mit dem ball")),
+            MorphLang::German
+        );
+        assert_eq!(
+            language_of_drawer(&toks("the dog was not with the ball")),
+            MorphLang::English
+        );
+        // Nothing to go on stays undeclared rather than guessing — the
+        // never-guess contract, at the one place a language could be invented.
+        assert_eq!(
+            language_of_drawer(&toks("kelp harvest quota memo 41")),
+            MorphLang::Undeclared
+        );
+        // The decision needs THREE votes and double the runner-up. One
+        // function word does not make a drawer German, which matters because
+        // an English drawer quoting one German phrase must not switch the
+        // endings applied to the whole of it.
+        assert_eq!(language_of_drawer(&toks("die")), MorphLang::Undeclared);
+        assert_eq!(language_of_drawer(&toks("der die")), MorphLang::Undeclared);
+        // And the margin, not just the count: a drawer that reads equally as
+        // both decides as neither, rather than letting whichever list is
+        // longer win.
+        assert_eq!(
+            language_of_drawer(&toks("der die das the and was")),
+            MorphLang::Undeclared,
+            "3 votes each is a tie, and a tie must not pick a language"
+        );
+    }
+
     /// Round-four #18 — the same defect as its sibling above, on the highest
     /// value secret in the system.
     ///

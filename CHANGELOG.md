@@ -2,6 +2,44 @@
 
 ## Unreleased — 1.1.0
 
+### three claims that contradicted the code they sat next to
+
+Round-four #40, #54 and #55 — the documentation-truth rows. Each was verified
+by reading both sides, and one turned out to be a gap rather than a typo.
+
+**#40 — "declared, never detected" was false in three places.**
+`language_of_drawer` resolves a drawer's language from its own closed-class
+function words whenever the caller declared nothing, per candidate, because a
+vault may hold several languages and the drawer is the unit that has one.
+`CLAUDE.md`, `SearchOptions::morph_lang`'s doc and a comment in `search_inner`
+all said the opposite — the last of them sitting twenty lines above the loop
+that calls the detector. The consequence is not cosmetic: a reader would
+believe German endings apply only when declared, when in fact a drawer that
+reads as German gets them automatically, and the pinned cost (`flow`/`flower`
+meets under German) applies to detected German too. All three corrected, and
+the behaviour they now describe is pinned by
+`an_undeclared_language_is_read_off_the_drawer` — including the rule that
+decides it: three votes AND double the runner-up, so one German phrase inside
+an English drawer changes nothing, and a tie picks neither.
+
+**#54 — the residue was recorded nowhere.** A comment in `search_inner` said a
+deep-`offset` full scan is "recorded as A17". `ROADMAP.md` contains no `A17`
+— and no `A`-numbered entries at all, the scheme having been consolidated
+away. So the citation was standing in for a filing that did not exist. Filed
+properly as **O23**, with the argument for leaving the cost open: every
+alternative trades a bounded cost for a wrong answer.
+
+**#55 — `ROADMAP.md` linked `THREAT_MODEL.md` at the repo root**, where there
+is no such file; it is in `docs/`.
+
+Recorded with them, in `.handover/AUDIT_CONTINUATION.md`: a partial status
+sweep of the ranked table, which had never been updated since the sweep ran.
+Of ~15 rows checked, four were already closed and one half-closed. **Three of
+the probes were broken before they were right** — needles grepped in files
+that do not contain them, each returning a `0` that reads exactly like a clean
+tree. Every count recorded there was taken only after proving its needle
+exists somewhere.
+
 ### an empty passphrase wrote a key to disk and called it success
 
 Round-four finding #18 (D1). The same defect as #4 — closed earlier in this

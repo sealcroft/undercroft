@@ -322,9 +322,15 @@ Consequences that are binding, not advisory:
   scanner (en/ar) and morphology (en/de). For English `-er` admits
   `flow`/`flower`, `corn`/`corner`, `butt`/`butter`; declared German it takes
   `Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher` and German goes 50%→**100%**,
-  all on the lexical channel. Declared, never detected — the two share a script,
-  so nothing in the bytes says which endings are legal, and the price is pinned:
-  under German, `flow`/`flower` DOES meet. Note promiscuity
+  all on the lexical channel. **Declared FIRST, then detected** — this line
+  said "declared, never detected" long after `language_of_drawer` shipped, and
+  that was wrong in a way that matters: a declaration outranks the text, but
+  when the caller declares NOTHING the drawer's own closed-class function
+  words decide, per CANDIDATE, because a vault may hold several languages and
+  the drawer is the unit that has one. A word two languages both claim votes
+  for neither. So the price below is pinned for **detected** German too:
+  under German, `flow`/`flower` DOES meet — and a drawer that merely reads as
+  German gets German endings without anyone declaring them. Note promiscuity
   moved only +0.21 for `-er`, i.e. **the population metric could not see it and
   the negative controls could**. `drawers_fts` is a
   **standalone** fts5 table over `search_key(content)`, rebuilt on a
@@ -1095,8 +1101,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (710 run,
-                                      # 4 #[ignore]d = 714 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (711 run,
+                                      # 4 #[ignore]d = 715 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

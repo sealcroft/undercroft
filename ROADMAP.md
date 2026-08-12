@@ -74,7 +74,14 @@ contract:
 
 The twenty defects on the pre-merge blocker list, the eleven regressions the
 third audit round found inside those fixes, and T1–T15. All described in
-CHANGELOG under `## Unreleased`. The seven worth naming:
+CHANGELOG under `## Unreleased`. The eight worth naming:
+
+* **Three claims that contradicted the code beside them** (round-four #40,
+  #54, #55). "Declared, never detected" was false in three places, one of
+  them twenty lines above the loop that calls the detector; a residue said to
+  be "recorded as A17" was recorded nowhere, the ROADMAP holding no
+  `A`-numbered entries at all (now **O23**); and a link pointed at a file that
+  is in `docs/`.
 
 * **An empty `UNDERCROFT_PASSPHRASE` wrote a key to disk and called it
   success** (round-four #18) — the same defect as #4/O16 on the highest-value
@@ -1363,6 +1370,39 @@ doors.
 
 ---
 
+### O23 — a very deep `offset` makes one request pay a full scan
+
+Round-four #54, and it turned out to be worse than the finding said. The
+finding was that a code comment cites ROADMAP `A17`, which does not exist.
+It does not exist because **the ROADMAP holds no `A`-numbered entries at
+all** any more — they were consolidated away — so the residue that comment
+says is "recorded as A17" was recorded **nowhere**. A citation is not a
+filing, and this one had been standing in for one.
+
+The residue itself, restated from the code that owns it
+(`search_inner`'s depth handling): pagination is `offset + limit`, so a very
+deep offset makes a single request scan the corpus. That is a **cost, not a
+wrong answer** — the pinned contract is that a page returns the right rows,
+and refusing past a ceiling would break that contract outright to save a
+cost. It is corpus-bounded, and it is the same price a below-floor scope
+already pays by design.
+
+What WAS broken was one line at the SQL boundary, where `k as i64` wrapped
+negative and SQLite reads a negative `LIMIT` as no limit. That is clamped at
+the cast, and is not this entry.
+
+**Deliberately not scheduled.** Filed so the cost is recorded rather than
+implied by a dangling id, and so a future reader finds the argument for
+leaving it: every alternative considered — a depth ceiling, refusing past a
+bound, silently truncating — trades a bounded cost for a wrong answer, which
+is the trade this project does not make.
+
+**Gate:** if it is ever closed, the closing change must keep
+`a_deep_offset_still_returns_the_right_page` true; the cost may move, the
+answer may not.
+
+---
+
 ### O22 — an empty `UNDERCROFT_MCP_HTTP_TOKEN` removes a bearer gate on loopback
 
 Found by applying the rule that closing round-four #18 added to `CLAUDE.md` —
@@ -1668,7 +1708,7 @@ release with the usual battery + measured gates.
   (MINJA, AgentPoison, forged-reasoning): screen memory **at ingest**,
   not just at retrieval, so poison never becomes retrievable while a
   human gate is pending. Full design in
-  [THREAT_MODEL.md §8](THREAT_MODEL.md) (the three-zone boundary);
+  [THREAT_MODEL.md §8](docs/THREAT_MODEL.md) (the three-zone boundary);
   the shipping mechanism:
   - **Provenance on every drawer** — writing agent / source / channel
     / session, tamper-covered by the record HMAC. This is the
