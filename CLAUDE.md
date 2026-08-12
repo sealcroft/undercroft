@@ -1943,6 +1943,18 @@ had and was still bypassable on the surface most deployments use.
 2. **A test that would have failed before the fix.** Assert the premise, so it
    cannot pass for the wrong reason. Several tests here carry an explicit
    counterfactual arm for exactly this.
+   **And a passing battery is not evidence a test is DETERMINISTIC — only
+   repetition is.** A retrieval test asserting the whole ranked id list over
+   1,200 near-identical drawers passed several consecutive batteries and then
+   went red on CI; run twelve times it measured 4 failures in 6. The tail of
+   that list is not a property of the system: the PQ codebook trains on a
+   KEYED sample (`sample_rank`, off a master key that is random per vault),
+   so which rows train it differs per run and the ADC ordering moves at the
+   margin. **Never assert an exact order over content that ties**; assert the
+   one answer the query decisively matches, or a membership the geometry
+   cannot move. And when a test touches PQ, FDE, the codebook or any keyed
+   draw, **run it in a loop before believing a green** — the battery runs
+   each test once, which for a coin flip is not a measurement.
 3. **Drift check.** If the change touches a capability reachable from more
    than one of {CLI, MCP, `/v1`, orchestrator}, verify EVERY one of them —
    by reading the other surfaces' code, not by assuming symmetry. `cargo test`

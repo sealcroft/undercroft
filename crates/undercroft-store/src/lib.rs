@@ -12608,6 +12608,23 @@ mod tests {
     /// passed against the reverted code, which is how the overclaims were
     /// caught — the observable this defect actually moves is the number of
     /// seqs scope resolution materializes, and that is measured next door.
+    ///
+    /// **A third draft was FLAKY and CI caught it, not the battery.** It
+    /// compared the whole ranked id list before and after, over 1,200
+    /// near-identical fillers — and the tail of that list is not a property
+    /// of the system: the PQ codebook trains on a KEYED sample
+    /// (`sample_rank`, off a master key that is random per vault), so which
+    /// rows train it differs per run and the ADC ordering moves at the
+    /// margin. Measured 4 passes and 2 failures in 6 local runs after CI
+    /// went red. It had passed several consecutive batteries, which is a
+    /// coin landing the same way, not evidence.
+    ///
+    /// So the assertion is now about the ONE drawer the query decisively
+    /// matches, on terms no filler contains. That is stable under any
+    /// codebook sample, and it still fails if a diversion moves the geometry
+    /// far enough to push the answer out of the pool. **Do not re-tighten
+    /// this to compare the full list**: the tail is noise, and asserting
+    /// noise buys a red build rather than a guarantee.
     #[test]
     fn a_diversion_does_not_change_what_an_unscoped_search_returns() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
@@ -12622,10 +12639,11 @@ mod tests {
             ))
             .unwrap();
         }
+        // ONE decisively-best answer, carrying terms no filler contains.
         let target = drawer(
             "arctic",
             "r",
-            "kelp beds mapped near the arctic station",
+            "zanzibar sabbatical quorum: the arctic station rota",
             5000,
         );
         s.upsert(&target).unwrap();
@@ -12635,13 +12653,20 @@ mod tests {
             limit: 5,
             ..Default::default()
         };
-        let before: Vec<String> = s
-            .search("kelp harvest quota", &opts)
-            .unwrap()
-            .into_iter()
-            .map(|h| h.drawer.id)
-            .collect();
-        assert!(!before.is_empty(), "premise: the query answers at all");
+        let top = |s: &PalaceStore| -> String {
+            s.search("zanzibar sabbatical quorum", &opts)
+                .unwrap()
+                .first()
+                .expect("premise: the query answers at all")
+                .drawer
+                .id
+                .clone()
+        };
+        let before = top(&s);
+        assert_eq!(
+            before, target.id,
+            "premise: the uniquely-matching drawer is the answer"
+        );
 
         s.set_admission(true);
         let landed = s
@@ -12654,14 +12679,9 @@ mod tests {
             .unwrap();
         assert!(landed.quarantined, "premise: the screen must have diverted");
 
-        let after: Vec<String> = s
-            .search("kelp harvest quota", &opts)
-            .unwrap()
-            .into_iter()
-            .map(|h| h.drawer.id)
-            .collect();
         assert_eq!(
-            before, after,
+            top(&s),
+            before,
             "a diverted drawer must not change what an unrelated search can \
              reach — the accidental scope inflated the candidate pool from \
              the unscoped 256 to the scoped floor, which is a different \

@@ -2,6 +2,25 @@
 
 ## Unreleased — 1.1.0
 
+### a flaky test of my own, caught by CI rather than by the battery
+
+The regression guard added with #6 asserted the whole ranked id list before and
+after a diversion, over 1,200 near-identical filler drawers. That tail is not a
+property of the system: the PQ codebook trains on a **keyed** sample
+(`sample_rank`, derived from a master key that is random per vault), so which
+rows train it differs per run and the ADC ordering moves at the margin.
+
+It passed several consecutive full batteries and then went red on CI. Run in a
+loop it measured **4 failures in 6**. A battery runs each test once, which for
+a coin flip is not a measurement — repetition is, and that is now in the
+definition of done.
+
+The assertion is now about the one drawer the query decisively matches, on
+terms no filler contains: stable under any codebook sample, and it still fails
+if a diversion moves the geometry far enough to push the answer out of the
+pool. Verified 12/12, with four clean runs of the full 295-test store suite
+alongside it to check nothing else in this session's tests was a coin flip too.
+
 ### three claims that contradicted the code they sat next to
 
 Round-four #40, #54 and #55 — the documentation-truth rows. Each was verified
