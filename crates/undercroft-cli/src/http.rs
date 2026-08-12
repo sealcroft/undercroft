@@ -261,13 +261,28 @@ pub fn serve_http(
         }
         // Prometheus metrics — opt-in, behind the bearer gate above.
         if metrics_enabled && request.method() == &Method::Get && path == "/metrics" {
-            let (code, body) = match undercroft_obs::render_prometheus() {
-                Some(text) => (200, text),
-                None => (
-                    503,
-                    "metrics require building undercroft with --features telemetry\n".to_string(),
-                ),
-            };
+            // ROADMAP O25. This route sits after the bearer gate above and
+            // BEFORE `tenancy.authorize`, where the per-vault assertion is
+            // enforced — because it addresses no single vault, so that gate
+            // never applied to it. Under a declared assertion secret the
+            // vault-labelled gauges are therefore suppressed: the banner
+            // promises "per-vault assertions required" without qualification,
+            // and a caller who could assert only vault A was reading vault B's
+            // record counts, chain height, KG size and database bytes.
+            //
+            // Not filtered to the caller's vault, because an assertion binds
+            // exactly one and a scraper would need a fresh one per vault per
+            // scrape. Not aggregated either — a caller who knows A (from
+            // `/v1/…/stats`, legitimately) recovers B by subtraction.
+            let (code, body) =
+                match undercroft_obs::render_prometheus_scoped(tenancy.requires_assertion()) {
+                    Some(text) => (200, text),
+                    None => (
+                        503,
+                        "metrics require building undercroft with --features telemetry\n"
+                            .to_string(),
+                    ),
+                };
             let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/plain; version=0.0.4"[..])
                 .expect("static header");
             let _ = request.respond(

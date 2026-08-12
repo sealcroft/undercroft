@@ -1192,7 +1192,7 @@ docker compose run --rm test          # cargo unit + integration tests (722 run,
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (335 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (107 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (30 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (36 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)

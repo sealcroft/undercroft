@@ -407,12 +407,32 @@ impl std::error::Error for ObsError {}
 /// Returns `None` when built without the `telemetry` feature, so callers
 /// can distinguish "not compiled in" from "no metrics yet".
 pub fn render_prometheus() -> Option<String> {
+    render_prometheus_scoped(false)
+}
+
+/// The exposition, with every **vault-labelled** series suppressed when
+/// `assertions_required` (ROADMAP O25).
+///
+/// `/metrics` addresses no single vault, so the per-vault assertion gate never
+/// applied to it — and on a deployment that declared
+/// `UNDERCROFT_ASSERTION_SECRET`, whose contract is that a bearer alone
+/// reaches no vault, that let one caller read every vault's counts. The route
+/// takes no caller identity and does not need one: an assertion binds exactly
+/// one vault id, so filtering to the caller would leave a scraper needing a
+/// fresh assertion per vault per scrape.
+///
+/// Nothing that alerts is lost — every series `alerts.yml` evaluates is a
+/// vault-blind counter or histogram. Dashboard panels showing per-vault
+/// gauges go empty, and that detail lives on `/v1/…/stats`, which is
+/// assertion-gated.
+pub fn render_prometheus_scoped(assertions_required: bool) -> Option<String> {
     #[cfg(feature = "telemetry")]
     {
-        imp::render_prometheus()
+        imp::render_prometheus_filtered(assertions_required)
     }
     #[cfg(not(feature = "telemetry"))]
     {
+        let _ = assertions_required;
         None
     }
 }
@@ -562,6 +582,70 @@ pub fn run_sse(writer: Box<dyn std::io::Write + Send>, vault: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ROADMAP O25. Under a declared assertion secret, `/metrics` must not
+    /// carry one vault's counts to a caller who can assert only another's.
+    ///
+    /// **The premise arm is the whole test.** Gauges are populated only for
+    /// vaults with an active stream subscriber, so a naive version of this
+    /// runs over an EMPTY registry, finds no vault-B series, and passes while
+    /// measuring nothing — which is exactly how the defect survived. So the
+    /// unfiltered render is asserted to CONTAIN both vaults first; only then
+    /// does the filtered render's silence mean anything.
+    ///
+    /// It also pins what must SURVIVE: every series `alerts.yml` evaluates is
+    /// a vault-blind counter, and suppression that took those with it would
+    /// trade a disclosure for a blind fleet.
+    #[test]
+    #[cfg(feature = "telemetry")]
+    fn a_declared_assertion_secret_suppresses_every_vault_labelled_series() {
+        // **The guard is deliberately LEAKED, and both telemetry tests must
+        // do this.** `init()` is a `Once`, so the guard is a process-global
+        // lifecycle handle rather than a per-test one, and
+        // `TelemetryGuard::drop` calls `shutdown()` — tearing down the meter
+        // provider for every OTHER test in the process. With one such test
+        // that was latent; a second one made it a live interference, and it
+        // is not order-dependent flakiness to be re-run until green.
+        //
+        // Found because the premise arm below refused to pass over an empty
+        // registry. The first version wrote `let _ =`, which drops at the end
+        // of the STATEMENT and failed the neighbouring test outright.
+        std::mem::forget(init());
+        set_gauge("drawers", "vault-a", 11.0);
+        set_gauge("drawers", "vault-b", 22.0);
+        drawer_write(WriteOutcome::Created);
+
+        let open = render_prometheus_scoped(false).expect("telemetry is on in this build");
+        // PREMISE: without it, the assertions below pass over an empty registry.
+        assert!(
+            open.contains("vault-a") && open.contains("vault-b"),
+            "premise failed — the registry holds no vault-labelled series, so \
+             this test cannot show that they are suppressed:\n{open}"
+        );
+        assert!(
+            open.contains("undercroft_drawers"),
+            "premise failed — the gauge under test is not in the exposition"
+        );
+
+        let scoped = render_prometheus_scoped(true).expect("telemetry is on in this build");
+        assert!(
+            !scoped.contains("vault-a") && !scoped.contains("vault-b"),
+            "a vault label survived suppression:\n{scoped}"
+        );
+        // The HELP/TYPE headers go too: a bare header still tells a scraper
+        // the series exists, and existence is part of what leaked.
+        assert!(
+            !scoped.contains("undercroft_drawers"),
+            "the gauge's header survived with no samples:\n{scoped}"
+        );
+        // …and everything alerting depends on is still there.
+        assert!(
+            scoped.contains("undercroft_drawer_writes_total"),
+            "suppression took a vault-BLIND counter with it — alerts.yml \
+             evaluates these, so this would trade a disclosure for a blind \
+             fleet:\n{scoped}"
+        );
+    }
 
     #[test]
     fn no_op_calls_never_panic() {
@@ -812,7 +896,9 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn render_contains_recorded_metrics() {
-        let _g = init();
+        // Leaked for the same reason as its sibling above: dropping this
+        // guard shuts telemetry down for every other test in the process.
+        std::mem::forget(init());
         chain_commit(1);
         drawer_write(WriteOutcome::Created);
         hmac_verify_failed("drawer");

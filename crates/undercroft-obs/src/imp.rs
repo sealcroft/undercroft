@@ -376,11 +376,68 @@ fn register_gauges() {
 }
 
 pub(crate) fn render_prometheus() -> Option<String> {
+    render_prometheus_filtered(false)
+}
+
+/// The exposition, optionally with every **vault-labelled** series removed
+/// (ROADMAP O25).
+///
+/// `/metrics` is served after the palace bearer and BEFORE per-vault
+/// assertion — the route addresses no single vault, so the per-vault gate does
+/// not apply to it. On a deployment that declared
+/// `UNDERCROFT_ASSERTION_SECRET`, whose whole purpose is that *"a bearer alone
+/// reaches no vault on either path"*, that let a caller holding the bearer and
+/// an assertion for vault A read vault B's record counts, chain height, KG
+/// size and database bytes.
+///
+/// **Suppression rather than filtering-to-the-caller, and the reason is that
+/// an assertion binds exactly ONE vault id** (`"<ts>|<vault_id>"`). Filtering
+/// the exposition to what the caller may assert therefore yields a single
+/// vault, which is useless to the scraper `/metrics` exists for: Prometheus
+/// would need one time-boxed assertion per vault per scrape.
+///
+/// **Aggregating instead of suppressing was considered and is WRONG**: a
+/// caller who knows vault A's counts — which they legitimately do, from
+/// `/v1/…/stats` — recovers B exactly by subtracting from a two-vault sum.
+///
+/// Nothing that alerts is lost. Every series `deploy/observability/alerts.yml`
+/// evaluates is a vault-BLIND counter or histogram; the vault-labelled gauges
+/// feed dashboard panels. Those panels go empty under assertions, and the
+/// per-vault detail they showed lives on `/v1/…/stats`, which IS
+/// assertion-gated — the correct home for it.
+///
+/// The suppressed set is derived from [`crate::GAUGE_NAMES`] rather than
+/// listed again here, so a gauge added later is suppressed without anyone
+/// remembering to.
+pub(crate) fn render_prometheus_filtered(hide_vault_series: bool) -> Option<String> {
     let registry = REGISTRY.get()?;
     let mut buf = Vec::new();
     let encoder = prometheus::TextEncoder::new();
     encoder.encode(&registry.gather(), &mut buf).ok()?;
-    String::from_utf8(buf).ok()
+    let text = String::from_utf8(buf).ok()?;
+    if !hide_vault_series {
+        return Some(text);
+    }
+    // `format!("undercroft_{name}")` is exactly what `register_gauges` builds
+    // the metric name with; if that ever moves, both must move together.
+    let hidden: Vec<String> = crate::GAUGE_NAMES
+        .iter()
+        .map(|g| format!("undercroft_{g}"))
+        .collect();
+    // Drops the sample lines AND their `# HELP` / `# TYPE` headers: a bare
+    // header with no samples is a series the scrape still learns exists.
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            let name = line
+                .strip_prefix("# HELP ")
+                .or_else(|| line.strip_prefix("# TYPE "))
+                .map(|r| r.split(' ').next().unwrap_or(""))
+                .unwrap_or_else(|| line.split(['{', ' ']).next().unwrap_or(""));
+            !hidden.iter().any(|h| h == name)
+        })
+        .collect();
+    Some(kept.join("\n") + "\n")
 }
 
 pub(crate) fn shutdown() {

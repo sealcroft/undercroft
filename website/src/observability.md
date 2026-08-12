@@ -85,7 +85,12 @@ Exposed series (all `undercroft_*`):
   `http_requests_total{route,status}`, `auth_rejections_total{kind}`.
 - **Histograms** — `search_duration_seconds`, `search_hits`,
   `http_request_duration_seconds{route}`.
-- **Gauges** (per vault) — `drawers`, `audit_chain_height`, plus
+- **Gauges** (per vault — and **suppressed entirely when
+  `UNDERCROFT_ASSERTION_SECRET` is declared**, since `/metrics` addresses no
+  single vault and would otherwise carry one vault's counts to a caller who
+  can assert only another's; the per-vault detail is on `/v1/…/stats`, which
+  is assertion-gated, and no alert depends on these) — `drawers`,
+  `audit_chain_height`, plus
   `kg_triples` / `kg_entities` / `store_bytes` where sampled, and the
   five **codebook generation** counters —
   `codebook_generation_pq_codebook`, `…_pq_ivf`, `…_fde_codebook`,

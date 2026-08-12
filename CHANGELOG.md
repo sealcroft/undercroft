@@ -2,6 +2,57 @@
 
 ## Unreleased — 1.1.0
 
+### `/metrics` stops reading across the assertion boundary
+
+ROADMAP **O25**, found by the adversarial review commissioned for O20 and
+fixed by a third option neither of the two filed there.
+
+`/metrics` is served immediately after the palace bearer and **before**
+`tenancy.authorize`, where `UNDERCROFT_ASSERTION_SECRET` is enforced — because
+the route addresses no single vault, so the per-vault gate never applied to
+it. The gauges are labelled per vault. On a deployment that declared
+assertions, whose entire contract is *"a bearer alone reaches no vault on
+either path"*, a caller authorized for vault A read vault B's record counts,
+chain height, KG size and database bytes, while the banner said "per-vault
+assertions required" without qualification.
+
+Narrowed until now by an **accident, not a boundary**: gauges are populated
+only for vaults with an active stream subscriber — a cost optimisation that
+would have silently widened the disclosure the moment anyone made sampling
+unconditional.
+
+**The fix was decided by a measurement.** Both filed options failed the impact
+analysis: `render_prometheus()` takes no caller identity, and an assertion
+binds exactly ONE vault id, so filtering to the caller leaves a scraper needing
+a fresh time-boxed assertion per vault per scrape. What settled it is that
+**not one rule in `alerts.yml` evaluates a vault-labelled gauge** — all six
+series it uses are vault-blind counters and histograms. So under a declared
+assertion secret the exposition suppresses every vault-labelled series and
+keeps the rest: alerting untouched, per-vault census gone, and the detail
+still available on `/v1/…/stats`, which is assertion-gated. The suppressed set
+derives from `GAUGE_NAMES`, so a gauge added later is covered automatically.
+Aggregating was considered and rejected — a caller who knows A recovers B by
+subtraction.
+
+**The gate needed two arms and the first version had one, vacuously.**
+Measured: a fresh server exposes **zero** `vault=` series until `/v1/…/stats`
+runs, so a check that scrapes and finds no vault label *passes on the broken
+code* — which is what the first draft did. It now populates a gauge through a
+minted assertion before scraping, and runs a **control server** with the
+secret unset through the same sequence which must expose the label. One config
+difference, opposite result.
+
+One defect of my own, caught by the unit test's premise arm on its first run:
+`let _ = init()` drops the telemetry guard at the end of the statement, and
+`TelemetryGuard::drop` calls `shutdown()` — tearing down the process-global
+meter provider and failing a neighbouring test outright. Both telemetry tests
+leak the guard now, since it is a process-lifetime handle rather than a
+per-test one; looped 6/6 before being believed.
+
+`UPGRADING.md` gains an entry: the only deployments affected are those that
+declare assertions *and* scrape those gauges, and their per-vault detail moves
+to a route that was always assertion-gated.
+
 ### the trace verifier is tracked, invoked, and probes itself
 
 ROADMAP **O10**, taken with O15 because both own `tests/battery.sh` and

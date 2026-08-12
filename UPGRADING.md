@@ -75,8 +75,19 @@ was NEVER valid was accepted and silently ignored — so a deployment that
 
 What they can do is stop a **misconfigured** deployment at start-up, which is
 why every one is listed here and detectable in advance by
-`undercroft config check`. If that command exits 0 against your environment,
-none of this affects you.
+`undercroft config check`.
+
+**One entry is the exception to both sentences above, and it is called out
+here rather than left to be discovered inside it.** *"`/metrics` carries no
+vault-labelled series when assertions are declared"* changes what a **running,
+correctly-configured** deployment returns — so it is a response-shape change
+rather than a refusal, `config check` cannot see it (there is no declaration
+that fails to parse), and a scrape that parsed those gauges will find them
+absent. It is still a fix and not a contract change: the series were crossing
+the per-vault assertion boundary the deployment paid to declare. Everything
+else in this section is a misconfiguration caught at start-up, and for those,
+`config check` exiting 0 against your environment means none of them affect
+you.
 
 ### The OTLP traces endpoint obeys the transport policy — cleartext to a non-loopback collector is refused
 
@@ -200,6 +211,41 @@ length floor; what changes is that it says which problem it is.
 
 **Detectable in advance:** yes — `undercroft-orchestrator config check`, which
 did not exist before 1.1.0.
+
+### `/metrics` carries no vault-labelled series when assertions are declared
+
+**Affects:** deployments that declare `UNDERCROFT_ASSERTION_SECRET` **and**
+scrape `/metrics`, on `--features telemetry` builds. Nothing else changes.
+
+**Symptom:** the ten vault-labelled gauges — `undercroft_drawers`,
+`undercroft_audit_chain_height`, `undercroft_kg_triples`,
+`undercroft_kg_entities`, `undercroft_store_bytes` and the five
+`undercroft_codebook_generation_*` — stop appearing in the exposition.
+Dashboard panels built on them go empty. **No alert changes**: every rule in
+the shipped `alerts.yml` evaluates a vault-blind counter or histogram, and
+those are untouched.
+
+**Cause:** `/metrics` is served after the palace bearer and BEFORE per-vault
+assertion, because the route addresses no single vault — so the gate whose
+contract is *"a bearer alone reaches no vault on either path"* never applied
+to it. A caller holding the bearer and an assertion for vault A could read
+vault B's record counts, chain height, KG size and database bytes, while the
+start-up banner said "per-vault assertions required" without qualification.
+
+**Fix / what to do:** nothing, unless you scrape those gauges. If you do, the
+per-vault detail is available on `GET /v1/vaults/{id}/stats`, which is
+assertion-gated — the correct home for it. If you would rather keep the
+gauges on `/metrics`, that means not declaring an assertion secret, which is
+the trade stated plainly rather than hidden.
+
+**It is not filtered to the caller's vault**, because an assertion binds
+exactly one vault id and a scraper would need a fresh time-boxed assertion per
+vault per scrape. **It is not aggregated either**: a caller who legitimately
+knows vault A's counts recovers B by subtracting from a two-vault sum.
+
+**Detectable in advance:** not by `config check` — this is a runtime response
+shape, not a declaration that fails to parse. Scrape `/metrics` on a staging
+node with the secret declared and confirm your dashboards.
 
 ### An empty `UNDERCROFT_MCP_HTTP_TOKEN` refuses instead of removing the bearer gate
 

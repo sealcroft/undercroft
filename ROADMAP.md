@@ -1518,7 +1518,7 @@ so "0 hits" is never read as "0 hits in everything".
 
 ---
 
-### O25 — `/metrics` sits behind the bearer but IN FRONT of per-vault assertion
+### O25 — CLOSED 2026-08-12: under assertions, `/metrics` carries no vault-labelled series
 
 **O25 BLOCKS O20, and they are one question on two binaries.** O20 needs a
 ruling on where `/metrics` sits in a process that serves several isolated
@@ -1587,6 +1587,47 @@ all, or the check passes over an empty registry and reports nothing.
 **Not scheduled here.** It wants its own unit: it changes what a shipped
 route returns, and both candidate fixes are contract decisions rather than
 repairs.
+
+**CLOSED, and by a THIRD option neither of the two filed above.** The
+impact analysis killed both: `render_prometheus()` takes no caller identity,
+and an assertion binds exactly ONE vault id (`"<ts>|<vault_id>"`), so
+"filter to the caller's vaults" yields a single vault and a scraper would need
+a fresh time-boxed assertion per vault per scrape. Refusing the route outright
+was the only remaining filed option and it is heavier than necessary.
+
+**What decided it was a measurement, not a preference:** not one rule in
+`deploy/observability/alerts.yml` evaluates a vault-labelled gauge. All six
+series it uses — `auth_rejections_total`, `chain_commits_total`,
+`drawer_writes_total`, `hmac_verify_failures_total`, `http_requests_total`,
+`search_duration_seconds_bucket` — are vault-BLIND counters and histograms.
+The ten vault-labelled gauges feed dashboard panels only.
+
+So under a declared assertion secret the exposition **suppresses every
+vault-labelled series and keeps everything else**. Alerting is untouched; the
+per-vault panels go empty, and that detail's correct home is `/v1/…/stats`,
+which IS assertion-gated. The suppressed set derives from `GAUGE_NAMES`, so a
+gauge added later is covered without anyone remembering.
+
+**Aggregating instead was considered and is WRONG**, recorded so it is not
+re-proposed: a caller who legitimately knows vault A's counts recovers B
+exactly by subtracting from a two-vault sum.
+
+**The gate needed two arms and the first version had one — vacuously.**
+Measured: a fresh server exposes **zero** `vault=` series until `/v1/…/stats`
+or the SSE sampler runs. So a check that merely scrapes and finds no vault
+label **passes on the broken code**, which is what the first draft did. It now
+(a) mints an assertion and calls `/v1/…/stats` to populate a gauge before
+scraping, and (b) runs a CONTROL server with the secret unset through the same
+sequence, which must expose the label. One config difference, opposite result
+— the counterfactual lives in the suite rather than in a session's memory.
+
+**One defect of my own**, and it was caught by the unit test's premise arm on
+its first run: `let _ = init()` drops the telemetry guard at the end of the
+STATEMENT, and `TelemetryGuard::drop` calls `shutdown()` — which tore down the
+process-global meter provider and failed the neighbouring
+`render_contains_recorded_metrics` outright. Both telemetry tests leak the
+guard now (`std::mem::forget`), because it is a process-lifetime handle rather
+than a per-test one. Looped 6/6 before being believed.
 
 ---
 
@@ -2039,12 +2080,26 @@ variable classified in `ENGINE_ENV_VARS`, which the scanner enforces both ways;
 and the live/SSE third of `undercroft-obs` left alone — it is vault-keyed end
 to end and the orchestrator has no vault.
 
-**BLOCKED ON O25, which must be closed first.** The unanswered question above
-— what plane `/metrics` belongs to — is not an orchestrator question. It is
-the same question O25 raises on the engine: a process serving several isolated
-subjects, and a route that addresses none of them. O25 establishes the
-doctrine; this entry applies it. Attempting O20 first means ruling on
-`/metrics` twice, differently, in two binaries.
+**UNBLOCKED: O25 closed 2026-08-12, and here is the doctrine to apply.**
+The engine's answer to *what does `/metrics` owe when the process serves
+several isolated subjects* is: **serve the subject-BLIND series to whoever
+clears the transport gate, and suppress every series labelled by the isolation
+unit when the isolation is in force.** Not "filter to the caller" — a
+credential that names one subject makes a scraper useless — and not
+aggregation, which leaks by subtraction.
+
+Applied here, the isolation unit is the TENANT, so: counters labelled `route`,
+`status` and `instance` are fine; anything labelled by tenant, vault name or
+tenant name is not, which agrees independently with the cardinality ruling the
+specialist review derived from the per-wing codebook precedent. That agreement
+is worth noting — two different routes to the same constraint.
+
+**What O25 does NOT settle**, and it is the question this entry still owns:
+which PLANE serves `/metrics` on a binary with two credentials and a role that
+has neither. The engine has one bearer and a refuse-to-bind guard; the
+orchestrator has an admin token, per-tenant tokens, an unauthenticated
+`/healthz`, and `serve --read-replica` resolves no admin token at all. That
+ruling is still needed before code.
 
 ---
 

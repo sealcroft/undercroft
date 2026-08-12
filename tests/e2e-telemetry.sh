@@ -63,6 +63,66 @@ grep -q "undercroft_search_total" <<<"$out" && pass "search_total recorded after
 kill "$S1" 2>/dev/null
 wait "$S1" 2>/dev/null
 
+echo "== /metrics under a declared assertion secret (ROADMAP O25) =="
+# `/metrics` is served after the palace bearer and BEFORE per-vault assertion,
+# because the route addresses no single vault — so the gate whose contract is
+# "a bearer alone reaches no vault on either path" never applied to it, and a
+# caller who could assert only vault A read vault B's counts.
+#
+# Asserted on the BODY, not the status: the status is 200 either way, which is
+# why this went unnoticed. The vault-blind series must SURVIVE — every rule in
+# alerts.yml evaluates one, and suppression that took them would trade a
+# disclosure for a blind fleet.
+UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" UNDERCROFT_METRICS=1 \
+  UNDERCROFT_ASSERTION_SECRET="e2e-assertion-secret-0123456789" \
+  "$BIN" serve-http --host 127.0.0.1 --port 8797 >/tmp/tserve3.log 2>&1 &
+S3=$!
+wait_up 8797 || fail "server did not start" "$(cat /tmp/tserve3.log)"
+grep -q "assertions required" /tmp/tserve3.log \
+  && pass "the banner states assertions are required" \
+  || fail "banner did not declare assertions" "$(cat /tmp/tserve3.log)"
+# **A vault gauge has to be POPULATED first, or this proves nothing.** Gauges
+# are set by `/v1/…/stats` (and by the SSE sampler); measured, a fresh server
+# exposes ZERO `vault=` series until one of those runs — so a check that just
+# scrapes and finds no vault label passes on the BROKEN code too. The first
+# version of this block did exactly that. Under assertions the stats call
+# needs a minted header, which is what `assert-header` is for.
+ASSERT=$(UNDERCROFT_ASSERTION_SECRET="e2e-assertion-secret-0123456789" \
+  "$BIN" assert-header default 2>/dev/null)
+[ -n "$ASSERT" ] && pass "an assertion header was minted for the stats call" \
+  || fail "could not mint an assertion — the population step cannot run"
+curl -s -H "Authorization: Bearer $TOKEN" -H "X-Vault-Assertion: $ASSERT" \
+  http://127.0.0.1:8797/v1/vaults/default/stats >/dev/null
+aout=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8797/metrics)
+grep -q "# TYPE" <<<"$aout" \
+  && pass "the assertion-mode scrape returned an exposition" \
+  || fail "empty scrape — the checks below would prove nothing" "$aout"
+grep -q 'vault=' <<<"$aout" \
+  && fail "a vault-labelled series crossed the assertion boundary" "$(grep 'vault=' <<<"$aout" | head -3)" \
+  || pass "no vault-labelled series is exposed under assertions"
+grep -q "undercroft_http_requests_total" <<<"$aout" \
+  && pass "vault-blind counters survive suppression (alerts keep working)" \
+  || fail "suppression took the vault-blind counters too" "$aout"
+kill "$S3" 2>/dev/null
+wait "$S3" 2>/dev/null
+
+# THE COUNTERFACTUAL, in the suite rather than in a session's memory: the same
+# sequence with the assertion secret UNSET must expose the vault label. One
+# config difference, opposite result. Without this arm, "no vault label" is
+# indistinguishable from "no vault series were ever populated" — which is how
+# the first version of the block above passed while measuring nothing.
+UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" UNDERCROFT_METRICS=1 \
+  "$BIN" serve-http --host 127.0.0.1 --port 8798 >/tmp/tserve4.log 2>&1 &
+S4=$!
+wait_up 8798 || fail "control server did not start" "$(cat /tmp/tserve4.log)"
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8798/v1/vaults/default/stats >/dev/null
+cout=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8798/metrics)
+grep -q 'vault=' <<<"$cout" \
+  && pass "control: the same sequence DOES expose vault labels without assertions" \
+  || fail "the control exposed no vault label either — the check above is vacuous" "$cout"
+kill "$S4" 2>/dev/null
+wait "$S4" 2>/dev/null
+
 echo "== /metrics disabled (flag unset -> 404) =="
 UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
   "$BIN" serve-http --host 127.0.0.1 --port 8796 >/tmp/tserve2.log 2>&1 &
