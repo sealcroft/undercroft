@@ -283,11 +283,13 @@ engines never know it exists. Full docs:
 
 ```bash
 export UNDERCROFT_ORCH_KEY=$(undercroft-orchestrator keygen)   # seals engine creds
-export UNDERCROFT_ORCH_ADMIN_TOKEN=...                        # /admin bearer (≥16 chars)
+export UNDERCROFT_ORCH_ADMIN_TOKEN=...                        # /admin bearer (>=16 chars)
+undercroft-orchestrator config check                          # pre-flight the CONTROL PLANE
 undercroft-orchestrator serve                                 # 127.0.0.1:8900 (UNDERCROFT_ORCH_ADDR)
 
 # register engines, create tenants (token shown ONCE), migrate:
-undercroft-orchestrator instance-add engine-a https://a:8800 \n  --bearer <bearer> --assertion-secret <assertion-secret>
+undercroft-orchestrator instance-add engine-a https://a:8800 \
+  --bearer <bearer> --assertion-secret <assertion-secret>
 undercroft-orchestrator tenant-create acme
 undercroft-orchestrator migrate acme engine-b     # export→import→count-verify→flip→delete
 
@@ -978,7 +980,14 @@ and `/ui` answer 403.
 
 **Check them before you deploy.** `undercroft config check` runs every
 `UNDERCROFT_*` declaration in the current environment through the resolver
-that runs at start-up, opening nothing — no vault, no database, no socket, no
+that runs at start-up, opening nothing. **Three do not yet keep that
+promise** — `UNDERCROFT_ORCH_ADMIN_TOKEN`, `_KEY` and `_RATE_LIMIT` are read
+by the control-plane binary and are pre-flighted today by
+`undercroft-orchestrator config check` instead. That is a gap (ROADMAP O24),
+not the design. A fleet runs both commands today; when O24 lands the
+orchestrator's own stays useful for pre-flighting the control plane
+standalone. Both run every declaration through the resolver that runs at
+start-up, opening nothing — no vault, no database, no socket, no
 outbound call — and exits non-zero if the environment would refuse to start.
 Run it in CI against the deployment's real environment; that is the
 difference between finding out in a pipeline and finding out during a rolling
@@ -1176,8 +1185,11 @@ e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 `UNDERCROFT_SERVICE_NAME`.
 
 Orchestrator: `UNDERCROFT_ORCH_DB` · `UNDERCROFT_ORCH_KEY` (required) ·
-`UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, ≥16 chars; unused
-by `serve --read-replica`) · `UNDERCROFT_ORCH_ENGINE_CA` (PEM pinning the root for the hop to the engines — that hop refuses cleartext beyond loopback, with no override) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
+`UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, >=16 chars; unused
+by `serve --read-replica`; refused when empty **or ending in whitespace** —
+HTTP strips a header value's trailing whitespace, so `$(cat token)` over a
+file ending in a newline clears the length floor and produces a control plane
+that starts cleanly and refuses every `/admin` request forever) · `UNDERCROFT_ORCH_ENGINE_CA` (PEM pinning the root for the hop to the engines — that hop refuses cleartext beyond loopback, with no override) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
 `UNDERCROFT_ORCH_RATE_LIMIT` (req/min per tenant; unset/`0`/`off` = off;
 per-process — each replica enforces its own windows. A value that is not
 one of those **refuses to start**, the engine's posture for a declaration
@@ -1191,6 +1203,7 @@ CONFIGURATION first, because it is the only check that needs nothing running:
 
 ```bash
 undercroft config check                    # exit 0, "This environment starts"
+undercroft-orchestrator config check       # scenario D only: the control plane
 ```
 
 

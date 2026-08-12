@@ -16,6 +16,11 @@ the resolver that runs at start-up, and **opens nothing** — no vault, no
 database, no socket, no outbound call. Exit 1 means this environment would
 refuse to start; exit 0 means it starts.
 
+**Three declarations do not yet keep that promise**, and it is a gap rather
+than the design (ROADMAP **O24**): `UNDERCROFT_ORCH_ADMIN_TOKEN`,
+`UNDERCROFT_ORCH_KEY` and `UNDERCROFT_ORCH_RATE_LIMIT` are read by the
+control-plane binary and are pre-flighted today by its own command instead.
+
 Run it in a pipeline against the deployment's real environment. That is the
 difference between finding out in CI and finding out during a rolling
 restart, one node at a time.
@@ -29,12 +34,14 @@ undercroft-orchestrator config check
 
 It runs the four `UNDERCROFT_ORCH_*` declarations that binary reads through
 the same resolvers its `serve` path runs, opens no state database and binds no
-port, and uses the same exit codes. The two commands are separate because the
-two crates deliberately cannot link — the engine is tree-blind and the
-orchestrator is a pure `/v1` client — so neither can run the other's
-resolvers at any price. What must not drift is the CLASSIFICATION of each
-variable, and that is counted across the two inventories, in both directions,
-by a test rather than by anyone remembering.
+port, and uses the same exit codes. What must not drift is the CLASSIFICATION
+of each variable, and that is counted across the two inventories, in both
+directions, by a test rather than by anyone remembering.
+
+**Run it because it pre-flights the control plane standalone — not because
+the engine's command is supposed to skip those three.** It is not: three of
+them are a coverage gap in the engine's command (O24), and closing it does not
+retire this one.
 
 Everything that can refuse is pre-flighted by one of the two. Until 1.1.0 the
 orchestrator's declarations had no pre-flight at all, and this paragraph said

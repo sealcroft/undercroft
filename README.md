@@ -358,7 +358,10 @@ undercroft config check              # validate every UNDERCROFT_* declaration
                                      # WITHOUT opening a vault or binding a port;
                                      # exits non-zero if this environment would
                                      # refuse to start. Run it in CI before an
-                                     # upgrade — see UPGRADING.md
+                                     # upgrade — see UPGRADING.md. Three ORCH
+                                     # declarations are a known gap (ROADMAP O24)
+                                     # and are pre-flighted today by
+                                     # `undercroft-orchestrator config check`
 ```
 
 `serve-http` is both the shared team server (MCP over HTTP, bearer auth) and

@@ -37,25 +37,25 @@ struct Cli {
 enum Command {
     /// Generate a fresh orchestrator key (and a suggested admin token)
     Keygen,
-    /// Validate every `UNDERCROFT_ORCH_*` declaration in this environment
-    /// WITHOUT opening the state database or binding a port
+    /// Inspect this deployment's configuration (see `config check`)
     ///
-    /// Exit 1 if any declaration that turns a protection on would refuse to
-    /// start; exit 0 otherwise. Warnings do not fail the run.
-    ///
-    /// `undercroft config check` covers the ENGINE. This covers the control
-    /// plane, and a fleet needs both — that gap is ROADMAP O21.
+    /// The two-word spelling every document publishes. It exists beside the
+    /// hyphenated one from the start rather than being added after a doc was
+    /// found wrong — the engine shipped only `config-check` while every
+    /// document published `config check`, and the published form did not run
+    /// (ROADMAP O18).
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Validate every `UNDERCROFT_ORCH_*` declaration in this environment
-    /// WITHOUT opening the state database or binding a port
+    /// Validate every `UNDERCROFT_ORCH_*` declaration WITHOUT opening the
+    /// state database or binding a port
     ///
-    /// The hyphenated spelling, kept beside `config check` from the start
-    /// rather than added after a doc was found wrong: the engine shipped only
-    /// this one while every document published the two-word form, and the
-    /// two-word form did not run.
+    /// Exit 1 if any declaration that turns a protection on would refuse to
+    /// start; exit 0 otherwise. Warnings do not fail the run.
+    ///
+    /// `undercroft config check` covers the ENGINE and cannot run this
+    /// binary's resolvers — the two do not link. A fleet runs both.
     ConfigCheck {
         /// Also print the declarations that resolve cleanly
         #[arg(long)]
@@ -544,6 +544,68 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The engine's help gate, on the binary that did not have one.**
+    ///
+    /// Found by the drift check for O21 rather than by the unit itself:
+    /// `every_subcommand_has_its_own_about_and_config_check_runs` existed
+    /// only in `undercroft-cli`, so the class it guards — a variant inserted
+    /// BETWEEN a doc comment and the variant it documented, which leaves one
+    /// subcommand bare and the other wearing two — was ungated in this
+    /// binary the whole time. That is exactly the shape of ROADMAP O18, and
+    /// this unit had just added two variants here.
+    ///
+    /// Nothing in the tree can see that class otherwise: clap accepts it,
+    /// rustfmt accepts it, and no other gate reads help strings.
+    #[test]
+    fn every_subcommand_has_its_own_about_and_config_check_runs() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+
+        // Both spellings parse. Unlike the engine, this binary shipped them
+        // together — the engine published `config check` in every doc while
+        // only `config-check` ran, and there is no reason to repeat that.
+        assert!(
+            Cli::try_parse_from(["undercroft-orchestrator", "config", "check"]).is_ok(),
+            "the two-word spelling is what the docs publish and it must run"
+        );
+        assert!(
+            Cli::try_parse_from(["undercroft-orchestrator", "config-check"]).is_ok(),
+            "the hyphenated spelling must run too"
+        );
+
+        let mut seen: std::collections::HashMap<String, String> = Default::default();
+        for sub in cmd.get_subcommands() {
+            let name = sub.get_name().to_string();
+            let about = sub
+                .get_about()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            assert!(
+                !about.is_empty(),
+                "subcommand `{name}` advertises no help text — the usual cause \
+                 is a variant inserted between a doc comment and the variant it \
+                 documented, which leaves this one bare and the other one \
+                 wearing two"
+            );
+            if let Some(other) = seen.insert(about.clone(), name.clone()) {
+                panic!(
+                    "`{name}` and `{other}` advertise the SAME help text \
+                     {about:?} — one of them has taken the other's doc comment"
+                );
+            }
+        }
+        // Premise: the walk examined the real surface. An empty or tiny
+        // subcommand list satisfies every assertion above.
+        assert!(
+            cmd.get_subcommands().count() >= 10,
+            "premise: this gate must have walked the real command surface, \
+             found {}",
+            cmd.get_subcommands().count()
+        );
+    }
 
     /// **A fleet-wide integrity check must not report success on a
     /// tampered vault.**

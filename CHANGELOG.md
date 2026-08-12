@@ -60,6 +60,35 @@ empty sets read exactly like agreement. Both were run against a counterfactual
 reaching the **same verdict** on the same declaration, which is the whole
 point of having two.
 
+**The drift check across surfaces found three more, and it was run because
+the maintainer asked for it rather than because the unit produced it** — the
+definition of done requires it and this unit had skipped it, going straight
+from a green battery to offering the commit.
+
+1. **A GATE existed on one binary and not the other.**
+   `every_subcommand_has_its_own_about_and_config_check_runs` lived only in
+   `undercroft-cli`, so the class it guards — a variant inserted between a doc
+   comment and the variant it documented, leaving one subcommand bare and the
+   other wearing two — was ungated in the orchestrator the whole time. That is
+   ROADMAP O18's shape, and this unit had just added two variants to the
+   ungated binary. Ported, **and it failed on its first run**: `config` and
+   `config-check` advertised identical help, so `--help` listed two
+   indistinguishable entries. Both reworded.
+2. **`docs/AGENTS.md` claimed `undercroft config check` runs "every
+   `UNDERCROFT_*` declaration"**, which is false for the four the control
+   plane reads. Corrected in four passages — §11, Scenario D's recipe, the
+   prove-it block and the orchestrator env reference, which described the
+   admin token as "≥16 chars" and now names the whitespace refusal.
+   `website/src/agents.md` is an `{{#include}}` of it, so one edit covers
+   both. `README.md` said the same thing in the same words.
+3. **A published shell command was broken**, pre-existing and found only
+   because the sweep read the file: Scenario D's `instance-add` carried a
+   **literal `\n`** where a line continuation belonged, so copying it ran a
+   command with `\n` as an argument. Fixed — and the first fix was a no-op,
+   because the nested quoting collapsed the replacement back into the string
+   it was replacing. That is this tree's documented escape hazard, and it is
+   why the byte-scan afterwards is not optional.
+
 Two self-inflicted defects, both caught by mechanisms rather than by care, and
 both worth recording. The e2e check for the trailing newline built its value
 with `$(printf '…\n')` — command substitution **strips trailing newlines**, so

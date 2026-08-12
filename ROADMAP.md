@@ -41,7 +41,10 @@ Everything else on the branch is patch-level and folded in.
 * **`undercroft config check`** — validates every `UNDERCROFT_*` declaration
   through the resolver that runs at start-up, opening nothing (no vault, no
   database, no socket, no outbound call), and exits non-zero if the
-  environment would refuse to start. Reports validated and merely-accepted
+  environment would refuse to start. **Three are a known coverage gap** and
+  are pre-flighted today by **`undercroft-orchestrator config check`** (O21)
+  instead — see **O24**, which closes it by sharing the resolvers rather than
+  by narrowing the promise. Reports validated and merely-accepted
   separately, because only some variables have a parse to run.
 * **Capability parity closed on four surfaces.** `POST /v1/…/refine` gained
   `dry_run` and `preview`; `POST /v1/…/forget` gained `backend`;
@@ -1367,6 +1370,118 @@ MCP.
 `/v1` on both sides of a rotation, and the CLI and the route are shown to
 agree on one attestation — the same document, the same verdict, from both
 doors.
+
+---
+
+### O24 — `undercroft config check` does not cover four declarations it promises to, and the promise is the right one
+
+Found 2026-08-12 while drift-checking O21. **Filed as a gap in the CODE, after
+first being mis-filed as a gap in the docs** — the mis-filing is part of the
+entry because the reasoning error is the expensive artifact here.
+
+**What happened.** Six surfaces said `undercroft config check` validates every
+`UNDERCROFT_*` declaration: `UPGRADING.md`, `ROADMAP`, `README`,
+`docs/AGENTS.md`, `architecture/index.html`'s **doctrine paragraph**, and
+`CLAUDE.md`'s configuration section. The code validates all but three
+(`UNDERCROFT_ORCH_ADMIN_TOKEN`, `_KEY`, `_RATE_LIMIT`). The drift check
+narrowed the six documents to match the code, on the argument that the two
+crates deliberately do not link.
+
+**That argument was wrong, and three things in the tree say so.**
+
+1. **`ENGINE_ENV_VARS` already contains all six `UNDERCROFT_ORCH_*`
+   entries.** The inventory the engine's command iterates was deliberately
+   built to include them. Had the intent been "engine only", they would not be
+   in it.
+2. **`UNDERCROFT_ORCH_ENGINE_CA` is already validated by the engine's
+   command**, through `undercroft_net::declared_pin`. The engine therefore
+   already pre-flights an orchestrator declaration, so the boundary the
+   narrowing asserted is not one the code observes.
+3. **The three parses are pure string→value** — a hex decode, an
+   empty/whitespace/length check, a `u64`-or-`off` parse. None touches the
+   state database or the proxy. `CLAUDE.md`'s *"never linked by the engine"*
+   forbids the engine depending on the control-plane CRATE; it does not
+   forbid the engine validating those strings. Collapsing those two is what
+   produced the wrong conclusion.
+
+**When a claim is consistent across every surface including the doctrine, the
+prior is that the CODE is wrong.** Six documents do not independently invent
+the same promise. That is the rule this entry exists to record.
+
+**Shape of the fix.** Move the three resolvers to a crate both binaries can
+see — `undercroft-core` is the candidate (a leaf domain crate; the
+orchestrator does not depend on it today but taking it pulls no control-plane
+code, and it must NOT be `undercroft-net`, which is transport). `Orch::open`,
+`Orch::open_read_only`, the `serve` arm, the orchestrator's `config check` and
+the engine's `check_declaration` then all call ONE implementation each. The
+three entries leave `config_check::PREFLIGHT_EXEMPT`, and the both-directions
+gate added in #9 forces that deletion rather than leaving it to rot. The six
+surfaces get their original promise back, unqualified.
+
+**This supersedes the first draft of this entry**, which proposed a
+`Finding::Elsewhere` variant naming the other command. That was a cosmetic fix
+to a report — it would have made the output honest about a coverage gap
+instead of closing it, which is the same mistake one layer in.
+
+**What stays either way:** `undercroft-orchestrator config check` (O21) is
+still right and still useful — it pre-flights the control plane standalone,
+it forced two resolvers out of `Orch::open`'s body, and it closed a live
+defect. Nothing here undoes it. What changes is that it stops being the ONLY
+place those three are checked.
+
+**Until it lands**, the six surfaces state the promise AND name this entry as
+the gap, rather than describing the narrowed behaviour as the design.
+
+**Gate:** `every_protects_variable_is_pre_flighted_or_exempt` in
+`undercroft-cli` with the three entries deleted — it fails today and passes
+when the resolvers are shared; plus an `e2e.sh` check that
+`UNDERCROFT_ORCH_ADMIN_TOKEN=` makes the ENGINE's `config check` exit 1,
+which is the observable an operator actually depends on.
+
+---
+
+### O24a — superseded framing, kept because the reasoning error is the lesson
+
+The paragraph below was this entry's first body. It is retained rather than
+deleted: it is the half-correct version, and what separates it from the
+version above is not new evidence but reading the inventory the command
+already iterates.
+
+`undercroft config check` iterates `ENGINE_ENV_VARS`, which contains the six
+`UNDERCROFT_ORCH_*` entries. Three of them (`_ADMIN_TOKEN`, `_KEY`,
+`_RATE_LIMIT`) have no arm in the engine and fall to `Finding::Accepted`,
+which prints *"no parse to run; the consumer validates it"* — and only under
+`--verbose`; otherwise they are silently counted in `accepted`.
+
+That sentence is true and it misleads. The "consumer" is not some remote
+process the operator cannot reach: it is **`undercroft-orchestrator config
+check`, a command they own and can run right now**. An operator reading that
+line learns the value was not checked here; they do not learn where it *is*
+checked. The prose on every surface now says a fleet runs two commands
+(corrected in the same sweep that found this — `UPGRADING.md`, `ROADMAP`,
+`README`, `docs/AGENTS.md`, `architecture/index.html`), but the command
+itself still does not.
+
+**Why it was not fixed in the same unit**: the context budget was past the
+point where `CLAUDE.md` says to stop taking work and spend what is left on
+governance, and this needs a new `Finding` variant, a projection decision
+(does a "checked elsewhere" line count as `accepted`, or as its own total?),
+and a gate. Half-landing a surface's output is how a report starts lying in a
+new way.
+
+**Shape of the fix.** A `Finding::Elsewhere(&'static str)` naming the command
+that validates it, produced by an arm over the orchestrator-owned names —
+sourced from the exemption list rather than a second literal set, so the two
+cannot drift. It should print without `--verbose`, because "you have another
+command to run" is not a detail. Whether it counts as `accepted` or as its own
+column is the one real decision: `accepted` currently means *nothing checked
+this*, and that would stop being true.
+
+**Gate:** a test asserting that every name in `PREFLIGHT_EXEMPT` whose reason
+is the orchestrator produces `Elsewhere` and not `Accepted`, counted both
+ways against the orchestrator's own `ORCH_ENV_VARS`; plus an `e2e.sh` check
+that the line appears in non-verbose output. The premise arm matters — an
+empty exemption list would satisfy the first assertion trivially.
 
 ---
 
