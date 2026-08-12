@@ -41,10 +41,11 @@ Everything else on the branch is patch-level and folded in.
 * **`undercroft config check`** — validates every `UNDERCROFT_*` declaration
   through the resolver that runs at start-up, opening nothing (no vault, no
   database, no socket, no outbound call), and exits non-zero if the
-  environment would refuse to start. **Three are a known coverage gap** and
-  are pre-flighted today by **`undercroft-orchestrator config check`** (O21)
-  instead — see **O24**, which closes it by sharing the resolvers rather than
-  by narrowing the promise. Reports validated and merely-accepted
+  environment would refuse to start — **including the four `UNDERCROFT_ORCH_*`
+  the control plane reads** (O24 moved three shared parses into
+  `undercroft-config` so this command runs the same code the control plane
+  runs). **`undercroft-orchestrator config check`** (O21) pre-flights the
+  control plane standalone. Reports validated and merely-accepted
   separately, because only some variables have a parse to run.
 * **Capability parity closed on four surfaces.** `POST /v1/…/refine` gained
   `dry_run` and `preview`; `POST /v1/…/forget` gained `backend`;
@@ -1373,7 +1374,7 @@ doors.
 
 ---
 
-### O24 — `undercroft config check` does not cover four declarations it promises to, and the promise is the right one
+### O24 — CLOSED 2026-08-12: the promise is kept, by sharing the parses rather than narrowing it
 
 Found 2026-08-12 while drift-checking O21. **Filed as a gap in the CODE, after
 first being mis-filed as a gap in the docs** — the mis-filing is part of the
@@ -1437,6 +1438,41 @@ the gap, rather than describing the narrowed behaviour as the design.
 when the resolvers are shared; plus an `e2e.sh` check that
 `UNDERCROFT_ORCH_ADMIN_TOKEN=` makes the ENGINE's `config check` exit 1,
 which is the observable an operator actually depends on.
+
+**CLOSED as filed.** `undercroft-config` is the thirteenth crate — leaf, two
+dependencies (`thiserror`, `hex`), carved out on the precedent
+`undercroft-net` set and for the same reason: a policy several crates need has
+one implementation, and when the crates that need it cannot link each other it
+gets a home neither owns. `Orch::open`, `Orch::open_read_only`, the `serve`
+arm, `undercroft-orchestrator config check` and the engine's
+`check_declaration` now call one function each. The three entries left
+`PREFLIGHT_EXEMPT`, and **nothing is exempt from that command any more.**
+
+**The placement was decided by the doctrine, not by preference**, which is the
+rule this whole thread produced. `undercroft-core` was the candidate in the
+filing and is wrong: it would put deployment-config parsing in the crate
+`CLAUDE.md` documents as *"domain model, chunking, ids, normalization"* and
+charge the control plane unicode-normalization, `calendrical_calculations` and
+`time` for three string parses. `undercroft-net` correctly keeps the two
+declaration resolvers that ARE transport (`declared_pin`,
+`declared_endpoint`) and correctly does not take these.
+
+**Both gate directions were RUN, not assumed.** With the exemptions deleted
+and one arm disabled, `every_protects_variable_is_pre_flighted_or_exempt`
+fails with *"UNDERCROFT_ORCH_KEY — Protects, but this command runs no parse
+for it"*; with the arm restored it passes. Five new `e2e.sh` checks drive the
+ENGINE's command over an empty bearer, an unpresentable one, a bad key and a
+bad rate limit — and over an **empty rate limit, which must stay the DEFAULT**,
+because that one is a closed vocabulary and the opposite answer from the two
+secrets. The first run of that last check failed for the right reason and the
+wrong cause: an earlier check leaves an unpresentable bearer exported and
+`config check` reports every declaration, so the exit code said nothing about
+the subject. A check must isolate its own subject; it resets the bearer first
+now.
+
+**A cost worth stating:** the crate count is a number in exactly one place
+(`CLAUDE.md`), which was measured rather than assumed — the same question was
+first answered from memory, wrongly, as "three docs".
 
 ---
 

@@ -16,10 +16,11 @@ the resolver that runs at start-up, and **opens nothing** — no vault, no
 database, no socket, no outbound call. Exit 1 means this environment would
 refuse to start; exit 0 means it starts.
 
-**Three declarations do not yet keep that promise**, and it is a gap rather
-than the design (ROADMAP **O24**): `UNDERCROFT_ORCH_ADMIN_TOKEN`,
-`UNDERCROFT_ORCH_KEY` and `UNDERCROFT_ORCH_RATE_LIMIT` are read by the
-control-plane binary and are pre-flighted today by its own command instead.
+**Every one of them, including the four `UNDERCROFT_ORCH_*` the control
+plane reads.** Three of those were a coverage gap until 1.1.0 — their parses
+sat inside a binary the engine deliberately never links — and O24 closed it by
+moving the parses to a crate both link and neither owns, so this command runs
+the same code the control plane runs at start-up.
 
 Run it in a pipeline against the deployment's real environment. That is the
 difference between finding out in CI and finding out during a rolling
@@ -38,14 +39,15 @@ port, and uses the same exit codes. What must not drift is the CLASSIFICATION
 of each variable, and that is counted across the two inventories, in both
 directions, by a test rather than by anyone remembering.
 
-**Run it because it pre-flights the control plane standalone — not because
-the engine's command is supposed to skip those three.** It is not: three of
-them are a coverage gap in the engine's command (O24), and closing it does not
-retire this one.
+**Run it to pre-flight the control plane standalone** — on a host that runs
+the orchestrator and no engine, it is the command there is. It is not a
+substitute for the engine's, and the engine's is not a substitute for it: the
+two cover different binaries, and the three declarations they share go through
+one implementation, so they cannot disagree.
 
-Everything that can refuse is pre-flighted by one of the two. Until 1.1.0 the
-orchestrator's declarations had no pre-flight at all, and this paragraph said
-so (ROADMAP O21).
+Everything that can refuse is pre-flighted. Until 1.1.0 the orchestrator's
+declarations had no pre-flight at all (ROADMAP O21), and three of them were
+then missing from the engine's for one release (**O24**).
 
 **There used to be a second limit here and it was too broad**: *"it cannot
 check a credential — any string is a well-formed passphrase or token."* That

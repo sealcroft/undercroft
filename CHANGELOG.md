@@ -2,6 +2,63 @@
 
 ## Unreleased — 1.1.0
 
+### the promise six surfaces made is kept, by sharing the parses rather than narrowing it
+
+ROADMAP **O24**, and the thirteenth crate.
+
+`undercroft config check` is documented in six places — `UPGRADING.md`,
+`ROADMAP`, `README`, `docs/AGENTS.md`, `CLAUDE.md` and
+`architecture/index.html`'s **doctrine paragraph** — as validating every
+`UNDERCROFT_*` declaration. Three were not validated: `UNDERCROFT_ORCH_KEY`,
+`_ADMIN_TOKEN` and `_RATE_LIMIT`, whose parses lived inside
+`undercroft-orchestrator`, which the engine deliberately never links.
+
+**The first attempt narrowed all six documents to match the code.** That was
+backwards, and three things in the tree said so before any of them was
+edited: the engine's own `ENGINE_ENV_VARS` already CONTAINED those names;
+`UNDERCROFT_ORCH_ENGINE_CA` was already validated by that very command; and
+the three parses are pure string→value, so *"never linked by the engine"* —
+which forbids a crate dependency — was used to license something it does not
+cover. **When a claim is consistent across every surface including the
+doctrine, the prior is that the CODE is wrong**; several documents do not
+independently invent the same promise. That rule is now in `CLAUDE.md`, and
+the wrong draft is kept as **O24a** because what separated it from the right
+answer was not new evidence but reading the inventory the command already
+iterates.
+
+**`undercroft-config`** is a leaf crate with two dependencies (`thiserror`,
+`hex`), carved out on the precedent `undercroft-net` set: a policy several
+crates need has one implementation, and when the crates that need it cannot
+link each other it gets a home neither owns. `Orch::open`,
+`Orch::open_read_only`, the `serve` arm, `undercroft-orchestrator config
+check` and the engine's `check_declaration` all call one function each —
+which also removed the key decode that was written out twice inside the two
+opens.
+
+Placement was decided by the doctrine rather than by preference.
+`undercroft-core` would put deployment-config parsing in the crate documented
+as *"domain model, chunking, ids, normalization"* and charge the control plane
+unicode-normalization, `calendrical_calculations` and `time` for three string
+parses. `undercroft-net` correctly keeps the two declaration resolvers that
+ARE transport and correctly does not take these.
+
+**`PREFLIGHT_EXEMPT` is now empty of engine-reachable entries** — nothing is
+exempt from `config check` for being a credential or for belonging to another
+binary. Both gate directions were run rather than assumed: with the
+exemptions deleted and one arm disabled, the both-directions gate fails with
+*"UNDERCROFT_ORCH_KEY — Protects, but this command runs no parse for it"*;
+restored, it passes. Five new `e2e.sh` checks (330 → 335) drive the **engine's**
+command over an empty bearer, an unpresentable one, a bad key and a bad rate
+limit — and over an **empty rate limit, which must stay the default**, since
+that one is a closed vocabulary and takes the opposite answer from the two
+secrets.
+
+One self-inflicted defect, recorded: that last check failed on its first run
+for the right reason and the wrong cause. An earlier check deliberately leaves
+an unpresentable bearer exported, and `config check` reports every
+declaration, so the exit code said nothing about the subject. A check must
+isolate its own subject; it resets the bearer first now.
+
 ### the control plane can be pre-flighted, and its admin bearer could not be presented
 
 ROADMAP **O21**. `undercroft config check` runs the ENGINE's resolvers; four

@@ -16,6 +16,9 @@ hnsw = ["dep:instant-distance"]
 [dependencies]
 rayon = { workspace = true }
 undercroft-core = { path = "../undercroft-core" }
+# The control plane's declaration parses, so `check_declaration` can run the
+# SAME code the orchestrator runs rather than a second copy (ROADMAP O24).
+undercroft-config = { path = "../undercroft-config" }
 undercroft-vault = { path = "../undercroft-vault" }
 undercroft-index = { path = "../undercroft-index" }
 # The transport policy owns the CA-pin resolver that `config check` drives.

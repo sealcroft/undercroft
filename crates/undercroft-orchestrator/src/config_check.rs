@@ -19,8 +19,7 @@
 //! floor was an `if` in the `serve` arm — none of them reachable without
 //! opening a database or binding a port.
 
-use crate::proxy::{resolve_admin_token, resolve_rate_limit};
-use crate::state::resolve_orch_key;
+use undercroft_config::{resolve_admin_token, resolve_orch_key, resolve_rate_limit};
 
 /// What a bad value does, per `CLAUDE.md`'s configuration doctrine.
 ///

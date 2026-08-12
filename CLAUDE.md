@@ -83,7 +83,7 @@ Consequences that are binding, not advisory:
 
 ## Layout
 
-- `Cargo.toml` — workspace root (12 crates; `undercroft-embed-onnx` and
+- `Cargo.toml` — workspace root (13 crates; `undercroft-embed-onnx` and
   `undercroft-embed-ort` excluded from default-members — heavy ML deps,
   built explicitly)
 - `crates/undercroft-core` — domain model, chunking, ids, normalization
@@ -721,6 +721,23 @@ Consequences that are binding, not advisory:
   over preserved audit bytes, crash-reconciled at open), bulk ingest
   (`upsert_many`: one transaction + one manifest anchor per batch —
   advisory encode paths must never BEGIN or batching breaks)
+- `crates/undercroft-config` — the declaration resolvers the engine and the
+  control plane SHARE (`resolve_orch_key`, `resolve_admin_token`,
+  `resolve_rate_limit`). Its own crate on `undercroft-net`'s precedent: a
+  policy several crates need has one implementation, and when the crates that
+  need it cannot link each other it gets a home neither owns. Six surfaces
+  including the doctrine promised `undercroft config check` validates every
+  `UNDERCROFT_*` declaration; three were not, because their parses sat inside
+  `undercroft-orchestrator` — and the first fix attempt narrowed all six
+  documents to match the code instead (ROADMAP O24, and **O24a keeps that
+  draft**, because what separated right from wrong was not new evidence but
+  reading the inventory the command already iterates). **The dependency list
+  is the design** — `thiserror` and `hex`, nothing else: both consumers pay
+  for whatever lands here, which is why this is not in `undercroft-core`
+  (unicode normalization and a calendar library, for three string parses) and
+  not in `undercroft-net`, whose domain is transport and which correctly
+  keeps the two declaration resolvers that ARE transport (`declared_pin`,
+  `declared_endpoint`)
 - `crates/undercroft-net` — the outbound transport policy, in ONE place:
   **TLS or loopback, nothing else, no override** (refused at construction,
   before a byte moves) plus CA pinning, where a declared root REPLACES the
@@ -1118,8 +1135,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (719 run,
-                                      # 4 #[ignore]d = 723 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (722 run,
+                                      # 4 #[ignore]d = 726 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1165,7 +1182,7 @@ docker compose run --rm test          # cargo unit + integration tests (719 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (330 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (335 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (107 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (30 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate

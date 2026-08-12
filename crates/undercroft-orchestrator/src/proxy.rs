@@ -80,73 +80,16 @@ pub(crate) struct RateLimiter {
 /// declaration this process cannot read is a startup refusal, not a
 /// default. Pure, so the parse is tested without touching the
 /// environment.
-/// The `/admin` plane's bearer.
+/// The `/admin` bearer and the rate screen, re-exported from
+/// `undercroft-config`.
 ///
-/// **One implementation, two callers**: the `serve` arm and
-/// `undercroft-orchestrator config check`. Before it there was no resolver at
-/// all — `serve` read the variable and applied a 16-character floor inline,
-/// which is a parse a pre-flight cannot reach.
-///
-/// **Trailing whitespace refuses, and that is the defect this function was
-/// written for.** HTTP strips a header field value's trailing whitespace, so
-/// the bearer that ARRIVES is always the trimmed one; `proxy.rs`'s
-/// `strip_prefix("Bearer ")` then compares it against the untrimmed
-/// declaration and never matches. `UNDERCROFT_ORCH_ADMIN_TOKEN=$(cat
-/// /run/secrets/token)` over a file ending in a newline clears the
-/// 16-character floor at 17 and produces an admin plane that starts cleanly
-/// and refuses every request forever — 401 naming no cause, nothing in the
-/// log. The floor is what made it survive: it is a length test, and a newline
-/// has length.
-///
-/// It is **not trimmed for you**: that authenticates a key the operator did
-/// not declare. Leading and internal whitespace are presentable — measured on
-/// the engine's identical path, both answer 200 — so they stay values, and
-/// the refusal is exactly as wide as the defect. See `CLAUDE.md`: *a
-/// declaration that cannot work is refused, never quietly adjusted into one
-/// that can.*
-pub(crate) fn resolve_admin_token(env: Option<&str>) -> anyhow::Result<String> {
-    let Some(raw) = env else {
-        anyhow::bail!("UNDERCROFT_ORCH_ADMIN_TOKEN is not set");
-    };
-    if raw.trim().is_empty() {
-        anyhow::bail!(
-            "UNDERCROFT_ORCH_ADMIN_TOKEN is set but names no token (it is empty or only \
-             whitespace). It is most often an unset shell variable interpolated into a compose \
-             file or a systemd unit"
-        );
-    }
-    if raw.trim_end() != raw {
-        anyhow::bail!(
-            "UNDERCROFT_ORCH_ADMIN_TOKEN ends in whitespace, and no client could ever present \
-             it: HTTP strips a header value's trailing whitespace, so the bearer that arrives \
-             is always the trimmed one and every /admin request is refused — a 401 that names \
-             no cause, from a control plane that started cleanly. It is most often \
-             `$(cat /run/secrets/token)` over a file ending in a newline, which clears the \
-             16-character floor because a newline has length. Strip it at the source \
-             (`tr -d '\\n'`). It is not trimmed here on purpose: that would authenticate a key \
-             you did not declare"
-        );
-    }
-    if raw.len() < 16 {
-        anyhow::bail!("UNDERCROFT_ORCH_ADMIN_TOKEN must be at least 16 characters");
-    }
-    Ok(raw.to_string())
-}
-
-pub(crate) fn resolve_rate_limit(env: Option<&str>) -> anyhow::Result<u64> {
-    let Some(v) = env else { return Ok(0) };
-    let v = v.trim();
-    if v.is_empty() || v.eq_ignore_ascii_case("off") {
-        return Ok(0);
-    }
-    v.parse::<u64>().map_err(|_| {
-        anyhow::anyhow!(
-            "UNDERCROFT_ORCH_RATE_LIMIT={v:?} — expected requests per minute as a \
-             plain positive integer (e.g. 600), or 0/off; refusing to start with \
-             an unreadable rate-limit declaration"
-        )
-    })
-}
+/// **Both parses moved out of this crate** (ROADMAP O24): `undercroft config
+/// check` promises to validate every `UNDERCROFT_*` declaration, six surfaces
+/// including the doctrine say so, and it could not reach a parse that lived
+/// here — the engine never links the control plane. They are re-exported
+/// rather than re-implemented so every existing call site is unchanged and
+/// there is still exactly one implementation of each.
+pub(crate) use undercroft_config::{resolve_admin_token, resolve_rate_limit};
 
 impl RateLimiter {
     pub(crate) fn from_env() -> anyhow::Result<Self> {

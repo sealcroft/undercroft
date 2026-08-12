@@ -174,6 +174,33 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
         // arm the variable fell to `_ => Ok(None)` and `config check`
         // reported "no parse to run; the consumer validates it", when the
         // consumer validated nothing at all.
+        // **The control plane's three declarations, ROADMAP O24.** Six
+        // surfaces — including `architecture/index.html`'s doctrine paragraph
+        // — promise that this command validates every `UNDERCROFT_*`
+        // declaration, and these three were not validated: their parses lived
+        // inside `undercroft-orchestrator`, which the engine deliberately
+        // never links. The first attempt narrowed all six documents to match
+        // the code, which was backwards — the engine's own `ENGINE_ENV_VARS`
+        // already CONTAINED these names, and `UNDERCROFT_ORCH_ENGINE_CA` was
+        // already validated one arm below.
+        //
+        // The parses now live in `undercroft-config`, which both binaries
+        // link and neither owns, so this is the SAME code the control plane
+        // runs at start-up rather than a second copy of it.
+        "UNDERCROFT_ORCH_KEY" => undercroft_config::resolve_orch_key(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|_| described("seals engine credentials and MACs tenant tokens".into())),
+        "UNDERCROFT_ORCH_ADMIN_TOKEN" => undercroft_config::resolve_admin_token(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|_| described("bearer required on the orchestrator's /admin plane".into())),
+        "UNDERCROFT_ORCH_RATE_LIMIT" => undercroft_config::resolve_rate_limit(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|n| {
+                described(match n {
+                    0 => "no rate screen".into(),
+                    n => format!("{n} requests/minute per tenant"),
+                })
+            }),
         // …through `declared_endpoint`, NOT `require_secure_transport`
         // directly. The policy call alone answered the wrong question for an
         // empty value: it parses the string, fails, and reports an

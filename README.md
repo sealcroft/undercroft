@@ -358,10 +358,10 @@ undercroft config check              # validate every UNDERCROFT_* declaration
                                      # WITHOUT opening a vault or binding a port;
                                      # exits non-zero if this environment would
                                      # refuse to start. Run it in CI before an
-                                     # upgrade — see UPGRADING.md. Three ORCH
-                                     # declarations are a known gap (ROADMAP O24)
-                                     # and are pre-flighted today by
-                                     # `undercroft-orchestrator config check`
+                                     # upgrade — see UPGRADING.md. Covers the
+                                     # control plane's declarations too; the
+                                     # orchestrator has its own command for
+                                     # pre-flighting a fleet standalone
 ```
 
 `serve-http` is both the shared team server (MCP over HTTP, bearer auth) and
@@ -477,6 +477,8 @@ crates/
   undercroft-index/   remote vector backends as untrusted accelerators
   undercroft-llm/     local LLM runtimes + the HTTP-served embedder
   undercroft-net/     the outbound transport policy: TLS or loopback, no override
+  undercroft-config/  declaration resolvers the engine and the control plane
+                     share, so a pre-flight runs the same parse a start-up does
   undercroft-obs/     observability shim: no-op and zero-dep by default
   undercroft-orchestrator/  optional multi-tenant control plane (own binary)
   undercroft-bench/   retrieval benchmark + synthetic-instrument harnesses

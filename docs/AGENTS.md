@@ -980,14 +980,12 @@ and `/ui` answer 403.
 
 **Check them before you deploy.** `undercroft config check` runs every
 `UNDERCROFT_*` declaration in the current environment through the resolver
-that runs at start-up, opening nothing. **Three do not yet keep that
-promise** — `UNDERCROFT_ORCH_ADMIN_TOKEN`, `_KEY` and `_RATE_LIMIT` are read
-by the control-plane binary and are pre-flighted today by
-`undercroft-orchestrator config check` instead. That is a gap (ROADMAP O24),
-not the design. A fleet runs both commands today; when O24 lands the
-orchestrator's own stays useful for pre-flighting the control plane
-standalone. Both run every declaration through the resolver that runs at
-start-up, opening nothing — no vault, no database, no socket, no
+that runs at start-up, opening nothing — **including the four
+`UNDERCROFT_ORCH_*` the control plane reads** (three were a coverage gap
+until 1.1.0; O24 moved the shared parses into a crate both binaries link).
+`undercroft-orchestrator config check` pre-flights the control plane
+standalone, which a fleet still wants. Both run every declaration through the
+resolver that runs at start-up, opening nothing — no vault, no database, no socket, no
 outbound call — and exits non-zero if the environment would refuse to start.
 Run it in CI against the deployment's real environment; that is the
 difference between finding out in a pipeline and finding out during a rolling

@@ -188,28 +188,20 @@ const PREFLIGHT_EXEMPT: &[(&str, &str)] = &[
     // Nothing is exempt for being a credential any more. If a future one is,
     // say which of the two questions is unanswerable and why.
     //
-    // Owned by a DIFFERENT BINARY. `undercroft config check` runs the
-    // engine's resolvers; these are read by `undercroft-orchestrator`, and
-    // the two crates deliberately cannot link — the engine is tree-blind and
-    // the orchestrator is a pure `/v1` client — so running their resolvers
-    // from here is not available at any price.
+    // **The three `UNDERCROFT_ORCH_*` entries are GONE (ROADMAP O24).** They
+    // said the declarations were owned by a different binary and therefore
+    // unreachable "at any price", and that was wrong twice over: this
+    // command's own `ENGINE_ENV_VARS` already contained the names, and
+    // `UNDERCROFT_ORCH_ENGINE_CA` was already validated by the CA-pin arm.
+    // The doctrine forbids the engine LINKING the control-plane crate; it
+    // never forbade validating three string-to-value parses.
     //
-    // **They are pre-flighted, by `undercroft-orchestrator config check`**
-    // (O21, closed 2026-08-12). These entries used to say the declarations
-    // had no pre-flight at all, which was true when written and is a
-    // different, worse statement: an operator reading it learned that a
-    // surface was UNCOVERED rather than that it is covered by a second
-    // command they must also run. The exemption is unchanged; only what it
-    // means has.
-    (
-        "UNDERCROFT_ORCH_ADMIN_TOKEN",
-        "pre-flighted by the orchestrator",
-    ),
-    ("UNDERCROFT_ORCH_KEY", "pre-flighted by the orchestrator"),
-    (
-        "UNDERCROFT_ORCH_RATE_LIMIT",
-        "pre-flighted by the orchestrator",
-    ),
+    // They live in `undercroft-config` now — a leaf crate both binaries link
+    // and neither owns, carved out on the precedent `undercroft-net` set —
+    // so `check_declaration` runs the SAME code the control plane runs.
+    //
+    // The deletion was FORCED rather than remembered: the both-directions
+    // gate below fails on an entry that turns out to be pre-flighted.
     // Flags, not vocabularies: any value that is not the enabling one leaves
     // the conservative default in place, so there is nothing that can fail
     // to parse. Verified against the binary — a garbage value runs.

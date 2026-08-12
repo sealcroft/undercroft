@@ -1000,6 +1000,37 @@ export UNDERCROFT_MCP_HTTP_TOKEN="e2e-secret-token
 "
 check "http refuses a token ending in a newline" 1 "ends in whitespace" \
   -- "$BIN" serve-http --host 127.0.0.1 --port 18766
+# ROADMAP O24: the ENGINE's own pre-flight validates the control plane's three
+# declarations. Six surfaces including the doctrine promised it did; three were
+# not validated because their parses lived inside a binary the engine
+# deliberately never links. They live in `undercroft-config` now, so this is
+# the same code `undercroft-orchestrator serve` runs — asserted HERE, through
+# the engine, because that is the command an operator gates a pipeline on.
+#
+# The bearer is reset to a clean value FIRST: the checks above deliberately
+# leave an unpresentable one exported, and `config check` reports every
+# declaration, so without this the exit code says nothing about the variable
+# under test. Its first run failed exactly that way.
+export UNDERCROFT_MCP_HTTP_TOKEN="e2e-secret-token"
+export UNDERCROFT_ORCH_ADMIN_TOKEN=""
+check "engine config check refuses an empty orchestrator bearer" 1 "names no token" \
+  -- "$BIN" config-check
+export UNDERCROFT_ORCH_ADMIN_TOKEN="0123456789abcdef
+"
+check "engine config check refuses an unpresentable orchestrator bearer" 1 "ends in whitespace" \
+  -- "$BIN" config-check
+unset UNDERCROFT_ORCH_ADMIN_TOKEN
+export UNDERCROFT_ORCH_KEY="not-hex"
+check "engine config check refuses a bad orchestrator key" 1 "not hex" -- "$BIN" config-check
+unset UNDERCROFT_ORCH_KEY
+export UNDERCROFT_ORCH_RATE_LIMIT="lots"
+check "engine config check refuses a bad orchestrator rate limit" 1 "requests per minute" \
+  -- "$BIN" config-check
+# …and the vocabulary's empty stays the DEFAULT, not a refusal — the opposite
+# answer from the two secrets above, which is the payload-vs-vocabulary rule.
+export UNDERCROFT_ORCH_RATE_LIMIT=""
+check "an empty orchestrator rate limit is the default, not a refusal" 0 "" -- "$BIN" config-check
+unset UNDERCROFT_ORCH_RATE_LIMIT
 # Leading and INTERNAL whitespace ARE presentable (measured: both answer 200),
 # so they are values and must NOT be refused — the guard is exactly as wide as
 # the defect, which a `trim() != value` version of it would not have been.

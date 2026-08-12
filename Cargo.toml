@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/undercroft-config",
     "crates/undercroft-core",
     "crates/undercroft-vault",
     "crates/undercroft-store",
@@ -18,6 +19,7 @@ members = [
 # are built explicitly (see the `onnx-build` / `ort-build` compose services),
 # not by default.
 default-members = [
+    "crates/undercroft-config",
     "crates/undercroft-core",
     "crates/undercroft-vault",
     "crates/undercroft-store",
