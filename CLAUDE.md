@@ -1789,6 +1789,44 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   on the queue that exists to contain it, nor assign the trust class that
   decides what it may retrieve), asserted by the same test as the parity,
   so the two can never disagree about what MCP is allowed to reach.
+- **A drift has a DIRECTION, and it is decided by provenance — never by
+  which side is cheaper to edit.** Finding that the code and the documents
+  disagree is half the work; the other half is deciding which one is wrong,
+  and that question has an answer rather than a preference. Ask the three
+  places intent is recorded — `ROADMAP.md`, this file's doctrine, and
+  `architecture/index.html` — **which one INTRODUCED the thing**:
+  - **A new capability** (the ROADMAP files it, or the code adds something
+    the documents never promised) → the **code leads**; update every surface
+    that describes it, including the ones you did not grep for.
+  - **A fix to something already promised** → the **documents lead**, and
+    the code must be made to keep the promise. Narrowing a promise to match
+    an implementation is how a gap silently becomes the design.
+  **The discriminator is breadth, and it is nearly decisive: when a claim is
+  consistent across every surface INCLUDING the doctrine, the prior is that
+  the CODE is wrong.** Several documents do not independently invent the same
+  promise. The worked example is O24 — six surfaces said
+  `undercroft config check` validates every `UNDERCROFT_*` declaration, three
+  of them were not validated, and the first fix narrowed all six. It was
+  backwards, and three things in the tree said so: `ENGINE_ENV_VARS` already
+  CONTAINS the six `UNDERCROFT_ORCH_*` entries, `UNDERCROFT_ORCH_ENGINE_CA`
+  is already validated by that very command, and the three unvalidated parses
+  are pure string→value — so *"never linked by the engine"*, which forbids a
+  crate dependency, was used to license something it does not cover. Reading
+  the inventory the command already iterates was all it took, and no gate
+  caught it; the maintainer did.
+  The converse case is real and has its own tell: a claim asserted in ONE
+  place, recently, with nothing else agreeing, is a claim to TEST rather than
+  a promise to keep — the versioning doctrine is that example, and history
+  refuted it. Breadth plus the doctrine means keep; narrow and new means
+  question.
+  Applied backwards, as a new RULE here must be: it agrees with #40 (a
+  detector shipped, the docs went stale, the code led), #54 and #55 (doc
+  defects), #18 and O22 (the opaque-payload rule promised the refusal, the
+  code was fixed to keep it) and round-four #8 (`undercroft-net`'s own doc
+  claimed to be the only implementation; the code was made true). It
+  reclassifies exactly one decision — O24's first draft — which is the one it
+  was written for. Tested against roughly six decisions, all from this
+  campaign; that is its whole history and it is stated rather than implied.
 - **An IDENTIFIER is never derived from rotatable key material. Neither is
   a blind-index key. This is not a preference — it is the difference
   between a memory store and a pile of unreferenceable rows.**
