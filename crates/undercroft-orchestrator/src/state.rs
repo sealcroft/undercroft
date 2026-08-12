@@ -125,15 +125,52 @@ fn now_rfc3339() -> String {
     format!("unix:{secs}")
 }
 
+/// The orchestrator's sealing key, decoded from its hex declaration.
+///
+/// **One implementation, three callers**: [`Orch::open`],
+/// [`Orch::open_read_only`] and `undercroft-orchestrator config check`. The
+/// decode was written out twice — once in each open — which is two places for
+/// one decision to drift, and neither was reachable without opening a
+/// DATABASE. A pre-flight opens nothing, so the check it runs has to be a
+/// function rather than a side effect of a connection.
+///
+/// Unset and empty both refuse, and they refuse for the same reason as every
+/// other declared secret in this fleet: an empty value is a `${VAR}` that did
+/// not interpolate, and there is no third thing it could mean. The message
+/// says which of the two it is, because the fixes differ.
+///
+/// The value IS trimmed, and that is a deliberate exception rather than an
+/// oversight: hex has no whitespace, so trimming cannot change which key was
+/// named — it can only remove the newline a `$(cat orch.key)` puts there.
+/// Contrast the engine's bearer, where trimming would change the KEY and is
+/// refused instead.
+pub fn resolve_orch_key(declared: Option<&str>) -> Result<[u8; 32], StateError> {
+    let Some(raw) = declared else {
+        return Err(StateError::Invalid(
+            "UNDERCROFT_ORCH_KEY is not set (generate one with `keygen`)".into(),
+        ));
+    };
+    let v = raw.trim();
+    if v.is_empty() {
+        return Err(StateError::Invalid(
+            "UNDERCROFT_ORCH_KEY is set but names no key (it is empty or only whitespace). It \
+             is most often an unset shell variable interpolated into a compose file or a \
+             systemd unit. Generate one with `keygen`"
+                .into(),
+        ));
+    }
+    let bytes =
+        hex::decode(v).map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY is not hex".into()))?;
+    bytes
+        .try_into()
+        .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into()))
+}
+
 impl Orch {
     /// Open (or create) the state database. `key_hex` is the 64-char hex
     /// orchestrator key (`UNDERCROFT_ORCH_KEY`).
     pub fn open(path: &std::path::Path, key_hex: &str) -> Result<Self, StateError> {
-        let bytes = hex::decode(key_hex.trim())
-            .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY is not hex".into()))?;
-        let key: [u8; 32] = bytes.try_into().map_err(|_| {
-            StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into())
-        })?;
+        let key = resolve_orch_key(Some(key_hex))?;
         let conn = Connection::open(path)?;
         // Control-plane state must survive power loss: a token shown once at
         // create/rotate is gone forever if the row that recorded its HMAC is
@@ -184,11 +221,7 @@ impl Orch {
     /// on a shared volume the writer maintains the `-shm` file, and a
     /// replicated snapshot is a checkpointed plain file.
     pub fn open_read_only(path: &std::path::Path, key_hex: &str) -> Result<Self, StateError> {
-        let bytes = hex::decode(key_hex.trim())
-            .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY is not hex".into()))?;
-        let key: [u8; 32] = bytes.try_into().map_err(|_| {
-            StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into())
-        })?;
+        let key = resolve_orch_key(Some(key_hex))?;
         if !path.exists() {
             return Err(StateError::Invalid(format!(
                 "state database {path:?} does not exist (a read replica never creates one)"

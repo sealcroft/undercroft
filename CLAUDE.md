@@ -937,7 +937,24 @@ Consequences that are binding, not advisory:
   tokens stored as HMACs), `/t/*` routing proxy, `/admin/*` plane,
   count-verified migration, fleet console (ui.html at `GET /ui`),
   read replicas (`serve --read-replica`: RO state db, data plane only,
-  `/healthz` mode+last_write lag surface).
+  `/healthz` mode+last_write lag surface), and **its own
+  `config check`** (`config_check.rs`, O21) — the engine's pre-flight runs
+  the ENGINE's resolvers and cannot run another binary's at any price, so a
+  fleet runs both. Two properties are load-bearing. Every arm calls the
+  resolver `serve` calls, which is what forced `resolve_orch_key` (the hex
+  decode was written out twice, in `Orch::open` AND `open_read_only`, neither
+  reachable without opening a DATABASE) and `resolve_admin_token` (a length
+  floor inline in the `serve` arm) into existence — and that floor was hiding
+  a live defect: a trailing newline HAS LENGTH, so `$(cat …)` cleared 16
+  characters and produced a control plane that started cleanly and refused
+  every `/admin` request forever, HTTP having stripped the trailing
+  whitespace from the header the client sent. And `ORCH_ENV_VARS` is counted
+  against the CLI's `ENGINE_ENV_VARS` by **reading its source**, name and
+  class, both directions — the only route two crates that deliberately do not
+  link have. Note that gate's needle must be SPLIT (`concat!`): written
+  contiguously it declares a variable called `UNDERCROFT_ORCH_`, the bare
+  prefix, which the engine's own env-var inventory gate scans for and
+  rejects. One gate's needle is another gate's input.
   Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding),
@@ -1101,8 +1118,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (711 run,
-                                      # 4 #[ignore]d = 715 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (718 run,
+                                      # 4 #[ignore]d = 722 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1148,9 +1165,9 @@ docker compose run --rm test          # cargo unit + integration tests (711 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (325 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (28 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (330 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (107 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (30 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)

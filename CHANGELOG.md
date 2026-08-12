@@ -2,6 +2,76 @@
 
 ## Unreleased — 1.1.0
 
+### the control plane can be pre-flighted, and its admin bearer could not be presented
+
+ROADMAP **O21**. `undercroft config check` runs the ENGINE's resolvers; four
+`UNDERCROFT_ORCH_*` declarations are read by a different binary, and that
+binary had no pre-flight command at all. Three of them sat on the engine's
+`PREFLIGHT_EXEMPT` list as *"orchestrator-owned"* while `UPGRADING.md` told
+operators that exit 0 means none of its entries affect them — a promise
+narrower than it read, with nothing on either surface saying so.
+
+`undercroft-orchestrator config check` (and `config-check`, both spellings
+from the start rather than after a doc was found wrong). It opens no state
+database, binds no port, and every arm calls the **same resolver the serve
+path calls**.
+
+**Extracting those resolvers is most of the value, and it removed a second
+implementation on the way.** The orchestrator key was hex-decoded inline in
+`Orch::open` AND `Orch::open_read_only` — one decision in two places, neither
+reachable without opening a database; it is now `resolve_orch_key`, which also
+distinguishes *absent* from *not hex*, previously one message for both. The
+admin token's 16-character floor was an `if` in the `serve` arm.
+
+**And that floor was hiding a live defect, the twin of the one closed above.**
+`UNDERCROFT_ORCH_ADMIN_TOKEN=$(cat /run/secrets/token)` over a file ending in
+a newline **clears a length floor** — a newline has length — so the control
+plane started cleanly and refused every `/admin` request forever, because HTTP
+strips a header value's trailing whitespace and the bearer that arrives is
+never the declared one. It was left out of the O22 commit deliberately: a bare
+guard beside the floor would have been a second implementation of a decision
+`resolve_mcp_token` already owns, and it belonged in the resolver this entry
+builds.
+
+The claim that the orchestrator's bearer behaves like the engine's was
+originally *transferred by reading* — same `tiny_http`, same untrimmed
+compare — and reading is not measuring. Measured directly against a live
+control plane fronting a real 1,360-drawer corpus: the byte-exact token with
+leading and internal whitespace answers **200**, the same value trimmed
+answers **401**. So the key is not edited, and the counterfactual for a future
+"fix" that trims it is a live 200.
+
+`config check` is exempt from the engine-hop CA refusal that runs in front of
+dispatch, for the same reason the engine's is exempt from telemetry init: a
+command whose job is diagnosing an environment that will not start is useless
+if it cannot start in one. It warns and reports the declaration as its own
+finding. That is the exempt list the surrounding comment declines to keep — it
+has exactly one member and an argument.
+
+Gates. `every_protects_variable_is_pre_flighted` over `ORCH_ENV_VARS`, with no
+exempt list at all: this binary reads four `Protects` variables and can check
+all four. `the_orchestrator_and_the_engine_agree_on_every_orch_variable` counts
+the two inventories against each other by **reading the engine's source**,
+which is the only route two crates that deliberately cannot link have — name
+and class, both directions, with a premise assertion because two agreeing
+empty sets read exactly like agreement. Both were run against a counterfactual
+(a flipped class plus an invented name) and both failed as designed. Nine new
+`e2e-orchestrator.sh` checks (98 → 107) assert the pre-flight and `serve`
+reaching the **same verdict** on the same declaration, which is the whole
+point of having two.
+
+Two self-inflicted defects, both caught by mechanisms rather than by care, and
+both worth recording. The e2e check for the trailing newline built its value
+with `$(printf '…\n')` — command substitution **strips trailing newlines**, so
+it passed a perfectly valid token, `serve` bound the port and the suite hung
+for ten minutes instead of proving anything. The value is a literal now, and
+`orch_pre` wraps `serve` in `timeout` so a regression fails rather than hangs.
+And the cross-crate gate's needle, written contiguously, declared a variable
+called `UNDERCROFT_ORCH_` — the bare prefix — which the engine's own env-var
+inventory gate reads as an unknown variable and rejects. One gate's needle is
+another gate's input; it is split with the `concat!` idiom the scanner itself
+uses.
+
 ### an empty declaration is a failed interpolation, and a bearer nobody can present is not a bearer
 
 ROADMAP **O22**, plus two defects the work found — one of them in the previous

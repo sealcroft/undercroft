@@ -540,6 +540,81 @@ code_is "replica refuses a data-plane delete" 403 -- -X DELETE   -H "Authorizati
 body_has "replica still serves POST search" 'gigawatts' -- -X POST   -H "Authorization: Bearer $ACME_TOKEN3" -d '{"query":"flux capacitor power"}' "$R/t/search"
 
 
+echo "== config check: the pre-flight and the serve path agree (ROADMAP O21) =="
+# The control plane had no pre-flight at all, so three Protects declarations
+# sat on the ENGINE's exempt list as "orchestrator-owned" while
+# `UPGRADING.md` told operators that exit 0 means nothing affects them.
+#
+# What is asserted here is AGREEMENT, which is the whole point: the same
+# declaration must produce the same verdict from the pre-flight and from a
+# real `serve`. A pre-flight that merely runs is worth nothing.
+orch_pre() { # orch_pre <VAR> <value> -> prints "<preflight-exit> <serve-exit>"
+  local var="$1" val="$2" pc sc
+  env "$var=$val" "$ORCH" config check >/tmp/orch-cc.log 2>&1; pc=$?
+  # `timeout` because a serve that does NOT refuse binds and blocks forever —
+  # which is the regression these checks exist to catch, and without it the
+  # suite hangs instead of failing. 124 is neither 0 nor 1, so it reports.
+  timeout 5 env "$var=$val" "$ORCH" serve --addr "127.0.0.1:18999" \
+    >/tmp/orch-serve.log 2>&1; sc=$?
+  echo "$pc $sc"
+}
+
+# Both spellings dispatch, since the engine shipped only the hyphenated one
+# while every doc published the two-word form (ROADMAP O18).
+"$ORCH" config check >/dev/null 2>&1 && ok "two-word 'config check' runs" \
+  || fail "two-word 'config check' did not run" "$("$ORCH" config check 2>&1 | tail -3)"
+"$ORCH" config-check >/dev/null 2>&1 && ok "hyphenated 'config-check' runs" \
+  || fail "hyphenated 'config-check' did not run"
+
+read -r PC SC <<<"$(orch_pre UNDERCROFT_ORCH_RATE_LIMIT lots)"
+if [ "$PC" = "1" ] && [ "$SC" = "1" ]; then
+  ok "a garbage rate limit is refused by the pre-flight AND by serve"
+else
+  fail "pre-flight and serve disagree on a garbage rate limit" "preflight=$PC serve=$SC"
+fi
+grep -q "requests per minute" /tmp/orch-cc.log \
+  && ok "the pre-flight names the fix for a garbage rate limit" \
+  || fail "pre-flight refused without naming the fix" "$(tail -3 /tmp/orch-cc.log)"
+
+# The admin token, and this is the live defect O22 found on the engine's
+# identical path. A trailing newline CLEARS the 16-character floor that was
+# the only check here — a newline has length — so the control plane started
+# cleanly and refused every /admin request forever, 401 naming no cause.
+#
+# The newline is a LITERAL inside single quotes, never `$(printf …)`: command
+# substitution strips trailing newlines, so the tidier spelling passes a
+# perfectly valid token, `serve` starts, and the check hangs instead of
+# proving anything. It did exactly that on its first run.
+TOKEN_WITH_NEWLINE='e2e-admin-token-0123456789
+'
+read -r PC SC <<<"$(orch_pre UNDERCROFT_ORCH_ADMIN_TOKEN "$TOKEN_WITH_NEWLINE")"
+if [ "$PC" = "1" ] && [ "$SC" = "1" ]; then
+  ok "an admin token ending in a newline is refused by both"
+else
+  fail "a token no client can present started a control plane" "preflight=$PC serve=$SC"
+fi
+grep -q "ends in whitespace" /tmp/orch-cc.log \
+  && ok "the diagnosis is the trailing whitespace, not the length floor" \
+  || fail "wrong diagnosis for a trailing-newline admin token" "$(tail -3 /tmp/orch-cc.log)"
+
+read -r PC SC <<<"$(orch_pre UNDERCROFT_ORCH_ADMIN_TOKEN "")"
+if [ "$PC" = "1" ] && [ "$SC" = "1" ]; then
+  ok "an empty admin token is refused by both"
+else
+  fail "an empty admin token was accepted somewhere" "preflight=$PC serve=$SC"
+fi
+
+# …and a healthy environment passes, so the checks above are not a command
+# that refuses everything. This is the premise the four of them rest on.
+if "$ORCH" config check >/tmp/orch-cc-ok.log 2>&1; then
+  ok "the environment this suite runs in passes its own pre-flight"
+else
+  fail "the pre-flight refuses a working environment" "$(tail -5 /tmp/orch-cc-ok.log)"
+fi
+grep -q "CONTROL PLANE only" /tmp/orch-cc-ok.log \
+  && ok "the pass message says it covers the control plane only" \
+  || fail "the pre-flight implied it covered the engines too"
+
 echo ""
 echo "orchestrator e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] && echo "ORCHESTRATOR E2E OK" || exit 1

@@ -1469,7 +1469,7 @@ resolver, and O21's gate now carries it.
 
 ---
 
-### O21 — `config check` cannot pre-flight the orchestrator's own declarations
+### O21 — CLOSED 2026-08-12: the control plane pre-flights its own declarations
 
 Found while closing round-four #9, and it is the honest residue of that fix
 rather than a new defect.
@@ -1514,6 +1514,39 @@ serve path with the same exit code — the agreement that is the whole point.
 Plus, for the admin token: empty refuses, trailing whitespace refuses naming
 the cause, and leading/internal whitespace still authenticates — asserted at
 the RUN against a live `/admin` request, since the header is where it is lost.
+
+**CLOSED as filed, and the extraction was worth more than the command.**
+`undercroft-orchestrator config check` (both spellings) runs the four
+`UNDERCROFT_ORCH_*` declarations through the resolvers `serve` runs, opening
+no database and binding no port. Making that possible required extracting two
+parses that were unreachable without a side effect: the key decode, written
+out TWICE (`Orch::open` and `Orch::open_read_only` — one decision in two
+places), now `resolve_orch_key`; and the admin token's length floor, an `if`
+in the `serve` arm, now `resolve_admin_token`.
+
+**The admin-token defect was live and is closed here.** A trailing newline
+clears a LENGTH floor, so the control plane started and refused every
+`/admin` request forever. Measured on a live control plane over a real
+1,360-drawer fleet rather than transferred from the engine by reading:
+byte-exact with leading and internal whitespace answers 200, the same value
+trimmed answers 401.
+
+**The inventory gate is the part to keep in mind for future work.** The two
+crates deliberately cannot link, so `ORCH_ENV_VARS` is counted against the
+engine's `ENGINE_ENV_VARS` by READING ITS SOURCE — name and class, both
+directions, with a premise assertion because two agreeing empty sets read
+exactly like agreement. Counterfactual run: a flipped class and an invented
+name both fail it.
+
+**Two residues, stated.** The engine's `PREFLIGHT_EXEMPT` still carries the
+three orchestrator variables, and must — `undercroft config check` cannot run
+another binary's resolvers at any price. What changed is the REASON text: it
+said the declarations had no pre-flight, which was true and is a worse
+statement than "covered by a second command you must also run". And
+`UNDERCROFT_ORCH_ADDR`/`_DB` are reported as *seen*, never as checked: a
+listen address and a database path have no parse this command can run without
+binding or opening, which is exactly the distinction the `validated` vs
+`accepted` split exists to keep honest.
 
 ---
 

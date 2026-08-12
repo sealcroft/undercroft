@@ -430,6 +430,35 @@ The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
 failure is a uniform 401. The CLI (`instance-add`, `tenant-create`,
 `migrate`, …) mirrors the admin plane for scripted use, plus `keygen`.
 
+**Pre-flight the control plane before a restart**, exactly as you would an
+engine:
+
+```bash
+undercroft-orchestrator config check    # or: config-check --verbose
+```
+
+It runs the four `UNDERCROFT_ORCH_*` declarations this binary reads through
+the same resolvers `serve` runs — the sealing key, the admin bearer, the rate
+limit and the engine-hop CA pin — and opens no state database and binds no
+port. Exit 1 means this environment would refuse to start.
+
+**A fleet runs it alongside `undercroft config check` on each engine, not
+instead of it.** The two commands cover different binaries and neither can run
+the other's resolvers: the engine is tree-blind and the orchestrator is a pure
+`/v1` client, so they do not link. What is shared is the CLASSIFICATION of
+each variable, counted across the two inventories in both directions by a
+test. Before 1.1.0 this command did not exist and the control plane's
+declarations were pre-flighted by nothing at all (ROADMAP O21).
+
+Two of them are worth knowing about. `UNDERCROFT_ORCH_ADMIN_TOKEN` refuses
+when it is empty **or ends in whitespace** — HTTP strips a header value's
+trailing whitespace, so `$(cat /run/secrets/token)` over a file ending in a
+newline used to clear the 16-character floor and produce a control plane that
+started cleanly and refused every `/admin` request forever. It is not trimmed
+for you: that would authenticate a key you did not declare. And
+`UNDERCROFT_ORCH_KEY` now says whether it is *absent* or merely *not hex*,
+which used to be one message for both.
+
 **Security model** — the orchestrator state is credential-bearing, so it is
 hardened the way the engine hardens its own secrets:
 

@@ -189,13 +189,27 @@ const PREFLIGHT_EXEMPT: &[(&str, &str)] = &[
     // say which of the two questions is unanswerable and why.
     //
     // Owned by a DIFFERENT BINARY. `undercroft config check` runs the
-    // engine's resolvers; these are read by `undercroft-orchestrator`, which
-    // has no pre-flight command of its own. Filed as ROADMAP O21 rather than
-    // silently narrowed, because an operator running a fleet reads this
-    // command's exit code and would not guess it skipped a whole surface.
-    ("UNDERCROFT_ORCH_ADMIN_TOKEN", "orchestrator-owned (O21)"),
-    ("UNDERCROFT_ORCH_KEY", "orchestrator-owned (O21)"),
-    ("UNDERCROFT_ORCH_RATE_LIMIT", "orchestrator-owned (O21)"),
+    // engine's resolvers; these are read by `undercroft-orchestrator`, and
+    // the two crates deliberately cannot link — the engine is tree-blind and
+    // the orchestrator is a pure `/v1` client — so running their resolvers
+    // from here is not available at any price.
+    //
+    // **They are pre-flighted, by `undercroft-orchestrator config check`**
+    // (O21, closed 2026-08-12). These entries used to say the declarations
+    // had no pre-flight at all, which was true when written and is a
+    // different, worse statement: an operator reading it learned that a
+    // surface was UNCOVERED rather than that it is covered by a second
+    // command they must also run. The exemption is unchanged; only what it
+    // means has.
+    (
+        "UNDERCROFT_ORCH_ADMIN_TOKEN",
+        "pre-flighted by the orchestrator",
+    ),
+    ("UNDERCROFT_ORCH_KEY", "pre-flighted by the orchestrator"),
+    (
+        "UNDERCROFT_ORCH_RATE_LIMIT",
+        "pre-flighted by the orchestrator",
+    ),
     // Flags, not vocabularies: any value that is not the enabling one leaves
     // the conservative default in place, so there is nothing that can fail
     // to parse. Verified against the binary — a garbage value runs.

@@ -20,12 +20,25 @@ Run it in a pipeline against the deployment's real environment. That is the
 difference between finding out in CI and finding out during a rolling
 restart, one node at a time.
 
-**One limit on "exit 0 means it starts", stated because it is real.** It
-covers the **engine**: `undercroft-orchestrator` reads three declarations of
-its own and has no pre-flight command yet (ROADMAP O21), so a fleet should not
-read this command's exit code as covering the control plane. Everything else
-that can refuse is pre-flighted, and that is enforced by a test counting the
-inventory in both directions rather than by anyone remembering.
+**A fleet runs TWO commands, and this one covers the engine.** The control
+plane has its own:
+
+```bash
+undercroft-orchestrator config check
+```
+
+It runs the four `UNDERCROFT_ORCH_*` declarations that binary reads through
+the same resolvers its `serve` path runs, opens no state database and binds no
+port, and uses the same exit codes. The two commands are separate because the
+two crates deliberately cannot link — the engine is tree-blind and the
+orchestrator is a pure `/v1` client — so neither can run the other's
+resolvers at any price. What must not drift is the CLASSIFICATION of each
+variable, and that is counted across the two inventories, in both directions,
+by a test rather than by anyone remembering.
+
+Everything that can refuse is pre-flighted by one of the two. Until 1.1.0 the
+orchestrator's declarations had no pre-flight at all, and this paragraph said
+so (ROADMAP O21).
 
 **There used to be a second limit here and it was too broad**: *"it cannot
 check a credential — any string is a well-formed passphrase or token."* That
@@ -154,6 +167,30 @@ silently make an existing vault underivable.
 resolver. It previously could not: the variable was exempt from the pre-flight
 on the argument that a passphrase is a credential rather than a syntax, which
 is true of a *wrong* passphrase and false of an *absent* one.
+
+### A `UNDERCROFT_ORCH_ADMIN_TOKEN` ending in whitespace refuses instead of 401-ing every admin request
+
+**Affects:** `undercroft-orchestrator serve`, when the admin token has a
+trailing space, tab or newline. `$(cat /run/secrets/token)` produces one.
+
+**Symptom:** the process exits 1 with `UNDERCROFT_ORCH_ADMIN_TOKEN ends in
+whitespace, and no client could ever present it …`.
+
+**Cause:** the same as the engine's bearer, and it survived here for a
+specific reason worth knowing — the only validation was a **16-character
+floor**, and a newline has length, so `$(cat …)` cleared it at 27 characters.
+The control plane then started cleanly and refused every `/admin` request
+forever, because HTTP strips a header value's trailing whitespace and the
+bearer that arrives is never the declared one.
+
+**Fix:** `$(tr -d '\n' < /run/secrets/token)`, or a token without trailing
+whitespace. Not trimmed for you, for the same reason as the engine's.
+
+**Empty is refused too**, with its own message. It was already refused by the
+length floor; what changes is that it says which problem it is.
+
+**Detectable in advance:** yes — `undercroft-orchestrator config check`, which
+did not exist before 1.1.0.
 
 ### An empty `UNDERCROFT_MCP_HTTP_TOKEN` refuses instead of removing the bearer gate
 

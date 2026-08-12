@@ -13,6 +13,7 @@
 //! - `UNDERCROFT_ORCH_ADMIN_TOKEN` — bearer for the `/admin` plane (`serve`)
 //! - `UNDERCROFT_ORCH_ADDR`   — listen address (default `127.0.0.1:8900`)
 
+mod config_check;
 mod engine;
 mod proxy;
 mod state;
@@ -36,6 +37,30 @@ struct Cli {
 enum Command {
     /// Generate a fresh orchestrator key (and a suggested admin token)
     Keygen,
+    /// Validate every `UNDERCROFT_ORCH_*` declaration in this environment
+    /// WITHOUT opening the state database or binding a port
+    ///
+    /// Exit 1 if any declaration that turns a protection on would refuse to
+    /// start; exit 0 otherwise. Warnings do not fail the run.
+    ///
+    /// `undercroft config check` covers the ENGINE. This covers the control
+    /// plane, and a fleet needs both — that gap is ROADMAP O21.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Validate every `UNDERCROFT_ORCH_*` declaration in this environment
+    /// WITHOUT opening the state database or binding a port
+    ///
+    /// The hyphenated spelling, kept beside `config check` from the start
+    /// rather than added after a doc was found wrong: the engine shipped only
+    /// this one while every document published the two-word form, and the
+    /// two-word form did not run.
+    ConfigCheck {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Serve the routing proxy + admin plane
     Serve {
         #[arg(long, env = "UNDERCROFT_ORCH_ADDR", default_value = "127.0.0.1:8900")]
@@ -115,6 +140,18 @@ enum Command {
         /// Keep the source vault instead of deleting it after the flip
         #[arg(long, default_value_t = false)]
         keep_source: bool,
+    },
+}
+
+/// `config check` — the two-word spelling every doc publishes.
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Validate every `UNDERCROFT_ORCH_*` declaration in this environment
+    /// WITHOUT opening the state database or binding a port
+    Check {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -242,8 +279,47 @@ fn run() -> Result<()> {
     // is the exact shape this tree keeps paying for. An undeclared pin —
     // the default — resolves to `Ok(None)` and costs nothing, so only an
     // operator whose fleet is already misconfigured ever sees this.
-    engine::init_transport().map_err(|e| anyhow::anyhow!(e))?;
+    // …with ONE exemption, and it is the same one the engine's CLI makes for
+    // the same command: `config check` exists to diagnose an environment that
+    // will not start, so a version of it that cannot itself start in that
+    // environment is useless. It carries on and REPORTS the declaration as a
+    // finding of its own — including this one, since
+    // `UNDERCROFT_ORCH_ENGINE_CA` has an arm. Both spellings, because
+    // matching only the hyphenated one would exempt the spelling every doc
+    // publishes from nothing at all.
+    //
+    // This is the exempt list the comment above declines to keep, and the
+    // difference is that it has exactly one member with an argument rather
+    // than being a place to add subcommands somebody found inconvenient.
+    let preflight = matches!(
+        cli.command,
+        Command::ConfigCheck { .. } | Command::Config { .. }
+    );
+    match engine::init_transport() {
+        Ok(()) => {}
+        Err(e) if preflight => eprintln!("warning: engine hop unusable — {e}"),
+        Err(e) => return Err(anyhow::anyhow!(e)),
+    }
     match cli.command {
+        Command::Config {
+            action: ConfigAction::Check { verbose },
+        }
+        | Command::ConfigCheck { verbose } => {
+            let (fatal, warned, validated, accepted) = config_check::run(verbose);
+            println!(
+                "checked {validated} declaration(s) of the control plane: \
+                 {fatal} refusing, {warned} warning, {accepted} seen but not validated"
+            );
+            if fatal > 0 {
+                bail!("this environment would refuse to start");
+            }
+            println!(
+                "`undercroft-orchestrator serve` would start in this environment. \
+                 Note this covers the CONTROL PLANE only — run `undercroft config check` \
+                 on each engine as well."
+            );
+            Ok(())
+        }
         Command::Keygen => {
             let mut key = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut key);
@@ -260,11 +336,12 @@ fn run() -> Result<()> {
                 return proxy::serve(&orch, &addr, proxy::Role::ReadReplica);
             }
             let orch = Orch::open(&cli.db, &orch_key()?)?;
-            let admin = std::env::var("UNDERCROFT_ORCH_ADMIN_TOKEN")
-                .context("UNDERCROFT_ORCH_ADMIN_TOKEN is not set")?;
-            if admin.len() < 16 {
-                bail!("UNDERCROFT_ORCH_ADMIN_TOKEN must be at least 16 characters");
-            }
+            // The SAME resolver `config check` runs — the length floor used
+            // to live here as an inline `if`, which a pre-flight cannot
+            // reach and which a trailing newline clears at 17 characters.
+            let admin = proxy::resolve_admin_token(
+                std::env::var("UNDERCROFT_ORCH_ADMIN_TOKEN").ok().as_deref(),
+            )?;
             proxy::serve(
                 &orch,
                 &addr,
