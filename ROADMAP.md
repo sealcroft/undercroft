@@ -216,7 +216,40 @@ endpoint exposes, and one is a naming decision. Kept out of the version
 sections deliberately, so a release plan is not padded with things a
 release cannot contain.
 
-### OPEN after 1.0.0 — recorded as work, with a gate each
+### The dependency map — read this BEFORE picking an item
+
+Built 2026-08-12, by reading all nine open entries and the code they name.
+It exists because picking by "what the handover suggested next" walked
+straight into a question another open item already owns: **O20's inspection
+stalled on a ruling that is O25's to make.** Nothing in either filing said so
+— they were written a day apart, by different routes, and neither referenced
+the other. A gap between two entries is invisible to both of them.
+
+**The item numbers are FILING ORDER, not priority.** Working them 1, 2, 3
+starts with a web-UI click (O6), a cosmetic naming overlap (O7) and a verifier
+nobody runs (O10) — the three that matter least. Dependency order is the real
+one, and it has to be derived rather than assumed.
+
+| relation | items | what it means |
+|---|---|---|
+| **HARD — blocks** | **O25 → O20** | One question on two binaries: where does `/metrics` sit in a process serving several isolated subjects, when the route addresses none of them? Engine → many vaults, orchestrator → many tenants. Ruling twice produces two answers to one question |
+| **SHARED SURFACE** | O10 + O15 | Both modify `tests/battery.sh`. Not a logical dependency — a merge and a battery each, done twice, for no reason |
+| **CROSS-CUTTING — do early** | O15 | Every unit's governance step reports a test count, and this defect corrupts that number intermittently. Until it is closed, each unit must hand-verify by pairing target headers against results. Cheap, and it makes everything after it trustworthy |
+| **RELEASE-GATED** | O7 | Its fix renames `palace.db` — the on-disk database filename, `Vault::db_path()` at `crates/undercroft-vault/src/lib.rs:217`, named 39 times in `crates/` and 16 more in tests, deploy and docs. That is *"an on-disk format that will not open"*, i.e. **MAJOR**, unless it ships with a compat path that opens both. It cannot ride a minor, and that is a scheduling fact rather than a preference |
+| **INDEPENDENT** | O14, O19, O6 | No item blocks or is blocked by these |
+| **NOT SCHEDULED** | O23 | Filed with the argument for leaving it: every alternative trades a bounded cost for a wrong answer |
+
+**Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
+O7 (whenever a major is cut) → O6. O23 stays filed.
+
+**What this map does NOT cover, stated so it is not mistaken for complete.**
+It is a dependency check over the ROADMAP entries and the code they name
+directly. It did not re-derive each item's fix and then look for collisions in
+the code that fix would touch — O19 and a future retrieval change could
+collide in `search_inner` without either entry saying so. The O25 → O20
+dependency was found by reading two entries side by side, which is the cheap
+half; the expensive half is asking, per pair, *would closing this change what
+the other's fix must be?* That was done at entry level, not at diff level.
 
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
@@ -1374,6 +1407,78 @@ doors.
 
 ---
 
+### O25 — `/metrics` sits behind the bearer but IN FRONT of per-vault assertion
+
+**O25 BLOCKS O20, and they are one question on two binaries.** O20 needs a
+ruling on where `/metrics` sits in a process that serves several isolated
+subjects; this entry is that defect on the engine. Engine → many vaults,
+orchestrator → many tenants, and in both cases `/metrics` addresses no single
+subject, so the per-subject gate does not apply to it. Answering it twice
+would produce two rulings for one question — the duplication this tree spends
+its time deleting. **Close this first; O20 then applies the doctrine it
+establishes rather than inventing a parallel one.**
+
+The dependency was found by the maintainer asking whether the pick-and-choose
+ordering was right, after O20's inspection stalled on exactly this question.
+It is recorded because nothing in the filing made it visible: the two entries
+were written a day apart, by different routes, and neither references the
+other.
+
+Found 2026-08-12 by an adversarial review commissioned for **O20**, and filed
+separately because it is a **live defect in shipped code** with nothing to do
+with the control plane. Verified by reading, not taken from the report.
+
+`crates/undercroft-cli/src/http.rs`: the palace bearer is checked at `:247`,
+and `/metrics` is served at `:261` — immediately after it and **before**
+`tenancy.authorize`, which is where `UNDERCROFT_ASSERTION_SECRET` is enforced
+on the `/v1` routes. The gauges are labelled per vault
+(`imp.rs:370` attaches `KeyValue::new("vault", …)`; `tenant.rs:598-602` sets
+`drawers`, `audit_chain_height`, `kg_triples`, `kg_entities`, `store_bytes`).
+
+So on a deployment that declared per-vault assertions — the feature whose
+whole purpose is that a caller reaching the server may still only address the
+vault it can assert for — a caller holding the bearer and authorized for
+vault A alone can `GET /metrics` and read vault B's record counts, chain
+height, KG size and database bytes. The banner says *"per-vault assertions
+required"* without qualification (`http.rs:147`), and for this route it is
+not true.
+
+**Narrowed today by an accident, not a boundary**, and that is the part worth
+recording: `Tenancy::sample` populates gauges only for vaults with an active
+SSE subscriber (`tenant.rs:591-592`, *"samples only vaults with an active
+stream subscriber, so it costs nothing when no dashboard is connected"*). So
+the leak covers exactly the vaults someone is watching in the monitor. That
+narrowing exists for COST reasons and would disappear the moment anyone made
+sampling unconditional — a change that reads as a pure performance decision
+and would silently widen a disclosure.
+
+**Not content, and not keys** — counts, sizes and a vault id. It is a
+confidentiality defect about metadata, at the same level as the exposure
+inventory `a_sealed_vault_exposes_metadata_but_never_content` pins, and it
+crosses a boundary the deployment paid to declare.
+
+**Shape of the fix.** Decide the route's plane deliberately rather than by
+where it sits in the dispatch order. Either serve `/metrics` only when
+assertions are NOT in force and refuse it otherwise (honest, blunt), or
+filter the exposition to the vaults the presented assertion covers — which
+means the renderer needs the caller's identity and `render_prometheus()`
+currently takes none. The first is a one-line policy; the second is the one
+an operator actually wants. Do not simply move the route later in the chain:
+`tenancy.authorize` is per-vault and `/metrics` addresses no single vault, so
+the ordering fix does not typecheck onto the problem.
+
+**Gate:** an `e2e.sh` check under a declared `UNDERCROFT_ASSERTION_SECRET`
+that a caller with a valid assertion for vault A gets no vault-B series from
+`/metrics` — asserted on the BODY, not the status, since the status is 200
+either way. Plus a premise arm proving vault B's gauges were populated at
+all, or the check passes over an empty registry and reports nothing.
+
+**Not scheduled here.** It wants its own unit: it changes what a shipped
+route returns, and both candidate fixes are contract decisions rather than
+repairs.
+
+---
+
 ### O24 — CLOSED 2026-08-12: the promise is kept, by sharing the parses rather than narrowing it
 
 Found 2026-08-12 while drift-checking O21. **Filed as a gap in the CODE, after
@@ -1729,6 +1834,106 @@ all. Bolting it on would have doubled the unit and hidden the argument.
 behind the same bearer as the engine, `e2e-orchestrator.sh` asserts a
 non-empty exposition, and `parity.rs` records the decision either way — so a
 future reader finds a ruling rather than an absence.
+
+---
+
+**REQUIREMENT, 2026-08-12.** Inspected by two read-only specialist reviews
+before any code, because the provenance rule classes this a NEW CAPABILITY
+(verified: `website/src/observability.md` and `deploy/observability/README.md`
+mention the orchestrator zero times; `docs/MULTI_TENANCY.md` mentions it 30
+times and never pairs it with a telemetry claim). Every load-bearing claim
+below was re-verified by reading the code, not taken from the reports.
+
+**The gate line above is UNIMPLEMENTABLE AS WRITTEN and must be replaced.**
+"Behind the same bearer as the engine" does not exist here. The engine has one
+palace bearer and refuses to bind non-loopback without it
+(`http.rs:122-127`); the orchestrator has two non-equivalent credentials, an
+unauthenticated `/healthz`, no refuse-to-bind guard at all, and
+`serve --read-replica` **resolves no admin token whatsoever**
+(`main.rs:333-336`, *"No admin token: the replica has no admin plane to
+gate"*) — while the replica is the role that most needs observing, because
+lag lives there. `/metrics` is a THIRD plane and needs its own ruling. The
+admin token is the wrong answer twice over: it creates tenants and reads
+engine bearers and assertion secrets (`proxy.rs:810-818`), and a scrape target
+holds its credential in a file on every Prometheus host.
+
+**Two hard constraints, verified by reading:**
+
+1. **Every new series literal MUST live in `undercroft-obs`.**
+   `emitted_series_literals()` (`obs/lib.rs:603-606`) reads exactly
+   `["lib.rs", "imp.rs"]` from that crate's own `src`, and
+   `the_series_inventory_matches_the_emit_sites` counts
+   `COUNTER_NAMES`+`HISTOGRAM_NAMES` against them **in both directions**. A
+   name added to the inventory and emitted from the orchestrator crate fails
+   direction 2 and breaks the build; a name emitted there and never
+   inventoried is invisible to every gate. `counter_add`/`histogram_record`
+   are `pub(crate)`, so this is enforced by visibility as well as by test.
+   (The GAUGE gate is different and does bind: it walks all of `crates/` for
+   `set_gauge("` literals. That reach is a property of a filesystem scan and
+   of `Dockerfile:23` copying the whole subtree, not of anything the gate
+   states — worth one sentence in the gate when this is done.)
+2. **Gauges are structurally vault-shaped.** The observable-gauge callback
+   hard-codes `KeyValue::new("vault", …)` (`obs/imp.rs:370`). A control-plane
+   gauge — replication lag, registered instances — has no vault and would be
+   forced to smuggle an instance name into a field named `vault`. Either the
+   callback grows a second shape or control-plane facts are counters, not
+   gauges.
+
+**Cardinality ruling, from the precedent already in code**
+(`store/lib.rs:2111-2120`, where per-wing codebook generations are deliberately
+NOT gauges): *an identifier whose value set is created by USE belongs on a
+query surface; only an identifier an operator DECLARED may be a metric label.*
+So **tenant id, vault name and tenant name are all forbidden as labels** —
+the third is unvalidated free text (`state.rs:461-497`), i.e. unbounded, PII,
+and an exposition-format injection vector. **`instance` is permitted**: it is
+operator-declared at registration and shape-validated (`state.rs:313`).
+Per-tenant detail already has a home at `GET /admin/tenants/{id}/stats`.
+
+**Do not re-emit the engine's series.** The shipped dashboard aggregates
+several of them with no `by (instance)` and no `job` filter, and the route
+strings collide exactly (`healthz`, `ui`, `metrics` exist on both binaries).
+The provable one: `AuditChainStalled` (`alerts.yml:41`) is
+`rate(drawer_writes) > 0 and rate(chain_commits) == 0` by instance, so a
+control plane emitting drawer writes and never chain commits fires a
+permanent alert on itself. `hmac_verify_failures` is worse than useless here —
+it drives `PalaceTamperDetected`, critical at `for: 0m`, which **inhibits
+every warning in the fleet** while it fires.
+
+**The distinct events worth having** are the ones no engine can see: tenant
+token resolution failure, rate-limit refusal (an operator who declared a limit
+has no surface saying it took), the path-climb guard firing (`proxy.rs:158`,
+which closed a live cross-tenant exploit), the three quarantine-fence shapes,
+`StateError::Unsealable`, transport-refused vs unreachable vs unhealthy,
+engine-hop fan-out (one tenant write becomes TWO engine calls), migration
+outcome and its compensating deletes, token rotation (the revocation
+primitive, today with no signal), and **replication lag** — already computed
+at `state.rs:240` and today obtainable only by diffing two `/healthz` bodies,
+which `docs/AGENTS.md:312` already promises is observable.
+
+**Never on a span, label or log line:** the request body (`proxy.rs:532`, up
+to 256 MB — drawer content verbatim, or a whole corpus on import), the drawer
+probe's response body, the export payload, migration NDJSON, the **forwarded
+query string** (it carries `wing=`/`room=`, the very names the engine's own
+telemetry suppresses for sealed vaults), the fence-match value, any of the
+four credentials, or the outbound `Authorization`/`X-Vault-Assertion` headers.
+The sharpest trap is concrete: `route()` holds path, query and body together,
+so one `scope_request(route, …)` wired with the URL instead of a derived route
+CLASS leaks wing and room names on every list call.
+
+**Also needed:** its own `UNDERCROFT_SERVICE_NAME` default (the shared default
+is `"undercroft"`, so two binaries under one env file are indistinguishable in
+Tempo); a separate Prometheus scrape job (`alerts.yml:60` hard-codes
+`job="undercroft"` and a message naming port 8765); any new `UNDERCROFT_*`
+variable classified in `ENGINE_ENV_VARS`, which the scanner enforces both ways;
+and the live/SSE third of `undercroft-obs` left alone — it is vault-keyed end
+to end and the orchestrator has no vault.
+
+**BLOCKED ON O25, which must be closed first.** The unanswered question above
+— what plane `/metrics` belongs to — is not an orchestrator question. It is
+the same question O25 raises on the engine: a process serving several isolated
+subjects, and a route that addresses none of them. O25 establishes the
+doctrine; this entry applies it. Attempting O20 first means ruling on
+`/metrics` twice, differently, in two binaries.
 
 ---
 
