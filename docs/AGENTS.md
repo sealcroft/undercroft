@@ -283,11 +283,13 @@ engines never know it exists. Full docs:
 
 ```bash
 export UNDERCROFT_ORCH_KEY=$(undercroft-orchestrator keygen)   # seals engine creds
-export UNDERCROFT_ORCH_ADMIN_TOKEN=...                        # /admin bearer (≥16 chars)
+export UNDERCROFT_ORCH_ADMIN_TOKEN=...                        # /admin bearer (>=16 chars)
+undercroft-orchestrator config check                          # pre-flight the CONTROL PLANE
 undercroft-orchestrator serve                                 # 127.0.0.1:8900 (UNDERCROFT_ORCH_ADDR)
 
 # register engines, create tenants (token shown ONCE), migrate:
-undercroft-orchestrator instance-add engine-a https://a:8800 \n  --bearer <bearer> --assertion-secret <assertion-secret>
+undercroft-orchestrator instance-add engine-a https://a:8800 \
+  --bearer <bearer> --assertion-secret <assertion-secret>
 undercroft-orchestrator tenant-create acme
 undercroft-orchestrator migrate acme engine-b     # export→import→count-verify→flip→delete
 
@@ -327,7 +329,8 @@ those is fixed by looking at the engine.
 admin plane for scripted use, over a closed vocabulary of operations:
 `verify`, `anchor`, `supersessions`, `admission`, `admission-rule`,
 `trust`, `trust-set`, `retention`, `retention-set`, `retention-sweep`,
-`forget`. Drawer reads and key rotation are deliberately NOT among them.
+`forget`, `verify-forgetting`. Drawer reads and key rotation are
+deliberately NOT among them.
 
 `anchor` is the one worth knowing about if you run a long-lived server:
 read-audit records append without advancing the manifest anchor, and only a
@@ -616,6 +619,16 @@ An external-embedding vault is refused on this path exactly as it is on
 
 ### 7.1 The assembly pattern — retrieved memory is DATA, never instructions
 
+**Names are screened too, not just content.** A wing or a room name is text
+you choose and another agent reads back through `undercroft_list_wings`,
+`undercroft_get_taxonomy`, `undercroft_get_closet_index` and — for a diary —
+`undercroft_list_agents`. Under `UNDERCROFT_ADMISSION=quarantine` a declared
+destination that trips the detector diverts the whole save with the
+`destination-anomaly` signal, so the name never reaches those listings; it is
+recorded as the intended destination for the operator's review queue instead.
+The drawer is kept, not refused. Expect a `quarantined` reply when you invent
+a wing name out of untrusted text.
+
 **This is your job, not the engine's, and the engine cannot do it for
 you.** Undercroft screens writes and can quarantine what trips the
 detector, but screening is heuristic; the last boundary is how *you*
@@ -691,6 +704,12 @@ a forged signature, a tombstone tag this vault never recorded, or something
 other than a tombstone inside the attested interval) each reach the verdict
 through their own checking.
 
+Since 1.1.0 the same check is on `/v1` as
+`POST /v1/vaults/{id}/verify-forgetting`, answering the verdict as a typed
+field rather than as a sentence. Use it on any deployment where the HTTP
+plane is the operator's door — before it, that operator could mint a receipt
+and had nowhere to check one (O14).
+
 **`verify-forgetting` has THREE outcomes, not two, and the third is exit 0.**
 The replay it runs is keyed, and `vault rotate` destroys the key that made
 the tombstones — that is what a rotation is. So after any rotation it prints
@@ -702,7 +721,12 @@ claim, not a failure, and the line says what it did not re-check. Until
 rotation turned every receipt an operator had issued into a tamper verdict.
 The third-party posture never changed: the operator's Ed25519 signature is
 verified without any vault key, so a data subject's own check is unaffected
-by rotation. But a rolled-back database, or a manifest edited
+by rotation. **A `sig` field alone is not that signature**, and 1.1.0
+corrected it: verification runs against `sender`, the public key, so a
+document carrying a signature with no sender can be checked by nobody. That
+shape used to be skipped rather than refused while the CLI printed
+`"; sender signature verified"` over it; it is now `ATTESTATION FAILED`, and
+the line names the sender that was actually checked. But a rolled-back database, or a manifest edited
 offline, is detected **when the vault opens** — before any command's own
 checks begin — so `search`, `stats`, `recent` and `drawer get` reach it too,
 and since 1.0.0 they exit 2 as well. They used to exit 1, i.e. the same
@@ -871,7 +895,7 @@ checklist this design exists to remove.
 | `undercroft_delete_by_source` | W | delete everything mined from a source. Refuses the whole call — deleting nothing — if any of those drawers is awaiting an admission ruling |
 | `undercroft_check_duplicate` | | is this exact content already filed? Quarantined rows do not answer: any writer can drive this oracle with content it chose, and answering would confirm that a screened write landed and hand back the quarantine id — the one thing the save path deliberately withholds from the writer |
 | `undercroft_list_wings` / `_list_rooms` / `_get_taxonomy` | | palace shape |
-| `undercroft_create_tunnel` / `_delete_tunnel` | W | connect/disconnect wings |
+| `undercroft_create_tunnel` / `_delete_tunnel` | W | connect/disconnect wings. The `label` goes through the same name guard as a wing or a knowledge-graph predicate (1–128 chars, no control characters, no path separators) — **always** — and through the tier-1 admission screen where the deployment declared screening, which **refuses** a flagged label rather than diverting it, because a tunnel has no review queue. It is free text another agent reads back verbatim through the tools below, which is the whole reason it is guarded |
 | `undercroft_list_tunnels` / `_follow_tunnel` / `_traverse` | | navigate tunnels |
 | `undercroft_history` | `subject?`, `limit?`, `offset?` | audit-chain history for a memory or fact — what happened to it, when, and the tamper tag as of each write. Never content. Operator-only namespaces (review rulings, trust/retention policy, destructions, exports, read audits, rotations) are fenced out, and a record whose subject sits in the reserved review wing is not shown, so a diverted write cannot read its own evidence back |
 | `undercroft_list_hallways` | | entity co-occurrence within a wing |
@@ -924,6 +948,7 @@ classifies it deliberately:
 | POST | `/v1/vaults/{id}/verify` | integrity verdict, **six legs**: HMAC every record, replay the audit chain, check every drawer supersession receipt, check every knowledge-graph fact receipt, resolve every knowledge-graph audit label, and compare every mirror column against the HMAC-covered meta. `ok` covers all six — the same verdict CLI `verify` exits 2 on and MCP prints as VERIFY FAILED — plus `records_checked`, `bad_records`, `chain_ok`, a `supersessions` count breakdown, `bad_supersessions` (links whose receipt failed its HMAC), a `receipts` count breakdown, `bad_receipts` (facts whose citation binding failed its HMAC), `orphan_labels` (an audit label naming no live record — `record_id` is outside the chain hash, so a relabel passes every other leg. Covers graph labels **and bare drawer ids**: a drawer label with no live row and no `del/{id}` tombstone is a relabel onto a drawer nothing destroyed, since the crate's single `DELETE FROM drawers` writes that tombstone in the same transaction. Prefixed namespaces stay out — `del/`, `retention-clear/`, `read/`, `egress/`, `rotate/` all have legitimate absent subjects) and `mirror_drift` (a clear `wing`/`room`/`kind`/`supersedes` column disagreeing with the covered copy — the record is intact, the column was edited offline). The **fact-receipt leg arrived in 1.1.0**: the check existed one call away and no verify path made it, so a forged citation answered `"ok": true` here, exit 0 on the CLI, `isError: false` on MCP — and `backup create` gates on this verdict, so the forgery was archived as clean |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
 | POST | `/v1/vaults/{id}/forget` | destroy the named drawers through the audit chain and return the attestation (`{ids}` in; heads + tombstone interval + content fingerprints out, unsigned — sign via CLI `forget --sign`). Verify with CLI `verify-forgetting`. Optional `backend` also issues a delete to that remote mirror FIRST, so a failure there leaves the vault intact; without it the attestation's `mirror` field WARNS that a pushed mirror may still hold the content, because destroying the local row does not reach a third party |
+| POST | `/v1/vaults/{id}/verify-forgetting` | check an attestation against this vault: the document goes in the body, the verdict comes back as a **typed field** — `verdict` ∈ `verified`\|`recorded`, plus `drawers`, `signed`, and (on `recorded`) `rotations_since` and `keyed_replay: "unavailable"`. The two verdicts make DIFFERENT claims: `recorded` means the MAC key that made these tombstones was destroyed by a key rotation, so the keyed replay is unavailable and the vault's preserved audit trail holds the tombstones contiguously instead — real evidence, a narrower claim, **not** a tamper verdict. A document that does not describe what this vault did is **409 + `class: "integrity"`** (the set CLI `verify-forgetting` exits 2 on); a malformed body is 400. **A READ** — served by a `--read-only` server, and never on MCP. Arrived in 1.1.0 (O14): `forget` could MINT a receipt here and nothing on this plane could check one, which on a multi-tenant deployment meant the only door an operator had could not verify its own right-to-erasure receipts |
 | GET | `/v1/vaults/{id}/admission` | drawers awaiting an admission ruling (signal codes + offsets, intended destination) plus whether screening is on |
 | POST | `/v1/vaults/{id}/admission` | rule on a quarantined drawer (`drawer_id`, `verdict` ∈ `allow`\|`deny`; chain-audited — a deny destroys through the attested-forgetting path and the response carries the receipt). Operator surface, never MCP — an agent whose write was quarantined must not rule on it |
 | GET | `/v1/vaults/{id}/retention` | every declared retention policy, tag-verified |
@@ -935,7 +960,7 @@ classifies it deliberately:
 | POST | `/v1/vaults/{id}/anchor` | fast-forward the manifest rollback anchor onto the committed audit-chain head, and report how far behind it was (`behind_by`). **The surface this capability exists for**: `store_for` caches its handle, so a long-lived server never re-opens and never reconciles by itself, while `POST …/verify` is a genuine read and does not anchor (ROADMAP A31/R3). A write — refused 403 on a `--read-only` server, and deliberately absent from MCP (`OPERATOR_ONLY`), because it moves the out-of-database evidence a rollback is detected against |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract — **409** for the vault this same process also serves over `/mcp`, i.e. the one named by `--vault`: rotating retires the keys under that second live handle, which then reports every read as TAMPERED and re-anchors the manifest from its stale cache. Stop the server and run `undercroft vault rotate <name>`, which holds the only handle) |
 | GET | `/v1/vaults/{id}/export` | lossless NDJSON: a manifest first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (a receipt's fingerprint is keyed to its own vault, so import RE-DERIVES it from the source drawer that travelled with it — drawers are written before facts for exactly that; a fact whose cited drawer is not in the payload imports `unreceipted`) and tunnels — the whole palace |
-| POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present. The response carries `quarantined` beside `imported` — how many records the admission screen diverted (0 while screening is off). Every imported record's `added_by` is **re-stamped `import`**, overwriting whatever the payload claimed: that field is the key the trusted-source auto-admit rides, so a bundle claiming `added_by: "cli"` must not inherit a save surface's standing. Declare `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import` to trust the import act itself |
+| POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present. The response carries `quarantined` beside `imported` — how many records the admission screen diverted (0 while screening is off). Every imported record's `added_by` is **re-stamped `import`**, overwriting whatever the payload claimed: that field is the key the trusted-source auto-admit rides, so a bundle claiming `added_by: "cli"` must not inherit a save surface's standing. Declare `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import` to trust the import act itself. A record whose `wing` or `room` fails the name guard is **400** naming which record and which field — and since 2026-08-13 that holds even when the content trips the admission screen. It did not: the screen ran first and a diversion moves the declared wing into `intended_wing`, so such a record was quarantined instead of refused and could then never be allowed out of the queue (ROADMAP O30). This route is where that was reachable, because the three SAVE surfaces validate before they reach the store and this one deserializes a whole drawer out of the payload |
 | GET | `/ui` | vault admin console (static page, served in front of the bearer gate on every build — the operator pastes the bearer into the page) |
 | GET | `/metrics`, `/monitor`, `/v1/…/stream` | telemetry builds only |
 
@@ -958,7 +983,8 @@ with the tenant bearer; admin plane `/admin/instances[…]`,
 `/admin/tenants[…]` (+ `/rotate`, `/migrate`, `/stats` — metadata-only
 relay) and the **operator relay**
 `/admin/tenants/{id}/ops/<subpath>`, a closed vocabulary forwarding
-`POST verify`, `GET supersessions`, `POST forget`, `GET`/`POST admission`,
+`POST verify`, `GET supersessions`, `POST forget`,
+`POST verify-forgetting`, `GET`/`POST admission`,
 `GET`/`POST retention`, `POST retention/sweep` and `GET`/`POST trust` to the
 tenant's engine (these live on the ADMIN plane, never the data plane: a
 tenant token must not rule on the admission queue that screened its own
@@ -978,7 +1004,12 @@ and `/ui` answer 403.
 
 **Check them before you deploy.** `undercroft config check` runs every
 `UNDERCROFT_*` declaration in the current environment through the resolver
-that runs at start-up, opening nothing — no vault, no database, no socket, no
+that runs at start-up, opening nothing — **including the four
+`UNDERCROFT_ORCH_*` the control plane reads** (three were a coverage gap
+until 1.1.0; O24 moved the shared parses into a crate both binaries link).
+`undercroft-orchestrator config check` pre-flights the control plane
+standalone, which a fleet still wants. Both run every declaration through the
+resolver that runs at start-up, opening nothing — no vault, no database, no socket, no
 outbound call — and exits non-zero if the environment would refuse to start.
 Run it in CI against the deployment's real environment; that is the
 difference between finding out in a pipeline and finding out during a rolling
@@ -1167,14 +1198,20 @@ is refused by `index push` unless the operator passes
 `--allow-plaintext`.
 
 Telemetry builds: `UNDERCROFT_LOG` · `UNDERCROFT_LOG_FORMAT` (`json`) ·
-`UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process) ·
+`UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ nothing leaves the process; an outward
+path, so TLS or loopback, nothing else, no override) ·
+`UNDERCROFT_OTLP_CA` (pin a private CA for the collector; the declared root
+replaces the public ones) ·
 `UNDERCROFT_OTLP_HEADERS` (comma-separated `key=value` export headers,
 e.g. `authorization=Bearer <token>` for authenticated collectors) ·
 `UNDERCROFT_SERVICE_NAME`.
 
 Orchestrator: `UNDERCROFT_ORCH_DB` · `UNDERCROFT_ORCH_KEY` (required) ·
-`UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, ≥16 chars; unused
-by `serve --read-replica`) · `UNDERCROFT_ORCH_ENGINE_CA` (PEM pinning the root for the hop to the engines — that hop refuses cleartext beyond loopback, with no override) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
+`UNDERCROFT_ORCH_ADMIN_TOKEN` (required on the writer, >=16 chars; unused
+by `serve --read-replica`; refused when empty **or ending in whitespace** —
+HTTP strips a header value's trailing whitespace, so `$(cat token)` over a
+file ending in a newline clears the length floor and produces a control plane
+that starts cleanly and refuses every `/admin` request forever) · `UNDERCROFT_ORCH_ENGINE_CA` (PEM pinning the root for the hop to the engines — that hop refuses cleartext beyond loopback, with no override) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
 `UNDERCROFT_ORCH_RATE_LIMIT` (req/min per tenant; unset/`0`/`off` = off;
 per-process — each replica enforces its own windows. A value that is not
 one of those **refuses to start**, the engine's posture for a declaration
@@ -1188,6 +1225,7 @@ CONFIGURATION first, because it is the only check that needs nothing running:
 
 ```bash
 undercroft config check                    # exit 0, "This environment starts"
+undercroft-orchestrator config check       # scenario D only: the control plane
 ```
 
 

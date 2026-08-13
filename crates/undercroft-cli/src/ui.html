@@ -425,6 +425,12 @@
               <button class="ctl danger" id="forgetBtn">⌫ FORGET + ATTEST</button>
             </div>
             <pre class="report" id="forgetReport" style="display:none"></pre>
+            <p class="kv" style="margin-top:14px">Paste a receipt back to check it against this vault. <b>VERIFIED</b> means the keyed replay ran and passed; <b>RECORDED</b> means a key rotation destroyed the MAC key that made these tombstones, so the replay is unavailable and this vault's preserved audit trail holds them contiguously instead — real evidence, a narrower claim, and <em>not</em> a tamper verdict. Anything else is one.</p>
+            <div class="rowflex">
+              <textarea id="attDoc" placeholder="paste the attestation JSON" style="flex:1;min-width:200px;min-height:54px"></textarea>
+              <button class="ctl" id="verifyAttBtn">✓ CHECK RECEIPT</button>
+            </div>
+            <pre class="report" id="attReport" style="display:none"></pre>
           </div>
         </div>
 
@@ -1388,7 +1394,46 @@ async function runForget() {
     $("forgetReport").style.display = "block";
     $("forgetReport").textContent = JSON.stringify(r, null, 2);
     toast("forgot " + ids.length + " drawer(s) — receipt below");
+    // The console is where most operators actually receive a receipt, so it
+    // is where "save this, it is the only proof" is least useful without a
+    // way to check one. Hand it straight to the checker (ROADMAP O14).
+    $("attDoc").value = JSON.stringify(r);
   } catch (e) { toast("forget failed — " + e.message, true); }
+}
+
+// **The fourth renderer** (`CLAUDE.md`: count the renderers, not the
+// surfaces). This console is a `/v1` client served at `GET /ui`, and it
+// MINTED receipts while telling the operator they are the only proof — with
+// no door to check one. That is O14's own asymmetry on the surface most
+// operators drive, so closing it on `/v1` and stopping there would have left
+// the drift where it is most visible.
+async function verifyAttestation() {
+  const v = state.vault;
+  let doc;
+  try {
+    doc = JSON.parse($("attDoc").value);
+  } catch (e) {
+    toast("that is not JSON — paste the receipt as written", true);
+    return;
+  }
+  const out = $("attReport");
+  out.style.display = "block";
+  try {
+    const r = await api("POST", opsPath("verify-forgetting"), { vault: v, body: doc });
+    out.textContent = JSON.stringify(r, null, 2);
+    // The two verdicts make DIFFERENT claims and must not share a word.
+    if (r.verdict === "verified") {
+      toast("ATTESTATION VERIFIED — the keyed replay passed");
+    } else if (r.verdict === "recorded") {
+      toast("ATTESTATION RECORDED — genuine, keyed replay unavailable after "
+        + (r.rotations_since || 0) + " rotation(s)");
+    } else {
+      toast("unrecognised verdict — read the report below", true);
+    }
+  } catch (e) {
+    out.textContent = e.message;
+    toast("ATTESTATION FAILED — this does not describe what this vault did", true);
+  }
 }
 
 $("connectBtn").onclick = connect;
@@ -1423,6 +1468,7 @@ $("retRefresh").onclick = loadRetention;
 $("retSet").onclick = setRetention;
 $("retSweep").onclick = sweepRetention;
 $("forgetBtn").onclick = runForget;
+$("verifyAttBtn").onclick = verifyAttestation;
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => showTab(b.dataset.tab);
 $("bearer").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
 $("asecret").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });

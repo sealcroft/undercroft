@@ -130,9 +130,19 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass)] = &[
     ("UNDERCROFT_ORCH_DB", Tunes),
     ("UNDERCROFT_ORCH_ENGINE_CA", Protects),
     ("UNDERCROFT_ORCH_KEY", Protects),
+    // The control plane's metrics listener (O20). `_ADDR` is `Protects`
+    // because declaring it OPENS a network surface, and `_TOKEN` because it
+    // is what makes a non-loopback listener legal at all.
+    ("UNDERCROFT_ORCH_METRICS_ADDR", Protects),
+    ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects),
     ("UNDERCROFT_ORCH_RATE_LIMIT", Protects),
     ("UNDERCROFT_ORT_POOL", Tunes),
-    ("UNDERCROFT_OTLP_ENDPOINT", Tunes),
+    // An OUTWARD PATH, and `architecture/index.html` has always named it as
+    // one of the four. `Tunes` made `config check` print "warn … keeps the
+    // conservative default" for a declaration that now stops the process,
+    // because the pre-flight derives fatal-vs-warn from this class alone.
+    ("UNDERCROFT_OTLP_ENDPOINT", Protects),
+    ("UNDERCROFT_OTLP_CA", Protects),
     ("UNDERCROFT_OTLP_HEADERS", Tunes),
     ("UNDERCROFT_PASSPHRASE", Protects),
     ("UNDERCROFT_PGVECTOR_DSN", Tunes),
@@ -1018,6 +1028,51 @@ mod tests {
             "every outbound client must come from `undercroft_net` — TLS or \
              loopback, nothing else, no override. Found:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    /// The gate above scans SOURCE for `ureq`'s builder token — which is
+    /// precisely the observable round-four #8 did not move. The OTLP span
+    /// exporter was a second outbound HTTP client built by *someone else's*
+    /// library (`reqwest`, via `opentelemetry-otlp`'s
+    /// `reqwest-blocking-client` feature), so it was structurally invisible
+    /// to a scan for a token it never contained. CLAUDE.md's rule, third
+    /// instance: ask what a gate can SEE, not what it asserts.
+    ///
+    /// This one measures the DEPENDENCY EDGE instead, which is the thing
+    /// that actually moved — and the removal of that feature is what makes
+    /// the absence byte-readable at all.
+    ///
+    /// It also caught the second half of #8: `reqwest` resolved with NO TLS
+    /// crate in its dependency list, so an `https://` collector could not
+    /// work and failed silently inside the span processor. A client this
+    /// workspace cannot see is also a client nobody checked could do TLS.
+    #[test]
+    fn no_second_http_client_is_linked_into_the_workspace() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ is this crate's parent")
+            .parent()
+            .expect("the workspace root is crates/'s parent");
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect(
+            "Cargo.lock must be readable — a gate that cannot read its input \
+             reports exactly what a clean tree reports",
+        );
+        // PREMISE. Without it an empty or truncated lock file passes every
+        // assertion below by containing nothing at all.
+        assert!(
+            lock.contains(concat!("name = \"u", "req\"")),
+            "premise failed: this does not look like the workspace lock file \
+             — `ureq`, the transport `undercroft-net` is built on, is absent"
+        );
+        assert!(
+            !lock.contains(concat!("name = \"re", "qwest\"")),
+            "a second outbound HTTP client is linked into the workspace. The \
+             OTLP exporter used to be one: unpoliced by `undercroft-net`, and \
+             resolved with no TLS backend at all, so `https://` silently \
+             exported nothing. If a dependency legitimately needs it, route \
+             it through `undercroft_net` first and then decide what this gate \
+             should say."
         );
     }
 

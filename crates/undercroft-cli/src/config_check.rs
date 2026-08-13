@@ -101,6 +101,53 @@ fn check_one(name: &str, raw: &str) -> Finding {
         .find(|(n, _)| *n == name)
         .map(|(_, c)| *c)
         .unwrap_or(ConfigClass::Tunes);
+    // **Declarations this crate owns are checked here, not in the store.**
+    // `check_declaration` lives in `undercroft-store`, which cannot reach a
+    // parse that lives in the CLI or in `undercroft-llm` — so those fell
+    // through its catch-all and this command printed "no parse to run; the
+    // consumer validates it" about values that stop start-up. Measured
+    // against the binary: `config check` exited 0 while the same environment
+    // failed to run, for all three below (round-four #9).
+    //
+    // Each arm calls the SAME function the engine calls. None of them
+    // constructs anything — this command opens nothing and makes no outbound
+    // call, so a model is never loaded to find out whether its name is legal.
+    let owned: Option<Result<String, String>> = match name {
+        "UNDERCROFT_EMBEDDER" => Some(
+            crate::check_embedder(raw).map(|()| "selects the vector space for this vault".into()),
+        ),
+        "UNDERCROFT_RETRIEVAL" => {
+            Some(crate::check_retrieval(raw).map(|()| "selects the candidate generator".into()))
+        }
+        "UNDERCROFT_ADMISSION_LLM" => Some(
+            undercroft_llm::advisor::check_mode(raw)
+                .map(|()| "tier-2 advisory screen, toward quarantine only".into())
+                .map_err(|e| e.to_string()),
+        ),
+        // Its CORRECTNESS is uncheckable — any non-empty string is a
+        // well-formed token and only a client can say whether it is the right
+        // one. Its EMPTINESS is not, and that was the whole of ROADMAP O22:
+        // an empty declaration served /mcp and /v1 to any caller on the
+        // loopback host while the operator's configuration said a bearer was
+        // required. Two different questions, and the exemption this replaces
+        // answered both with "a credential, not a syntax".
+        "UNDERCROFT_MCP_HTTP_TOKEN" => Some(
+            crate::http::resolve_mcp_token(Some(raw))
+                .map(|_| "bearer required on /mcp and /v1".into()),
+        ),
+        _ => None,
+    };
+    if let Some(result) = owned {
+        return match result {
+            Ok(what) => Finding::Ok(what),
+            Err(why) => match class {
+                ConfigClass::Protects => Finding::Fatal(why),
+                ConfigClass::Tunes => Finding::Warn(format!(
+                    "{why}; this one keeps the conservative default rather than refusing"
+                )),
+            },
+        };
+    }
     match undercroft_store::check_declaration(name, raw) {
         Ok(Some(what)) => Finding::Ok(what),
         Ok(None) => Finding::Accepted,
@@ -113,9 +160,117 @@ fn check_one(name: &str, raw: &str) -> Finding {
     }
 }
 
+/// `Protects` variables this command legitimately cannot pre-flight, each
+/// with the reason it is exempt rather than forgotten.
+///
+/// A `Protects` variable is one whose refusal is FATAL, so an operator is
+/// told to trust `config check`'s exit code — `UPGRADING.md` says in as many
+/// words that if it exits 0, none of its entries affect you. Anything on this
+/// list is a place where that promise is narrower than it sounds, so the list
+/// is short, argued, and counted against the code in BOTH directions by
+/// [`tests::every_protects_variable_is_pre_flighted_or_exempt`].
+///
+/// `#[cfg(test)]` because it is inventory, not behaviour — the same shape as
+/// `mcp::WRITE_TOOLS`, which survives as the other half of a count and is
+/// referenced by nothing at run time.
+#[cfg(test)]
+const PREFLIGHT_EXEMPT: &[(&str, &str)] = &[
+    // `UNDERCROFT_PASSPHRASE` was here, and then `UNDERCROFT_MCP_HTTP_TOKEN`
+    // was, and both were too broad in the same way: a credential's
+    // CORRECTNESS is uncheckable without decrypting a vault or being refused
+    // by a peer, but its EMPTINESS is checkable here and is always a failed
+    // interpolation. Listing the variable answered both questions with
+    // "cannot" — and the silent halves were key material written to disk and
+    // a bearer gate removed from a loopback server. Each has an arm now, and
+    // the both-directions half of the gate below is what forced these entries
+    // to be deleted rather than left to rot.
+    //
+    // Nothing is exempt for being a credential any more. If a future one is,
+    // say which of the two questions is unanswerable and why.
+    //
+    // **The three `UNDERCROFT_ORCH_*` entries are GONE (ROADMAP O24).** They
+    // said the declarations were owned by a different binary and therefore
+    // unreachable "at any price", and that was wrong twice over: this
+    // command's own `ENGINE_ENV_VARS` already contained the names, and
+    // `UNDERCROFT_ORCH_ENGINE_CA` was already validated by the CA-pin arm.
+    // The doctrine forbids the engine LINKING the control-plane crate; it
+    // never forbade validating three string-to-value parses.
+    //
+    // They live in `undercroft-config` now — a leaf crate both binaries link
+    // and neither owns, carved out on the precedent `undercroft-net` set —
+    // so `check_declaration` runs the SAME code the control plane runs.
+    //
+    // The deletion was FORCED rather than remembered: the both-directions
+    // gate below fails on an entry that turns out to be pre-flighted.
+    // Flags, not vocabularies: any value that is not the enabling one leaves
+    // the conservative default in place, so there is nothing that can fail
+    // to parse. Verified against the binary — a garbage value runs.
+    (
+        "UNDERCROFT_FORCE_EMBEDDER",
+        "a flag; no value can fail to parse",
+    ),
+    (
+        "UNDERCROFT_ADMIT_TRUSTED_SOURCES",
+        "a flag; no value can fail to parse",
+    ),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Round-four #9's gate. **Every `Protects` variable is either
+    /// pre-flighted or on the exempt list, and the list cannot go stale
+    /// because it is counted in both directions.**
+    ///
+    /// The defect this closes is not "three arms were missing" — it is that
+    /// nothing could tell. `check_declaration`'s catch-all renders an
+    /// unknown name as `Accepted`, printed as *"no parse to run; the
+    /// consumer validates it"*, which is indistinguishable from a variable
+    /// that genuinely has no parse. Measured against the binary,
+    /// `config check` exited 0 for `UNDERCROFT_RETRIEVAL`,
+    /// `UNDERCROFT_EMBEDDER` and `UNDERCROFT_ADMISSION_LLM` while the same
+    /// environment failed to start — and `UPGRADING.md` tells operators that
+    /// exit 0 means none of its entries affect them.
+    #[test]
+    fn every_protects_variable_is_pre_flighted_or_exempt() {
+        let exempt: std::collections::BTreeMap<&str, &str> =
+            PREFLIGHT_EXEMPT.iter().copied().collect();
+        let mut unchecked = Vec::new();
+        let mut protects = 0usize;
+        for (name, class) in ENGINE_ENV_VARS {
+            if *class != ConfigClass::Protects {
+                continue;
+            }
+            protects += 1;
+            // A value no vocabulary can contain. `Accepted` here means this
+            // command ran no parse at all for a variable whose refusal is
+            // fatal.
+            let accepted = matches!(check_one(name, "\u{1}not-a-legal-value"), Finding::Accepted);
+            match (accepted, exempt.contains_key(name)) {
+                (true, false) => unchecked.push(format!(
+                    "  {name} — Protects, but this command runs no parse for it. \
+                     Give it an arm, or add it to PREFLIGHT_EXEMPT with a reason."
+                )),
+                (false, true) => unchecked.push(format!(
+                    "  {name} — listed in PREFLIGHT_EXEMPT but IS pre-flighted now. \
+                     Good news: delete the exemption."
+                )),
+                _ => {}
+            }
+        }
+        // PREMISE. A filter that matched nothing would report a clean tree.
+        assert!(
+            protects >= 20,
+            "premise failed: only {protects} Protects variables found — the \
+             inventory is not being read"
+        );
+        assert!(
+            unchecked.is_empty(),
+            "`config check` and the Protects class disagree:\n{}",
+            unchecked.join("\n")
+        );
+    }
 
     /// **The validator calls the engine's own resolvers, and this is the
     /// test that would notice if it ever stopped.**

@@ -17,10 +17,15 @@
 # on the maintainer's machine that was the project's FORMER name, which
 # therefore branded every build artifact while appearing in no file.
 #
-# It is the seventh class of name occurrence, and the one the six-class trace
-# verifier (.handover/verify-no-trace.py) structurally cannot see: it scans
-# tracked file CONTENTS, and this name was in none of them. A negative result
-# is only as good as the widest question you thought to ask.
+# It is a class of name occurrence that lives in NO FILE, and so the one the
+# trace verifier (tests/no-trace/verify.py) structurally cannot see: it scans
+# tracked file CONTENTS across seven classes, and this name was in none of
+# them. A negative result is only as good as the widest question you thought
+# to ask. Deliberately NOT numbered against that scanner's classes — it is not
+# a content class at all, and calling it "the seventh" collided with the
+# seventh content class the moment one was added (O26, the compressed PDF
+# stream). Extend the QUESTION, never the regex; the mechanism here is the
+# compose-project-name preflight.
 #
 # It also silently falsified a doc: CLAUDE.md's volume-mount recipe names
 # `undercroft_undercroft-embed-tls`, a volume that did not exist while the
@@ -188,7 +193,7 @@ services:
       target: builder
     entrypoint: ["bash", "-c"]
     command:
-      - "cargo build --release -p undercroft-cli --features telemetry && bash /src/tests/e2e-telemetry.sh"
+      - "cargo build --release -p undercroft-cli --features telemetry && cargo build --release -p undercroft-orchestrator --features telemetry && bash /src/tests/e2e-telemetry.sh"
     volumes:
       - ./tests/e2e-telemetry.sh:/src/tests/e2e-telemetry.sh:ro
 

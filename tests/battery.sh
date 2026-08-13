@@ -115,6 +115,241 @@ echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 # `ROADMAP.md`, so a `cargo test` cannot read it. Cheap, and it makes "do not
 # forget" mechanical instead of remembered — which is this project's whole
 # position on inventories versus prose.
+# ---------------------------------------------------------------------------
+# The `test` suite's count, read by PAIRING rather than by summing (ROADMAP
+# O15).
+#
+# `docker compose run` SOMETIMES replays the tail of the container's stream,
+# so `.battery/test.log` ends with a duplicated block. Summing every
+# `test result:` line then reports a run that executed 694/4 as 1016/8. It is
+# INTERMITTENT — two batteries the same hour on the same tree produced one
+# duplicated log and one clean one — which is worse than a constant error,
+# because nobody re-derives a number that looked right last time.
+#
+# So: pair each target HEADER (`Running …` / `Doc-tests …`) with the result
+# that follows it, and sum only paired results. A duplicated tail has no
+# header above it, so its result lines are ORPHANS.
+#
+# **An orphan is reported as a PREMISE FAILURE, never dropped.** It is the
+# only visible symptom of the replay; a reader that quietly ignored one would
+# be unable to say the stream had been duplicated at all, which is the same
+# defect one level down from the one this fixes.
+#
+# A function, not inline awk, because the gate below runs the SAME code on
+# synthetic input. A gate that re-implements what it checks agrees with itself
+# by construction — this file's own first ROADMAP-heading check shipped broken
+# for exactly that reason.
+test_summary() { # test_summary <log>
+  awk '
+    /^[[:space:]]*(Running|Doc-tests)[[:space:]]/ { hdr = 1; next }
+    /^test result:/ {
+      if (hdr) {
+        for (i = 1; i <= NF; i++) {
+          if ($(i+1) ~ /^passed/)  p += $i
+          if ($(i+1) ~ /^failed/)  f += $i
+          if ($(i+1) ~ /^ignored/) g += $i
+        }
+        t++; hdr = 0
+      } else { orphan++ }
+    }
+    END {
+      if (t == 0 && orphan == 0) {
+        printf "no result lines found — this reader examined nothing"
+        exit
+      }
+      printf "%d passed, %d failed, %d ignored over %d targets", p, f, g, t
+      if (orphan > 0)
+        printf "  ** PREMISE FAILURE: %d orphan result line(s) — the log tail was replayed; this count is not trustworthy (ROADMAP O15) **", orphan
+    }' "$1" 2>/dev/null
+}
+
+# **The same class one suite over (ROADMAP O27).** `test_summary` can name a
+# replayed tail because it pairs cargo's target HEADERS with their results —
+# but `Running` and `Doc-tests` are cargo's, and no other suite emits them, so
+# O15's detector covered ONE suite of eight. The seven shell suites print a
+# single `<suite> results: N passed, M failed` line as their FINAL statement
+# (`tests/e2e-backends.sh:157` and its siblings), so more than one in a log is
+# not a heuristic signal: that log is not the record of a single run.
+#
+# Observed rather than theorised. A `backends-e2e` log on this branch carried
+# `56 passed, 1 failed` AND `54 passed, 3 failed`, and the `| tail -1` this
+# replaces printed the second with nothing saying the first existed.
+suite_summary() { # suite_summary <log>
+  awk '
+    /^[a-z0-9-]+([ ][a-z0-9-]+)* results: [0-9]+ passed, [0-9]+ failed/ {
+      n++; last = $0
+    }
+    END {
+      if (n == 0) {
+        printf "no results line found — this reader examined nothing"
+        exit
+      }
+      printf "%s", last
+      if (n > 1)
+        printf "  ** PREMISE FAILURE: %d summary lines in one log — it holds more than one run, so this count is not trustworthy (ROADMAP O27) **", n
+    }' "$1" 2>/dev/null
+}
+
+# The gate for it, run host-side because no image carries this script. Both
+# arms come from the filed shape: a log reports the same figure with and
+# without a duplicated tail, and the orphan is counted and NAMED.
+echo "═══ preflight: the test-count reader ═══"
+SUM_TMP="$(mktemp -d)"
+cat >"$SUM_TMP/clean.log" <<'SUMEOF'
+     Running unittests src/lib.rs (target/release/deps/a-1)
+test result: ok. 10 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+     Running tests/cli.rs (target/release/deps/b-2)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+   Doc-tests undercroft_core
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
+# The replay: the tail block again, with NO header above it.
+cp "$SUM_TMP/clean.log" "$SUM_TMP/replayed.log"
+cat >>"$SUM_TMP/replayed.log" <<'SUMEOF'
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
+SUM_CLEAN=$(test_summary "$SUM_TMP/clean.log")
+SUM_REPLAY=$(test_summary "$SUM_TMP/replayed.log")
+SUM_EMPTY=$(test_summary /dev/null)
+SUM_FAIL=0
+case "$SUM_CLEAN" in
+  "16 passed, 0 failed, 2 ignored over 3 targets") ;;
+  *) echo "FAIL  the reader miscounts a clean log: $SUM_CLEAN"; SUM_FAIL=1 ;;
+esac
+case "$SUM_REPLAY" in
+  "16 passed, 0 failed, 2 ignored over 3 targets"*) ;;
+  *) echo "FAIL  a replayed tail changed the count: $SUM_REPLAY"; SUM_FAIL=1 ;;
+esac
+case "$SUM_REPLAY" in
+  *"PREMISE FAILURE: 1 orphan"*) ;;
+  *) echo "FAIL  the replay was absorbed silently: $SUM_REPLAY"; SUM_FAIL=1 ;;
+esac
+# A reader that examined nothing must say so rather than print a clean zero.
+case "$SUM_EMPTY" in
+  *"examined nothing"*) ;;
+  *) echo "FAIL  an empty log reported a count: $SUM_EMPTY"; SUM_FAIL=1 ;;
+esac
+
+# ...and the same three arms for the SUITE reader (ROADMAP O27), because the
+# same class needs the same proof: a doubled log must be NAMED rather than
+# silently reduced to its last line, and a scanner that examined nothing must
+# say so. The replayed fixture uses the exact numbers the real contaminated
+# log carried, so this arm fails if the reader ever goes back to `tail -1`.
+cat >"$SUM_TMP/suite-clean.log" <<'SUMEOF'
+ok    [qdrant] push
+backends-e2e results: 57 passed, 0 failed
+SUMEOF
+cp "$SUM_TMP/suite-clean.log" "$SUM_TMP/suite-replayed.log"
+cat >>"$SUM_TMP/suite-replayed.log" <<'SUMEOF'
+ok    [weaviate] verbatim result
+backends-e2e results: 54 passed, 3 failed
+SUMEOF
+SUI_CLEAN=$(suite_summary "$SUM_TMP/suite-clean.log")
+SUI_REPLAY=$(suite_summary "$SUM_TMP/suite-replayed.log")
+SUI_EMPTY=$(suite_summary /dev/null)
+case "$SUI_CLEAN" in
+  "backends-e2e results: 57 passed, 0 failed") ;;
+  *) echo "FAIL  the suite reader misreads a clean log: $SUI_CLEAN"; SUM_FAIL=1 ;;
+esac
+case "$SUI_REPLAY" in
+  *"PREMISE FAILURE: 2 summary lines"*) ;;
+  *) echo "FAIL  two summaries in one log were absorbed silently: $SUI_REPLAY"; SUM_FAIL=1 ;;
+esac
+case "$SUI_EMPTY" in
+  *"examined nothing"*) ;;
+  *) echo "FAIL  the suite reader reported a verdict over an empty log: $SUI_EMPTY"; SUM_FAIL=1 ;;
+esac
+rm -rf "$SUM_TMP"
+if [ "$SUM_FAIL" -ne 0 ]; then
+  echo "      the summary is reporting-only and decides nothing, but it is the"
+  echo "      number a session copies into CLAUDE.md — an unreproducible doc claim"
+  # `exit 1`, like every other preflight here. The first version of this line
+  # incremented a `FAIL` counter that does not exist in this script, so the
+  # gate would have printed its complaint and let the battery continue — a
+  # checker that cannot fail, inside the gate written to catch that class.
+  exit 1
+else
+  echo "ok    counts by pairing (cargo) and by counting summaries (suites);"
+  echo "      a replayed tail or a doubled log is named, not absorbed"
+fi
+
+# ---------------------------------------------------------------------------
+# The former-name trace check, INVOKED (ROADMAP O10).
+#
+# `tests/no-trace/verify.py` covers seven file-content classes a plain grep
+# cannot: a non-Latin spelling sharing no byte with the Latin one, a truncated
+# root used as an identifier stem, base64 inside a certificate, the identity
+# carried without the name, and — since O26 — a Flate-compressed PDF stream,
+# which is the class the rule was written about and the one the scanner
+# implementing that rule could not read. It used to live in a gitignored directory
+# and was run BY HAND — so a fresh clone did not carry it and nothing invoked
+# it. A verifier nobody runs is a verifier you do not have, and the instance is
+# on record: a comment added to explain the derived-name defect quoted the
+# former name, the verifier would have caught it, and the battery was green.
+#
+# In a CONTAINER, because a gate needing Python on the host is a gate that does
+# not run on the next machine. The tracked list is piped in so the image needs
+# no `git` and no `apt-get`.
+#
+# **Docker absent is a FAILURE, not a skip** — a preflight that skips reports
+# exactly what a clean tree reports, which is the whole defect class this file
+# exists to close.
+echo "═══ preflight: former-name trace ═══"
+if ! command -v docker >/dev/null 2>&1; then
+  echo "FAIL  docker is not available, so this check cannot run — that is a"
+  echo "      failure and not a skip: a scanner that did not run reports what a"
+  echo "      clean tree reports"
+  exit 1
+fi
+NOTRACE_IMG="python:3-slim"
+# The self-test first, on synthetic input: a known-positive file must be
+# CAUGHT. Its content is assembled here from fragments for the same reason the
+# scanner's needles are — this script is scanned too.
+# The plant lives INSIDE the repo (in gitignored `.battery/`) rather than in a
+# second mount: a Git Bash `mktemp -d` path passed through `MSYS_NO_PATHCONV`
+# does not resolve for Docker, so the file simply did not exist in the
+# container and the scanner "found nothing" — a self-test that silently tested
+# an empty directory, which is the exact shape it exists to prevent.
+mkdir -p .battery
+NOTRACE_PROBE=".battery/notrace-probe.md"
+printf 'a clean line\nthe %s%s%s name\n' "mne" "mos" "yne" > "$NOTRACE_PROBE"
+# NOTE the sense: the scanner exits NON-ZERO when it finds something, so
+# catching the plant is a FAILING exit and this `if` fires on exit ZERO. The
+# first version of this line had the `!` and reported a working scanner as
+# broken — an inverted gate, which is the one kind that fails loudly rather
+# than silently, and the only reason it was cheap.
+if git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i \
+     -v "$(pwd):/r" -w /r "$NOTRACE_IMG" \
+     python tests/no-trace/verify.py --stdin "$NOTRACE_PROBE" >/dev/null 2>&1; then
+  echo "FAIL  the scanner did not catch a planted known-positive — it cannot be believed"
+  rm -f "$NOTRACE_PROBE"
+  exit 1
+fi
+rm -f "$NOTRACE_PROBE"
+# …then the tree itself.
+NOTRACE_OUT=$(git ls-files | MSYS_NO_PATHCONV=1 docker run --rm -i \
+  -v "$(pwd):/r" -w /r "$NOTRACE_IMG" python tests/no-trace/verify.py --stdin 2>&1)
+if [ $? -ne 0 ]; then
+  # Two different failures share this exit code, and saying the wrong one is
+  # its own defect: a disarmed scanner is not a dirty tree.
+  case "$NOTRACE_OUT" in
+    *"PREMISE FAILED"*)
+      echo "FAIL  the trace scanner cannot be believed — it did not check what it claims:" ;;
+    *)
+      echo "FAIL  the former name is present in tracked content:" ;;
+  esac
+  echo "$NOTRACE_OUT" | sed 's/^/      /'
+  exit 1
+fi
+# Print the scanner's own coverage lines rather than reformatting one of them.
+# The previous version cut the output at `files scanned: ` and re-inserted the
+# words with `sed`, which is a second copy of the scanner's format living here
+# — and it stopped matching the moment the scanner gained a line. What a gate
+# reports about its own reach is the last thing that should be reassembled by
+# a caller, so both lines are passed through verbatim.
+echo "ok    the former name is absent from tracked content"
+echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /      /'
+
 echo "═══ preflight: ROADMAP headings ═══"
 ROADMAP_DRIFT=$(awk '
   function flush() {
@@ -198,6 +433,196 @@ if [ -n "$COMPOSE_BAD" ]; then
   exit 1
 fi
 echo "ok    all $COMPOSE_N compose files declare a project name"
+
+# ── preflight: every published figure has an inventory row ─────────────────
+# **A number in prose is a claim about the moment someone last counted**, and
+# this project's published ones have rotted repeatedly: the landing page's
+# cargo-test tile was set to 660 by the very commit that added four tests, and
+# on 2026-08-13 its e2e tile read 508 against a true 541 — stale BEFORE the
+# session that found it, with nothing able to say so. `docs/MULTI_TENANCY.md`
+# was published claiming a suite runs 95 checks while it ran 110.
+#
+# So: an INVENTORY the surfaces are counted against, in BOTH directions. A new
+# tile with no row fails; a row naming no tile fails. That is the half a
+# hand-maintained doc table cannot do, and it is the same mechanism
+# `parity.rs` uses for MCP tools and `GAUGE_NAMES` for metric series.
+#
+# **Three classes, because the figures do not have one provenance and
+# pretending they do would be the dishonest part.**
+#   derived  — checkable from the tree RIGHT NOW; the value is recomputed here
+#              and a mismatch fails.
+#   measured — only a battery run produces it. Checked two ways: every surface
+#              publishing it must AGREE (static, and it is what catches a doc
+#              going stale), and the full battery re-checks it against what it
+#              actually measured (below, after the suites).
+#   claim    — not a count at all. Recorded with its reason so it cannot be
+#              mistaken for an unchecked number.
+#
+# **Scope, stated so it is not mistaken for complete.** This covers the
+# landing page's `data-count` tiles and the per-suite check counts wherever
+# they are published — the figures the battery itself measures, which move on
+# almost every unit and have demonstrably rotted. It does NOT cover figures
+# with their own gate (`UNDERCROFT_*` variables are counted by
+# `ENGINE_ENV_VARS` both ways) or measurements needing an instrument run
+# (IRREGULAR pairs, paradigm counts). Those are a different question, and
+# widening a gate past what it can actually verify is how a check starts
+# reading as though it covered more than it does.
+echo "═══ preflight: published figures ═══"
+
+LANDING="website/landing/index.html"
+# label|class|source
+PUBLISHED_FIGURES=(
+  "cargo tests|measured|test"
+  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e"
+  "live backends|derived|BACKENDS"
+  "mcp tools|derived|MCP_TOOLS"
+  "bytes phoned home|claim|the local-first invariant — a promise, not a count"
+)
+
+FIG_FAIL=0
+# The tiles as PUBLISHED, read out of the page rather than assumed.
+TILES=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">[^<]+' "$LANDING" \
+        | sed -E 's/data-count="([0-9]+)">0<\/div><div class="l">(.*)/\2=\1/')
+TILE_N=$(printf '%s\n' "$TILES" | grep -c '=' || true)
+# PREMISE. An extractor that matches nothing reports what a clean page
+# reports — the failure this whole family is about. The page has had five
+# tiles for its whole life; zero means the markup moved, not that the page
+# is fine.
+if [ "$TILE_N" -lt 1 ]; then
+  echo "FAIL  no data-count tiles found in $LANDING — this reader examined nothing,"
+  echo "      which is not the same as a page with no figures on it"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# Direction 1: every published tile has a row. This is the arm that stops a
+# NEW ungated figure from shipping.
+while IFS= read -r t; do
+  [ -z "$t" ] && continue
+  label="${t%=*}"
+  found=0
+  for row in "${PUBLISHED_FIGURES[@]}"; do
+    [ "${row%%|*}" = "$label" ] && found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "FAIL  the landing page publishes \"$label\" with no inventory row —"
+    echo "      classify it (derived / measured / claim) in PUBLISHED_FIGURES"
+    FIG_FAIL=1
+  fi
+done <<< "$TILES"
+
+# Direction 2: every row names a real tile. A row that has outlived its figure
+# reads as a gate being enforced when nothing is.
+for row in "${PUBLISHED_FIGURES[@]}"; do
+  label="${row%%|*}"
+  if ! grep -q "^$label=" <<< "$TILES"; then
+    echo "FAIL  PUBLISHED_FIGURES names \"$label\", which the landing page no longer"
+    echo "      publishes — a stale row reads as a checked figure"
+    FIG_FAIL=1
+  fi
+done
+
+fig_value() { grep -oE "^$1=[0-9]+" <<< "$TILES" | head -1 | cut -d= -f2; }
+
+# The `derived` rows, recomputed from their source of truth.
+BACKENDS_N=$(grep -cE '^run_backend_suite ' tests/e2e-backends.sh || true)
+MCP_N=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
+        | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
+# Premise on both sources: a zero here is a broken extractor, and it would
+# make the comparison below pass only when the page is ALSO wrong.
+if [ "$BACKENDS_N" -lt 1 ] || [ "$MCP_N" -lt 1 ]; then
+  echo "FAIL  a derived source read as empty (backends=$BACKENDS_N mcp=$MCP_N) —"
+  echo "      the extractor is broken, which is not evidence about the page"
+  FIG_FAIL=1
+else
+  for pair in "live backends=$BACKENDS_N" "mcp tools=$MCP_N"; do
+    lbl="${pair%=*}"; want="${pair#*=}"; got=$(fig_value "$lbl")
+    if [ "$got" != "$want" ]; then
+      echo "FAIL  the landing page publishes $lbl=$got; the tree says $want"
+      FIG_FAIL=1
+    fi
+  done
+fi
+
+# The `measured` rows: every surface publishing one must AGREE. Static, and it
+# is what catches a doc going stale between units — `docs/MULTI_TENANCY.md`
+# claimed 95 for a suite running 110 while every other surface was current.
+#
+# CLAUDE.md publishes them on its `docker compose run --rm <suite>` lines;
+# other docs publish them as `tests/<script>.sh`, N checks`.
+# `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
+# that is a GNU extension and Ubuntu's default `awk` is mawk, which does not
+# have it. CI runs these preflights on ubuntu-latest, so the gawk form would
+# have produced an empty read there — caught by the premise arm below, but as
+# a confusing failure on a clean tree rather than as the portability bug it
+# is. A gate that only runs on its author's machine is the shape this whole
+# file exists to remove.
+declare_suite_counts() {
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
+}
+SUITE_COUNTS=$(declare_suite_counts)
+if [ -z "$SUITE_COUNTS" ]; then
+  echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
+  echo "      and a broken reader agrees with every page it cannot read"
+  FIG_FAIL=1
+fi
+suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
+
+# Any OTHER doc republishing a suite's count must match CLAUDE.md's.
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  f="${hit%%:*}"; rest="${hit#*:}"
+  sc=$(sed -E 's#.*tests/([a-z0-9-]+)\.sh`?,? +([0-9]+) checks.*#\1=\2#' <<< "$rest")
+  sname="${sc%=*}"; sval="${sc#*=}"
+  # `tests/e2e-backends.sh` is the script; the suite is `backends-e2e`.
+  case "$sname" in
+    e2e-backends) sname="backends-e2e" ;;
+    e2e-orchestrator) sname="orchestrator-e2e" ;;
+  esac
+  want=$(suite_count "$sname")
+  if [ -n "$want" ] && [ "$sval" != "$want" ]; then
+    echo "FAIL  $f publishes $sname=$sval; CLAUDE.md publishes $want"
+    FIG_FAIL=1
+  fi
+done <<< "$(git grep -nE 'tests/[a-z0-9-]+\.sh`?,? +[0-9]+ checks' -- '*.md' ':!CHANGELOG.md' 2>/dev/null)"
+
+# The `e2e checks` tile is a SUM, and the row says which components. Deriving
+# it here is the difference between a tile that is checked and one that merely
+# looks plausible.
+SUM_SPEC=""
+for row in "${PUBLISHED_FIGURES[@]}"; do
+  case "$row" in "e2e checks|"*) SUM_SPEC="${row##*SUM:}" ;; esac
+done
+if [ -n "$SUM_SPEC" ] && [ -n "$SUITE_COUNTS" ]; then
+  total=0; missing=""
+  for s in ${SUM_SPEC//,/ }; do
+    v=$(suite_count "$s")
+    if [ -z "$v" ]; then missing="$missing $s"; else total=$((total + v)); fi
+  done
+  if [ -n "$missing" ]; then
+    echo "FAIL  the e2e tile sums$missing, which CLAUDE.md does not publish"
+    FIG_FAIL=1
+  else
+    got=$(fig_value "e2e checks")
+    if [ "$got" != "$total" ]; then
+      echo "FAIL  the landing page publishes e2e checks=$got; its named components"
+      echo "      (${SUM_SPEC//,/ + }) sum to $total"
+      FIG_FAIL=1
+    fi
+  fi
+fi
+
+if [ "$FIG_FAIL" -ne 0 ]; then
+  echo "      A published figure is a claim to anyone reading it. Correct the"
+  echo "      surface, or the inventory if the figure legitimately moved."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $TILE_N published tiles, each with a row; derived values and"
+echo "      cross-surface suite counts agree"
 
 # ── preflight: the handover has not drifted ────────────────────────────────
 # `.handover/` is gitignored on purpose and MUST stay so — 1.6 GB of working
@@ -380,13 +805,19 @@ for i in "${!NAMES[@]}"; do
   # "0 passed" under a green battery. Harmless, and still a number that does
   # not measure what it appears to, which is the habit this file exists to
   # break. Summed instead.
-  if [ "$n" = "test" ]; then
-    detail=$(awk '/^test result:/ { for (i=1;i<=NF;i++) {
-                    if ($(i+1) ~ /^passed/) p+=$i
-                    if ($(i+1) ~ /^failed/) f+=$i
-                    if ($(i+1) ~ /^ignored/) g+=$i } }
-                  END { printf "%d passed, %d failed, %d ignored (summed over %s targets)", p, f, g, "all" }' \
-             ".battery/$n.log" 2>/dev/null)
+  if [ "$n" = "lint" ]; then
+    # **The one suite with no summary line, named rather than complained
+    # about.** `cargo fmt --check` and `clippy` are silent on success, so
+    # `lint` has never printed one — and the O27 reader below correctly
+    # answered "this reader examined nothing", beside a green run, every
+    # time. That is a message which misdescribes its own situation, and
+    # worse: it is the SAME string that is a real signal for the other seven
+    # suites, so printing it routinely here teaches the reader to skip it.
+    # An alarm nobody can distinguish from a real failure is the thing this
+    # project exists to remove.
+    detail=""
+  elif [ "$n" = "test" ]; then
+    detail=$(test_summary ".battery/$n.log")
   else
     # Widened past `…e2e results:` when `obs-config` and `site` joined the
     # battery — the old pattern hard-coded `e2e` and silently printed nothing
@@ -398,12 +829,85 @@ for i in "${!NAMES[@]}"; do
     # because this line has never decided anything. A reporting line that
     # quietly stops reporting is the same defect as a summary read from an
     # empty field; it is only cheaper.
-    detail=$(grep -hoE '^[a-z0-9-]+( [a-z0-9-]+)* results: [0-9]+ passed, [0-9]+ failed' \
-               ".battery/$n.log" 2>/dev/null | tail -1)
+    # `| tail -1` until O27: it took the LAST summary and said nothing when
+    # there was more than one, which is how a log holding two runs printed a
+    # figure that measured neither. Same reader, one counted question added.
+    detail=$(suite_summary ".battery/$n.log")
   fi
   printf ' %-18s exit %-3s %s\n' "$n" "$c" "${detail:-}"
 done
 echo "════════════════════════════════════════════════════"
+
+# ── the published figures, against what this run MEASURED ──────────────────
+# The preflight checks that every surface publishing a figure AGREES with the
+# others. That cannot catch the case where they are all stale TOGETHER, which
+# is the one that actually happened: `CLAUDE.md` published 335 e2e checks
+# while the suite ran 348, and every surface was consistent with every other.
+# Only a run knows the true number, so the comparison belongs here.
+#
+# Suites that did not run in THIS invocation are skipped — a subset run
+# (`bash tests/battery.sh test`) must not report the other seven as drifted,
+# which would be an alarm that fires on correct usage.
+FIGURE_DRIFT=""
+for i in "${!NAMES[@]}"; do
+  n="${NAMES[$i]}"
+  published=$(grep -oE "docker compose run --rm $n .*\([0-9]+ checks" CLAUDE.md 2>/dev/null \
+              | sed -E 's/.*\(([0-9]+) checks/\1/' | head -1)
+  [ -z "$published" ] && continue
+  line=$(suite_summary ".battery/$n.log")
+  measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
+  case "$measured" in
+    *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
+    *)     continue ;;
+  esac
+  [ "$measured" -eq 0 ] && continue
+  if [ "$measured" != "$published" ]; then
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published, this run measured $measured\n"
+  fi
+done
+
+# **The cargo figure needs its own comparison, and finding that out is how
+# this gate learned its own scope.** The loop above matches `(N checks`, and
+# cargo publishes none — it is `(N run,` plus a compiled total in `CLAUDE.md`
+# and a `cargo tests` tile on the landing page. So the first version of this
+# check covered every suite EXCEPT the one whose number moves most often, and
+# the unit that added it moved that number in the same commit. A gate whose
+# scope is narrower than it reads is the defect this file keeps closing.
+if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
+  tline=$(test_summary ".battery/test.log")
+  tpass=$(sed -E 's/^([0-9]+) passed.*/\1/' <<< "$tline")
+  tign=$(sed -E 's/.*, ([0-9]+) ignored.*/\1/' <<< "$tline")
+  case "$tpass" in
+    ''|*[!0-9]*) : ;;   # the reader said something else; it names its own failure
+    *)
+      cm_run=$(grep -oE 'integration tests \([0-9]+ run' CLAUDE.md | grep -oE '[0-9]+' | head -1)
+      cm_comp=$(grep -oE '= [0-9]+ compiled' CLAUDE.md | grep -oE '[0-9]+' | head -1)
+      tile=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">cargo tests' "$LANDING" \
+             | grep -oE '[0-9]+' | head -1)
+      if [ -n "$cm_run" ] && [ "$cm_run" != "$tpass" ]; then
+        FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: CLAUDE.md publishes $cm_run run, this run measured $tpass\n"
+      fi
+      if [ -n "$cm_comp" ] && [ -n "$tign" ]; then
+        want=$(( tpass + tign ))
+        [ "$cm_comp" != "$want" ] && FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: CLAUDE.md publishes $cm_comp compiled; run+ignored is $want\n"
+      fi
+      if [ -n "$tile" ] && [ "$tile" != "$tpass" ]; then
+        FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: the landing tile publishes $tile, this run measured $tpass\n"
+      fi
+      ;;
+  esac
+fi
+
+if [ -n "$FIGURE_DRIFT" ]; then
+  echo ""
+  echo "PUBLISHED FIGURES ARE STALE — the suites passed; the numbers describing"
+  echo "them did not. This is a doc-drift verdict, NOT a suite failure:"
+  printf "$FIGURE_DRIFT"
+  echo "      Update CLAUDE.md, then the landing page tile (its e2e figure is the"
+  echo "      SUM of the four e2e suites) and any doc republishing the count."
+  OVERALL=1
+fi
+
 if [ "$OVERALL" -eq 0 ]; then
   echo "BATTERY OK — every suite exited 0"
 else

@@ -1054,15 +1054,17 @@ fn data_dir(cli: &Cli) -> PathBuf {
         .unwrap_or_else(|| home_dir().unwrap_or_else(|| ".".into()).join(".undercroft"))
 }
 
-fn passphrase() -> Option<String> {
-    std::env::var("UNDERCROFT_PASSPHRASE")
-        .ok()
-        .filter(|p| !p.is_empty())
+/// The declared passphrase, through the ONE resolver `config check` also
+/// runs — never `.filter(|p| !p.is_empty())`, which is what silently turned a
+/// failed interpolation into "no passphrase" and wrote a key to disk.
+fn passphrase() -> Result<Option<String>> {
+    let raw = std::env::var("UNDERCROFT_PASSPHRASE").ok();
+    undercroft_store::resolve_passphrase(raw.as_deref()).map_err(|e| anyhow::anyhow!(e))
 }
 
 fn manager(cli: &Cli) -> Result<VaultManager> {
     let dir = data_dir(cli);
-    let pw = passphrase();
+    let pw = passphrase()?;
     VaultManager::open(&dir, pw.as_deref())
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
@@ -1143,7 +1145,12 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore
         }
         Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
         Ok(other) => {
-            bail!("unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, http, onnx, ort)")
+            // The message comes from the SAME validator `config check` runs,
+            // so the pre-flight and the start-up can never disagree about
+            // what is legal. The named arms above matched every legal value,
+            // so this is an error by construction.
+            bail!(check_embedder(other)
+                .expect_err("every legal embedder name is matched by an arm above"))
         }
     };
     attach_reranker(&mut store)?;
@@ -1165,26 +1172,73 @@ pub(crate) fn attach_admission_advisor(store: &mut PalaceStore) -> Result<()> {
     Ok(())
 }
 
+/// The `UNDERCROFT_EMBEDDER` vocabulary, and what THIS BUILD can honour.
+///
+/// **One implementation, two callers**: the open path below and
+/// `undercroft config check`. The parse used to live only inside that
+/// path's `match`, so the pre-flight had nothing to call — `check_declaration`
+/// fell through to its catch-all and the command printed *"no parse to run;
+/// the consumer validates it"* about a value that bails before the port is
+/// bound. Round-four #9: the pre-flight said "This environment starts" for
+/// environments that do not.
+///
+/// Validates the NAME only. It must not construct anything — `config check`
+/// opens nothing and makes no outbound call, and loading a model is both.
+pub(crate) fn check_embedder(raw: &str) -> Result<(), String> {
+    match raw {
+        "" | "hash" | "http" | "external" => Ok(()),
+        "onnx" if !cfg!(feature = "onnx") => Err(
+            "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
+             (cargo build -p undercroft-cli --features onnx)"
+                .to_string(),
+        ),
+        "ort" if !cfg!(feature = "ort") => Err(
+            "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
+             (cargo build -p undercroft-cli --features ort)"
+                .to_string(),
+        ),
+        "onnx" | "ort" => Ok(()),
+        other => Err(format!(
+            "unknown UNDERCROFT_EMBEDDER {other:?} (expected: hash, onnx, ort, http)"
+        )),
+    }
+}
+
+/// The `UNDERCROFT_RETRIEVAL` vocabulary, and what this build can honour.
+/// Same shape and same reason as [`check_embedder`].
+pub(crate) fn check_retrieval(raw: &str) -> Result<(), String> {
+    match raw {
+        "" | "pq" | "fde" => Ok(()),
+        "hnsw" if !cfg!(feature = "hnsw") => Err(
+            "UNDERCROFT_RETRIEVAL=hnsw requires a build with the 'hnsw' feature \
+             (cargo build -p undercroft-cli --features hnsw)"
+                .to_string(),
+        ),
+        "hnsw" => Ok(()),
+        other => Err(format!(
+            "unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, fde, hnsw)"
+        )),
+    }
+}
+
 /// Select the candidate-generation strategy via `UNDERCROFT_RETRIEVAL`
 /// (same contract as the bench harness). Unset ⇒ the default full scan with
 /// the FTS prefilter. `pq` enables the on-disk PQ/IVF prefilter — plain
 /// codes on hmac-only vaults, AEAD-sealed rows + a decrypt-once RAM cache
 /// on sealed vaults.
 fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
-    match std::env::var("UNDERCROFT_RETRIEVAL").as_deref() {
-        Ok("pq") => store.set_pq(true),
-        Ok("fde") => store.set_fde(true),
-        Ok("hnsw") => {
-            #[cfg(feature = "hnsw")]
-            store.set_hnsw(true);
-            #[cfg(not(feature = "hnsw"))]
-            bail!(
-                "UNDERCROFT_RETRIEVAL=hnsw requires a build with the 'hnsw' feature \
-                 (cargo build -p undercroft-cli --features hnsw)"
-            );
-        }
-        Ok("") | Err(_) => {}
-        Ok(other) => bail!("unknown UNDERCROFT_RETRIEVAL {other:?} (expected: pq, fde, hnsw)"),
+    let raw = std::env::var("UNDERCROFT_RETRIEVAL").unwrap_or_default();
+    // The vocabulary is decided ONCE, by the same function `config check`
+    // runs, so the pre-flight and the start-up cannot disagree about what is
+    // legal. Everything below is application, not validation — which is why
+    // the final arm can be a bare `_` with no second error message.
+    check_retrieval(&raw).map_err(|e| anyhow::anyhow!(e))?;
+    match raw.as_str() {
+        "pq" => store.set_pq(true),
+        "fde" => store.set_fde(true),
+        #[cfg(feature = "hnsw")]
+        "hnsw" => store.set_hnsw(true),
+        _ => {}
     }
     Ok(())
 }
@@ -1515,9 +1569,6 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
 }
 
 fn main() -> std::process::ExitCode {
-    // Telemetry is a no-op unless built with `--features telemetry`. The
-    // guard flushes providers on any return path (including `?` out of `run`).
-    let _telemetry = undercroft_obs::init();
     // `fn main() -> Result<()>` let the std `Termination` impl choose the
     // code, and it only knows one failure: 1. Everything this CLI wants to
     // say about a failure has to be said here.
@@ -1532,6 +1583,38 @@ fn main() -> std::process::ExitCode {
         let _ = e.print();
         std::process::exit(if e.use_stderr() { 1 } else { 0 });
     });
+    // Telemetry is a no-op unless built with `--features telemetry`. The
+    // guard flushes providers on any return path (including `?` out of `run`).
+    //
+    // It runs AFTER the parse because it can now FAIL — the OTLP endpoint is
+    // an outward path, so a cleartext non-loopback collector is refused
+    // rather than silently exported to in the clear. Nothing between the two
+    // emits a span, so no signal is lost by the move.
+    let _telemetry = match undercroft_obs::init() {
+        Ok(g) => Some(g),
+        // `config check` is EXEMPT, and the exemption is the point of the
+        // command: it exists to diagnose an environment that will not start,
+        // so a version of it that cannot itself start in that environment is
+        // useless. It carries on without telemetry and reports the same
+        // declaration as a finding of its own.
+        // BOTH spellings, because `config check` and `config-check` are two
+        // variants bound to one dispatch arm (see `Command::Config`) and
+        // matching only the hyphenated one would exempt the spelling every
+        // doc publishes from nothing at all.
+        Err(e)
+            if matches!(
+                parsed.command,
+                Command::ConfigCheck { .. } | Command::Config { .. }
+            ) =>
+        {
+            eprintln!("warning: telemetry disabled — {e}");
+            None
+        }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return std::process::ExitCode::from(EXIT_FAILURE);
+        }
+    };
     match run(parsed) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
@@ -1578,7 +1661,7 @@ fn run(cli: Cli) -> Result<()> {
                         ]
                     )
                 );
-                if passphrase().is_some() {
+                if passphrase()?.is_some() {
                     println!("Master key: derived from UNDERCROFT_PASSPHRASE (Argon2id)");
                 } else {
                     println!("Master key: {}/master.key (0600)", mgr.root().display());
@@ -1811,10 +1894,20 @@ fn run(cli: Cli) -> Result<()> {
             // which is exactly what the caller did NOT get.
             let out = store.upsert_screened(&drawer)?;
             if out.quarantined {
+                // "the content tripped" was true of every diversion until
+                // O32, and then it was not: a save whose CONTENT is clean now
+                // diverts when the declared WING or ROOM trips the screen, and
+                // this line told the operator to go looking in the wrong
+                // place. A message that misdescribes its own situation is the
+                // most expensive artifact this project produces, so it says
+                // "this save" and lets `admission list` — which carries the
+                // per-signal codes — name what actually fired.
                 println!(
-                    "Quarantined pending review: the content tripped the admission \
+                    "Quarantined pending review: this save tripped the admission \
                      screen and is NOT retrievable in {wing}/{room}. \
-                     Review with `undercroft admission list`."
+                     Review with `undercroft admission list`, which names the \
+                     signals — `destination-anomaly` means the wing or room \
+                     name tripped rather than the text."
                 );
             } else {
                 println!(
@@ -2188,10 +2281,20 @@ fn run(cli: Cli) -> Result<()> {
             // lines run while printing a verdict.
             let before: String = att.head_before.chars().take(12).collect();
             let after: String = att.head_after.chars().take(12).collect();
-            let signature = if att.sig.is_some() {
-                "; sender signature verified"
-            } else {
-                "; unsigned"
+            // **Both fields, not `sig` alone.** This read `att.sig.is_some()`
+            // and printed "sender signature verified" — a claim the code had
+            // not established, because verification only ran when `sender`
+            // was ALSO present, and `sender` is the public key the signature
+            // is checked against. A document with it stripped was verified by
+            // nothing and reported as verified. The store refuses that shape
+            // now, so the two can no longer disagree; stating the condition
+            // the message claims is what keeps it true if that ever moves.
+            let signature = match (att.sender.as_deref(), att.sig.as_deref()) {
+                (Some(who), Some(_)) => {
+                    let who: String = who.chars().take(16).collect();
+                    format!("; signature verified, sender {who}…")
+                }
+                _ => "; unsigned".to_string(),
             };
             match verdict {
                 undercroft_store::AttestationVerdict::Verified => println!(
@@ -3054,9 +3157,17 @@ fn run(cli: Cli) -> Result<()> {
                     let out = store.diary_write(agent, entry, "cli")?;
                     if out.quarantined {
                         println!(
-                            "Quarantined pending review: the entry tripped the admission \
+                            // Not "the entry tripped": a diary's wing is
+                            // `agent-{agent}`, so since O32 a clean entry
+                            // diverts when the AGENT NAME trips the screen.
+                            // That is the likelier case here, an agent name
+                            // being the shorter and more attacker-shaped of
+                            // the two strings.
+                            "Quarantined pending review: this entry tripped the admission \
                              screen and is NOT readable in agent '{agent}'s diary. \
-                             Review with `undercroft admission list`."
+                             Review with `undercroft admission list`, which names the \
+                             signals — `destination-anomaly` means the agent name \
+                             tripped rather than the entry text."
                         );
                     } else {
                         println!("Diary entry {} written for agent '{agent}'", out.id);

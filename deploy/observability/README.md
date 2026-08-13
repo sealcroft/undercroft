@@ -34,7 +34,10 @@ undercroft (telemetry) ──/metrics──▶ Prometheus ──rules──▶ A
 - The `undercroft` image is built with the `telemetry` feature
   (`UNDERCROFT_FEATURES=telemetry`) and started with `UNDERCROFT_METRICS=1`
   (`/metrics` on), `UNDERCROFT_LOG_FORMAT=json` (structured logs promtail ships
-  to Loki), and `UNDERCROFT_OTLP_ENDPOINT=http://tempo:4318` (traces to Tempo).
+  to Loki), and `UNDERCROFT_OTLP_ENDPOINT=https://tempo-tls` (traces to Tempo
+  through the bundled TLS terminator — the engine refuses cleartext http to a
+  non-loopback host, with no override, and pins Caddy's internal CA root via
+  `UNDERCROFT_OTLP_CA` off the shared `tempo-tls-data` volume).
 - `/metrics` is bearer-gated; Prometheus authenticates with the same token
   (`prometheus.yml`).
 - Prometheus evaluates `alerts.yml` and pushes firing alerts to Alertmanager,

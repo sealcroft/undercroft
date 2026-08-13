@@ -83,7 +83,7 @@ Consequences that are binding, not advisory:
 
 ## Layout
 
-- `Cargo.toml` — workspace root (12 crates; `undercroft-embed-onnx` and
+- `Cargo.toml` — workspace root (13 crates; `undercroft-embed-onnx` and
   `undercroft-embed-ort` excluded from default-members — heavy ML deps,
   built explicitly)
 - `crates/undercroft-core` — domain model, chunking, ids, normalization
@@ -322,9 +322,15 @@ Consequences that are binding, not advisory:
   scanner (en/ar) and morphology (en/de). For English `-er` admits
   `flow`/`flower`, `corn`/`corner`, `butt`/`butter`; declared German it takes
   `Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher` and German goes 50%→**100%**,
-  all on the lexical channel. Declared, never detected — the two share a script,
-  so nothing in the bytes says which endings are legal, and the price is pinned:
-  under German, `flow`/`flower` DOES meet. Note promiscuity
+  all on the lexical channel. **Declared FIRST, then detected** — this line
+  said "declared, never detected" long after `language_of_drawer` shipped, and
+  that was wrong in a way that matters: a declaration outranks the text, but
+  when the caller declares NOTHING the drawer's own closed-class function
+  words decide, per CANDIDATE, because a vault may hold several languages and
+  the drawer is the unit that has one. A word two languages both claim votes
+  for neither. So the price below is pinned for **detected** German too:
+  under German, `flow`/`flower` DOES meet — and a drawer that merely reads as
+  German gets German endings without anyone declaring them. Note promiscuity
   moved only +0.21 for `-er`, i.e. **the population metric could not see it and
   the negative controls could**. `drawers_fts` is a
   **standalone** fts5 table over `search_key(content)`, rebuilt on a
@@ -378,8 +384,18 @@ Consequences that are binding, not advisory:
   dynamically at rotation since a fixed list cannot enumerate them);
   below the floor a scoped query full-scans its wing — bounded by the
   floor, exact, and still starvation-free. **Every other declared filter
-  is scope-resolved before candidates are drawn** (`scope_seqs` →
-  `*_candidates_in`): `room` was a plain `WHERE` over globally generated
+  is scope-resolved before candidates are drawn** (`resolve_scope` →
+  `resolve_seq_filter` → `*_candidates_in` — the ROUTING is its own
+  function since O19, because WHICH call `resolve_seq_filter` receives is
+  the decision, and a test of that function alone passes on both trees.
+  A wing the per-wing tier already generates inside, beside a pure
+  exclusion, no longer materializes the wing's own membership set: the
+  wing leaves the NARROWING, never the query, and the exclusion rides as
+  an `AllBut`. Recall cannot regress and the argument is arithmetic
+  rather than sampled — `scoped_pool_k` is monotonic in its population
+  and an exclusion's `narrows()` false is what makes the tier re-apply
+  the corpus divisor):
+  `room` was a plain `WHERE` over globally generated
   candidates — the wing defect with no tier and no fallback — and the FTS
   prefilter shared the shape (both were recorded gaps, both closed
   2026-08-02). A scope that fits the hydration budget (`max(256,
@@ -387,7 +403,29 @@ Consequences that are binding, not advisory:
   gets membership-filtered candidates (PQ/wing-PQ/FDE filter during
   selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
   filter their top-k and surrender to the bounded exact scan when the
-  scope's share cannot fill the page), pools SIZED BY THE SCOPE
+  scope's share cannot fill the page), pools SIZED BY THE SCOPE.
+  **A NARROWING and an EXCLUSION are not the same relation and
+  `SeqFilter::{Only,AllBut}` is what keeps them apart** — one
+  representation served both until 2026-08-11 and it was always the wrong
+  one for half its callers. A declared `wing`/`room`/`kind` (or a trust
+  `Allow`) is small relative to the corpus, so materializing its MEMBERS is
+  the cheap side and its cardinality is a real population to size pools by.
+  A bare trust `Exclude` — the shape the quarantine fence and a `standard`
+  floor BOTH produce — is the complement of a small set, so materializing
+  its in-scope side is O(corpus) **per query** and its cardinality is the
+  corpus wearing a scope's name. One diverted drawer therefore reclassified
+  every search on a prefilter-enabled vault as scoped: measured on a
+  1,190-drawer real corpus under `UNDERCROFT_RETRIEVAL=pq`, **76 → 140
+  ms/q** from a single quarantined row, and 77 → 69 (noise) once `AllBut`
+  answered `narrows()` with `false`. So: **the scoped floors below apply to
+  narrowings only**, `SeqFilter::admits` is the one membership door and
+  `scope_population` the one geometry door, and the fence is unchanged —
+  the SQL clause was always the accelerator and `verified_meta_admits` the
+  boundary (A28). Note what the arithmetic hides: `scoped_pool_k` and the
+  unscoped `max(hydrate_k, live/64)` coincide **exactly at live = 131,072**,
+  which is the floor of the pqscale/scopescale grid, so every checkpoint
+  either instrument measures reads 1.0× and neither could ever have seen
+  this. Measure a scope-geometry claim at ~10³–10⁴, not on the grid.
   (`scoped_pool_k`/`scoped_keep`: stage 1 ≥ `min(scope, 2048)`,
   hydration ≥ `min(scope, 1024)`, floors measured by scopescale — the
   corpus divisors collapse to the fixed 256 floor exactly at wing sizes,
@@ -512,6 +550,26 @@ Consequences that are binding, not advisory:
   `save_with_dedup{,_vec}` and `import_record` all state `Apply` now;
   the operator's `allow` ruling is the one `OperatorRuling` bypass, since
   re-screening a human's verdict would trap every allowed drawer forever.
+  **The screen runs AFTER the declaration is validated, and that ordering
+  is the whole of O30 (2026-08-13)**: a diversion *rewrites the fields
+  validation reads* — `admission_divert` moves the declared wing into
+  `intended_wing` and puts the reserved constant in `meta.wing` — so
+  validating downstream validated a value the store had chosen, and an
+  invalidly-declared write was QUARANTINED rather than refused. It then
+  could not leave: `admission_allow` restored `intended_wing` checking only
+  that it was non-EMPTY, so the restore was refused by the choke point on
+  the way back out, and the row could be denied but never allowed.
+  `admission::validate_declaration` is the one function, called from
+  `screen_and_divert`'s `Apply` arm (the DOOR — in front of the rewrite,
+  and shared, so `upsert_many`'s own loop and `dedup`'s dry-run preview
+  inherit it) and from `write_drawer_stmts` (the BOUNDARY), which is the
+  `resolve_search_policy`/`verified_meta_admits` shape one level over.
+  Two things that unit found and its filing had not: `validate_name(value,
+  what)` **discarded `what`** at all 44 call sites, so no refusal anywhere
+  in the tree could name its field — the gate was unreachable, not merely
+  unmet — and `screen_and_divert`'s doc comment said "both write paths"
+  while three callers existed. The reachable door was IMPORT, never save:
+  the three save surfaces validate before they reach the store.
   **`upsert_many` is the stated exception**: a batch owns its transaction,
   so it cannot call `write_drawer` and screens through its own
   `admission_divert` loop into `BulkOutcome{created, quarantined}` — the
@@ -564,7 +622,15 @@ Consequences that are binding, not advisory:
   saves sealed into the reserved `quarantine-pending` wing, excluded from
   **every read that returns content** and not from `search` alone:
   `search` through `resolve_search_policy` (pre-candidate, so poison
-  cannot crowd or starve), `recent` — which is what `wake_up` and the
+  cannot crowd or starve — carried as a `SeqFilter::AllBut` over the
+  EXCLUDED rows, which is what makes it cheap; see the retrieval bullet
+  above for why the complement is the only affordable side). **The fence
+  is raised by the ROWS, not by the flag**: `resolve_search_policy`'s
+  `EXISTS` is not gated on `UNDERCROFT_ADMISSION`, so turning admission
+  back off does not lower it while diverted rows exist — only ruling them
+  does, which is correct (content the screen diverted must not become
+  retrievable by flipping a setting) and is worth knowing before anyone
+  reads a cost back to configuration), `recent` — which is what `wake_up` and the
   closet index call, i.e. the two surfaces whose whole job is loading
   context at session start, exactly where injected text wants to be —
   and `list_drawers`. Naming the wing is how the reviewer opts back in,
@@ -685,6 +751,23 @@ Consequences that are binding, not advisory:
   over preserved audit bytes, crash-reconciled at open), bulk ingest
   (`upsert_many`: one transaction + one manifest anchor per batch —
   advisory encode paths must never BEGIN or batching breaks)
+- `crates/undercroft-config` — the declaration resolvers the engine and the
+  control plane SHARE (`resolve_orch_key`, `resolve_admin_token`,
+  `resolve_rate_limit`). Its own crate on `undercroft-net`'s precedent: a
+  policy several crates need has one implementation, and when the crates that
+  need it cannot link each other it gets a home neither owns. Six surfaces
+  including the doctrine promised `undercroft config check` validates every
+  `UNDERCROFT_*` declaration; three were not, because their parses sat inside
+  `undercroft-orchestrator` — and the first fix attempt narrowed all six
+  documents to match the code instead (ROADMAP O24, and **O24a keeps that
+  draft**, because what separated right from wrong was not new evidence but
+  reading the inventory the command already iterates). **The dependency list
+  is the design** — `thiserror` and `hex`, nothing else: both consumers pay
+  for whatever lands here, which is why this is not in `undercroft-core`
+  (unicode normalization and a calendar library, for three string parses) and
+  not in `undercroft-net`, whose domain is transport and which correctly
+  keeps the two declaration resolvers that ARE transport (`declared_pin`,
+  `declared_endpoint`)
 - `crates/undercroft-net` — the outbound transport policy, in ONE place:
   **TLS or loopback, nothing else, no override** (refused at construction,
   before a byte moves) plus CA pinning, where a declared root REPLACES the
@@ -698,6 +781,25 @@ Consequences that are binding, not advisory:
   rather than re-deriving the host, because a hand-rolled predicate
   inverted this gate twice (`http://127.0.0.1:8080@evil.com/` read as
   loopback)
+- **The OTLP traces hop was the one outbound client that never obeyed any of
+  this, and the gate could not see it (round-four #8).** `undercroft-obs`
+  built its span exporter on `opentelemetry-otlp`'s `reqwest-blocking-client`
+  feature, so it went through a second HTTP library `undercroft-net` knew
+  nothing about — no cleartext refusal, no loopback check, no pin — while
+  `UNDERCROFT_OTLP_HEADERS` is documented to carry a bearer token and spans
+  carry vault ids and route labels. Worse, that feature set linked reqwest
+  with **no TLS backend at all**, so `https://` could not work and the
+  builder failure was swallowed by an `if let Ok(..)`: no traces, no error.
+  The exporter now runs on the policed `ureq` agent through
+  `opentelemetry-http`'s `HttpClient` trait, and `UNDERCROFT_OTLP_CA` pins
+  its root. **The gate is the lesson**:
+  `no_crate_but_undercroft_net_builds_its_own_http_client` scans source for
+  ureq's builder token — the observable this defect does not move, since the
+  client was somebody else's library. Its sibling
+  `no_second_http_client_is_linked_into_the_workspace` reads the DEPENDENCY
+  EDGE out of `Cargo.lock` instead, which is why dropping that feature (so
+  reqwest leaves the lock entirely) is part of the fix rather than tidying.
+  Third instance of *ask what a gate can SEE, not what it asserts.*
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
   OTLP traces (metadata-only spans), and the live SSE broker. Two contracts
@@ -824,7 +926,14 @@ Consequences that are binding, not advisory:
   http.rs/tenant.rs: HTTP + multi-tenant `/v1` incl. the management and
   operator planes (drawers list/get/update/delete, taxonomy, stats +
   history, read-only kg browse + `kg/authority`, supersessions, trust,
-  admission list/rule, retention set/list/sweep, forget, refine, verify,
+  admission list/rule, retention set/list/sweep, forget,
+  **verify-forgetting** (O14 — the plane could MINT an erasure receipt and
+  check none, and on a multi-tenant deployment `/v1` is the only door an
+  operator has; the verdict is a TYPED field because `verified` and
+  `recorded` make different claims, and a document that does not describe
+  this vault is 409 + `class: "integrity"`. It is on the orchestrator's
+  `OPS_ROUTES` too, or the fleet operator it was filed for still could not
+  reach it), refine, verify,
   rotate, export/import). **`--read-only` is a posture on the whole
   process, decided once in FRONT of dispatch** (`mutates`), not a guard
   per mutating handler: there were thirteen guards for fourteen mutating
@@ -832,10 +941,14 @@ Consequences that are binding, not advisory:
   rewrote HMAC-covered authority columns, superseded the previous
   canonical holder and appended to the chain while answering 200 — while
   the identical capability over `/mcp` in the same process refused. It
-  fails CLOSED (anything not GET is a write unless named), and the two
-  named exceptions are `POST …/search` and `POST …/verify` — both POST
-  for cost, not for effect: search reads, and verify walks every record's
-  HMAC and replays the chain. Verify is a read in the strict sense —
+  fails CLOSED (anything not GET is a write unless named), and the
+  **three** named exceptions are `POST …/search`, `POST …/verify` and
+  `POST …/verify-forgetting` — all POST for cost or for a caller-supplied
+  document, never for effect: search reads, verify walks every record's
+  HMAC and replays the chain, and verify-forgetting POSTs only because the
+  attestation is the CALLER's and has to travel in a body. Failing closed
+  means a new read must be NAMED, and the cost of forgetting is a
+  read-only server refusing a pure read while the CLI performs it. Verify is a read in the strict sense —
   `&self`, no mutating call — which also means it does **not** tighten the
   manifest anchor: only a store open does (`init_chain`), so the
   read-audit boundary's old "run writes or `verify`" advice was wrong on
@@ -882,7 +995,40 @@ Consequences that are binding, not advisory:
   tokens stored as HMACs), `/t/*` routing proxy, `/admin/*` plane,
   count-verified migration, fleet console (ui.html at `GET /ui`),
   read replicas (`serve --read-replica`: RO state db, data plane only,
-  `/healthz` mode+last_write lag surface).
+  `/healthz` mode+last_write lag surface), and **its own
+  `config check`** (`config_check.rs`, O21) — the engine's pre-flight runs
+  the ENGINE's resolvers and cannot run another binary's at any price, so a
+  fleet runs both. Two properties are load-bearing. Every arm calls the
+  resolver `serve` calls, which is what forced `resolve_orch_key` (the hex
+  decode was written out twice, in `Orch::open` AND `open_read_only`, neither
+  reachable without opening a DATABASE) and `resolve_admin_token` (a length
+  floor inline in the `serve` arm) into existence — and that floor was hiding
+  a live defect: a trailing newline HAS LENGTH, so `$(cat …)` cleared 16
+  characters and produced a control plane that started cleanly and refused
+  every `/admin` request forever, HTTP having stripped the trailing
+  whitespace from the header the client sent. And `ORCH_ENV_VARS` is counted
+  against the CLI's `ENGINE_ENV_VARS` by **reading its source**, name and
+  class, both directions — the only route two crates that deliberately do not
+  link have. Note that gate's needle must be SPLIT (`concat!`): written
+  contiguously it declares a variable called `UNDERCROFT_ORCH_`, the bare
+  prefix, which the engine's own env-var inventory gate scans for and
+  rejects. One gate's needle is another gate's input.
+  **Telemetry since O20**, behind its own `telemetry` feature (a pure `/v1`
+  client inherits nothing): four `undercroft_orch_*` counters and a histogram
+  for the events no engine can see — a refused tenant token, the rate screen
+  firing, a transport refusal that happens before a byte moves, and the
+  one-write-becomes-two-calls amplification of the drawer probe. **No
+  tenant-shaped label anywhere**, on the per-wing-codebook precedent: an
+  identifier whose value set is created BY USE belongs on a query surface, and
+  per-tenant figures are already on `/admin/tenants/{id}/stats`. The names are
+  `undercroft_orch_`-prefixed because the shipped dashboard aggregates several
+  engine series with no `job` filter and the route strings collide exactly.
+  **`/metrics` is a SEPARATE listener** (`UNDERCROFT_ORCH_METRICS_ADDR`),
+  which is a boundary rather than a drift from the engine: the engine's one
+  listener can legitimately be loopback-only, the control plane's cannot be
+  because tenants must reach it, so a `/metrics` path there would be
+  network-exposed in every real fleet. Loopback needs no token; anything else
+  refuses to start without `UNDERCROFT_ORCH_METRICS_TOKEN`.
   Pure `/v1` client; never linked by the engine
 - `crates/undercroft-bench` — LongMemEval/LoCoMo/ConvoMem/MemBench/model-eval
   harnesses (`--features onnx` for model rows; `--skip`/`--limit` sharding),
@@ -925,14 +1071,17 @@ Consequences that are binding, not advisory:
   version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all **78**
-  `UNDERCROFT_*` variables the engine honours — 63 written out in full
-  across the env table's 59 rows, plus 15 siblings abbreviated to a
+  which inlines them and documents every layer plus all **81**
+  `UNDERCROFT_*` variables the engine honours — 64 written out in full
+  across the env table's 60 rows, plus 17 siblings abbreviated to a
   suffix inside the row that owns them (`_TOKENIZER` three times, one
   per model role), which is why grepping the page for full names
   undercounts it. (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
   pin for the orchestrator→engine hop, which had no transport policy at
-  all until the post-1.0.0 drift audit.) Count the truth, never a number in prose:
+  all until the post-1.0.0 drift audit; 79/64/60 since
+  `UNDERCROFT_OTLP_CA`, the pin for the traces hop, which had none
+  either and whose exporter could not do TLS at all.) Count the truth,
+  never a number in prose:
   `grep -rhoE '"UNDERCROFT_[A-Z0-9_]+"' crates/ | sort -u` over every
   crate except `undercroft-bench`, whose `UNDERCROFT_VS_*`/`UNDERCROFT_TEST_*`
   belong to the harness rather than the engine.
@@ -1043,8 +1192,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (699 run,
-                                      # 4 #[ignore]d = 703 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (737 run,
+                                      # 4 #[ignore]d = 741 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1068,14 +1217,51 @@ docker compose run --rm test          # cargo unit + integration tests (699 run,
                                       # error: nobody re-derives a number that
                                       # looked right last time. Pair each target
                                       # HEADER with the result that follows it —
-                                      # 18 targets, 11 binaries + 7 doc-tests —
+                                      # 20 targets, 12 binaries + 8 doc-tests —
                                       # and treat an orphan as a PREMISE FAILURE,
                                       # since it is the only visible symptom of
-                                      # the replay. `tests/battery.sh`'s own
-                                      # summary sums the file and inherits this;
-                                      # it is informational (the script decides on
-                                      # EXIT CODES, never on parsed output, by
-                                      # design) and is filed as ROADMAP O15.
+                                      # the replay. **`tests/battery.sh` DOES
+                                      # this now (O15, closed 2026-08-12)**: its
+                                      # `test_summary` pairs headers with results
+                                      # and prints a loud PREMISE FAILURE naming
+                                      # the orphan count, so a replayed tail is
+                                      # reported rather than absorbed. It stays
+                                      # informational — the script decides on EXIT
+                                      # CODES, never on parsed output, by design —
+                                      # but the number it prints is now the one
+                                      # you can copy here. A host-side preflight
+                                      # exercises the reader itself on a synthetic
+                                      # replayed log, because the summary had
+                                      # never been checked by anything.
+                                      # **That reader covered ONE suite of eight
+                                      # until O27 (closed 2026-08-13)**: it pairs
+                                      # cargo's `Running`/`Doc-tests` headers, and
+                                      # no other suite emits them. The seven shell
+                                      # suites print ONE summary line as their
+                                      # final statement, so more than one in a log
+                                      # is definitive rather than heuristic — and
+                                      # a real `backends-e2e` log carried TWO with
+                                      # different numbers (56/1 and 54/3) while
+                                      # the `| tail -1` that read it printed the
+                                      # second and said nothing about the first.
+                                      # `suite_summary` counts them and names a
+                                      # doubled log; same three premise arms.
+                                      # **And the figure itself is now GATED
+                                      # (O28, closed 2026-08-13)**: every
+                                      # published per-suite count is compared
+                                      # to what the run measured, reported as
+                                      # a doc-drift verdict distinct from a
+                                      # suite failure, and the battery fails.
+                                      # A `published figures` preflight counts
+                                      # the landing tiles against
+                                      # `PUBLISHED_FIGURES` both ways, checks
+                                      # the derived ones against the tree, and
+                                      # requires every surface republishing a
+                                      # count to agree. So the numbers in this
+                                      # block are checked rather than
+                                      # remembered — do not hand-edit one to
+                                      # silence the gate; it is measuring the
+                                      # suite, not this comment.
                                       # The 4 ignored are 3 measurements needing
                                       # testdata/*_50k.txt plus one in lib.rs. Run
                                       # them with `cargo test --release -- --ignored`:
@@ -1090,9 +1276,9 @@ docker compose run --rm test          # cargo unit + integration tests (699 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (317 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (98 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (24 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (355 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
@@ -1205,7 +1391,7 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the five host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the seven host-side preflights
 and no suite**, which is what CI invokes. The script is the one thing that
 runs on the host rather than in a container, and it has to be: it *drives*
 Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
@@ -1369,6 +1555,27 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   not idempotent, and collapsing repeats is dedup's job. Never index an
   append with `count()` — it decreases on delete, and a reused index derives
   an id that already exists, silently overwriting an unrelated drawer.
+  **The same failure has a second form, and it cost round-four #7: never
+  SUBSTITUTE A CONSTANT for one of the recipe's components.** The admission
+  screen derived a diverted drawer's id as
+  `drawer_id(QUARANTINE_WING, room, source, chunk)`, which collapses one of
+  the four dimensions the recipe is injective over — so two diversions
+  differing only in wing derived ONE id and `ON CONFLICT(id) DO UPDATE`
+  replaced the first row wholesale, taking its content, its signal codes and
+  the `intended_wing` that `admission allow` restores from. `mine ./docs
+  --wing team-a` then `--wing team-b` is the ordinary operation that produces
+  it. A second id space gets a DOMAIN TAG and keeps every component
+  (`ids::quarantine_drawer_id`); the tag is load-bearing, because without it
+  the diverted id would equal the id of the very drawer being screened and
+  the diversion would overwrite the legitimate row. One shared recipe body
+  (`id_over`) so the ordinary id cannot drift, pinned to an INDEPENDENTLY
+  derived literal — the refactor's byte-identity was proved by
+  re-implementing the recipe in Python and running it, not by observing that
+  the tests still passed, which they would have either way. **No migration:
+  existing quarantine ids are held by `audit.record_id` for the diversion
+  write and by `admission/{id}/{verdict}` for every ruling, so moving a live
+  one orphans both — A10 verbatim. The new recipe applies to new diversions
+  only, and that is a decision with an argument, not a gap.**
 - Sealed vaults must never persist plaintext or plaintext-derived data **in
   clear** on disk: FTS never exists for them; embeddings, PQ code rows/pages
   and codebooks, and ColBERT token matrices are AEAD-sealed under distinct
@@ -1645,8 +1852,34 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   So: any claim that a string is gone must **decompress rather than grep**,
   must cover **non-Latin scripts and truncated roots**, must hunt the
   **identity** as well as the spelling, and must ask what the TOOLING DERIVES
-  from the environment. `.handover/verify-no-trace.py` covers the six classes
-  a file-content scan can reach and fails on any hit; class 5 above is
+  from the environment. `tests/no-trace/verify.py` covers the **seven** classes
+  a file-content scan can reach and fails on any hit. It is **tracked and run by
+  a preflight, in a container** since O10 — it was gitignored and hand-run
+  before, so a fresh clone did not carry it and nothing invoked it, which is
+  how a comment quoting the former name shipped under a green battery. Its
+  needles are assembled from fragments so it scans ITSELF clean rather than
+  being excluded by path, and a premise probe fires every pattern on a
+  known-positive (and requires silence on clean control text) before any zero
+  is believed. **The seventh class is a Flate-compressed PDF stream** (O26,
+  closed 2026-08-13): the walk inflates every `stream`/`endstream` payload
+  whose dictionary declares `/FlateDecode` and runs the same needles over the
+  result, counts what it could NOT inflate, and treats a PDF that declares
+  `FlateDecode` while yielding no readable stream as a premise failure rather
+  than a clean file.
+  **How that gap was described is the lesson, and it is this file's own first
+  rule turned on a filed item.** O26, this guide, and the commit that created
+  the scanner all said it *skipped* `.pdf` via `SKIP_BIN`. The hand-run
+  original does. The tracked port dropped `pdf` from that list and nobody read
+  the line — so all eleven tracked PDFs were opened in TEXT mode, scanned for
+  needles that cannot survive DEFLATE, and **counted in `files scanned`**.
+  That is worse than the skip it was filed as: an admitted skip is at least
+  visible in the arithmetic, while false coverage reads as a clean result.
+  Two general shapes follow. **A gap inherited from a filing is a claim about
+  the code and gets the same verification as any other** — three surfaces
+  agreed here and all three were describing a different file. And **a coverage
+  count must count what was EXAMINED, not what was listed**: the same line
+  reported `len(paths)`, skipped entries included, which over-reported by 80.
+  Class 5 above is
   **outside its reach by construction** and needs a different mechanism —
   which is the compose preflight, not a wider regex. Do not "extend" the
   verifier to cover it; extend the QUESTION.
@@ -1672,7 +1905,22 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   checked in both directions — a table-driven test proving every listed field
   is screened, plus an assertion inside the screen proving no call site can
   name a field the inventory omits, which is the half a test cannot do
-  (`KG_SCREENED_FIELDS`, O17).
+  (O17). **And then the inventory's own NAME chose a second scope, which is
+  the same defect one level up (O29, 2026-08-13).** It was
+  `KG_SCREENED_FIELDS`, so `tunnels.label` — agent-written through
+  `undercroft_create_tunnel`, read back verbatim through
+  `undercroft_list_tunnels` — was outside the question it asked, for as long
+  as it existed. It is `admission::SCREENED_FIELDS` now, keyed by
+  `(owner, field)`, because a key is what lets one inventory span tables and
+  a graph-shaped name is what hid the gap. The rule for a row is **an agent
+  can write it and an agent can read it back** — never "it is content", which
+  is the judgement that scoped O17's own screen to `object`.
+  **The sibling sweep is part of the fix, and its WORDING is load-bearing.**
+  O29 asked "which other such fields exist *outside `drawers` and the
+  graph*?" and the answer was partly INSIDE `drawers`: an agent-chosen WING
+  name reaches `taxonomy`, `closets` and `stats` unscreened (filed O32,
+  measured). A scoping phrase in a filed question decides what the answer can
+  contain, exactly as a scoping phrase in a gate does.
 - **A capability missing from one surface is a boundary or a drift, and
   which one has to be written down.** A 14-agent audit of CLI vs MCP vs
   `/v1` found **65 confirmed drifts** — a capability present on one
@@ -1693,6 +1941,44 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   on the queue that exists to contain it, nor assign the trust class that
   decides what it may retrieve), asserted by the same test as the parity,
   so the two can never disagree about what MCP is allowed to reach.
+- **A drift has a DIRECTION, and it is decided by provenance — never by
+  which side is cheaper to edit.** Finding that the code and the documents
+  disagree is half the work; the other half is deciding which one is wrong,
+  and that question has an answer rather than a preference. Ask the three
+  places intent is recorded — `ROADMAP.md`, this file's doctrine, and
+  `architecture/index.html` — **which one INTRODUCED the thing**:
+  - **A new capability** (the ROADMAP files it, or the code adds something
+    the documents never promised) → the **code leads**; update every surface
+    that describes it, including the ones you did not grep for.
+  - **A fix to something already promised** → the **documents lead**, and
+    the code must be made to keep the promise. Narrowing a promise to match
+    an implementation is how a gap silently becomes the design.
+  **The discriminator is breadth, and it is nearly decisive: when a claim is
+  consistent across every surface INCLUDING the doctrine, the prior is that
+  the CODE is wrong.** Several documents do not independently invent the same
+  promise. The worked example is O24 — six surfaces said
+  `undercroft config check` validates every `UNDERCROFT_*` declaration, three
+  of them were not validated, and the first fix narrowed all six. It was
+  backwards, and three things in the tree said so: `ENGINE_ENV_VARS` already
+  CONTAINS the six `UNDERCROFT_ORCH_*` entries, `UNDERCROFT_ORCH_ENGINE_CA`
+  is already validated by that very command, and the three unvalidated parses
+  are pure string→value — so *"never linked by the engine"*, which forbids a
+  crate dependency, was used to license something it does not cover. Reading
+  the inventory the command already iterates was all it took, and no gate
+  caught it; the maintainer did.
+  The converse case is real and has its own tell: a claim asserted in ONE
+  place, recently, with nothing else agreeing, is a claim to TEST rather than
+  a promise to keep — the versioning doctrine is that example, and history
+  refuted it. Breadth plus the doctrine means keep; narrow and new means
+  question.
+  Applied backwards, as a new RULE here must be: it agrees with #40 (a
+  detector shipped, the docs went stale, the code led), #54 and #55 (doc
+  defects), #18 and O22 (the opaque-payload rule promised the refusal, the
+  code was fixed to keep it) and round-four #8 (`undercroft-net`'s own doc
+  claimed to be the only implementation; the code was made true). It
+  reclassifies exactly one decision — O24's first draft — which is the one it
+  was written for. Tested against roughly six decisions, all from this
+  campaign; that is its whole history and it is stated rather than implied.
 - **An IDENTIFIER is never derived from rotatable key material. Neither is
   a blind-index key. This is not a preference — it is the difference
   between a memory store and a pile of unreferenceable rows.**
@@ -1847,6 +2133,30 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path
   traversal guard).
+- **A guard runs BEFORE any step that rewrites the field it guards, and a
+  guard that cannot name the field it refused is half a guard.** Both halves
+  are O30 (2026-08-13). The first: `validate_name` sat at the write choke
+  point, which is where a guard belongs — but the admission screen ran in
+  front of it, and a diversion MOVES the declared wing into `intended_wing`
+  and writes the reserved constant in its place. So the guard ran, on a value
+  the store had chosen, and reported success over a declaration nothing had
+  checked. Placing a guard at the choke point is necessary and not sufficient:
+  ask what has *already rewritten* the field by the time it runs. The second:
+  `validate_name(value, what)` accepted a field label from all 44 call sites
+  and discarded it, so no refusal in the tree could say WHICH name was bad —
+  an operator with two declared names got one message for both, and the fix's
+  own gate ("a refusal that names the field") was unreachable until the
+  parameter was wired up. A parameter that is accepted and dropped is a
+  promise the signature makes and the body breaks.
+  Applied backwards, as a rule here must be: it **reclassifies exactly one**
+  decision, the one it was written for. It **confirms three** that already got
+  the order right — `import_stamp` re-stamps `added_by` before the screen
+  reads it, `update_drawer` re-stamps for the same reason one level over, and
+  `import_unwrap_screened` unwraps a reserved-wing claim before screening. It
+  **does not touch A28**, which asks *which copy* a decision reads rather than
+  *in what order*, and conflating the two would be the mistake the versioning
+  doctrine above records. Four decisions is a thin history and this is the
+  rule's first real application; that is stated rather than implied.
 
 ## Definition of done — every unit, no exceptions
 
@@ -1864,6 +2174,18 @@ had and was still bypassable on the surface most deployments use.
 2. **A test that would have failed before the fix.** Assert the premise, so it
    cannot pass for the wrong reason. Several tests here carry an explicit
    counterfactual arm for exactly this.
+   **And a passing battery is not evidence a test is DETERMINISTIC — only
+   repetition is.** A retrieval test asserting the whole ranked id list over
+   1,200 near-identical drawers passed several consecutive batteries and then
+   went red on CI; run twelve times it measured 4 failures in 6. The tail of
+   that list is not a property of the system: the PQ codebook trains on a
+   KEYED sample (`sample_rank`, off a master key that is random per vault),
+   so which rows train it differs per run and the ADC ordering moves at the
+   margin. **Never assert an exact order over content that ties**; assert the
+   one answer the query decisively matches, or a membership the geometry
+   cannot move. And when a test touches PQ, FDE, the codebook or any keyed
+   draw, **run it in a loop before believing a green** — the battery runs
+   each test once, which for a coin flip is not a measurement.
 3. **Drift check.** If the change touches a capability reachable from more
    than one of {CLI, MCP, `/v1`, orchestrator}, verify EVERY one of them —
    by reading the other surfaces' code, not by assuming symmetry. `cargo test`
@@ -2064,6 +2386,57 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   silently, and `" "` is not empty so it was accepted as a real one-byte key
   while the banner truthfully reported assertions required. A fix that only
   maps empty to absent closes the first and leaves the second.
+  **The rule was written from one instance and there were at least two.**
+  `UNDERCROFT_PASSPHRASE` carried the identical `.filter(|p| !p.is_empty())`
+  for the whole time the doctrine sat in this file, on a higher-value secret:
+  an empty declaration became "no passphrase" and the palace wrote a random
+  `master.key` to DISK — the exact opposite of what declaring a passphrase
+  asks for, granted silently, reachable through a compose recipe the docs
+  shipped. So when a rule like this lands, **grep for the pattern it names
+  rather than trusting that the instance which taught it was the only one**;
+  `!is_empty()` over a declared secret is a two-minute search and it would
+  have found this the same day. Note also the shape of the exemption that
+  hid it: a later unit listed the passphrase as unpre-flightable because "a
+  passphrase is a credential, not a syntax" — true of a WRONG one, false of
+  an ABSENT one. Two questions, one answer, and the wrong one.
+  **The sweep was finally run on 2026-08-12 and returned two more**, which is
+  the doctrine paying for itself twice: `UNDERCROFT_MCP_HTTP_TOKEN` (a bearer
+  gate removed on loopback) and `UNDERCROFT_OTLP_ENDPOINT` — the second inside
+  the *previous commit's own* code, wrong in BOTH directions at once, the
+  runtime reading empty as "off" while the pre-flight handed the empty string
+  to the transport policy, which parses it, fails, and reports an unparseable
+  URL as CLEARTEXT. Four instances, one pattern, and the only one anybody
+  found by thinking about it was the first.
+- **A declaration that CANNOT WORK is refused, never quietly adjusted into one
+  that can — and "cannot work" is measured, not reasoned about.** Emptiness is
+  not the only way a declared value fails to be one. A bearer ending in
+  whitespace is a perfectly good string that **no client can ever present**:
+  HTTP strips a header field value's trailing whitespace, so the token that
+  arrives is always the trimmed one, and `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
+  /run/secrets/token)` over a file ending in a newline starts a healthy server
+  that refuses every request forever — 401 naming no cause on one side,
+  nothing in the log on the other. The tempting fix is to trim it; that is
+  wrong, because it authenticates a key the operator did not declare, and a
+  server whose key silently differs from the file it was configured from is
+  the whole failure class restated.
+  Two disciplines, both earned here. **Measure which spellings actually break
+  before writing the guard**: leading and internal whitespace answer 200 and
+  trailing whitespace answers 401, so the guard is `trim_end() != value` and
+  not `trim() != value` — the wider version would refuse legitimate values in
+  the name of a defect they do not have. And **a real corpus is how this class
+  is found at all**: every unit test compares a resolver to itself, so no test
+  in this tree could see it; the live `serve-http` over 1,360 mined drawers
+  that the definition of done demands is what returned the 401. Ask of any
+  declared value not only *"can this be empty?"* but *"is there a spelling of
+  this that the surface consuming it cannot carry?"*
+  Applied backwards, as this file requires of a new RULE: it reclassifies
+  nothing and adds one case. The CA pin, the cleartext refusal and the two
+  Argon2id/HMAC secrets all keep their current answers — a passphrase or an
+  HMAC key with trailing whitespace WORKS, both sides using the same bytes, so
+  the rule correctly declines to touch them. Only a value that must survive a
+  transport it cannot survive is caught. That is the healthy outcome for a
+  doctrine (mostly describes the tree, one genuine addition), and the addition
+  is the only history it has: **untested against anything older than itself.**
 - **Drift check before every release**, not only when something feels off.
   The 65-drift audit found capabilities present on one surface and missing,
   weaker or silently ignored on another — 55 of them failing with no signal

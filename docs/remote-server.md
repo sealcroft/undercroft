@@ -15,6 +15,13 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
 ```
 
 - The server refuses non-loopback binds without the token.
+- It also refuses a token that is **empty** or ends in **whitespace**. The
+  second is the one that bites: `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
+  /run/secrets/token)` over a file ending in a newline used to start a server
+  that refused every client forever, because HTTP strips a header value's
+  trailing whitespace so the declared token could never be presented. Strip it
+  at the source — `$(tr -d '\n' < /run/secrets/token)`. Leading and internal
+  whitespace are fine; they are presentable.
 - `--read-only` exposes recall without write access (see the compose file).
 - `/healthz` is unauthenticated for probes.
 - Plain HTTP: terminate TLS in a reverse proxy for anything beyond a
@@ -217,7 +224,12 @@ services:
     command: ["serve-http", "--host", "0.0.0.0", "--port", "8765"]
     environment:
       # Master key material — inject from your secret store, never bake in.
-      UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE}
+      # Same interpolation hazard as the assertion secret below, and the
+      # consequence is worse: an empty value used to mean "no passphrase",
+      # so the palace wrote a random master.key to DISK — the opposite of
+      # what declaring a passphrase asks for. Since 1.1.0 it REFUSES. The
+      # `:?` form fails in compose before the container ever starts.
+      UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE:?set TENANT_PASSPHRASE}
       UNDERCROFT_MCP_HTTP_TOKEN: ${PALACE_BEARER}
       # Compose interpolates an UNSET shell variable to the empty string, and
       # the variable is then SET in the container. Since 1.1.0 an empty (or

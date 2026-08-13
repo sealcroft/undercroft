@@ -80,20 +80,16 @@ pub(crate) struct RateLimiter {
 /// declaration this process cannot read is a startup refusal, not a
 /// default. Pure, so the parse is tested without touching the
 /// environment.
-fn resolve_rate_limit(env: Option<&str>) -> anyhow::Result<u64> {
-    let Some(v) = env else { return Ok(0) };
-    let v = v.trim();
-    if v.is_empty() || v.eq_ignore_ascii_case("off") {
-        return Ok(0);
-    }
-    v.parse::<u64>().map_err(|_| {
-        anyhow::anyhow!(
-            "UNDERCROFT_ORCH_RATE_LIMIT={v:?} — expected requests per minute as a \
-             plain positive integer (e.g. 600), or 0/off; refusing to start with \
-             an unreadable rate-limit declaration"
-        )
-    })
-}
+/// The `/admin` bearer and the rate screen, re-exported from
+/// `undercroft-config`.
+///
+/// **Both parses moved out of this crate** (ROADMAP O24): `undercroft config
+/// check` promises to validate every `UNDERCROFT_*` declaration, six surfaces
+/// including the doctrine say so, and it could not reach a parse that lived
+/// here — the engine never links the control plane. They are re-exported
+/// rather than re-implemented so every existing call site is unchanged and
+/// there is still exactly one implementation of each.
+pub(crate) use undercroft_config::{resolve_admin_token, resolve_rate_limit};
 
 impl RateLimiter {
     pub(crate) fn from_env() -> anyhow::Result<Self> {
@@ -367,6 +363,13 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "verify"),
     ("GET", "supersessions"),
     ("POST", "forget"),
+    // **Minting without checking is the asymmetry above, one step on**
+    // (ROADMAP O14). `forget` has been forwardable since this table was
+    // written; verifying the receipt it returns was reachable from nowhere
+    // in a fleet, because the engine had no route for it at all. A
+    // right-to-erasure receipt an operator cannot verify through the only
+    // door they have is the same defect this table's own comment describes.
+    ("POST", "verify-forgetting"),
     ("GET", "admission"),
     ("POST", "admission"),
     ("GET", "retention"),
@@ -459,6 +462,7 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         "retention-set" => ("POST", "retention"),
         "retention-sweep" => ("POST", "retention/sweep"),
         "forget" => ("POST", "forget"),
+        "verify-forgetting" => ("POST", "verify-forgetting"),
         _ => return None,
     })
 }
@@ -510,11 +514,99 @@ pub enum Role<'a> {
 }
 
 /// Run the proxy loop forever.
+/// Bring up the control plane's metrics endpoint on its own address, if one
+/// is declared. `Ok(())` with nothing bound is the default and the common
+/// case.
+///
+/// **Refuses rather than degrades**, per the configuration doctrine: a
+/// non-loopback address without `UNDERCROFT_ORCH_METRICS_TOKEN` is refused
+/// here, before any port opens, exactly as the engine refuses a
+/// network-exposed bind without its bearer. Silently binding it open would
+/// publish a fleet's request rates to anyone who could reach it.
+fn spawn_metrics_listener() -> anyhow::Result<()> {
+    let Some(addr) = undercroft_config::resolve_metrics_addr(
+        std::env::var("UNDERCROFT_ORCH_METRICS_ADDR")
+            .ok()
+            .as_deref(),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?
+    else {
+        return Ok(());
+    };
+    let token = undercroft_config::resolve_metrics_token(
+        &addr,
+        std::env::var("UNDERCROFT_ORCH_METRICS_TOKEN")
+            .ok()
+            .as_deref(),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server =
+        Server::http(&addr).map_err(|e| anyhow::anyhow!("bind metrics listener {addr}: {e}"))?;
+    eprintln!("undercroft-orchestrator metrics listening on http://{addr}/metrics");
+    std::thread::spawn(move || {
+        for request in server.incoming_requests() {
+            let authed = match &token {
+                None => true,
+                Some(expected) => request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("Authorization"))
+                    .and_then(|h| h.value.as_str().strip_prefix("Bearer "))
+                    .is_some_and(|p| bytes_eq(p.as_bytes(), expected.as_bytes())),
+            };
+            if !authed {
+                undercroft_obs::orch_auth_rejected("metrics");
+                let _ =
+                    request.respond(Response::from_string("unauthorized").with_status_code(401));
+                continue;
+            }
+            if request.url().split('?').next().unwrap_or("") != "/metrics" {
+                let _ = request.respond(Response::from_string("not found").with_status_code(404));
+                continue;
+            }
+            let (code, body) = match undercroft_obs::render_prometheus() {
+                Some(text) => (200, text),
+                None => (
+                    503,
+                    "metrics require building undercroft-orchestrator with --features                      telemetry (this binary was built without it)
+"
+                        .to_string(),
+                ),
+            };
+            let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/plain; version=0.0.4"[..])
+                .expect("static header");
+            let _ = request.respond(
+                Response::from_string(body)
+                    .with_status_code(code)
+                    .with_header(ct),
+            );
+        }
+    });
+    Ok(())
+}
+
+/// Constant-time byte comparison for the metrics bearer — the same property
+/// every other secret comparison in this fleet already has.
+fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    a.len() == b.len() && bool::from(a.ct_eq(b))
+}
+
 pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
     // Resolved BEFORE the bind: a refusal about configuration must not
     // arrive after the port is open and a load balancer has started
     // sending traffic to it.
     let limiter = RateLimiter::from_env()?;
+    // The metrics listener is resolved before the bind too, and on its OWN
+    // address (ROADMAP O20). Everything else this function serves — /healthz,
+    // /t/*, /admin/*, /ui — shares one port that a fleet must expose to
+    // tenants, so a `/metrics` PATH there would be network-exposed in every
+    // real deployment and "loopback is the gate" would be a comfort
+    // production never gets. A separate listener lets the data plane sit on
+    // 0.0.0.0 while metrics sit on 127.0.0.1 for a sidecar scraper, and it is
+    // what makes `--read-replica` work unchanged: the replica resolves no
+    // admin token and needs none for this.
+    spawn_metrics_listener()?;
     let server = Server::http(addr).map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
     let mode = match role {
         Role::Writer { .. } => "writer",
@@ -544,7 +636,23 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
             path: &path,
             query: &query,
         };
+        let started = std::time::Instant::now();
         let response = route(orch, &role, &limiter, &request, &method, target, &body);
+        // A route CLASS from a closed set, never the URL: the forwarded query
+        // string carries `wing=` and `room=`, which is exactly what the
+        // engine's own telemetry suppresses for sealed vaults.
+        let route_class = if path == "/healthz" {
+            "healthz"
+        } else if path == "/ui" {
+            "ui"
+        } else if path == "/admin" || path.starts_with("/admin/") {
+            "admin"
+        } else if path.starts_with("/t/") {
+            "tenant"
+        } else {
+            "other"
+        };
+        undercroft_obs::orch_request(route_class, response.status_code().0, started.elapsed());
         let _ = request.respond(response);
     }
     Ok(())
@@ -646,7 +754,10 @@ fn route(
         // Admin gate first; uniform 401.
         match bearer(request) {
             Some(t) if ct_eq(&t, admin_token) => {}
-            _ => return err_response(401, "unauthorized"),
+            _ => {
+                undercroft_obs::orch_auth_rejected("admin");
+                return err_response(401, "unauthorized");
+            }
         }
         return admin_plane(orch, method, path, body);
     }
@@ -666,11 +777,15 @@ fn data_plane(
     body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let Some(token) = bearer(request) else {
+        undercroft_obs::orch_auth_rejected("tenant");
         return err_response(401, "unauthorized");
     };
     let tenant = match orch.tenant_by_token(&token) {
         Ok(Some(t)) => t,
-        Ok(None) => return err_response(401, "unauthorized"),
+        Ok(None) => {
+            undercroft_obs::orch_auth_rejected("tenant");
+            return err_response(401, "unauthorized");
+        }
         // The typed class, not a bare 500. A tampered token table
         // (`Unsealable`, permanent, 409 everywhere else) answered 500 here —
         // the class that tells a caller to retry.
@@ -679,6 +794,11 @@ fn data_plane(
     // Rate limit after auth (unauthenticated traffic never occupies a
     // window), per tenant — one noisy tenant can't starve the rest.
     if !limiter.allow(&tenant.id) {
+        // An operator who declared UNDERCROFT_ORCH_RATE_LIMIT had no surface
+        // saying it ever fired: the refusal happens here and no engine sees
+        // the request. Unlabelled on purpose — WHICH tenant is rate-limited
+        // is a per-tenant fact and belongs on the admin plane.
+        undercroft_obs::orch_rate_limited();
         return err_response(429, "rate limited");
     }
     if !data_subpath_ok(subpath) {
@@ -1351,6 +1471,7 @@ mod tests {
             "retention-set",
             "retention-sweep",
             "forget",
+            "verify-forgetting",
         ];
         let mut resolved = Vec::new();
         for a in aliases {
@@ -1395,6 +1516,14 @@ mod tests {
             "anchor",
             "supersessions",
             "forget",
+            // **Added with the engine route it names** (ROADMAP O14). This
+            // list is a hand-maintained literal, which means a new `/v1`
+            // operator route absent from it is counted in NEITHER direction
+            // — so the gate whose whole job is to force every capability
+            // into *reachable* or *recorded-as-absent* stays green over one
+            // nobody classified. That is the failure mode it exists to
+            // prevent, reachable through its own inventory.
+            "verify-forgetting",
             "admission",
             "retention",
             "retention/sweep",

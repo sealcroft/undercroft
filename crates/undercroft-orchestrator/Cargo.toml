@@ -11,7 +11,20 @@ authors.workspace = true
 name = "undercroft-orchestrator"
 path = "src/main.rs"
 
+[features]
+# The control plane's own telemetry (ROADMAP O20). It is a pure `/v1` client
+# and inherits nothing from the engine, so it needs its own feature — and with
+# it OFF this binary pulls no observability dependency at all, exactly as the
+# engine's default build does.
+telemetry = ["undercroft-obs/telemetry"]
+
 [dependencies]
+# Metrics for the control plane. Zero-dependency no-op unless `telemetry` is
+# on, so the default build is untouched.
+undercroft-obs = { path = "../undercroft-obs" }
+# Constant-time comparison for the metrics bearer — the same property the
+# admin token and the engine's palace bearer already have.
+subtle = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 clap = { workspace = true }
@@ -21,6 +34,9 @@ serde_json = { workspace = true }
 # This hop carries the palace bearer, a minted assertion, and drawer
 # content during search and migration, and had no policy at all.
 undercroft-net = { path = "../undercroft-net" }
+# The three declaration parses this binary shares with the engine's
+# `config check`, which cannot link this crate (ROADMAP O24).
+undercroft-config = { path = "../undercroft-config" }
 rusqlite = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }

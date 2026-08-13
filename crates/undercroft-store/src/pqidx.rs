@@ -697,7 +697,7 @@ impl PalaceStore {
         &self,
         qvec: &[f32],
         k: usize,
-        scope: Option<&std::collections::HashSet<i64>>,
+        scope: Option<&crate::SeqFilter>,
     ) -> Result<Option<Vec<i64>>, StoreError> {
         // Coherence is **event-driven**, not per-query: the O(corpus)
         // verification (schema + matched-count join) runs on the first
@@ -796,8 +796,12 @@ impl PalaceStore {
         // Corpus-scaled pool, applied against the verified live count: a
         // fixed floor is the measured recall-leak defect (R@5 100 → 96.8
         // over 131k → 1M at 256 candidates; 100.0% restored at live/512).
-        // A scoped call arrives already scaled to its scope's population.
-        let k = if scope.is_some() {
+        // A NARROWED call arrives already scaled to its scope's population.
+        // An exclusion has been scaled by nothing and must keep the corpus
+        // divisor: gating on `is_some()` let one quarantined row pin stage
+        // 1 at the caller's fixed floor, which is the measured recall leak
+        // this divisor exists to close.
+        let k = if scope.is_some_and(|f| f.narrows()) {
             k
         } else {
             k.max(live as usize / self.pool_div.max(1))
@@ -892,7 +896,7 @@ impl PalaceStore {
             }
         }
         if let Some(s) = scope {
-            scored.retain(|(_, seq)| s.contains(seq));
+            scored.retain(|(_, seq)| s.admits(seq));
             // A probe that under-delivers INSIDE the scope widens to the
             // full scan: the scope's rows may sit in lists the probe
             // skipped, and starving a scoped query on partition luck is
@@ -905,7 +909,7 @@ impl PalaceStore {
                 };
                 scored.clear();
                 cache.scan(pq, &tables, None, &mut scored);
-                scored.retain(|(_, seq)| s.contains(seq));
+                scored.retain(|(_, seq)| s.admits(seq));
             }
         }
         if scored.len() > k {
@@ -1846,7 +1850,7 @@ impl PalaceStore {
         wing: &str,
         qvec: &[f32],
         k: usize,
-        scope: Option<&std::collections::HashSet<i64>>,
+        scope: Option<&crate::SeqFilter>,
     ) -> Result<Option<Vec<i64>>, StoreError> {
         if !self.wing_pq.borrow().contains_key(wing) {
             let built = self.wing_pq_build(wing)?;
@@ -1875,8 +1879,12 @@ impl PalaceStore {
         };
         // Same corpus-scaled pool as the global path, against the wing's
         // own live count — a wing large enough to leak gets the same cure.
-        // A scoped call arrives already scaled to its scope's population.
-        let k = if scope.is_some() {
+        // A NARROWED call arrives already scaled to its scope's population.
+        // An exclusion has been scaled by nothing and must keep the corpus
+        // divisor: gating on `is_some()` let one quarantined row pin stage
+        // 1 at the caller's fixed floor, which is the measured recall leak
+        // this divisor exists to close.
+        let k = if scope.is_some_and(|f| f.narrows()) {
             k
         } else {
             k.max(st.live as usize / self.pool_div.max(1))
@@ -1903,14 +1911,14 @@ impl PalaceStore {
             _ => st.cache.scan(&st.pq, &tables, None, &mut scored),
         }
         if let Some(s) = scope {
-            scored.retain(|(_, seq)| s.contains(seq));
+            scored.retain(|(_, seq)| s.admits(seq));
             // Under-delivery inside the scope widens to the whole wing —
             // the wing cache is fully resident, so this is one more scan,
             // not a load.
             if scored.len() < k && probe.is_some() && !widen {
                 scored.clear();
                 st.cache.scan(&st.pq, &tables, None, &mut scored);
-                scored.retain(|(_, seq)| s.contains(seq));
+                scored.retain(|(_, seq)| s.admits(seq));
             }
         }
         if scored.len() > k {

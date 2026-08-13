@@ -37,6 +37,11 @@ services:
       args:
         UNDERCROFT_FEATURES: telemetry
     restart: unless-stopped
+    # The terminator must exist before the engine resolves its pin: the
+    # engine REFUSES to start when the declared CA file is unreadable, which
+    # is deliberate (a pin that silently un-pins is the failure mode).
+    depends_on:
+      - tempo-tls
     # Create the palace + default vault on first run, then serve.
     entrypoint: ["/bin/sh", "-c"]
     command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]
@@ -47,10 +52,16 @@ services:
       UNDERCROFT_METRICS: "1"
       UNDERCROFT_LOG: "warn,undercroft=info"
       UNDERCROFT_LOG_FORMAT: "json"
-      UNDERCROFT_OTLP_ENDPOINT: "http://tempo:4318"
+      # TLS, through the terminator below. Cleartext http to a non-loopback
+      # host is REFUSED with no override — the OTLP hop obeys the same
+      # transport policy as every other outbound client since round-four #8.
+      # The pin is Caddy's internal CA root, which REPLACES the public roots.
+      UNDERCROFT_OTLP_ENDPOINT: "https://tempo-tls"
+      UNDERCROFT_OTLP_CA: /tls/caddy/pki/authorities/local/root.crt
       UNDERCROFT_SERVICE_NAME: "undercroft"
     volumes:
       - undercroft-data:/data
+      - tempo-tls-data:/tls:ro
     ports:
       - "8765:8765"
 
@@ -113,6 +124,19 @@ services:
     ports:
       - "3200:3200"
 
+  # TLS terminator for the OTLP hop. Mirrors deploy/embeddings-tls/ — the
+  # engine will not send traces in the clear to a non-loopback host, so the
+  # shipped stack terminates TLS here and the engine pins Caddy's internal
+  # CA root off the shared volume.
+  tempo-tls:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      - tempo
+    volumes:
+      - ./tempo-tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - tempo-tls-data:/data
+
   grafana:
     image: grafana/grafana:11.3.0
     restart: unless-stopped
@@ -156,4 +180,5 @@ volumes:
   alertmanager-data:
   loki-data:
   tempo-data:
+  tempo-tls-data:
   grafana-data:

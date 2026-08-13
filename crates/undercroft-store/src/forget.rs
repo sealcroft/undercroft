@@ -483,9 +483,32 @@ impl PalaceStore {
         }
         // Signature first when present: a forged document should fail
         // before any flattering partial checks.
-        if let (Some(sender), Some(sig)) = (att.sender.as_deref(), att.sig.as_deref()) {
-            undercroft_vault::bundle::verify_detached(sender, &att.canonical(), sig)
-                .map_err(|e| fail(format!("signature: {e}")))?;
+        match (att.sender.as_deref(), att.sig.as_deref()) {
+            (Some(sender), Some(sig)) => {
+                undercroft_vault::bundle::verify_detached(sender, &att.canonical(), sig)
+                    .map_err(|e| fail(format!("signature: {e}")))?;
+            }
+            // **A signature with nobody to check it against is REFUSED, not
+            // skipped.** [`ForgetAttestation::sign`] writes both fields, so
+            // no genuine document reaches this arm — but a hand-edited one
+            // does, and the `if let` this replaces simply performed no
+            // verification for it while the CLI printed "sender signature
+            // verified" on `sig.is_some()` alone. A claim the code had not
+            // established, on the one surface whose entire third-party
+            // posture IS that signature, and `sender` is the public key: a
+            // document with `sender` stripped is precisely one nobody can
+            // attribute. Tightening a shape `sign()` never produced is a
+            // fix, not a contract change.
+            (None, Some(_)) => {
+                return Err(fail(
+                    "carries a signature but names no sender to verify it against".into(),
+                ));
+            }
+            // Unsigned, or a sender named with no signature. Both are
+            // reported as unsigned and neither asserts provenance, so
+            // neither is refused — a `sender` alone is a label, and the
+            // verdict says "unsigned" about it, which is true.
+            (_, None) => {}
         }
         let named: std::collections::HashSet<&str> =
             att.drawers.iter().map(|d| d.id.as_str()).collect();
@@ -913,5 +936,91 @@ mod tests {
         assert!(store.get(&a.id).unwrap().is_none());
         assert!(store.get(&keep.id).unwrap().is_some());
         assert!(store.verify().unwrap().ok(), "the chain stays green");
+    }
+
+    /// **A signature with nobody to check it against is REFUSED, not
+    /// skipped** — and this is the arm that used to pass silently.
+    ///
+    /// [`ForgetAttestation::sign`] writes `sender` and `sig` together, so a
+    /// genuine document carries both. Verification, though, ran only when
+    /// both were present, and `Command::VerifyForgetting` printed
+    /// "sender signature verified" on `sig.is_some()` ALONE. `sender` is the
+    /// public key the signature is checked against, so a document with it
+    /// stripped is attributable to nobody — and the one surface whose entire
+    /// third-party posture is that signature said it was verified.
+    ///
+    /// COUNTERFACTUAL, run: with the `if let (Some(..), Some(..))` this
+    /// replaced, arm 2 returns `Ok(Verified)` for a document nothing
+    /// authenticated, and the CLI prints the sentence over it.
+    #[test]
+    fn a_signature_with_no_sender_is_refused_rather_than_silently_unchecked() {
+        use undercroft_vault::{SecurityLevel, VaultManager};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("s", SecurityLevel::Sealed).unwrap();
+        let mut store = PalaceStore::open(vault).unwrap();
+
+        let gone = drawer("a note the subject asked us to erase", 0);
+        let keep = drawer("an unrelated note that must survive", 1);
+        for d in [&gone, &keep] {
+            store.upsert(d).unwrap();
+        }
+        let mut att = store
+            .forget_with_proof(std::slice::from_ref(&gone.id))
+            .unwrap();
+        let (secret, _) = undercroft_vault::bundle::sign_keygen();
+        att.sign(&secret).unwrap();
+
+        // ARM 1 — PREMISE. Signed and complete, this verifies; without it
+        // the refusal below could be any other defect in the document.
+        assert!(
+            att.sender.is_some() && att.sig.is_some(),
+            "premise: sign() writes BOTH fields, which is what makes the \
+             stripped shape detectable at all"
+        );
+        assert_eq!(
+            store.verify_forget_attestation(&att).unwrap(),
+            AttestationVerdict::Verified,
+            "premise: the intact signed document verifies"
+        );
+
+        // ARM 2 — the defect. `sig` kept, `sender` stripped: nothing can
+        // check it, so claiming it was checked is the lie.
+        let mut stripped = att.clone();
+        stripped.sender = None;
+        match store.verify_forget_attestation(&stripped) {
+            Err(StoreError::Attestation(why)) => assert!(
+                why.contains("names no sender"),
+                "must be refused FOR that reason, not incidentally: {why}"
+            ),
+            other => panic!(
+                "a signature with no sender must be refused, not skipped: \
+                 {other:?}"
+            ),
+        }
+
+        // ARM 3 — the other direction is NOT an error, and saying so keeps
+        // the refusal narrow. A `sender` with no signature asserts nothing
+        // cryptographically and is reported as unsigned, which is true.
+        let mut unsigned = att.clone();
+        unsigned.sig = None;
+        assert_eq!(
+            store.verify_forget_attestation(&unsigned).unwrap(),
+            AttestationVerdict::Verified,
+            "a sender named without a signature is unsigned, not forged"
+        );
+
+        // ARM 4 — and a wholly unsigned document still verifies, so the new
+        // arm has not made signing mandatory by accident.
+        let mut bare = att.clone();
+        bare.sender = None;
+        bare.sig = None;
+        assert_eq!(
+            store.verify_forget_attestation(&bare).unwrap(),
+            AttestationVerdict::Verified,
+            "an unsigned attestation is still a valid vault-verifiable one"
+        );
+        assert!(store.get(&keep.id).unwrap().is_some());
     }
 }

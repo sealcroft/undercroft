@@ -13,6 +13,7 @@
 //! - `UNDERCROFT_ORCH_ADMIN_TOKEN` — bearer for the `/admin` plane (`serve`)
 //! - `UNDERCROFT_ORCH_ADDR`   — listen address (default `127.0.0.1:8900`)
 
+mod config_check;
 mod engine;
 mod proxy;
 mod state;
@@ -36,6 +37,30 @@ struct Cli {
 enum Command {
     /// Generate a fresh orchestrator key (and a suggested admin token)
     Keygen,
+    /// Inspect this deployment's configuration (see `config check`)
+    ///
+    /// The two-word spelling every document publishes. It exists beside the
+    /// hyphenated one from the start rather than being added after a doc was
+    /// found wrong — the engine shipped only `config-check` while every
+    /// document published `config check`, and the published form did not run
+    /// (ROADMAP O18).
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Validate every `UNDERCROFT_ORCH_*` declaration WITHOUT opening the
+    /// state database or binding a port
+    ///
+    /// Exit 1 if any declaration that turns a protection on would refuse to
+    /// start; exit 0 otherwise. Warnings do not fail the run.
+    ///
+    /// `undercroft config check` covers the ENGINE and cannot run this
+    /// binary's resolvers — the two do not link. A fleet runs both.
+    ConfigCheck {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Serve the routing proxy + admin plane
     Serve {
         #[arg(long, env = "UNDERCROFT_ORCH_ADDR", default_value = "127.0.0.1:8900")]
@@ -98,10 +123,11 @@ enum Command {
         id: String,
         /// One of: verify, anchor, supersessions, admission, admission-rule,
         /// trust, trust-set, retention, retention-set, retention-sweep,
-        /// forget
+        /// forget, verify-forgetting
         op: String,
         /// JSON body for the operations that take one (rulings, trust and
-        /// retention assignment, forget)
+        /// retention assignment, forget, and the attestation document
+        /// verify-forgetting checks)
         #[arg(long)]
         body: Option<String>,
     },
@@ -115,6 +141,18 @@ enum Command {
         /// Keep the source vault instead of deleting it after the flip
         #[arg(long, default_value_t = false)]
         keep_source: bool,
+    },
+}
+
+/// `config check` — the two-word spelling every doc publishes.
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Validate every `UNDERCROFT_ORCH_*` declaration in this environment
+    /// WITHOUT opening the state database or binding a port
+    Check {
+        /// Also print the declarations that resolve cleanly
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -242,8 +280,66 @@ fn run() -> Result<()> {
     // is the exact shape this tree keeps paying for. An undeclared pin —
     // the default — resolves to `Ok(None)` and costs nothing, so only an
     // operator whose fleet is already misconfigured ever sees this.
-    engine::init_transport().map_err(|e| anyhow::anyhow!(e))?;
+    // …with ONE exemption, and it is the same one the engine's CLI makes for
+    // the same command: `config check` exists to diagnose an environment that
+    // will not start, so a version of it that cannot itself start in that
+    // environment is useless. It carries on and REPORTS the declaration as a
+    // finding of its own — including this one, since
+    // `UNDERCROFT_ORCH_ENGINE_CA` has an arm. Both spellings, because
+    // matching only the hyphenated one would exempt the spelling every doc
+    // publishes from nothing at all.
+    //
+    // This is the exempt list the comment above declines to keep, and the
+    // difference is that it has exactly one member with an argument rather
+    // than being a place to add subcommands somebody found inconvenient.
+    let preflight = matches!(
+        cli.command,
+        Command::ConfigCheck { .. } | Command::Config { .. }
+    );
+    // Telemetry comes up before anything is served (ROADMAP O20). It is a
+    // no-op without `--features telemetry`, and the guard is held for the
+    // process rather than dropped, because dropping it shuts the providers
+    // down.
+    //
+    // **Its own service name**: both binaries in this workspace defaulted to
+    // `"undercroft"`, so a fleet running an engine and a control plane under
+    // one env file produced traces that could not be told apart. A declared
+    // `UNDERCROFT_SERVICE_NAME` still wins.
+    //
+    // `config check` is exempt from a failure here for the same reason it is
+    // exempt from the engine-hop refusal below: a command whose job is
+    // diagnosing an environment that will not start is useless if it cannot
+    // start in one.
+    match undercroft_obs::init_as("undercroft-orchestrator") {
+        Ok(guard) => std::mem::forget(guard),
+        Err(e) if preflight => eprintln!("warning: telemetry disabled — {e}"),
+        Err(e) => return Err(anyhow::anyhow!(e)),
+    }
+    match engine::init_transport() {
+        Ok(()) => {}
+        Err(e) if preflight => eprintln!("warning: engine hop unusable — {e}"),
+        Err(e) => return Err(anyhow::anyhow!(e)),
+    }
     match cli.command {
+        Command::Config {
+            action: ConfigAction::Check { verbose },
+        }
+        | Command::ConfigCheck { verbose } => {
+            let (fatal, warned, validated, accepted) = config_check::run(verbose);
+            println!(
+                "checked {validated} declaration(s) of the control plane: \
+                 {fatal} refusing, {warned} warning, {accepted} seen but not validated"
+            );
+            if fatal > 0 {
+                bail!("this environment would refuse to start");
+            }
+            println!(
+                "`undercroft-orchestrator serve` would start in this environment. \
+                 Note this covers the CONTROL PLANE only — run `undercroft config check` \
+                 on each engine as well."
+            );
+            Ok(())
+        }
         Command::Keygen => {
             let mut key = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut key);
@@ -260,11 +356,12 @@ fn run() -> Result<()> {
                 return proxy::serve(&orch, &addr, proxy::Role::ReadReplica);
             }
             let orch = Orch::open(&cli.db, &orch_key()?)?;
-            let admin = std::env::var("UNDERCROFT_ORCH_ADMIN_TOKEN")
-                .context("UNDERCROFT_ORCH_ADMIN_TOKEN is not set")?;
-            if admin.len() < 16 {
-                bail!("UNDERCROFT_ORCH_ADMIN_TOKEN must be at least 16 characters");
-            }
+            // The SAME resolver `config check` runs — the length floor used
+            // to live here as an inline `if`, which a pre-flight cannot
+            // reach and which a trailing newline clears at 17 characters.
+            let admin = proxy::resolve_admin_token(
+                std::env::var("UNDERCROFT_ORCH_ADMIN_TOKEN").ok().as_deref(),
+            )?;
             proxy::serve(
                 &orch,
                 &addr,
@@ -467,6 +564,68 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The engine's help gate, on the binary that did not have one.**
+    ///
+    /// Found by the drift check for O21 rather than by the unit itself:
+    /// `every_subcommand_has_its_own_about_and_config_check_runs` existed
+    /// only in `undercroft-cli`, so the class it guards — a variant inserted
+    /// BETWEEN a doc comment and the variant it documented, which leaves one
+    /// subcommand bare and the other wearing two — was ungated in this
+    /// binary the whole time. That is exactly the shape of ROADMAP O18, and
+    /// this unit had just added two variants here.
+    ///
+    /// Nothing in the tree can see that class otherwise: clap accepts it,
+    /// rustfmt accepts it, and no other gate reads help strings.
+    #[test]
+    fn every_subcommand_has_its_own_about_and_config_check_runs() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+
+        // Both spellings parse. Unlike the engine, this binary shipped them
+        // together — the engine published `config check` in every doc while
+        // only `config-check` ran, and there is no reason to repeat that.
+        assert!(
+            Cli::try_parse_from(["undercroft-orchestrator", "config", "check"]).is_ok(),
+            "the two-word spelling is what the docs publish and it must run"
+        );
+        assert!(
+            Cli::try_parse_from(["undercroft-orchestrator", "config-check"]).is_ok(),
+            "the hyphenated spelling must run too"
+        );
+
+        let mut seen: std::collections::HashMap<String, String> = Default::default();
+        for sub in cmd.get_subcommands() {
+            let name = sub.get_name().to_string();
+            let about = sub
+                .get_about()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            assert!(
+                !about.is_empty(),
+                "subcommand `{name}` advertises no help text — the usual cause \
+                 is a variant inserted between a doc comment and the variant it \
+                 documented, which leaves this one bare and the other one \
+                 wearing two"
+            );
+            if let Some(other) = seen.insert(about.clone(), name.clone()) {
+                panic!(
+                    "`{name}` and `{other}` advertise the SAME help text \
+                     {about:?} — one of them has taken the other's doc comment"
+                );
+            }
+        }
+        // Premise: the walk examined the real surface. An empty or tiny
+        // subcommand list satisfies every assertion above.
+        assert!(
+            cmd.get_subcommands().count() >= 10,
+            "premise: this gate must have walked the real command surface, \
+             found {}",
+            cmd.get_subcommands().count()
+        );
+    }
 
     /// **A fleet-wide integrity check must not report success on a
     /// tampered vault.**

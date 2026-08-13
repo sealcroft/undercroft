@@ -216,6 +216,57 @@ pub fn declared_pin(what: &'static str, declared: Option<&str>) -> Result<Option
     }
 }
 
+/// A declared outward ENDPOINT, resolved once so the pre-flight and the run
+/// cannot answer differently. `None` when nothing was declared — the
+/// documented default, which for every hop in this workspace means the
+/// process contacts nobody.
+///
+/// The sibling of [`declared_pin`], and it exists for the same reason: an
+/// endpoint is **opaque payload**, so an empty declaration cannot express
+/// intent. It is a `${VAR}` that did not interpolate in a compose file or a
+/// systemd unit, and there is no third thing it could mean. Reading it as
+/// "unset" grants the conservative default while the operator's own
+/// configuration says an endpoint was named.
+///
+/// The transport policy runs here too, so a caller that resolves an endpoint
+/// cannot forget to police it — the refusal is the one an operator cannot fix
+/// by editing a file, and it must arrive before anything is built.
+///
+/// **Written because the OTLP hop had both halves wrong at once**, in
+/// opposite directions: `undercroft config check` refused
+/// `UNDERCROFT_OTLP_ENDPOINT=` by handing the empty string to
+/// [`require_secure_transport`], which reports an unparseable URL as
+/// cleartext — so an operator was told to use https about a value that names
+/// no host at all, the empty parenthesis in the message being the only tell.
+/// The exporter meanwhile read the same value through an
+/// `.ok().filter(|s| !s.is_empty())` and started with traces silently off,
+/// four lines above a comment saying telemetry that silently does not export
+/// is worse than telemetry that refuses to start.
+///
+/// The value is **never trimmed**: emptiness is a question about whether
+/// anything was named, and the answer does not license editing what was.
+pub fn declared_endpoint(
+    what: &'static str,
+    declared: Option<&str>,
+) -> Result<Option<String>, NetError> {
+    match declared {
+        None => Ok(None),
+        Some(u) if u.trim().is_empty() => Err(NetError::Config {
+            what,
+            reason: "is set but names no endpoint (it is empty or only whitespace). It is most \
+                     often an unset shell variable interpolated into a compose file or a systemd \
+                     unit. There is no silent fallback: reading it as unset would disable the hop \
+                     the declaration asks for, and leave no signal that it had been asked for. \
+                     Point it at a URL, or unset the variable to disable the hop deliberately"
+                .to_string(),
+        }),
+        Some(u) => {
+            require_secure_transport(what, u)?;
+            Ok(Some(u.to_string()))
+        }
+    }
+}
+
 type PinCache = std::sync::Mutex<std::collections::HashMap<String, Result<Option<Pin>, String>>>;
 static PINS: std::sync::OnceLock<PinCache> = std::sync::OnceLock::new();
 
@@ -379,6 +430,52 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let missing = dir.path().join("nope.pem");
         assert!(declared_pin("x", Some(missing.to_str().unwrap())).is_err());
+    }
+
+    /// The same rule for the ENDPOINT, and the counterfactual is the reason
+    /// this is a separate test rather than a line in its sibling: before
+    /// [`declared_endpoint`] existed, an empty endpoint reached
+    /// [`require_secure_transport`] directly, which parses it, fails, and
+    /// reports an unparseable URL as CLEARTEXT. So the empty case was not
+    /// unhandled — it was handled, loudly, with the wrong diagnosis, and an
+    /// assertion that merely required a refusal would have passed against the
+    /// defect. What is asserted is therefore the DIAGNOSIS, and that the old
+    /// wrong one is gone.
+    #[test]
+    fn an_empty_endpoint_is_a_failed_interpolation_not_a_cleartext_url() {
+        assert!(declared_endpoint("x", None)
+            .expect("unset is not a refusal")
+            .is_none());
+        for empty in ["", "   ", "\t", "\n"] {
+            let err = declared_endpoint("x", Some(empty)).expect_err("must refuse");
+            assert!(err.to_string().contains("names no endpoint"), "{err}");
+            assert!(err.to_string().contains("no silent fallback"), "{err}");
+            assert!(
+                !err.to_string().contains("cleartext"),
+                "an empty declaration is not a cleartext URL — this is the \
+                 pre-fix diagnosis, which sent an operator to configure TLS \
+                 for a value that names no host: {err}"
+            );
+        }
+        // The policy still runs on a value that IS one, in both directions —
+        // so this is a rule about the empty case and not a bypass around it.
+        assert!(declared_endpoint("x", Some("http://collector:4318")).is_err());
+        assert_eq!(
+            declared_endpoint("x", Some("https://collector:4318")).unwrap(),
+            Some("https://collector:4318".to_string())
+        );
+        assert_eq!(
+            declared_endpoint("x", Some("http://127.0.0.1:4318")).unwrap(),
+            Some("http://127.0.0.1:4318".to_string())
+        );
+        // Never trimmed: emptiness is a question about whether anything was
+        // named, and the answer does not license editing what was.
+        assert_eq!(
+            declared_endpoint("x", Some("https://collector:4318 "))
+                .unwrap()
+                .as_deref(),
+            Some("https://collector:4318 ")
+        );
     }
 
     /// The cleartext refusal is reported BEFORE a pin failure. An operator

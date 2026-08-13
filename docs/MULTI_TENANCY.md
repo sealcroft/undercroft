@@ -58,7 +58,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `GET /v1/vaults/{id}/kg/stats` · `.../kg/entities` · `.../kg/query` · `.../kg/timeline` · `.../kg/receipts` · `.../kg/canonical/{key}` | read-only knowledge-graph browse |
 | `POST /v1/vaults/{id}/kg/authority` | the one KG **mutation** on this surface: place a fact on the authority tier (closed vocabulary, audited, HMAC-covered) |
 | `POST /v1/vaults/{id}/refine` | LLM distillation of a drawer into KG facts (`UNDERCROFT_LLM_*`; nothing is contacted unless a URL is set) |
-| `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting |
+| `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` · `POST .../verify-forgetting` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting — and, since 1.1.0, **checking** an attestation (a READ; typed verdict, 409 + `class: "integrity"` for a document that does not describe this vault) |
 | `POST /v1/vaults/{id}/verify` · `POST .../anchor` · `POST .../rotate` | integrity report (a read) · tighten the manifest rollback anchor onto the committed chain head (a **write**: a cached handle never re-opens, so nothing else closes that window) · key rotation (sole-writer contract — 409 for the vault the same process serves over `/mcp`) |
 | `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair. Export is **chain-audited unconditionally** (one `egress/export` record binding surface, counts and the export's own manifest digest); import re-stamps `added_by` and screens every record |
 | `GET /ui` | vault admin console (static page, every build) |
@@ -423,12 +423,71 @@ sequenceDiagram
 | `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
 | `GET /admin/tenants/{id}/stats` | admin | metadata-only stats relay (counts, sizes, chain head) via the stored engine creds — content stays behind the tenant's own token |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
-| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by |
+| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one |
 | `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>` |
 
 The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
 failure is a uniform 401. The CLI (`instance-add`, `tenant-create`,
 `migrate`, …) mirrors the admin plane for scripted use, plus `keygen`.
+
+**Observe the control plane** (ROADMAP O20, `--features telemetry` builds):
+
+```bash
+UNDERCROFT_ORCH_METRICS_ADDR=127.0.0.1:9900 undercroft-orchestrator serve
+```
+
+A **separate listener**, not a path on the serving port, and the reason is
+structural: the serving port carries `/t/*` and must be reachable by tenants,
+so a `/metrics` path there would be network-exposed in every real fleet.
+Splitting it lets the data plane sit on `0.0.0.0:8900` while metrics sit on
+loopback for a sidecar scraper — and it means a **read replica works
+unchanged**, since it has no admin credential and now needs none.
+
+Loopback needs no token. Any other address **refuses to start** without
+`UNDERCROFT_ORCH_METRICS_TOKEN` — deliberately not the admin token, which
+creates tenants and reads engine bearers, and which a scrape target would hold
+in a file on every Prometheus host.
+
+What it exports is **fleet-shaped, never tenant-shaped**: requests by route
+class and status, refused credentials by kind, the rate screen firing, and
+engine-call outcomes. There is no tenant, vault or tenant-name label — those
+identifiers are created by use, so they belong on a query surface, and
+per-tenant figures are already on `GET /admin/tenants/{id}/stats`. The series
+are `undercroft_orch_`-prefixed so they cannot blend with an engine's in a
+dashboard that aggregates without a job filter.
+
+Two things it does not do yet: no gauges (the shared gauge shape is
+vault-labelled, so replication lag stays on `/healthz`), and no scrape job or
+alert rules ship for it — a fleet adds its own.
+
+**Pre-flight the control plane before a restart**, exactly as you would an
+engine:
+
+```bash
+undercroft-orchestrator config check    # or: config-check --verbose
+```
+
+It runs the four `UNDERCROFT_ORCH_*` declarations this binary reads through
+the same resolvers `serve` runs — the sealing key, the admin bearer, the rate
+limit and the engine-hop CA pin — and opens no state database and binds no
+port. Exit 1 means this environment would refuse to start.
+
+**A fleet runs it alongside `undercroft config check` on each engine, not
+instead of it.** The two commands cover different binaries and neither can run
+the other's resolvers: the engine is tree-blind and the orchestrator is a pure
+`/v1` client, so they do not link. What is shared is the CLASSIFICATION of
+each variable, counted across the two inventories in both directions by a
+test. Before 1.1.0 this command did not exist and the control plane's
+declarations were pre-flighted by nothing at all (ROADMAP O21).
+
+Two of them are worth knowing about. `UNDERCROFT_ORCH_ADMIN_TOKEN` refuses
+when it is empty **or ends in whitespace** — HTTP strips a header value's
+trailing whitespace, so `$(cat /run/secrets/token)` over a file ending in a
+newline used to clear the 16-character floor and produce a control plane that
+started cleanly and refused every `/admin` request forever. It is not trimmed
+for you: that would authenticate a key you did not declare. And
+`UNDERCROFT_ORCH_KEY` now says whether it is *absent* or merely *not hex*,
+which used to be one message for both.
 
 **Security model** — the orchestrator state is credential-bearing, so it is
 hardened the way the engine hardens its own secrets:
@@ -450,8 +509,11 @@ hardened the way the engine hardens its own secrets:
   `ops/` prefix. The one deletion a tenant token reaches
   (`DELETE /t/…/drawers/{id}`) produces a bare tombstone, so an erasure
   request should be answered through `ops/forget`, which returns a
-  chain-attested receipt. A data-plane request for an operator subpath
-  now says so instead of answering a bare `unknown route`.
+  chain-attested receipt — and checked through `ops/verify-forgetting`,
+  which until 1.1.0 existed on no surface at all, so the receipt this
+  paragraph recommends could be minted and never verified (O14). A
+  data-plane request for an operator subpath now says so instead of
+  answering a bare `unknown route`.
 
 **Migration** (`POST /admin/tenants/{id}/migrate {"to": …}`): export from
 the source (the v0.18 artifact-carrying NDJSON, so token matrices restore
@@ -461,7 +523,7 @@ before the flip leaves the source authoritative and removes the partial
 copy. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 95 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 110 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the

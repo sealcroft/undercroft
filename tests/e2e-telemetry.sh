@@ -63,6 +63,103 @@ grep -q "undercroft_search_total" <<<"$out" && pass "search_total recorded after
 kill "$S1" 2>/dev/null
 wait "$S1" 2>/dev/null
 
+echo "== /metrics under a declared assertion secret (ROADMAP O25) =="
+# `/metrics` is served after the palace bearer and BEFORE per-vault assertion,
+# because the route addresses no single vault — so the gate whose contract is
+# "a bearer alone reaches no vault on either path" never applied to it, and a
+# caller who could assert only vault A read vault B's counts.
+#
+# Asserted on the BODY, not the status: the status is 200 either way, which is
+# why this went unnoticed. The vault-blind series must SURVIVE — every rule in
+# alerts.yml evaluates one, and suppression that took them would trade a
+# disclosure for a blind fleet.
+UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" UNDERCROFT_METRICS=1 \
+  UNDERCROFT_ASSERTION_SECRET="e2e-assertion-secret-0123456789" \
+  "$BIN" serve-http --host 127.0.0.1 --port 8797 >/tmp/tserve3.log 2>&1 &
+S3=$!
+wait_up 8797 || fail "server did not start" "$(cat /tmp/tserve3.log)"
+grep -q "assertions required" /tmp/tserve3.log \
+  && pass "the banner states assertions are required" \
+  || fail "banner did not declare assertions" "$(cat /tmp/tserve3.log)"
+# **A vault gauge has to be POPULATED first, or this proves nothing.** Gauges
+# are set by `/v1/…/stats` (and by the SSE sampler); measured, a fresh server
+# exposes ZERO `vault=` series until one of those runs — so a check that just
+# scrapes and finds no vault label passes on the BROKEN code too. The first
+# version of this block did exactly that. Under assertions the stats call
+# needs a minted header, which is what `assert-header` is for.
+ASSERT=$(UNDERCROFT_ASSERTION_SECRET="e2e-assertion-secret-0123456789" \
+  "$BIN" assert-header default 2>/dev/null)
+[ -n "$ASSERT" ] && pass "an assertion header was minted for the stats call" \
+  || fail "could not mint an assertion — the population step cannot run"
+curl -s -H "Authorization: Bearer $TOKEN" -H "X-Vault-Assertion: $ASSERT" \
+  http://127.0.0.1:8797/v1/vaults/default/stats >/dev/null
+aout=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8797/metrics)
+grep -q "# TYPE" <<<"$aout" \
+  && pass "the assertion-mode scrape returned an exposition" \
+  || fail "empty scrape — the checks below would prove nothing" "$aout"
+grep -q 'vault=' <<<"$aout" \
+  && fail "a vault-labelled series crossed the assertion boundary" "$(grep 'vault=' <<<"$aout" | head -3)" \
+  || pass "no vault-labelled series is exposed under assertions"
+grep -q "undercroft_http_requests_total" <<<"$aout" \
+  && pass "vault-blind counters survive suppression (alerts keep working)" \
+  || fail "suppression took the vault-blind counters too" "$aout"
+kill "$S3" 2>/dev/null
+wait "$S3" 2>/dev/null
+
+# THE COUNTERFACTUAL, in the suite rather than in a session's memory: the same
+# sequence with the assertion secret UNSET must expose the vault label. One
+# config difference, opposite result. Without this arm, "no vault label" is
+# indistinguishable from "no vault series were ever populated" — which is how
+# the first version of the block above passed while measuring nothing.
+UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" UNDERCROFT_METRICS=1 \
+  "$BIN" serve-http --host 127.0.0.1 --port 8798 >/tmp/tserve4.log 2>&1 &
+S4=$!
+wait_up 8798 || fail "control server did not start" "$(cat /tmp/tserve4.log)"
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8798/v1/vaults/default/stats >/dev/null
+cout=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8798/metrics)
+grep -q 'vault=' <<<"$cout" \
+  && pass "control: the same sequence DOES expose vault labels without assertions" \
+  || fail "the control exposed no vault label either — the check above is vacuous" "$cout"
+kill "$S4" 2>/dev/null
+wait "$S4" 2>/dev/null
+
+echo "== the CONTROL PLANE's metrics listener (ROADMAP O20) =="
+ORCH="${ORCH:-/build/release/undercroft-orchestrator}"
+[ -x "$ORCH" ] || ORCH=/src/target/release/undercroft-orchestrator
+export UNDERCROFT_ORCH_DB="$(mktemp -d)/orch.db"
+export UNDERCROFT_ORCH_KEY="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+export UNDERCROFT_ORCH_ADMIN_TOKEN="o20-admin-token-0123456789"
+
+# A NON-LOOPBACK metrics address without a token must refuse to start. This is
+# the whole reason the listener is separate: the orchestrator's serving port is
+# network-facing in every real fleet, so a `/metrics` path there could not be
+# gated by reachability. Asserted at the RUN, before any exposition question.
+out=$(UNDERCROFT_ORCH_METRICS_ADDR=0.0.0.0:9901 timeout 5 "$ORCH" serve --addr 127.0.0.1:18930 2>&1)
+if [ $? -ne 0 ] && grep -q "is required" <<<"$out"; then
+  pass "a networked metrics listener refuses to start without a token"
+else
+  fail "a networked metrics listener started ungated" "$out"
+fi
+
+# Loopback needs no token, and the exposition must carry the control plane's
+# OWN series — prefixed `undercroft_orch_` so they cannot blend with the
+# engine's in a dashboard that aggregates without a job filter.
+UNDERCROFT_ORCH_METRICS_ADDR=127.0.0.1:9902 "$ORCH" serve --addr 127.0.0.1:18931 >/tmp/orchm.log 2>&1 &
+OM=$!
+for _ in $(seq 1 60); do curl -sf http://127.0.0.1:18931/healthz >/dev/null 2>&1 && break; sleep 0.1; done
+# Drive traffic the control plane can actually count: a rejected tenant token.
+curl -s -o /dev/null -H "Authorization: Bearer nope" http://127.0.0.1:18931/t/search
+mout=$(curl -s http://127.0.0.1:9902/metrics)
+grep -q "# TYPE" <<<"$mout" && pass "the control plane exposes a Prometheus exposition"   || fail "no exposition from the metrics listener" "$mout$(cat /tmp/orchm.log)"
+grep -q "undercroft_orch_requests_total" <<<"$mout"   && pass "it carries the control plane's own request series"   || fail "orch_requests_total missing" "$mout"
+grep -q "undercroft_orch_auth_rejections_total" <<<"$mout"   && pass "a refused tenant token is counted at the hop that refused it"   || fail "orch_auth_rejections_total missing" "$mout"
+# The isolation rule: no tenant-shaped label anywhere.
+grep -qE "tenant=\"|vault=\"" <<<"$mout"   && fail "a tenant-shaped label reached the exposition" "$(grep -E 'tenant=|vault=' <<<"$mout" | head -3)"   || pass "no tenant-shaped label is exposed"
+# …and it must not answer on the SERVING port, which is the whole point.
+sc=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18931/metrics)
+[ "$sc" = "404" ] && pass "/metrics is not served on the data-plane port"   || fail "/metrics answered on the serving port ($sc)"
+kill "$OM" 2>/dev/null; wait "$OM" 2>/dev/null
+
 echo "== /metrics disabled (flag unset -> 404) =="
 UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
   "$BIN" serve-http --host 127.0.0.1 --port 8796 >/tmp/tserve2.log 2>&1 &
@@ -207,6 +304,70 @@ grep -q '"quarantined":1' <<<"$iresp" && pass "import reports the diversion coun
 
 kill "$S4" 2>/dev/null
 wait "$S4" 2>/dev/null
+
+echo "== OTLP export obeys the transport policy (round-four #8) =="
+# The export path had NO end-to-end coverage at all before this, which is why
+# "https cannot work" was never observable: the exporter was an unpoliced
+# reqwest client with no TLS backend linked, and its build failure was
+# swallowed. These four drive the real binary.
+otlp_out=$(env UNDERCROFT_OTLP_ENDPOINT=http://collector.invalid:4318 "$BIN" stats 2>&1)
+otlp_code=$?
+if [ "$otlp_code" -eq 1 ] && printf '%s' "$otlp_out" | grep -q "no override"; then
+  pass "cleartext to a non-loopback collector is refused"
+else
+  fail "cleartext OTLP collector was not refused" "exit=$otlp_code out=$otlp_out"
+fi
+
+env UNDERCROFT_OTLP_ENDPOINT=http://127.0.0.1:4318 "$BIN" stats >/dev/null 2>&1
+if [ $? -ne 1 ]; then
+  pass "a loopback collector is allowed"
+else
+  fail "a loopback collector was refused — cleartext on loopback is legal"
+fi
+
+# `config check` is EXEMPT from the start-up refusal, deliberately: a command
+# whose job is diagnosing an environment that will not start has to run in
+# one. It must still REPORT the declaration rather than pass it.
+cc_out=$(env UNDERCROFT_OTLP_ENDPOINT=http://collector.invalid:4318 "$BIN" config check 2>&1)
+cc_code=$?
+if printf '%s' "$cc_out" | grep -q "warning: telemetry disabled"; then
+  pass "config check runs in an environment that refuses to start"
+else
+  fail "config check was not exempt from the OTLP refusal" "exit=$cc_code out=$cc_out"
+fi
+if [ "$cc_code" -eq 1 ]; then
+  pass "config check reports the OTLP endpoint as fatal"
+else
+  fail "config check did not fail on a refused OTLP endpoint" "exit=$cc_code"
+fi
+
+# An EMPTY endpoint, which the four checks above are blind to and which the
+# fix for #8 left behind in both directions at once. The exporter read it
+# through a helper that maps empty to unset and started with traces silently
+# off; `config check` handed the same empty string to the transport policy,
+# which parses it, fails, and reports an unparseable URL as CLEARTEXT — so an
+# operator was told to configure https for a value naming no host.
+#
+# Both halves are asserted, and the second is why a bare "it refuses" check
+# would not have caught this: the pre-fix command DID refuse, with the wrong
+# diagnosis, so the DIAGNOSIS is the observable.
+empty_out=$(env UNDERCROFT_OTLP_ENDPOINT= "$BIN" stats 2>&1)
+empty_code=$?
+if [ "$empty_code" -eq 1 ] && printf '%s' "$empty_out" | grep -q "names no endpoint"; then
+  pass "an empty OTLP endpoint refuses to start rather than exporting nothing"
+else
+  fail "empty OTLP endpoint was read as unset" "exit=$empty_code out=$empty_out"
+fi
+
+ecc_out=$(env UNDERCROFT_OTLP_ENDPOINT= "$BIN" config check 2>&1)
+ecc_code=$?
+if [ "$ecc_code" -eq 1 ] \
+  && printf '%s' "$ecc_out" | grep -q "names no endpoint" \
+  && ! printf '%s' "$ecc_out" | grep -q "cleartext http to a non-loopback host ()"; then
+  pass "the pre-flight diagnoses an empty endpoint as a failed interpolation"
+else
+  fail "empty OTLP endpoint diagnosed as cleartext" "exit=$ecc_code out=$ecc_out"
+fi
 
 echo
 echo "telemetry e2e results: $PASS passed, $FAIL failed"

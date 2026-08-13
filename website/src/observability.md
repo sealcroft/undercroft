@@ -10,6 +10,9 @@ export. It is built to preserve the project's stance:
 - **Local-first / no phone-home.** Nothing leaves the process unless you
   explicitly point it somewhere: `/metrics` is served only when you ask,
   and OTLP export happens only when `UNDERCROFT_OTLP_ENDPOINT` is set.
+  *Set* means set to an endpoint — a declaration that names none refuses to
+  start rather than exporting nothing silently, since a collector you
+  configured and never receive spans from is the harder failure to notice.
 - **Metadata only.** Every signal is a count, a rate, a latency, or an
   aggregate gauge. Drawer content, drawer names beyond what `stats`
   already exposes, and key material are **never** emitted. Sealed vaults
@@ -30,6 +33,19 @@ flowchart LR
     loki --> graf
     tempo --> graf
 ```
+
+## The control plane
+
+**The control plane has its own telemetry** since 1.1.0
+(`undercroft-orchestrator --features telemetry`), on a **separate listener**
+declared by `UNDERCROFT_ORCH_METRICS_ADDR`: its serving port must be reachable
+by tenants, so a `/metrics` path there would be exposed in every real fleet.
+Loopback needs no token; any other address refuses to start without
+`UNDERCROFT_ORCH_METRICS_TOKEN`. It exports `undercroft_orch_*` counters —
+requests by route class, refused credentials by kind, rate-screen firings,
+engine-call outcomes — and **carries no tenant, vault or tenant-name label**;
+per-tenant figures live on the admin plane. No scrape job or alert rules ship
+for it yet.
 
 ## Building with telemetry
 
@@ -82,7 +98,12 @@ Exposed series (all `undercroft_*`):
   `http_requests_total{route,status}`, `auth_rejections_total{kind}`.
 - **Histograms** — `search_duration_seconds`, `search_hits`,
   `http_request_duration_seconds{route}`.
-- **Gauges** (per vault) — `drawers`, `audit_chain_height`, plus
+- **Gauges** (per vault — and **suppressed entirely when
+  `UNDERCROFT_ASSERTION_SECRET` is declared**, since `/metrics` addresses no
+  single vault and would otherwise carry one vault's counts to a caller who
+  can assert only another's; the per-vault detail is on `/v1/…/stats`, which
+  is assertion-gated, and no alert depends on these) — `drawers`,
+  `audit_chain_height`, plus
   `kg_triples` / `kg_entities` / `store_bytes` where sampled, and the
   five **codebook generation** counters —
   `codebook_generation_pq_codebook`, `…_pq_ivf`, `…_fde_codebook`,
@@ -106,14 +127,27 @@ verification — i.e. tamper was detected on read.
 Set an endpoint to export traces and metrics over OTLP/HTTP:
 
 ```bash
+# Loopback cleartext is allowed — the collector never leaves the machine.
 UNDERCROFT_OTLP_ENDPOINT=http://localhost:4318 \
+UNDERCROFT_SERVICE_NAME=undercroft \
+undercroft serve-http
+```
+
+For a collector on another host, TLS is required and there is no override —
+the headers this exporter sends are documented to carry a bearer token, and
+the spans carry vault ids and route labels:
+
+```bash
+UNDERCROFT_OTLP_ENDPOINT=https://collector.internal \
+UNDERCROFT_OTLP_CA=/etc/undercroft/collector-ca.crt \
 UNDERCROFT_SERVICE_NAME=undercroft \
 undercroft serve-http
 ```
 
 | Variable | Meaning |
 |---|---|
-| `UNDERCROFT_OTLP_ENDPOINT` | OTLP/HTTP collector base URL. **Unset ⇒ no network egress.** |
+| `UNDERCROFT_OTLP_ENDPOINT` | OTLP/HTTP collector base URL. **Unset ⇒ no network egress.** An outward path: **TLS or loopback, nothing else, no override** — cleartext `http://` to a non-loopback host is refused at start-up. |
+| `UNDERCROFT_OTLP_CA` | Pin a private CA for the collector. The declared root **replaces** the public roots; a file that pins nothing refuses rather than falling back. |
 | `UNDERCROFT_SERVICE_NAME` | `service.name` resource attribute (default `undercroft`). |
 | `UNDERCROFT_OTLP_HEADERS` | Optional headers for the exporter. |
 

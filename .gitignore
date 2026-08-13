@@ -56,3 +56,9 @@ benchmarks/logs/local/
 #   curl -sSL https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ar/ar_50k.txt -o crates/undercroft-store/testdata/ar_50k.txt
 crates/undercroft-store/testdata/
 .battery/
+
+# Bytecode of the one tracked Python file, `tests/no-trace/verify.py`. The
+# preflight EXECUTES it, so this appears only when something IMPORTS it — an
+# ad-hoc probe did, while closing O26. Ignored because a committed `.pyc`
+# sitting beside a GATE is a second, stale copy of the thing that decides.
+__pycache__/

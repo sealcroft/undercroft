@@ -125,15 +125,24 @@ fn now_rfc3339() -> String {
     format!("unix:{secs}")
 }
 
+/// The orchestrator's sealing key.
+///
+/// **The parse lives in `undercroft-config`** (ROADMAP O24), because
+/// `undercroft config check` has to run it too and the engine deliberately
+/// never links this crate. It was written out TWICE here — once in
+/// [`Orch::open`], once in [`Orch::open_read_only`] — and neither copy was
+/// reachable without opening a DATABASE, which is what kept it out of every
+/// pre-flight. This wrapper only maps the error into this crate's class.
+fn orch_key_bytes(key_hex: &str) -> Result<[u8; 32], StateError> {
+    undercroft_config::resolve_orch_key(Some(key_hex))
+        .map_err(|e| StateError::Invalid(e.to_string()))
+}
+
 impl Orch {
     /// Open (or create) the state database. `key_hex` is the 64-char hex
     /// orchestrator key (`UNDERCROFT_ORCH_KEY`).
     pub fn open(path: &std::path::Path, key_hex: &str) -> Result<Self, StateError> {
-        let bytes = hex::decode(key_hex.trim())
-            .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY is not hex".into()))?;
-        let key: [u8; 32] = bytes.try_into().map_err(|_| {
-            StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into())
-        })?;
+        let key = orch_key_bytes(key_hex)?;
         let conn = Connection::open(path)?;
         // Control-plane state must survive power loss: a token shown once at
         // create/rotate is gone forever if the row that recorded its HMAC is
@@ -184,11 +193,7 @@ impl Orch {
     /// on a shared volume the writer maintains the `-shm` file, and a
     /// replicated snapshot is a checkpointed plain file.
     pub fn open_read_only(path: &std::path::Path, key_hex: &str) -> Result<Self, StateError> {
-        let bytes = hex::decode(key_hex.trim())
-            .map_err(|_| StateError::Invalid("UNDERCROFT_ORCH_KEY is not hex".into()))?;
-        let key: [u8; 32] = bytes.try_into().map_err(|_| {
-            StateError::Invalid("UNDERCROFT_ORCH_KEY must be 32 bytes (64 hex)".into())
-        })?;
+        let key = orch_key_bytes(key_hex)?;
         if !path.exists() {
             return Err(StateError::Invalid(format!(
                 "state database {path:?} does not exist (a read replica never creates one)"

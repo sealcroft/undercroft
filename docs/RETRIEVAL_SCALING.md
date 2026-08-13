@@ -24,7 +24,11 @@ throughout: sealed vaults never persist a plaintext-derived index to disk.
    in-memory HNSW prefilter exists behind the off-by-default `hnsw`
    feature. Scopes that fit the hydration budget skip the prefilter and
    are scanned **exactly**; larger ones get membership-filtered candidates
-   and pools sized by the scope.
+   and pools sized by the scope. A *narrowing* and an *exclusion* are kept
+   apart here (`SeqFilter::{Only, AllBut}`): only a narrowing sizes the
+   pools, because an exclusion — a trust floor, or the quarantine fence —
+   removes a handful of rows and leaves a searched population that is
+   still the whole corpus.
 2. **Fusion** — cosine + Okapi BM25 (+ recency), the hybrid rank.
 3. **Reranking (optional)** — a cross-encoder re-scores the top-N by the full
    `(query, passage)` pair, or ColBERT MaxSim rescores from stored token

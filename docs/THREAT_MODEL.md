@@ -208,7 +208,13 @@ Vault keys are independent HKDF derivations; AAD binds the vault id
 into every ciphertext, so a blob copied from vault A into vault B
 **fails to decrypt** — it is not filtered out by a query predicate that
 could have a bug, it is rejected by the cipher. Vault, wing, and room
-names pass a path-traversal guard (`validate_name`). This is the
+names pass a path-traversal guard (`validate_name`) — at the write choke
+point, **and** at the admission screen in front of it, because a diversion
+rewrites the very fields the guard reads: it moves the declared wing into
+`intended_wing` and puts the reserved quarantine constant in its place, so
+until 2026-08-13 an invalidly-declared write whose content tripped the
+detector was quarantined rather than refused (ROADMAP O30). A guard at the
+choke point is necessary and was not sufficient. This is the
 property that makes vault-per-customer multi-tenancy defensible; every
 competitor surveyed in [SECURITY_COMPARISON.md](https://sealcroft.com/undercroft/docs/security-comparison.html)
 isolates tenants with a metadata filter.
@@ -717,7 +723,17 @@ straight, each carrying what it actually is.
   drawer, so a flipped clear column can neither launder a deletion nor
   hide a drawer from its declared retention. Honest boundary: a third
   party verifies the operator's *signature*, not the replay — the chain
-  step is keyed.
+  step is keyed. **A `sig` field is not by itself evidence of one**, and
+  saying so is 1.1.0's correction: verification runs against `sender`,
+  the public key, so a document carrying a signature with no sender can
+  be checked by nobody. That shape was skipped rather than refused, and
+  the CLI reported "sender signature verified" over it on the strength
+  of `sig` being present. It is refused now, and every operator door can
+  run the check — `verify-forgetting` on the CLI,
+  `POST /v1/vaults/{id}/verify-forgetting`, the fleet's
+  `ops/verify-forgetting`, and the admin console — where until 1.1.0 the
+  HTTP plane could MINT a receipt and only the CLI could check one
+  (ROADMAP O14).
 - **Memory-poisoning defense (C3.3) — BUILT (2026-08-03/04)**:
   write-path admission control — provenance on every write, a
   deterministic (optionally classifier-assisted) detector at the write

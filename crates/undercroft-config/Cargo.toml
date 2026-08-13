@@ -1,0 +1,15 @@
+[package]
+name = "undercroft-config"
+description = "Declaration resolvers shared by the Undercroft engine and its control plane — one implementation of each parse, so a pre-flight and a start-up cannot disagree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Deliberately the whole dependency list. This crate exists so two binaries
+# that must not link each other can share one parse; anything heavier here
+# would be paid by both, and a control plane has no use for a domain model.
+thiserror = { workspace = true }
+hex = { workspace = true }

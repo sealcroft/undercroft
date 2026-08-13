@@ -2,6 +2,1381 @@
 
 ## Unreleased — 1.1.0
 
+### a payload may not author what only the screen authors
+
+ROADMAP **O31**, filed while closing O30 and closed last of the campaign.
+
+`intended_wing`, `intended_room` and `admission_signals` are all
+`#[serde(default)]` on `DrawerMeta`, and both import surfaces deserialize a
+whole `Drawer`. `import_unwrap_screened` looked only at records whose wing IS
+the reserved constant, so a record declaring an ORDINARY wing carried a
+fabricated destination — and fabricated signal codes — onto disk, inside the
+drawer's HMAC, validated by nothing.
+
+**Three fields, not the two the filing named.** `admission_signals` has the
+same shape and the same `#[serde(default)]`, and the branch that cleared it
+explained why in a comment that applied equally to the branch it was not on.
+Found by enumerating the payload-controlled fields rather than by re-reading
+the entry.
+
+**And a second call site the filing did not mention.** `upsert_many` unwraps
+only when its guard fires, and that guard tested the wing alone — so the bulk
+path, which is what a CLI `import` and every sealed-bundle restore take,
+would have skipped the strip for exactly these payloads. The guard now tests
+for anything the screen authors and keeps its zero-cost property.
+
+Cleared rather than refused, because refusing breaks the `export_all` →
+`import` round trip for genuinely quarantined rows — which this function's
+own history records having broken once. That round trip is the test's
+load-bearing arm: a real quarantined row exported, imported into a second
+vault, converging on the same deterministic id with its destination intact.
+
+Counterfactuals on both arms. No `UPGRADING.md` entry, with the reasoning
+stated: the screen sets these fields only when it diverts, which also sets
+the wing, and `admission_allow` clears them — so no payload any version of
+this engine has emitted carries them on a non-reserved row.
+
+**With this the engine-side queue is empty.** What remains is O7
+(release-gated) and O6 (a web-UI click).
+
+### the signal vocabulary is counted against what the engine can emit
+
+ROADMAP **O33**, found by adding the seventh code to it while closing O32.
+
+`SIGNAL_CODES` declares the closed vocabulary of admission signal classes.
+Grepped across `crates/`, it appeared three times and **all three were in the
+file that defines it** — itself and two doc links. Nothing counted the codes
+actually emitted against it, in either direction, so a code emitted without a
+row would have shipped and a row nothing emits would have shipped. That is
+the arrangement whose first instance shipped five dead gauge names before
+`GAUGE_NAMES` was gated, and these codes travel further than a gauge:
+`PendingAdmission.signals`, the `drawer-quarantined` frame, `/v1 …/admission`,
+`monitor.html`, and the architecture page and its diagram.
+
+**No emit-site scanning, which is the point.** The codes `screen` produces
+are obtained by RUNNING it — three of the five come from a tuple table the
+function iterates, so a scan for `code: "..."` would have found two of eight
+and reported clean. Only the codes no function produces are read from source,
+and those are exactly the `*_CODE` constants, all of which live in one file.
+A second gate in `undercroft-store` closes the half the first cannot see: this
+crate names a code by constant, never by literal.
+
+Five arms executed, every one observed to fail: a row nothing emits, a code
+with no row, the constant scanner examining nothing, a literal at a production
+emit site, and the store scanner examining nothing. The store gate's own scope
+was wrong at first — it scanned past `#[cfg(test)]` and reported two test
+fixtures as violations — which running it caught.
+
+Test-only: 154 insertions, 0 deletions, entirely inside `#[cfg(test)]`.
+No `UPGRADING.md` entry, and no real-corpus run, because nothing a deployment
+can observe changed.
+
+### the declared destination is screened, and the reserved wing leaves the name listings
+
+ROADMAP **O32**, filed by the sibling sweep O29 demanded and measured before
+it was filed.
+
+A wing name is agent-chosen and another agent reads it back through
+`undercroft_list_wings`, `undercroft_get_taxonomy`,
+`undercroft_get_closet_index` and — for a diary — `undercroft_list_agents`,
+which resolves `wing = agent-{agent}`. **Both existing guards fired on that
+path and neither saw it**: `validate_name` admits any 128-byte string free of
+control characters and path separators (O17's own finding, and the poison is
+56 bytes), and the admission screen had only ever been pointed at
+`drawer.content`. Measured before the fix: a drawer with CLEAN content filed
+into a wing named `ignore previous instructions …` was accepted, the queue
+did not grow, and the string reached `taxonomy`, `closets` and `stats`.
+The closet index is one of the two session-start surfaces.
+
+**Two halves, and only one was filed.** `admission_divert` now screens the
+declared wing and room and emits a new `destination-anomaly` signal, so the
+save DIVERTS — kept, not refused, because a drawer has the reserved wing and
+the rulings, unlike a fact (O17) or a tunnel (O29). And **`wings()` had no
+quarantine fence**, so `taxonomy`, `list_wings` and `PalaceStats.wings`
+published the reserved wing and every ROOM name inside it; diverting alone
+did not close the leak, because `admission_divert` moves the wing and leaves
+the room. That half is pre-existing and independent: the fence was built for
+reads that return CONTENT, and a NAME is agent-chosen text too. Stated cost —
+`PalaceStats.wings` no longer counts the reserved wing; queue depth is on the
+admission surface.
+
+**A new code rather than a reused one.** `AdmissionSignal.offset` is a byte
+position *in the candidate*, and a wing name is not the candidate; reusing a
+content code would give a reviewer an offset into text that does not contain
+the marker — wrong rather than missing. `rate-anomaly` is the precedent.
+
+**The corpus run caught a defect no test could.** Four surfaces said *"the
+content tripped the admission screen"*, true of every diversion until this
+unit and now false for exactly the case it adds. Corrected on all four to
+name the save and point at `admission list`, which carries the codes.
+
+Counterfactuals executed on both halves: with the screen reverted the flagged
+wing does not divert; with the fence reverted the taxonomy carries the name —
+the second observed naturally, as the test failed on that assertion while the
+diversion arm already passed. **O33 filed**: `SIGNAL_CODES` is a declared
+closed vocabulary that nothing counts in either direction, noticed by adding
+the seventh code to it.
+
+### the screened-field inventory spans tables, and the tunnel label is in it
+
+ROADMAP **O29**, round-four #21 — finding #5 / O17 exactly, one table over.
+
+A tunnel `label` had no guard at all: not `validate_name`, not the admission
+screen. It is written by an agent (`undercroft_create_tunnel`) and read back
+verbatim by another (`undercroft_list_tunnels`, `undercroft_follow_tunnel`),
+so `ignore previous instructions …` reached a later session intact — 56
+bytes, no control characters, no path separators.
+
+**It survived O17 because that unit's inventory was named for the graph.**
+`KG_SCREENED_FIELDS` is gone; `admission::SCREENED_FIELDS` replaces it, keyed
+by `(owner, field)` so ONE inventory spans two tables and the
+both-directions gate can dispatch to the right choke point. The screen moved
+to `admission::screen_agent_text` and `screen_kg_record` delegates; the
+`object` size bound stayed in `kg.rs`, being the one rule that really does
+belong to a single field.
+
+**`validate_name` by analogy to `predicate`, not to `object`.** O17 declined
+the traversal guard on an object because an object is content that may
+legitimately carry punctuation and newlines; a label is the relationship
+DESCRIPTOR ("why related", per the tool schema), which is what a predicate
+is. The argument that does NOT work — and was reached first, then refuted by
+reading — is "the label is in the id recipe, so it is identity": `object` is
+in the triple-id recipe too. It does incidentally make that recipe injective,
+which it was only by accident, the label being last.
+
+Refused rather than diverted, on O17's reasoning: a tunnel has no wing, no
+review queue and no ruling to divert to. Screening stays declared-never-
+defaulted, so a default vault's tunnel contract does not move; the
+`validate_name` half applies always, and has an `UPGRADING.md` entry.
+
+**Gate executed**, both tests observed to fail against the reverted guards —
+the poisoned label was accepted and returned a tunnel id. The focused test
+asserts the READ first, because a refusal proves nothing unless the value
+reaches a reader.
+
+**The sibling sweep this entry demanded found two more instances, and one is
+worse — filed as O32.** An agent-chosen WING name reaches `taxonomy`,
+`closets` and `stats` unscreened (measured: one hit each, with clean content
+and the queue not growing), and a diary AGENT name reaches `diary agents`
+through `wing = agent-{agent}`. `diary_write` itself is clean — it funnels
+into `upsert_screened`. Not folded in: it alters the security verdict of
+every write path on every surface and needs a divert-not-refuse decision the
+tunnel case does not. Note where the answer was: partly INSIDE `drawers`, in
+a column the sweep's own question ("outside `drawers` and the graph") had
+excluded by wording.
+
+### the screen validates the declaration it is about to rewrite
+
+ROADMAP **O30**, round-four #20. Two halves that compounded, plus a third
+defect found while closing them and reported here as this unit's own.
+
+`write_drawer` ran the admission screen and `write_drawer_stmts` ran
+`validate_name` — in that order. A diversion is the step that **rewrites the
+fields validation reads**: `admission_divert` moves the declared wing into
+`intended_wing` and writes the reserved constant into `meta.wing`. So a write
+declaring a path-traversal wing was not refused; it was screened, and if the
+content tripped the detector it was DIVERTED, after which the choke point
+validated a value the store itself had chosen. The row landed in the review
+queue carrying a declaration nothing had ever checked.
+
+Then it could not leave. `admission_allow` restored `intended_wing` and
+`intended_room` checking only that they were non-EMPTY, so the restore
+reached the choke point and was refused there — with a message naming
+neither the field, nor the row, nor the fact that the value came out of the
+queue rather than off the request. The operator saw a generic write error.
+The one ruling that worked was **deny**, i.e. destroying content they had
+just decided to keep.
+
+**The fix is one function inside the shared screening step.**
+`admission::validate_declaration` runs on `screen_and_divert`'s `Apply` arm,
+in front of the rewrite, and the write choke point now calls the same
+function instead of the two `validate_name` lines it carried. Door and
+boundary — the `resolve_search_policy` / `verified_meta_admits` shape one
+level over — and one implementation rather than two. `admission_allow`
+validates what it restores itself, naming the row, the field, the value, the
+reason and the recourse.
+
+**Three things reading found that the filing did not.**
+
+* **`validate_name(value, what)` discarded `what`**, with a `let _ = what;`
+  to silence the unused-parameter warning. All 44 call sites pass a real
+  label — `wing`, `room`, `subject`, `from_wing`, `canonical_key`, `entity`,
+  `vault` — and every refusal in the tree rendered the same
+  `invalid name "…"`. O30's gate asks for a refusal that NAMES the field, so
+  this was on the critical path rather than beside it.
+  `CoreError::InvalidName` is a named-field variant now, and
+  `validate_kind`/`validate_trust` label themselves too. The pinning test
+  covers **all three** rejection arms: only one of them carried the visible
+  discard, so a fix aimed at that line would have left the other two.
+* **Two write paths had the ordering, not one.** `upsert_many` screens in
+  its own batch loop — it owns its transaction and cannot reach the choke
+  point — and validated afterwards, exactly as `write_drawer` did. A fix at
+  `write_drawer` alone would have left every bulk ingest, which is what a
+  CLI `import` and every sealed-bundle restore take, with the defect intact.
+* **`screen_and_divert` has three callers and its doc comment said "both
+  write paths".** The third is `dedup`'s dry-run preview. The compiler found
+  it when the function became fallible; nothing else would have.
+
+**The reachable door is IMPORT, not save.** CLI `remember`, MCP and
+`POST …/drawers` all validate before reaching the store, so the three save
+surfaces were never the way in. `import_record` deserializes a whole `Drawer`
+out of a payload — which is why `/v1` import already listed "bad name" among
+its refusal classes while that refusal only fired for content the detector
+had passed.
+
+**Gate, executed.** Five tests, each observed to FAIL against the reverted
+code: the invalid declaration returned `Ok(SaveOutcome { quarantined: true })`
+and the stuck row's refusal read
+`invalid operation: invalid name "notes/../etc": …`. Every one carries a
+premise arm — the fixture must actually trip the detector and the same
+content in a valid wing must actually divert — because without that a green
+result is indistinguishable from a store with screening off. The pre-fix
+queue row is built the way the pre-fix binary built one, under
+`Bypass(AlreadyDiverted)`, since the ordering fix means no reachable path
+produces one any more.
+
+**Real corpus**: 1,360 drawers mined into 16 wings with admission on. Poison
+into a valid wing diverts (queue 0 → 1); the same poison declared into
+`ops/../etc` is refused naming the field and the queue does **not** grow; a
+legitimate queue row still allows; `verify` 9 ms, green. Stated honestly, the
+first corpus arm was weaker than it looked — the LoCoMo feed is clean, so
+nothing tripped the screen and the invalid-wing mine would have been refused
+before the fix too. Reproducing the defect needed a poisoned document beside
+the corpus.
+
+**Residual, stated.** A row that reached the queue under an older binary can
+be denied but not allowed: the destination it records is one no write may
+use. `allow` now says so and names the recourse, which is a real path —
+`GET …/drawers/{id}?wing=quarantine-pending` exists for exactly this
+reviewer. Restoring such a row to a *different* wing would be new capability
+on three surfaces and is deliberately not filed as one, since no vault can
+now produce the state.
+
+**A second gap this unit found is FILED rather than folded in** (ROADMAP
+**O31**): an imported record declaring an ordinary wing beside an
+`intended_wing` takes neither of `import_unwrap_screened`'s branches, so a
+payload-controlled string reaches disk unvalidated. It is inert today —
+every reader of those fields checks the wing first — which is exactly what
+makes it a gap with a shape rather than a defect to half-land beside this
+one.
+
+### a wing the tier already covers no longer materializes its own membership
+
+ROADMAP **O19**, split out of round-four #6 rather than folded into it,
+because it is a second decision with its own recall argument.
+
+When a query names a `wing` **and** a bare `TrustClause::Exclude` is in force
+— the quarantine fence, or a vault trust floor — `search_inner` took the arm
+that materializes `Only(wing minus excluded)`: the wing's whole membership
+set. The per-wing PQ index never needed it. That tier scans the wing's *own*
+cache, so it generates inside the wing by construction; the only thing that
+had to be materialized was what the fence EXCLUDES.
+
+**The fix is one match arm at the call site.** `resolve_seq_filter` already
+answers `AllBut(excluded)` whenever nothing positive is narrowing, so the
+defect was only ever which call it received. A wing the tier covers, beside a
+pure `Exclude`, now asks for `resolve_seq_filter(None, None, None, trust)` —
+the wing leaves the NARROWING, never the query. O(excluded) instead of
+O(wing).
+
+**Three ways it could have been silently wrong, each checked by reading the
+code rather than assumed.** The exclusion still reaches the ACCELERATOR: the
+hydration SQL builds its `WHERE` from `opts` and `trust` independently of
+`scope`. It still bounds CANDIDATE GENERATION: `wing_pq_candidates_in` does
+`scored.retain(|(_, seq)| s.admits(seq))`. And the BOUNDARY was never the
+clause but `verified_meta_admits` (A28). Nor is there a starvation risk of
+#6's kind — that generator scans the wing's own cache and returns `None`,
+not global candidates, when the wing has no index.
+
+**The decision is extracted (`resolve_scope`) so the gate drives the
+ROUTING.** The whole defect is which call `resolve_seq_filter` receives, so a
+test of that function would have passed on both trees — the O26 lesson one
+unit later. Counterfactual executed: with the arm removed, `materialized()`
+is **64** where the test wants **1**.
+
+**The recall arm is a proof rather than a sample**, which is more than the
+filed gate asked for. `scoped_pool_k(h, n) = h.max(n/64).max(n.min(FLOOR))`
+is monotonic non-decreasing in `n`, so counting the whole wing rather than
+wing-minus-excluded can only raise the pool; and an exclusion answers
+`narrows()` false, which is precisely the condition under which the tier
+applies `k.max(live / pool_div)` and raises it again. Both asserted, walked
+across the band boundaries instead of sampled at one size. Three negative
+controls: without the tier the wing must still narrow, a declared room must
+still narrow, and an `Allow` must still narrow — that last is the one way
+this fix could have been actively wrong, since dropping the wing beside a
+positive narrowing would widen the scope rather than cheapen it.
+
+Real corpus: the LoCoMo feed in one wing above a declared
+`UNDERCROFT_WING_PQ_MIN` under `UNDERCROFT_RETRIEVAL=pq`, ten queries drawn
+from the corpus itself, fence down then up — 10/10 both ways. The fix changes
+cost, not answers, which is what the entry always said it was.
+
+### a published figure is counted against an inventory, not remembered
+
+ROADMAP **O28**, and it found a live one on its first run.
+
+A number in prose is a claim about the moment someone last counted. This
+project's published figures have rotted repeatedly — the landing page's
+cargo-test tile was set to 660 by the very commit that added four tests, and
+its e2e tile read 508 against a true 541, stale *before* the session that
+found it. The count-correction commit that preceded this one said so in its
+own message: a hand-maintained number with no gate. This is the gate.
+
+**`PUBLISHED_FIGURES`, counted both ways.** A new landing tile with no
+inventory row fails; a row naming no tile fails. Three classes, because the
+figures do not share one provenance: **derived** (recomputed from the tree —
+`mcp tools` from `MCP_TOOLS`, `live backends` from the `run_backend_suite`
+invocations), **measured** (only a run produces it), **claim** (`bytes phoned
+home` is the local-first invariant, not a count, recorded so it cannot be
+mistaken for an unchecked number).
+
+**Two checks, because the static one cannot see the case that happened.**
+Every surface publishing a figure must AGREE, and the `e2e checks` tile must
+equal the SUM of the four components its row names. That catches a doc going
+stale between units — and it immediately caught `docs/MULTI_TENANCY.md`
+publishing a suite as 95 checks while it ran 110. But surfaces can be stale
+*together*, consistent and all wrong, which is exactly what happened here
+(`CLAUDE.md` published 335 e2e checks against a true 348). Only a run knows,
+so the battery now re-checks every published per-suite figure against what it
+measured, reports it as a **doc-drift verdict distinct from a suite failure**,
+and fails. Suites that did not run in that invocation are skipped, so a subset
+run does not raise an alarm on correct usage.
+
+Seven counterfactual arms executed against the preflight — new ungated tile,
+derived value drifting, the SUM ceasing to hold, a doc republishing a stale
+count, a suite count moving underneath a doc, a row naming a dead tile, and
+the extractor finding nothing — each exits 1, clean tree exits 0. Plus the
+post-run arm driven through a real subset battery: a deliberately wrong `site`
+figure reports drift and exits 1; the correct figure exits 0 silently.
+
+**Its own scope was narrower than it read.** The post-run comparison matched
+`(N checks` and cargo publishes none — its figure is `(N run,` plus a compiled
+total and a landing tile — so the first version covered every suite except the
+one whose number moves most often, and the very next unit moved it. Extended
+to the cargo run count, the compiled total and the tile, and proved on a LIVE
+instance: with the figures as they stood it named all three and exited 1;
+corrected, it exits 0 silently.
+
+**Two portability defects of my own, both caught by running rather than
+reading.** The first reader used awk's three-argument `match()`, a GNU
+extension; Ubuntu's default `awk` is mawk, and CI runs these preflights on
+ubuntu-latest, so it would have read empty there. The second: the character
+class `[a-z-]+` excludes digits, so `e2e` truncated to `e` and every suite
+name was wrong — found by looking at the reader's output instead of trusting
+that it ran.
+
+### the replay detector covered one suite of eight
+
+ROADMAP **O27**, found by a battery of mine going red and worth more than the
+red was.
+
+O15 closed "the battery's own test count intermittently over-reports" by
+pairing each cargo target HEADER with the result under it and naming an
+orphan as a premise failure. That reader keys on `Running` and `Doc-tests` —
+which **only cargo emits**. The seven shell suites print a single
+`<suite> results: N passed, M failed` line and were read with `| tail -1`,
+which takes the last one and says nothing when there is more than one.
+
+**Observed, not theorised.** A `backends-e2e` log on this branch carried
+`56 passed, 1 failed` at line 164 and `54 passed, 3 failed` at line 181, with
+the weaviate block re-emitted between them. `tests/e2e-backends.sh:157` prints
+its summary exactly once, as its final statement, so more than one in a log is
+definitive rather than heuristic: that log is not the record of one run. The
+battery still failed correctly — it decides on exit codes, by design — but the
+FIGURE it printed was one of two contradictory candidates, and figures are
+what a session copies into `CHANGELOG.md`, `CLAUDE.md` and the handover. That
+is exactly how O15 itself was found, one suite over.
+
+`suite_summary` counts the summary lines and appends a named premise failure
+when the count is not one. Three arms mirror the cargo reader's: a clean log
+reads correctly, a doubled log is NAMED, an empty log says it examined
+nothing rather than printing a clean zero. The doubled fixture uses the real
+numbers from the contaminated log, so the arm fails if anyone reverts to
+reading the last line.
+
+Counterfactual executed against the artifact: with the `n > 1` branch
+disarmed, the preflight prints *"two summaries in one log were absorbed
+silently"* and exits 1; restored, it exits 0. Measured **unpiped** — the first
+attempt read `sed`'s status through a pipeline, which is the hazard this
+script exists to teach, committed while testing the script that teaches it.
+
+**One deliberate absence, found by running the fix rather than reading it.**
+`lint` prints no summary line and never has, so the new reader answered *"this
+reader examined nothing"* beside a green `lint` on every run — a message
+misdescribing its own situation, and the SAME string that is a real signal for
+the other seven suites, which is how a reader learns to skip it. `lint` is a
+named third branch now, with its reason, and its detail column is blank as it
+always was; its verdict was never in question, because the exit code carries
+it.
+
+The contamination that produced the doubled log was mine: three batteries
+stopped mid-run left the backends stack warm, and the `push` failures were
+`already exists` against state a previous pass had created. That is the
+trigger, not the defect — the defect is that a log which cannot be a faithful
+record of one run read exactly like one that is.
+
+### the plane that mints an erasure receipt can check one, and a signature with no sender is refused
+
+ROADMAP **O14**, plus a second defect found while doing it.
+
+`POST /v1/…/forget` destroys drawers and returns a chain-attested receipt.
+Nothing on `/v1` could check one: `verify_forget_attestation` had exactly one
+non-test caller in the whole tree, `Command::VerifyForgetting`. So an operator
+driving the HTTP plane could MINT a right-to-erasure receipt they had no door
+to verify — and on a multi-tenant deployment the HTTP plane is the *only* door
+an operator has, which made it not merely asymmetric but unreachable.
+
+`POST /v1/vaults/{id}/verify-forgetting` takes the document in the body and
+answers a **typed** verdict: `verified` or `recorded`, the second carrying
+`rotations_since` and `keyed_replay: "unavailable"`. The two make different
+claims — `recorded` means a key rotation destroyed the MAC key that made these
+tombstones, so the vault's preserved audit trail holds them contiguously
+instead (O13) — and a client keying on a substring of an English sentence is
+exactly how the CLI nearly shipped them as one. A document that does not
+describe this vault is **409 + `class: "integrity"`**, straight out of
+`store_err`, which is the same set `integrity_verdict` exits 2 on; a malformed
+body is 400.
+
+**Three inventories, and the entry's filed gate named none of them.** They
+came out of a diff-level pass over the dependency map, which had explicitly
+recorded that it had only been done at entry level:
+
+* `mutates()` **fails closed**, so a POST that reads must be NAMED there.
+  Without the entry a `--read-only` server would refuse this pure read while
+  the CLI performed the identical check on the same vault — the posture drift
+  that function exists to end, reintroduced by the route closing another one.
+* The orchestrator's `OPS_ROUTES` is a **closed vocabulary** bound to
+  `ops_alias` by test. A route in neither is unreachable in a fleet, so an
+  engine-only fix would have closed the drift for the single-tenant operator
+  and left it open for the one the entry was written about. That table's own
+  comment already describes this shape: it exists because a fleet operator
+  could reach only the receipt-LESS deletion while the surface next door
+  minted a signable attestation. Minting and never verifying is that
+  asymmetry one step on.
+* `engine_ops`, inside
+  `every_operator_capability_is_reachable_or_recorded_as_absent`, is a
+  hand-maintained literal — a route absent from it is counted in NEITHER
+  direction, so the gate whose job is to force every capability into
+  *reachable* or *recorded-as-absent* stays green over an unclassified one.
+
+**The second defect: a signature with nobody to check it against was
+skipped, and reported as verified.** `ForgetAttestation::sign` writes
+`sender` and `sig` together, but `verify_forget_attestation` verified only
+when both were present, and the CLI printed `"; sender signature verified"`
+on `sig.is_some()` **alone**. `sender` is the public key the signature is
+checked against, so a document with it stripped is attributable to nobody —
+and the one surface whose entire third-party posture is that signature said
+it had been verified by its sender. It is refused now, with the CLI naming
+the sender it actually checked. Tightening a shape `sign()` never produced is
+a fix, not a contract change; `UPGRADING.md` carries it because a hand-built
+document could hit it.
+
+Counterfactuals, both executed: reverting the store guard makes the new arm
+answer `Ok(Verified)` for a document nothing authenticated; removing the
+`mutates` entry makes the read-only arm fail with 403 against 200.
+
+**The fourth renderer got it too, and it is the one that mattered most.**
+`ui.html`, the console served at `GET /ui`, has a panel that mints a receipt
+and tells the operator *"Save the receipt: it is the only proof afterwards"* —
+with no door to check one. Closing this on `/v1` and stopping would have left
+the drift on the surface most operators actually drive. The console now takes
+a pasted receipt, hands `forget`'s own output straight to the checker, and
+keeps VERIFIED and RECORDED apart in the toast rather than collapsing them,
+which a UI is the easiest place to get wrong.
+
+No `OPERATOR_ONLY` entry is owed and that is a finding, not an omission: the
+list holds capability substrings asserted absent from every advertised MCP
+tool name, and `"forget"` already matches anything such a tool could be
+called. The boundary was enforced by an entry that predates the route.
+
+Gates: two store arms (the refusal, and the two directions that must stay
+legal), two `/v1` tests (every verdict including across a rotation, and the
+read-only posture with the minting route refused on the same server beside
+it), 13 e2e checks driving all of it through `/v1` and the console —
+including the CLI and the route agreeing on **one document from both doors**
+— and 3 orchestrator e2e checks driving the round trip through the ops plane
+and its CLI alias.
+
+Measured on a real corpus rather than a fixture: 1,360 LoCoMo-mined drawers
+across 16 wings, one destroyed and attested; CLI 5 ms, `/v1` 9 ms, same
+verdict for the same document, and the signature refusal driven on a genuine
+receipt. The corpus probe's own premise arms fired twice — it refused to
+report a timing over a vault whose drawer count it had mis-parsed.
+
+### the trace scanner decompresses, and the gap it was filed as was not the one it had
+
+ROADMAP **O26**, and the entry describing it was wrong about its own
+mechanism — which is the part worth reading, because the wrong description
+came from this campaign.
+
+O26, `CLAUDE.md` and `71e653b`'s own commit message all said the tracked
+scanner *skips* `.pdf` via `SKIP_BIN`. The hand-run original
+(`.handover/verify-no-trace.py:17`) does: `\.(png|pdf|ico|jpg|jpeg|woff2?)$`.
+**The port dropped `pdf` from that list**, and nobody read the line. So
+`tests/no-trace/verify.py` opened all eleven tracked PDFs in TEXT mode with
+`errors="ignore"`, scanned them for needles that cannot survive DEFLATE, and
+**counted them in `files scanned`**. That is a worse defect than the one
+filed: an admitted skip is visible in the arithmetic, false coverage reads
+exactly like a clean result. Reported as my own — `71e653b` is on this branch.
+
+The scan now walks every `stream`/`endstream` payload, inflates the ones whose
+dictionary declares `/FlateDecode` (zlib-wrapped, then raw deflate), and runs
+the same needle set over what comes back. A payload that will not inflate is
+**counted, not dropped**, and a PDF that declares `FlateDecode` while yielding
+no readable stream is a **premise failure** rather than a clean file — the
+distinction the whole scanner exists to preserve, one level down. No PDF
+parser: a needle scan does not need one, and a partial parser that misreads an
+object fails the way this gate exists to prevent, so the filter is read from a
+bounded window before the keyword and anything unrecognised is
+inflated-or-counted rather than interpreted.
+
+**The counterfactual was run against a real tracked PDF, not the synthesized
+one.** A Flate stream of `architecture/pdf/layers.pdf` was re-compressed with
+the former name inside it, asserted absent from the file as a literal, and fed
+to both scanners as an extra path. The version as shipped: **0 hits, exit 0**,
+`files scanned: 373`. The version here: `latin name 1` at
+`poisoned.pdf:7`, exit 1.
+
+**The probe measures the ROUTING, not the extractor**, and that choice is the
+whole value of it: an `IS_PDF` that fails to match sends every PDF down the
+text path and the stream walk is never called, while a probe of the walk by
+itself passes cleanly. It plants a needle in a compressed stream of a real
+temp file, asserts the literal did not survive compression (or the hit would
+prove only that the text scan works), and runs it through `scan()`. Second
+counterfactual executed: with `pdf` restored to `SKIP_BIN` the probe answers
+`PREMISE FAILED — a .pdf was not routed to the stream walk (pdfs=0,
+streams=0)`, not a clean tree.
+
+**A second, smaller false-coverage line went with it.** `files scanned` printed
+`len(paths)` — every path handed in, skipped ones included. It read 372 for a
+walk that examined 292. It now reports files read, skipped and unreadable
+separately, plus streams examined and unexamined, and `tests/battery.sh` passes
+those lines through verbatim instead of cutting the output at a substring and
+re-inserting the words with `sed` — a second copy of the scanner's format that
+had already stopped matching.
+
+Measured at this tree: **292 files, 119 streams across 11 PDFs, 0 unexamined,
+0 hits.**
+
+### the control plane emits telemetry, on its own listener
+
+ROADMAP **O20** — the last of the pair O25 unblocked, and the maintainer's
+ruling is what shaped it.
+
+`crates/undercroft-orchestrator` had no `undercroft-obs` dependency at all: no
+`/metrics`, no OTLP, no spans. A tenant request proxied through `/t/*`
+appeared in an engine's telemetry with no record of the hop that routed it.
+
+**`/metrics` is a SEPARATE listener** (`UNDERCROFT_ORCH_METRICS_ADDR`, unset =
+off), not a path on the serving port, and the reason is structural rather than
+stylistic: `proxy::serve` binds ONE `Server::http(addr)` for `/healthz`,
+`/t/*`, `/admin/*` and `/ui`, and a fleet must expose that address to tenants
+— so a `/metrics` path there is network-exposed in every real deployment and
+"loopback is the gate" would be a comfort production never gets. Splitting it
+lets the data plane sit on `0.0.0.0:8900` with metrics on `127.0.0.1:9900` for
+a sidecar scraper, and it is what makes `serve --read-replica` work unchanged:
+the replica resolves no admin token and now needs none.
+
+Loopback needs no token; **any other address refuses to start** without
+`UNDERCROFT_ORCH_METRICS_TOKEN` — mirroring the engine's refuse-to-bind rule
+rather than inventing a second posture, and deliberately not the admin token,
+which creates tenants and reads engine bearers and would sit in a config file
+on every Prometheus host.
+
+**This differs from the engine deliberately and it is a boundary, not a
+drift**: the engine's single listener can legitimately be loopback-only, so
+path-gating `/metrics` behind its bearer is sufficient there. The control
+plane's cannot be.
+
+**Four counters and a histogram, `undercroft_orch_`-prefixed**, each an event
+no engine can see: requests by route CLASS and status (never the URL — the
+forwarded query carries `wing=`/`room=`), refused credentials by kind (three
+different secrets the engine's single `{kind="bearer"}` would have merged),
+the rate screen firing (an operator who declared a limit had **no surface
+saying it ever fired**), and engine-call outcomes including `refused`, which
+happens before a byte moves. The prefix is load-bearing: the shipped dashboard
+aggregates several engine series with no `job` filter and the route strings
+`healthz`, `ui`, `metrics` collide exactly between the two binaries.
+
+**No tenant-shaped label anywhere.** Tenant id, vault name and tenant name are
+identifiers whose value set is created BY USE, which the per-wing codebook
+precedent puts on a query surface rather than a metric label; per-tenant
+figures are already on `/admin/tenants/{id}/stats`. **Gauges are omitted**
+because the shared gauge callback hard-codes a `vault` label — replication lag
+stays on `/healthz` rather than being smuggled into a field named for
+something else.
+
+Verified over a **real fleet**: two tenants (`acme-corp`,
+`globex-industries`), an engine holding 1,360 mined drawers, the data plane on
+`0.0.0.0` and metrics on loopback. All four counters moved for real traffic,
+neither tenant's id, vault or NAME appears anywhere in the exposition,
+`/metrics` is absent from the data-plane port and the metrics port serves
+nothing else, and the engine's own exposition is unchanged and carries no
+`orch` series.
+
+**Four defects of my own, every one caught by a mechanism rather than by
+care:**
+
+1. **The binary never called `undercroft_obs::init()`** — every emit site and
+   the listener wired, and the thing that creates the registry forgotten. So
+   `/metrics` answered 503 *"build with --features telemetry"* on a binary
+   that had the feature. Caught by the e2e; the message conflated two causes
+   and is narrowed to the one it can mean.
+2. **`config check` could not see the token rule at all.** It only iterates
+   declarations that are SET, so a non-loopback address with no token declared
+   was invisible — the pre-flight exited 0 for an environment that refuses to
+   start, which is the exact promise it exists to keep. The ADDRESS arm checks
+   the token now, in both pre-flights. **Found by a premise probe on the
+   corpus run, not by any test.**
+3. `histogram_record` was `pub(crate)` — caught at compile.
+4. **The engine's `config check` had no arm for the two new variables**,
+   caught by O24's both-directions gate within minutes of classifying them.
+
+**Two residuals, stated rather than absorbed:** no Prometheus scrape job or
+alert rules ship for the control plane (`prometheus.yml` has one
+`job_name: undercroft` and `alerts.yml` hard-codes `up{job="undercroft"}`), and
+these are fleet aggregates, so at small fleet sizes an aggregate approximates
+an individual — inherent to publishing aggregates, bounded by fleet size, and
+accepted on the ruling that suppressing by fleet size would make the metric
+surface vary with it.
+
+No `UPGRADING.md` entry is owed: both variables are new, so nothing an
+existing deployment declares can change behaviour.
+
+### `/metrics` stops reading across the assertion boundary
+
+ROADMAP **O25**, found by the adversarial review commissioned for O20 and
+fixed by a third option neither of the two filed there.
+
+`/metrics` is served immediately after the palace bearer and **before**
+`tenancy.authorize`, where `UNDERCROFT_ASSERTION_SECRET` is enforced — because
+the route addresses no single vault, so the per-vault gate never applied to
+it. The gauges are labelled per vault. On a deployment that declared
+assertions, whose entire contract is *"a bearer alone reaches no vault on
+either path"*, a caller authorized for vault A read vault B's record counts,
+chain height, KG size and database bytes, while the banner said "per-vault
+assertions required" without qualification.
+
+Narrowed until now by an **accident, not a boundary**: gauges are populated
+only for vaults with an active stream subscriber — a cost optimisation that
+would have silently widened the disclosure the moment anyone made sampling
+unconditional.
+
+**The fix was decided by a measurement.** Both filed options failed the impact
+analysis: `render_prometheus()` takes no caller identity, and an assertion
+binds exactly ONE vault id, so filtering to the caller leaves a scraper needing
+a fresh time-boxed assertion per vault per scrape. What settled it is that
+**not one rule in `alerts.yml` evaluates a vault-labelled gauge** — all six
+series it uses are vault-blind counters and histograms. So under a declared
+assertion secret the exposition suppresses every vault-labelled series and
+keeps the rest: alerting untouched, per-vault census gone, and the detail
+still available on `/v1/…/stats`, which is assertion-gated. The suppressed set
+derives from `GAUGE_NAMES`, so a gauge added later is covered automatically.
+Aggregating was considered and rejected — a caller who knows A recovers B by
+subtraction.
+
+**The gate needed two arms and the first version had one, vacuously.**
+Measured: a fresh server exposes **zero** `vault=` series until `/v1/…/stats`
+runs, so a check that scrapes and finds no vault label *passes on the broken
+code* — which is what the first draft did. It now populates a gauge through a
+minted assertion before scraping, and runs a **control server** with the
+secret unset through the same sequence which must expose the label. One config
+difference, opposite result.
+
+One defect of my own, caught by the unit test's premise arm on its first run:
+`let _ = init()` drops the telemetry guard at the end of the statement, and
+`TelemetryGuard::drop` calls `shutdown()` — tearing down the process-global
+meter provider and failing a neighbouring test outright. Both telemetry tests
+leak the guard now, since it is a process-lifetime handle rather than a
+per-test one; looped 6/6 before being believed.
+
+`UPGRADING.md` gains an entry: the only deployments affected are those that
+declare assertions *and* scrape those gauges, and their per-vault detail moves
+to a route that was always assertion-gated.
+
+### the trace verifier is tracked, invoked, and probes itself
+
+ROADMAP **O10**, taken with O15 because both own `tests/battery.sh` and
+landing scanners one at a time is how this tree got two differently-broken
+ones.
+
+The former-name trace check covered six file-content classes a plain grep
+cannot see — a non-Latin spelling sharing no byte with the Latin one, a
+truncated root used as an identifier stem, base64 inside a certificate, the
+identity carried without the name. It was run **by hand**, from a gitignored
+directory a fresh clone does not carry, invoked by no suite, no preflight and
+no workflow. The instance is on record: a comment added to explain the
+derived-name defect **quoted the former name**, this check would have caught
+it, and the eight-suite battery was green across it.
+
+`tests/no-trace/verify.py` is tracked now and a seventh preflight invokes it
+**in a container** — a gate needing Python on the host is a gate that does not
+run on the next machine — with the tracked list piped in so the image needs
+neither `git` nor an `apt-get`. **Docker absent is a failure, not a skip.**
+
+Both constraints the entry named are met, and both were verified by running
+rather than reading. Every needle is assembled from fragments at run time, so
+the file holds no matchable literal: it **scans itself and reports 0 hits**,
+rather than being excluded by path — which would be the unfalsifiable
+second direction round three found. And a `probe()` runs before any scan:
+every pattern must fire on its own synthesized positive and stay silent on
+clean control text that deliberately includes the ordinary English word
+sharing the root.
+
+Three counterfactuals executed: a planted known-positive is caught at
+file:line (the preflight plants one on **every** run before trusting the
+scanner); the scanner finds nothing in itself; and with the pattern set
+emptied it fails with *"the pattern set is EMPTY — this scanner would report
+any tree clean"*.
+
+Three defects of my own, all found by running:
+
+1. The self-test's `if !` was inverted — a working scanner reported as broken.
+2. The plant was written to a `mktemp -d` path and passed as a second Docker
+   mount; a Git Bash temp path does not resolve through `MSYS_NO_PATHCONV`, so
+   the file never existed in the container and the scanner "found nothing" —
+   **a self-test that silently tested an empty directory**, the exact shape it
+   exists to prevent. It is written inside the mounted repo now.
+3. The failure headline said *"the former name is present"* for a PREMISE
+   failure. A disarmed scanner is not a dirty tree; it branches on the output.
+
+**One gap found and deliberately not closed:** the Flate-compressed
+content-stream class — the one `CLAUDE.md` records as having passed a clean
+`grep` across 17 historical PDF blobs — is unexamined. That class was never
+among the six, so it is a gap in reach rather than a regression, and it is
+filed as **O26** with its shape and gate rather than left as a silence.
+
+> **Corrected 2026-08-13, closing O26.** This paragraph said the scanner
+> *skips* `.pdf`, and so did O26 and `CLAUDE.md`. All three described the
+> hand-run original. The port above dropped `pdf` from `SKIP_BIN` and nobody
+> read the line, so the tracked scanner opened all eleven PDFs in text mode
+> and counted them as scanned — false coverage, not an admitted skip. See
+> the O26 entry below.
+
+### the battery's own count is read by pairing, and a replayed tail is named
+
+ROADMAP **O15**, taken first because the dependency map says so: every unit's
+governance step reports a test count, and this defect corrupted it
+**intermittently** — two batteries the same hour on the same tree produced one
+duplicated log and one clean one. A figure that is sometimes right is harder
+to catch than one that is always wrong, because nobody re-derives a number
+that looked plausible last time.
+
+`docker compose run` sometimes replays the tail of the container's stream, so
+`.battery/test.log` ends with a duplicated block whose result lines have no
+`Running`/`Doc-tests` header above them. Summing every `test result:` line
+reported a run that executed 694/4 as **1016/8**.
+
+`tests/battery.sh` now pairs each target header with the result beneath it and
+sums only paired results. An unpaired result is printed as a loud **PREMISE
+FAILURE** naming the orphan count — never dropped, because it is the only
+visible symptom of the replay and a reader that absorbed it could no longer
+report that the stream had been duplicated at all. A reader that examined
+nothing says so rather than printing a clean zero.
+
+**The gate is the deliverable, and it is why this is a function rather than
+inline awk:** a new host-side preflight runs the SAME code on synthetic input
+— a clean three-target log, that log with a duplicated tail appended, and
+`/dev/null`. A gate that re-implements what it checks agrees with itself by
+construction, which is how this script's own first ROADMAP-heading check
+shipped broken. Counterfactual run rather than assumed: with the orphan branch
+emptied, the preflight fails with *"the replay was absorbed silently"* and the
+battery exits 1. CI already invokes `--preflight-only`, so it binds a pull
+request with no wiring.
+
+Two defects of my own while closing it, both caught by mechanisms:
+
+1. The failure path was `FAIL=$((FAIL + 1))` — a counter this script does not
+   have; every other preflight ends in `exit 1`. The gate would have printed
+   its complaint and let the battery continue: **a checker that cannot fail,
+   inside the gate written to catch that class.** Found by reading how the
+   neighbouring preflights actually fail instead of assuming.
+2. The block was anchored on the line-endings preflight's `echo` and inserted
+   above it, orphaning that preflight's twelve-line comment onto my section.
+   *Read what is adjacent to the anchor.* Relocated, with the comment
+   rejoining its own `echo` asserted before the move was written.
+
+Measured at this tree: `722 passed, 0 failed, 4 ignored over 20 targets`,
+matching a hand-derived pairing exactly. The 20 is 12 binaries + 8 doc-tests,
+counted from the log — `undercroft-config` added one of each, which is also
+why the recorded 18 was already stale. The preflight count in `CLAUDE.md` goes
+five → six for the same reason: a number that is written down is a number that
+has to be re-counted.
+
+### the promise six surfaces made is kept, by sharing the parses rather than narrowing it
+
+ROADMAP **O24**, and the thirteenth crate.
+
+`undercroft config check` is documented in six places — `UPGRADING.md`,
+`ROADMAP`, `README`, `docs/AGENTS.md`, `CLAUDE.md` and
+`architecture/index.html`'s **doctrine paragraph** — as validating every
+`UNDERCROFT_*` declaration. Three were not validated: `UNDERCROFT_ORCH_KEY`,
+`_ADMIN_TOKEN` and `_RATE_LIMIT`, whose parses lived inside
+`undercroft-orchestrator`, which the engine deliberately never links.
+
+**The first attempt narrowed all six documents to match the code.** That was
+backwards, and three things in the tree said so before any of them was
+edited: the engine's own `ENGINE_ENV_VARS` already CONTAINED those names;
+`UNDERCROFT_ORCH_ENGINE_CA` was already validated by that very command; and
+the three parses are pure string→value, so *"never linked by the engine"* —
+which forbids a crate dependency — was used to license something it does not
+cover. **When a claim is consistent across every surface including the
+doctrine, the prior is that the CODE is wrong**; several documents do not
+independently invent the same promise. That rule is now in `CLAUDE.md`, and
+the wrong draft is kept as **O24a** because what separated it from the right
+answer was not new evidence but reading the inventory the command already
+iterates.
+
+**`undercroft-config`** is a leaf crate with two dependencies (`thiserror`,
+`hex`), carved out on the precedent `undercroft-net` set: a policy several
+crates need has one implementation, and when the crates that need it cannot
+link each other it gets a home neither owns. `Orch::open`,
+`Orch::open_read_only`, the `serve` arm, `undercroft-orchestrator config
+check` and the engine's `check_declaration` all call one function each —
+which also removed the key decode that was written out twice inside the two
+opens.
+
+Placement was decided by the doctrine rather than by preference.
+`undercroft-core` would put deployment-config parsing in the crate documented
+as *"domain model, chunking, ids, normalization"* and charge the control plane
+unicode-normalization, `calendrical_calculations` and `time` for three string
+parses. `undercroft-net` correctly keeps the two declaration resolvers that
+ARE transport and correctly does not take these.
+
+**`PREFLIGHT_EXEMPT` is now empty of engine-reachable entries** — nothing is
+exempt from `config check` for being a credential or for belonging to another
+binary. Both gate directions were run rather than assumed: with the
+exemptions deleted and one arm disabled, the both-directions gate fails with
+*"UNDERCROFT_ORCH_KEY — Protects, but this command runs no parse for it"*;
+restored, it passes. Five new `e2e.sh` checks (330 → 335) drive the **engine's**
+command over an empty bearer, an unpresentable one, a bad key and a bad rate
+limit — and over an **empty rate limit, which must stay the default**, since
+that one is a closed vocabulary and takes the opposite answer from the two
+secrets.
+
+One self-inflicted defect, recorded: that last check failed on its first run
+for the right reason and the wrong cause. An earlier check deliberately leaves
+an unpresentable bearer exported, and `config check` reports every
+declaration, so the exit code said nothing about the subject. A check must
+isolate its own subject; it resets the bearer first now.
+
+### the control plane can be pre-flighted, and its admin bearer could not be presented
+
+ROADMAP **O21**. `undercroft config check` runs the ENGINE's resolvers; four
+`UNDERCROFT_ORCH_*` declarations are read by a different binary, and that
+binary had no pre-flight command at all. Three of them sat on the engine's
+`PREFLIGHT_EXEMPT` list as *"orchestrator-owned"* while `UPGRADING.md` told
+operators that exit 0 means none of its entries affect them — a promise
+narrower than it read, with nothing on either surface saying so.
+
+`undercroft-orchestrator config check` (and `config-check`, both spellings
+from the start rather than after a doc was found wrong). It opens no state
+database, binds no port, and every arm calls the **same resolver the serve
+path calls**.
+
+**Extracting those resolvers is most of the value, and it removed a second
+implementation on the way.** The orchestrator key was hex-decoded inline in
+`Orch::open` AND `Orch::open_read_only` — one decision in two places, neither
+reachable without opening a database; it is now `resolve_orch_key`, which also
+distinguishes *absent* from *not hex*, previously one message for both. The
+admin token's 16-character floor was an `if` in the `serve` arm.
+
+**And that floor was hiding a live defect, the twin of the one closed above.**
+`UNDERCROFT_ORCH_ADMIN_TOKEN=$(cat /run/secrets/token)` over a file ending in
+a newline **clears a length floor** — a newline has length — so the control
+plane started cleanly and refused every `/admin` request forever, because HTTP
+strips a header value's trailing whitespace and the bearer that arrives is
+never the declared one. It was left out of the O22 commit deliberately: a bare
+guard beside the floor would have been a second implementation of a decision
+`resolve_mcp_token` already owns, and it belonged in the resolver this entry
+builds.
+
+The claim that the orchestrator's bearer behaves like the engine's was
+originally *transferred by reading* — same `tiny_http`, same untrimmed
+compare — and reading is not measuring. Measured directly against a live
+control plane fronting a real 1,360-drawer corpus: the byte-exact token with
+leading and internal whitespace answers **200**, the same value trimmed
+answers **401**. So the key is not edited, and the counterfactual for a future
+"fix" that trims it is a live 200.
+
+`config check` is exempt from the engine-hop CA refusal that runs in front of
+dispatch, for the same reason the engine's is exempt from telemetry init: a
+command whose job is diagnosing an environment that will not start is useless
+if it cannot start in one. It warns and reports the declaration as its own
+finding. That is the exempt list the surrounding comment declines to keep — it
+has exactly one member and an argument.
+
+Gates. `every_protects_variable_is_pre_flighted` over `ORCH_ENV_VARS`, with no
+exempt list at all: this binary reads four `Protects` variables and can check
+all four. `the_orchestrator_and_the_engine_agree_on_every_orch_variable` counts
+the two inventories against each other by **reading the engine's source**,
+which is the only route two crates that deliberately cannot link have — name
+and class, both directions, with a premise assertion because two agreeing
+empty sets read exactly like agreement. Both were run against a counterfactual
+(a flipped class plus an invented name) and both failed as designed. Nine new
+`e2e-orchestrator.sh` checks (98 → 107) assert the pre-flight and `serve`
+reaching the **same verdict** on the same declaration, which is the whole
+point of having two.
+
+**The drift check across surfaces found three more, and it was run because
+the maintainer asked for it rather than because the unit produced it** — the
+definition of done requires it and this unit had skipped it, going straight
+from a green battery to offering the commit.
+
+1. **A GATE existed on one binary and not the other.**
+   `every_subcommand_has_its_own_about_and_config_check_runs` lived only in
+   `undercroft-cli`, so the class it guards — a variant inserted between a doc
+   comment and the variant it documented, leaving one subcommand bare and the
+   other wearing two — was ungated in the orchestrator the whole time. That is
+   ROADMAP O18's shape, and this unit had just added two variants to the
+   ungated binary. Ported, **and it failed on its first run**: `config` and
+   `config-check` advertised identical help, so `--help` listed two
+   indistinguishable entries. Both reworded.
+2. **`docs/AGENTS.md` claimed `undercroft config check` runs "every
+   `UNDERCROFT_*` declaration"**, which is false for the four the control
+   plane reads. Corrected in four passages — §11, Scenario D's recipe, the
+   prove-it block and the orchestrator env reference, which described the
+   admin token as "≥16 chars" and now names the whitespace refusal.
+   `website/src/agents.md` is an `{{#include}}` of it, so one edit covers
+   both. `README.md` said the same thing in the same words.
+3. **A published shell command was broken**, pre-existing and found only
+   because the sweep read the file: Scenario D's `instance-add` carried a
+   **literal `\n`** where a line continuation belonged, so copying it ran a
+   command with `\n` as an argument. Fixed — and the first fix was a no-op,
+   because the nested quoting collapsed the replacement back into the string
+   it was replacing. That is this tree's documented escape hazard, and it is
+   why the byte-scan afterwards is not optional.
+
+Two self-inflicted defects, both caught by mechanisms rather than by care, and
+both worth recording. The e2e check for the trailing newline built its value
+with `$(printf '…\n')` — command substitution **strips trailing newlines**, so
+it passed a perfectly valid token, `serve` bound the port and the suite hung
+for ten minutes instead of proving anything. The value is a literal now, and
+`orch_pre` wraps `serve` in `timeout` so a regression fails rather than hangs.
+And the cross-crate gate's needle, written contiguously, declared a variable
+called `UNDERCROFT_ORCH_` — the bare prefix — which the engine's own env-var
+inventory gate reads as an unknown variable and rejects. One gate's needle is
+another gate's input; it is split with the `concat!` idiom the scanner itself
+uses.
+
+### an empty declaration is a failed interpolation, and a bearer nobody can present is not a bearer
+
+ROADMAP **O22**, plus two defects the work found — one of them in the previous
+commit's own code, one that only a real corpus could see.
+
+**The pattern sweep the doctrine asked for.** Closing round-four #18 added a
+rule to `CLAUDE.md`: *grep for the pattern a rule names rather than trusting
+that the instance which taught it was the only one.* Run over `.filter(|x|
+!x.is_empty())` on a declared value, it returns exactly two live sites, and
+both are fixed here.
+
+**`UNDERCROFT_MCP_HTTP_TOKEN` (O22).** A non-loopback bind with no token
+already refuses, so the network-exposed case was never open. What an empty
+declaration produced was a **loopback** server on which the operator declared
+a bearer and got none — `/mcp` and `/v1` serving any process on the host.
+`resolve_mcp_token` refuses empty and whitespace-only, is called by
+`serve_http` and by `config check`, and the variable leaves
+`PREFLIGHT_EXEMPT` — a deletion the both-directions gate **forces**: re-adding
+the entry fails the build with *"listed in PREFLIGHT\_EXEMPT but IS
+pre-flighted now"*, run and confirmed.
+
+**`UNDERCROFT_OTLP_ENDPOINT`, which this branch broke two commits earlier.**
+The transport fix for round-four #8 left the empty case wrong in **both**
+directions at once. The exporter read the value through a helper that maps
+empty to unset and started with **traces silently off** — four lines above its
+own comment saying that is worse than refusing to start. `config check`
+handed the same empty string to `require_secure_transport`, which parses it,
+fails, and reports an unparseable URL as **cleartext** — so the pre-flight
+refused an environment that ran, and told the operator to configure https for
+a value naming no host. The empty parenthesis in `…non-loopback host ()` was
+the only tell. One resolver, `undercroft_net::declared_endpoint`, is now held
+by both callers, so the pre-flight and the run cannot answer differently.
+
+**And a bearer that no client can present, found by the corpus run.** The
+definition of done requires driving a change through a real corpus, and that
+is the only thing that could have seen this: **HTTP strips a header field
+value's trailing whitespace**, so a token ending in a space or newline never
+equals the declared one. The server starts cleanly and refuses every request
+forever — a 401 naming no cause on one side, nothing in the log on the other.
+`UNDERCROFT_MCP_HTTP_TOKEN=$(cat /run/secrets/token)` over a file ending in a
+newline is the ordinary way to produce it.
+
+Measured against a live `serve-http` over 1,360 mined LoCoMo drawers rather
+than reasoned about: plain, **leading** and **internal** whitespace answer
+200; **trailing** space and newline answer 401. So trailing whitespace is
+refused and the other two are values — the guard is exactly as wide as the
+defect, which a `trim() != value` version of it would not have been.
+
+It is **not trimmed for you**, and that is the decision rather than an
+oversight: trimming would authenticate a key the operator did not declare, and
+a server whose key silently differs from the file it was configured from is
+the failure this whole class is about. A declaration that cannot work is
+refused; it is never quietly adjusted into one that can.
+
+The same shape exists one binary over — `UNDERCROFT_ORCH_ADMIN_TOKEN` passes a
+16-character floor that a trailing newline satisfies, and the orchestrator
+compares its bearer the same way. It is **not** fixed here, deliberately: the
+orchestrator has no resolver to put it in, and adding a bare guard would be
+the second implementation this project spends its time removing. Recorded in
+**O21**, which builds that resolver.
+
+`UPGRADING.md` gains three entries. Its "cannot check a credential" caveat is
+corrected in the same unit — true of a *wrong* credential, false of an
+*absent* or *unusable* one, and no variable is exempt from the pre-flight for
+being a credential any more.
+
+Gates: `an_empty_endpoint_is_a_failed_interpolation_not_a_cleartext_url`
+asserts the **diagnosis**, not merely a refusal, because the pre-fix command
+did refuse — with the wrong one, so a bare "it refuses" assertion would have
+passed against the defect. `an_empty_bearer_declaration_refuses_and_a_real_one_is_never_trimmed`
+pins the untrimmed round-trip and the guard order. Five new `e2e.sh` checks
+(325 → 330) drive the loopback bind, which is where the gate was lost, and two
+new `e2e-telemetry.sh` checks (28 → 30) drive the exporter.
+
+### a flaky test of my own, caught by CI rather than by the battery
+
+The regression guard added with #6 asserted the whole ranked id list before and
+after a diversion, over 1,200 near-identical filler drawers. That tail is not a
+property of the system: the PQ codebook trains on a **keyed** sample
+(`sample_rank`, derived from a master key that is random per vault), so which
+rows train it differs per run and the ADC ordering moves at the margin.
+
+It passed several consecutive full batteries and then went red on CI. Run in a
+loop it measured **4 failures in 6**. A battery runs each test once, which for
+a coin flip is not a measurement — repetition is, and that is now in the
+definition of done.
+
+The assertion is now about the one drawer the query decisively matches, on
+terms no filler contains: stable under any codebook sample, and it still fails
+if a diversion moves the geometry far enough to push the answer out of the
+pool. Verified 12/12, with four clean runs of the full 295-test store suite
+alongside it to check nothing else in this session's tests was a coin flip too.
+
+### three claims that contradicted the code they sat next to
+
+Round-four #40, #54 and #55 — the documentation-truth rows. Each was verified
+by reading both sides, and one turned out to be a gap rather than a typo.
+
+**#40 — "declared, never detected" was false in three places.**
+`language_of_drawer` resolves a drawer's language from its own closed-class
+function words whenever the caller declared nothing, per candidate, because a
+vault may hold several languages and the drawer is the unit that has one.
+`CLAUDE.md`, `SearchOptions::morph_lang`'s doc and a comment in `search_inner`
+all said the opposite — the last of them sitting twenty lines above the loop
+that calls the detector. The consequence is not cosmetic: a reader would
+believe German endings apply only when declared, when in fact a drawer that
+reads as German gets them automatically, and the pinned cost (`flow`/`flower`
+meets under German) applies to detected German too. All three corrected, and
+the behaviour they now describe is pinned by
+`an_undeclared_language_is_read_off_the_drawer` — including the rule that
+decides it: three votes AND double the runner-up, so one German phrase inside
+an English drawer changes nothing, and a tie picks neither.
+
+**#54 — the residue was recorded nowhere.** A comment in `search_inner` said a
+deep-`offset` full scan is "recorded as A17". `ROADMAP.md` contains no `A17`
+— and no `A`-numbered entries at all, the scheme having been consolidated
+away. So the citation was standing in for a filing that did not exist. Filed
+properly as **O23**, with the argument for leaving the cost open: every
+alternative trades a bounded cost for a wrong answer.
+
+**#55 — `ROADMAP.md` linked `THREAT_MODEL.md` at the repo root**, where there
+is no such file; it is in `docs/`.
+
+Recorded with them, in `.handover/AUDIT_CONTINUATION.md`: a partial status
+sweep of the ranked table, which had never been updated since the sweep ran.
+Of ~15 rows checked, four were already closed and one half-closed. **Three of
+the probes were broken before they were right** — needles grepped in files
+that do not contain them, each returning a `0` that reads exactly like a clean
+tree. Every count recorded there was taken only after proving its needle
+exists somewhere.
+
+### an empty passphrase wrote a key to disk and called it success
+
+Round-four finding #18 (D1). The same defect as #4 — closed earlier in this
+release as O16 — applied to the highest-value secret in the system.
+
+`passphrase()` was `env::var("UNDERCROFT_PASSPHRASE").ok().filter(|p|
+!p.is_empty())`. An empty declaration therefore became `None`, and `None`
+means the documented default: derive nothing, write a random `master.key` to
+disk at 0600. **Declaring a passphrase is precisely the request that no key
+material be written to disk**, so the fallback granted the opposite of what
+was asked, silently. `vault status` printed the key path, which only reads as
+wrong if you already suspected it.
+
+Measured against the binary before the fix:
+
+```
+UNDERCROFT_PASSPHRASE=   →  master.key EXISTS on disk
+undercroft config check  →  exit 0
+```
+
+`undercroft_store::resolve_passphrase` is the fix, mirroring
+`resolve_assertion_secret` line for line: one resolver, two consumers — the
+CLI's `passphrase()` and `check_declaration`, so `config check` catches it
+before a restart rather than after one. Whitespace-only refuses too. **The
+value is never trimmed**: whitespace decides only whether a passphrase was
+*named*, and trimming would change the KEY, silently making a vault derived
+from a padded passphrase underivable. That is the closed-vocabulary versus
+opaque-payload distinction #4 earned, now applied a second time.
+
+**Reachable through a shipped recipe**, exactly as #4 was.
+`docs/remote-server.md` carried `UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE}`,
+and Compose interpolates an unset shell variable to the empty string and then
+*sets* it in the container. That line now uses `${TENANT_PASSPHRASE:?…}` so it
+fails in Compose before a container starts.
+
+**It also narrowed a claim this release made three commits earlier.** #9 put
+`UNDERCROFT_PASSPHRASE` on `PREFLIGHT_EXEMPT` as "a credential, not a syntax".
+That is right about a *wrong* passphrase and wrong about an *absent* one — two
+different questions, and the exemption answered both with "cannot". The entry
+is deleted, and the both-directions half of #9's own gate is what would have
+failed had it been left: a listed variable that becomes checkable fails the
+build too.
+
+Counterfactual executed: with the old filter restored, the unit test reports
+`None` where it demanded a refusal, and `UNDERCROFT_PASSPHRASE= undercroft
+init` writes `master.key` to disk again.
+
+### `config check` said "This environment starts" about environments that do not
+
+Round-four finding #9 (D1+D11). The pre-flight is what `UPGRADING.md` tells
+operators to trust — *"if that command exits 0 against your environment, none
+of this affects you"* — and for three `Protects` variables that sentence was
+false.
+
+**Measured against the binary, not read off the plan.** For each variable, a
+garbage value, `config check`'s exit code beside the actual run's:
+
+| | `config check` | actual run |
+|---|---|---|
+| `UNDERCROFT_RETRIEVAL` | 0 | 1 |
+| `UNDERCROFT_EMBEDDER` | 0 | 1 |
+| `UNDERCROFT_ADMISSION_LLM` | 0 | 1 |
+
+**Cause, and it is structural rather than three forgotten arms.**
+`check_declaration` lives in `undercroft-store`, and these three parses live
+in `undercroft-cli` and `undercroft-llm` — crates the store cannot depend on.
+So they fell through its `_ => Ok(None)` catch-all and were rendered
+`Accepted`, printed as *"no parse to run; the consumer validates it"*. That
+is indistinguishable from a variable which genuinely has no parse, which is
+why nothing could tell.
+
+Each now has an arm in `config_check::check_one` calling the **same function
+the engine calls** — `check_embedder`, `check_retrieval`,
+`advisor::check_mode`, each extracted so the vocabulary has exactly one
+implementation. `attach_retrieval`'s application `match` lost its error text
+entirely as a result: validation happens once, up front, so the arm that
+applies the value ends in a bare `_`. None of the three validators constructs
+anything, because this command opens nothing and makes no outbound call — a
+model is never loaded to find out whether its name is legal.
+
+**The gate is the deliverable.** `PREFLIGHT_EXEMPT` lists the `Protects`
+variables this command legitimately cannot pre-flight, each with its reason,
+and `every_protects_variable_is_pre_flighted_or_exempt` counts it against the
+code in **both** directions: a `Protects` variable with no parse fails the
+build unless it is listed, and a listed variable that becomes checkable fails
+it too, so the exemption cannot rot. It carries a premise assertion, since a
+filter matching nothing would report a clean tree. Counterfactual executed:
+removing one arm makes it name that variable.
+
+Two things the exempt list makes visible that were not visible before.
+Credentials (`UNDERCROFT_PASSPHRASE`, `UNDERCROFT_MCP_HTTP_TOKEN`) cannot be
+pre-flighted at all — any string is well-formed, and whether it is the right
+one is learned by decrypting, which this command must not do. And three
+variables belong to a **different binary**: the orchestrator has no
+pre-flight command, so the promise in `UPGRADING.md` is narrower than it reads
+for anyone running a fleet. Filed as ROADMAP **O21** rather than papered over.
+
+A fourth variable the sweep named did not survive verification.
+`UNDERCROFT_PASSPHRASE` looked like a liar under the same probe — `config
+check` 0, run 2 — but a wrong passphrase is a bad credential, not a malformed
+declaration, and exit 2 is the integrity verdict working correctly.
+
+### the traces hop was the one outbound client obeying no transport policy, and it could not do TLS at all
+
+Round-four finding #8 (D1). Silent, and it had **no end-to-end coverage of
+any kind** — which is why "https cannot work" was never observable.
+
+`undercroft-net`'s own doc says *"Every Undercroft client that leaves this
+machine obeys the same two rules, and this crate is the only implementation
+of them."* A `--features telemetry` build falsified that sentence.
+`undercroft-obs` built its OTLP span exporter on `opentelemetry-otlp`'s
+`reqwest-blocking-client` feature — a second HTTP library, with no cleartext
+refusal, no loopback check and no CA pin. `UNDERCROFT_OTLP_HEADERS` is
+documented to carry `authorization=Bearer …`, and spans carry vault ids and
+route labels, so that credential crossed the wire in the clear to any
+non-loopback collector.
+
+**And TLS was not merely unpoliced, it was absent.** The shipped feature set
+resolved reqwest with **no TLS crate in its dependency list at all**, so an
+`https://` endpoint could not work — and the resulting builder failure was
+swallowed by `if let Ok(span_exporter) = …`. An operator who did the secure
+thing got no traces and no error.
+
+Both halves are fixed together, which is why the refusal can appear now:
+before, there was no secure configuration to move to.
+
+- The exporter runs on the **policed `ureq` agent** through
+  `opentelemetry-http`'s `HttpClient` trait — one `agent_from_env` call
+  giving the cleartext refusal, the loopback allowance and CA pinning,
+  identical to the index and embedder hops. A 4xx/5xx is passed back as a
+  *response*, not converted into a transport error, so a collector's own
+  "429 slow down" is not hidden behind "send failed".
+- `reqwest-blocking-client` is dropped, so **reqwest leaves `Cargo.lock`
+  entirely** — a byte-readable outcome a gate can assert.
+- The swallow is gone: a builder failure now says so.
+- `UNDERCROFT_OTLP_CA` pins a private CA (79 engine variables now, counted
+  both ways against `ENGINE_ENV_VARS`).
+- `UNDERCROFT_OTLP_ENDPOINT` is reclassified `Tunes` → **`Protects`**, which
+  is what makes `undercroft config check` report it fatal instead of printing
+  "keeps the conservative default" for a value that now stops the process,
+  and it gains a `check_declaration` arm running the same policy the engine
+  runs. It had none: it fell through to "no parse to run; the consumer
+  validates it", and no consumer validated anything.
+- **`config check` is exempt from the start-up refusal**, deliberately: a
+  command whose whole job is diagnosing an environment that will not start is
+  useless if it cannot run in one. It warns, runs, and reports the same
+  declaration as a finding.
+- The **shipped observability stack** used `http://tempo:4318`, which this
+  refuses, so it would have shipped broken. It now bundles a `tempo-tls`
+  Caddy terminator mirroring `deploy/embeddings-tls/`, and the engine pins
+  its internal CA root off a shared volume.
+
+**The gate is the part worth carrying.**
+`no_crate_but_undercroft_net_builds_its_own_http_client` scans every `.rs`
+under `crates/` for ureq's builder token — precisely the observable this
+defect does not move, because the client was somebody else's library. Its new
+sibling `no_second_http_client_is_linked_into_the_workspace` reads the
+dependency edge out of `Cargo.lock`, with a premise probe so a truncated lock
+cannot pass by containing nothing. Counterfactual executed: restoring the
+`reqwest-blocking-client` feature makes it fail.
+
+Four e2e-telemetry checks now drive the real binary: cleartext non-loopback
+refused (exit 1), loopback allowed, `config check` exempt, `config check`
+fatal. The export path had zero coverage before.
+
+**Version: MINOR** — `UNDERCROFT_OTLP_CA` is new capability. The refusal
+itself is a fix: the transport policy always said this, and the OTLP hop was
+simply never routed through it. It can still stop a running deployment, so it
+has an `UPGRADING.md` entry and is detectable in advance by `config check`.
+
+### two diverted drawers shared one queue slot, and the second ate the first
+
+Round-four finding #7 (D2). Silent, and it destroyed a record by writing a
+different one.
+
+`admission_divert` derived the diverted drawer's id as
+`drawer_id(QUARANTINE_WING, room, source, chunk_index)` — substituting a
+**constant** for one of the four components the recipe is injective over. Two
+drawers differing only in wing therefore derived one id, and the write path's
+`ON CONFLICT(id) DO UPDATE` replaced the first row wholesale: its content, its
+tier-1 signal codes, and the `intended_wing` that `admission allow` restores
+from. The reviewer saw one pending entry where two writes had been diverted,
+and re-filing sent it to the second wing only.
+
+`undercroft mine ./docs --wing team-a` then `--wing team-b` is the ordinary
+operation that produces it — `room_for_file` and the chunk index are both
+functions of the file, so the wing is the only knob. `import_record` takes
+wing/room/source/chunk verbatim, so every backup restore and the
+orchestrator's tenant migration were collision-prone too. Plain `remember`
+saves were not: those carry `next_append_index`, which is unique per call —
+the same defect this is, one level up, already solved.
+
+**The fix is a second id space with a domain tag**, `ids::quarantine_drawer_id`,
+keeping all four components and keying the queue slot on the wing the write
+was AIMED at — which is also what `admission_allow` restores from, so the
+inverse derivation is unchanged. The tag is load-bearing rather than
+decorative: without it the diverted id would equal the id of the very drawer
+being screened, and the diversion would overwrite the legitimate row.
+
+Both recipes now share one body (`id_over`), so the ordinary drawer id cannot
+drift while the new one is edited. That refactor is pinned to an
+**independently derived** literal: the recipe was re-implemented in Python
+from the code as committed and run, and its output
+(`f95019f45b6f49ad9e1f42c4864f7ce6`) matched — byte-identity proved rather
+than inferred from "the tests still pass", which they would have done either
+way, every other test in that file comparing the function to itself.
+
+**No migration, and that is a decision with an argument.** `audit.record_id`
+holds the quarantine id for the diversion write, and `admission/{id}/{verdict}`
+for every ruling. Moving a live quarantine id orphans both — the A10 rule
+verbatim. Existing rows keep their ids and keep verifying; the new recipe
+applies to new diversions only.
+
+Counterfactual run: with the old call site restored, two diversions differing
+only in wing produced the identical id `0d2de85da3f2bead6655aae166e10df7` and
+one row. The e2e arm drives the real reproduction through `undercroft mine`
+twice and reads `admission list`.
+
+### one quarantined drawer made every search a scoped search
+
+Round-four finding #6 (sweep dimension D3). Silent, and it charged the vaults
+that had turned a security feature ON.
+
+**What happened.** `resolve_search_policy` folds the reserved wing into a
+`TrustClause::Exclude` the moment one diverted row exists. Scope resolution
+had exactly ONE representation — *the set of seqs that are IN scope* — and two
+different relations were being pushed through it. A declared `wing`/`room`/
+`kind` is small relative to the corpus: materializing its members is the cheap
+side, and its cardinality is a real population to size pools by. A bare
+`Exclude` is the **complement** of a small set, so the same code materialized
+an O(corpus) `HashSet` per query and then read its cardinality as a "scope
+population", pinning stage 1 and hydration at floors `scopescale` measured for
+the 10³–10⁵ band.
+
+**Measured, on a real corpus rather than a fixture.** 1,190 LoCoMo-mined
+drawers under `UNDERCROFT_RETRIEVAL=pq`, one drawer diverted by the screen:
+
+| | clean vault | one row quarantined |
+|---|---|---|
+| before | 76 ms/q | **140 ms/q** |
+| after | 77 ms/q | 69 ms/q (noise) |
+
+Phase trace before: `scope-resolve` 0.00 → 0.13 ms, `sql-fetch` 0.37 → 1.25,
+`hydrate` 5.30 → 14.51. After: `scope-resolve` 0.00 → 0.01, `hydrate` 4.41 →
+5.57.
+
+**The fix is a type, at the one place every consumer passes through.**
+`SeqFilter::{Only, AllBut}` with three doors and no fourth: `admits` (the only
+membership test), `narrows` (the only geometry test), `materialized` (rows
+pulled from the table — deliberately not `len()`, because for `AllBut` that
+number means the opposite thing). `resolve_seq_filter` replaces `scope_seqs`:
+anything positive present resolves to `Only` over byte-identical SQL; a bare
+non-empty `Exclude` resolves to `AllBut` over the excluded wings, O(excluded).
+The complement is rendered by `TrustClause::sql` itself rather than by a
+second copy of the wing-list mapping. `scope_population` is the single
+geometry door both `scope_scan` and `scope_live` now ask, so they cannot
+disagree about what counts as a scope. The `pqidx` divisor gates move from
+`scope.is_some()` to `scope.is_some_and(|f| f.narrows())` — not optional:
+leaving them would pin stage 1 at the caller's fixed floor and reinstate the
+measured recall leak.
+
+**Nothing about the fence changed.** The SQL clause was always the
+accelerator and `verified_meta_admits` the boundary (A28); the exact-scan arm
+renders `TrustClause::sql` for itself either way. `resolve_search_policy`
+keeps its signature, so the remote path is provably untouched. No public
+surface, no on-disk format, no new variable.
+
+**Two things this unit got wrong before it got them right, both recorded
+because the pattern is the point.** The first draft of the end-to-end test
+asserted that a diversion **re-ranks** results, reasoning that `bm25_raw`
+takes its IDF corpus size from the pool (`n = cands.len()`). It passed
+against the reverted code: IDF is a per-term constant that scales every
+candidate alike, so a pool-size change does not by itself reorder a fixed
+candidate set. The second draft asserted **reachability** — a drawer the
+wider pool newly admits — and also passed, because such a drawer still has to
+out-score 1,200 competitors to reach the page. That test is kept and labelled
+what it is, a regression guard that passes on both trees; the counterfactual
+is `a_pure_exclusion_is_not_a_declared_scope`, where one quarantined row
+materializes **64 seqs before the fix and 1 after**.
+
+**And the reason no existing instrument could have found this.**
+`scoped_pool_k(hk, live)` and the unscoped `max(hk, live/64)` coincide
+*exactly* at `live = 131,072` — which is the first checkpoint of both
+`pqscale` and `scopescale`. Every scale measurement this project runs would
+have read 1.0× and reported nothing. Scope-geometry claims belong at
+10³–10⁴, and that is now written into `CLAUDE.md`.
+
 ### the documented pre-upgrade command did not exist, and one variant wore another's help
 
 Round-four findings #10 and #41, both in the same clap block, both proven by

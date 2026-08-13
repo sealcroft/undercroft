@@ -194,6 +194,34 @@ body_has "ops trust assign"  '"trust":"trusted"' -- -X POST "${ADMIN[@]}"   -d '
 body_has "ops retention list" 'policies'   -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention set" '"days":3650' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","days":3650}' "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention sweep" 'destroyed' -- -X POST "${ADMIN[@]}"   -d '{}' "$O/admin/tenants/$OPS_ID/ops/retention/sweep"
+# **ROADMAP O14 — the plane that MINTS a receipt can now CHECK one.**
+# `forget` has been forwardable since this table was written; verifying what
+# it returns was reachable from nowhere in a fleet, because the engine had no
+# route for it at all. A right-to-erasure receipt an operator cannot verify
+# through their only door is the asymmetry this table's own comment describes,
+# one step on. The ROUND TRIP is the assertion — minted here, checked here,
+# the same document — because either half alone proves nothing about the pair.
+O14_ID="$(curl -s -X POST -H "Authorization: Bearer $OPS_TOKEN" \
+  -d '{"text":"a fleet note the data subject asked us to erase","wing":"w","room":"r"}' \
+  "$O/t/drawers" | grep -o '"id":"[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
+O14_ATT="$(curl -s -X POST "${ADMIN[@]}" -d "{\"ids\":[\"$O14_ID\"]}" \
+  "$O/admin/tenants/$OPS_ID/ops/forget")"
+if [ -n "$O14_ID" ] && grep -q '"head_after"' <<<"$O14_ATT"; then
+  ok "o14 premise: the ops plane minted an attestation"
+else
+  fail "o14 premise: id='$O14_ID' body='$(head -c 160 <<<"$O14_ATT")'"
+fi
+body_has "ops verify-forgetting" '"verdict":"verified"' -- -X POST "${ADMIN[@]}" \
+  -d "$O14_ATT" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
+# And through the CLI alias, which `docs/MULTI_TENANCY.md` says mirrors the
+# plane — the half that has shipped missing before. Captured, never piped:
+# `set -o pipefail` makes `if cmd | grep` see the command's status.
+O14_CLI="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify-forgetting --body "$O14_ATT" 2>&1)"
+if grep -q '"verdict":"verified"' <<<"$O14_CLI"; then
+  ok "orchestrator CLI ops verify-forgetting"
+else
+  fail "orchestrator CLI ops verify-forgetting: $(head -c 160 <<<"$O14_CLI")"
+fi
 # A route that is NOT on the plane stays off it, so the block above is not
 # passing because everything is forwarded.
 code_is  "ops refuses key rotation" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/rotate"
@@ -539,6 +567,81 @@ code_is "replica refuses a data-plane write" 403 -- -X POST -H "Authorization: B
 code_is "replica refuses a data-plane delete" 403 -- -X DELETE   -H "Authorization: Bearer $ACME_TOKEN3" "$R/t/drawers/deadbeef"
 body_has "replica still serves POST search" 'gigawatts' -- -X POST   -H "Authorization: Bearer $ACME_TOKEN3" -d '{"query":"flux capacitor power"}' "$R/t/search"
 
+
+echo "== config check: the pre-flight and the serve path agree (ROADMAP O21) =="
+# The control plane had no pre-flight at all, so three Protects declarations
+# sat on the ENGINE's exempt list as "orchestrator-owned" while
+# `UPGRADING.md` told operators that exit 0 means nothing affects them.
+#
+# What is asserted here is AGREEMENT, which is the whole point: the same
+# declaration must produce the same verdict from the pre-flight and from a
+# real `serve`. A pre-flight that merely runs is worth nothing.
+orch_pre() { # orch_pre <VAR> <value> -> prints "<preflight-exit> <serve-exit>"
+  local var="$1" val="$2" pc sc
+  env "$var=$val" "$ORCH" config check >/tmp/orch-cc.log 2>&1; pc=$?
+  # `timeout` because a serve that does NOT refuse binds and blocks forever —
+  # which is the regression these checks exist to catch, and without it the
+  # suite hangs instead of failing. 124 is neither 0 nor 1, so it reports.
+  timeout 5 env "$var=$val" "$ORCH" serve --addr "127.0.0.1:18999" \
+    >/tmp/orch-serve.log 2>&1; sc=$?
+  echo "$pc $sc"
+}
+
+# Both spellings dispatch, since the engine shipped only the hyphenated one
+# while every doc published the two-word form (ROADMAP O18).
+"$ORCH" config check >/dev/null 2>&1 && ok "two-word 'config check' runs" \
+  || fail "two-word 'config check' did not run" "$("$ORCH" config check 2>&1 | tail -3)"
+"$ORCH" config-check >/dev/null 2>&1 && ok "hyphenated 'config-check' runs" \
+  || fail "hyphenated 'config-check' did not run"
+
+read -r PC SC <<<"$(orch_pre UNDERCROFT_ORCH_RATE_LIMIT lots)"
+if [ "$PC" = "1" ] && [ "$SC" = "1" ]; then
+  ok "a garbage rate limit is refused by the pre-flight AND by serve"
+else
+  fail "pre-flight and serve disagree on a garbage rate limit" "preflight=$PC serve=$SC"
+fi
+grep -q "requests per minute" /tmp/orch-cc.log \
+  && ok "the pre-flight names the fix for a garbage rate limit" \
+  || fail "pre-flight refused without naming the fix" "$(tail -3 /tmp/orch-cc.log)"
+
+# The admin token, and this is the live defect O22 found on the engine's
+# identical path. A trailing newline CLEARS the 16-character floor that was
+# the only check here — a newline has length — so the control plane started
+# cleanly and refused every /admin request forever, 401 naming no cause.
+#
+# The newline is a LITERAL inside single quotes, never `$(printf …)`: command
+# substitution strips trailing newlines, so the tidier spelling passes a
+# perfectly valid token, `serve` starts, and the check hangs instead of
+# proving anything. It did exactly that on its first run.
+TOKEN_WITH_NEWLINE='e2e-admin-token-0123456789
+'
+read -r PC SC <<<"$(orch_pre UNDERCROFT_ORCH_ADMIN_TOKEN "$TOKEN_WITH_NEWLINE")"
+if [ "$PC" = "1" ] && [ "$SC" = "1" ]; then
+  ok "an admin token ending in a newline is refused by both"
+else
+  fail "a token no client can present started a control plane" "preflight=$PC serve=$SC"
+fi
+grep -q "ends in whitespace" /tmp/orch-cc.log \
+  && ok "the diagnosis is the trailing whitespace, not the length floor" \
+  || fail "wrong diagnosis for a trailing-newline admin token" "$(tail -3 /tmp/orch-cc.log)"
+
+read -r PC SC <<<"$(orch_pre UNDERCROFT_ORCH_ADMIN_TOKEN "")"
+if [ "$PC" = "1" ] && [ "$SC" = "1" ]; then
+  ok "an empty admin token is refused by both"
+else
+  fail "an empty admin token was accepted somewhere" "preflight=$PC serve=$SC"
+fi
+
+# …and a healthy environment passes, so the checks above are not a command
+# that refuses everything. This is the premise the four of them rest on.
+if "$ORCH" config check >/tmp/orch-cc-ok.log 2>&1; then
+  ok "the environment this suite runs in passes its own pre-flight"
+else
+  fail "the pre-flight refuses a working environment" "$(tail -5 /tmp/orch-cc-ok.log)"
+fi
+grep -q "CONTROL PLANE only" /tmp/orch-cc-ok.log \
+  && ok "the pass message says it covers the control plane only" \
+  || fail "the pre-flight implied it covered the engines too"
 
 echo ""
 echo "orchestrator e2e results: $PASS passed, $FAIL failed"

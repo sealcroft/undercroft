@@ -202,6 +202,90 @@ pub fn hmac_verify_failed(surface: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Control plane (ROADMAP O20) — orchestrator-only events
+// ---------------------------------------------------------------------------
+//
+// **No tenant-shaped label appears anywhere below, and that is the design.**
+// A tenant id, a vault name and a tenant name are all identifiers whose value
+// set is created BY USE, so they belong on a query surface rather than a
+// metric label — the rule the per-wing codebook generations already follow
+// (`store/lib.rs`: dynamic `<wing>/pq-codebook` keys reach stats, never a
+// gauge, "because per-wing gauge cardinality is unbounded"). Per-tenant
+// figures live on `GET /admin/tenants/{id}/stats`, which is credential-gated.
+//
+// The consequence, stated rather than hidden: these are fleet aggregates, and
+// at small fleet sizes an aggregate approximates an individual — with two
+// tenants, one who knows their own load infers the other's by subtraction.
+// That is inherent to publishing aggregates at all; the bound is fleet size,
+// and the mitigation is the listener's own gate, not suppression. Suppressing
+// by fleet size would make the metric surface VARY with it, so dashboards and
+// alerts that work at thirty tenants would break at two.
+
+/// A request the control plane handled: route class, status, duration.
+///
+/// `route` is a CLASS from a closed set, never the URL — the forwarded query
+/// string carries `wing=` and `room=`, which is exactly what the engine's own
+/// telemetry suppresses for sealed vaults.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn orch_request(route: &str, status: u16, duration: std::time::Duration) {
+    #[cfg(feature = "telemetry")]
+    {
+        let code = status.to_string();
+        imp::counter_add(
+            "undercroft_orch_requests_total",
+            1,
+            &[("route", route), ("status", &code)],
+        );
+        imp::histogram_record(
+            "undercroft_orch_request_duration_seconds",
+            duration.as_secs_f64(),
+            &[("route", route)],
+        );
+    }
+}
+
+/// A credential the control plane refused. `kind` is `tenant`, `admin` or
+/// `metrics` — three different secrets that the engine's single
+/// `auth_rejections_total{kind="bearer"}` would have merged into one series.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn orch_auth_rejected(kind: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add(
+        "undercroft_orch_auth_rejections_total",
+        1,
+        &[("kind", kind)],
+    );
+}
+
+/// A request the per-tenant rate screen refused.
+///
+/// An operator who declared `UNDERCROFT_ORCH_RATE_LIMIT` had **no surface
+/// saying it took** — the refusal happened at the proxy and no engine ever
+/// saw the request. Deliberately unlabelled: which tenant is rate-limited is
+/// a per-tenant fact and belongs on the admin plane.
+pub fn orch_rate_limited() {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add("undercroft_orch_rate_limited_total", 1, &[]);
+}
+
+/// One outbound call to an engine, by outcome — `ok`, `refused` (the
+/// transport policy declined before a byte moved), `unreachable`, or
+/// `status`.
+///
+/// The engine cannot see any of this: `refused` never leaves the process, and
+/// a tenant write becomes TWO engine calls via the drawer probe, an
+/// amplification nothing else reports.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn orch_engine_call(outcome: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add(
+        "undercroft_orch_engine_calls_total",
+        1,
+        &[("outcome", outcome)],
+    );
+}
+
 /// Record a vault store open (cache miss in the multi-tenant server).
 pub fn vault_opened() {
     #[cfg(feature = "telemetry")]
@@ -313,6 +397,18 @@ pub const COUNTER_NAMES: &[&str] = &[
     "undercroft_search_total",
     "undercroft_search_wings_probed_total",
     "undercroft_vault_opens_total",
+    // ── the CONTROL PLANE's own series (ROADMAP O20) ────────────────────
+    // Prefixed `undercroft_orch_` and deliberately NOT reusing the engine's
+    // names. The shipped dashboard aggregates several engine series with no
+    // `by (instance)` and no `job` filter, and the route strings collide
+    // exactly — `healthz`, `ui`, `metrics` exist on both binaries — so a
+    // control plane emitting `undercroft_http_requests_total` would blend two
+    // populations into one number. These are also the events no engine can
+    // see, because they terminate at the proxy.
+    "undercroft_orch_requests_total",
+    "undercroft_orch_auth_rejections_total",
+    "undercroft_orch_rate_limited_total",
+    "undercroft_orch_engine_calls_total",
 ];
 
 /// Full names of the histogram series this build exports. Each renders as
@@ -323,6 +419,7 @@ pub const HISTOGRAM_NAMES: &[&str] = &[
     "undercroft_http_request_duration_seconds",
     "undercroft_search_duration_seconds",
     "undercroft_search_hits",
+    "undercroft_orch_request_duration_seconds",
 ];
 
 /// Every series name this build can export, gauges included and fully
@@ -373,22 +470,78 @@ impl Drop for TelemetryGuard {
 /// Reads: `UNDERCROFT_LOG` (EnvFilter directives), `UNDERCROFT_LOG_FORMAT`
 /// (`json`|`text`), `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ no network egress),
 /// `UNDERCROFT_SERVICE_NAME`, `UNDERCROFT_OTLP_HEADERS`.
-pub fn init() -> TelemetryGuard {
-    #[cfg(feature = "telemetry")]
-    imp::init();
-    TelemetryGuard(())
+pub fn init() -> Result<TelemetryGuard, ObsError> {
+    init_as("undercroft")
 }
+
+/// As [`init`], naming the service this process reports as when
+/// `UNDERCROFT_SERVICE_NAME` is not declared.
+///
+/// Two binaries ship from this workspace and both defaulted to
+/// `"undercroft"`, so a fleet running an engine and a control plane under one
+/// env file could not tell their traces apart (ROADMAP O20). A declared
+/// `UNDERCROFT_SERVICE_NAME` still wins — this only moves the default.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn init_as(default_service: &str) -> Result<TelemetryGuard, ObsError> {
+    #[cfg(feature = "telemetry")]
+    imp::init_as(default_service).map_err(ObsError::Transport)?;
+    Ok(TelemetryGuard(()))
+}
+
+/// Why telemetry could not come up.
+///
+/// A `String` payload rather than a `NetError` on purpose: the non-telemetry
+/// build must keep this crate's "zero dependencies by default" invariant, and
+/// `undercroft-net` is optional. The text is the transport crate's own
+/// verbatim message, so it still names the fix and still says there is no
+/// override.
+#[derive(Debug)]
+pub enum ObsError {
+    /// The outbound OTLP hop was refused by the transport policy, or the
+    /// exporter could not be built.
+    Transport(String),
+}
+
+impl std::fmt::Display for ObsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObsError::Transport(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for ObsError {}
 
 /// Render the current metrics in Prometheus text exposition format.
 /// Returns `None` when built without the `telemetry` feature, so callers
 /// can distinguish "not compiled in" from "no metrics yet".
 pub fn render_prometheus() -> Option<String> {
+    render_prometheus_scoped(false)
+}
+
+/// The exposition, with every **vault-labelled** series suppressed when
+/// `assertions_required` (ROADMAP O25).
+///
+/// `/metrics` addresses no single vault, so the per-vault assertion gate never
+/// applied to it — and on a deployment that declared
+/// `UNDERCROFT_ASSERTION_SECRET`, whose contract is that a bearer alone
+/// reaches no vault, that let one caller read every vault's counts. The route
+/// takes no caller identity and does not need one: an assertion binds exactly
+/// one vault id, so filtering to the caller would leave a scraper needing a
+/// fresh assertion per vault per scrape.
+///
+/// Nothing that alerts is lost — every series `alerts.yml` evaluates is a
+/// vault-blind counter or histogram. Dashboard panels showing per-vault
+/// gauges go empty, and that detail lives on `/v1/…/stats`, which is
+/// assertion-gated.
+pub fn render_prometheus_scoped(assertions_required: bool) -> Option<String> {
     #[cfg(feature = "telemetry")]
     {
-        imp::render_prometheus()
+        imp::render_prometheus_filtered(assertions_required)
     }
     #[cfg(not(feature = "telemetry"))]
     {
+        let _ = assertions_required;
         None
     }
 }
@@ -538,6 +691,70 @@ pub fn run_sse(writer: Box<dyn std::io::Write + Send>, vault: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ROADMAP O25. Under a declared assertion secret, `/metrics` must not
+    /// carry one vault's counts to a caller who can assert only another's.
+    ///
+    /// **The premise arm is the whole test.** Gauges are populated only for
+    /// vaults with an active stream subscriber, so a naive version of this
+    /// runs over an EMPTY registry, finds no vault-B series, and passes while
+    /// measuring nothing — which is exactly how the defect survived. So the
+    /// unfiltered render is asserted to CONTAIN both vaults first; only then
+    /// does the filtered render's silence mean anything.
+    ///
+    /// It also pins what must SURVIVE: every series `alerts.yml` evaluates is
+    /// a vault-blind counter, and suppression that took those with it would
+    /// trade a disclosure for a blind fleet.
+    #[test]
+    #[cfg(feature = "telemetry")]
+    fn a_declared_assertion_secret_suppresses_every_vault_labelled_series() {
+        // **The guard is deliberately LEAKED, and both telemetry tests must
+        // do this.** `init()` is a `Once`, so the guard is a process-global
+        // lifecycle handle rather than a per-test one, and
+        // `TelemetryGuard::drop` calls `shutdown()` — tearing down the meter
+        // provider for every OTHER test in the process. With one such test
+        // that was latent; a second one made it a live interference, and it
+        // is not order-dependent flakiness to be re-run until green.
+        //
+        // Found because the premise arm below refused to pass over an empty
+        // registry. The first version wrote `let _ =`, which drops at the end
+        // of the STATEMENT and failed the neighbouring test outright.
+        std::mem::forget(init());
+        set_gauge("drawers", "vault-a", 11.0);
+        set_gauge("drawers", "vault-b", 22.0);
+        drawer_write(WriteOutcome::Created);
+
+        let open = render_prometheus_scoped(false).expect("telemetry is on in this build");
+        // PREMISE: without it, the assertions below pass over an empty registry.
+        assert!(
+            open.contains("vault-a") && open.contains("vault-b"),
+            "premise failed — the registry holds no vault-labelled series, so \
+             this test cannot show that they are suppressed:\n{open}"
+        );
+        assert!(
+            open.contains("undercroft_drawers"),
+            "premise failed — the gauge under test is not in the exposition"
+        );
+
+        let scoped = render_prometheus_scoped(true).expect("telemetry is on in this build");
+        assert!(
+            !scoped.contains("vault-a") && !scoped.contains("vault-b"),
+            "a vault label survived suppression:\n{scoped}"
+        );
+        // The HELP/TYPE headers go too: a bare header still tells a scraper
+        // the series exists, and existence is part of what leaked.
+        assert!(
+            !scoped.contains("undercroft_drawers"),
+            "the gauge's header survived with no samples:\n{scoped}"
+        );
+        // …and everything alerting depends on is still there.
+        assert!(
+            scoped.contains("undercroft_drawer_writes_total"),
+            "suppression took a vault-BLIND counter with it — alerts.yml \
+             evaluates these, so this would trade a disclosure for a blind \
+             fleet:\n{scoped}"
+        );
+    }
 
     #[test]
     fn no_op_calls_never_panic() {
@@ -788,7 +1005,9 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn render_contains_recorded_metrics() {
-        let _g = init();
+        // Leaked for the same reason as its sibling above: dropping this
+        // guard shuts telemetry down for every other test in the process.
+        std::mem::forget(init());
         chain_commit(1);
         drawer_write(WriteOutcome::Created);
         hmac_verify_failed("drawer");

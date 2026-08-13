@@ -49,6 +49,66 @@ fn bearer_matches(header: &str, expected: &str) -> bool {
     presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
 }
 
+/// The declared bearer for `/mcp` and `/v1`. `None` when unset — the
+/// documented default, which a non-loopback bind then refuses outright.
+///
+/// **Set-but-empty REFUSES**, and the boundary this closes is narrower than
+/// its two siblings, which is why it is its own decision rather than a line
+/// in theirs. A network-exposed bind with no token already refuses below;
+/// what an empty declaration silently produced was a **loopback** server on
+/// which the operator asked for a bearer and got none, serving `/mcp` and
+/// `/v1` to any caller on the host. That is bounded by the binding in a way
+/// [`undercroft_store::resolve_passphrase`] and
+/// [`undercroft_store::resolve_assertion_secret`] were not — and it is the
+/// same defect, which is what the `.filter(|t| !t.is_empty())` this replaces
+/// had in common with them.
+///
+/// Opaque payload, so the value is **never trimmed**: trimming would make the
+/// server accept a key the operator did not declare, and a server whose key
+/// silently differs from the file it was configured from is the failure this
+/// whole class is about. A declaration that cannot work is REFUSED, never
+/// quietly adjusted into one that can.
+///
+/// **TRAILING whitespace is refused for that reason**, and the boundary is
+/// measured rather than assumed. HTTP strips a field value's trailing
+/// whitespace, so a trailing space or newline can never be presented — every
+/// client is refused, forever, with a 401 that says nothing and a server log
+/// that says nothing either. `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
+/// /run/secrets/token)` is how it happens, and a file ending in a newline is
+/// the normal case, not the odd one. Leading and INTERNAL whitespace are
+/// presentable — measured, both answer 200 — so they are accepted: the
+/// refusal is exactly as wide as the defect.
+///
+/// The sibling secrets are deliberately not treated this way.
+/// [`undercroft_store::resolve_assertion_secret`] is an HMAC key: it is never
+/// put in a header, both sides compute with the same bytes, and trailing
+/// whitespace changes nothing about whether it works.
+pub(crate) fn resolve_mcp_token(declared: Option<&str>) -> Result<Option<String>, String> {
+    match declared {
+        None => Ok(None),
+        Some(t) if t.trim().is_empty() => Err(
+            "UNDERCROFT_MCP_HTTP_TOKEN is set but names no token (it is empty or only \
+             whitespace). It is most often an unset shell variable interpolated into a compose \
+             file or a systemd unit. There is no silent fallback: reading it as unset would \
+             serve /mcp and /v1 to any caller that can reach the bind — on loopback, every \
+             process on the host — while the declaration says a bearer is required. Set a real \
+             token, or unset the variable to run without one deliberately"
+                .to_string(),
+        ),
+        Some(t) if t.trim_end() != t => Err(
+            "UNDERCROFT_MCP_HTTP_TOKEN ends in whitespace, and no client could ever present \
+             it: HTTP strips a header value's trailing whitespace, so the bearer that arrives \
+             is always the trimmed one and every request is refused — a 401 that names no \
+             cause, from a server that started cleanly. It is most often \
+             `$(cat /run/secrets/token)` over a file ending in a newline. Strip it at the \
+             source (`tr -d '\\n'`), or use a token without trailing whitespace. It is not \
+             trimmed here on purpose: that would authenticate a key you did not declare"
+                .to_string(),
+        ),
+        Some(t) => Ok(Some(t.to_string())),
+    }
+}
+
 pub fn serve_http(
     store: PalaceStore,
     tenancy: Tenancy,
@@ -56,9 +116,8 @@ pub fn serve_http(
     port: u16,
     read_only: bool,
 ) -> Result<()> {
-    let token = std::env::var("UNDERCROFT_MCP_HTTP_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty());
+    let token = resolve_mcp_token(std::env::var("UNDERCROFT_MCP_HTTP_TOKEN").ok().as_deref())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
     if !loopback && token.is_none() {
         bail!(
@@ -202,13 +261,28 @@ pub fn serve_http(
         }
         // Prometheus metrics — opt-in, behind the bearer gate above.
         if metrics_enabled && request.method() == &Method::Get && path == "/metrics" {
-            let (code, body) = match undercroft_obs::render_prometheus() {
-                Some(text) => (200, text),
-                None => (
-                    503,
-                    "metrics require building undercroft with --features telemetry\n".to_string(),
-                ),
-            };
+            // ROADMAP O25. This route sits after the bearer gate above and
+            // BEFORE `tenancy.authorize`, where the per-vault assertion is
+            // enforced — because it addresses no single vault, so that gate
+            // never applied to it. Under a declared assertion secret the
+            // vault-labelled gauges are therefore suppressed: the banner
+            // promises "per-vault assertions required" without qualification,
+            // and a caller who could assert only vault A was reading vault B's
+            // record counts, chain height, KG size and database bytes.
+            //
+            // Not filtered to the caller's vault, because an assertion binds
+            // exactly one and a scraper would need a fresh one per vault per
+            // scrape. Not aggregated either — a caller who knows A (from
+            // `/v1/…/stats`, legitimately) recovers B by subtraction.
+            let (code, body) =
+                match undercroft_obs::render_prometheus_scoped(tenancy.requires_assertion()) {
+                    Some(text) => (200, text),
+                    None => (
+                        503,
+                        "metrics require building undercroft with --features telemetry\n"
+                            .to_string(),
+                    ),
+                };
             let ct = Header::from_bytes(&b"Content-Type"[..], &b"text/plain; version=0.0.4"[..])
                 .expect("static header");
             let _ = request.respond(
@@ -344,5 +418,64 @@ mod tests {
         // A non-ASCII secret must not panic on a byte-length guard.
         assert!(bearer_matches("Bearer pässwörd", "pässwörd"));
         assert!(!bearer_matches("Bearer passwörd", "pässwörd"));
+    }
+
+    /// ROADMAP O22. `UNDERCROFT_MCP_HTTP_TOKEN=` was
+    /// `.ok().filter(|t| !t.is_empty())`, so a declaration that failed to
+    /// interpolate became "no token" — and on a loopback bind that is not
+    /// refused, so `/mcp` and `/v1` served any caller on the host while the
+    /// operator's configuration said a bearer was required.
+    ///
+    /// The counterfactual is the second half and it is the half a naive
+    /// version of this test would miss: mapping empty to a refusal is easy
+    /// to write in a way that ALSO trims, and trimming a token changes the
+    /// KEY — every client already sending the untrimmed value would stop
+    /// matching, silently, with no error anywhere. Whitespace-only names no
+    /// secret; whitespace AROUND one is part of it.
+    #[test]
+    fn an_empty_bearer_declaration_refuses_and_a_real_one_is_never_trimmed() {
+        assert!(resolve_mcp_token(None)
+            .expect("unset is not a refusal")
+            .is_none());
+
+        for empty in ["", " ", "\t", "\n", "  \r\n "] {
+            let err = resolve_mcp_token(Some(empty)).expect_err("must refuse");
+            assert!(err.contains("names no token"), "{err}");
+            assert!(err.contains("no silent fallback"), "{err}");
+            // The consequence, named — an operator reading this on a loopback
+            // box must not think the refusal is about a network bind.
+            assert!(err.contains("loopback"), "{err}");
+        }
+
+        // Untrimmed: a value that IS presentable round-trips byte for byte.
+        // Leading and internal whitespace are both presentable — measured
+        // against a live server, not assumed — so they are values, not
+        // typos, and editing them would change the key.
+        for real in ["s3cret", " s3cret", "p ä ss", "  a b  c"] {
+            assert_eq!(
+                resolve_mcp_token(Some(real)).unwrap().as_deref(),
+                Some(real),
+                "the declared token was edited on the way through"
+            );
+        }
+
+        // TRAILING whitespace refuses, because HTTP strips a field value's
+        // trailing whitespace and the token could never be presented: the
+        // server would start clean and 401 every client forever. Measured
+        // against a live `serve-http` over a 1,360-drawer corpus — leading
+        // and internal whitespace answered 200, these answered 401.
+        for tailed in ["s3cret ", "s3cret\n", "s3cret\t", " s3cret \n"] {
+            let err = resolve_mcp_token(Some(tailed)).expect_err("must refuse");
+            assert!(err.contains("ends in whitespace"), "{err}");
+            assert!(err.contains("HTTP strips"), "{err}");
+            // The refusal must not read as the empty case — an operator with
+            // a real token and a stray newline is a different diagnosis.
+            assert!(!err.contains("names no token"), "{err}");
+        }
+        // …and whitespace-ONLY keeps the empty diagnosis, which is only true
+        // if the two guards stay in this order.
+        assert!(resolve_mcp_token(Some("  "))
+            .expect_err("must refuse")
+            .contains("names no token"));
     }
 }
