@@ -242,11 +242,26 @@ one, and it has to be derived rather than assumed.
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
 **Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28, O30, O29,
-O32, O33 and O31 are CLOSED — and with O31 the engine-side queue is EMPTY.**
-What remains is **O7** (release-gated: its fix renames `palace.db`, so it
-cannot ride a minor) and **O6** (a click in the GitHub web UI that no REST
-endpoint exposes), with **O23** filed and deliberately unscheduled. Neither
-O7 nor O6 is reachable from a keyboard on this branch. **`.handover/AUDIT_CONTINUATION.md`
+O32, O33 and O31 are CLOSED**, which emptied the engine-side queue.
+
+**Refilled 2026-08-14 by a PARTIAL round-five audit** — three of eleven
+dimensions, run solo, no adversarial verification. **O34**, **O35** and
+**O36** are its findings, all LOW to LOW-MEDIUM, none a live exposure, and
+**two of the three were introduced by this campaign's own units** (O32 fenced
+one `stats()` field and not its neighbour; O33's gate assumes a co-location
+nothing enforces). Beside them: **O7** (release-gated — its fix renames
+`palace.db`, so it cannot ride a minor), **O6** (a GitHub web-UI click no
+REST endpoint exposes) and **O23**, filed and deliberately unscheduled.
+
+**The audit's own coverage is the thing to read before trusting its verdict.**
+Eight dimensions did not run, including the two most obviously owed by the
+units just landed: **D5** (`invalid name` became `invalid <field>` on every
+surface, and nothing has swept suites, docs, client examples or `ui.html` for
+the old text) and **D7** (the published figures moved four times in one
+session). Full charter and findings are in `.handover/DRIFT_SWEEP_PLAN_R5.md`
+and `.handover/SWEEP5_FINDINGS.md` — gitignored, so these three entries are
+the committed record. A weaker result than round four's, and the honest
+reading is that it reflects the SCOPE rather than the tree. **`.handover/AUDIT_CONTINUATION.md`
 §1a now carries a verdict for 21 of the ~47 unclosed sweep rows and names the
 26 that are still unprobed** — eight more are verified OPEN there and are
 schedulable without re-deriving them.
@@ -1883,6 +1898,78 @@ exactly this reviewer. Restoring such a row to a *different* wing would be a
 new capability on three surfaces and is not filed as one: no vault can now
 produce the state, and inventing an operator-chosen destination is the kind
 of guessing this engine refuses everywhere else.
+
+---
+
+### O34 — `PalaceStats` disagrees with itself about whether the review queue exists
+
+Round-five **F1**, and it is this campaign's own defect: O32 fenced one field
+of `stats()` and not its neighbour.
+
+`stats()` reports `wings: self.wings()?`, which since O32 EXCLUDES the
+reserved wing (`lib.rs:6055`, `WHERE wing <> ?1`), beside
+`rooms: SELECT COUNT(*) FROM (SELECT DISTINCT wing, room FROM drawers)`
+(`manage.rs:890-894`), which has no fence. On a vault holding quarantined
+rows the struct therefore reports a wing list omitting the queue and a room
+count including it — one quantity, two answers, inside one struct. The same
+class as `writes` on two handles and `records:` vs `"drawers":`.
+
+**Not an exposure**: `rooms` is a count, so no name escapes. A coherence
+defect, and low.
+
+**Shape of the fix.** Fence the room count the same way, so both fields
+answer the same question. **Gate:** on a vault whose only drawer in a wing is
+quarantined, `stats().wings` and `stats().rooms` agree the wing is absent;
+`/v1 …/stats` and `ui.html` render the same numbers.
+
+---
+
+### O35 — `rooms()` is fenced by a check in another crate, and by nothing of its own
+
+Round-five **F2**. Pre-existing, made visible by O32's asymmetry.
+
+`rooms(wing)` (`manage.rs:789`) takes a caller-supplied wing with no
+quarantine fence. Two callers: `taxonomy()` (safe now, because `wings()` is
+fenced) and MCP `undercroft_list_rooms` (`mcp.rs:903`), safe only because the
+MCP quarantine fence refuses any tool whose ARGUMENTS name the reserved wing.
+
+So the queue's room names are protected by a check in a different crate,
+keyed on tool arguments, plus the absence of any CLI or `/v1` route passing a
+caller-supplied wing here. O32 gave `wings()` defence in depth and left its
+sibling with none. **This is A28 pointed forward** — *any future retrieval
+path must call the FUNCTION*: a `/v1 …/wings/{wing}/rooms` route would leak
+and nothing in `rooms()` would stop it.
+
+**Shape of the fix.** Either fence `rooms()` unless the reserved wing is
+named deliberately (the `list_drawers` pattern), or record the reliance at
+the function and pin the layer that holds it. **Gate:**
+`rooms(QUARANTINE_WING)` returns empty, or a test pins the MCP fence as the
+boundary and the comment says so.
+
+---
+
+### O36 — the signal-vocabulary gate assumes co-location and nothing enforces it
+
+Round-five **F3**, and the gate is one this campaign wrote (O33).
+
+`the_signal_vocabulary_is_exactly_what_the_engine_can_emit` reads its
+declared codes from `include_str!("admission.rs")` — ONE file. All three
+`*_CODE` constants live there today (`admission.rs:57,63,83`, and nowhere
+else in the crate), and nothing enforces that.
+
+The blind spot is one-directional and exact. A future `FOO_CODE` defined in
+another file, emitted from the store BY CONSTANT, and absent from
+`SIGNAL_CODES`: the core gate's `declared` set misses it so `emitted == vocab`
+still holds and it **passes**; the store gate flags only string LITERALS at
+`code:` sites, so it **passes** too. Both gates green over a code outside the
+declared vocabulary — the exact condition O33 exists to prevent. The opposite
+direction is safe and fails loudly.
+
+**Shape of the fix.** Scan the crate's `src` directory rather than one file
+(the store gate's own `read_dir` pattern), or assert no `*_CODE: &str` exists
+outside `admission.rs` — cheaper, and it states the assumption the gate
+currently makes silently. **Gate:** adding a `*_CODE` constant to any other
+core file fails the test.
 
 ---
 
