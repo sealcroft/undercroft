@@ -1333,7 +1333,7 @@
     <tr><td>Durability</td><td>WAL + <code>synchronous=FULL</code>; anchor fsynced through an atomic rename plus directory sync; key material fsynced at creation</td></tr>
     <tr><td>Key rotation</td><td>In-place re-seal of every artifact plus chain re-key over preserved audit bytes, in one transaction, crash-reconciled at open</td></tr>
     <tr><td>Sharing</td><td>Recipient-encrypted export bundles: <strong>hybrid post-quantum</strong> X25519 + ML-KEM-768 (<code>pq1</code> identities) → HKDF over both shared secrets → XChaCha20-Poly1305. Legacy bare-hex X25519 identities still parse and still receive openable v1 bundles, but a hybrid recipient never silently downgrades — an X25519-only secret is refused on a v2 bundle. Beside it, an optional Ed25519 <em>sender attestation</em> (<code>bundle sign-keygen</code> / <code>bundle sender</code>): encryption says who may READ, the signature says who WROTE. See <code>docs/PQ.md</code></td></tr>
-    <tr><td>Path safety</td><td>Vault, wing, and room names pass <code>validate_name</code>, a path-traversal guard</td></tr>
+    <tr><td>Path safety</td><td>Vault, wing, and room names pass <code>validate_name</code>, a path-traversal guard — at the write choke point <em>and</em> at the admission screen in front of it, since a diversion rewrites the fields the guard reads (it moves the declared wing into <code>intended_wing</code> and writes the reserved constant in its place). Every refusal names which field it refused</td></tr>
     <tr><td>Secrets in memory</td><td>Key material lives in a zeroize-on-drop wrapper and is never <code>Debug</code>-printed</td></tr>
   </tbody>
 </table>

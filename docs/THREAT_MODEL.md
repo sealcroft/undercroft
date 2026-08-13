@@ -208,7 +208,13 @@ Vault keys are independent HKDF derivations; AAD binds the vault id
 into every ciphertext, so a blob copied from vault A into vault B
 **fails to decrypt** — it is not filtered out by a query predicate that
 could have a bug, it is rejected by the cipher. Vault, wing, and room
-names pass a path-traversal guard (`validate_name`). This is the
+names pass a path-traversal guard (`validate_name`) — at the write choke
+point, **and** at the admission screen in front of it, because a diversion
+rewrites the very fields the guard reads: it moves the declared wing into
+`intended_wing` and puts the reserved quarantine constant in its place, so
+until 2026-08-13 an invalidly-declared write whose content tripped the
+detector was quarantined rather than refused (ROADMAP O30). A guard at the
+choke point is necessary and was not sufficient. This is the
 property that makes vault-per-customer multi-tenancy defensible; every
 competitor surveyed in [SECURITY_COMPARISON.md](https://sealcroft.com/undercroft/docs/security-comparison.html)
 isolates tenants with a metadata filter.

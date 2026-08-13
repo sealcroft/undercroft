@@ -54,6 +54,33 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
+/// The destination a write DECLARES, through the one path-traversal guard.
+///
+/// It exists because the order was wrong (ROADMAP O30). `write_drawer_stmts`
+/// validates `meta.wing`/`meta.room` at the write choke point, which is where
+/// CLAUDE.md puts it so no write path can forget — but the admission screen
+/// runs BEFORE that, and the screen is the step that **rewrites the fields
+/// validation reads**: [`PalaceStore::admission_divert`] moves the declared
+/// wing into `intended_wing` and writes the reserved constant into
+/// `meta.wing`. So a write declaring an invalid wing was not refused at the
+/// door; it was screened, and if the content tripped the detector it was
+/// DIVERTED — after which the choke point validated the reserved constant,
+/// which is always valid, and the row landed in the review queue carrying an
+/// invalid declaration nothing had ever checked.
+///
+/// Both write paths had it: `write_drawer` screens at the choke point,
+/// `upsert_many` screens in its own batch loop because it owns its
+/// transaction. Validating here — inside the shared screening step, in front
+/// of the rewrite — is one implementation for both, and is the reason this
+/// is not two call sites.
+pub(crate) fn validate_declaration(meta: &undercroft_core::DrawerMeta) -> Result<(), StoreError> {
+    undercroft_core::validate_name(&meta.wing, "wing")
+        .map_err(|e| StoreError::Invalid(e.to_string()))?;
+    undercroft_core::validate_name(&meta.room, "room")
+        .map_err(|e| StoreError::Invalid(e.to_string()))?;
+    Ok(())
+}
+
 /// What one just-written drawer means on the live event feed.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SaveEvent<'a> {
@@ -149,11 +176,19 @@ impl PalaceStore {
         self.admission_advisor = advisor;
     }
 
-    /// The screen-and-divert step, in the ONE place both write paths call.
+    /// The screen-and-divert step, in the ONE place every caller reaches it.
     ///
     /// `write_drawer` calls it in front of its transaction; `upsert_many`
     /// calls it inside its batch loop, because a batch owns its transaction
-    /// and so cannot route through the choke point at all. Until 2026-08-05
+    /// and so cannot route through the choke point at all; and `dedup`'s
+    /// **dry run** calls it to preview whether the survivor would divert,
+    /// which is a read (`&self`) rather than a write. That third caller is
+    /// named here because this comment said "both write paths" and there
+    /// were three call sites — the compiler found it when this function
+    /// became fallible, and a doc comment that undercounts its own callers
+    /// is the same class of artifact as a heading that is wrong.
+    ///
+    /// Until 2026-08-05
     /// those were two implementations of one security decision — the shape
     /// every drift in the surface audit had — and they did not even guard on
     /// the same condition: the choke point tested the required [`Screen`]
@@ -172,12 +207,33 @@ impl PalaceStore {
         &self,
         drawer: &Drawer,
         screen: crate::Screen,
-    ) -> Option<Drawer> {
+    ) -> Result<Option<Drawer>, StoreError> {
         match screen {
             // A bypass is a decision already made somewhere a reviewer can
             // grep for; the reason it carries is that justification.
-            crate::Screen::Bypass(_) => None,
-            crate::Screen::Apply => self.admission_divert(drawer),
+            //
+            // It does NOT re-validate, and that is deliberate rather than an
+            // omission. `AlreadyDiverted` carries this function's own output,
+            // whose declaration was validated one frame up on the `Apply`
+            // arm; `OperatorRuling` carries what [`Self::admission_allow`]
+            // restored, which that function validates itself and with a far
+            // better message — it is the one caller that knows the value came
+            // out of a queue row rather than off a request. Validating a
+            // second time here would only replace that message with a worse
+            // one, and the write choke point is still behind both.
+            crate::Screen::Bypass(_) => Ok(None),
+            // The declaration is validated HERE, in front of the rewrite,
+            // because this arm is the rewrite: `admission_divert` moves
+            // `meta.wing` into `intended_wing` and puts the reserved constant
+            // in its place, so everything downstream validates a system value
+            // and the caller's own declaration is never seen again. That is
+            // ROADMAP O30, and it compounded — the row landed in the review
+            // queue and `admission_allow` was then refused on the way back
+            // out, so it could be denied but never allowed.
+            crate::Screen::Apply => {
+                validate_declaration(&drawer.meta)?;
+                Ok(self.admission_divert(drawer))
+            }
         }
     }
 
@@ -357,6 +413,32 @@ impl PalaceStore {
             return Err(StoreError::Invalid(format!(
                 "{id} carries no intended destination — not a quarantined drawer"
             )));
+        }
+        // Non-empty was the ONLY check, and it is not the check the restore
+        // needs: `write_drawer_stmts` validates what it is handed, so a row
+        // whose intended destination is invalid was refused there — with a
+        // message naming neither the field, nor the row, nor the fact that
+        // the value came out of the queue rather than off this request. The
+        // operator saw a generic write error and the row stayed pending.
+        // It could be DENIED, i.e. destroyed, and never allowed.
+        //
+        // The ordering fix above means no new row reaches the queue this
+        // way. This arm is what a row written by an older binary meets, and
+        // it is the half worth having on its own (ROADMAP O30): it turns a
+        // permanent trap into a refusal that says what to do about it.
+        for (what, value) in [
+            ("intended wing", wing.as_str()),
+            ("intended room", room.as_str()),
+        ] {
+            undercroft_core::validate_name(value, what).map_err(|e| {
+                StoreError::Invalid(format!(
+                    "{id} cannot be allowed: {e}. Its destination was recorded \
+                     before the screen validated one, so re-filing it as \
+                     declared is refused — read the drawer back naming the \
+                     {QUARANTINE_WING} wing, save it to a valid destination, \
+                     then deny this row"
+                ))
+            })?;
         }
         let mut restored = d.clone();
         restored.meta.wing = wing.clone();

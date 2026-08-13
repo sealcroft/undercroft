@@ -29,8 +29,22 @@ pub use rerank::Reranker;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
-    #[error("invalid name {0:?}: {1}")]
-    InvalidName(String, &'static str),
+    /// `what` names the FIELD, and it is in the message because it was not.
+    /// [`validate_name`] has always taken a `what` label — every one of its
+    /// call sites passes a real one (`wing`, `room`, `subject`, `from_wing`,
+    /// `canonical_key`, `entity`, `vault`) — and it **discarded it**, with a
+    /// `let _ = what;` to silence the unused-parameter warning. So every
+    /// refusal in the tree read `invalid name "a/b": …`, and a caller that
+    /// had declared two names could not tell which one was refused.
+    ///
+    /// Found while closing ROADMAP O30, whose gate is a refusal that NAMES
+    /// the field: it could not be met while the label went nowhere.
+    #[error("invalid {what} {value:?}: {reason}")]
+    InvalidName {
+        what: &'static str,
+        value: String,
+        reason: &'static str,
+    },
     #[error("content too large: {0} bytes (max {1})")]
     ContentTooLarge(usize, usize),
 }
@@ -41,22 +55,27 @@ pub enum CoreError {
 pub fn validate_name(value: &str, what: &'static str) -> Result<(), CoreError> {
     let v = value.trim();
     if v.is_empty() || v.len() > 128 {
-        return Err(CoreError::InvalidName(
-            value.into(),
-            "must be 1..=128 chars",
-        ));
+        return Err(CoreError::InvalidName {
+            what,
+            value: value.into(),
+            reason: "must be 1..=128 chars",
+        });
     }
     if v == "." || v == ".." {
-        return Err(CoreError::InvalidName(value.into(), "reserved name"));
+        return Err(CoreError::InvalidName {
+            what,
+            value: value.into(),
+            reason: "reserved name",
+        });
     }
     if v.chars()
         .any(|c| c.is_control() || c == '/' || c == '\\' || c == '\0')
     {
-        let _ = what;
-        return Err(CoreError::InvalidName(
-            value.into(),
-            "control chars and path separators are not allowed",
-        ));
+        return Err(CoreError::InvalidName {
+            what,
+            value: value.into(),
+            reason: "control chars and path separators are not allowed",
+        });
     }
     Ok(())
 }
@@ -104,10 +123,11 @@ pub fn validate_kind(value: &str) -> Result<(), CoreError> {
     if KIND_VOCAB.contains(&value) {
         Ok(())
     } else {
-        Err(CoreError::InvalidName(
-            value.into(),
-            "not in the closed kind vocabulary (question|preference|decision|event|procedure|statement)",
-        ))
+        Err(CoreError::InvalidName {
+            what: "kind",
+            value: value.into(),
+            reason: "not in the closed kind vocabulary (question|preference|decision|event|procedure|statement)",
+        })
     }
 }
 
@@ -127,10 +147,11 @@ pub fn validate_trust(value: &str) -> Result<(), CoreError> {
     if TRUST_VOCAB.contains(&value) {
         Ok(())
     } else {
-        Err(CoreError::InvalidName(
-            value.into(),
-            "not in the closed trust vocabulary (quarantined|standard|trusted)",
-        ))
+        Err(CoreError::InvalidName {
+            what: "trust class",
+            value: value.into(),
+            reason: "not in the closed trust vocabulary (quarantined|standard|trusted)",
+        })
     }
 }
 
@@ -157,5 +178,45 @@ mod tests {
     fn validate_name_rejects_empty_and_huge() {
         assert!(validate_name("", "room").is_err());
         assert!(validate_name(&"x".repeat(200), "room").is_err());
+    }
+
+    /// The `what` label reaches the MESSAGE, on every rejection arm.
+    ///
+    /// It did not: the parameter was taken by all 44 call sites and thrown
+    /// away, so `wing`, `room`, `subject`, `from_wing`, `canonical_key`,
+    /// `entity` and `vault` all rendered the same `invalid name "…"`. A
+    /// caller declaring two names could not tell which was refused, and
+    /// O30's gate — a refusal that NAMES the field — was unreachable.
+    ///
+    /// All three arms, because only one of them carried the `let _ = what;`
+    /// that made the discard visible; the other two never mentioned it.
+    #[test]
+    fn a_rejection_names_the_field_it_rejected() {
+        for (value, arm) in [("", "length"), ("..", "reserved"), ("a/b", "separator")] {
+            let msg = validate_name(value, "wing").unwrap_err().to_string();
+            assert!(
+                msg.contains("wing"),
+                "the {arm} arm dropped the field label: {msg:?}"
+            );
+            assert!(
+                !msg.contains("invalid name"),
+                "the {arm} arm still renders the label-less form: {msg:?}"
+            );
+        }
+        // Distinct labels must render distinctly, or "names the field" is
+        // satisfied by a constant that happens to read like one.
+        let a = validate_name("a/b", "wing").unwrap_err().to_string();
+        let b = validate_name("a/b", "room").unwrap_err().to_string();
+        assert_ne!(a, b, "two fields rendered the same refusal");
+        // The vocabulary validators share the variant and were equally
+        // anonymous.
+        assert!(validate_kind("nope")
+            .unwrap_err()
+            .to_string()
+            .contains("kind"));
+        assert!(validate_trust("nope")
+            .unwrap_err()
+            .to_string()
+            .contains("trust class"));
     }
 }

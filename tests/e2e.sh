@@ -89,6 +89,13 @@ echo "== Vault management & isolation =="
 check "vault create"              0 "Created vault 'work'"           -- "$BIN" vault create work
 check "vault create dup fails"    1 "already exists"                 -- "$BIN" vault create work
 check "vault traversal rejected"  1 ""                               -- "$BIN" vault create "../escape"
+# O30: the refusal NAMES the field. `validate_name` took a `what` label at
+# all 44 call sites and discarded it, so every one of them rendered the same
+# `invalid name "…"` and a caller declaring two names could not tell which
+# was refused. Two different fields, so a constant that merely reads like a
+# label cannot pass this.
+check "and names the field"       1 "invalid vault"                  -- "$BIN" vault create "../escape"
+check "a bad wing names its own"  1 "invalid wing"                   -- "$BIN" remember "x" --wing "a/b"
 check "remember into work vault"  0 "Filed drawer"                   -- "$BIN" remember \
   "the acquisition codename is BLUE HERON" --vault work
 check "default cannot see work"   0 "No memories matched"            -- "$BIN" search "acquisition codename"

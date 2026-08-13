@@ -550,6 +550,26 @@ Consequences that are binding, not advisory:
   `save_with_dedup{,_vec}` and `import_record` all state `Apply` now;
   the operator's `allow` ruling is the one `OperatorRuling` bypass, since
   re-screening a human's verdict would trap every allowed drawer forever.
+  **The screen runs AFTER the declaration is validated, and that ordering
+  is the whole of O30 (2026-08-13)**: a diversion *rewrites the fields
+  validation reads* — `admission_divert` moves the declared wing into
+  `intended_wing` and puts the reserved constant in `meta.wing` — so
+  validating downstream validated a value the store had chosen, and an
+  invalidly-declared write was QUARANTINED rather than refused. It then
+  could not leave: `admission_allow` restored `intended_wing` checking only
+  that it was non-EMPTY, so the restore was refused by the choke point on
+  the way back out, and the row could be denied but never allowed.
+  `admission::validate_declaration` is the one function, called from
+  `screen_and_divert`'s `Apply` arm (the DOOR — in front of the rewrite,
+  and shared, so `upsert_many`'s own loop and `dedup`'s dry-run preview
+  inherit it) and from `write_drawer_stmts` (the BOUNDARY), which is the
+  `resolve_search_policy`/`verified_meta_admits` shape one level over.
+  Two things that unit found and its filing had not: `validate_name(value,
+  what)` **discarded `what`** at all 44 call sites, so no refusal anywhere
+  in the tree could name its field — the gate was unreachable, not merely
+  unmet — and `screen_and_divert`'s doc comment said "both write paths"
+  while three callers existed. The reachable door was IMPORT, never save:
+  the three save surfaces validate before they reach the store.
   **`upsert_many` is the stated exception**: a batch owns its transaction,
   so it cannot call `write_drawer` and screens through its own
   `admission_divert` loop into `BulkOutcome{created, quarantined}` — the
@@ -1172,8 +1192,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (728 run,
-                                      # 4 #[ignore]d = 732 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (732 run,
+                                      # 4 #[ignore]d = 736 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1256,7 +1276,7 @@ docker compose run --rm test          # cargo unit + integration tests (728 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (348 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (350 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -2098,6 +2118,30 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   just logically.
 - Vault/wing/room names go through `undercroft_core::validate_name` (path
   traversal guard).
+- **A guard runs BEFORE any step that rewrites the field it guards, and a
+  guard that cannot name the field it refused is half a guard.** Both halves
+  are O30 (2026-08-13). The first: `validate_name` sat at the write choke
+  point, which is where a guard belongs — but the admission screen ran in
+  front of it, and a diversion MOVES the declared wing into `intended_wing`
+  and writes the reserved constant in its place. So the guard ran, on a value
+  the store had chosen, and reported success over a declaration nothing had
+  checked. Placing a guard at the choke point is necessary and not sufficient:
+  ask what has *already rewritten* the field by the time it runs. The second:
+  `validate_name(value, what)` accepted a field label from all 44 call sites
+  and discarded it, so no refusal in the tree could say WHICH name was bad —
+  an operator with two declared names got one message for both, and the fix's
+  own gate ("a refusal that names the field") was unreachable until the
+  parameter was wired up. A parameter that is accepted and dropped is a
+  promise the signature makes and the body breaks.
+  Applied backwards, as a rule here must be: it **reclassifies exactly one**
+  decision, the one it was written for. It **confirms three** that already got
+  the order right — `import_stamp` re-stamps `added_by` before the screen
+  reads it, `update_drawer` re-stamps for the same reason one level over, and
+  `import_unwrap_screened` unwraps a reserved-wing claim before screening. It
+  **does not touch A28**, which asks *which copy* a decision reads rather than
+  *in what order*, and conflating the two would be the mistake the versioning
+  doctrine above records. Four decisions is a thin history and this is the
+  rule's first real application; that is stated rather than implied.
 
 ## Definition of done — every unit, no exceptions
 

@@ -1005,7 +1005,18 @@ impl PalaceStore {
                     // The screen answers without writing (`&self`, returns
                     // the diverted copy), so the preview costs a screen and
                     // no mutation.
-                    diverted = self.screen_and_divert(keep, crate::Screen::Apply).is_some();
+                    //
+                    // The `?` is O30's declaration check reaching a third
+                    // caller, and it is inert here by construction rather
+                    // than by luck: `keep` is a drawer read back out of this
+                    // store, so its wing and room already passed the write
+                    // choke point. It propagates anyway — a preview that
+                    // swallowed a refusal would be previewing something the
+                    // apply path would not do, which is the defect the two
+                    // comments above this one describe.
+                    diverted = self
+                        .screen_and_divert(keep, crate::Screen::Apply)?
+                        .is_some();
                 }
                 if !diverted {
                     dates_kept += gained as u64;

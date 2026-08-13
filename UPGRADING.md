@@ -77,17 +77,69 @@ What they can do is stop a **misconfigured** deployment at start-up, which is
 why every one is listed here and detectable in advance by
 `undercroft config check`.
 
-**One entry is the exception to both sentences above, and it is called out
-here rather than left to be discovered inside it.** *"`/metrics` carries no
-vault-labelled series when assertions are declared"* changes what a **running,
-correctly-configured** deployment returns — so it is a response-shape change
-rather than a refusal, `config check` cannot see it (there is no declaration
-that fails to parse), and a scrape that parsed those gauges will find them
-absent. It is still a fix and not a contract change: the series were crossing
-the per-vault assertion boundary the deployment paid to declare. Everything
-else in this section is a misconfiguration caught at start-up, and for those,
-`config check` exiting 0 against your environment means none of them affect
-you.
+**TWO entries are the exception to both sentences above, and they are called
+out here rather than left to be discovered inside them.** Both change what a
+**running, correctly-configured** deployment returns, so neither is a
+start-up refusal and `config check` can see neither — there is no declaration
+that fails to parse.
+
+* *"`/metrics` carries no vault-labelled series when assertions are
+  declared"* — a scrape that parsed those gauges will find them absent. Still
+  a fix: the series were crossing the per-vault assertion boundary the
+  deployment paid to declare.
+* *"An import declaring an invalid wing or room is refused rather than
+  quarantined"* — an import client can see a 400 where it saw 200/202, and
+  **every** name refusal on every surface changes its wording. Still a fix:
+  the value was never valid, and the old behaviour put a permanently
+  un-allowable row in an operator's review queue.
+
+Everything else in this section is a misconfiguration caught at start-up, and
+for those, `config check` exiting 0 against your environment means none of
+them affect you.
+
+### An import declaring an invalid wing or room is refused rather than quarantined, and every name refusal names its field
+
+**Affects:** `POST /v1/vaults/{id}/import`, `undercroft import`, and the
+wording of every `invalid name` error on every surface. **No declaration is
+involved, so `undercroft config check` cannot detect this one** — it is a
+behaviour change on a running deployment, not a misconfiguration.
+
+**Symptom, before:** with `UNDERCROFT_ADMISSION=quarantine` declared, an
+imported record whose `meta.wing` or `meta.room` was invalid (a path
+separator, a control character, over 128 characters, `.` or `..`) and whose
+content tripped the admission detector was **accepted**, answering
+`quarantined: 1`, and landed in the review queue. It could then never be
+allowed out of it: `admission allow` restores the recorded destination, which
+no write may use, so the row could only be denied. Records whose content did
+*not* trip the detector were already refused, so the acceptance depended on
+the content rather than on the declaration.
+
+**Symptom, after:** the declaration is validated before the screen runs, so
+such a record is refused — `400` on `/v1` naming which record, exit 1 on the
+CLI — and never reaches the queue. A bulk import refuses the batch, which is
+the contract that path already had for any record the write guard rejects.
+
+**Also changed: the wording.** `validate_name` took a field label at all 44
+of its call sites and discarded it, so every refusal read
+`invalid name "a/b": …`. It now reads `invalid wing "a/b": …`,
+`invalid room`, `invalid vault`, `invalid subject`, `invalid kind`,
+`invalid trust class`, and so on.
+
+**What to do.** Nothing, unless a client matches on the literal string
+`invalid name` — match on the status code (`400`) or on `class` instead. If
+an import pipeline starts returning 400, the records it names carry a wing or
+room that was never valid; correct them at the source. To find rows already
+stuck in a queue from an earlier version, list the queue and compare each
+`intended_wing` against the rules above:
+
+```bash
+undercroft admission list
+```
+
+Such a row is not lost: read it back with the reserved wing named
+(`GET /v1/vaults/{id}/drawers/{drawer_id}?wing=quarantine-pending`), save the
+content to a valid destination, then `undercroft admission deny` the queue
+row so the ruling is attested.
 
 ### The OTLP traces endpoint obeys the transport policy — cleartext to a non-loopback collector is refused
 

@@ -3258,6 +3258,76 @@ mod tests {
         assert_eq!(code, 200, "{body}");
     }
 
+    /// ROADMAP O30 on the surface that can reach it: `/v1` import.
+    ///
+    /// "bad name" is one of the six refusal classes this route already
+    /// listed — and it only fired for content the admission detector
+    /// PASSED. The screen ran first, and a diversion moves the declared
+    /// wing into `intended_wing` and writes the reserved constant in its
+    /// place, so the guard downstream validated a value the store had
+    /// chosen. Flagged content declaring `ops/../etc` therefore answered
+    /// 200 with `quarantined: 1` and put a permanently un-allowable row in
+    /// the operator's review queue.
+    ///
+    /// Import is the door because the three SAVE surfaces validate before
+    /// they reach the store (CLI `remember`, MCP, `POST …/drawers`), while
+    /// this route deserializes a whole `Drawer` out of the payload. That is
+    /// the same asymmetry the choke-point guard was introduced for.
+    #[test]
+    fn an_import_declaring_an_invalid_wing_is_refused_even_when_the_screen_would_divert_it() {
+        let mut s = surface(false);
+        let mut store = PalaceStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
+        store.set_admission(true);
+        s.tenancy.stores.insert("acme".to_string(), store);
+        let pending_before = |s: &mut Surface| {
+            s.tenancy
+                .stores
+                .get_mut("acme")
+                .expect("cached")
+                .admission_pending()
+                .unwrap()
+                .len()
+        };
+
+        // PREMISE: the fixture trips the screen on this route, and a VALID
+        // declaration carrying it is DIVERTED rather than refused. Without
+        // this the 400 below could be an ordinary name refusal on content
+        // the detector never looked at, which is the case that already
+        // worked.
+        let good = Drawer::new("ops", "r", POISON.into(), None, 41, "export");
+        let (code, body) = s.call(
+            "POST",
+            "/v1/vaults/acme/import",
+            Some(&format!("{}\n", json!({ "drawer": good }))),
+        );
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["quarantined"], json!(1), "premise: the screen diverts");
+        let queued = pending_before(&mut s);
+
+        // The same content, declared into a wing the guard refuses.
+        let bad = Drawer::new("ops/../etc", "r", POISON.into(), None, 42, "export");
+        let (code, body) = s.call(
+            "POST",
+            "/v1/vaults/acme/import",
+            Some(&format!("{}\n", json!({ "drawer": bad }))),
+        );
+        assert_eq!(code, 400, "an invalid declaration is a bad request: {body}");
+        assert!(
+            body.contains("wing") && body.contains("ops/../etc"),
+            "the refusal names the field and the value: {body}"
+        );
+        assert!(
+            !body.contains("corrupt"),
+            "a caller's bad value is not a corrupt vault: {body}"
+        );
+        assert_eq!(
+            pending_before(&mut s),
+            queued,
+            "a refused declaration must not reach the operator's review queue"
+        );
+    }
+
     /// C6: an imported token artifact is filed under the id the row LANDED
     /// under, and an id that is not a drawer id is refused outright.
     ///

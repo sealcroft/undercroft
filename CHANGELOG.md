@@ -2,6 +2,101 @@
 
 ## Unreleased — 1.1.0
 
+### the screen validates the declaration it is about to rewrite
+
+ROADMAP **O30**, round-four #20. Two halves that compounded, plus a third
+defect found while closing them and reported here as this unit's own.
+
+`write_drawer` ran the admission screen and `write_drawer_stmts` ran
+`validate_name` — in that order. A diversion is the step that **rewrites the
+fields validation reads**: `admission_divert` moves the declared wing into
+`intended_wing` and writes the reserved constant into `meta.wing`. So a write
+declaring a path-traversal wing was not refused; it was screened, and if the
+content tripped the detector it was DIVERTED, after which the choke point
+validated a value the store itself had chosen. The row landed in the review
+queue carrying a declaration nothing had ever checked.
+
+Then it could not leave. `admission_allow` restored `intended_wing` and
+`intended_room` checking only that they were non-EMPTY, so the restore
+reached the choke point and was refused there — with a message naming
+neither the field, nor the row, nor the fact that the value came out of the
+queue rather than off the request. The operator saw a generic write error.
+The one ruling that worked was **deny**, i.e. destroying content they had
+just decided to keep.
+
+**The fix is one function inside the shared screening step.**
+`admission::validate_declaration` runs on `screen_and_divert`'s `Apply` arm,
+in front of the rewrite, and the write choke point now calls the same
+function instead of the two `validate_name` lines it carried. Door and
+boundary — the `resolve_search_policy` / `verified_meta_admits` shape one
+level over — and one implementation rather than two. `admission_allow`
+validates what it restores itself, naming the row, the field, the value, the
+reason and the recourse.
+
+**Three things reading found that the filing did not.**
+
+* **`validate_name(value, what)` discarded `what`**, with a `let _ = what;`
+  to silence the unused-parameter warning. All 44 call sites pass a real
+  label — `wing`, `room`, `subject`, `from_wing`, `canonical_key`, `entity`,
+  `vault` — and every refusal in the tree rendered the same
+  `invalid name "…"`. O30's gate asks for a refusal that NAMES the field, so
+  this was on the critical path rather than beside it.
+  `CoreError::InvalidName` is a named-field variant now, and
+  `validate_kind`/`validate_trust` label themselves too. The pinning test
+  covers **all three** rejection arms: only one of them carried the visible
+  discard, so a fix aimed at that line would have left the other two.
+* **Two write paths had the ordering, not one.** `upsert_many` screens in
+  its own batch loop — it owns its transaction and cannot reach the choke
+  point — and validated afterwards, exactly as `write_drawer` did. A fix at
+  `write_drawer` alone would have left every bulk ingest, which is what a
+  CLI `import` and every sealed-bundle restore take, with the defect intact.
+* **`screen_and_divert` has three callers and its doc comment said "both
+  write paths".** The third is `dedup`'s dry-run preview. The compiler found
+  it when the function became fallible; nothing else would have.
+
+**The reachable door is IMPORT, not save.** CLI `remember`, MCP and
+`POST …/drawers` all validate before reaching the store, so the three save
+surfaces were never the way in. `import_record` deserializes a whole `Drawer`
+out of a payload — which is why `/v1` import already listed "bad name" among
+its refusal classes while that refusal only fired for content the detector
+had passed.
+
+**Gate, executed.** Five tests, each observed to FAIL against the reverted
+code: the invalid declaration returned `Ok(SaveOutcome { quarantined: true })`
+and the stuck row's refusal read
+`invalid operation: invalid name "notes/../etc": …`. Every one carries a
+premise arm — the fixture must actually trip the detector and the same
+content in a valid wing must actually divert — because without that a green
+result is indistinguishable from a store with screening off. The pre-fix
+queue row is built the way the pre-fix binary built one, under
+`Bypass(AlreadyDiverted)`, since the ordering fix means no reachable path
+produces one any more.
+
+**Real corpus**: 1,360 drawers mined into 16 wings with admission on. Poison
+into a valid wing diverts (queue 0 → 1); the same poison declared into
+`ops/../etc` is refused naming the field and the queue does **not** grow; a
+legitimate queue row still allows; `verify` 9 ms, green. Stated honestly, the
+first corpus arm was weaker than it looked — the LoCoMo feed is clean, so
+nothing tripped the screen and the invalid-wing mine would have been refused
+before the fix too. Reproducing the defect needed a poisoned document beside
+the corpus.
+
+**Residual, stated.** A row that reached the queue under an older binary can
+be denied but not allowed: the destination it records is one no write may
+use. `allow` now says so and names the recourse, which is a real path —
+`GET …/drawers/{id}?wing=quarantine-pending` exists for exactly this
+reviewer. Restoring such a row to a *different* wing would be new capability
+on three surfaces and is deliberately not filed as one, since no vault can
+now produce the state.
+
+**A second gap this unit found is FILED rather than folded in** (ROADMAP
+**O31**): an imported record declaring an ordinary wing beside an
+`intended_wing` takes neither of `import_unwrap_screened`'s branches, so a
+payload-controlled string reaches disk unvalidated. It is inert today —
+every reader of those fields checks the wing first — which is exactly what
+makes it a gap with a shape rather than a defect to half-land beside this
+one.
+
 ### a wing the tier already covers no longer materializes its own membership
 
 ROADMAP **O19**, split out of round-four #6 rather than folded into it,

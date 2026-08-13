@@ -241,12 +241,12 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
-**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27 and O28 are
-CLOSED.** Open: **O29** (a tunnel label reaches another agent unscreened — O17 one
-table over) and **O30** (the screen runs before validation, so invalid input
-is quarantined and then cannot be allowed), both filed from the 2026-08-13
-verification sweep of the round-four table; plus **O7** (at a major) and
-**O6** (a web-UI click), with O23 filed. **`.handover/AUDIT_CONTINUATION.md`
+**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28 and O30 are
+CLOSED.** Open: **O29** (a tunnel label reaches another agent unscreened — O17
+one table over), filed from the 2026-08-13 verification sweep of the
+round-four table, and **O31** (a payload's `intended_wing` reaches disk
+unvalidated when the record is not a queue row), filed while closing O30;
+plus **O7** (at a major) and **O6** (a web-UI click), with O23 filed. **`.handover/AUDIT_CONTINUATION.md`
 §1a now carries a verdict for 21 of the ~47 unclosed sweep rows and names the
 26 that are still unprobed** — eight more are verified OPEN there and are
 schedulable without re-deriving them.
@@ -1675,10 +1675,57 @@ unexamined, 0 hits.**
 
 ---
 
-### O30 — the screen runs before validation, so invalid input is quarantined and then cannot be allowed
+### O31 — a payload's `intended_wing` reaches disk unvalidated when it is not a queue row
 
-Round-four **#20**, verified against code 2026-08-13. Both halves hold, and
-they compound.
+Found while closing O30, and deliberately NOT folded into it: it is a second
+decision with its own argument, and half-landing a change that touches the
+write path is what this file forbids.
+
+`intended_wing`/`intended_room` are `#[serde(default)]` on `DrawerMeta`, and
+both import surfaces deserialize a whole `Drawer` out of the payload.
+`import_unwrap_screened` only looks at a record whose `wing` **is** the
+reserved constant — it moves `intended_wing` into `wing` and clears it. A
+record declaring `wing: "notes"` **and** `intended_wing: "a/b"` therefore
+takes neither branch: it lands in `notes`, and the invalid `intended_wing`
+travels with it onto disk, inside the drawer's HMAC, never validated by
+anything.
+
+**It is inert today, and the reason is worth writing down because it is what
+makes this a gap rather than a defect.** Every reader of those fields checks
+the wing first: `save_event` reads `intended_wing` only under
+`landed_in_quarantine`, `admission_pending` selects on the reserved wing, and
+`admission_allow` goes through `quarantined(id)`. `admission_divert`
+overwrites both fields from `meta.wing`, so such a row cannot later inherit
+its own stale claim. The exposure is that a payload-controlled string of
+arbitrary shape is stored and served back on `GET …/drawers/{id}`, and that
+the NEXT reader of `intended_wing` inherits an unvalidated value unless it
+repeats the wing check — which is the "a screen's scope must match the scope
+of the read it guards" failure (O17) waiting one table over.
+
+**Shape of the fix, and the alternatives rejected.** Clear `intended_wing`
+and `intended_room` on any imported record **not** in the reserved wing: the
+screen is the only legitimate author of those fields, and a payload's claim
+about where a row "was headed" is meaningless for a row that is not in the
+queue. Rejected: (a) validating them at `write_drawer_stmts`, because the
+choke point's job is the destination being USED and `intended_*` is history —
+it would also make a pre-O30 queue row unconstructible, which is the state
+O30's own second half exists to handle; (b) refusing the record outright,
+which breaks the legitimate round trip `export_all` produces and is the
+mistake `import_unwrap_screened`'s own comment records having made once.
+
+**Gate:** an import declaring a non-reserved wing beside an `intended_wing`
+lands with both fields empty; a genuine quarantined record still round-trips
+through export → import and converges on the same deterministic id (the
+property `import_unwrap_screened` exists for, and the one this fix could
+plausibly break).
+
+---
+
+### O30 — CLOSED 2026-08-13: the screen validates the declaration it is about to rewrite
+
+Round-four **#20**, verified against code 2026-08-13. Both halves held, and
+they compounded. Closed the same day, with a **third** defect found while
+closing it and reported below as this unit's own.
 
 `write_drawer` calls `screen_and_divert` FIRST; `validate_name` lives in
 `write_drawer_stmts`, which runs after. So a write whose declared wing or room
@@ -1711,6 +1758,91 @@ a permanent trap into a refusal that names its cause.
 validation error and never appears in the queue; and a pre-existing queue row
 with an invalid intended destination fails `allow` with a message naming the
 field rather than a generic write error.
+
+#### What closing it changed, and what closing it FOUND
+
+**The fix is one function inside the shared screening step.**
+`admission::validate_declaration` runs on `screen_and_divert`'s `Apply` arm —
+in front of the rewrite, because that arm *is* the rewrite — and the write
+choke point calls the same function rather than the two `validate_name` lines
+it used to carry. Door and boundary, the `resolve_search_policy` /
+`verified_meta_admits` shape one level over, and one implementation for both.
+`admission_allow` validates what it restores itself, with a message naming the
+row, the field, the value, the reason and the recourse; the `Bypass` arms
+deliberately do not re-validate, since `AlreadyDiverted` carries this
+function's own output and `OperatorRuling` carries what `admission_allow`
+just checked with a better message than this level could produce.
+
+**Three things reading found that the filing did not.**
+
+1. **`validate_name(value, what)` DISCARDED `what`** — a `let _ = what;` to
+   silence the unused-parameter warning. All 44 call sites pass a real label
+   (`wing`, `room`, `subject`, `from_wing`, `canonical_key`, `entity`,
+   `vault`) and every refusal in the tree rendered the same
+   `invalid name "…"`. The gate above asks for a refusal that NAMES the
+   field, and it was **unreachable** while the label went nowhere — so this
+   was on the critical path, not adjacent to it. `CoreError::InvalidName` is
+   now a named-field variant and `validate_kind`/`validate_trust` label
+   themselves too. Pinned by `a_rejection_names_the_field_it_rejected`, which
+   checks all three rejection arms — only ONE of them carried the visible
+   discard, and a fix aimed at that line alone would have left the other two.
+2. **There are two write paths with this ordering, not one.** `upsert_many`
+   screens in its own batch loop (it owns its transaction and cannot reach
+   the choke point) and validates afterwards, exactly as `write_drawer` did.
+   A fix at `write_drawer` alone would have left every bulk ingest — which
+   is the path a CLI `import` and every sealed-bundle restore take — with the
+   defect intact.
+3. **`screen_and_divert` has THREE callers and its own doc comment said
+   "both write paths".** The third is `dedup`'s dry-run preview, which
+   screens without writing. The compiler found it when the function became
+   fallible; nothing else would have. A doc comment that undercounts its own
+   callers is the same class of artifact as a heading that is wrong, and it
+   is corrected in place.
+
+**The reachable door is IMPORT, not save.** CLI `remember`, MCP and
+`POST …/drawers` all `validate_name` before they reach the store, so the
+three save surfaces were never the way in. `import_record` deserializes a
+whole `Drawer` out of the payload and hands it to
+`write_drawer(…, Screen::Apply)` — which is why `/v1` import already listed
+"bad name" among its refusal classes while that refusal only ever fired for
+content the detector had PASSED.
+
+**Gate, executed.** Five tests, each observed to fail against the reverted
+code rather than reasoned about:
+`an_invalid_declaration_is_refused_before_the_screen_can_divert_it` (both
+write paths; returned `Ok(SaveOutcome { quarantined: true })` before),
+`a_queue_row_whose_destination_never_validated_says_why_it_cannot_be_allowed`
+(the pre-fix row is built the way the pre-fix binary built one, under
+`Bypass(AlreadyDiverted)`, because the ordering fix means no reachable path
+produces one any more; the old message was
+`invalid operation: invalid name "notes/../etc": …` — no row, no field, no
+recourse), `a_rejection_names_the_field_it_rejected`,
+`an_import_declaring_an_invalid_wing_is_refused_even_when_the_screen_would_divert_it`
+(the `/v1` surface), and two e2e checks on the real binary. Every one carries
+a premise arm: the fixture must actually trip the detector and the same
+content in a VALID wing must actually divert, or the refusal is measuring the
+detector's silence instead of the ordering.
+
+**Real corpus** (1,360 drawers mined from `.handover/locomo_feed.txt` into 16
+wings, admission on): poison into a valid wing diverts, queue 0 → 1; the same
+poison declared into `ops/../etc` is refused naming the field and the queue
+does **not** grow; a legitimate queue row still allows; `verify` 9 ms, green.
+Stated honestly — the first corpus arm run was **weaker than it looked**: the
+LoCoMo feed is clean (consistent with `screenfp`'s 0/5,882), so nothing
+tripped the screen and the invalid-wing mine would have been refused before
+the fix too. It measured the message change and no regression at scale, not
+the ordering. The arm that reproduces the defect needed a poisoned document
+beside the corpus, and that is the arm quoted above.
+
+**Residual, stated.** A row that reached the queue under an older binary can
+be DENIED but not ALLOWED — the destination it records is one no write may
+use. `allow` now says so and names the recourse (read the drawer back naming
+the reserved wing, save it to a valid destination, deny the row), which is a
+real path because `GET …/drawers/{id}?wing=quarantine-pending` exists for
+exactly this reviewer. Restoring such a row to a *different* wing would be a
+new capability on three surfaces and is not filed as one: no vault can now
+produce the state, and inventing an operator-chosen destination is the kind
+of guessing this engine refuses everywhere else.
 
 ---
 
