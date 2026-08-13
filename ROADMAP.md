@@ -241,15 +241,52 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
+**Status 2026-08-13: O15, O10, O25, O20 and O26 are CLOSED.** What remains is
+**O14 → O19**, then O7 at a major, then O6, with O23 filed.
 
-**What this map does NOT cover, stated so it is not mistaken for complete.**
-It is a dependency check over the ROADMAP entries and the code they name
-directly. It did not re-derive each item's fix and then look for collisions in
-the code that fix would touch — O19 and a future retrieval change could
-collide in `search_inner` without either entry saying so. The O25 → O20
-dependency was found by reading two entries side by side, which is the cheap
-half; the expensive half is asking, per pair, *would closing this change what
-the other's fix must be?* That was done at entry level, not at diff level.
+### The diff-level pass — 2026-08-13
+
+The entry-level map above ends by naming what it could not see: *"the expensive
+half is asking, per pair, would closing this change what the other's fix must
+be? That was done at entry level, not at diff level."* This is that pass, done
+by reading the code each remaining fix would touch rather than the entries.
+
+| item | the files its diff touches |
+|---|---|
+| **O14** | `undercroft-cli/src/tenant.rs` (handler, dispatch, `mutates`) · `undercroft-orchestrator/src/proxy.rs` (`OPS_ROUTES`, `ops_alias`, `engine_ops`) · `tests/e2e.sh` · `tests/e2e-orchestrator.sh` · `docs/AGENTS.md` · `architecture/index.html` |
+| **O19** | `undercroft-store/src/lib.rs` — the scope match at `search_inner`, and nothing else |
+| **O26** | `tests/no-trace/verify.py` · `tests/battery.sh` — **CLOSED** |
+| **O7** | `undercroft-vault/src/lib.rs` + 5 more files under `crates/` (39 sites), `tests/` (11), `deploy/` (1), `docs/` (4), plus website/architecture/root prose. Re-measured; the entry's figures are exact |
+| **O6** | none in the tree |
+
+**Pairwise, the answer is no collisions:** O14 × O19 × O26 touch disjoint
+files, and O7 meets O14 only in `tests/e2e.sh` and `docs/`, textually rather
+than by design. O7 forces `architecture/build.sh` to be re-run if a diagram
+names the file, which regenerates the eleven PDFs — the input set O26's
+scanner walks. An ordering note, not a blocker.
+
+**What the pass found that the entry level could not, and it is O14's:** the
+entry calls O14 independent, which is true of item-to-item blocking and
+misleading about its diff. Its own motivating case is *"the multi-tenant
+deployment, where `/v1` is the only door an operator has, cannot check one at
+all"* — and a route on the engine alone does not reach that operator.
+`proxy.rs`'s `OPS_ROUTES` is a **closed vocabulary**, `ops_alias` is the
+scripted door, and
+`every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias` binds the
+two; a route in neither is unreachable in a fleet. A third inventory,
+`engine_ops` inside
+`every_operator_capability_is_reachable_or_recorded_as_absent`, is a
+hand-maintained literal — a new `/v1` route absent from it is not counted in
+**either** direction, so the gate that exists to classify capabilities stays
+green over an unclassified one. And `tenant.rs`'s `mutates()` fails closed, so
+verify-forgetting must be named the third POST-that-reads beside `search` and
+`verify` or a `--read-only` server refuses a pure read. **O14's filed gate
+names none of these three**; it is corrected in that entry.
+
+The general shape, since it recurs: an entry-level map answers *which item do
+I take next*, and a diff-level map answers *what does taking it actually
+touch*. The second is where a filed gate turns out to be incomplete, and a
+gate that is incomplete is the failure this project pays for most.
 
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
@@ -938,15 +975,20 @@ would report any tree clean"* rather than passing vacuously.
    and a message that misdescribes its own situation is this project's most
    expensive artifact. It branches on the output now.
 
-**One gap found and NOT closed, recorded rather than absorbed:** the original
-skips `.pdf` via `SKIP_BIN` and the port keeps that, so the **Flate-compressed
-content stream** class — the one `CLAUDE.md` records as having passed a clean
-`grep` across 17 historical PDF blobs — is *not* covered by this scanner. The
-six classes in the entry's own list are the five text patterns plus the
-certificate; PDFs were never among them. Closing it means decompressing every
-`/FlateDecode` stream, which is a real dependency (`zlib` is stdlib, so it is
-tractable) and a separate decision about scope. Filed as **O26** so the
-absence is a decision with an argument rather than a silence.
+**One gap found and NOT closed, recorded rather than absorbed:** the
+**Flate-compressed content stream** class — the one `CLAUDE.md` records as
+having passed a clean `grep` across 17 historical PDF blobs — is *not* covered
+by this scanner. The six classes in the entry's own list are the five text
+patterns plus the certificate; PDFs were never among them. Closing it means
+decompressing every `/FlateDecode` stream, which is a real dependency (`zlib`
+is stdlib, so it is tractable) and a separate decision about scope. Filed as
+**O26** so the absence is a decision with an argument rather than a silence.
+
+> **Corrected 2026-08-13, closing O26.** This paragraph said *"the original
+> skips `.pdf` via `SKIP_BIN` and the port keeps that."* The second half is
+> false: the port DROPPED `pdf` from that list, so the tracked scanner opened
+> every PDF in text mode and counted it as scanned. The gap was real and its
+> stated mechanism was not — see O26 for what the difference cost.
 
 ### O11 — CLOSED 2026-08-10: the orphan-label leg now covers drawers too
 Raised by the round-four sweep as a defect; **reclassified here as an open
@@ -1481,40 +1523,96 @@ the two surfaces cannot state different doctrines about the same bytes. It is
 an operator route, so it belongs beside `rotate` and `forget` and never on
 MCP.
 
+**Three inventories the diff must touch, added 2026-08-13 by the diff-level
+dependency pass; the gate as originally filed named none of them.**
+
+1. `tenant.rs`'s **`mutates()` fails closed** — anything not GET is a write
+   unless named, and the only two exceptions are `POST …/search` and
+   `POST …/verify`. Verification is a read in the strict sense (`&self`, no
+   mutating call), so without a third entry a `--read-only` server refuses a
+   pure read while the CLI performs it. That is the posture drift `mutates`
+   was built to end, so it must not be reintroduced by the route that fixes a
+   different one.
+2. `undercroft-orchestrator/src/proxy.rs`'s **`OPS_ROUTES` is a closed
+   vocabulary** and `ops_alias` is the scripted door, bound together by
+   `every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias`. A route
+   in neither is unreachable in a fleet — so an engine-only fix closes this
+   drift for the single-tenant operator and leaves it open for **exactly the
+   deployment this entry was filed about**. Note the argument is already
+   written there: `OPS_ROUTES`' own doc records that a fleet operator could
+   reach only the receipt-LESS deletion while *"the surface next door produced
+   a signed-able attestation"*. Minting through the ops plane and verifying
+   nowhere is that same asymmetry one step further on.
+3. **`engine_ops`**, the literal inside
+   `every_operator_capability_is_reachable_or_recorded_as_absent`, is
+   hand-maintained. A `/v1` route absent from it is counted in **neither**
+   direction, so the gate whose job is to force every capability into
+   *reachable* or *recorded-as-absent* stays green over an unclassified one.
+   Adding the route without adding the line leaves it invisible to the one
+   mechanism that would have named it.
+
 **Gate:** the route answers all three verdicts, `e2e.sh` drives each through
 `/v1` on both sides of a rotation, and the CLI and the route are shown to
 agree on one attestation — the same document, the same verdict, from both
-doors.
+doors. Plus: a `--read-only` server SERVES it (the `mutates` arm), and
+`e2e-orchestrator.sh` verifies through the ops plane an attestation the same
+plane minted — the round trip the fleet operator actually has.
 
 ---
 
-### O26 — the trace scanner does not look inside PDFs
+### O26 — CLOSED 2026-08-13: the trace scanner decompresses, and it was not the gap this entry described
 
-Found while closing O10, by reading what its scanner skips rather than what it
-claims. `SKIP_BIN` excludes `.pdf`, so `tests/no-trace/verify.py` never opens
-one — and `CLAUDE.md` records the instance that matters: **17 historical PDF
-blobs passed a clean `grep` while carrying the former name inside
-Flate-compressed content streams**, invisible to a byte scan and plainly
-visible to anyone who opened the file. The rule that lesson produced is that
-such a claim must *decompress rather than grep*, and the scanner that
-implements the rule does not decompress.
+**The filing was wrong about its own mechanism, and the correction is the
+entry.** This item read: *"`SKIP_BIN` excludes `.pdf`, so
+`tests/no-trace/verify.py` never opens one."* It does not.
+`.handover/verify-no-trace.py:17` — the hand-run original — carries
+`\.(png|pdf|ico|jpg|jpeg|woff2?)$`. The tracked port `71e653b` created
+**dropped `pdf`**, and this entry, `CLAUDE.md` and that commit's own message
+were all written from the original. Three surfaces agreeing, all describing a
+different file.
 
-The six classes O10's entry lists are the five text patterns plus the
-certificate; PDFs were never among them, so this is a gap in the SCANNER's
-reach rather than a regression in it. `architecture/pdf/` carries eleven
-tracked PDFs today.
+That makes the real defect **worse in kind than the one filed**. The scanner
+opened all eleven tracked PDFs in TEXT mode with `errors="ignore"`, scanned
+them for needles that cannot survive DEFLATE, and **counted them in
+`files scanned`**. An admitted skip is at least visible in the arithmetic;
+false coverage reads exactly like a clean result — which is the failure this
+scanner exists to prevent, committed by the scanner.
 
-**Shape of the fix.** Walk each tracked `.pdf` for `stream`/`endstream` pairs
-whose dictionary declares `/FlateDecode`, `zlib.decompress` each (stdlib, so
-no new dependency), and run the same needle set over the result. Tolerate
-failures per stream rather than aborting — a malformed or
-otherwise-encoded stream must be *reported as unexamined*, never skipped
-silently, or this reintroduces the defect one level down.
+What made it matter is on record in `CLAUDE.md`: **17 historical PDF blobs
+passed a clean `grep` while carrying the former name inside Flate-compressed
+content streams.** The rule that instance produced is that such a claim must
+*decompress rather than grep*, and the artifact implementing the rule did not
+decompress.
 
-**Gate:** the premise probe gains a synthesized PDF — a minimal object with a
-Flate-compressed stream containing a planted needle — which must be caught;
-and a count of streams examined versus streams skipped, printed on every run,
-so "0 hits" is never read as "0 hits in everything".
+**Closed by:** a `stream`/`endstream` walk that inflates every payload whose
+dictionary declares `/FlateDecode` (zlib-wrapped, then raw deflate) and runs
+the same needle set over the result; a payload that will not inflate is
+**counted, never dropped**; and a PDF that declares `FlateDecode` while
+yielding no readable stream is a **premise failure**, not a clean file. No PDF
+parser — a needle scan does not need one, and a partial parser that misreads
+an object fails exactly the way this gate exists to prevent.
+
+**Gate, both arms executed.** The probe measures the **routing**, not the
+extractor: it plants a needle in a compressed stream of a real temp file,
+asserts the literal did not survive compression, and drives it through
+`scan()` — because an `IS_PDF` that fails to match sends every PDF down the
+text path while a probe of the walk alone still passes. Counterfactual 1, on
+a **real** tracked PDF (`architecture/pdf/layers.pdf`, one Flate stream
+re-compressed with the name inside, literal asserted absent): the scanner as
+shipped answered **0 hits, exit 0**; this one answers `latin name 1`, exit 1.
+Counterfactual 2: with `pdf` restored to `SKIP_BIN`, the probe answers
+`PREMISE FAILED — a .pdf was not routed to the stream walk (pdfs=0,
+streams=0)`, not a clean tree. Stream counts print on every run, so "0 hits"
+is never read as "0 hits in everything".
+
+**A second false-coverage line closed with it:** `files scanned` printed
+`len(paths)`, skipped entries included — 372 for a walk that examined 292. It
+now reports files read, skipped and unreadable separately, and
+`tests/battery.sh` passes the scanner's own coverage lines through instead of
+reassembling one of them with `sed`.
+
+Measured at the closing tree: **292 files, 119 streams across 11 PDFs, 0
+unexamined, 0 hits.**
 
 ---
 

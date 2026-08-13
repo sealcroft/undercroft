@@ -1782,17 +1782,34 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   So: any claim that a string is gone must **decompress rather than grep**,
   must cover **non-Latin scripts and truncated roots**, must hunt the
   **identity** as well as the spelling, and must ask what the TOOLING DERIVES
-  from the environment. `tests/no-trace/verify.py` covers the six classes a
-  file-content scan can reach and fails on any hit. It is **tracked and run by
+  from the environment. `tests/no-trace/verify.py` covers the **seven** classes
+  a file-content scan can reach and fails on any hit. It is **tracked and run by
   a preflight, in a container** since O10 — it was gitignored and hand-run
   before, so a fresh clone did not carry it and nothing invoked it, which is
   how a comment quoting the former name shipped under a green battery. Its
   needles are assembled from fragments so it scans ITSELF clean rather than
   being excluded by path, and a premise probe fires every pattern on a
   known-positive (and requires silence on clean control text) before any zero
-  is believed. **PDF content streams are outside its reach** — it skips
-  `.pdf`, so the Flate-compressed class this very rule was written about is
-  unexamined; filed as O26 rather than left implied. Class 5 above is
+  is believed. **The seventh class is a Flate-compressed PDF stream** (O26,
+  closed 2026-08-13): the walk inflates every `stream`/`endstream` payload
+  whose dictionary declares `/FlateDecode` and runs the same needles over the
+  result, counts what it could NOT inflate, and treats a PDF that declares
+  `FlateDecode` while yielding no readable stream as a premise failure rather
+  than a clean file.
+  **How that gap was described is the lesson, and it is this file's own first
+  rule turned on a filed item.** O26, this guide, and the commit that created
+  the scanner all said it *skipped* `.pdf` via `SKIP_BIN`. The hand-run
+  original does. The tracked port dropped `pdf` from that list and nobody read
+  the line — so all eleven tracked PDFs were opened in TEXT mode, scanned for
+  needles that cannot survive DEFLATE, and **counted in `files scanned`**.
+  That is worse than the skip it was filed as: an admitted skip is at least
+  visible in the arithmetic, while false coverage reads as a clean result.
+  Two general shapes follow. **A gap inherited from a filing is a claim about
+  the code and gets the same verification as any other** — three surfaces
+  agreed here and all three were describing a different file. And **a coverage
+  count must count what was EXAMINED, not what was listed**: the same line
+  reported `len(paths)`, skipped entries included, which over-reported by 80.
+  Class 5 above is
   **outside its reach by construction** and needs a different mechanism —
   which is the compose preflight, not a wider regex. Do not "extend" the
   verifier to cover it; extend the QUESTION.

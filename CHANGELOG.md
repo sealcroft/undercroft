@@ -2,6 +2,61 @@
 
 ## Unreleased — 1.1.0
 
+### the trace scanner decompresses, and the gap it was filed as was not the one it had
+
+ROADMAP **O26**, and the entry describing it was wrong about its own
+mechanism — which is the part worth reading, because the wrong description
+came from this campaign.
+
+O26, `CLAUDE.md` and `71e653b`'s own commit message all said the tracked
+scanner *skips* `.pdf` via `SKIP_BIN`. The hand-run original
+(`.handover/verify-no-trace.py:17`) does: `\.(png|pdf|ico|jpg|jpeg|woff2?)$`.
+**The port dropped `pdf` from that list**, and nobody read the line. So
+`tests/no-trace/verify.py` opened all eleven tracked PDFs in TEXT mode with
+`errors="ignore"`, scanned them for needles that cannot survive DEFLATE, and
+**counted them in `files scanned`**. That is a worse defect than the one
+filed: an admitted skip is visible in the arithmetic, false coverage reads
+exactly like a clean result. Reported as my own — `71e653b` is on this branch.
+
+The scan now walks every `stream`/`endstream` payload, inflates the ones whose
+dictionary declares `/FlateDecode` (zlib-wrapped, then raw deflate), and runs
+the same needle set over what comes back. A payload that will not inflate is
+**counted, not dropped**, and a PDF that declares `FlateDecode` while yielding
+no readable stream is a **premise failure** rather than a clean file — the
+distinction the whole scanner exists to preserve, one level down. No PDF
+parser: a needle scan does not need one, and a partial parser that misreads an
+object fails the way this gate exists to prevent, so the filter is read from a
+bounded window before the keyword and anything unrecognised is
+inflated-or-counted rather than interpreted.
+
+**The counterfactual was run against a real tracked PDF, not the synthesized
+one.** A Flate stream of `architecture/pdf/layers.pdf` was re-compressed with
+the former name inside it, asserted absent from the file as a literal, and fed
+to both scanners as an extra path. The version as shipped: **0 hits, exit 0**,
+`files scanned: 373`. The version here: `latin name 1` at
+`poisoned.pdf:7`, exit 1.
+
+**The probe measures the ROUTING, not the extractor**, and that choice is the
+whole value of it: an `IS_PDF` that fails to match sends every PDF down the
+text path and the stream walk is never called, while a probe of the walk by
+itself passes cleanly. It plants a needle in a compressed stream of a real
+temp file, asserts the literal did not survive compression (or the hit would
+prove only that the text scan works), and runs it through `scan()`. Second
+counterfactual executed: with `pdf` restored to `SKIP_BIN` the probe answers
+`PREMISE FAILED — a .pdf was not routed to the stream walk (pdfs=0,
+streams=0)`, not a clean tree.
+
+**A second, smaller false-coverage line went with it.** `files scanned` printed
+`len(paths)` — every path handed in, skipped ones included. It read 372 for a
+walk that examined 292. It now reports files read, skipped and unreadable
+separately, plus streams examined and unexamined, and `tests/battery.sh` passes
+those lines through verbatim instead of cutting the output at a substring and
+re-inserting the words with `sed` — a second copy of the scanner's format that
+had already stopped matching.
+
+Measured at this tree: **292 files, 119 streams across 11 PDFs, 0 unexamined,
+0 hits.**
+
 ### the control plane emits telemetry, on its own listener
 
 ROADMAP **O20** — the last of the pair O25 unblocked, and the maintainer's
@@ -184,12 +239,18 @@ Three defects of my own, all found by running:
 3. The failure headline said *"the former name is present"* for a PREMISE
    failure. A disarmed scanner is not a dirty tree; it branches on the output.
 
-**One gap found and deliberately not closed:** the scanner skips `.pdf`, so
-the Flate-compressed content-stream class — the one `CLAUDE.md` records as
-having passed a clean `grep` across 17 historical PDF blobs — is unexamined.
-That class was never among the six, so it is a gap in reach rather than a
-regression, and it is filed as **O26** with its shape and gate rather than
-left as a silence.
+**One gap found and deliberately not closed:** the Flate-compressed
+content-stream class — the one `CLAUDE.md` records as having passed a clean
+`grep` across 17 historical PDF blobs — is unexamined. That class was never
+among the six, so it is a gap in reach rather than a regression, and it is
+filed as **O26** with its shape and gate rather than left as a silence.
+
+> **Corrected 2026-08-13, closing O26.** This paragraph said the scanner
+> *skips* `.pdf`, and so did O26 and `CLAUDE.md`. All three described the
+> hand-run original. The port above dropped `pdf` from `SKIP_BIN` and nobody
+> read the line, so the tracked scanner opened all eleven PDFs in text mode
+> and counted them as scanned — false coverage, not an admitted skip. See
+> the O26 entry below.
 
 ### the battery's own count is read by pairing, and a replayed tail is named
 

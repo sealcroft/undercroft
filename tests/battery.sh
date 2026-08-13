@@ -218,10 +218,12 @@ fi
 # ---------------------------------------------------------------------------
 # The former-name trace check, INVOKED (ROADMAP O10).
 #
-# `tests/no-trace/verify.py` covers six file-content classes a plain grep
+# `tests/no-trace/verify.py` covers seven file-content classes a plain grep
 # cannot: a non-Latin spelling sharing no byte with the Latin one, a truncated
-# root used as an identifier stem, base64 inside a certificate, and the
-# identity carried without the name. It used to live in a gitignored directory
+# root used as an identifier stem, base64 inside a certificate, the identity
+# carried without the name, and — since O26 — a Flate-compressed PDF stream,
+# which is the class the rule was written about and the one the scanner
+# implementing that rule could not read. It used to live in a gitignored directory
 # and was run BY HAND — so a fresh clone did not carry it and nothing invoked
 # it. A verifier nobody runs is a verifier you do not have, and the instance is
 # on record: a comment added to explain the derived-name defect quoted the
@@ -281,7 +283,14 @@ if [ $? -ne 0 ]; then
   echo "$NOTRACE_OUT" | sed 's/^/      /'
   exit 1
 fi
-echo "ok    ${NOTRACE_OUT#*files scanned: }" | sed 's/  (patterns probed/ files scanned (patterns probed/' | head -1
+# Print the scanner's own coverage lines rather than reformatting one of them.
+# The previous version cut the output at `files scanned: ` and re-inserted the
+# words with `sed`, which is a second copy of the scanner's format living here
+# — and it stopped matching the moment the scanner gained a line. What a gate
+# reports about its own reach is the last thing that should be reassembled by
+# a caller, so both lines are passed through verbatim.
+echo "ok    the former name is absent from tracked content"
+echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /      /'
 
 echo "═══ preflight: ROADMAP headings ═══"
 ROADMAP_DRIFT=$(awk '
