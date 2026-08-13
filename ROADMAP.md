@@ -242,10 +242,14 @@ one, and it has to be derived rather than assumed.
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
 **Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27 and O28 are
-CLOSED.** Open: **O29** (a tunnel label reaches another agent unscreened —
-filed from a verification sweep of the round-four table, and it is O17 one
-table over), **O7** (at a major) and **O6** (a web-UI click), with O23
-filed. O29 is the only open item that touches the engine.
+CLOSED.** Open: **O29** (a tunnel label reaches another agent unscreened — O17 one
+table over) and **O30** (the screen runs before validation, so invalid input
+is quarantined and then cannot be allowed), both filed from the 2026-08-13
+verification sweep of the round-four table; plus **O7** (at a major) and
+**O6** (a web-UI click), with O23 filed. **`.handover/AUDIT_CONTINUATION.md`
+§1a now carries a verdict for 21 of the ~47 unclosed sweep rows and names the
+26 that are still unprobed** — eight more are verified OPEN there and are
+schedulable without re-deriving them.
 
 ### The diff-level pass — 2026-08-13
 
@@ -1668,6 +1672,45 @@ reassembling one of them with `sed`.
 
 Measured at the closing tree: **292 files, 119 streams across 11 PDFs, 0
 unexamined, 0 hits.**
+
+---
+
+### O30 — the screen runs before validation, so invalid input is quarantined and then cannot be allowed
+
+Round-four **#20**, verified against code 2026-08-13. Both halves hold, and
+they compound.
+
+`write_drawer` calls `screen_and_divert` FIRST; `validate_name` lives in
+`write_drawer_stmts`, which runs after. So a write whose declared wing or room
+is invalid — a path-traversal shape, say — is not refused at the door. It is
+SCREENED, and if the screen flags it, DIVERTED into the review queue.
+
+Then it cannot leave. `admission_allow` restores `intended_wing` and
+`intended_room` checking only that they are non-EMPTY, never re-running
+`validate_name`, so the restore reaches `write_drawer_stmts` and is refused
+there. The operator gets an error naming the wing and the row stays in the
+queue — permanently un-allowable, and occupying a queue whose whole purpose is
+that a human resolves it.
+
+**Why the ordering is not simply reversible.** `CLAUDE.md` records the reason
+the reserved-wing case is *not* an assertion at the choke point: a caller may
+legitimately aim a write at the quarantine wing (a forgery attempt) and must
+reach the guard and be refused as invalid INPUT. Validation and screening are
+both refusals, and which comes first decides whether a malformed declaration
+is a 400 at the door or a row in a review queue. That is a decision to make
+deliberately, not a line to move.
+
+**Shape of the fix.** Validate the caller's DECLARATION before the screen —
+the screen rewrites the fields validation reads, which is the ordering
+argument in one line — and, independently, have `admission_allow` re-validate
+what it restores so a row that somehow reached the queue cannot be stuck in
+it. The second is worth doing even if the first is deferred, because it turns
+a permanent trap into a refusal that names its cause.
+
+**Gate:** a write with an invalid wing is refused at the door with the
+validation error and never appears in the queue; and a pre-existing queue row
+with an invalid intended destination fails `allow` with a message naming the
+field rather than a generic write error.
 
 ---
 
