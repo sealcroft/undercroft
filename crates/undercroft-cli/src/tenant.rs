@@ -386,6 +386,9 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "trust"]) => self.list_trust(id, req, now),
             ("GET", &["v1", "vaults", id, "admission"]) => self.admission_list(id, req, now),
             ("POST", &["v1", "vaults", id, "forget"]) => self.forget(id, req, body, now),
+            ("POST", &["v1", "vaults", id, "verify-forgetting"]) => {
+                self.verify_forgetting(id, req, body, now)
+            }
             ("POST", &["v1", "vaults", id, "admission"]) => self.admission_rule(id, req, body, now),
             ("GET", &["v1", "vaults", id, "retention"]) => self.retention_list(id, req, now),
             ("POST", &["v1", "vaults", id, "retention"]) => self.retention_set(id, req, body, now),
@@ -1499,6 +1502,67 @@ impl Tenancy {
         ))
     }
 
+    /// `POST /v1/vaults/{id}/verify-forgetting` — check a forgetting
+    /// attestation against THIS vault (ROADMAP **O14**).
+    ///
+    /// **The drift this closes.** `POST …/forget` MINTS an attestation and
+    /// nothing on `/v1` could check one: `verify_forget_attestation` had
+    /// exactly one non-test caller in the tree, `Command::VerifyForgetting`.
+    /// On a multi-tenant deployment `/v1` is the only door an operator has,
+    /// so the fleet could produce a right-to-erasure receipt it had no way to
+    /// verify — and the orchestrator's ops plane exists precisely because
+    /// that asymmetry (mint here, verify nowhere) was already found once, on
+    /// the receipt-less deletion.
+    ///
+    /// **The verdict is a typed field, never prose.** `verdict` is
+    /// `"verified"` or `"recorded"` and the two make DIFFERENT claims — see
+    /// [`undercroft_store::AttestationVerdict`], where `recorded` means the
+    /// MAC key that made these tombstones was destroyed by a key rotation
+    /// and this vault's preserved audit trail holds them contiguously
+    /// instead. A client keying on a substring of an English sentence is how
+    /// the CLI nearly shipped the two as one.
+    ///
+    /// The tamper verdict is **409 + `class: "integrity"`**, straight out of
+    /// `store_err`, which is the same set `integrity_verdict` exits 2 on —
+    /// so the two surfaces cannot state different doctrines about one
+    /// document.
+    fn verify_forgetting(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        // A malformed body is the CALLER's error (400) and a well-formed
+        // document that does not describe this vault is an integrity verdict
+        // (409). Keeping those apart is the whole reason this route exists
+        // rather than a client comparing JSON by hand.
+        let att: undercroft_store::ForgetAttestation = serde_json::from_str(body)
+            .map_err(|e| RestError::new(400, format!("body is not an attestation: {e}")))?;
+        let store = self.store_for(id)?;
+        let verdict = store.verify_forget_attestation(&att).map_err(store_err)?;
+        // `sender` AND `sig`, never `sig` alone: the sender is the public key
+        // the signature is checked against, so a document carrying one
+        // without the other is attributable to nobody. The store refuses
+        // that shape, and saying so here rather than assuming it is what
+        // stops this surface inheriting the claim the CLI used to make.
+        let signed = att.sender.is_some() && att.sig.is_some();
+        let mut out = json!({
+            "verdict": match verdict {
+                undercroft_store::AttestationVerdict::Verified => "verified",
+                undercroft_store::AttestationVerdict::Recorded { .. } => "recorded",
+            },
+            "drawers": att.drawers.len(),
+            "signed": signed,
+        });
+        if let undercroft_store::AttestationVerdict::Recorded { rotations_since } = verdict {
+            out["rotations_since"] = json!(rotations_since);
+            // The narrowed claim travels with the verdict rather than living
+            // only in the CLI's prose, because this surface has no operator
+            // reading a paragraph.
+            out["keyed_replay"] = json!("unavailable");
+        }
+        if signed {
+            out["sender"] = json!(att.sender);
+        }
+        Ok((200, Body::Json(out)))
+    }
+
     /// `GET /v1/vaults/{id}/admission` — every drawer awaiting an
     /// admission ruling: signal codes + offsets (structure, never
     /// content), intended destination, age. Enable the screen itself with
@@ -2351,7 +2415,18 @@ fn mutates(method: &str, segs: &[&str]) -> bool {
     }
     !matches!(
         (method, segs),
-        ("POST", &["v1", "vaults", _, "search"]) | ("POST", &["v1", "vaults", _, "verify"])
+        ("POST", &["v1", "vaults", _, "search"])
+            | ("POST", &["v1", "vaults", _, "verify"])
+            // **The third POST that reads** (ROADMAP O14). It POSTs because
+            // the document is the CALLER's and has to travel in a body, not
+            // because it changes anything: `verify_forget_attestation` takes
+            // `&self`, makes no mutating call, and its one live query asks
+            // whether the named drawers are gone. Omitting it here would
+            // have made a `--read-only` server refuse a pure read while the
+            // CLI performed it on the same vault — the posture drift this
+            // function was written to end, reintroduced by the route that
+            // closes a different one.
+            | ("POST", &["v1", "vaults", _, "verify-forgetting"])
     )
 }
 
@@ -3269,6 +3344,127 @@ mod tests {
         // Premise: the same server still serves the two named reads.
         let (code, _) = ro.call("POST", "/v1/vaults/acme/verify", None);
         assert_eq!(code, 200);
+    }
+
+    // ---- O14: `/v1` can check the receipt it mints --------------------
+
+    /// **All three verdicts, through the surface that could only MINT one.**
+    ///
+    /// `POST …/forget` returns an attestation and nothing on `/v1` could
+    /// check one: `verify_forget_attestation` had exactly one non-test
+    /// caller in the tree, a CLI subcommand. On a multi-tenant deployment
+    /// `/v1` is the only door an operator has, so a right-to-erasure receipt
+    /// was produced through a surface with no way to verify it.
+    ///
+    /// Arm 4 is the one that needs the route to exist to be reachable at
+    /// all: O13's reduced verdict, which an operator on the HTTP plane had
+    /// no way to observe.
+    #[test]
+    fn verify_forgetting_answers_every_verdict_through_v1() {
+        let mut s = surface(false);
+        let ids = json!({ "ids": [s.clean_id.clone()] }).to_string();
+
+        // The mint — the half that already worked.
+        let (code, att) = s.call("POST", "/v1/vaults/acme/forget", Some(&ids));
+        assert_eq!(code, 200, "{att}");
+        let doc: Value = serde_json::from_str(&att).unwrap();
+        assert_eq!(
+            doc["drawers"].as_array().map(Vec::len),
+            Some(1),
+            "premise: one drawer was attested, so the checks below have a \
+             subject: {att}"
+        );
+
+        // ARM 1 — the verdict this route exists for.
+        let (code, out) = s.call("POST", "/v1/vaults/acme/verify-forgetting", Some(&att));
+        assert_eq!(code, 200, "{out}");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["verdict"], json!("verified"), "{out}");
+        assert_eq!(v["drawers"], json!(1), "{out}");
+        assert_eq!(
+            v["signed"],
+            json!(false),
+            "the `/v1` mint is unsigned by design — the signing identity is \
+             an operator file: {out}"
+        );
+        assert!(
+            v.get("rotations_since").is_none(),
+            "a verified verdict must not carry a rotation count, or a client \
+             cannot tell the two claims apart: {out}"
+        );
+
+        // ARM 2 — the tamper verdict AND its class. 409 + `integrity` is the
+        // same set `integrity_verdict` exits 2 on, so the two surfaces
+        // cannot state different doctrines about one document.
+        let mut forged: Value = serde_json::from_str(&att).unwrap();
+        forged["records"][0]["tag"] = json!("00".repeat(32));
+        let (code, out) = s.call(
+            "POST",
+            "/v1/vaults/acme/verify-forgetting",
+            Some(&forged.to_string()),
+        );
+        assert_eq!(code, 409, "{out}");
+        assert!(
+            out.contains("integrity"),
+            "a forged document must carry the integrity class, not a bare \
+             409: {out}"
+        );
+
+        // ARM 3 — a malformed body is the CALLER's error. Keeping 400 and
+        // 409 apart is the reason this is a route rather than a client
+        // comparing JSON by hand.
+        let (code, out) = s.call(
+            "POST",
+            "/v1/vaults/acme/verify-forgetting",
+            Some("{\"not\":\"an attestation\"}"),
+        );
+        assert_eq!(code, 400, "{out}");
+
+        // ARM 4 — across a key rotation the verdict REDUCES and says so.
+        // O13 fixed this in the store; until this route existed, an operator
+        // driving the HTTP plane could not observe it at all.
+        let (code, out) = s.call("POST", "/v1/vaults/acme/rotate", None);
+        assert_eq!(code, 200, "{out}");
+        let (code, out) = s.call("POST", "/v1/vaults/acme/verify-forgetting", Some(&att));
+        assert_eq!(
+            code, 200,
+            "a rotated vault must not report its own genuine receipt as \
+             forged: {out}"
+        );
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["verdict"], json!("recorded"), "{out}");
+        assert_eq!(v["rotations_since"], json!(1), "{out}");
+        assert_eq!(v["keyed_replay"], json!("unavailable"), "{out}");
+    }
+
+    /// **The route is a READ, and a `--read-only` server must serve it.**
+    ///
+    /// `mutates` fails closed, so a POST that reads has to be NAMED there.
+    /// Without the entry this route would have been refused by a read-only
+    /// server while the CLI performed the identical check on the same vault
+    /// — the posture drift that function was built to end, reintroduced by
+    /// the route closing a different one. The minting arm below is the
+    /// premise: it proves the server really is read-only.
+    #[test]
+    fn verify_forgetting_is_served_by_a_read_only_server_while_forget_is_not() {
+        let mut s = surface(false);
+        let ids = json!({ "ids": [s.clean_id.clone()] }).to_string();
+        let (code, att) = s.call("POST", "/v1/vaults/acme/forget", Some(&ids));
+        assert_eq!(code, 200, "premise: minted on a writable server: {att}");
+
+        s.tenancy.read_only = true;
+        let (code, out) = s.call("POST", "/v1/vaults/acme/verify-forgetting", Some(&att));
+        assert_eq!(code, 200, "a pure read must be served read-only: {out}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["verdict"],
+            json!("verified"),
+            "{out}"
+        );
+
+        // Premise for the assertion above: this server refuses the write.
+        let (code, out) = s.call("POST", "/v1/vaults/acme/forget", Some(&ids));
+        assert_eq!(code, 403, "{out}");
+        assert!(out.contains("read-only"), "{out}");
     }
 
     // ---- A22: rotate's error classes ----------------------------------

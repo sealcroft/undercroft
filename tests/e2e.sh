@@ -1460,6 +1460,70 @@ rest_body "forget attests"      '"head_after"'    -- -X POST "$API/vaults/acme/f
 rest_code "forgotten is gone"   404 -- "$API/vaults/acme/drawers/$FORGET_ID" \
   -H "X-Vault-Assertion: $(sign acme)"
 
+# **ROADMAP O14 — `/v1` can now CHECK the receipt it mints.** Until this
+# route existed, `verify_forget_attestation` had exactly one non-test caller
+# in the tree and it was a CLI subcommand, so an operator whose only door is
+# the HTTP plane — which is every multi-tenant operator — could produce a
+# right-to-erasure receipt with no way to verify it.
+#
+# Its own vault, deliberately: arm 4 ROTATES, and doing that to `acme`
+# mid-suite would make every later check in this section measure a vault this
+# block had moved out from under it.
+rest_body "erasure vault"       '"created":true'  -- -X POST "$API/vaults" \
+  -H "X-Vault-Assertion: $(sign erasure)" -d '{"id":"erasure","level":"sealed"}'
+ERASE_ID="$(curl -s -X POST "$API/vaults/erasure/drawers" -H "X-Vault-Assertion: $(sign erasure)" \
+  -d '{"text":"a note the data subject will ask us to erase, with a receipt","wing":"eng","room":"tmp"}' \
+  | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+O14_ATT="$UNDERCROFT_HOME/o14-attestation.json"
+curl -s -X POST "$API/vaults/erasure/forget" -H "X-Vault-Assertion: $(sign erasure)" \
+  -d "{\"ids\":[\"$ERASE_ID\"]}" > "$O14_ATT"
+# Premise, asserted rather than assumed. An empty id or an unwritten file
+# would leave every arm below checking a document that is not there, and a
+# 400 on a malformed body reads exactly like a 400 on an empty one.
+if [ -n "$ERASE_ID" ] && grep -q '"head_after"' "$O14_ATT"; then
+  echo "ok    o14 premise: the plane minted a real attestation"; PASS=$((PASS+1))
+else
+  echo "FAIL  o14 premise — id='$ERASE_ID', attestation at $O14_ATT is not one"
+  FAIL=$((FAIL+1))
+fi
+rest_body "v1 verifies its own receipt" '"verdict":"verified"' -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O14_ATT"
+# The tamper verdict travels with its CLASS — the same set the CLI exits 2
+# on — so a scripted operator keys on one doctrine across both surfaces.
+sed 's/"tag": *"[0-9a-f]*"/"tag":"00"/' "$O14_ATT" > "$O14_ATT.forged"
+if cmp -s "$O14_ATT" "$O14_ATT.forged"; then
+  echo "FAIL  o14 forgery premise — the edit changed nothing"; FAIL=$((FAIL+1))
+else
+  echo "ok    o14 forgery premise: the document was modified"; PASS=$((PASS+1))
+fi
+rest_body "a forged receipt is an integrity verdict" '"class":"integrity"' -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O14_ATT.forged"
+rest_code "forged receipt is 409"  409 -- -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O14_ATT.forged"
+# ...and a malformed body is the CALLER's error, not a verdict about stored
+# evidence. Keeping 400 and 409 apart is why this is a route rather than a
+# client comparing JSON by hand.
+rest_code "a malformed receipt is 400" 400 -- -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" -d '{"not":"an attestation"}'
+# **BOTH DOORS, ONE DOCUMENT.** The gate O14 was filed with: the CLI and the
+# route must agree on the same bytes. They read the same vault here, so a
+# disagreement is a real one rather than two vaults being compared.
+check "the CLI agrees with the route" 0 "ATTESTATION VERIFIED" -- \
+  env UNDERCROFT_HOME="$REST_HOME" "$BIN" verify-forgetting "$O14_ATT" --vault erasure
+# Arm 4: across a rotation the verdict REDUCES and says so, rather than
+# becoming the tamper verdict (O13). Reachable from the HTTP plane only
+# because this route exists.
+rest_body "rotate the erasure vault" '"rotated"' -- -X POST "$API/vaults/erasure/rotate" \
+  -H "X-Vault-Assertion: $(sign erasure)"
+rest_body "the reduced verdict reaches /v1" '"verdict":"recorded"' -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O14_ATT"
+rest_body "and it counts the rotation" '"rotations_since":1' -- \
+  -X POST "$API/vaults/erasure/verify-forgetting" \
+  -H "X-Vault-Assertion: $(sign erasure)" --data-binary "@$O14_ATT"
+
 # Retention over /v1 (C3.2 phase 2): declared, listed tag-verified,
 # previewed dry, cleared explicitly — operator routes, never MCP.
 rest_body "retention declares"  '"declared":true'  -- -X POST "$API/vaults/acme/retention" \
@@ -1602,6 +1666,12 @@ rest_body "/ui reads the update verdict"  'r.quarantined' -- "http://127.0.0.1:$
 rest_body "/ui reads the import verdict"  'DIVERTED to review' -- "http://127.0.0.1:$PORT/ui"
 rest_body "/ui reads the import attestation" 'UNATTESTED payload' -- "http://127.0.0.1:$PORT/ui"
 rest_body "/ui no longer claims import is all-or-nothing" 'fails <b>mid-import</b>'   -- "http://127.0.0.1:$PORT/ui"
+# **The fourth renderer** (O14). This console MINTED receipts while telling
+# the operator they are the only proof afterwards, and had no door to check
+# one — O14's own asymmetry on the surface most operators actually drive. A
+# route that stops at `/v1` leaves the drift exactly where it is most visible.
+rest_body "/ui can check a receipt"       'verify-forgetting'  -- "http://127.0.0.1:$PORT/ui"
+rest_body "/ui tells the two verdicts apart" 'ATTESTATION RECORDED' -- "http://127.0.0.1:$PORT/ui"
 
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 

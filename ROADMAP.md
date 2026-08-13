@@ -241,8 +241,10 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
-**Status 2026-08-13: O15, O10, O25, O20 and O26 are CLOSED.** What remains is
-**O14 → O19**, then O7 at a major, then O6, with O23 filed.
+**Status 2026-08-13: O15, O10, O25, O20, O26 and O14 are CLOSED.** What
+remains is **O19** and **O27** (filed while closing O14 — O15's replay
+detector covers one suite of eight, observed on a real log carrying two
+contradictory summaries), then O7 at a major, then O6, with O23 filed.
 
 ### The diff-level pass — 2026-08-13
 
@@ -253,11 +255,12 @@ by reading the code each remaining fix would touch rather than the entries.
 
 | item | the files its diff touches |
 |---|---|
-| **O14** | `undercroft-cli/src/tenant.rs` (handler, dispatch, `mutates`) · `undercroft-orchestrator/src/proxy.rs` (`OPS_ROUTES`, `ops_alias`, `engine_ops`) · `tests/e2e.sh` · `tests/e2e-orchestrator.sh` · `docs/AGENTS.md` · `architecture/index.html` |
+| **O14** | **CLOSED.** Touched exactly what this row predicted, plus two the pass did not: `undercroft-store/src/forget.rs` (the signature defect it surfaced) and `docs/MULTI_TENANCY.md`. A diff-level map narrows the search; it does not replace reading the code you are about to change |
 | **O19** | `undercroft-store/src/lib.rs` — the scope match at `search_inner`, and nothing else |
 | **O26** | `tests/no-trace/verify.py` · `tests/battery.sh` — **CLOSED** |
 | **O7** | `undercroft-vault/src/lib.rs` + 5 more files under `crates/` (39 sites), `tests/` (11), `deploy/` (1), `docs/` (4), plus website/architecture/root prose. Re-measured; the entry's figures are exact |
 | **O6** | none in the tree |
+| **O27** | `tests/battery.sh` — the summary reader and its host-side preflight. Filed 2026-08-13; shares that file with nothing else open, so it collides with nobody |
 
 **Pairwise, the answer is no collisions:** O14 × O19 × O26 touch disjoint
 files, and O7 meets O14 only in `tests/e2e.sh` and `docs/`, textually rather
@@ -1497,7 +1500,7 @@ one of each, which is also why the previously-recorded 18 was already stale.
 
 ---
 
-### O14 — `/v1` can mint a forgetting attestation and cannot check one
+### O14 — CLOSED 2026-08-13: `/v1` checks the receipt it mints, on every operator door
 Found while closing O13, and filed rather than absorbed because it is the
 drift shape this project keeps paying for: a capability present on one
 surface and absent on another, with nothing able to say so.
@@ -1558,6 +1561,55 @@ doors. Plus: a `--read-only` server SERVES it (the `mutates` arm), and
 `e2e-orchestrator.sh` verifies through the ops plane an attestation the same
 plane minted — the round trip the fleet operator actually has.
 
+**CLOSED, every arm above executed.** 11 e2e checks on `/v1` (in their own
+vault, because arm 4 ROTATES and doing that to the shared one would make every
+later check in that section measure a vault this block had moved out from
+under it), 3 on the ops plane and its CLI alias, 2 `/v1` unit tests, and all
+three inventories updated. Counterfactual on the posture arm: removing the
+`mutates` entry answers 403 where the test wants 200 — so the drift would have
+shipped as a read-only server refusing a pure read the CLI performs.
+
+**A FOURTH renderer, and it is the one that mattered most.** `CLAUDE.md` says
+count the renderers, not the surfaces — and `ui.html`, the console served at
+`GET /ui`, has a panel that MINTS a receipt and tells the operator *"Save the
+receipt: it is the only proof afterwards"*, with no way to check one. That is
+this entry's own asymmetry on the surface most operators actually drive, so
+closing it on `/v1` and stopping would have left the drift where it is most
+visible. The console now takes a pasted receipt, hands `forget`'s own output
+straight to the checker, and distinguishes VERIFIED from RECORDED in the
+toast rather than collapsing them — the conflation `AttestationVerdict` exists
+to prevent, which a UI is the easiest place to reintroduce. Two e2e checks.
+
+**No `OPERATOR_ONLY` entry is owed, and that is a finding rather than an
+omission**: that list holds capability SUBSTRINGS asserted absent from every
+advertised MCP tool name, and `"forget"` already matches anything a
+verify-forgetting tool could be called. The never-on-MCP boundary is enforced
+for this route by an entry that predates it.
+
+**Measured on a real corpus** (definition of done, 6): 1,360 LoCoMo-mined
+drawers across 16 wings, one destroyed and attested. CLI 5 ms, `/v1` 9 ms,
+both doors returning the same verdict for the same document; and the
+signature refusal driven on a genuine receipt rather than a synthesized one,
+answering `class: "integrity"`. The premise arms earned their place twice —
+the corpus probe refused to run against a mis-parsed drawer count instead of
+reporting a timing over an empty vault.
+
+**A second defect, found while doing it and folded in rather than filed,
+because the new surface could not be written honestly without deciding it.**
+`ForgetAttestation::sign` writes `sender` and `sig` together, but
+`verify_forget_attestation` verified only when BOTH were present, while the
+CLI printed `"; sender signature verified"` on `sig.is_some()` alone. `sender`
+is the public key the signature is checked against: strip it and the document
+is attributable to nobody, nothing verifies it, and the one surface whose
+entire third-party posture IS that signature reported it verified by its
+sender. Refused now — `(None, Some(_))` is a typed `Attestation` error — with
+the CLI naming the sender it actually checked, and the two legal shapes
+(wholly unsigned; a sender named with no signature) pinned as still legal so
+the refusal cannot widen by accident. Counterfactual executed: with the old
+`if let`, the arm answers `Ok(Verified)`. `UPGRADING.md` carries it because a
+hand-built document could hit it, and states honestly that `config check`
+cannot detect it — the condition is a FILE, not a declaration.
+
 ---
 
 ### O26 — CLOSED 2026-08-13: the trace scanner decompresses, and it was not the gap this entry described
@@ -1613,6 +1665,51 @@ reassembling one of them with `sed`.
 
 Measured at the closing tree: **292 files, 119 streams across 11 PDFs, 0
 unexamined, 0 hits.**
+
+---
+
+### O27 — the replay detector O15 built covers one suite of eight
+
+Found 2026-08-13 by a battery of my own going red, and it is **O15's defect in
+a suite O15 cannot see**.
+
+O15 closed "the battery's own test count intermittently over-reports" by
+pairing each cargo target HEADER with the result under it and printing a loud
+PREMISE FAILURE when one is orphaned. That reader keys on `Running` and
+`Doc-tests`, which **only cargo emits**. The other seven suites print a single
+`<suite> results: N passed, M failed` line and nothing checks it.
+
+**Observed, not theorised.** `.battery/backends-e2e.log` from a run on this
+branch carried *two* summary lines with *different* numbers — `56 passed, 1
+failed` at line 164 and `54 passed, 3 failed` at line 181 — with the weaviate
+block re-emitted between them. `tests/e2e-backends.sh:157` prints its summary
+**exactly once**, as its final statement, so more than one in a log is not a
+heuristic signal but a definitive one: that log is not the record of one run.
+Nothing reported it. The suite's exit code was 1 and the battery correctly
+failed, so no VERDICT was wrong — but the figure it printed was one of two
+contradictory candidates, and the figures are what a session copies into
+`CHANGELOG.md`, `CLAUDE.md` and the handover. That is exactly how O15 itself
+was found, one suite over.
+
+Cause of that particular contamination was mine — three batteries stopped
+mid-run left the backends stack warm, and the `push` failures were
+`already exists` against state a previous pass had created. **That is the
+trigger and not the defect.** The defect is that a log which cannot be a
+faithful record of one run reads exactly like one that is.
+
+**Shape of the fix.** Generalise `test_summary`'s premise arm: count summary
+lines per suite log, and report a PREMISE FAILURE naming the suite when the
+count is not one. It is *simpler* than O15's pairing logic, because the
+suites print one summary by construction — the cargo case needed pairing only
+because a cargo log legitimately holds one result per target. Keep it
+informational, as O15's is: the script decides on EXIT CODES, never on parsed
+output, and that must not change.
+
+**Gate:** the existing host-side preflight that feeds the test reader a
+synthetic replayed log gains a sibling — a synthetic suite log carrying two
+summaries must be named, and a clean one must pass. Without that arm a
+scanner that examined nothing reports what a clean run reports, which is the
+failure this whole family is about.
 
 ---
 

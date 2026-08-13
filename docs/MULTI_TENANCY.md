@@ -58,7 +58,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `GET /v1/vaults/{id}/kg/stats` · `.../kg/entities` · `.../kg/query` · `.../kg/timeline` · `.../kg/receipts` · `.../kg/canonical/{key}` | read-only knowledge-graph browse |
 | `POST /v1/vaults/{id}/kg/authority` | the one KG **mutation** on this surface: place a fact on the authority tier (closed vocabulary, audited, HMAC-covered) |
 | `POST /v1/vaults/{id}/refine` | LLM distillation of a drawer into KG facts (`UNDERCROFT_LLM_*`; nothing is contacted unless a URL is set) |
-| `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting |
+| `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` · `POST .../verify-forgetting` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting — and, since 1.1.0, **checking** an attestation (a READ; typed verdict, 409 + `class: "integrity"` for a document that does not describe this vault) |
 | `POST /v1/vaults/{id}/verify` · `POST .../anchor` · `POST .../rotate` | integrity report (a read) · tighten the manifest rollback anchor onto the committed chain head (a **write**: a cached handle never re-opens, so nothing else closes that window) · key rotation (sole-writer contract — 409 for the vault the same process serves over `/mcp`) |
 | `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair. Export is **chain-audited unconditionally** (one `egress/export` record binding surface, counts and the export's own manifest digest); import re-stamps `added_by` and screens every record |
 | `GET /ui` | vault admin console (static page, every build) |
@@ -423,7 +423,7 @@ sequenceDiagram
 | `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
 | `GET /admin/tenants/{id}/stats` | admin | metadata-only stats relay (counts, sizes, chain head) via the stored engine creds — content stays behind the tenant's own token |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
-| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by |
+| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one |
 | `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>` |
 
 The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
@@ -509,8 +509,11 @@ hardened the way the engine hardens its own secrets:
   `ops/` prefix. The one deletion a tenant token reaches
   (`DELETE /t/…/drawers/{id}`) produces a bare tombstone, so an erasure
   request should be answered through `ops/forget`, which returns a
-  chain-attested receipt. A data-plane request for an operator subpath
-  now says so instead of answering a bare `unknown route`.
+  chain-attested receipt — and checked through `ops/verify-forgetting`,
+  which until 1.1.0 existed on no surface at all, so the receipt this
+  paragraph recommends could be minted and never verified (O14). A
+  data-plane request for an operator subpath now says so instead of
+  answering a bare `unknown route`.
 
 **Migration** (`POST /admin/tenants/{id}/migrate {"to": …}`): export from
 the source (the v0.18 artifact-carrying NDJSON, so token matrices restore

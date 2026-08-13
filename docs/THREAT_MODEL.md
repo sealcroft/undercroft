@@ -717,7 +717,17 @@ straight, each carrying what it actually is.
   drawer, so a flipped clear column can neither launder a deletion nor
   hide a drawer from its declared retention. Honest boundary: a third
   party verifies the operator's *signature*, not the replay — the chain
-  step is keyed.
+  step is keyed. **A `sig` field is not by itself evidence of one**, and
+  saying so is 1.1.0's correction: verification runs against `sender`,
+  the public key, so a document carrying a signature with no sender can
+  be checked by nobody. That shape was skipped rather than refused, and
+  the CLI reported "sender signature verified" over it on the strength
+  of `sig` being present. It is refused now, and every operator door can
+  run the check — `verify-forgetting` on the CLI,
+  `POST /v1/vaults/{id}/verify-forgetting`, the fleet's
+  `ops/verify-forgetting`, and the admin console — where until 1.1.0 the
+  HTTP plane could MINT a receipt and only the CLI could check one
+  (ROADMAP O14).
 - **Memory-poisoning defense (C3.3) — BUILT (2026-08-03/04)**:
   write-path admission control — provenance on every write, a
   deterministic (optionally classifier-assisted) detector at the write

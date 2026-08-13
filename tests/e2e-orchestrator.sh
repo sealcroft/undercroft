@@ -194,6 +194,34 @@ body_has "ops trust assign"  '"trust":"trusted"' -- -X POST "${ADMIN[@]}"   -d '
 body_has "ops retention list" 'policies'   -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention set" '"days":3650' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","days":3650}' "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention sweep" 'destroyed' -- -X POST "${ADMIN[@]}"   -d '{}' "$O/admin/tenants/$OPS_ID/ops/retention/sweep"
+# **ROADMAP O14 — the plane that MINTS a receipt can now CHECK one.**
+# `forget` has been forwardable since this table was written; verifying what
+# it returns was reachable from nowhere in a fleet, because the engine had no
+# route for it at all. A right-to-erasure receipt an operator cannot verify
+# through their only door is the asymmetry this table's own comment describes,
+# one step on. The ROUND TRIP is the assertion — minted here, checked here,
+# the same document — because either half alone proves nothing about the pair.
+O14_ID="$(curl -s -X POST -H "Authorization: Bearer $OPS_TOKEN" \
+  -d '{"text":"a fleet note the data subject asked us to erase","wing":"w","room":"r"}' \
+  "$O/t/drawers" | grep -o '"id":"[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
+O14_ATT="$(curl -s -X POST "${ADMIN[@]}" -d "{\"ids\":[\"$O14_ID\"]}" \
+  "$O/admin/tenants/$OPS_ID/ops/forget")"
+if [ -n "$O14_ID" ] && grep -q '"head_after"' <<<"$O14_ATT"; then
+  ok "o14 premise: the ops plane minted an attestation"
+else
+  fail "o14 premise: id='$O14_ID' body='$(head -c 160 <<<"$O14_ATT")'"
+fi
+body_has "ops verify-forgetting" '"verdict":"verified"' -- -X POST "${ADMIN[@]}" \
+  -d "$O14_ATT" "$O/admin/tenants/$OPS_ID/ops/verify-forgetting"
+# And through the CLI alias, which `docs/MULTI_TENANCY.md` says mirrors the
+# plane — the half that has shipped missing before. Captured, never piped:
+# `set -o pipefail` makes `if cmd | grep` see the command's status.
+O14_CLI="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify-forgetting --body "$O14_ATT" 2>&1)"
+if grep -q '"verdict":"verified"' <<<"$O14_CLI"; then
+  ok "orchestrator CLI ops verify-forgetting"
+else
+  fail "orchestrator CLI ops verify-forgetting: $(head -c 160 <<<"$O14_CLI")"
+fi
 # A route that is NOT on the plane stays off it, so the block above is not
 # passing because everything is forwarded.
 code_is  "ops refuses key rotation" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/rotate"

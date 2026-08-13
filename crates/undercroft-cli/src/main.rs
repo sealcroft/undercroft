@@ -2271,10 +2271,20 @@ fn run(cli: Cli) -> Result<()> {
             // lines run while printing a verdict.
             let before: String = att.head_before.chars().take(12).collect();
             let after: String = att.head_after.chars().take(12).collect();
-            let signature = if att.sig.is_some() {
-                "; sender signature verified"
-            } else {
-                "; unsigned"
+            // **Both fields, not `sig` alone.** This read `att.sig.is_some()`
+            // and printed "sender signature verified" — a claim the code had
+            // not established, because verification only ran when `sender`
+            // was ALSO present, and `sender` is the public key the signature
+            // is checked against. A document with it stripped was verified by
+            // nothing and reported as verified. The store refuses that shape
+            // now, so the two can no longer disagree; stating the condition
+            // the message claims is what keeps it true if that ever moves.
+            let signature = match (att.sender.as_deref(), att.sig.as_deref()) {
+                (Some(who), Some(_)) => {
+                    let who: String = who.chars().take(16).collect();
+                    format!("; signature verified, sender {who}…")
+                }
+                _ => "; unsigned".to_string(),
             };
             match verdict {
                 undercroft_store::AttestationVerdict::Verified => println!(

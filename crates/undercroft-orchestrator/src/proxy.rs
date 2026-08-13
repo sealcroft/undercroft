@@ -363,6 +363,13 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "verify"),
     ("GET", "supersessions"),
     ("POST", "forget"),
+    // **Minting without checking is the asymmetry above, one step on**
+    // (ROADMAP O14). `forget` has been forwardable since this table was
+    // written; verifying the receipt it returns was reachable from nowhere
+    // in a fleet, because the engine had no route for it at all. A
+    // right-to-erasure receipt an operator cannot verify through the only
+    // door they have is the same defect this table's own comment describes.
+    ("POST", "verify-forgetting"),
     ("GET", "admission"),
     ("POST", "admission"),
     ("GET", "retention"),
@@ -455,6 +462,7 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         "retention-set" => ("POST", "retention"),
         "retention-sweep" => ("POST", "retention/sweep"),
         "forget" => ("POST", "forget"),
+        "verify-forgetting" => ("POST", "verify-forgetting"),
         _ => return None,
     })
 }
@@ -1463,6 +1471,7 @@ mod tests {
             "retention-set",
             "retention-sweep",
             "forget",
+            "verify-forgetting",
         ];
         let mut resolved = Vec::new();
         for a in aliases {
@@ -1507,6 +1516,14 @@ mod tests {
             "anchor",
             "supersessions",
             "forget",
+            // **Added with the engine route it names** (ROADMAP O14). This
+            // list is a hand-maintained literal, which means a new `/v1`
+            // operator route absent from it is counted in NEITHER direction
+            // — so the gate whose whole job is to force every capability
+            // into *reachable* or *recorded-as-absent* stays green over one
+            // nobody classified. That is the failure mode it exists to
+            // prevent, reachable through its own inventory.
+            "verify-forgetting",
             "admission",
             "retention",
             "retention/sweep",

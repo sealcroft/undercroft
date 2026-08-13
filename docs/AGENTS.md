@@ -329,7 +329,8 @@ those is fixed by looking at the engine.
 admin plane for scripted use, over a closed vocabulary of operations:
 `verify`, `anchor`, `supersessions`, `admission`, `admission-rule`,
 `trust`, `trust-set`, `retention`, `retention-set`, `retention-sweep`,
-`forget`. Drawer reads and key rotation are deliberately NOT among them.
+`forget`, `verify-forgetting`. Drawer reads and key rotation are
+deliberately NOT among them.
 
 `anchor` is the one worth knowing about if you run a long-lived server:
 read-audit records append without advancing the manifest anchor, and only a
@@ -693,6 +694,12 @@ a forged signature, a tombstone tag this vault never recorded, or something
 other than a tombstone inside the attested interval) each reach the verdict
 through their own checking.
 
+Since 1.1.0 the same check is on `/v1` as
+`POST /v1/vaults/{id}/verify-forgetting`, answering the verdict as a typed
+field rather than as a sentence. Use it on any deployment where the HTTP
+plane is the operator's door — before it, that operator could mint a receipt
+and had nowhere to check one (O14).
+
 **`verify-forgetting` has THREE outcomes, not two, and the third is exit 0.**
 The replay it runs is keyed, and `vault rotate` destroys the key that made
 the tombstones — that is what a rotation is. So after any rotation it prints
@@ -704,7 +711,12 @@ claim, not a failure, and the line says what it did not re-check. Until
 rotation turned every receipt an operator had issued into a tamper verdict.
 The third-party posture never changed: the operator's Ed25519 signature is
 verified without any vault key, so a data subject's own check is unaffected
-by rotation. But a rolled-back database, or a manifest edited
+by rotation. **A `sig` field alone is not that signature**, and 1.1.0
+corrected it: verification runs against `sender`, the public key, so a
+document carrying a signature with no sender can be checked by nobody. That
+shape used to be skipped rather than refused while the CLI printed
+`"; sender signature verified"` over it; it is now `ATTESTATION FAILED`, and
+the line names the sender that was actually checked. But a rolled-back database, or a manifest edited
 offline, is detected **when the vault opens** — before any command's own
 checks begin — so `search`, `stats`, `recent` and `drawer get` reach it too,
 and since 1.0.0 they exit 2 as well. They used to exit 1, i.e. the same
@@ -926,6 +938,7 @@ classifies it deliberately:
 | POST | `/v1/vaults/{id}/verify` | integrity verdict, **six legs**: HMAC every record, replay the audit chain, check every drawer supersession receipt, check every knowledge-graph fact receipt, resolve every knowledge-graph audit label, and compare every mirror column against the HMAC-covered meta. `ok` covers all six — the same verdict CLI `verify` exits 2 on and MCP prints as VERIFY FAILED — plus `records_checked`, `bad_records`, `chain_ok`, a `supersessions` count breakdown, `bad_supersessions` (links whose receipt failed its HMAC), a `receipts` count breakdown, `bad_receipts` (facts whose citation binding failed its HMAC), `orphan_labels` (an audit label naming no live record — `record_id` is outside the chain hash, so a relabel passes every other leg. Covers graph labels **and bare drawer ids**: a drawer label with no live row and no `del/{id}` tombstone is a relabel onto a drawer nothing destroyed, since the crate's single `DELETE FROM drawers` writes that tombstone in the same transaction. Prefixed namespaces stay out — `del/`, `retention-clear/`, `read/`, `egress/`, `rotate/` all have legitimate absent subjects) and `mirror_drift` (a clear `wing`/`room`/`kind`/`supersedes` column disagreeing with the covered copy — the record is intact, the column was edited offline). The **fact-receipt leg arrived in 1.1.0**: the check existed one call away and no verify path made it, so a forged citation answered `"ok": true` here, exit 0 on the CLI, `isError: false` on MCP — and `backup create` gates on this verdict, so the forgery was archived as clean |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
 | POST | `/v1/vaults/{id}/forget` | destroy the named drawers through the audit chain and return the attestation (`{ids}` in; heads + tombstone interval + content fingerprints out, unsigned — sign via CLI `forget --sign`). Verify with CLI `verify-forgetting`. Optional `backend` also issues a delete to that remote mirror FIRST, so a failure there leaves the vault intact; without it the attestation's `mirror` field WARNS that a pushed mirror may still hold the content, because destroying the local row does not reach a third party |
+| POST | `/v1/vaults/{id}/verify-forgetting` | check an attestation against this vault: the document goes in the body, the verdict comes back as a **typed field** — `verdict` ∈ `verified`\|`recorded`, plus `drawers`, `signed`, and (on `recorded`) `rotations_since` and `keyed_replay: "unavailable"`. The two verdicts make DIFFERENT claims: `recorded` means the MAC key that made these tombstones was destroyed by a key rotation, so the keyed replay is unavailable and the vault's preserved audit trail holds the tombstones contiguously instead — real evidence, a narrower claim, **not** a tamper verdict. A document that does not describe what this vault did is **409 + `class: "integrity"`** (the set CLI `verify-forgetting` exits 2 on); a malformed body is 400. **A READ** — served by a `--read-only` server, and never on MCP. Arrived in 1.1.0 (O14): `forget` could MINT a receipt here and nothing on this plane could check one, which on a multi-tenant deployment meant the only door an operator had could not verify its own right-to-erasure receipts |
 | GET | `/v1/vaults/{id}/admission` | drawers awaiting an admission ruling (signal codes + offsets, intended destination) plus whether screening is on |
 | POST | `/v1/vaults/{id}/admission` | rule on a quarantined drawer (`drawer_id`, `verdict` ∈ `allow`\|`deny`; chain-audited — a deny destroys through the attested-forgetting path and the response carries the receipt). Operator surface, never MCP — an agent whose write was quarantined must not rule on it |
 | GET | `/v1/vaults/{id}/retention` | every declared retention policy, tag-verified |
@@ -960,7 +973,8 @@ with the tenant bearer; admin plane `/admin/instances[…]`,
 `/admin/tenants[…]` (+ `/rotate`, `/migrate`, `/stats` — metadata-only
 relay) and the **operator relay**
 `/admin/tenants/{id}/ops/<subpath>`, a closed vocabulary forwarding
-`POST verify`, `GET supersessions`, `POST forget`, `GET`/`POST admission`,
+`POST verify`, `GET supersessions`, `POST forget`,
+`POST verify-forgetting`, `GET`/`POST admission`,
 `GET`/`POST retention`, `POST retention/sweep` and `GET`/`POST trust` to the
 tenant's engine (these live on the ADMIN plane, never the data plane: a
 tenant token must not rule on the admission queue that screened its own

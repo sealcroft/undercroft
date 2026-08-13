@@ -896,7 +896,14 @@ Consequences that are binding, not advisory:
   http.rs/tenant.rs: HTTP + multi-tenant `/v1` incl. the management and
   operator planes (drawers list/get/update/delete, taxonomy, stats +
   history, read-only kg browse + `kg/authority`, supersessions, trust,
-  admission list/rule, retention set/list/sweep, forget, refine, verify,
+  admission list/rule, retention set/list/sweep, forget,
+  **verify-forgetting** (O14 — the plane could MINT an erasure receipt and
+  check none, and on a multi-tenant deployment `/v1` is the only door an
+  operator has; the verdict is a TYPED field because `verified` and
+  `recorded` make different claims, and a document that does not describe
+  this vault is 409 + `class: "integrity"`. It is on the orchestrator's
+  `OPS_ROUTES` too, or the fleet operator it was filed for still could not
+  reach it), refine, verify,
   rotate, export/import). **`--read-only` is a posture on the whole
   process, decided once in FRONT of dispatch** (`mutates`), not a guard
   per mutating handler: there were thirteen guards for fourteen mutating
@@ -904,10 +911,14 @@ Consequences that are binding, not advisory:
   rewrote HMAC-covered authority columns, superseded the previous
   canonical holder and appended to the chain while answering 200 — while
   the identical capability over `/mcp` in the same process refused. It
-  fails CLOSED (anything not GET is a write unless named), and the two
-  named exceptions are `POST …/search` and `POST …/verify` — both POST
-  for cost, not for effect: search reads, and verify walks every record's
-  HMAC and replays the chain. Verify is a read in the strict sense —
+  fails CLOSED (anything not GET is a write unless named), and the
+  **three** named exceptions are `POST …/search`, `POST …/verify` and
+  `POST …/verify-forgetting` — all POST for cost or for a caller-supplied
+  document, never for effect: search reads, verify walks every record's
+  HMAC and replays the chain, and verify-forgetting POSTs only because the
+  attestation is the CALLER's and has to travel in a body. Failing closed
+  means a new read must be NAMED, and the cost of forgetting is a
+  read-only server refusing a pure read while the CLI performs it. Verify is a read in the strict sense —
   `&self`, no mutating call — which also means it does **not** tighten the
   manifest anchor: only a store open does (`init_chain`), so the
   read-audit boundary's old "run writes or `verify`" advice was wrong on

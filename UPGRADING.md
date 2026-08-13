@@ -423,6 +423,35 @@ code saw a no-op as done.
 undercroft-orchestrator instance-remove old-engine || true
 ```
 
+### A forgetting attestation carrying a signature but no sender is refused
+
+**Affects:** `undercroft verify-forgetting`, `POST /v1/vaults/{id}/verify-forgetting`
+and the fleet's `ops/verify-forgetting` — any attestation document whose
+`sig` field is present while `sender` is absent.
+
+**Symptom:** `ATTESTATION FAILED: carries a signature but names no sender to
+verify it against`, exit 2 (409 + `class: "integrity"` over HTTP), where the
+same file previously reported `ATTESTATION VERIFIED` at exit 0.
+
+**Cause:** `sender` is the public key the signature is checked against, so a
+document without it can be verified by nobody. Verification only ran when
+both fields were present, and the CLI printed `"; sender signature verified"`
+whenever `sig` was set — a claim the code had not established, on the one
+surface whose entire third-party posture is that signature.
+
+**Fix:** re-sign the document from the vault that produced it
+(`undercroft forget --sign`), which writes both fields, or drop the orphaned
+`sig` field if the receipt was always meant to be unsigned — an unsigned
+attestation is still fully vault-verifiable and is **not** affected by this
+change. Nothing `sign()` has ever produced hits it: it writes `sender` and
+`sig` together, so only a hand-built or hand-edited document can.
+
+**`undercroft config check` cannot detect this one**, and that is a property
+of the condition rather than a gap in the command: the check resolves
+*declarations* and opens nothing, while this is a verdict about the contents
+of a FILE you hold. Run `verify-forgetting` over your archived receipts if
+you want to know before an auditor does.
+
 ### Usage errors now exit 1 rather than 2
 
 **Affects:** both binaries, any invalid command line.

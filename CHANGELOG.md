@@ -2,6 +2,94 @@
 
 ## Unreleased — 1.1.0
 
+### the plane that mints an erasure receipt can check one, and a signature with no sender is refused
+
+ROADMAP **O14**, plus a second defect found while doing it.
+
+`POST /v1/…/forget` destroys drawers and returns a chain-attested receipt.
+Nothing on `/v1` could check one: `verify_forget_attestation` had exactly one
+non-test caller in the whole tree, `Command::VerifyForgetting`. So an operator
+driving the HTTP plane could MINT a right-to-erasure receipt they had no door
+to verify — and on a multi-tenant deployment the HTTP plane is the *only* door
+an operator has, which made it not merely asymmetric but unreachable.
+
+`POST /v1/vaults/{id}/verify-forgetting` takes the document in the body and
+answers a **typed** verdict: `verified` or `recorded`, the second carrying
+`rotations_since` and `keyed_replay: "unavailable"`. The two make different
+claims — `recorded` means a key rotation destroyed the MAC key that made these
+tombstones, so the vault's preserved audit trail holds them contiguously
+instead (O13) — and a client keying on a substring of an English sentence is
+exactly how the CLI nearly shipped them as one. A document that does not
+describe this vault is **409 + `class: "integrity"`**, straight out of
+`store_err`, which is the same set `integrity_verdict` exits 2 on; a malformed
+body is 400.
+
+**Three inventories, and the entry's filed gate named none of them.** They
+came out of a diff-level pass over the dependency map, which had explicitly
+recorded that it had only been done at entry level:
+
+* `mutates()` **fails closed**, so a POST that reads must be NAMED there.
+  Without the entry a `--read-only` server would refuse this pure read while
+  the CLI performed the identical check on the same vault — the posture drift
+  that function exists to end, reintroduced by the route closing another one.
+* The orchestrator's `OPS_ROUTES` is a **closed vocabulary** bound to
+  `ops_alias` by test. A route in neither is unreachable in a fleet, so an
+  engine-only fix would have closed the drift for the single-tenant operator
+  and left it open for the one the entry was written about. That table's own
+  comment already describes this shape: it exists because a fleet operator
+  could reach only the receipt-LESS deletion while the surface next door
+  minted a signable attestation. Minting and never verifying is that
+  asymmetry one step on.
+* `engine_ops`, inside
+  `every_operator_capability_is_reachable_or_recorded_as_absent`, is a
+  hand-maintained literal — a route absent from it is counted in NEITHER
+  direction, so the gate whose job is to force every capability into
+  *reachable* or *recorded-as-absent* stays green over an unclassified one.
+
+**The second defect: a signature with nobody to check it against was
+skipped, and reported as verified.** `ForgetAttestation::sign` writes
+`sender` and `sig` together, but `verify_forget_attestation` verified only
+when both were present, and the CLI printed `"; sender signature verified"`
+on `sig.is_some()` **alone**. `sender` is the public key the signature is
+checked against, so a document with it stripped is attributable to nobody —
+and the one surface whose entire third-party posture is that signature said
+it had been verified by its sender. It is refused now, with the CLI naming
+the sender it actually checked. Tightening a shape `sign()` never produced is
+a fix, not a contract change; `UPGRADING.md` carries it because a hand-built
+document could hit it.
+
+Counterfactuals, both executed: reverting the store guard makes the new arm
+answer `Ok(Verified)` for a document nothing authenticated; removing the
+`mutates` entry makes the read-only arm fail with 403 against 200.
+
+**The fourth renderer got it too, and it is the one that mattered most.**
+`ui.html`, the console served at `GET /ui`, has a panel that mints a receipt
+and tells the operator *"Save the receipt: it is the only proof afterwards"* —
+with no door to check one. Closing this on `/v1` and stopping would have left
+the drift on the surface most operators actually drive. The console now takes
+a pasted receipt, hands `forget`'s own output straight to the checker, and
+keeps VERIFIED and RECORDED apart in the toast rather than collapsing them,
+which a UI is the easiest place to get wrong.
+
+No `OPERATOR_ONLY` entry is owed and that is a finding, not an omission: the
+list holds capability substrings asserted absent from every advertised MCP
+tool name, and `"forget"` already matches anything such a tool could be
+called. The boundary was enforced by an entry that predates the route.
+
+Gates: two store arms (the refusal, and the two directions that must stay
+legal), two `/v1` tests (every verdict including across a rotation, and the
+read-only posture with the minting route refused on the same server beside
+it), 13 e2e checks driving all of it through `/v1` and the console —
+including the CLI and the route agreeing on **one document from both doors**
+— and 3 orchestrator e2e checks driving the round trip through the ops plane
+and its CLI alias.
+
+Measured on a real corpus rather than a fixture: 1,360 LoCoMo-mined drawers
+across 16 wings, one destroyed and attested; CLI 5 ms, `/v1` 9 ms, same
+verdict for the same document, and the signature refusal driven on a genuine
+receipt. The corpus probe's own premise arms fired twice — it refused to
+report a timing over a vault whose drawer count it had mis-parsed.
+
 ### the trace scanner decompresses, and the gap it was filed as was not the one it had
 
 ROADMAP **O26**, and the entry describing it was wrong about its own
