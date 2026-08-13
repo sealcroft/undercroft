@@ -2,6 +2,43 @@
 
 ## Unreleased — 1.1.0
 
+### a payload may not author what only the screen authors
+
+ROADMAP **O31**, filed while closing O30 and closed last of the campaign.
+
+`intended_wing`, `intended_room` and `admission_signals` are all
+`#[serde(default)]` on `DrawerMeta`, and both import surfaces deserialize a
+whole `Drawer`. `import_unwrap_screened` looked only at records whose wing IS
+the reserved constant, so a record declaring an ORDINARY wing carried a
+fabricated destination — and fabricated signal codes — onto disk, inside the
+drawer's HMAC, validated by nothing.
+
+**Three fields, not the two the filing named.** `admission_signals` has the
+same shape and the same `#[serde(default)]`, and the branch that cleared it
+explained why in a comment that applied equally to the branch it was not on.
+Found by enumerating the payload-controlled fields rather than by re-reading
+the entry.
+
+**And a second call site the filing did not mention.** `upsert_many` unwraps
+only when its guard fires, and that guard tested the wing alone — so the bulk
+path, which is what a CLI `import` and every sealed-bundle restore take,
+would have skipped the strip for exactly these payloads. The guard now tests
+for anything the screen authors and keeps its zero-cost property.
+
+Cleared rather than refused, because refusing breaks the `export_all` →
+`import` round trip for genuinely quarantined rows — which this function's
+own history records having broken once. That round trip is the test's
+load-bearing arm: a real quarantined row exported, imported into a second
+vault, converging on the same deterministic id with its destination intact.
+
+Counterfactuals on both arms. No `UPGRADING.md` entry, with the reasoning
+stated: the screen sets these fields only when it diverts, which also sets
+the wing, and `admission_allow` clears them — so no payload any version of
+this engine has emitted carries them on a non-reserved row.
+
+**With this the engine-side queue is empty.** What remains is O7
+(release-gated) and O6 (a web-UI click).
+
 ### the signal vocabulary is counted against what the engine can emit
 
 ROADMAP **O33**, found by adding the seventh code to it while closing O32.

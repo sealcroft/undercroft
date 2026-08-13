@@ -242,10 +242,11 @@ one, and it has to be derived rather than assumed.
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
 **Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28, O30, O29,
-O32 and O33 are CLOSED.** Open: **O31** alone on the engine side (a payload's
-`intended_wing` reaches disk unvalidated when the record is not a queue row —
-inert today, and the entry says why), plus **O7** (at a major) and **O6** (a
-web-UI click), with O23 filed. **No open item is a live exposure.** **`.handover/AUDIT_CONTINUATION.md`
+O32, O33 and O31 are CLOSED — and with O31 the engine-side queue is EMPTY.**
+What remains is **O7** (release-gated: its fix renames `palace.db`, so it
+cannot ride a minor) and **O6** (a click in the GitHub web UI that no REST
+endpoint exposes), with **O23** filed and deliberately unscheduled. Neither
+O7 nor O6 is reachable from a keyboard on this branch. **`.handover/AUDIT_CONTINUATION.md`
 §1a now carries a verdict for 21 of the ~47 unclosed sweep rows and names the
 26 that are still unprobed** — eight more are verified OPEN there and are
 schedulable without re-deriving them.
@@ -1674,7 +1675,7 @@ unexamined, 0 hits.**
 
 ---
 
-### O31 — a payload's `intended_wing` reaches disk unvalidated when it is not a queue row
+### O31 — CLOSED 2026-08-13: a payload may not author what only the screen authors
 
 Found while closing O30, and deliberately NOT folded into it: it is a second
 decision with its own argument, and half-landing a change that touches the
@@ -1717,6 +1718,46 @@ lands with both fields empty; a genuine quarantined record still round-trips
 through export → import and converges on the same deterministic id (the
 property `import_unwrap_screened` exists for, and the one this fix could
 plausibly break).
+
+#### What closing it changed, and two things this entry's own filing missed
+
+**It is THREE fields, not two.** `admission_signals` is `#[serde(default)]`
+on `DrawerMeta` exactly like `intended_wing` and `intended_room`, and
+`import_unwrap_screened` cleared it only on the reserved-wing branch — with a
+comment explaining why ("the signals travel as history, not as a verdict")
+that applies just as well to the branch it was not on. So a payload declaring
+an ORDINARY wing kept fabricated signal codes as well as a fabricated
+destination. Found by enumerating the `#[serde(default)]` fields rather than
+by re-reading the entry, which named the two it had happened to notice.
+
+**And the fix needed a second site the filing did not mention.**
+`upsert_many` calls `import_unwrap_screened` only when its guard fires, and
+that guard tested `d.meta.wing == QUARANTINE_WING` alone — so the batch path
+would have skipped the strip for exactly the payloads this fix is about. That
+is the path a CLI `import` and every sealed-bundle restore take, i.e. the
+larger of the two. The guard now tests for anything the screen authors, and
+keeps its documented zero-cost property: a batch declaring none of the three
+is neither cloned nor rewritten.
+
+**Cleared rather than refused**, as filed, and the round trip is why: refusing
+breaks `export_all` → `import` for genuinely quarantined rows, which this
+function's own history records having broken once already. The negative
+control is the load-bearing arm of the test — a real quarantined row is
+exported, imported into a second vault, and must converge on the SAME
+deterministic id with its destination intact. That is the one way this fix
+could have been actively wrong.
+
+**Counterfactuals executed on both arms:** with the strip reverted
+`intended_wing` survives the `/v1` path; with the guard reverted to wing-only
+the bulk path keeps both the destination and the fabricated signals.
+
+**No `UPGRADING.md` entry, with the reasoning rather than by omission.** The
+behaviour change is real but unreachable by any legitimate producer: the
+screen sets these three fields only when it diverts, which also sets the wing
+to the reserved constant, and `admission_allow` clears them on the way back
+out. So no payload any version of this engine has ever emitted carries them
+on a non-reserved row — which the round-trip control demonstrates rather than
+asserts.
 
 ---
 
