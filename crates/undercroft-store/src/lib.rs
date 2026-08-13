@@ -5982,12 +5982,36 @@ impl PalaceStore {
     }
 
     /// Distinct wings and per-wing drawer counts.
+    /// Wing names and their drawer counts, **excluding the reserved review
+    /// queue** — which it did not, and that was the second half of O32.
+    ///
+    /// The quarantine fence was built for reads that return CONTENT
+    /// (`search`, `recent`, `list_drawers`), so this one was never in scope:
+    /// it returns names. But a NAME is agent-chosen text, and this function
+    /// is the choke point under `undercroft_list_wings`, `taxonomy` (which
+    /// iterates it) and `PalaceStats.wings` — three agent-readable surfaces.
+    /// So a diverted drawer published the ROOM name it kept, and the reserved
+    /// wing itself, to every one of them. That was true before the screen
+    /// looked at destinations at all: an agent picking a poisoned ROOM plus
+    /// poisoned content has always been diverted, and the room name has
+    /// always been listed.
+    ///
+    /// No opt-back-in argument, unlike `list_drawers`: this call takes no
+    /// wing, so there is nothing for a reviewer to name. The reviewer's door
+    /// is `admission list`, which reads the queue directly.
+    ///
+    /// Stated cost: `PalaceStats.wings` no longer counts the reserved wing,
+    /// so a vault holding only quarantined rows reports one fewer wing than
+    /// it has rows in. That is the same trade every other fenced read makes,
+    /// and the queue depth is on the admission surface rather than inferred
+    /// from a wing list.
     pub fn wings(&self) -> Result<Vec<(String, u64)>, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT wing, COUNT(*) FROM drawers GROUP BY wing ORDER BY wing")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT wing, COUNT(*) FROM drawers WHERE wing <> ?1 \
+             GROUP BY wing ORDER BY wing",
+        )?;
         let rows = stmt
-            .query_map([], |r| {
+            .query_map(params![crate::admission::QUARANTINE_WING], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
             })?
             .collect::<Result<_, _>>()?;

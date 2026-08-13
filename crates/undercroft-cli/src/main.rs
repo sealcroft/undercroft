@@ -1894,10 +1894,20 @@ fn run(cli: Cli) -> Result<()> {
             // which is exactly what the caller did NOT get.
             let out = store.upsert_screened(&drawer)?;
             if out.quarantined {
+                // "the content tripped" was true of every diversion until
+                // O32, and then it was not: a save whose CONTENT is clean now
+                // diverts when the declared WING or ROOM trips the screen, and
+                // this line told the operator to go looking in the wrong
+                // place. A message that misdescribes its own situation is the
+                // most expensive artifact this project produces, so it says
+                // "this save" and lets `admission list` — which carries the
+                // per-signal codes — name what actually fired.
                 println!(
-                    "Quarantined pending review: the content tripped the admission \
+                    "Quarantined pending review: this save tripped the admission \
                      screen and is NOT retrievable in {wing}/{room}. \
-                     Review with `undercroft admission list`."
+                     Review with `undercroft admission list`, which names the \
+                     signals — `destination-anomaly` means the wing or room \
+                     name tripped rather than the text."
                 );
             } else {
                 println!(
@@ -3147,9 +3157,17 @@ fn run(cli: Cli) -> Result<()> {
                     let out = store.diary_write(agent, entry, "cli")?;
                     if out.quarantined {
                         println!(
-                            "Quarantined pending review: the entry tripped the admission \
+                            // Not "the entry tripped": a diary's wing is
+                            // `agent-{agent}`, so since O32 a clean entry
+                            // diverts when the AGENT NAME trips the screen.
+                            // That is the likelier case here, an agent name
+                            // being the shorter and more attacker-shaped of
+                            // the two strings.
+                            "Quarantined pending review: this entry tripped the admission \
                              screen and is NOT readable in agent '{agent}'s diary. \
-                             Review with `undercroft admission list`."
+                             Review with `undercroft admission list`, which names the \
+                             signals — `destination-anomaly` means the agent name \
+                             tripped rather than the entry text."
                         );
                     } else {
                         println!("Diary entry {} written for agent '{agent}'", out.id);

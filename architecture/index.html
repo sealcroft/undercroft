@@ -1692,7 +1692,7 @@
 <p>An assigned class is consumed as a <em>candidate-set floor</em> (<code>min_trust</code> on a request, <code>UNDERCROFT_TRUST_FLOOR</code> on a vault) through the same scope machinery every other filter uses: resolved <em>before</em> candidates are drawn, so a quarantined wing that owns the corpus-wide top-k can neither answer a floored query nor crowd its candidates out — the starvation defect class, closed once for scopes, is closed here by construction. The doctrine is written down in <code>docs/LABELS.md</code>: filter, then weight; labels never enter scoring; cost is not trust.</p>
 
 <h3 id="defense-admission-screened-at-the-door">Admission — screened at the door</h3>
-<p>With <code>UNDERCROFT_ADMISSION=quarantine</code> declared, every save that does not come from a deployment-trusted surface passes a two-tier detector. Tier 1 is deterministic — pure functions over the candidate bytes plus its deterministic hash embedding, no model, no network — and emits a <em>closed vocabulary</em> of signal codes with byte offsets, never content: <code>imperative-instruction</code>, <code>tool-call-syntax</code>, <code>exfil-marker</code>, <code>encoded-blob</code>, <code>fixture-similarity</code>, and <code>rate-anomaly</code>.</p>
+<p>With <code>UNDERCROFT_ADMISSION=quarantine</code> declared, every save that does not come from a deployment-trusted surface passes a two-tier detector. Tier 1 is deterministic — pure functions over the candidate bytes plus its deterministic hash embedding, no model, no network — and emits a <em>closed vocabulary</em> of signal codes with byte offsets, never content: <code>imperative-instruction</code>, <code>tool-call-syntax</code>, <code>exfil-marker</code>, <code>encoded-blob</code>, <code>fixture-similarity</code>, <code>rate-anomaly</code>, and <code>destination-anomaly</code> — the last of these when the caller’s declared WING or ROOM name trips the screen rather than the content, which carries offset 0 because an offset is a position in the candidate and a wing name is not the candidate.</p>
 <p>The last two closed the detector's stated wishlist. <strong>Fixture similarity</strong> compares 32-word windows of the candidate against a committed corpus of eighteen attack payload shapes by hash-embedder cosine — window granularity because whole-text cosine dilutes a short injection inside a long drawer to invisibility. It exists for the <em>variant</em>: a paraphrase that dodges every marker substring still shares the fixture's surface vocabulary, and surface overlap is exactly what the hash embedder measures. Its threshold is pinned from both sides — hard negatives (security prose <em>about</em> injection, an instructions-shaped onboarding note) measured ≤ 0.369, marker-dodging variants ≥ 0.540, threshold 0.45 — and validated at corpus scale: <strong>0 of 5,882 clean LoCoMo turns flagged; 18 of 18 fixtures trip their own screen</strong> (the <code>screenfp</code> bench instrument, which fails hard if either side slips). <strong>The rate screen</strong> is the tier-1 signal candidate bytes cannot carry: a declared per-writer budget (<code>UNDERCROFT_ADMISSION_RATE=&lt;count&gt;/&lt;seconds&gt;</code>) checked against the vault's own committed history — the runaway-agent bound. It is declared, never defaulted, because a busy legitimate agent and a runaway one differ only by the deployment's own expectations; an unreadable declaration refuses to open rather than silently running unscreened.</p>
 <p>Tier 2 is an optional local model (<code>UNDERCROFT_ADMISSION_LLM=advisory</code>) and is advisory-only <em>by construction</em>, in both directions that matter: consulted only for candidates the deterministic tier passed, and only able to push toward quarantine — a tier-1-flagged candidate is never shown to it, so content that talks the classifier into “clean” bypasses nothing. A failure to answer is a non-event, never a blocked write.</p>
 
@@ -1703,7 +1703,7 @@
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 806" width="900" height="806" role="img" aria-labelledby="t_defenseadmission d_defenseadmission">
 <title id="t_defenseadmission">The write-path defense: screened at the door, ruled by a human, receipted on the way out</title>
-<desc id="d_defenseadmission">A save arrives from a surface which stamps added_by. Deployment-trusted surfaces bypass by declaration. Everything else passes the deterministic tier-1 detector (six signal classes including fixture similarity and the declared rate screen) and optionally an advisory-only LLM tier. Clean writes land where they aimed; flagged writes divert sealed into the quarantine wing, excluded from retrieval, where a human allows (re-files) or denies (destroys through attested forgetting, returning a receipt). Every ruling is chain-audited.</desc>
+<desc id="d_defenseadmission">A save arrives from a surface which stamps added_by. Deployment-trusted surfaces bypass by declaration. Everything else passes the deterministic tier-1 detector (seven signal classes including fixture similarity, the declared rate screen, and the declared DESTINATION when a wing or room name itself trips) and optionally an advisory-only LLM tier. Clean writes land where they aimed; flagged writes divert sealed into the quarantine wing, excluded from retrieval, where a human allows (re-files) or denies (destroys through attested forgetting, returning a receipt). Every ruling is chain-audited.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -1742,14 +1742,16 @@
 <text x="42" y="230" class="f l ink">Tier 1 — deterministic. No model, no network; signal codes and byte offsets, never content.</text>
 <text x="42" y="248" class="f s dim">A closed vocabulary, so the review queue reads as data. One signal per class, offsets into the candidate; independent classes record independent evidence.</text>
 
-<rect x="42" y="262" width="196" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
-<text x="140" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">imperative-instruction</text>
-<rect x="250" y="262" width="160" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
-<text x="330" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">tool-call-syntax</text>
-<rect x="422" y="262" width="140" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
-<text x="492" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">exfil-marker</text>
-<rect x="574" y="262" width="140" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
-<text x="644" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">encoded-blob</text>
+<rect x="42" y="262" width="208" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
+<text x="146" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">imperative-instruction</text>
+<rect x="262" y="262" width="152" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
+<text x="338" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">tool-call-syntax</text>
+<rect x="426" y="262" width="114" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
+<text x="483" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">exfil-marker</text>
+<rect x="552" y="262" width="114" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
+<text x="609" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">encoded-blob</text>
+<rect x="678" y="262" width="178" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
+<text x="767" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">destination-anomaly</text>
 
 <rect x="42" y="304" width="404" height="90" rx="8" fill="var(--d-violet-bg,#f7f4fc)" stroke="var(--d-violet,#6b4fa5)" stroke-width="1.3"/>
 <text x="58" y="326" class="mono" fill="var(--d-violet-ink,#53398a)">fixture-similarity</text>

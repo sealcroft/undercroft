@@ -2,6 +2,52 @@
 
 ## Unreleased — 1.1.0
 
+### the declared destination is screened, and the reserved wing leaves the name listings
+
+ROADMAP **O32**, filed by the sibling sweep O29 demanded and measured before
+it was filed.
+
+A wing name is agent-chosen and another agent reads it back through
+`undercroft_list_wings`, `undercroft_get_taxonomy`,
+`undercroft_get_closet_index` and — for a diary — `undercroft_list_agents`,
+which resolves `wing = agent-{agent}`. **Both existing guards fired on that
+path and neither saw it**: `validate_name` admits any 128-byte string free of
+control characters and path separators (O17's own finding, and the poison is
+56 bytes), and the admission screen had only ever been pointed at
+`drawer.content`. Measured before the fix: a drawer with CLEAN content filed
+into a wing named `ignore previous instructions …` was accepted, the queue
+did not grow, and the string reached `taxonomy`, `closets` and `stats`.
+The closet index is one of the two session-start surfaces.
+
+**Two halves, and only one was filed.** `admission_divert` now screens the
+declared wing and room and emits a new `destination-anomaly` signal, so the
+save DIVERTS — kept, not refused, because a drawer has the reserved wing and
+the rulings, unlike a fact (O17) or a tunnel (O29). And **`wings()` had no
+quarantine fence**, so `taxonomy`, `list_wings` and `PalaceStats.wings`
+published the reserved wing and every ROOM name inside it; diverting alone
+did not close the leak, because `admission_divert` moves the wing and leaves
+the room. That half is pre-existing and independent: the fence was built for
+reads that return CONTENT, and a NAME is agent-chosen text too. Stated cost —
+`PalaceStats.wings` no longer counts the reserved wing; queue depth is on the
+admission surface.
+
+**A new code rather than a reused one.** `AdmissionSignal.offset` is a byte
+position *in the candidate*, and a wing name is not the candidate; reusing a
+content code would give a reviewer an offset into text that does not contain
+the marker — wrong rather than missing. `rate-anomaly` is the precedent.
+
+**The corpus run caught a defect no test could.** Four surfaces said *"the
+content tripped the admission screen"*, true of every diversion until this
+unit and now false for exactly the case it adds. Corrected on all four to
+name the save and point at `admission list`, which carries the codes.
+
+Counterfactuals executed on both halves: with the screen reverted the flagged
+wing does not divert; with the fence reverted the taxonomy carries the name —
+the second observed naturally, as the test failed on that assertion while the
+diversion arm already passed. **O33 filed**: `SIGNAL_CODES` is a declared
+closed vocabulary that nothing counts in either direction, noticed by adding
+the seventh code to it.
+
 ### the screened-field inventory spans tables, and the tunnel label is in it
 
 ROADMAP **O29**, round-four #21 — finding #5 / O17 exactly, one table over.

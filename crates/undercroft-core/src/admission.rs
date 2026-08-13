@@ -49,6 +49,7 @@ pub const SIGNAL_CODES: &[&str] = &[
     "encoded-blob",
     "fixture-similarity",
     "rate-anomaly",
+    "destination-anomaly",
     "llm-advisory",
 ];
 
@@ -60,6 +61,26 @@ pub const LLM_ADVISORY_CODE: &str = "llm-advisory";
 /// of the candidate bytes, so the check lives where the history does).
 /// Offset 0: a rate has no byte position.
 pub const RATE_ANOMALY_CODE: &str = "rate-anomaly";
+
+/// The signal code the store emits when the caller's DECLARED DESTINATION —
+/// the wing or the room — trips [`screen`], rather than the content.
+///
+/// Its own code rather than the content class that fired, and offset 0, for
+/// the reason [`AdmissionSignal::offset`] states: an offset is a position in
+/// **the candidate**, and a wing name is not the candidate. Reusing
+/// `imperative-instruction` here would hand a reviewer a byte position into
+/// text that does not contain the marker — a durable signal that is WRONG,
+/// which is worse than one that is missing (ROADMAP C11). `rate-anomaly` is
+/// the precedent in shape as well as in kind: a signal the candidate bytes
+/// cannot carry, so it carries no position.
+///
+/// Why it exists at all (ROADMAP O32): a wing name is agent-chosen and
+/// another agent reads it back through `taxonomy`, the closet index and
+/// `list_wings`, and NEITHER existing guard sees it. `validate_name` admits
+/// any 128-byte string free of control characters and path separators — the
+/// shape every `IMPERATIVE_MARKERS` phrase fits — and [`screen`] had only
+/// ever been pointed at `drawer.content`.
+pub const DESTINATION_ANOMALY_CODE: &str = "destination-anomaly";
 
 /// The optional tier-2 admission advisor (C3.3): a local model's opinion
 /// on a candidate the deterministic tier passed. **Advisory-only by

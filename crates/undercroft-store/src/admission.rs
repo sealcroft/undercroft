@@ -381,6 +381,40 @@ impl PalaceStore {
                 offset: 0,
             });
         }
+        // The DECLARED DESTINATION, screened beside the content (ROADMAP
+        // O32). A wing name is agent-chosen and another agent reads it back
+        // through `taxonomy`, the closet index, `list_wings` and — for a
+        // diary — `list_agents`, which resolves `wing = agent-{agent}`. Both
+        // existing guards fired on that path and neither saw it:
+        // `validate_name` admits any 128-byte string free of control
+        // characters and path separators, and this screen had only ever been
+        // pointed at `drawer.content`. Measured before the fix: clean content
+        // into a poisoned wing was accepted and the string reached all three
+        // read surfaces.
+        //
+        // DIVERTED, not refused, and this is where the graph and the tunnel
+        // precedent stops applying. Those refuse because a fact and a tunnel
+        // have nowhere to divert TO. A drawer has the reserved wing,
+        // `admission list` and the rulings — so the write is kept, the wing
+        // is never created (the row lands in the reserved wing instead, so
+        // nothing adds the poisoned name to the taxonomy), and the name
+        // survives on `intended_wing`, which only the operator's review queue
+        // shows. Refusing would discard a legitimate drawer over its label
+        // and break the contract that a flagged write is never lost.
+        //
+        // It lives HERE rather than in `validate_declaration` — which is what
+        // this unit's own filing predicted — because that function is called
+        // from the door AND from the write choke point, and at the choke
+        // point a diverted row's wing is already the reserved constant, so
+        // screening there would screen a value the store chose. This function
+        // is door-only by construction, which makes the split the filing
+        // worried about unnecessary rather than solved.
+        if self.destination_flagged(drawer) {
+            signals.push(undercroft_core::admission::AdmissionSignal {
+                code: undercroft_core::admission::DESTINATION_ANOMALY_CODE.to_string(),
+                offset: 0,
+            });
+        }
         if signals.is_empty() {
             // Tier 2, advisory-only (C3.3): a wired model may push a
             // candidate the deterministic tier passed toward quarantine —
@@ -480,6 +514,21 @@ impl PalaceStore {
                 false
             }
         }
+    }
+
+    /// Does the caller's declared destination trip the tier-1 screen?
+    ///
+    /// The wing and the room, separately — a signal in either is a signal,
+    /// and screening the two CONCATENATED would let a marker split across the
+    /// boundary read as one string that neither field contains.
+    ///
+    /// `&self` and no history: unlike the rate screen this is a pure function
+    /// of the candidate's own metadata, so it costs two `screen` calls over
+    /// at most 256 bytes, and runs only when screening is declared — the
+    /// caller has already returned for an unscreened vault.
+    fn destination_flagged(&self, drawer: &Drawer) -> bool {
+        !undercroft_core::admission::screen(&drawer.meta.wing).is_empty()
+            || !undercroft_core::admission::screen(&drawer.meta.room).is_empty()
     }
 
     /// Every drawer awaiting an admission ruling, oldest first.

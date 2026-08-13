@@ -521,7 +521,9 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let out = store.upsert_screened(&drawer)?;
             if out.quarantined {
                 return Ok(format!(
-                    "save quarantined pending review — the content tripped the \
+                    // "this save", not "the content": since O32 a clean text
+                    // diverts when the declared WING or ROOM trips the screen.
+                    "save quarantined pending review — this save tripped the \
                      admission screen and is NOT retrievable in {wing}/{room}; \
                      an operator rules on it"
                 ));
@@ -847,7 +849,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             let out = store.upsert_screened(&drawer)?;
             if out.quarantined {
                 return Ok(format!(
-                    "drawer quarantined pending review — the content tripped the \
+                    "drawer quarantined pending review — this update tripped the \
                      admission screen and is NOT retrievable in {wing}/{room}"
                 ));
             }

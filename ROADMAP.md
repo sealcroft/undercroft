@@ -241,13 +241,14 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
-**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28, O30 and
-O29 are CLOSED.** Open: **O32** (an agent-chosen wing or room name reaches
-`taxonomy`/`closets`/`stats` unscreened — measured, and the worst of the
-class because the closet index is a session-start surface), filed by the
-sibling sweep O29 demanded; **O31** (a payload's `intended_wing` reaches disk
-unvalidated when the record is not a queue row), filed while closing O30;
-plus **O7** (at a major) and **O6** (a web-UI click), with O23 filed. **`.handover/AUDIT_CONTINUATION.md`
+**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28, O30, O29
+and O32 are CLOSED.** Open: **O33** (`SIGNAL_CODES` is a declared closed
+vocabulary nothing counts, found by adding the seventh code to it) and
+**O31** (a payload's `intended_wing` reaches disk unvalidated when the record
+is not a queue row), both filed while closing the unit above them; plus
+**O7** (at a major) and **O6** (a web-UI click), with O23 filed. **No open
+item is a live exposure** — O33 and O31 are both missing-gate/inert-value
+items with a stated shape. **`.handover/AUDIT_CONTINUATION.md`
 §1a now carries a verdict for 21 of the ~47 unclosed sweep rows and names the
 26 that are still unprobed** — eight more are verified OPEN there and are
 schedulable without re-deriving them.
@@ -1847,7 +1848,43 @@ of guessing this engine refuses everywhere else.
 
 ---
 
-### O32 — an agent-chosen WING or ROOM name reaches another agent unscreened, through the closet index
+### O33 — `SIGNAL_CODES` is a declared closed vocabulary that nothing counts
+
+Found while closing O32, which added the seventh code to it.
+
+`undercroft_core::admission::SIGNAL_CODES` declares the closed vocabulary of
+admission signal classes. Grepped across `crates/`, it appears in exactly
+three places and **all three are in the file that defines it**: the constant
+itself and two doc links. Nothing counts the codes actually emitted against
+it, in either direction.
+
+So a code emitted by the store but absent from the list would ship (the list
+is documentation nobody checks), and a code listed but never emitted would
+also ship — which is precisely the arrangement whose first instance shipped
+**five dead gauge names** before `GAUGE_NAMES` was gated. The codes travel
+further than a gauge does: they are on `PendingAdmission.signals`, on the
+`drawer-quarantined` telemetry frame, on `/v1 …/admission`, in `monitor.html`
+and enumerated on the architecture page and in its diagram.
+
+**Shape of the fix.** The `every_gauge_name_is_registered_and_every_registered
+_name_is_emitted` pattern: a source-scanning test in `undercroft-store` (where
+the non-`screen` emitters live) that collects every string assigned to a
+`code:` field and every `*_CODE` constant across both crates, and counts them
+against `SIGNAL_CODES` both ways. It needs a premise probe — a scanner that
+matches nothing reports what a clean tree reports, which is this project's
+most-repeated lesson.
+
+**Rejected:** making `AdmissionSignal.code` an enum, which would be stronger
+but changes the serde shape on `/v1`, the telemetry frame and every stored
+`meta_json` — an at-rest format change for a gate, which is the wrong trade.
+
+**Gate:** the test fails when a code is emitted without a `SIGNAL_CODES` row,
+and fails when a row names a code nothing emits; and its premise arm fails if
+the scan finds zero emit sites.
+
+---
+
+### O32 — CLOSED 2026-08-13: the declared destination is screened, and the reserved wing leaves the name listings
 
 Found by the sibling sweep O29's own entry demanded, and filed rather than
 folded into it: it changes the security verdict of **every write path on
@@ -1900,6 +1937,63 @@ grows by one, and the string appears in NO taxonomy, closet or wing listing;
 `admission list` shows it as the intended destination; a clean wing name is
 untouched; and the same for `room`, and for a diary agent name, which reaches
 this through the wing.
+
+#### What closing it changed, and where this entry's own filing was wrong
+
+**Two halves, and only the first was filed.** `admission_divert` now screens
+the declared wing and room beside the content and pushes a new
+`destination-anomaly` signal, so the whole save DIVERTS — the write is kept,
+the name is not. That was the filed half.
+
+The second half is what the gate actually needed and the filing had not
+seen: **`wings()` had no quarantine fence**, so `taxonomy` (which iterates
+it), `undercroft_list_wings` and `PalaceStats.wings` published the reserved
+wing and every ROOM name inside it. `admission_divert` moves the wing and
+leaves the room, so diverting alone did not close the leak — the poisoned
+room simply appeared under `quarantine-pending` instead. The test caught it:
+it failed on *"the taxonomy must not carry it"* after the diversion arm was
+already passing. That half is **pre-existing and independent** — an agent
+picking a poisoned ROOM plus poisoned content has always diverted, and the
+room name has always been listed. The fence was built for reads that return
+CONTENT; a NAME is agent-chosen text too.
+
+**A new signal code, not a reused one.** `AdmissionSignal.offset` is
+documented as a byte position *in the candidate*, and a wing name is not the
+candidate — reusing `imperative-instruction` would hand a reviewer an offset
+into text that does not contain the marker, a durable signal that is WRONG
+rather than missing (C11). `rate-anomaly` is the precedent in shape as well
+as kind, and carries offset 0 for the same reason.
+
+**Where this entry's filing was wrong, recorded because it is the third time
+a filing has been:** it predicted the hard part was that
+`validate_declaration` serves both the door and the write choke point, so
+"the screen belongs on the door arm only, which means the function has to
+distinguish its two callers". There is no such problem. The check belongs in
+`admission_divert`, which is door-only *by construction* — the filing
+proposed the right behaviour at the wrong call site and invented a
+refactor to solve a problem that call site does not have.
+
+**The corpus run caught a defect the tests could not.** Four surfaces
+explained a diversion with the words *"the content tripped the admission
+screen"*, which was true of every diversion until this unit and is now false
+for exactly the case it adds: the CLI told an operator whose content was
+clean to go looking at the text. Corrected on all four (CLI save, CLI diary,
+MCP save, MCP update) to name the save rather than the content, and to point
+at `admission list`, which carries the per-signal codes. No test asserted
+that wording; a real run printed it.
+
+**Surfaces the new code touched, counted rather than assumed:**
+`SIGNAL_CODES`, the architecture page's prose list, and the
+`defense-admission` DIAGRAM, whose four content chips had to be re-laid out
+to take a fifth — arithmetic verified against the parent box (five chips,
+12px gaps, row 42..856 inside 24..876) with a premise assert that the
+original row matched verbatim before anything was replaced, then
+`architecture/build.sh` re-run so the inlined copy and the PDFs are derived
+rather than hand-edited.
+
+**Filed, not folded in: O33** — `SIGNAL_CODES` is a declared closed
+vocabulary with no gate in either direction, which this unit noticed by
+adding the seventh code to it.
 
 ---
 
