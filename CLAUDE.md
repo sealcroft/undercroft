@@ -384,8 +384,18 @@ Consequences that are binding, not advisory:
   dynamically at rotation since a fixed list cannot enumerate them);
   below the floor a scoped query full-scans its wing — bounded by the
   floor, exact, and still starvation-free. **Every other declared filter
-  is scope-resolved before candidates are drawn** (`resolve_seq_filter` →
-  `*_candidates_in`): `room` was a plain `WHERE` over globally generated
+  is scope-resolved before candidates are drawn** (`resolve_scope` →
+  `resolve_seq_filter` → `*_candidates_in` — the ROUTING is its own
+  function since O19, because WHICH call `resolve_seq_filter` receives is
+  the decision, and a test of that function alone passes on both trees.
+  A wing the per-wing tier already generates inside, beside a pure
+  exclusion, no longer materializes the wing's own membership set: the
+  wing leaves the NARROWING, never the query, and the exclusion rides as
+  an `AllBut`. Recall cannot regress and the argument is arithmetic
+  rather than sampled — `scoped_pool_k` is monotonic in its population
+  and an exclusion's `narrows()` false is what makes the tier re-apply
+  the corpus divisor):
+  `room` was a plain `WHERE` over globally generated
   candidates — the wing defect with no tier and no fallback — and the FTS
   prefilter shared the shape (both were recorded gaps, both closed
   2026-08-02). A scope that fits the hydration budget (`max(256,
@@ -1162,8 +1172,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (726 run,
-                                      # 4 #[ignore]d = 730 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (728 run,
+                                      # 4 #[ignore]d = 732 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

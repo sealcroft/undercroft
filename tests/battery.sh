@@ -865,6 +865,39 @@ for i in "${!NAMES[@]}"; do
     FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published, this run measured $measured\n"
   fi
 done
+
+# **The cargo figure needs its own comparison, and finding that out is how
+# this gate learned its own scope.** The loop above matches `(N checks`, and
+# cargo publishes none — it is `(N run,` plus a compiled total in `CLAUDE.md`
+# and a `cargo tests` tile on the landing page. So the first version of this
+# check covered every suite EXCEPT the one whose number moves most often, and
+# the unit that added it moved that number in the same commit. A gate whose
+# scope is narrower than it reads is the defect this file keeps closing.
+if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
+  tline=$(test_summary ".battery/test.log")
+  tpass=$(sed -E 's/^([0-9]+) passed.*/\1/' <<< "$tline")
+  tign=$(sed -E 's/.*, ([0-9]+) ignored.*/\1/' <<< "$tline")
+  case "$tpass" in
+    ''|*[!0-9]*) : ;;   # the reader said something else; it names its own failure
+    *)
+      cm_run=$(grep -oE 'integration tests \([0-9]+ run' CLAUDE.md | grep -oE '[0-9]+' | head -1)
+      cm_comp=$(grep -oE '= [0-9]+ compiled' CLAUDE.md | grep -oE '[0-9]+' | head -1)
+      tile=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">cargo tests' "$LANDING" \
+             | grep -oE '[0-9]+' | head -1)
+      if [ -n "$cm_run" ] && [ "$cm_run" != "$tpass" ]; then
+        FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: CLAUDE.md publishes $cm_run run, this run measured $tpass\n"
+      fi
+      if [ -n "$cm_comp" ] && [ -n "$tign" ]; then
+        want=$(( tpass + tign ))
+        [ "$cm_comp" != "$want" ] && FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: CLAUDE.md publishes $cm_comp compiled; run+ignored is $want\n"
+      fi
+      if [ -n "$tile" ] && [ "$tile" != "$tpass" ]; then
+        FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: the landing tile publishes $tile, this run measured $tpass\n"
+      fi
+      ;;
+  esac
+fi
+
 if [ -n "$FIGURE_DRIFT" ]; then
   echo ""
   echo "PUBLISHED FIGURES ARE STALE — the suites passed; the numbers describing"

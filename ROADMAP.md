@@ -241,8 +241,9 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
-**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O27 and O28 are CLOSED.**
-What remains is **O19**, then O7 at a major, then O6, with O23 filed.
+**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27 and O28 are
+CLOSED.** What remains is **O7** (at a major) and **O6** (a web-UI click),
+with O23 filed. No open item touches the engine.
 
 ### The diff-level pass — 2026-08-13
 
@@ -1717,6 +1718,19 @@ needing an instrument run (IRREGULAR pairs, paradigm counts). Widening a gate
 past what it can verify is how a check starts reading as though it covered
 more than it does.
 
+**Its own scope was narrower than it read, and the next unit found out the
+hard way.** The post-run comparison matched `(N checks` — and cargo publishes
+none: its figure is `(N run,` plus a compiled total in `CLAUDE.md` and a
+`cargo tests` tile. So the first version covered every suite EXCEPT the one
+whose number moves most often, and O19 moved it two commits later. Extended
+to compare the cargo run count, the compiled total (run + ignored) and the
+tile, and the extension was proved on a LIVE instance rather than a
+synthesized one: with the figures as they stood it named all three
+(`726 run` against a measured 728, `730 compiled` against 732, tile 726
+against 728) and exited 1; corrected, it exits 0 and says nothing. A gate
+whose scope is narrower than it reads is the defect this file keeps closing,
+and it committed it once itself.
+
 **One portability defect of my own, caught by running it under the other
 awk.** The first reader used `match($0, re, arr)` — a GNU extension — and
 Ubuntu's default `awk` is mawk, which lacks it. CI runs these preflights on
@@ -2456,7 +2470,7 @@ ruling is still needed before code.
 
 ---
 
-### O19 — a wing-scoped query still materializes a set the wing tier does not need
+### O19 — CLOSED 2026-08-13: a wing the tier covers no longer materializes itself
 
 Split out of round-four #6 rather than folded into it, because it is a second
 decision with its own recall argument and closing #6 did not touch it.
@@ -2485,6 +2499,49 @@ population, plus the existing `scoped_pools_are_sized_by_the_scope` staying
 green — and a recall arm, because the wing tier's `k` currently comes from
 `scope_live` and dropping that would re-open the question the scoped floors
 were measured to answer.
+
+**CLOSED, and the fix is one match arm at the CALL SITE.** `resolve_seq_filter`
+already contained the right logic — it answers `AllBut(excluded)` whenever
+nothing positive is narrowing — so the defect was only ever which call it
+received. A wing the tier covers, beside a pure `Exclude`, now asks for
+`resolve_seq_filter(None, None, None, trust)`: the wing leaves the NARROWING,
+never the query.
+
+**Impact analysis first, by reading rather than assuming**, since the three
+ways this could have been wrong are all silent. The exclusion still reaches
+the ACCELERATOR — `search_inner`'s hydration SQL builds its `WHERE` from
+`opts` and `trust` independently of `scope`. It still bounds CANDIDATE
+GENERATION — `wing_pq_candidates_in` does `scored.retain(|(_, seq)|
+s.admits(seq))`. And the BOUNDARY was never the clause but
+`verified_meta_admits` (A28). There is also no starvation risk of #6's kind:
+that generator scans the WING's own cache and returns `None` — not global
+candidates — when the wing has no index.
+
+**The decision is EXTRACTED (`resolve_scope`) so the gate can drive the
+routing.** The whole defect is which call `resolve_seq_filter` receives, so a
+test of that function would have passed on both trees — the O26 lesson,
+applied one unit later. Counterfactual executed against the artifact: with the
+arm removed, `materialized()` is **64** where the test wants **1**.
+
+**The recall arm is a PROOF, not a sample**, which is stronger than what the
+gate asked for: `scoped_pool_k(h, n) = h.max(n/64).max(n.min(FLOOR))` is
+monotonic non-decreasing in `n`, so counting the whole wing instead of the
+wing-minus-excluded can only raise the pool; and an exclusion answers
+`narrows()` false, which is exactly the condition under which the tier applies
+`k.max(live / pool_div)` and raises it again. Both are asserted, walked across
+the band boundaries rather than sampled at one comfortable size. Three
+negative controls: without the tier the wing must still narrow (or a vault
+with no per-wing index loses the bound on its scan), a declared ROOM must
+still narrow, and an `Allow` must still narrow — that last one is the single
+way the fix could have been actively wrong, since dropping the wing beside a
+positive narrowing would WIDEN the scope rather than cheapen it.
+
+**Real corpus** (definition of done, 6): the LoCoMo feed mined into one wing
+above a declared `UNDERCROFT_WING_PQ_MIN` under `UNDERCROFT_RETRIEVAL=pq`, ten
+queries drawn from the corpus itself, run with the fence down and then up.
+10/10 answered both ways — the fix changes cost, not answers, which is what
+this entry always said it was. Binary freshness proved by mtime after a
+`grep`-based probe silently failed to fire.
 
 ---
 

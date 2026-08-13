@@ -2,6 +2,57 @@
 
 ## Unreleased — 1.1.0
 
+### a wing the tier already covers no longer materializes its own membership
+
+ROADMAP **O19**, split out of round-four #6 rather than folded into it,
+because it is a second decision with its own recall argument.
+
+When a query names a `wing` **and** a bare `TrustClause::Exclude` is in force
+— the quarantine fence, or a vault trust floor — `search_inner` took the arm
+that materializes `Only(wing minus excluded)`: the wing's whole membership
+set. The per-wing PQ index never needed it. That tier scans the wing's *own*
+cache, so it generates inside the wing by construction; the only thing that
+had to be materialized was what the fence EXCLUDES.
+
+**The fix is one match arm at the call site.** `resolve_seq_filter` already
+answers `AllBut(excluded)` whenever nothing positive is narrowing, so the
+defect was only ever which call it received. A wing the tier covers, beside a
+pure `Exclude`, now asks for `resolve_seq_filter(None, None, None, trust)` —
+the wing leaves the NARROWING, never the query. O(excluded) instead of
+O(wing).
+
+**Three ways it could have been silently wrong, each checked by reading the
+code rather than assumed.** The exclusion still reaches the ACCELERATOR: the
+hydration SQL builds its `WHERE` from `opts` and `trust` independently of
+`scope`. It still bounds CANDIDATE GENERATION: `wing_pq_candidates_in` does
+`scored.retain(|(_, seq)| s.admits(seq))`. And the BOUNDARY was never the
+clause but `verified_meta_admits` (A28). Nor is there a starvation risk of
+#6's kind — that generator scans the wing's own cache and returns `None`,
+not global candidates, when the wing has no index.
+
+**The decision is extracted (`resolve_scope`) so the gate drives the
+ROUTING.** The whole defect is which call `resolve_seq_filter` receives, so a
+test of that function would have passed on both trees — the O26 lesson one
+unit later. Counterfactual executed: with the arm removed, `materialized()`
+is **64** where the test wants **1**.
+
+**The recall arm is a proof rather than a sample**, which is more than the
+filed gate asked for. `scoped_pool_k(h, n) = h.max(n/64).max(n.min(FLOOR))`
+is monotonic non-decreasing in `n`, so counting the whole wing rather than
+wing-minus-excluded can only raise the pool; and an exclusion answers
+`narrows()` false, which is precisely the condition under which the tier
+applies `k.max(live / pool_div)` and raises it again. Both asserted, walked
+across the band boundaries instead of sampled at one size. Three negative
+controls: without the tier the wing must still narrow, a declared room must
+still narrow, and an `Allow` must still narrow — that last is the one way
+this fix could have been actively wrong, since dropping the wing beside a
+positive narrowing would widen the scope rather than cheapen it.
+
+Real corpus: the LoCoMo feed in one wing above a declared
+`UNDERCROFT_WING_PQ_MIN` under `UNDERCROFT_RETRIEVAL=pq`, ten queries drawn
+from the corpus itself, fence down then up — 10/10 both ways. The fix changes
+cost, not answers, which is what the entry always said it was.
+
 ### a published figure is counted against an inventory, not remembered
 
 ROADMAP **O28**, and it found a live one on its first run.
@@ -39,6 +90,14 @@ count, a suite count moving underneath a doc, a row naming a dead tile, and
 the extractor finding nothing — each exits 1, clean tree exits 0. Plus the
 post-run arm driven through a real subset battery: a deliberately wrong `site`
 figure reports drift and exits 1; the correct figure exits 0 silently.
+
+**Its own scope was narrower than it read.** The post-run comparison matched
+`(N checks` and cargo publishes none — its figure is `(N run,` plus a compiled
+total and a landing tile — so the first version covered every suite except the
+one whose number moves most often, and the very next unit moved it. Extended
+to the cargo run count, the compiled total and the tile, and proved on a LIVE
+instance: with the figures as they stood it named all three and exited 1;
+corrected, it exits 0 silently.
 
 **Two portability defects of my own, both caught by running rather than
 reading.** The first reader used awk's three-argument `match()`, a GNU
