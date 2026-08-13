@@ -242,8 +242,10 @@ one, and it has to be derived rather than assumed.
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
 **Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27 and O28 are
-CLOSED.** What remains is **O7** (at a major) and **O6** (a web-UI click),
-with O23 filed. No open item touches the engine.
+CLOSED.** Open: **O29** (a tunnel label reaches another agent unscreened —
+filed from a verification sweep of the round-four table, and it is O17 one
+table over), **O7** (at a major) and **O6** (a web-UI click), with O23
+filed. O29 is the only open item that touches the engine.
 
 ### The diff-level pass — 2026-08-13
 
@@ -259,6 +261,7 @@ by reading the code each remaining fix would touch rather than the entries.
 | **O26** | `tests/no-trace/verify.py` · `tests/battery.sh` — **CLOSED** |
 | **O7** | `undercroft-vault/src/lib.rs` + 5 more files under `crates/` (39 sites), `tests/` (11), `deploy/` (1), `docs/` (4), plus website/architecture/root prose. Re-measured; the entry's figures are exact |
 | **O6** | none in the tree |
+| **O29** | `undercroft-store/src/manage.rs` (`create_tunnel`), the screened-field inventory, and a sweep for sibling free-text fields outside `drawers` and the graph |
 | **O27** | **CLOSED.** `tests/battery.sh` only — the summary reader and its host-side preflight, exactly as this row predicted |
 | **O28** | **CLOSED.** `tests/battery.sh` (inventory + preflight + post-run check) and the one stale figure it found, `docs/MULTI_TENANCY.md` |
 
@@ -1665,6 +1668,48 @@ reassembling one of them with `sed`.
 
 Measured at the closing tree: **292 files, 119 streams across 11 PDFs, 0
 unexamined, 0 hits.**
+
+---
+
+### O29 — a tunnel label is agent-written free text that reaches another agent unscreened
+
+Round-four **#21**, verified against code 2026-08-13 during a status sweep of
+the ranked table. **It is finding #5 / O17 one table over**, and that is the
+reason it is filed as its own item rather than left as a table row.
+
+`PalaceStore::create_tunnel` validates `from_wing` and `to_wing` through
+`undercroft_core::validate_name` and refuses the reserved wing as an endpoint.
+It does neither for `label`. That value is stored
+(`INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at)`), read
+back verbatim (`SELECT id, from_wing, to_wing, label, … FROM tunnels`), WRITTEN
+by an agent through `undercroft_create_tunnel`, and READ by an agent through
+`undercroft_list_hallways` and `undercroft_follow_tunnel`.
+
+So it is the exact shape O17 closed for the knowledge graph: free text one
+agent writes, another agent reads verbatim in a later session, past the
+admission screen. `kg::KG_SCREENED_FIELDS` covers `subject`, `predicate`,
+`object`, `canonical_key`, `extractor` and `entity`; nothing covers this, and
+`validate_name` — which O17 found admits any 128-byte string free of control
+characters and path separators — is not even applied here.
+
+**Why it survived O17.** That unit's inventory was scoped to the graph, and
+its both-directions gate counts `KG_SCREENED_FIELDS` against the KG call
+sites. A field in a different table is outside the question it asks. The
+lesson O17 itself recorded — *ask what the READ returns, not what the writer
+considers content* — applies unchanged; it was simply asked about one table.
+
+**Shape of the fix.** `validate_name` at the tunnel's own choke point beside
+the two wing names, plus the admission screen over `label`, with the covered
+set an INVENTORY counted both ways rather than a second hand-maintained list —
+and the honest question asked once: which other agent-writable, agent-readable
+free-text fields exist outside `drawers` and the graph? A sweep for stored
+`TEXT` an MCP write tool populates and an MCP read tool returns is the way to
+find out, and it should be done with the fix rather than after it.
+
+**Gate:** a poisoned label refuses and NAMES the field, a clean one still
+creates the tunnel, and the screened-field inventory fails the build in both
+directions — the O17 shape, which is the precedent this follows in mechanism
+as well as in kind.
 
 ---
 
