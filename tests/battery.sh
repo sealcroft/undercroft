@@ -434,6 +434,196 @@ if [ -n "$COMPOSE_BAD" ]; then
 fi
 echo "ok    all $COMPOSE_N compose files declare a project name"
 
+# ── preflight: every published figure has an inventory row ─────────────────
+# **A number in prose is a claim about the moment someone last counted**, and
+# this project's published ones have rotted repeatedly: the landing page's
+# cargo-test tile was set to 660 by the very commit that added four tests, and
+# on 2026-08-13 its e2e tile read 508 against a true 541 — stale BEFORE the
+# session that found it, with nothing able to say so. `docs/MULTI_TENANCY.md`
+# was published claiming a suite runs 95 checks while it ran 110.
+#
+# So: an INVENTORY the surfaces are counted against, in BOTH directions. A new
+# tile with no row fails; a row naming no tile fails. That is the half a
+# hand-maintained doc table cannot do, and it is the same mechanism
+# `parity.rs` uses for MCP tools and `GAUGE_NAMES` for metric series.
+#
+# **Three classes, because the figures do not have one provenance and
+# pretending they do would be the dishonest part.**
+#   derived  — checkable from the tree RIGHT NOW; the value is recomputed here
+#              and a mismatch fails.
+#   measured — only a battery run produces it. Checked two ways: every surface
+#              publishing it must AGREE (static, and it is what catches a doc
+#              going stale), and the full battery re-checks it against what it
+#              actually measured (below, after the suites).
+#   claim    — not a count at all. Recorded with its reason so it cannot be
+#              mistaken for an unchecked number.
+#
+# **Scope, stated so it is not mistaken for complete.** This covers the
+# landing page's `data-count` tiles and the per-suite check counts wherever
+# they are published — the figures the battery itself measures, which move on
+# almost every unit and have demonstrably rotted. It does NOT cover figures
+# with their own gate (`UNDERCROFT_*` variables are counted by
+# `ENGINE_ENV_VARS` both ways) or measurements needing an instrument run
+# (IRREGULAR pairs, paradigm counts). Those are a different question, and
+# widening a gate past what it can actually verify is how a check starts
+# reading as though it covered more than it does.
+echo "═══ preflight: published figures ═══"
+
+LANDING="website/landing/index.html"
+# label|class|source
+PUBLISHED_FIGURES=(
+  "cargo tests|measured|test"
+  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e"
+  "live backends|derived|BACKENDS"
+  "mcp tools|derived|MCP_TOOLS"
+  "bytes phoned home|claim|the local-first invariant — a promise, not a count"
+)
+
+FIG_FAIL=0
+# The tiles as PUBLISHED, read out of the page rather than assumed.
+TILES=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">[^<]+' "$LANDING" \
+        | sed -E 's/data-count="([0-9]+)">0<\/div><div class="l">(.*)/\2=\1/')
+TILE_N=$(printf '%s\n' "$TILES" | grep -c '=' || true)
+# PREMISE. An extractor that matches nothing reports what a clean page
+# reports — the failure this whole family is about. The page has had five
+# tiles for its whole life; zero means the markup moved, not that the page
+# is fine.
+if [ "$TILE_N" -lt 1 ]; then
+  echo "FAIL  no data-count tiles found in $LANDING — this reader examined nothing,"
+  echo "      which is not the same as a page with no figures on it"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# Direction 1: every published tile has a row. This is the arm that stops a
+# NEW ungated figure from shipping.
+while IFS= read -r t; do
+  [ -z "$t" ] && continue
+  label="${t%=*}"
+  found=0
+  for row in "${PUBLISHED_FIGURES[@]}"; do
+    [ "${row%%|*}" = "$label" ] && found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "FAIL  the landing page publishes \"$label\" with no inventory row —"
+    echo "      classify it (derived / measured / claim) in PUBLISHED_FIGURES"
+    FIG_FAIL=1
+  fi
+done <<< "$TILES"
+
+# Direction 2: every row names a real tile. A row that has outlived its figure
+# reads as a gate being enforced when nothing is.
+for row in "${PUBLISHED_FIGURES[@]}"; do
+  label="${row%%|*}"
+  if ! grep -q "^$label=" <<< "$TILES"; then
+    echo "FAIL  PUBLISHED_FIGURES names \"$label\", which the landing page no longer"
+    echo "      publishes — a stale row reads as a checked figure"
+    FIG_FAIL=1
+  fi
+done
+
+fig_value() { grep -oE "^$1=[0-9]+" <<< "$TILES" | head -1 | cut -d= -f2; }
+
+# The `derived` rows, recomputed from their source of truth.
+BACKENDS_N=$(grep -cE '^run_backend_suite ' tests/e2e-backends.sh || true)
+MCP_N=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
+        | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
+# Premise on both sources: a zero here is a broken extractor, and it would
+# make the comparison below pass only when the page is ALSO wrong.
+if [ "$BACKENDS_N" -lt 1 ] || [ "$MCP_N" -lt 1 ]; then
+  echo "FAIL  a derived source read as empty (backends=$BACKENDS_N mcp=$MCP_N) —"
+  echo "      the extractor is broken, which is not evidence about the page"
+  FIG_FAIL=1
+else
+  for pair in "live backends=$BACKENDS_N" "mcp tools=$MCP_N"; do
+    lbl="${pair%=*}"; want="${pair#*=}"; got=$(fig_value "$lbl")
+    if [ "$got" != "$want" ]; then
+      echo "FAIL  the landing page publishes $lbl=$got; the tree says $want"
+      FIG_FAIL=1
+    fi
+  done
+fi
+
+# The `measured` rows: every surface publishing one must AGREE. Static, and it
+# is what catches a doc going stale between units — `docs/MULTI_TENANCY.md`
+# claimed 95 for a suite running 110 while every other surface was current.
+#
+# CLAUDE.md publishes them on its `docker compose run --rm <suite>` lines;
+# other docs publish them as `tests/<script>.sh`, N checks`.
+# `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
+# that is a GNU extension and Ubuntu's default `awk` is mawk, which does not
+# have it. CI runs these preflights on ubuntu-latest, so the gawk form would
+# have produced an empty read there — caught by the premise arm below, but as
+# a confusing failure on a clean tree rather than as the portability bug it
+# is. A gate that only runs on its author's machine is the shape this whole
+# file exists to remove.
+declare_suite_counts() {
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
+}
+SUITE_COUNTS=$(declare_suite_counts)
+if [ -z "$SUITE_COUNTS" ]; then
+  echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
+  echo "      and a broken reader agrees with every page it cannot read"
+  FIG_FAIL=1
+fi
+suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
+
+# Any OTHER doc republishing a suite's count must match CLAUDE.md's.
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  f="${hit%%:*}"; rest="${hit#*:}"
+  sc=$(sed -E 's#.*tests/([a-z0-9-]+)\.sh`?,? +([0-9]+) checks.*#\1=\2#' <<< "$rest")
+  sname="${sc%=*}"; sval="${sc#*=}"
+  # `tests/e2e-backends.sh` is the script; the suite is `backends-e2e`.
+  case "$sname" in
+    e2e-backends) sname="backends-e2e" ;;
+    e2e-orchestrator) sname="orchestrator-e2e" ;;
+  esac
+  want=$(suite_count "$sname")
+  if [ -n "$want" ] && [ "$sval" != "$want" ]; then
+    echo "FAIL  $f publishes $sname=$sval; CLAUDE.md publishes $want"
+    FIG_FAIL=1
+  fi
+done <<< "$(git grep -nE 'tests/[a-z0-9-]+\.sh`?,? +[0-9]+ checks' -- '*.md' ':!CHANGELOG.md' 2>/dev/null)"
+
+# The `e2e checks` tile is a SUM, and the row says which components. Deriving
+# it here is the difference between a tile that is checked and one that merely
+# looks plausible.
+SUM_SPEC=""
+for row in "${PUBLISHED_FIGURES[@]}"; do
+  case "$row" in "e2e checks|"*) SUM_SPEC="${row##*SUM:}" ;; esac
+done
+if [ -n "$SUM_SPEC" ] && [ -n "$SUITE_COUNTS" ]; then
+  total=0; missing=""
+  for s in ${SUM_SPEC//,/ }; do
+    v=$(suite_count "$s")
+    if [ -z "$v" ]; then missing="$missing $s"; else total=$((total + v)); fi
+  done
+  if [ -n "$missing" ]; then
+    echo "FAIL  the e2e tile sums$missing, which CLAUDE.md does not publish"
+    FIG_FAIL=1
+  else
+    got=$(fig_value "e2e checks")
+    if [ "$got" != "$total" ]; then
+      echo "FAIL  the landing page publishes e2e checks=$got; its named components"
+      echo "      (${SUM_SPEC//,/ + }) sum to $total"
+      FIG_FAIL=1
+    fi
+  fi
+fi
+
+if [ "$FIG_FAIL" -ne 0 ]; then
+  echo "      A published figure is a claim to anyone reading it. Correct the"
+  echo "      surface, or the inventory if the figure legitimately moved."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $TILE_N published tiles, each with a row; derived values and"
+echo "      cross-surface suite counts agree"
+
 # ── preflight: the handover has not drifted ────────────────────────────────
 # `.handover/` is gitignored on purpose and MUST stay so — 1.6 GB of working
 # material including the 269 MB pre-rename bundle. It is still a governance
@@ -647,6 +837,44 @@ for i in "${!NAMES[@]}"; do
   printf ' %-18s exit %-3s %s\n' "$n" "$c" "${detail:-}"
 done
 echo "════════════════════════════════════════════════════"
+
+# ── the published figures, against what this run MEASURED ──────────────────
+# The preflight checks that every surface publishing a figure AGREES with the
+# others. That cannot catch the case where they are all stale TOGETHER, which
+# is the one that actually happened: `CLAUDE.md` published 335 e2e checks
+# while the suite ran 348, and every surface was consistent with every other.
+# Only a run knows the true number, so the comparison belongs here.
+#
+# Suites that did not run in THIS invocation are skipped — a subset run
+# (`bash tests/battery.sh test`) must not report the other seven as drifted,
+# which would be an alarm that fires on correct usage.
+FIGURE_DRIFT=""
+for i in "${!NAMES[@]}"; do
+  n="${NAMES[$i]}"
+  published=$(grep -oE "docker compose run --rm $n .*\([0-9]+ checks" CLAUDE.md 2>/dev/null \
+              | sed -E 's/.*\(([0-9]+) checks/\1/' | head -1)
+  [ -z "$published" ] && continue
+  line=$(suite_summary ".battery/$n.log")
+  measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
+  case "$measured" in
+    *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
+    *)     continue ;;
+  esac
+  [ "$measured" -eq 0 ] && continue
+  if [ "$measured" != "$published" ]; then
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published, this run measured $measured\n"
+  fi
+done
+if [ -n "$FIGURE_DRIFT" ]; then
+  echo ""
+  echo "PUBLISHED FIGURES ARE STALE — the suites passed; the numbers describing"
+  echo "them did not. This is a doc-drift verdict, NOT a suite failure:"
+  printf "$FIGURE_DRIFT"
+  echo "      Update CLAUDE.md, then the landing page tile (its e2e figure is the"
+  echo "      SUM of the four e2e suites) and any doc republishing the count."
+  OVERALL=1
+fi
+
 if [ "$OVERALL" -eq 0 ]; then
   echo "BATTERY OK — every suite exited 0"
 else

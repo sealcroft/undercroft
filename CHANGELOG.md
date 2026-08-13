@@ -2,6 +2,52 @@
 
 ## Unreleased — 1.1.0
 
+### a published figure is counted against an inventory, not remembered
+
+ROADMAP **O28**, and it found a live one on its first run.
+
+A number in prose is a claim about the moment someone last counted. This
+project's published figures have rotted repeatedly — the landing page's
+cargo-test tile was set to 660 by the very commit that added four tests, and
+its e2e tile read 508 against a true 541, stale *before* the session that
+found it. The count-correction commit that preceded this one said so in its
+own message: a hand-maintained number with no gate. This is the gate.
+
+**`PUBLISHED_FIGURES`, counted both ways.** A new landing tile with no
+inventory row fails; a row naming no tile fails. Three classes, because the
+figures do not share one provenance: **derived** (recomputed from the tree —
+`mcp tools` from `MCP_TOOLS`, `live backends` from the `run_backend_suite`
+invocations), **measured** (only a run produces it), **claim** (`bytes phoned
+home` is the local-first invariant, not a count, recorded so it cannot be
+mistaken for an unchecked number).
+
+**Two checks, because the static one cannot see the case that happened.**
+Every surface publishing a figure must AGREE, and the `e2e checks` tile must
+equal the SUM of the four components its row names. That catches a doc going
+stale between units — and it immediately caught `docs/MULTI_TENANCY.md`
+publishing a suite as 95 checks while it ran 110. But surfaces can be stale
+*together*, consistent and all wrong, which is exactly what happened here
+(`CLAUDE.md` published 335 e2e checks against a true 348). Only a run knows,
+so the battery now re-checks every published per-suite figure against what it
+measured, reports it as a **doc-drift verdict distinct from a suite failure**,
+and fails. Suites that did not run in that invocation are skipped, so a subset
+run does not raise an alarm on correct usage.
+
+Seven counterfactual arms executed against the preflight — new ungated tile,
+derived value drifting, the SUM ceasing to hold, a doc republishing a stale
+count, a suite count moving underneath a doc, a row naming a dead tile, and
+the extractor finding nothing — each exits 1, clean tree exits 0. Plus the
+post-run arm driven through a real subset battery: a deliberately wrong `site`
+figure reports drift and exits 1; the correct figure exits 0 silently.
+
+**Two portability defects of my own, both caught by running rather than
+reading.** The first reader used awk's three-argument `match()`, a GNU
+extension; Ubuntu's default `awk` is mawk, and CI runs these preflights on
+ubuntu-latest, so it would have read empty there. The second: the character
+class `[a-z-]+` excludes digits, so `e2e` truncated to `e` and every suite
+name was wrong — found by looking at the reader's output instead of trusting
+that it ran.
+
 ### the replay detector covered one suite of eight
 
 ROADMAP **O27**, found by a battery of mine going red and worth more than the

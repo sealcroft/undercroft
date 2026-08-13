@@ -1216,6 +1216,22 @@ docker compose run --rm test          # cargo unit + integration tests (726 run,
                                       # second and said nothing about the first.
                                       # `suite_summary` counts them and names a
                                       # doubled log; same three premise arms.
+                                      # **And the figure itself is now GATED
+                                      # (O28, closed 2026-08-13)**: every
+                                      # published per-suite count is compared
+                                      # to what the run measured, reported as
+                                      # a doc-drift verdict distinct from a
+                                      # suite failure, and the battery fails.
+                                      # A `published figures` preflight counts
+                                      # the landing tiles against
+                                      # `PUBLISHED_FIGURES` both ways, checks
+                                      # the derived ones against the tree, and
+                                      # requires every surface republishing a
+                                      # count to agree. So the numbers in this
+                                      # block are checked rather than
+                                      # remembered — do not hand-edit one to
+                                      # silence the gate; it is measuring the
+                                      # suite, not this comment.
                                       # The 4 ignored are 3 measurements needing
                                       # testdata/*_50k.txt plus one in lib.rs. Run
                                       # them with `cargo test --release -- --ignored`:

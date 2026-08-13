@@ -241,8 +241,8 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
-**Status 2026-08-13: O15, O10, O25, O20, O26, O14 and O27 are CLOSED.** What
-remains is **O19**, then O7 at a major, then O6, with O23 filed.
+**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O27 and O28 are CLOSED.**
+What remains is **O19**, then O7 at a major, then O6, with O23 filed.
 
 ### The diff-level pass — 2026-08-13
 
@@ -259,6 +259,7 @@ by reading the code each remaining fix would touch rather than the entries.
 | **O7** | `undercroft-vault/src/lib.rs` + 5 more files under `crates/` (39 sites), `tests/` (11), `deploy/` (1), `docs/` (4), plus website/architecture/root prose. Re-measured; the entry's figures are exact |
 | **O6** | none in the tree |
 | **O27** | **CLOSED.** `tests/battery.sh` only — the summary reader and its host-side preflight, exactly as this row predicted |
+| **O28** | **CLOSED.** `tests/battery.sh` (inventory + preflight + post-run check) and the one stale figure it found, `docs/MULTI_TENANCY.md` |
 
 **Pairwise, the answer is no collisions:** O14 × O19 × O26 touch disjoint
 files, and O7 meets O14 only in `tests/e2e.sh` and `docs/`, textually rather
@@ -1663,6 +1664,66 @@ reassembling one of them with `sed`.
 
 Measured at the closing tree: **292 files, 119 streams across 11 PDFs, 0
 unexamined, 0 hits.**
+
+---
+
+### O28 — CLOSED 2026-08-13: a published figure is counted against an inventory
+
+Filed by the maintainer out of the count-correction commit `08dfdb9`, whose
+own message said the landing page's e2e tile "is a hand-maintained number
+with no gate". It had been proposed in the round-four sweep as
+`every_published_figure_has_an_inventory_row` and never built.
+
+**Why it needed one.** A number in prose is a claim about the moment someone
+last counted, and this project's published ones have rotted repeatedly: the
+cargo-test tile was set to 660 by the very commit that added four tests; the
+e2e tile read 508 against a true 541, stale *before* the session that found
+it; and `docs/MULTI_TENANCY.md` published a suite as running 95 checks while
+it ran 110 — which this gate found on its first run.
+
+**Closed by an inventory the surfaces are counted against, both directions.**
+`PUBLISHED_FIGURES` in `tests/battery.sh`: a new tile with no row fails, a row
+naming no tile fails. Three classes, because the figures do not share one
+provenance and pretending they did would be the dishonest part —
+**derived** (recomputed from the tree now: `mcp tools` from `MCP_TOOLS`,
+`live backends` from `run_backend_suite` invocations), **measured** (only a
+run produces it), and **claim** (`bytes phoned home` is the local-first
+invariant, not a count, and is recorded as such so it cannot be mistaken for
+an unchecked number).
+
+**Two checks, because one of them cannot see the case that actually
+happened.** Statically, every surface publishing a figure must AGREE, and the
+`e2e checks` tile must equal the SUM of the four components its row names —
+that is what catches a doc going stale between units. But surfaces can be
+stale *together*, all consistent and all wrong, which is exactly what this
+session found (`CLAUDE.md` published 335 e2e checks against a true 348). Only
+a run knows, so the battery re-checks every published per-suite figure against
+what it measured, reports it as a **doc-drift verdict distinct from a suite
+failure**, and fails. Suites that did not run in that invocation are skipped:
+an alarm that fires on a correct subset run is an alarm nobody keeps.
+
+**Gate, seven arms executed:** a new ungated tile, a derived value drifting,
+the SUM ceasing to hold, a doc republishing a stale count, a suite count
+moving underneath a doc, a row naming a dead tile, and the extractor finding
+nothing (premise). All exit 1; the clean tree exits 0. Plus the post-run arm
+on a real subset battery — a deliberately wrong `site` figure reports drift
+and exits 1, the correct figure exits 0 and reports nothing.
+
+**Scope, stated so it is not mistaken for complete.** It covers the landing
+tiles and the per-suite check counts wherever published — the figures the
+battery itself measures. It does NOT cover figures with their own gate
+(`UNDERCROFT_*` is counted by `ENGINE_ENV_VARS` both ways) or measurements
+needing an instrument run (IRREGULAR pairs, paradigm counts). Widening a gate
+past what it can verify is how a check starts reading as though it covered
+more than it does.
+
+**One portability defect of my own, caught by running it under the other
+awk.** The first reader used `match($0, re, arr)` — a GNU extension — and
+Ubuntu's default `awk` is mawk, which lacks it. CI runs these preflights on
+ubuntu-latest, so it would have read empty there. Rewritten as `grep -oE` +
+`sed -E`. A second of mine in the same line: the character class `[a-z-]+`
+excludes digits, so `e2e` truncated to `e` — found by looking at the reader's
+output instead of trusting that it ran.
 
 ---
 
