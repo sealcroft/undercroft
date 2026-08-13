@@ -2,6 +2,54 @@
 
 ## Unreleased — 1.1.0
 
+### the screened-field inventory spans tables, and the tunnel label is in it
+
+ROADMAP **O29**, round-four #21 — finding #5 / O17 exactly, one table over.
+
+A tunnel `label` had no guard at all: not `validate_name`, not the admission
+screen. It is written by an agent (`undercroft_create_tunnel`) and read back
+verbatim by another (`undercroft_list_tunnels`, `undercroft_follow_tunnel`),
+so `ignore previous instructions …` reached a later session intact — 56
+bytes, no control characters, no path separators.
+
+**It survived O17 because that unit's inventory was named for the graph.**
+`KG_SCREENED_FIELDS` is gone; `admission::SCREENED_FIELDS` replaces it, keyed
+by `(owner, field)` so ONE inventory spans two tables and the
+both-directions gate can dispatch to the right choke point. The screen moved
+to `admission::screen_agent_text` and `screen_kg_record` delegates; the
+`object` size bound stayed in `kg.rs`, being the one rule that really does
+belong to a single field.
+
+**`validate_name` by analogy to `predicate`, not to `object`.** O17 declined
+the traversal guard on an object because an object is content that may
+legitimately carry punctuation and newlines; a label is the relationship
+DESCRIPTOR ("why related", per the tool schema), which is what a predicate
+is. The argument that does NOT work — and was reached first, then refuted by
+reading — is "the label is in the id recipe, so it is identity": `object` is
+in the triple-id recipe too. It does incidentally make that recipe injective,
+which it was only by accident, the label being last.
+
+Refused rather than diverted, on O17's reasoning: a tunnel has no wing, no
+review queue and no ruling to divert to. Screening stays declared-never-
+defaulted, so a default vault's tunnel contract does not move; the
+`validate_name` half applies always, and has an `UPGRADING.md` entry.
+
+**Gate executed**, both tests observed to fail against the reverted guards —
+the poisoned label was accepted and returned a tunnel id. The focused test
+asserts the READ first, because a refusal proves nothing unless the value
+reaches a reader.
+
+**The sibling sweep this entry demanded found two more instances, and one is
+worse — filed as O32.** An agent-chosen WING name reaches `taxonomy`,
+`closets` and `stats` unscreened (measured: one hit each, with clean content
+and the queue not growing), and a diary AGENT name reaches `diary agents`
+through `wing = agent-{agent}`. `diary_write` itself is clean — it funnels
+into `upsert_screened`. Not folded in: it alters the security verdict of
+every write path on every surface and needs a divert-not-refuse decision the
+tunnel case does not. Note where the answer was: partly INSIDE `drawers`, in
+a column the sweep's own question ("outside `drawers` and the graph") had
+excluded by wording.
+
 ### the screen validates the declaration it is about to rewrite
 
 ROADMAP **O30**, round-four #20. Two halves that compounded, plus a third

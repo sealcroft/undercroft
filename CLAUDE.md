@@ -1192,8 +1192,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (732 run,
-                                      # 4 #[ignore]d = 736 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (733 run,
+                                      # 4 #[ignore]d = 737 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1276,7 +1276,7 @@ docker compose run --rm test          # cargo unit + integration tests (732 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (350 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (352 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -1905,7 +1905,22 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   checked in both directions — a table-driven test proving every listed field
   is screened, plus an assertion inside the screen proving no call site can
   name a field the inventory omits, which is the half a test cannot do
-  (`KG_SCREENED_FIELDS`, O17).
+  (O17). **And then the inventory's own NAME chose a second scope, which is
+  the same defect one level up (O29, 2026-08-13).** It was
+  `KG_SCREENED_FIELDS`, so `tunnels.label` — agent-written through
+  `undercroft_create_tunnel`, read back verbatim through
+  `undercroft_list_tunnels` — was outside the question it asked, for as long
+  as it existed. It is `admission::SCREENED_FIELDS` now, keyed by
+  `(owner, field)`, because a key is what lets one inventory span tables and
+  a graph-shaped name is what hid the gap. The rule for a row is **an agent
+  can write it and an agent can read it back** — never "it is content", which
+  is the judgement that scoped O17's own screen to `object`.
+  **The sibling sweep is part of the fix, and its WORDING is load-bearing.**
+  O29 asked "which other such fields exist *outside `drawers` and the
+  graph*?" and the answer was partly INSIDE `drawers`: an agent-chosen WING
+  name reaches `taxonomy`, `closets` and `stats` unscreened (filed O32,
+  measured). A scoping phrase in a filed question decides what the answer can
+  contain, exactly as a scoping phrase in a gate does.
 - **A capability missing from one surface is a boundary or a drift, and
   which one has to be written down.** A 14-agent audit of CLI vs MCP vs
   `/v1` found **65 confirmed drifts** — a capability present on one

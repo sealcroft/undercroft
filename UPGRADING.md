@@ -77,11 +77,11 @@ What they can do is stop a **misconfigured** deployment at start-up, which is
 why every one is listed here and detectable in advance by
 `undercroft config check`.
 
-**TWO entries are the exception to both sentences above, and they are called
-out here rather than left to be discovered inside them.** Both change what a
-**running, correctly-configured** deployment returns, so neither is a
-start-up refusal and `config check` can see neither — there is no declaration
-that fails to parse.
+**THREE entries are the exception to both sentences above, and they are
+called out here rather than left to be discovered inside them.** Each changes
+what a **running, correctly-configured** deployment returns, so none is a
+start-up refusal and `config check` can see none of them — there is no
+declaration that fails to parse.
 
 * *"`/metrics` carries no vault-labelled series when assertions are
   declared"* — a scrape that parsed those gauges will find them absent. Still
@@ -93,9 +93,54 @@ that fails to parse.
   the value was never valid, and the old behaviour put a permanently
   un-allowable row in an operator's review queue.
 
+* *"A tunnel label is validated, and screened where screening is declared"* —
+  a label carrying a path separator, a control character, or more than 128
+  characters is now refused **on every vault**, screened or not.
+
 Everything else in this section is a misconfiguration caught at start-up, and
 for those, `config check` exiting 0 against your environment means none of
 them affect you.
+
+### A tunnel label is validated, and screened where screening is declared
+
+**Affects:** `undercroft tunnel create`, `undercroft_create_tunnel` over MCP,
+and the tunnel records inside `undercroft import` / `POST …/import`. **No
+declaration is involved for the first half, so `undercroft config check`
+cannot detect it.**
+
+**Symptom, before:** a tunnel `label` had no guard of any kind. It is
+agent-written (`undercroft_create_tunnel`) and read back verbatim by another
+agent (`undercroft_list_tunnels`, `undercroft_follow_tunnel`), so a label
+carrying `ignore previous instructions …` reached a later session intact.
+Measured: the string is 56 bytes, contains no control characters and no path
+separators, and `tunnel list` returned it.
+
+**Symptom, after, in two halves that have different conditions:**
+
+* **Always** — the label goes through the same name guard as a wing, a room
+  and a knowledge-graph predicate: 1–128 characters, no control characters,
+  no `/` or `\`, not `.` or `..`. A label that breaks any of those is refused
+  with `invalid label "…"`. **This applies to every vault**, whether or not
+  admission screening is declared.
+* **Only under `UNDERCROFT_ADMISSION=quarantine`** — the label also passes
+  the tier-1 admission screen, and a flagged one is REFUSED rather than
+  diverted, because a tunnel has no wing, no review queue and no ruling to
+  divert it to. The refusal names the field and the signal codes. A default
+  vault's tunnel contract does not move.
+
+**What to do.** Labels are short descriptions ("why related", per the tool
+schema; the default is `related`), so most are unaffected. If a label in your
+tooling contains a slash — `auth/session handoff` — change the separator; a
+dash or an en dash is accepted. To find labels that will be refused:
+
+```bash
+undercroft tunnel list
+```
+
+An import carrying such a tunnel fails **that record** and names it, rather
+than admitting it — the same cost the knowledge graph's screen already
+states. Existing rows are untouched: this guards the write, and nothing
+re-derives a stored label.
 
 ### An import declaring an invalid wing or room is refused rather than quarantined, and every name refusal names its field
 

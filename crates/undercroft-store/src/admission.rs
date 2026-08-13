@@ -81,6 +81,49 @@ pub(crate) fn validate_declaration(meta: &undercroft_core::DrawerMeta) -> Result
     Ok(())
 }
 
+/// Every agent-writable field that another agent reads back verbatim, and
+/// which is therefore screened. **One inventory, spanning tables** — the
+/// `(owner, field)` key is what lets it, and what lets the both-directions
+/// gate dispatch to the right call site.
+///
+/// It was `KG_SCREENED_FIELDS` and it was scoped to the graph (O17). A field
+/// in another table was outside the question it asked, so `tunnels.label`
+/// went unscreened for as long as it existed: written by an agent through
+/// `undercroft_create_tunnel`, read back verbatim by another through
+/// `undercroft_list_tunnels` and `undercroft_follow_tunnel` (ROADMAP O29).
+/// A second list would have been a second thing to forget; keying by owner
+/// keeps it one.
+///
+/// The rule for adding a row: a field belongs here when an AGENT can write
+/// it and an AGENT can read it back. Not "when it is content" — that is the
+/// judgement that scoped O17's own screen to `object` and left `subject` and
+/// `predicate` open.
+///
+/// Why each `fact` row is here, carried over from the inventory this
+/// replaces: `kg_query_entity` returns `Triple` and `serde` serializes it
+/// WHOLE, so every field reaches a later session verbatim, and `subject` /
+/// `predicate` were guarded only by `validate_name`. `canonical_key` and
+/// `extractor` are import-only — they arrive off the wire from another
+/// vault, are serialized straight back by `kg_query`, and have no author
+/// this vault ever screened. `entity` / `entity_type` belong to
+/// `kg_import_entity`, which screened nothing at all. `tunnel`/`label` is
+/// the same argument one table over.
+///
+/// Gated by `a_flagged_string_in_any_screened_field_is_refused`, which is
+/// table-driven over this list and dispatches on the owner — so a row added
+/// here without a call site screening it fails the build's tests rather than
+/// passing quietly.
+pub(crate) const SCREENED_FIELDS: &[(&str, &str)] = &[
+    ("fact", "subject"),
+    ("fact", "predicate"),
+    ("fact", "object"),
+    ("fact", "canonical_key"),
+    ("fact", "extractor"),
+    ("fact", "entity"),
+    ("fact", "entity_type"),
+    ("tunnel", "label"),
+];
+
 /// What one just-written drawer means on the live event feed.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SaveEvent<'a> {
@@ -235,6 +278,65 @@ impl PalaceStore {
                 Ok(self.admission_divert(drawer))
             }
         }
+    }
+
+    /// Screen agent-written text that another agent reads back verbatim,
+    /// against [`SCREENED_FIELDS`]. A flagged value is **REFUSED** and the
+    /// refusal names which field tripped.
+    ///
+    /// Refused rather than diverted, and that is the decision rather than an
+    /// omission: a diversion needs somewhere to divert TO. A drawer has the
+    /// reserved wing, `admission list` and the allow/deny rulings; neither a
+    /// fact nor a tunnel has any of it, and inventing a state nothing reads
+    /// and no surface reviews would be a silent drop wearing a queue's
+    /// clothes. So the write fails loudly and leaves the caller the verbatim
+    /// route: file the text as a drawer, where a flagged write IS quarantined
+    /// for a reviewer. `Invalid`, not `CorruptRow` — caller input owes a 400.
+    ///
+    /// Tier 2 deliberately does not reach here, for the reason O17 recorded:
+    /// with no queue to push toward, an advisory opinion would become the
+    /// sole reason a write hard-fails.
+    ///
+    /// `owner` is the inventory key AND the noun in the message, so the two
+    /// cannot drift into disagreeing about what has no queue.
+    pub(crate) fn screen_agent_text(
+        &self,
+        locator: &str,
+        owner: &str,
+        fields: &[(&str, &str)],
+    ) -> Result<(), StoreError> {
+        // **The inventory is checked in BOTH directions, and this is the half
+        // a test cannot do.** The table-driven gate proves every row in
+        // `SCREENED_FIELDS` is screened somewhere; this proves the reverse — a
+        // call site cannot invent an (owner, field) pair absent from the
+        // inventory, which is how a new agent-readable column would otherwise
+        // get screened without ever being listed as covered. `debug_assert`
+        // because it is a programming error, not caller input: the names are
+        // literals in this crate.
+        debug_assert!(
+            fields
+                .iter()
+                .all(|(name, _)| SCREENED_FIELDS.contains(&(owner, name))),
+            "a screen call names a field outside SCREENED_FIELDS: {owner}/{:?}",
+            fields.iter().map(|(n, _)| *n).collect::<Vec<_>>()
+        );
+        if !self.admission_quarantine {
+            return Ok(());
+        }
+        for (name, value) in fields {
+            let signals = undercroft_core::admission::screen(value);
+            if signals.is_empty() {
+                continue;
+            }
+            let codes: Vec<&str> = signals.iter().map(|s| s.code.as_str()).collect();
+            return Err(StoreError::Invalid(format!(
+                "{locator}: the {name} trips the admission screen ({}) and a \
+                 {owner} has no review queue to divert it to — file the text as \
+                 a drawer, where a flagged write is quarantined for review",
+                codes.join(", ")
+            )));
+        }
+        Ok(())
     }
 
     /// Screen one candidate drawer; `Some(diverted)` when it must land in
