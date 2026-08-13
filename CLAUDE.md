@@ -1203,6 +1203,19 @@ docker compose run --rm test          # cargo unit + integration tests (723 run,
                                       # exercises the reader itself on a synthetic
                                       # replayed log, because the summary had
                                       # never been checked by anything.
+                                      # **That reader covered ONE suite of eight
+                                      # until O27 (closed 2026-08-13)**: it pairs
+                                      # cargo's `Running`/`Doc-tests` headers, and
+                                      # no other suite emits them. The seven shell
+                                      # suites print ONE summary line as their
+                                      # final statement, so more than one in a log
+                                      # is definitive rather than heuristic — and
+                                      # a real `backends-e2e` log carried TWO with
+                                      # different numbers (56/1 and 54/3) while
+                                      # the `| tail -1` that read it printed the
+                                      # second and said nothing about the first.
+                                      # `suite_summary` counts them and names a
+                                      # doubled log; same three premise arms.
                                       # The 4 ignored are 3 measurements needing
                                       # testdata/*_50k.txt plus one in lib.rs. Run
                                       # them with `cargo test --release -- --ignored`:

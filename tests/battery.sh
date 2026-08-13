@@ -163,6 +163,33 @@ test_summary() { # test_summary <log>
     }' "$1" 2>/dev/null
 }
 
+# **The same class one suite over (ROADMAP O27).** `test_summary` can name a
+# replayed tail because it pairs cargo's target HEADERS with their results —
+# but `Running` and `Doc-tests` are cargo's, and no other suite emits them, so
+# O15's detector covered ONE suite of eight. The seven shell suites print a
+# single `<suite> results: N passed, M failed` line as their FINAL statement
+# (`tests/e2e-backends.sh:157` and its siblings), so more than one in a log is
+# not a heuristic signal: that log is not the record of a single run.
+#
+# Observed rather than theorised. A `backends-e2e` log on this branch carried
+# `56 passed, 1 failed` AND `54 passed, 3 failed`, and the `| tail -1` this
+# replaces printed the second with nothing saying the first existed.
+suite_summary() { # suite_summary <log>
+  awk '
+    /^[a-z0-9-]+([ ][a-z0-9-]+)* results: [0-9]+ passed, [0-9]+ failed/ {
+      n++; last = $0
+    }
+    END {
+      if (n == 0) {
+        printf "no results line found — this reader examined nothing"
+        exit
+      }
+      printf "%s", last
+      if (n > 1)
+        printf "  ** PREMISE FAILURE: %d summary lines in one log — it holds more than one run, so this count is not trustworthy (ROADMAP O27) **", n
+    }' "$1" 2>/dev/null
+}
+
 # The gate for it, run host-side because no image carries this script. Both
 # arms come from the filed shape: a log reports the same figure with and
 # without a duplicated tail, and the orphan is counted and NAMED.
@@ -202,6 +229,36 @@ case "$SUM_EMPTY" in
   *"examined nothing"*) ;;
   *) echo "FAIL  an empty log reported a count: $SUM_EMPTY"; SUM_FAIL=1 ;;
 esac
+
+# ...and the same three arms for the SUITE reader (ROADMAP O27), because the
+# same class needs the same proof: a doubled log must be NAMED rather than
+# silently reduced to its last line, and a scanner that examined nothing must
+# say so. The replayed fixture uses the exact numbers the real contaminated
+# log carried, so this arm fails if the reader ever goes back to `tail -1`.
+cat >"$SUM_TMP/suite-clean.log" <<'SUMEOF'
+ok    [qdrant] push
+backends-e2e results: 57 passed, 0 failed
+SUMEOF
+cp "$SUM_TMP/suite-clean.log" "$SUM_TMP/suite-replayed.log"
+cat >>"$SUM_TMP/suite-replayed.log" <<'SUMEOF'
+ok    [weaviate] verbatim result
+backends-e2e results: 54 passed, 3 failed
+SUMEOF
+SUI_CLEAN=$(suite_summary "$SUM_TMP/suite-clean.log")
+SUI_REPLAY=$(suite_summary "$SUM_TMP/suite-replayed.log")
+SUI_EMPTY=$(suite_summary /dev/null)
+case "$SUI_CLEAN" in
+  "backends-e2e results: 57 passed, 0 failed") ;;
+  *) echo "FAIL  the suite reader misreads a clean log: $SUI_CLEAN"; SUM_FAIL=1 ;;
+esac
+case "$SUI_REPLAY" in
+  *"PREMISE FAILURE: 2 summary lines"*) ;;
+  *) echo "FAIL  two summaries in one log were absorbed silently: $SUI_REPLAY"; SUM_FAIL=1 ;;
+esac
+case "$SUI_EMPTY" in
+  *"examined nothing"*) ;;
+  *) echo "FAIL  the suite reader reported a verdict over an empty log: $SUI_EMPTY"; SUM_FAIL=1 ;;
+esac
 rm -rf "$SUM_TMP"
 if [ "$SUM_FAIL" -ne 0 ]; then
   echo "      the summary is reporting-only and decides nothing, but it is the"
@@ -212,7 +269,8 @@ if [ "$SUM_FAIL" -ne 0 ]; then
   # checker that cannot fail, inside the gate written to catch that class.
   exit 1
 else
-  echo "ok    counts by pairing; a replayed tail is named, not absorbed"
+  echo "ok    counts by pairing (cargo) and by counting summaries (suites);"
+  echo "      a replayed tail or a doubled log is named, not absorbed"
 fi
 
 # ---------------------------------------------------------------------------
@@ -557,7 +615,18 @@ for i in "${!NAMES[@]}"; do
   # "0 passed" under a green battery. Harmless, and still a number that does
   # not measure what it appears to, which is the habit this file exists to
   # break. Summed instead.
-  if [ "$n" = "test" ]; then
+  if [ "$n" = "lint" ]; then
+    # **The one suite with no summary line, named rather than complained
+    # about.** `cargo fmt --check` and `clippy` are silent on success, so
+    # `lint` has never printed one — and the O27 reader below correctly
+    # answered "this reader examined nothing", beside a green run, every
+    # time. That is a message which misdescribes its own situation, and
+    # worse: it is the SAME string that is a real signal for the other seven
+    # suites, so printing it routinely here teaches the reader to skip it.
+    # An alarm nobody can distinguish from a real failure is the thing this
+    # project exists to remove.
+    detail=""
+  elif [ "$n" = "test" ]; then
     detail=$(test_summary ".battery/$n.log")
   else
     # Widened past `…e2e results:` when `obs-config` and `site` joined the
@@ -570,8 +639,10 @@ for i in "${!NAMES[@]}"; do
     # because this line has never decided anything. A reporting line that
     # quietly stops reporting is the same defect as a summary read from an
     # empty field; it is only cheaper.
-    detail=$(grep -hoE '^[a-z0-9-]+( [a-z0-9-]+)* results: [0-9]+ passed, [0-9]+ failed' \
-               ".battery/$n.log" 2>/dev/null | tail -1)
+    # `| tail -1` until O27: it took the LAST summary and said nothing when
+    # there was more than one, which is how a log holding two runs printed a
+    # figure that measured neither. Same reader, one counted question added.
+    detail=$(suite_summary ".battery/$n.log")
   fi
   printf ' %-18s exit %-3s %s\n' "$n" "$c" "${detail:-}"
 done

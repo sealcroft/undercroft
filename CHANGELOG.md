@@ -2,6 +2,56 @@
 
 ## Unreleased — 1.1.0
 
+### the replay detector covered one suite of eight
+
+ROADMAP **O27**, found by a battery of mine going red and worth more than the
+red was.
+
+O15 closed "the battery's own test count intermittently over-reports" by
+pairing each cargo target HEADER with the result under it and naming an
+orphan as a premise failure. That reader keys on `Running` and `Doc-tests` —
+which **only cargo emits**. The seven shell suites print a single
+`<suite> results: N passed, M failed` line and were read with `| tail -1`,
+which takes the last one and says nothing when there is more than one.
+
+**Observed, not theorised.** A `backends-e2e` log on this branch carried
+`56 passed, 1 failed` at line 164 and `54 passed, 3 failed` at line 181, with
+the weaviate block re-emitted between them. `tests/e2e-backends.sh:157` prints
+its summary exactly once, as its final statement, so more than one in a log is
+definitive rather than heuristic: that log is not the record of one run. The
+battery still failed correctly — it decides on exit codes, by design — but the
+FIGURE it printed was one of two contradictory candidates, and figures are
+what a session copies into `CHANGELOG.md`, `CLAUDE.md` and the handover. That
+is exactly how O15 itself was found, one suite over.
+
+`suite_summary` counts the summary lines and appends a named premise failure
+when the count is not one. Three arms mirror the cargo reader's: a clean log
+reads correctly, a doubled log is NAMED, an empty log says it examined
+nothing rather than printing a clean zero. The doubled fixture uses the real
+numbers from the contaminated log, so the arm fails if anyone reverts to
+reading the last line.
+
+Counterfactual executed against the artifact: with the `n > 1` branch
+disarmed, the preflight prints *"two summaries in one log were absorbed
+silently"* and exits 1; restored, it exits 0. Measured **unpiped** — the first
+attempt read `sed`'s status through a pipeline, which is the hazard this
+script exists to teach, committed while testing the script that teaches it.
+
+**One deliberate absence, found by running the fix rather than reading it.**
+`lint` prints no summary line and never has, so the new reader answered *"this
+reader examined nothing"* beside a green `lint` on every run — a message
+misdescribing its own situation, and the SAME string that is a real signal for
+the other seven suites, which is how a reader learns to skip it. `lint` is a
+named third branch now, with its reason, and its detail column is blank as it
+always was; its verdict was never in question, because the exit code carries
+it.
+
+The contamination that produced the doubled log was mine: three batteries
+stopped mid-run left the backends stack warm, and the `push` failures were
+`already exists` against state a previous pass had created. That is the
+trigger, not the defect — the defect is that a log which cannot be a faithful
+record of one run read exactly like one that is.
+
 ### the plane that mints an erasure receipt can check one, and a signature with no sender is refused
 
 ROADMAP **O14**, plus a second defect found while doing it.

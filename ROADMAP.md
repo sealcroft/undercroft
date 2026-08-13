@@ -241,10 +241,8 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
-**Status 2026-08-13: O15, O10, O25, O20, O26 and O14 are CLOSED.** What
-remains is **O19** and **O27** (filed while closing O14 — O15's replay
-detector covers one suite of eight, observed on a real log carrying two
-contradictory summaries), then O7 at a major, then O6, with O23 filed.
+**Status 2026-08-13: O15, O10, O25, O20, O26, O14 and O27 are CLOSED.** What
+remains is **O19**, then O7 at a major, then O6, with O23 filed.
 
 ### The diff-level pass — 2026-08-13
 
@@ -260,7 +258,7 @@ by reading the code each remaining fix would touch rather than the entries.
 | **O26** | `tests/no-trace/verify.py` · `tests/battery.sh` — **CLOSED** |
 | **O7** | `undercroft-vault/src/lib.rs` + 5 more files under `crates/` (39 sites), `tests/` (11), `deploy/` (1), `docs/` (4), plus website/architecture/root prose. Re-measured; the entry's figures are exact |
 | **O6** | none in the tree |
-| **O27** | `tests/battery.sh` — the summary reader and its host-side preflight. Filed 2026-08-13; shares that file with nothing else open, so it collides with nobody |
+| **O27** | **CLOSED.** `tests/battery.sh` only — the summary reader and its host-side preflight, exactly as this row predicted |
 
 **Pairwise, the answer is no collisions:** O14 × O19 × O26 touch disjoint
 files, and O7 meets O14 only in `tests/e2e.sh` and `docs/`, textually rather
@@ -1668,7 +1666,7 @@ unexamined, 0 hits.**
 
 ---
 
-### O27 — the replay detector O15 built covers one suite of eight
+### O27 — CLOSED 2026-08-13: every suite log is counted, not just cargo's
 
 Found 2026-08-13 by a battery of my own going red, and it is **O15's defect in
 a suite O15 cannot see**.
@@ -1710,6 +1708,31 @@ synthetic replayed log gains a sibling — a synthetic suite log carrying two
 summaries must be named, and a clean one must pass. Without that arm a
 scanner that examined nothing reports what a clean run reports, which is the
 failure this whole family is about.
+
+**CLOSED the same day.** `suite_summary` replaces the `| tail -1`, counting
+summary lines and appending a named PREMISE FAILURE when there is more than
+one; three premise arms mirror the cargo reader's (clean log reads correctly,
+doubled log is NAMED, empty log says it examined nothing). The doubled
+fixture carries **the real numbers from the contaminated log**, so the arm
+fails if the reader ever reverts to reading the last line. Counterfactual
+executed against the artifact: with the `n > 1` branch disarmed, the preflight
+prints *"two summaries in one log were absorbed silently"* and **exits 1**;
+restored, it exits 0. Measured unpiped — the first attempt read `sed`'s status
+through a pipeline, which is the hazard this script exists to teach.
+
+Stays informational by design: the script decides on EXIT CODES, never on
+parsed output.
+
+**One deliberate absence, found by running the fix rather than reading it.**
+`lint` prints no summary line and never has — `cargo fmt --check` and
+`clippy` are silent on success — so the new reader answered *"this reader
+examined nothing"* beside a green `lint`, on every run. That is a message
+misdescribing its own situation, and worse: it is the SAME string that is a
+real signal for the other seven suites, so printing it routinely there trains
+a reader to skip it. An alarm nobody can distinguish from a real failure is
+the thing this project exists to remove. `lint` is now a named third branch
+with its reason, and its detail column is blank as it always was; its verdict
+was never in question, because the exit code carries it.
 
 ---
 
