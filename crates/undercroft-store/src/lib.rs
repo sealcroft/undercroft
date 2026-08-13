@@ -12046,6 +12046,64 @@ mod tests {
         );
     }
 
+    /// ROADMAP O33, the half the core gate cannot reach: this crate names a
+    /// signal code by CONSTANT, never by literal.
+    ///
+    /// `undercroft-core` counts `SIGNAL_CODES` against what `screen` can
+    /// produce plus the `*_CODE` constants declared beside it — both
+    /// directions — and every code this crate emits is one of those
+    /// constants. A string literal written here would be a code the core
+    /// gate cannot see, because it is neither produced by `screen` nor
+    /// declared as a constant. There is no such literal today; this is what
+    /// keeps it that way.
+    #[test]
+    fn the_store_names_signal_codes_by_constant_never_by_literal() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sites = 0usize;
+        let mut literals: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&src).expect("the crate's own sources are readable") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for line in text.lines() {
+                let t = line.trim_start();
+                // Stop at the test module. A fixture that builds a signal by
+                // hand is not an emit site, and scanning past here reported
+                // two of them — including O30's own test, which constructs a
+                // pre-fix queue row. A gate whose scope is wider than its
+                // claim is the defect this file spends its time on.
+                if t.starts_with(concat!("#[cfg(", "test)]")) {
+                    break;
+                }
+                if t.starts_with("//") {
+                    continue;
+                }
+                let Some(rest) = t.strip_prefix("code: ") else {
+                    continue;
+                };
+                sites += 1;
+                if rest.starts_with('"') {
+                    literals.push(line.trim().to_string());
+                }
+            }
+        }
+        // PREMISE. A scan that finds no emit sites reports exactly what a
+        // clean crate reports — this project's most-repeated failure, and the
+        // reason every scanner here carries one of these.
+        assert!(
+            sites >= 3,
+            "premise: found {sites} `code:` sites — the scan examined nothing, \
+             which is not the same as a crate that emits no signals"
+        );
+        assert!(
+            literals.is_empty(),
+            "a signal code is named by constant so `SIGNAL_CODES` can count it; \
+             these are literals the core gate cannot see: {literals:?}"
+        );
+    }
+
     /// R5: every save arm reports a diversion, with the id the drawer
     /// actually landed under.
     ///

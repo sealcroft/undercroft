@@ -2,6 +2,38 @@
 
 ## Unreleased — 1.1.0
 
+### the signal vocabulary is counted against what the engine can emit
+
+ROADMAP **O33**, found by adding the seventh code to it while closing O32.
+
+`SIGNAL_CODES` declares the closed vocabulary of admission signal classes.
+Grepped across `crates/`, it appeared three times and **all three were in the
+file that defines it** — itself and two doc links. Nothing counted the codes
+actually emitted against it, in either direction, so a code emitted without a
+row would have shipped and a row nothing emits would have shipped. That is
+the arrangement whose first instance shipped five dead gauge names before
+`GAUGE_NAMES` was gated, and these codes travel further than a gauge:
+`PendingAdmission.signals`, the `drawer-quarantined` frame, `/v1 …/admission`,
+`monitor.html`, and the architecture page and its diagram.
+
+**No emit-site scanning, which is the point.** The codes `screen` produces
+are obtained by RUNNING it — three of the five come from a tuple table the
+function iterates, so a scan for `code: "..."` would have found two of eight
+and reported clean. Only the codes no function produces are read from source,
+and those are exactly the `*_CODE` constants, all of which live in one file.
+A second gate in `undercroft-store` closes the half the first cannot see: this
+crate names a code by constant, never by literal.
+
+Five arms executed, every one observed to fail: a row nothing emits, a code
+with no row, the constant scanner examining nothing, a literal at a production
+emit site, and the store scanner examining nothing. The store gate's own scope
+was wrong at first — it scanned past `#[cfg(test)]` and reported two test
+fixtures as violations — which running it caught.
+
+Test-only: 154 insertions, 0 deletions, entirely inside `#[cfg(test)]`.
+No `UPGRADING.md` entry, and no real-corpus run, because nothing a deployment
+can observe changed.
+
 ### the declared destination is screened, and the reserved wing leaves the name listings
 
 ROADMAP **O32**, filed by the sibling sweep O29 demanded and measured before

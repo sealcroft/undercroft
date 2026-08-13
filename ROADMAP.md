@@ -241,14 +241,11 @@ one, and it has to be derived rather than assumed.
 
 **Recommended order:** O15 → (O10 alongside it) → O25 → O20 → O14 → O19 →
 O7 (whenever a major is cut) → O6. O23 stays filed.
-**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28, O30, O29
-and O32 are CLOSED.** Open: **O33** (`SIGNAL_CODES` is a declared closed
-vocabulary nothing counts, found by adding the seventh code to it) and
-**O31** (a payload's `intended_wing` reaches disk unvalidated when the record
-is not a queue row), both filed while closing the unit above them; plus
-**O7** (at a major) and **O6** (a web-UI click), with O23 filed. **No open
-item is a live exposure** — O33 and O31 are both missing-gate/inert-value
-items with a stated shape. **`.handover/AUDIT_CONTINUATION.md`
+**Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28, O30, O29,
+O32 and O33 are CLOSED.** Open: **O31** alone on the engine side (a payload's
+`intended_wing` reaches disk unvalidated when the record is not a queue row —
+inert today, and the entry says why), plus **O7** (at a major) and **O6** (a
+web-UI click), with O23 filed. **No open item is a live exposure.** **`.handover/AUDIT_CONTINUATION.md`
 §1a now carries a verdict for 21 of the ~47 unclosed sweep rows and names the
 26 that are still unprobed** — eight more are verified OPEN there and are
 schedulable without re-deriving them.
@@ -1848,7 +1845,7 @@ of guessing this engine refuses everywhere else.
 
 ---
 
-### O33 — `SIGNAL_CODES` is a declared closed vocabulary that nothing counts
+### O33 — CLOSED 2026-08-13: the signal vocabulary is counted against what the engine can emit
 
 Found while closing O32, which added the seventh code to it.
 
@@ -1881,6 +1878,60 @@ but changes the serde shape on `/v1`, the telemetry frame and every stored
 **Gate:** the test fails when a code is emitted without a `SIGNAL_CODES` row,
 and fails when a row names a code nothing emits; and its premise arm fails if
 the scan finds zero emit sites.
+
+#### What closing it changed, and where this entry's own filing was wrong again
+
+**The filed mechanism would not have worked.** This entry proposed "a
+source-scanning test that collects every string assigned to a `code:` field".
+Three of the five deterministic codes are not written at a `code:` site at
+all — they come from a tuple table (`("imperative-instruction",
+IMPERATIVE_MARKERS)`) that `screen` iterates, and the field is
+`code: code.into()`, a variable. So the filed scanner would have found two of
+eight and reported a clean result: **the exact failure mode the entry itself
+warns about**, proposed as its own fix. Fourth consecutive filing to be wrong
+about its mechanism, and the first to be wrong in the direction the entry was
+written to prevent.
+
+**What replaced it needs no emit-site scanning.** The vocabulary splits
+cleanly in two: codes `screen` can PRODUCE, obtained by RUNNING it over one
+probe per class plus the committed fixtures — stronger than reading source
+and immune to a table built at runtime — and codes no function produces (a
+rate, a destination, a model's opinion), which are exactly the `*_CODE`
+constants and all live in one file. One `assert_eq!` between the union and
+`SIGNAL_CODES` covers both directions at once.
+
+**A second gate closes the half the first cannot see** (`undercroft-store`):
+this crate names a code by CONSTANT, never by literal, so a literal here —
+neither produced by `screen` nor declared as a constant — cannot slip past
+the core gate. It stops scanning at `#[cfg(test)]`, which it did not at
+first: it reported two literals that were test FIXTURES, one of them O30's
+own pre-fix queue row. A gate whose scope is wider than its claim is the
+defect this file spends its time on, caught here by running it.
+
+**Five arms executed, every one observed to fail:** a row nothing emits, a
+code with no row, the constant scanner examining nothing, a literal at a
+production emit site, and the store scanner examining nothing. Both premise
+arms fire on a mutated needle rather than being argued.
+
+**No `UPGRADING.md` entry, deliberately.** The diff is entirely inside
+`#[cfg(test)]` in both files — verified by comparing each first-changed hunk
+against its module marker, not assumed. Nothing a deployment can observe
+changes. For the same reason there is no real-corpus run: the release binary
+is behaviourally identical, so a corpus measurement would exercise the
+artifact this unit did not change.
+
+**Session defect, third instance, and the pattern is the anchoring rather
+than the edits.** Inserting this crate's gate by anchoring on
+`fn write_telemetry_has_exactly_one_emitter() {` put it between that
+function's `#[test]` and its `fn`, producing a duplicated attribute and
+attaching the neighbour's doc comment to the new test. `CLAUDE.md` documents
+exactly this — *"an attribute, a doc comment and a closing brace all belong
+to something"* — and it happened three times in one session (once on a doc
+comment for a removed constant, once inside a `rate_flagged` doc, once here).
+Patching it in place made it worse; the fix was `git checkout` on the file —
+cheap, because the unit it belonged to was already committed — and re-adding
+the block after a function's CLOSING BRACE, which is an anchor with nothing
+above it. **Anchor on a closing brace, not on a signature.**
 
 ---
 
