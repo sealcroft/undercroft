@@ -213,13 +213,22 @@ against the reserved wing and left `stats().rooms` counting
 `DISTINCT wing, room` across it, so `undercroft stats` printed a wing list
 omitting the review queue beside a room count including it.
 
-**O38 — the architecture page documented 72 of the 81 variables `CLAUDE.md`
-claimed for it**, and the miscount was hiding the better defect:
-`UNDERCROFT_COLBERT_NAME` and `UNDERCROFT_RERANK_NAME` were named in NO
-document in the repository — reachable, classed, validated by `config check`,
-and unfindable, so every vault swapping a reranker or ColBERT export stored
-the generic default. Both now in `docs/EMBEDDERS.md`; the claim now says 72
-and names all nine exclusions.
+**O38 — ~~the architecture page documented 72 of the 81 variables `CLAUDE.md`
+claimed for it~~. THIS WAS WRONG AND WAS ITSELF THE REGRESSION** — see O43 in
+the entry above, and read that before this bullet. The page documents **all
+81** (64 in full, 17 abbreviated to a suffix inside the row that owns them);
+the doctrine said so correctly before O38 rewrote it. The miscount came from
+counting full names and hand-classifying the remainder, which cannot see a
+family abbreviated into one row.
+
+**The half of O38 that stands**, and it is a real defect it deserves credit
+for: `UNDERCROFT_COLBERT_NAME` and `UNDERCROFT_RERANK_NAME` were written out
+in full in NO document — reachable, classed, validated by `config check`, and
+unfindable by anyone grepping for the name, so every vault swapping a
+reranker or ColBERT export stored the generic default. Both are now in
+`docs/EMBEDDERS.md`. *"Not written out in full anywhere"* and *"absent from
+the architecture page"* are different claims, and collapsing them is exactly
+what produced the wrong count.
 
 **O40 — twenty message literals carried rustfmt-collapsed space runs**, so an
 operator read a gap mid-sentence in refusals, warnings and pre-flight output.

@@ -254,12 +254,25 @@ surviving as hardening rather than as defects, one refuted**:
 |---|---|---|---|---|---|
 | **O37** | D9 | 3/3 | CONFIRMED — the only live exposure | round FOUR found it and never filed it | **CLOSED 2026-08-14** |
 | **O34** | D3 | 3/3 | CONFIRMED | this campaign's own O32 | **CLOSED 2026-08-14** |
-| **O38** | D7 | 3/3 | CONFIRMED | pre-existing doc claim | **CLOSED 2026-08-14** |
+| **O38** | D7 | 3/3 | **VERDICT OVERTURNED 2026-08-17 — it was a REGRESSION.** Three lenses agreed on a claim nobody re-measured: the figure it "corrected" was already right | pre-existing doc claim | **corrected by O43** |
 | **O35** | D3 | 2/3 | hardening — no user-reachable path today | pre-existing, exposed by O32 | **CLOSED 2026-08-14** |
 | **O36** | D11 | 2/3 | hardening — needs a future author, not a user | this campaign's own O33 | **CLOSED 2026-08-14** |
 | **O39** | D10 | 1/3 | **REFUTED — not work** | this campaign's own O29 | closed by verification |
 
-**All six are closed** — five fixed, one refuted by its own verification.
+**Re-verified end to end on 2026-08-17, and the summary above did not
+survive it: four hold, TWO carried defects of their own.** O38 was a
+**regression** — it rewrote a correct figure into a wrong one (**O43**) — and
+O35 cited a pinning test that has never existed (**O44**). A later sweep of
+README/`docs/`/`website/` found a third, unrelated (**O45**: two documents
+describe `/v1` and only one was kept). O41 and O42 were filed and closed in
+the same pass, gating the version surfaces and the prose figures respectively.
+**All of O41–O45 are CLOSED**; the engine-side queue is still empty.
+
+**Note what three-lens verification did NOT catch.** O38 passed 3/3 — the
+strongest verdict this charter can return — on a claim that was false. Every
+lens asked whether the NEW figure was right; none re-measured the OLD one.
+That is now the standing rule: *when a finding's output contradicts a number
+already in the tree, the burden is on the new number.*
 **O40 was filed while fixing one of them and is now CLOSED too**:
 rustfmt-collapsed space runs inside message literals, twenty of them,
 tree-wide and pre-existing. It was filed rather than swept on the day because
@@ -268,7 +281,11 @@ check`'s aligned output; closing it needed a hand-classified line list and a
 gate with seven individually named exceptions, since the two populations
 overlap at 10–14 spaces and no rule over spaces separates them.
 O38's fix found the better defect underneath it: two variables the engine
-honours that no document in the repository named.
+honours that no document **wrote out in full** — `UNDERCROFT_COLBERT_NAME`
+and `UNDERCROFT_RERANK_NAME`, now in `docs/EMBEDDERS.md`. That half stands;
+its miscount does not, and the difference between *"not written out in full
+anywhere"* and *"absent from the architecture page"* is precisely what
+collapsing the two produced (O43).
 
 **Nothing engine-side is open.** What remains is **O7** (release-gated — its
 fix renames `palace.db`), **O6** (a GitHub web-UI click) and **O23** (filed,
@@ -288,10 +305,18 @@ implied.
 correctness lens rather than weakening: the apex answers `HTTP/1.1 200 OK`
 with 17,447 bytes over cleartext while `…/undercroft/` answers
 `HTTP/1.1 301 Moved Permanently` **from the same server**, which is the
-per-repo Enforce-HTTPS setting and not a curl artifact. O38's "8 abbreviated"
-was inferred from suffix counts and is now attributed: one `_NPROBE` hit is
-`UNDERCROFT_IVF_NPROBE` written in full, the other is the bare suffix, so the
-count is 8 and the page documents 72 of 81. O34's reachability is the CLI
+per-repo Enforce-HTTPS setting and not a curl artifact. **O38's entry here was WRONG and is kept
+as written, struck, because it is the clearest specimen this file holds of a
+wrong measurement presented as verification.** It read: *"O38's '8
+abbreviated' was inferred from suffix counts and is now attributed: one
+`_NPROBE` hit is `UNDERCROFT_IVF_NPROBE` written in full, the other is the
+bare suffix, so the count is 8 and the page documents 72 of 81."* Every
+mechanical step in that sentence is correct and the conclusion is false: it
+attributes ONE suffix carefully and never asks whether the other nine
+"absent" variables are abbreviated in their own rows. They are — the six
+`UNDERCROFT_ORCH_*` share one row and the three `_NAME` sit in the model
+rows. Measured row-scoped, twice, in two languages: 64 full + 17 abbreviated
++ 0 absent = **81 of 81** (O43). O34's reachability is the CLI
 itself — `undercroft stats` prints `rooms:` and a `wings:` list in one
 output.
 
