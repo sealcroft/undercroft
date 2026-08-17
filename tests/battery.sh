@@ -933,6 +933,157 @@ if [ "$VER_FAIL" -ne 0 ]; then
 fi
 echo "ok    every version surface agrees with the workspace ($WS_VERSION), over $VER_FILE_N file(s)"
 
+# ── preflight: a figure in prose is counted against the tree ───────────────
+# ROADMAP O42, and it was filed because `CLAUDE.md` claimed "seven host-side
+# preflights" while the tree ran eight, and nothing could say so. Closing it
+# immediately paid for itself: the SAME sweep found that the architecture
+# reference's coverage figure had been rewritten from a correct value to a
+# wrong one (`all 81` / `17 abbreviated` -> `72 of the 81` / `8` / `9 absent`)
+# by a round-five item whose entire purpose was correcting that figure. See
+# ROADMAP O43.
+#
+# `PUBLISHED_FIGURES` above covers the landing page's tiles and the per-suite
+# check counts. This covers the OTHER class: numbers the doctrine states about
+# the tree in prose, which nothing recomputes.
+#
+# **The env-variable figures need ROW-SCOPED attribution, and that is the
+# whole lesson of O43.** The architecture page abbreviates a family of
+# variables to bare suffixes inside the row that owns them
+# (`UNDERCROFT_ORCH_ADDR . _DB . _KEY . ...`). Counting only full names
+# undercounts by 17; counting suffixes GLOBALLY credits `_NAME` from the ONNX
+# row to `UNDERCROFT_COLBERT_NAME`, a different variable in a different row.
+# Neither observable distinguishes documented from absent. The reconstruction
+# below pairs each suffix only with full names in ITS OWN row, and it was
+# cross-checked against an independent implementation in a second language
+# before being believed — both return 64 + 17 + 0.
+echo "═══ preflight: prose figures ═══"
+
+pf_word() {
+  case "$1" in
+    one) echo 1;; two) echo 2;; three) echo 3;; four) echo 4;; five) echo 5;;
+    six) echo 6;; seven) echo 7;; eight) echo 8;; nine) echo 9;; ten) echo 10;;
+    eleven) echo 11;; twelve) echo 12;; thirteen) echo 13;; fourteen) echo 14;;
+    fifteen) echo 15;; sixteen) echo 16;; seventeen) echo 17;;
+    eighteen) echo 18;; nineteen) echo 19;; twenty) echo 20;;
+    *) echo "$1";;
+  esac
+}
+
+PF_ARCH="architecture/index.html"
+PF_STORE="crates/undercroft-store/src/lib.rs"
+
+# The engine's variables, from the crates. `undercroft-bench` is excluded
+# because its UNDERCROFT_VS_*/UNDERCROFT_TEST_* belong to the harness, which
+# is the same boundary CLAUDE.md's own counting recipe draws.
+PF_VARS=$(git grep -hoE '"UNDERCROFT_[A-Z0-9_]+"' -- crates/ ':!crates/undercroft-bench' \
+          | tr -d '"' | sort -u)
+PF_ENV_TOTAL=$(printf '%s\n' "$PF_VARS" | grep -c . || true)
+
+# Row-scoped reconstruction: family prefix of a full name in a row, joined to
+# every bare suffix in the SAME row.
+PF_RECON=$(awk '
+  /<code>UNDERCROFT_/ {
+    nf = 0; ns = 0; tmp = $0
+    while (match(tmp, /<code>UNDERCROFT_[A-Z0-9_]+<\/code>/)) {
+      fulls[++nf] = substr(tmp, RSTART + 6, RLENGTH - 13)
+      tmp = substr(tmp, RSTART + RLENGTH)
+    }
+    tmp = $0
+    while (match(tmp, /<code>_[A-Z0-9_]+<\/code>/)) {
+      sufs[++ns] = substr(tmp, RSTART + 6, RLENGTH - 13)
+      tmp = substr(tmp, RSTART + RLENGTH)
+    }
+    for (i = 1; i <= nf; i++) {
+      f = fulls[i]; k = 0
+      for (j = length(f); j > 0; j--) if (substr(f, j, 1) == "_") { k = j; break }
+      if (k > 1) { fam = substr(f, 1, k - 1)
+        for (m = 1; m <= ns; m++) print fam sufs[m] }
+    }
+    for (i = 1; i <= nf; i++) delete fulls[i]
+    for (m = 1; m <= ns; m++) delete sufs[m]
+  }' "$PF_ARCH" | sort -u)
+
+PF_ENV_FULL=0; PF_ENV_ABBREV=0; PF_ENV_ABSENT=0; PF_ABSENT_LIST=""
+while IFS= read -r v; do
+  [ -z "$v" ] && continue
+  if grep -q "<code>$v</code>" "$PF_ARCH"; then
+    PF_ENV_FULL=$((PF_ENV_FULL + 1))
+  elif printf '%s\n' "$PF_RECON" | grep -qx "$v"; then
+    PF_ENV_ABBREV=$((PF_ENV_ABBREV + 1))
+  else
+    PF_ENV_ABSENT=$((PF_ENV_ABSENT + 1)); PF_ABSENT_LIST="$PF_ABSENT_LIST $v"
+  fi
+done <<< "$PF_VARS"
+
+PF_PREFLIGHTS=$(grep -c '^echo "═══ preflight:' tests/battery.sh || true)
+PF_CRATES=$(find crates -mindepth 1 -maxdepth 1 -type d | grep -c . || true)
+PF_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
+         | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
+PF_DIAGRAMS=$(find architecture/diagrams -name '*.svg' | grep -c . || true)
+PF_IRREGULAR=$(awk '/^const IRREGULAR/,/^\];/' "$PF_STORE" | grep -oE '\),' | grep -c . || true)
+
+# PREMISE. Every truth below is a count, and a broken extractor returns a
+# number too — zero. A zero here would silently agree with nothing.
+if [ "${PF_ENV_TOTAL:-0}" -lt 50 ] || [ "${PF_PREFLIGHTS:-0}" -lt 5 ] ||
+   [ "${PF_CRATES:-0}" -lt 5 ] || [ "${PF_MCP:-0}" -lt 10 ] ||
+   [ "${PF_DIAGRAMS:-0}" -lt 5 ] || [ "${PF_IRREGULAR:-0}" -lt 50 ]; then
+  echo "FAIL  a truth-side reader came back implausibly small:"
+  echo "      env=$PF_ENV_TOTAL preflights=$PF_PREFLIGHTS crates=$PF_CRATES"
+  echo "      mcp=$PF_MCP diagrams=$PF_DIAGRAMS irregular=$PF_IRREGULAR"
+  echo "      A reader that examined nothing reports what an accurate tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$((PF_ENV_FULL + PF_ENV_ABBREV + PF_ENV_ABSENT))" -ne "$PF_ENV_TOTAL" ]; then
+  echo "FAIL  the env classification lost a variable:"
+  echo "      $PF_ENV_FULL + $PF_ENV_ABBREV + $PF_ENV_ABSENT != $PF_ENV_TOTAL"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# label|file|sed-with-one-capture|truth
+PROSE_FIGURES=(
+  "host-side preflights|CLAUDE.md|s/.*runs the ([a-z]+) host-side preflights.*/\\1/p|$PF_PREFLIGHTS"
+  "workspace crates|CLAUDE.md|s/.*workspace root \\(([0-9]+) crates.*/\\1/p|$PF_CRATES"
+  "MCP tools|CLAUDE.md|s/.*\\*\\*([0-9]+) tools \\(incl\\..*/\\1/p|$PF_MCP"
+  "architecture diagrams|CLAUDE.md|s/.*reference: ([a-z]+) theme-aware.*/\\1/p|$PF_DIAGRAMS"
+  "engine env variables|CLAUDE.md|s/.*plus \\*\\*all ([0-9]+)\\*\\*.*/\\1/p|$PF_ENV_TOTAL"
+  "env vars written in full|CLAUDE.md|s/.*— \\*\\*([0-9]+)\\*\\* written out in.*/\\1/p|$PF_ENV_FULL"
+  "env vars abbreviated|CLAUDE.md|s/.*plus \\*\\*([0-9]+)\\*\\* siblings abbreviated.*/\\1/p|$PF_ENV_ABBREV"
+  "IRREGULAR pairs|CLAUDE.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
+)
+
+PROSE_FAIL=0
+for row in "${PROSE_FIGURES[@]}"; do
+  IFS='|' read -r label pfile pat truth <<< "$row"
+  raw=$(sed -nE "$pat" "$pfile" | head -1)
+  if [ -z "$raw" ]; then
+    echo "FAIL  $label: the reader found no published figure in $pfile."
+    echo "      Either the sentence was reworded (update the row) or it was"
+    echo "      deleted — a row that matches nothing checks nothing."
+    PROSE_FAIL=1
+    continue
+  fi
+  got=$(pf_word "$raw")
+  if [ "$got" != "$truth" ]; then
+    echo "FAIL  $label: $pfile publishes $raw, the tree measures $truth"
+    PROSE_FAIL=1
+  fi
+done
+
+if [ "$PF_ENV_ABSENT" -ne 0 ]; then
+  echo "note  $PF_ENV_ABSENT engine variable(s) appear on $PF_ARCH in no form:$PF_ABSENT_LIST"
+fi
+if [ "$PROSE_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    ${#PROSE_FIGURES[@]} prose figures agree with the tree"
+echo "      (env: $PF_ENV_FULL full + $PF_ENV_ABBREV row-abbreviated + $PF_ENV_ABSENT absent = $PF_ENV_TOTAL)"
+
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   echo ""
   echo "preflights only — no suite was run, by request (--preflight-only)"

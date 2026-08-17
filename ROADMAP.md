@@ -2075,7 +2075,57 @@ that annoying is one `git grep` away from the class of defect it prevents.
 
 ---
 
-### O42 — the count of the gates is itself an ungated figure
+### O42 — CLOSED 2026-08-17: a figure in prose is counted against the tree
+
+**Closed the day after it was filed, and closing it immediately found O43** —
+a wrong figure that had been sitting in the doctrine, written by the very
+round-five item whose purpose was to correct that figure. The argument for
+deferring it (below, kept) was that the general question is larger than one
+row. That was true and it was still the wrong call: the gate cost one
+preflight and the first thing it did was fail on a claim nobody had doubted.
+
+**What landed.** A `prose figures` preflight, on the `PUBLISHED_FIGURES`
+pattern, checking eight numbers the doctrine states about the tree:
+host-side preflights, workspace crates, MCP tools, architecture diagrams, the
+engine's `UNDERCROFT_*` total, how many of those are written out in full, how
+many are abbreviated, and `IRREGULAR` pairs. Spelled-out numbers are accepted
+(`nine`, `eleven`) because the doctrine writes both ways.
+
+**The env figures need ROW-SCOPED attribution and that is the whole of O43.**
+The architecture page abbreviates families to bare suffixes inside the row
+that owns them. Counting full names alone undercounts by 17; counting
+suffixes globally credits `_NAME` from the ONNX row to
+`UNDERCROFT_COLBERT_NAME`, which is a different variable in a different row.
+**Neither observable separates documented from absent** — the third instance
+in this tree of *ask what a gate can SEE*. The reconstruction pairs each
+suffix only with full names in its own row, and was cross-checked against an
+independent implementation in a second language before being believed; both
+return 64 + 17 + 0.
+
+**Counterfactuals, run:**
+
+| arm | injected | verdict |
+|---|---|---|
+| O43 reinstated | O38's exact figures restored | exit 1, naming **both** wrong numbers |
+| a reworded claim | `13 crates` → `thirteen crates` | exit 1, "the reader found no published figure" |
+| its own arrival | the new preflight made the count 10 while the doctrine said nine | exit 1, before anyone edited the sentence |
+
+That last one is not a contrived arm — it happened, and it is the cheapest
+possible demonstration that the gate reads the tree rather than the prose.
+
+**Residual, stated.** This is an INVENTORY, so it closes one direction only:
+every listed figure is checked, and a figure nobody listed is invisible. The
+other direction cannot be mechanised — there is no way to enumerate "every
+number in prose that happens to be a claim about the tree" without flagging
+every measurement, date and version in the CHANGELOG's history. Adding a row
+when a figure is published is the discipline; the gate makes the listed ones
+un-rottable, not the unlisted ones discoverable. Figures with their own gate
+(`ENGINE_ENV_VARS`, `MCP_TOOLS`, `PUBLISHED_FIGURES`) are deliberately not
+duplicated here, except where the doctrine restates them in prose — which is
+exactly the case that rotted.
+
+<details>
+<summary>The original filing, kept because deferring it was the wrong call</summary>
 
 Found while closing O41, and filed rather than folded in because it is a
 different question with a different scope.
@@ -2114,6 +2164,80 @@ that file has one.
 and the number of `echo "═══ preflight:"` lines in `tests/battery.sh`
 disagree, and must fail in the other direction too — a row naming a figure
 no surface publishes any more.
+
+*(Both halves of that gate landed. The second is the "reader found no
+published figure" arm.)*
+
+</details>
+
+---
+
+### O43 — CLOSED 2026-08-17: the correction was the regression
+
+**O38 rewrote a correct figure into a wrong one, and this is the fourth time
+in this tree that an audit round's fix has introduced the defect it was
+fixing.** What makes it worth its own entry is that the previous three were
+in CODE, where a test can fail. This one was in PROSE, where nothing could.
+
+**The claim.** `CLAUDE.md` said the architecture reference documents *"every
+layer plus all **81** `UNDERCROFT_*` variables — 64 written out in full
+across the env table's 60 rows, plus 17 siblings abbreviated to a suffix
+inside the row that owns them"*. That was **correct**. On 2026-08-14, commit
+`af1d9eb` replaced it with *"**72 of the 81** … plus **8** siblings
+abbreviated"* and added a bolded paragraph asserting *"This line said 'all
+81' and '17 abbreviated' until 2026-08-14, and both halves were wrong"*,
+followed by a scoping rationale for why nine variables were absent.
+
+**Measured, two ways.** 81 engine variables (bench excluded, the doctrine's
+own boundary); **64** appear in full on the page; **17** appear abbreviated,
+attributed to their own row; **0** absent. An awk implementation and an
+independent one in a second language agree digit for digit.
+
+**Why O38 got it wrong, and it is a measurement error, not a slip.** A bare
+`<code>_SUFFIX</code>` names a variable only once you attribute it to the ROW
+it sits in. `_NAME` in the ONNX row means `UNDERCROFT_ONNX_NAME`; it says
+nothing about `UNDERCROFT_COLBERT_NAME`, which is abbreviated in its own row
+one line below. Count full names only and you miss all 17. Count suffixes
+globally and you credit the wrong variables. **Neither observable separates
+documented from absent**, which is *ask what a gate can SEE* for the third
+time here — and the first two were about code.
+
+O38 recognised eight abbreviations (`_TOKENIZER`×3, the four `_FDE_*`,
+`_QUERY_MODEL`) and read the other nine as absent: the six
+`UNDERCROFT_ORCH_*`, which share ONE row (`UNDERCROFT_ORCH_ADDR · _DB ·
+_KEY · _ADMIN_TOKEN · _RATE_LIMIT · _METRICS_ADDR · _METRICS_TOKEN`), and the
+three `_NAME`. Then it wrote a reason why those *ought* to be absent — the
+control plane belongs in `docs/MULTI_TENANCY.md`. **A wrong measurement
+dressed in a plausible rationale is the most expensive artifact this project
+produces**, because the rationale is what stops the next reader checking.
+
+**The tell nobody looked for, and it is one command.** O38 claimed the page's
+coverage; `git log -- architecture/index.html` shows the page was not touched
+in round five at all. A claim that a document's coverage changed, filed
+against a document with no commit, was checkable in seconds.
+
+**Fix.** The doctrine states `all 81` / `64` / `17` again, and the figure is
+GATED by the `prose figures` preflight (O42) with row-scoped attribution.
+Counterfactual: reinstating O38's exact figures fails the gate and names both
+wrong numbers, so this could not have shipped under it.
+
+**What stands from O38.** Adding `UNDERCROFT_COLBERT_NAME` and
+`UNDERCROFT_RERANK_NAME` to `docs/EMBEDDERS.md` was a genuine improvement —
+neither is written out in full anywhere a reader would grep. *"Not written
+out in full anywhere"* and *"absent from the architecture page"* are
+different claims, and collapsing the first into the second is what produced
+the wrong count.
+
+**The process lesson, and it outlives the figure.** Round five ran SOLO and
+its own handover says so: *"no independent verification — the same person
+raised and checked the findings"*. This is what that costs. A finding that
+REPLACES a value needs the old value re-measured, not just the new one
+computed — O38 asserted the original was wrong in both halves without
+measuring the original. **When a fix's output is a number that contradicts a
+number already in the tree, the burden is on the new number**, and the
+cheapest discharge is a second implementation, which is exactly what the
+audit's own §2 has demanded since round three for gates and did not demand
+for prose.
 
 ---
 
@@ -2268,7 +2392,21 @@ own output is subject to the same rule as the tree's.
 
 ---
 
-### O38 — CLOSED 2026-08-14: the claim is corrected, and it was hiding two undocumented variables
+### O38 — CLOSED 2026-08-14, and its central correction was WRONG — see O43
+
+> **Read O43 before this entry.** The figure below is not what the tree
+> holds. This item rewrote a CORRECT claim (`all 81`, `17 abbreviated`) into
+> a false one (`72 of the 81`, `8 abbreviated`, `9 absent`) and asserted in
+> bold that both halves of the original had been wrong. They had not. The
+> architecture page documents every one of the 81 — 64 in full and 17
+> abbreviated to a suffix inside the row that owns them — and O38 never
+> changed that page at all. Corrected and GATED on 2026-08-17.
+>
+> The half of O38 that stands: adding `UNDERCROFT_COLBERT_NAME` and
+> `UNDERCROFT_RERANK_NAME` to `docs/EMBEDDERS.md` was a real improvement,
+> since neither was written out in full anywhere a reader would grep. That is
+> a different claim from "absent from the architecture page", and conflating
+> them is what produced the wrong count.
 
 Round-five **F4**, D7.
 

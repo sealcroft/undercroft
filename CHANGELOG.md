@@ -2,6 +2,64 @@
 
 ## 1.1.0 — 2026-08-17
 
+### the correction was the regression: a round-five fix replaced a correct figure with a wrong one (O43, O42)
+
+**A docs-vs-code sweep of the doctrine, the architecture reference and the
+code found that O38 — the round-five item whose entire purpose was correcting
+the architecture page's coverage figure — had corrected a CORRECT claim into
+a false one**, and asserted in bold that the original had been wrong in both
+halves. It had not been.
+
+The doctrine said the page documents *all 81* `UNDERCROFT_*` variables, 64 in
+full and 17 abbreviated. O38 changed that to *72 of the 81*, 8 abbreviated,
+9 absent, and added a scoping rationale for the nine. Measured two ways — an
+awk implementation and an independent one in a second language, agreeing
+digit for digit — the page documents **81: 64 in full, 17 abbreviated, none
+absent**.
+
+**The cause is a measurement that could not see what it was counting.** The
+page abbreviates families to bare suffixes inside the row that owns them
+(`UNDERCROFT_ORCH_ADDR · _DB · _KEY · _ADMIN_TOKEN · …` is one row). Counting
+full names alone undercounts by 17; counting suffixes globally credits
+`_NAME` from the ONNX row to `UNDERCROFT_COLBERT_NAME`, a different variable
+in a different row. Neither observable separates documented from absent —
+*ask what a gate can SEE*, third instance here and the first in prose rather
+than code. O38 recognised eight abbreviations, read the other nine as absent,
+and then explained why they ought to be. **A wrong measurement dressed in a
+plausible rationale is the most expensive thing this project produces**,
+because the rationale stops the next reader checking.
+
+The tell was one command: O38 claimed the page's coverage, and `git log --
+architecture/index.html` shows round five never touched that page.
+
+**O42 is closed in the same unit rather than deferred**, and closing it is
+what made the above provable. A `prose figures` preflight (the tenth) counts
+eight figures the doctrine states about the tree — preflights, crates, MCP
+tools, diagrams, the env-variable total, the full/abbreviated split, and
+`IRREGULAR` pairs — against what the tree measures, with row-scoped
+attribution for the env figures. Reinstating O38's exact numbers fails it and
+names both. It also caught its own arrival: adding it made the preflight
+count ten while the doctrine still said nine.
+
+**Also fixed: the layout section pointed at the wrong crate.** `AR_ROOTS`,
+`AR_PATTERNS` and `ar_root_family` were described inside the
+`crates/undercroft-core` bullet, interleaved into the era-marker material,
+while all three live in `crates/undercroft-store`. The layout section's whole
+job is saying where things live. Found by extracting every symbol each crate
+bullet names and checking which crate defines it; the other 44 hits are
+legitimate cross-references and were deliberately left alone, because a sweep
+is a hypothesis about every line it touches. The `2859` generated Arabic
+forms were verified by re-implementing the generator and running it (2,880
+instances, 2,859 distinct), and every other published constant — `0.56`,
+`0.45`, `4096`, `64`, `256`, `5`, `201`, `144 × 20` — was checked against the
+code and is correct.
+
+**The process lesson.** Round five ran solo, and its own handover records
+that as its known weakness. A finding that REPLACES a value needs the old
+value re-measured, not just the new one computed — O38 asserted the original
+was wrong without measuring it. When a fix's output is a number contradicting
+a number already in the tree, the burden is on the new number.
+
 ### the release's own version claim is gated, not remembered (O41)
 
 **Found while verifying the release-prep commit, and it was wrong about
