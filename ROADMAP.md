@@ -31,7 +31,7 @@ it before a restart. That obligation is the point; the number is not.
 
 ---
 
-## 1.1.0 — the release this branch is
+## 1.1.0 — released 2026-08-14
 
 MINOR: new capability, backward compatible. No documented contract changes.
 Everything else on the branch is patch-level and folded in.

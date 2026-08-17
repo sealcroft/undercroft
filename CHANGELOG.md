@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.1.0
+## 1.1.0 — 2026-08-14
 
 ### round five: eleven dimensions audited, six findings, five fixed and one refuted
 
