@@ -551,6 +551,109 @@ mod tests {
         );
     }
 
+    /// **No message literal carries a rustfmt-collapsed space run** (O40).
+    ///
+    /// A `\`-continued string keeps the continued line's indentation, and
+    /// **rustfmt does not reformat string literals** — so a wrapped literal
+    /// can end up carrying 10–34 spaces mid-sentence and the operator reads a
+    /// gap in the middle of a word. Twenty such lines were live across eight
+    /// crates before this gate, every one a user-facing refusal, warning or
+    /// pre-flight message.
+    ///
+    /// **The allowlist is the load-bearing half**, because prose continuation
+    /// and deliberate column alignment are byte-identical and no pattern over
+    /// spaces separates them. A sweep that assumed otherwise was RUN while
+    /// closing O40: it matched 58 lines and ate the padding in `config
+    /// check`'s aligned output. Measured, the populations are bimodal —
+    /// alignment clusters at 3–9 spaces (157 instances, all genuine) and
+    /// continuations at 18/22/26/34, the Rust indent depths — but they
+    /// overlap at 10–14, which is why the exceptions are named one at a time
+    /// rather than inferred.
+    #[test]
+    fn no_message_literal_carries_a_collapsed_space_run() {
+        // Each entry is a claim that the spaces are CONTENT: a table column,
+        // SQL, or a deliberate multi-line indent.
+        const ALIGNED: &[&str] = &[
+            "pair          n",         // bench: an R@k table header
+            "tunnels:             {}", // CLI stats: an output column
+            "Assign wing trust",       // MCP: a deliberate \n-indented message
+            "-> [",                    // core/script.rs: a doc comment's example
+            "INSERT INTO kg_entities", // SQL
+            "kg_blind_secret",         // SQL
+            "FROM kg_entities",        // SQL
+        ];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .canonicalize()
+            .expect("the crates directory is one level up from this crate");
+        let mut offenders: Vec<String> = Vec::new();
+        let mut scanned = 0usize;
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    let name = p
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if name != "target" && name != ".git" {
+                        stack.push(p);
+                    }
+                    continue;
+                }
+                if p.extension().and_then(|x| x.to_str()) != Some("rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                scanned += 1;
+                for (i, line) in text.lines().enumerate() {
+                    if !line.contains('"') || ALIGNED.iter().any(|a| line.contains(a)) {
+                        continue;
+                    }
+                    let b = line.as_bytes();
+                    let mut run = 0usize;
+                    for (j, ch) in b.iter().enumerate() {
+                        if *ch == b' ' {
+                            run += 1;
+                            continue;
+                        }
+                        if run >= 10 && j > run && b[j - run - 1] != b' ' {
+                            offenders.push(format!(
+                                "{}:{} ({run} spaces)",
+                                p.strip_prefix(&root).unwrap_or(&p).display(),
+                                i + 1
+                            ));
+                            break;
+                        }
+                        run = 0;
+                    }
+                }
+            }
+        }
+        // PREMISE: a walker that finds no files reports exactly what a clean
+        // tree reports, which is the failure this whole family is about.
+        assert!(
+            scanned > 50,
+            "premise: the walker actually found the crates tree, scanned only {scanned} files"
+        );
+        offenders.sort();
+        assert!(
+            offenders.is_empty(),
+            "these message literals carry a run of 10+ spaces — a wrapped line whose \
+             indentation survived, which an operator reads as a gap mid-sentence. Rejoin \
+             the literal, or add a distinctive substring to ALIGNED if the spaces really \
+             are content:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
     /// **Every field of a hand-projected report reaches the CLI.**
     ///
     /// The gate for the drift class CLAUDE.md names and this branch kept
@@ -800,7 +903,7 @@ mod tests {
             for advertised in MCP_TOOLS {
                 assert!(
                     !advertised.contains(cap),
-                    "{advertised} carries the operator-only capability                      {cap:?}. An agent must not rule on the queue that                      contains it, assign the trust class that decides what                      it may retrieve, or write the authority tier its own                      lookups read. If deliberate, that is a threat-model                      change, not a test change."
+                    "{advertised} carries the operator-only capability {cap:?}. An agent must not rule on the queue that contains it, assign the trust class that decides what it may retrieve, or write the authority tier its own lookups read. If deliberate, that is a threat-model change, not a test change."
                 );
             }
             for advertised in &from_source {
@@ -931,7 +1034,7 @@ mod tests {
                 .is_some_and(|sites| sites.iter().any(|p| !p.ends_with("parity.rs")));
             assert!(
                 read_for_real,
-                "ENGINE_ENV_VARS lists {name}, which no crate reads outside this                  inventory — a variable documented and honoured by nothing"
+                "ENGINE_ENV_VARS lists {name}, which no crate reads outside this inventory — a variable documented and honoured by nothing"
             );
         }
     }
@@ -1015,7 +1118,7 @@ mod tests {
         want.sort_unstable();
         assert_eq!(
             exempted, want,
-            "the walk must reach and skip each exempt crate exactly once —              a rename that stops matching silently widens the exemption"
+            "the walk must reach and skip each exempt crate exactly once — a rename that stops matching silently widens the exemption"
         );
         let policy = crates.join("undercroft-net/src/lib.rs");
         assert!(

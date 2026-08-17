@@ -987,7 +987,7 @@ fn upsert_batched(
             let first = c * INGEST_BATCH + 1;
             let last = first + chunk.len() - 1;
             format!(
-                "importing records {first}-{last} (this batch is one transaction, so none of                  it was written; records before it were)"
+                "importing records {first}-{last} (this batch is one transaction, so none of it was written; records before it were)"
             )
         })?;
         total.created += out.created;

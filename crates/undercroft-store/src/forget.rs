@@ -358,7 +358,7 @@ impl PalaceStore {
                 && self.is_quarantine_pending(id)?
             {
                 return Err(StoreError::Invalid(format!(
-                    "{id} is quarantine-pending — rule on it with `admission                      allow`/`deny`; pending review evidence is not deletable"
+                    "{id} is quarantine-pending — rule on it with `admission allow`/`deny`; pending review evidence is not deletable"
                 )));
             }
             drawers.push(ForgottenDrawer {

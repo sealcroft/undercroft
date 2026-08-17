@@ -568,7 +568,7 @@ fn spawn_metrics_listener() -> anyhow::Result<()> {
                 Some(text) => (200, text),
                 None => (
                     503,
-                    "metrics require building undercroft-orchestrator with --features                      telemetry (this binary was built without it)
+                    "metrics require building undercroft-orchestrator with --features telemetry (this binary was built without it)
 "
                         .to_string(),
                 ),
@@ -1362,7 +1362,7 @@ pub(crate) fn migrate_tenant(
         .unwrap_or(tenant.level.as_str());
     if declared != tenant.level {
         return Err(MigrateError::Unfaithful(format!(
-            "the source vault exports level {declared:?} while the control plane has this              tenant recorded as {:?} — refusing rather than choosing one. Reconcile the              record before migrating",
+            "the source vault exports level {declared:?} while the control plane has this tenant recorded as {:?} — refusing rather than choosing one. Reconcile the record before migrating",
             tenant.level
         )));
     }
@@ -1551,7 +1551,7 @@ mod tests {
             let a = absent.contains(cap);
             assert!(
                 r || a,
-                "{cap} is an engine operator capability that the ops plane neither                  reaches nor records as deliberately absent. Say which — an omission                  and a boundary look identical from outside."
+                "{cap} is an engine operator capability that the ops plane neither reaches nor records as deliberately absent. Say which — an omission and a boundary look identical from outside."
             );
             assert!(!(r && a), "{cap} is both reachable and recorded absent");
         }
@@ -1559,11 +1559,11 @@ mod tests {
         for (cap, why) in OPS_DELIBERATELY_ABSENT {
             assert!(
                 !why.trim().is_empty(),
-                "{cap} is recorded absent with no reason — that is an omission                  with a list entry, which is worse than an omission"
+                "{cap} is recorded absent with no reason — that is an omission with a list entry, which is worse than an omission"
             );
             assert!(
                 engine_ops.contains(cap),
-                "{cap} is recorded absent but is not an engine capability — a                  stale entry reads as a boundary being enforced"
+                "{cap} is recorded absent but is not an engine capability — a stale entry reads as a boundary being enforced"
             );
         }
     }

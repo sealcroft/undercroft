@@ -1691,7 +1691,7 @@ mod fence_inventory {
             assert_eq!(
                 AGENT_FENCED_NAMESPACES.contains(ns),
                 *fenced,
-                "{ns} is classified {} here and the opposite in                  AGENT_FENCED_NAMESPACES",
+                "{ns} is classified {} here and the opposite in AGENT_FENCED_NAMESPACES",
                 if *fenced { "fenced" } else { "open" }
             );
         }

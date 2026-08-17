@@ -2236,7 +2236,7 @@ impl Tenancy {
                 Ok("hnsw") => {
                     return Err(RestError::new(
                         500,
-                        "UNDERCROFT_RETRIEVAL=hnsw is not available on the multi-tenant                          server (in-process index); use pq or fde, or serve a single vault",
+                        "UNDERCROFT_RETRIEVAL=hnsw is not available on the multi-tenant server (in-process index); use pq or fde, or serve a single vault",
                     ))
                 }
                 Ok("") | Err(_) => {}

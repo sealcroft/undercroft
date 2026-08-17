@@ -1958,7 +1958,7 @@ of guessing this engine refuses everywhere else.
 
 ---
 
-### O40 — rustfmt-collapsed space runs inside message literals, tree-wide
+### O40 — CLOSED 2026-08-14: twenty collapsed literals rejoined, and a gate with a named allowlist
 
 Found 2026-08-14 while fixing one instance of it, and filed rather than swept
 because **the obvious sweep provably breaks working code** — see below.
@@ -2007,6 +2007,32 @@ failure, rather than trusting a green.
 **Two instances are already fixed** and are not in the count above: both were
 in gates this campaign wrote (`the_signal_vocabulary_is_exactly_what_the_
 engine_can_emit`), so they were mine.
+
+#### What closing it took, and the discriminator that does NOT exist
+
+**Twenty literals rejoined by hand-classified line, not by pattern.** Every
+target was read and judged first; the script that applied them carries a
+per-line premise assert that the line still holds a run, so a drifted line
+number stops it rather than editing something else. The whole diff was then
+read: 20 lines, all prose, no alignment touched.
+
+**The threshold is 10 spaces and it is NOT sufficient on its own.** Measured
+across the tree, the two populations are bimodal — alignment clusters at 3–9
+(157 instances, all genuine) and continuations at 18/22/26/34, which are the
+Rust indent depths. But they OVERLAP at 10–14: `"  tunnels:             {}"`
+is a 13-space output column and `"  pair          n     R@1"` is a 10-space
+table header, while `"…exactly once —              a rename…"` at 14 is a
+continuation. **So the allowlist is the load-bearing half exactly as this
+entry predicted**, and it names seven exceptions individually: two table
+layouts, a deliberate `
+`-indented MCP message, a doc comment's example
+output, and three SQL statements.
+
+**Gate:** `no_message_literal_carries_a_collapsed_space_run` in `parity.rs`,
+beside the CRLF walker it borrows. Both arms executed — re-introducing a run
+names the file, line and run length; breaking the walker fires "scanned only
+0 files". Adding an ALLOWED entry is a claim that the spaces are CONTENT, and
+that is the judgement the gate deliberately does not try to make for you.
 
 ---
 

@@ -241,7 +241,7 @@ fn main() -> Result<()> {
     if let Err(e) = &out {
         if state_is_integrity(e) {
             eprintln!(
-                "INTEGRITY VERDICT: {e}. This is the orchestrator's own state, not an                  engine's — a credential blob that will not open under the declared key                  is a tamper verdict or a wrong key, never a transient condition."
+                "INTEGRITY VERDICT: {e}. This is the orchestrator's own state, not an engine's — a credential blob that will not open under the declared key is a tamper verdict or a wrong key, never a transient condition."
             );
             std::process::exit(EXIT_INTEGRITY.into());
         }
