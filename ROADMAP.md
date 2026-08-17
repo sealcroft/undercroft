@@ -260,13 +260,19 @@ surviving as hardening rather than as defects, one refuted**:
 | **O39** | D10 | 1/3 | **REFUTED — not work** | this campaign's own O29 | closed by verification |
 
 **All six are closed** — five fixed, one refuted by its own verification.
-**O40 was filed on 2026-08-14 while fixing one of them**: rustfmt-collapsed
-space runs inside message literals, tree-wide and pre-existing. It is filed
-rather than swept because the obvious regex was RUN and ate deliberate column
-padding in `config check`'s aligned output — the naive fix is worse than the
-defect.
+**O40 was filed while fixing one of them and is now CLOSED too**:
+rustfmt-collapsed space runs inside message literals, twenty of them,
+tree-wide and pre-existing. It was filed rather than swept on the day because
+the obvious regex was RUN and ate deliberate column padding in `config
+check`'s aligned output; closing it needed a hand-classified line list and a
+gate with seven individually named exceptions, since the two populations
+overlap at 10–14 spaces and no rule over spaces separates them.
 O38's fix found the better defect underneath it: two variables the engine
 honours that no document in the repository named.
+
+**Nothing engine-side is open.** What remains is **O7** (release-gated — its
+fix renames `palace.db`), **O6** (a GitHub web-UI click) and **O23** (filed,
+deliberately unscheduled, with the argument for leaving it).
 
 **What the reachability lens changed, and it is the point of running it.**
 O35 and O36 were written as defects and are not: no user can reach
