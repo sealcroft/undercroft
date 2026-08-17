@@ -250,14 +250,18 @@ reachability / novelty, default to REFUTED when uncertain, survives on ≥2 of
 3). Solo rather than by fan-out. Six findings in, **three confirmed, two
 surviving as hardening rather than as defects, one refuted**:
 
-| | dimension | lenses | verdict | origin |
-|---|---|---|---|---|
-| **O37** | D9 | 3/3 | **CONFIRMED — the only live exposure** | round FOUR found it and never filed it |
-| **O34** | D3 | 3/3 | **CONFIRMED** | this campaign's own O32 |
-| **O38** | D7 | 3/3 | **CONFIRMED** | pre-existing doc claim |
-| **O35** | D3 | 2/3 | **SURVIVES as hardening** — no user-reachable path today | pre-existing, exposed by O32 |
-| **O36** | D11 | 2/3 | **SURVIVES as hardening** — needs a future author, not a user | this campaign's own O33 |
-| **O39** | D10 | 1/3 | **REFUTED — closed, not work** | this campaign's own O29 |
+| | dimension | lenses | verdict | origin | status |
+|---|---|---|---|---|---|
+| **O37** | D9 | 3/3 | CONFIRMED — the only live exposure | round FOUR found it and never filed it | **CLOSED 2026-08-14** |
+| **O34** | D3 | 3/3 | CONFIRMED | this campaign's own O32 | **CLOSED 2026-08-14** |
+| **O38** | D7 | 3/3 | CONFIRMED | pre-existing doc claim | **CLOSED 2026-08-14** |
+| **O35** | D3 | 2/3 | hardening — no user-reachable path today | pre-existing, exposed by O32 | **CLOSED 2026-08-14** |
+| **O36** | D11 | 2/3 | hardening — needs a future author, not a user | this campaign's own O33 | **CLOSED 2026-08-14** |
+| **O39** | D10 | 1/3 | **REFUTED — not work** | this campaign's own O29 | closed by verification |
+
+**All six are closed** — five fixed, one refuted by its own verification.
+O38's fix found the better defect underneath it: two variables the engine
+honours that no document in the repository named.
 
 **What the reachability lens changed, and it is the point of running it.**
 O35 and O36 were written as defects and are not: no user can reach
@@ -1949,7 +1953,7 @@ of guessing this engine refuses everywhere else.
 
 ---
 
-### O37 — the house Pages site serves cleartext, and round four found this and never filed it
+### O37 — CLOSED 2026-08-14: the house Pages site enforces HTTPS, nine days after round four found it
 
 Round-five **F5**, D9. **The finding is second; the first is that it went
 missing.** `.handover/AUDIT_CONTINUATION.md:251` records round four's D9
@@ -1990,9 +1994,39 @@ absent-path 404 beside it as the negative control. Worth a line in the
 release checklist, since Pages liveness is already verified there and this is
 the same class of check.
 
+#### Applied 2026-08-14, on the maintainer's explicit instruction
+
+**The precondition was checked before the change, not after.**
+`GET /repos/sealcroft/sealcroft.github.io/pages` reported
+`https_certificate_state: approved` and `protected_domain_state: verified`,
+which is what makes enabling safe: with a pending certificate, enforcing
+HTTPS takes the site down rather than securing it. Read the target before
+overwriting it.
+
+`PUT /repos/sealcroft/sealcroft.github.io/pages` with
+`https_enforced: true`; read back as `true`.
+
+**Verified by the gate above — the same measurement that found it, with the
+same negative control:**
+
+| | before | after |
+|---|---|---|
+| `http://sealcroft.com/` | `200 OK`, 17,447 bytes cleartext | **`301` → `https://sealcroft.com/`** |
+| `http://sealcroft.com/undercroft/` | `301` | `301` (unchanged) |
+| absent path | 404 | 404 (control holds) |
+
+**What this entry is really a record of.** The defect was one boolean. Round
+four found it, wrote it in a gitignored file, and never filed it — so it
+survived nine days, an entire fix campaign, a release-readiness review and a
+merge to `main`. The engineering cost of the fix was a single API call; the
+cost of the FILING failure was everything in between. That asymmetry is the
+argument for *"open threads written down AS WORK"* being a hard rule rather
+than a preference, and it is why round five's charter now says an audit's
+own output is subject to the same rule as the tree's.
+
 ---
 
-### O38 — the architecture page documents 72 of the 81 variables it claims to document
+### O38 — CLOSED 2026-08-14: the claim is corrected, and it was hiding two undocumented variables
 
 Round-five **F4**, D7.
 
@@ -2022,6 +2056,45 @@ and name what is excluded and why. **Gate:** a preflight counting
 `<code>UNDERCROFT_*</code>` plus declared suffixes on the page against
 `ENGINE_ENV_VARS`, both directions — the shape `PUBLISHED_FIGURES` already
 uses for the landing tiles.
+
+#### What closing it found, and it was better than the finding
+
+**The miscount was pointing at a documentation hole.** Asked where the nine
+ARE documented rather than only where they are not:
+
+- the six `UNDERCROFT_ORCH_*` are in `docs/MULTI_TENANCY.md`,
+  `docs/AGENTS.md` and `website/src/observability.md`. They belong to the
+  control plane, so the engine's architecture page omitting them is a
+  legitimate scoping decision — it just was not stated;
+- `UNDERCROFT_ONNX_NAME` is in `docs/EMBEDDERS.md`;
+- **`UNDERCROFT_COLBERT_NAME` and `UNDERCROFT_RERANK_NAME` were documented
+  NOWHERE.** Reachable, classed `Tunes` in `ENGINE_ENV_VARS`, validated by
+  `undercroft config check`, honoured by the code — and named in no document
+  in the repository.
+
+That is the quietest way for a declaration to be unusable: an operator
+swapping a reranker or a ColBERT export had no way to learn that the identity
+those roles record is declarable, so every such vault stored the generic
+default (`onnx-reranker`, `colbert`) and no artifact said which model
+produced it.
+
+**Fixed both halves.** `docs/EMBEDDERS.md` gained the reranker and ColBERT
+role block beside the embedder's, with both names and their defaults;
+`CLAUDE.md` now says 72 of 81, names all nine exclusions, and says which are
+scoping and which were absent. **The gate is deliberately NOT the filed
+preflight**: the count that was wrong is prose about a hand-authored page,
+and a preflight enforcing "the page lists every engine variable" would have
+forced the six control-plane variables onto it — encoding the wrong answer in
+a gate. The durable fix is that the two undocumented variables are now
+documented and the sentence states its own exclusions; a future variable
+absent from every document remains findable the way this one was, by asking
+where it IS documented rather than counting one page.
+
+**Stated residual:** `UNDERCROFT_COLBERT_NAME`, `UNDERCROFT_ONNX_NAME` and
+`UNDERCROFT_RERANK_NAME` still do not appear on `architecture/index.html`.
+They are documented in `docs/EMBEDDERS.md`, the page's env table is not
+claimed to be exhaustive any more, and adding three rows to a hand-authored
+table is a judgement about that page rather than a defect.
 
 ---
 
@@ -2074,7 +2147,7 @@ down rather than to rename.
 
 ---
 
-### O34 — `PalaceStats` disagrees with itself about whether the review queue exists
+### O34 — CLOSED 2026-08-14: `stats()` counts wings and rooms on the same side of the fence
 
 Round-five **F1**, and it is this campaign's own defect: O32 fenced one field
 of `stats()` and not its neighbour.
@@ -2097,7 +2170,7 @@ quarantined, `stats().wings` and `stats().rooms` agree the wing is absent;
 
 ---
 
-### O35 — hardening: `rooms()` is fenced by a check in another crate, and by nothing of its own
+### O35 — CLOSED 2026-08-14: the reliance is recorded at `rooms()` and pinned by a test
 
 Round-five **F2**. Pre-existing, made visible by O32's asymmetry.
 
@@ -2121,7 +2194,7 @@ boundary and the comment says so.
 
 ---
 
-### O36 — hardening: the signal-vocabulary gate assumes co-location and nothing enforces it
+### O36 — CLOSED 2026-08-14: the co-location the gate assumes is now enforced
 
 Round-five **F3**, and the gate is one this campaign wrote (O33).
 
