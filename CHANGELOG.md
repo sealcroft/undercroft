@@ -2,6 +2,41 @@
 
 ## 1.1.0 — 2026-08-17
 
+### round five re-verified end to end: four findings hold, two carried defects of their own (O44)
+
+All six of round five's findings were re-checked against the code, on the
+principle O43 established — **a finding that replaces a value must have the
+OLD value re-measured, not just the new one computed.**
+
+| | verdict |
+|---|---|
+| O34 `stats()` wings/rooms fence | **holds** — `WHERE wing <> ?1` landed, and `stats_counts_wings_and_rooms_on_the_same_side_of_the_fence` gates it |
+| O35 `rooms()` reliance recorded | **holds**, but cited a pinning test that **does not exist** → O44 |
+| O36 vocabulary gate co-location | **holds** — the gate reads the crate's `src` directory, not one file |
+| O37 house Pages HTTPS | **holds**, re-verified live: `http://` → 301 → `https://` on apex and product path, `https://` 200 |
+| O38 architecture coverage figure | **REGRESSION** → O43 |
+| O39 naming preference | **holds** as refuted; a wrapper's name changes no behaviour |
+
+**O44 — O35 cited a pinning test that has never existed.** Its doc comment
+attributes the MCP half of the boundary to
+`the_mcp_fence_is_what_keeps_queue_room_names_from_an_agent`; that string
+occurs exactly once in the tree, in the comment citing it. The boundary is
+genuinely pinned — by `mcp_cannot_read_rule_on_or_destroy_the_review_queue`,
+which drives `undercroft_list_rooms` with the reserved wing and requires a
+refusal — so this is a citation defect, not a coverage gap. It is filed
+anyway because of what it does to a reader: grep the cited name, find
+nothing, and conclude either that the boundary is unpinned or that the
+comment cannot be trusted. Both are wrong and one invites a redundant test.
+*A test NAME is not verification*, failing in its sharpest form.
+
+**Deliberately not turned into a gate.** Every long snake_case identifier
+cited in a doc comment under `crates/` was resolved against the tree: 39
+candidates, 8 unresolved, and **seven of those eight were legitimate** — two
+SQL index names, a reference to a *former* test the comment says it replaces,
+a removed MCP tool, a local binding, a findable prefix, one historical
+narration. At that ratio a mechanical citation check is noise, and a noisy
+gate gets switched off. Recorded as a method to re-run instead.
+
 ### the correction was the regression: a round-five fix replaced a correct figure with a wrong one (O43, O42)
 
 **A docs-vs-code sweep of the doctrine, the architecture reference and the

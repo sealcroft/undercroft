@@ -2550,7 +2550,53 @@ quarantined, `stats().wings` and `stats().rooms` agree the wing is absent;
 
 ---
 
-### O35 — CLOSED 2026-08-14: the reliance is recorded at `rooms()` and pinned by a test
+### O44 — CLOSED 2026-08-17: O35 cited a pinning test that does not exist
+
+Found by the same 2026-08-17 sweep as O43, and it is the *third* round-five
+item to carry a defect of its own — after O38 (a wrong figure) and O40's
+own filing.
+
+O35's fix records, in `rooms()`'s doc comment, what holds the boundary it
+deliberately does not fence, and attributes one layer of it: *"MCP
+`undercroft_list_rooms` — safe because the quarantine fence … **Pinned by**
+`the_mcp_fence_is_what_keeps_queue_room_names_from_an_agent`"*.
+
+**No such test has ever existed.** That string occurs exactly once in the
+tree: in the comment citing it.
+
+**The boundary itself is fine, and that is the point.** The MCP fence *is*
+pinned — by `mcp_cannot_read_rule_on_or_destroy_the_review_queue`
+(`undercroft-cli/src/mcp.rs:1125`), which drives `undercroft_list_rooms` with
+the reserved wing as its argument and requires a refusal. So this is a
+citation defect, not a coverage gap, and it is filed rather than waved away
+because of what it does to a reader: the next person to check that reliance
+greps the cited name, finds nothing, and concludes either that the boundary
+is unpinned or that the comment is untrustworthy. Both conclusions are wrong,
+and one of them invites a redundant second test.
+
+`CLAUDE.md`'s first rule is *a test NAME is not verification*. This is that
+rule failing in its sharpest form — the name does not resolve at all — and it
+is the second recorded instance: the round-four status sweep found #24 had
+been "verified" via a symbol that exists nowhere.
+
+**Fix.** The comment now cites the test that really pins it, names its crate
+and file, says what it asserts, and records the wrong citation rather than
+quietly replacing it.
+
+**Method, and it is reusable.** Every long snake_case identifier cited in a
+doc comment under `crates/` was extracted and resolved against the tree's
+definitions: 39 candidates, 8 unresolved, and **seven of the eight were
+legitimate** — two SQL index names, a deliberate reference to a *former* test
+the comment says it replaces, a reference to a REMOVED MCP tool, a local
+`let` binding, a truncated-but-findable prefix, and one historical narration.
+Exactly one was a live false citation. **That ratio is why this was not
+turned into a gate**: at 7 false positives in 8, a mechanical check of doc
+citations would be noise, and a noisy gate gets switched off. Recorded as a
+method to re-run rather than automated — the honest answer, not a gap.
+
+---
+
+### O35 — CLOSED 2026-08-14, with a false citation corrected under O44
 
 Round-five **F2**. Pre-existing, made visible by O32's asymmetry.
 
