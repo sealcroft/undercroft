@@ -1175,7 +1175,22 @@ Consequences that are binding, not advisory:
 - `docs/AGENTS.md` — the scenario-driven agent implementation guide
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
-  variables change
+  variables change. **`/v1` is described by TWO documents** — this one's §10
+  and `docs/remote-server.md` — and keeping only one is what O45 was: O14
+  added a route, updated §10, and left the other reference claiming "All 35
+  routes, counted against `route()` … rather than remembered". Both are
+  gated now, as SETS in both directions rather than counts, because a count
+  passes when one route is swapped for another.
+  **A full-name scan of any reference in this repo UNDERCOUNTS, and the
+  undercount reads as a documentation gap.** Every reference here groups
+  families into one row and abbreviates the siblings to a suffix —
+  `` `undercroft_list_wings` / `_list_rooms` / `_get_taxonomy` `` in the tool
+  table, `UNDERCROFT_ORCH_ADDR · _DB · _KEY` on the architecture page,
+  "`_KEY` carries a bearer, `_DIM` overrides the dimension" in
+  `docs/EMBEDDERS.md`. Three separate sweeps have now "found" phantom gaps
+  this way, including O38, which shipped its miscount as a correction. Match
+  the suffix form too, or you are measuring the notation rather than the
+  coverage
 - `docs/AMB_REPLICATION.md` — how to run the Agent Memory Benchmark's
   own protocol against this engine with **Claude subagents in the two
   model roles and no external LLM API**. Deliberately carries **no AMB
@@ -2517,7 +2532,10 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   (it is written when the release is prepared and the tag is a separate,
   later step, so it drifts by exactly as long as the prep sits in review —
   `1.1.0` was prepared on 2026-08-14 and dated that, three days before it
-  could be tagged) → PR → CI green →
+  could be tagged, **and then drifted a second time while still unreleased**,
+  which is the argument for making this a step rather than a number someone
+  sets once and trusts. A release date is not a fact about the work; it is a
+  fact about the tag, and the tag does not exist yet) → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
   post-merge CI green → Pages live-verified. Version bumps touch

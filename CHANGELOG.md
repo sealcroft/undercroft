@@ -1,6 +1,44 @@
 # Changelog
 
-## 1.1.0 — 2026-08-17
+## 1.1.0 — 2026-08-18
+
+### README, docs/ and website/ swept against the code: one drift, and it was in the doc that promised it had been counted (O45)
+
+The scope the previous sweep left unchecked. **One real drift.**
+
+`docs/remote-server.md` claimed *"All 35 routes, counted against `route()` …
+rather than remembered"*; `route()` dispatches **36**. Missing:
+`POST /v1/vaults/{id}/verify-forgetting`, the route **O14** added — which
+updated `docs/AGENTS.md` §10 correctly and left the second route reference
+behind. A doc that promises it was counted is the worst place for a stale
+count, because the promise is what stops the next reader checking.
+
+Fixed, and **gated**: the battery now compares route SETS in both directions
+for BOTH documents against the dispatch. Sets rather than counts, because a
+size check passes when one route is swapped for another.
+
+**Everything else checked out**, and two of the checks are worth recording
+because they *looked* like defects and were not:
+
+- `docs/AGENTS.md` §9 documents **all 34** MCP tools, and §10 matches the
+  dispatch exactly in both directions. A first pass reported "10 tools
+  missing" — **wrong**, because the table groups tools into rows by suffix
+  (`` `undercroft_list_wings` / `_list_rooms` / `_get_taxonomy` ``) and a
+  full-name grep cannot see them. That is the **identical error O38 made**,
+  reproduced in the same session that diagnosed it, and caught only by
+  reading the table instead of trusting the count.
+- All **81** engine variables are documented across README/`docs/`/`website/`
+  — six only in abbreviated form (`docs/EMBEDDERS.md`: "`_KEY` carries a
+  bearer, `_DIM` overrides the dimension"), which the same suffix-aware check
+  resolves. A full-name scan called them undocumented.
+- `docs/PARITY.md`'s "~35 tools" is **upstream's** count in a comparison
+  table, not ours. `110 checks`, `49 pairs`, `19 languages` and `10
+  languages` all match the tree.
+
+**The lesson repeats and is now the third instance:** this codebase documents
+families of names by abbreviating them into the row that owns them, so **any
+full-name scan of any reference here undercounts**, and the undercount reads
+as a documentation gap. Ask what the scan can SEE before believing a miss.
 
 ### round five re-verified end to end: four findings hold, two carried defects of their own (O44)
 

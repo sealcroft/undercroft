@@ -31,7 +31,7 @@ it before a restart. That obligation is the point; the number is not.
 
 ---
 
-## 1.1.0 — released 2026-08-17
+## 1.1.0 — released 2026-08-18
 
 MINOR: new capability, backward compatible. No documented contract changes.
 Everything else on the branch is patch-level and folded in.
@@ -2547,6 +2547,44 @@ defect, and low.
 answer the same question. **Gate:** on a vault whose only drawer in a wing is
 quarantined, `stats().wings` and `stats().rooms` agree the wing is absent;
 `/v1 …/stats` and `ui.html` render the same numbers.
+
+---
+
+### O45 — CLOSED 2026-08-17: two documents describe `/v1`, and only one was kept
+
+Found by sweeping README, `docs/` and `website/` against the code — the scope
+the O43/O44 sweep had explicitly left unchecked.
+
+`docs/remote-server.md` said **"All 35 routes, counted against `route()` in
+`crates/undercroft-cli/src/tenant.rs` rather than remembered"**. `route()`
+dispatches **36**. The missing one is `POST /v1/vaults/{id}/verify-forgetting`
+— the route **O14** added, which updated `docs/AGENTS.md` §10 correctly and
+left the other route reference behind. One route added, two references, one
+updated.
+
+**A doc that promises it was counted is the worst place for a stale count**,
+because the promise is exactly what stops the next reader checking. That
+sentence has been standing since 2026-08-05, when the same list was corrected
+from 18 routes to 35.
+
+**Fix.** The route is documented, the claim says 36, and **the count is
+gated** — `tests/battery.sh` now compares the route SETS, not the sizes, in
+both directions, for BOTH documents against `route()`'s dispatch. Sets rather
+than counts because a size check passes when one route is swapped for
+another; both documents because keeping one is what failed here.
+
+**Counterfactuals, run with the edit confirmed applied before the test:**
+
+| arm | injected | verdict |
+|---|---|---|
+| the real defect | the `verify-forgetting` line deleted | exit 1, "does not document 1 live route" and names it |
+| a dead route | `…/rotate` renamed to `…/rotate-keys` | exit 1 in BOTH directions — one live route undocumented, one documented route that does not exist |
+
+Note the first arm's guard had to be an assertion on the EXTRACTOR, not a
+`grep` of the file: the fix's own prose names `verify-forgetting`, so a bare
+`grep` found it after the deletion and the counterfactual silently did not
+run. It printed nothing rather than a false pass, which is the only reason it
+was noticed — the documented hazard, met in the wild.
 
 ---
 

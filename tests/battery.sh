@@ -1084,6 +1084,72 @@ fi
 echo "ok    ${#PROSE_FIGURES[@]} prose figures agree with the tree"
 echo "      (env: $PF_ENV_FULL full + $PF_ENV_ABBREV row-abbreviated + $PF_ENV_ABSENT absent = $PF_ENV_TOTAL)"
 
+# ── the `/v1` surface: TWO documents describe it, and both must be complete ─
+# ROADMAP O45. `docs/remote-server.md` said "All 35 routes, counted against
+# `route()` ... rather than remembered" while `route()` dispatched 36: O14
+# added `POST …/verify-forgetting`, updated `docs/AGENTS.md` §10, and did not
+# update the other route reference. A doc that PROMISES it was counted is the
+# worst place for a stale count, because the promise is what stops the reader
+# checking.
+#
+# Sets, not sizes, and in BOTH directions — a count alone passes when one
+# route is swapped for another. The `{id}` placeholders are normalised to the
+# binding names `route()` uses so the two spellings can be compared at all.
+V1_ARMS=$(awk '/match \(method\.as_str\(\), segs\.as_slice\(\)\)/,/^        }$/' \
+            crates/undercroft-cli/src/tenant.rs \
+          | grep -oE '\("(GET|POST|PUT|PATCH|DELETE)", &\["[^]]*\]\)' \
+          | sed -E 's/\("([A-Z]+)", &\[(.*)\]\)/\1 \2/' | tr -d '"' | sed 's/, /\//g' | sort -u)
+V1_N=$(printf '%s\n' "$V1_ARMS" | grep -c . || true)
+# PREMISE: the dispatch is the authority here, so a failed read must not be
+# allowed to agree with a doc that lists nothing either.
+if [ "${V1_N:-0}" -lt 20 ]; then
+  echo "FAIL  read $V1_N route(s) out of tenant.rs's dispatch; it has dozens."
+  echo "      The match block moved or was reshaped — this reader examined nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+v1_doc_routes() { # v1_doc_routes <file> <extractor-regex>
+  grep -ohE "$2" "$1" \
+    | sed -E 's/^\| *//; s/ *\| *`/ /; s/`//g; s/^([A-Z]+) +/\1 /' \
+    | sed -e 's#/v1#v1#' -e 's#{drawer_id}#drawer_id#g' -e 's#{key}#key#g' \
+          -e 's#{id}#id#g' -e 's#{[a-z_]*}#X#g' \
+    | awk '{print $1" "$2}' | sort -u
+}
+V1_RS=$(v1_doc_routes docs/remote-server.md '^(GET|POST|PUT|PATCH|DELETE) +/v1/[a-z{}/_-]+')
+V1_AG=$(v1_doc_routes docs/AGENTS.md '^\| *(GET|POST|PUT|PATCH|DELETE) *\| *`/v1/[^`]*`')
+
+V1_FAIL=0
+for pair in "docs/remote-server.md|$V1_RS" "docs/AGENTS.md|$V1_AG"; do
+  dfile="${pair%%|*}"; dlist="${pair#*|}"
+  dn=$(printf '%s\n' "$dlist" | grep -c . || true)
+  if [ "${dn:-0}" -lt 20 ]; then
+    echo "FAIL  $dfile: the route extractor found $dn route(s). The table's shape"
+    echo "      changed, and an extractor that reads nothing agrees with everything."
+    V1_FAIL=1
+    continue
+  fi
+  missing=$(comm -23 <(printf '%s\n' "$V1_ARMS") <(printf '%s\n' "$dlist"))
+  extra=$(comm -13 <(printf '%s\n' "$V1_ARMS") <(printf '%s\n' "$dlist"))
+  if [ -n "$missing" ]; then
+    echo "FAIL  $dfile does not document $(printf '%s\n' "$missing" | grep -c .) live route(s):"
+    printf '        %s\n' $(printf '%s\n' "$missing" | tr ' ' '~') | tr '~' ' '
+    V1_FAIL=1
+  fi
+  if [ -n "$extra" ]; then
+    echo "FAIL  $dfile documents $(printf '%s\n' "$extra" | grep -c .) route(s) that no longer exist:"
+    printf '        %s\n' $(printf '%s\n' "$extra" | tr ' ' '~') | tr '~' ' '
+    V1_FAIL=1
+  fi
+done
+if [ "$V1_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    both /v1 route references match the dispatch exactly ($V1_N routes)"
+
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   echo ""
   echo "preflights only — no suite was run, by request (--preflight-only)"

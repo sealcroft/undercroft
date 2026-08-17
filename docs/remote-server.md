@@ -38,9 +38,14 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
-**All 35 routes**, counted against `route()` in
-`crates/undercroft-cli/src/tenant.rs` rather than remembered — this table
-listed 18 of them until 2026-08-05, omitting the whole operator plane
+**All 36 routes**, counted against `route()` in
+`crates/undercroft-cli/src/tenant.rs` rather than remembered — and the count
+is GATED now (ROADMAP O45), because "rather than remembered" was exactly what
+happened: this list said 35 and omitted
+`POST /v1/vaults/{id}/verify-forgetting` from the day O14 added it, while
+`docs/AGENTS.md` §10 carried it correctly. One route added, two route
+references, one updated. It also listed 18 of them until 2026-08-05,
+omitting the whole operator plane
 (trust, admission review, retention, forgetting) plus the golden-values
 tier. Everything under *operator plane* is deliberately absent from MCP:
 an agent must not rule on the queue that exists to contain it, nor assign
@@ -88,6 +93,11 @@ GET    /v1/vaults/{id}/retention        policies per wing/room
 POST   /v1/vaults/{id}/retention        set one
 POST   /v1/vaults/{id}/retention/sweep  enforce; returns a proof receipt
 POST   /v1/vaults/{id}/forget           provable destruction + attestation
+POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
+                                        issued: Verified, or Recorded when a
+                                        key rotation has destroyed the replay
+                                        key (exit 0 either way); 409 if the
+                                        document does not describe this vault
 
 ── maintenance / portability ────────────────────────────────────────────
 POST   /v1/vaults/{id}/refine           LLM distillation → KG
