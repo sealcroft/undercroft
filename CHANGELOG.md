@@ -1,6 +1,60 @@
 # Changelog
 
-## 1.1.0 — 2026-08-14
+## 1.1.0 — 2026-08-17
+
+### the release's own version claim is gated, not remembered (O41)
+
+**Found while verifying the release-prep commit, and it was wrong about
+itself.** That commit is titled "bump every version surface".
+`architecture/index.html` still carried the PREVIOUS version behind its three
+`Engine v…` markers on a tree whose workspace said `1.1.0`, so merging it
+would have shipped a release whose own architecture document names the
+release before it.
+
+**The cause is the inventory, not the commit.** Counted from the `1.0.0`
+release commit rather than recalled, that release moved **five**
+version-identity strings across **three** files — and `CLAUDE.md`'s
+release-flow list named only ONE of those three, the landing hero button. So
+the release-prep commit bumped the one the list named and left the other two.
+A hand-recalled list drifts toward whatever the last person remembered, and
+— the half that matters — it cannot fail when a NEW surface starts stating a
+version, because nobody knows to add to it. The tree already gates the
+analogous figure (`PUBLISHED_FIGURES`, which exists because the landing
+page's test-count tiles rotted repeatedly); the version, the other number
+this project publishes about itself, was in prose.
+
+A `version surfaces` preflight now counts every version claim against the
+workspace version read out of `Cargo.toml` — never a literal of its own —
+in both directions: a surface that forgot to move fails, and a file stating
+a version with no inventory row fails. Claims are **classified**, because
+they do not share a provenance: `current` must equal the workspace version,
+while an **`as-of`** claim (`docs/PARITY.md`'s `updated for v…` marker) is
+deliberately not bumped, since moving it would assert a re-verification
+nobody performed. It is left naming `1.0.0` on purpose and printed on every
+run.
+
+Note the cost, because it is real and it is the rename lesson again: this
+entry cannot QUOTE a marker with a version attached without tripping the gate
+it describes. Describe the class, never the token — and the alternative,
+excluding `CHANGELOG.md` and `ROADMAP.md` by path, would make a genuine
+version claim in either of them invisible.
+
+**Two defects in the fix itself, reported as mine.** The gate matched its own
+source — the fifth occurrence in this tree of *a gate whose own text is part
+of what it measures* — and is closed by **splitting the needles** so the scan
+reads itself clean, not by excluding the path, which would make a real
+version claim in the battery invisible. And `git grep` does not see untracked
+files, so a newly authored surface was invisible until `git add`: the author
+got a green battery and the gate bit only in CI. `--untracked` closes it and
+was measured to return the identical file set on a clean tree.
+
+Four counterfactual arms were run, each failing for its own reason, with the
+edit chained ahead of the test so a failed edit stops the pipeline: a
+forgotten bump, a new ungated surface (untracked and tracked), a stale row
+whose count no longer matches, and an as-of marker naming a non-release.
+**O42 is filed** for what this could not close: the count of the preflights
+is itself an ungated figure — `CLAUDE.md` said seven while the tree ran
+eight.
 
 ### round five: eleven dimensions audited, six findings, five fixed and one refuted
 

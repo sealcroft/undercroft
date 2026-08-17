@@ -31,7 +31,7 @@ it before a restart. That obligation is the point; the number is not.
 
 ---
 
-## 1.1.0 — released 2026-08-14
+## 1.1.0 — released 2026-08-17
 
 MINOR: new capability, backward compatible. No documented contract changes.
 Everything else on the branch is patch-level and folded in.
@@ -1961,6 +1961,159 @@ exactly this reviewer. Restoring such a row to a *different* wing would be a
 new capability on three surfaces and is not filed as one: no vault can now
 produce the state, and inventing an operator-chosen destination is the kind
 of guessing this engine refuses everywhere else.
+
+---
+
+### O41 — CLOSED 2026-08-17: every version surface is counted against the workspace version
+
+Found while verifying PR #120, the release-prep commit, rather than from a
+sweep — and the thing it was hiding is that **the release flow's own
+inventory was hand-recalled**.
+
+`CLAUDE.md`'s release flow named six surfaces a version bump touches:
+workspace `Cargo.toml`, `Cargo.lock`, `.claude-plugin/plugin.json`,
+CHANGELOG, ROADMAP and the landing hero button.
+
+**Counted from `git show 6976983` — the `1.0.0` release commit — rather than
+from that list**, the release moved **five version-identity strings across
+three files**: `architecture/index.html` ×3, `website/landing/index.html` ×1,
+and `docs/PARITY.md`'s as-of marker ×1. The list named exactly ONE of those
+three files. (An earlier draft of this entry said "eight surfaces, four
+omitted" and additionally credited that commit with moving `CLAUDE.md`'s
+"Current release" sentence, which it did not — its `CLAUDE.md` hunks are
+heritage prose. Both figures were recalled rather than counted, in an entry
+about exactly that failure; corrected here rather than quietly.)
+
+So the `1.1.0` release-prep commit bumped the six on the list plus
+`CLAUDE.md`'s own release sentence (from memory, correctly — it is on no
+list), and left the architecture reference
+carrying the PREVIOUS version behind all three of its `Engine v…` markers on
+a tree whose workspace said `1.1.0`. **Merging it would have shipped a
+release whose own architecture document names the release before it.**
+
+**What made it invisible.** Nothing counted it. The tree gates the analogous
+figure one preflight up — `PUBLISHED_FIGURES` exists because the landing
+page's test-count tiles rotted repeatedly — and the version, which is the
+other number this project publishes about itself, was carried in prose and in
+someone's head. A hand-maintained list cannot do the second direction: it
+cannot fail when a NEW surface starts stating a version, because nobody knows
+to add to it.
+
+**The fix.** A `version surfaces` preflight in `tests/battery.sh`, on the
+`PUBLISHED_FIGURES` pattern:
+
+* The source of truth is the workspace version read out of `Cargo.toml`, not
+  a literal repeated in the gate — a gate holding its own copy of the answer
+  is a second place for it to be wrong.
+* `VERSION_SURFACES` rows are counted **both ways**: every row must still
+  match at the count it declares (a stale row reads as a checked surface
+  while checking nothing), and every file in the tree carrying a version
+  identity must have a row.
+* **Two classes, because the claims do not share a provenance.** `current`
+  must equal the workspace version. **`as-of`** — `docs/PARITY.md`'s
+  `updated for v…` marker — is deliberately NOT bumped: moving it asserts a
+  re-verification nobody performed, which is the doc-claim-as-evidence
+  failure this project's first rule is about. It is checked only for naming
+  a release that exists, and printed on every run so it stays visible.
+  **`docs/PARITY.md` is therefore left naming `1.0.0` on purpose**; whoever
+  re-verifies the parity comparison against `1.1.0` moves it then.
+
+**Two things the work found that the reasoning had not**, both reported as
+mine:
+
+1. **The gate matched its own source.** The first version failed on
+   `tests/battery.sh`, because the file names the markers it scans for. That
+   is the "a gate whose own text is part of what it measures" shape,
+   fifth occurrence in this tree. Closed the way `verify-no-trace.py` closes
+   it — the needles are **split** (`Engine v${PROBE_V}`, `"updated for
+   vX.Y.Z"`) so the scan reads its own source clean — and NOT by excluding
+   the path, which would make a real version claim in the battery invisible.
+2. **`git grep` does not see untracked files**, so a newly authored surface
+   was invisible until someone ran `git add`: the author got a green battery
+   and the gate only bit in CI. `--untracked` closes it, still honours
+   `.gitignore` (so `.handover/`, `.battery/` and `target/` stay out), and
+   was **measured** to return the identical file set on a clean tree — i.e.
+   it widens coverage without buying noise.
+
+**Counterfactual — four arms, each run and each failing for its own reason**,
+with the edit chained ahead of the test so a failed edit stops the pipeline:
+
+| arm | injected | verdict |
+|---|---|---|
+| a forgotten bump | one architecture marker rolled back one minor | exit 1, names the surface and the workspace version |
+| a new ungated surface | a file stating a version, untracked **and** tracked | exit 1, names the file, in both states |
+| a stale row | one claim deleted, row still declares 3 | exit 1, "carries 2 … declares 3" |
+| an as-of typo | the as-of marker set to a version never released | exit 1, "not a release heading in CHANGELOG.md" |
+
+**Gate:** the preflight itself. It fails closed in both directions, and its
+premise is probed from both sides before any zero is believed — a
+known-positive that must match, and a line of historical prose (`before
+1.0.0`) that must NOT, because a matcher widened far enough to flag every
+`since 1.0.0` in the docs is a gate that gets switched off.
+
+**Residual, stated.** The scan finds a version behind one of three identity
+markers (`Engine v…`, `updated for v…`, the landing button's
+`releases/latest">v…`). A surface stating the version some new way — a badge,
+a JSON field, "Undercroft 1.2" — is invisible to it. The honest close for
+that is a row when such a surface is written, not a wider regex that would
+sweep in the CHANGELOG's entire history; the boundary is probed rather than
+asserted, but it is a boundary.
+
+**A third defect, and it is a standing cost rather than a one-off.** Writing
+THIS entry tripped the gate: describing the defect put a marker with a
+version attached into `ROADMAP.md` and `CHANGELOG.md`, which the scan reads
+like any other file. That is `CLAUDE.md`'s rename lesson exactly — *"writing
+this lesson down is itself the trap … describe the class, never the token"* —
+and it is resolved the same way, by naming the marker (`Engine v…`) instead
+of quoting it with a number. The alternative, excluding those two files by
+path, was rejected for the reason the needle-split was chosen over exclusion
+inside the gate itself: it would make a genuine version claim in the
+CHANGELOG or the ROADMAP invisible, and those are exactly the two files a
+release edits. So the cost is real and permanent: **anything documenting a
+version surface must describe its marker, not quote it.** Anyone who finds
+that annoying is one `git grep` away from the class of defect it prevents.
+
+---
+
+### O42 — the count of the gates is itself an ungated figure
+
+Found while closing O41, and filed rather than folded in because it is a
+different question with a different scope.
+
+`CLAUDE.md` stated that `--preflight-only` runs "the seven host-side
+preflights". The tree ran **eight**, and had since 2026-08-13. The sentence
+was corrected to nine in the same unit that added the ninth, but **nothing
+detected the drift** — it was found by counting the `echo "═══ preflight:"`
+lines while looking for somewhere to put a new one.
+
+This is the `PUBLISHED_FIGURES` class exactly, one surface over: a number in
+prose is a claim about the moment someone last counted. It is not covered,
+because that preflight's reader is scoped to the landing page's `data-count`
+tiles and the per-suite check counts — and widening a gate past what it can
+actually verify is the failure its own comment warns about.
+
+**Why it is not closed here.** The general question — *which prose figures
+outside the landing page should be counted against the tree?* — is larger
+than this unit and has more instances than this one. `CLAUDE.md` alone
+publishes counts of crates, MCP tools, `UNDERCROFT_*` variables, diagrams,
+`IRREGULAR` pairs and false-friend control rows; several already have their
+own gates (`ENGINE_ENV_VARS`, `MCP_TOOLS`) and several do not. Closing it
+properly means deciding the inventory, not adding one row.
+
+**Severity: low, and honestly so.** It misleads a reader; it cannot make a
+gate stop running, because the count is prose and the preflights are driven
+by the script.
+
+**Shape of a fix:** extend the `published figures` preflight with a second
+reader for prose counts — label, source of truth, and the file that
+publishes it — recomputing each from the tree, on the existing three-class
+split. It needs a premise probe per source, for the reason every reader in
+that file has one.
+
+**Gate:** whatever lands must fail when the preflight count in `CLAUDE.md`
+and the number of `echo "═══ preflight:"` lines in `tests/battery.sh`
+disagree, and must fail in the other direction too — a row naming a figure
+no surface publishes any more.
 
 ---
 

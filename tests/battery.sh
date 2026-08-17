@@ -760,6 +760,179 @@ if [ -n "$CI_BAD" ]; then
 fi
 echo "ok    $VERDICT_JOB needs all $CI_NEEDS_N other job(s) of $CI_N"
 
+# ── preflight: every version surface states the version the tree IS ────────
+# **A version in prose is the same class of claim as a count in prose**, and
+# the release flow was carrying it in someone's head. `CLAUDE.md` listed the
+# surfaces a version bump touches — `Cargo.toml`, `Cargo.lock`,
+# `plugin.json`, CHANGELOG, ROADMAP, the landing hero button — and the 1.0.0
+# release commit (`6976983`) actually moved EIGHT, four of them not on that
+# list. The 1.1.0 release-prep commit then bumped the six it named plus
+# `CLAUDE.md`'s own sentence from memory, and left `architecture/index.html`
+# stating the PREVIOUS version in all three of its places. That is the
+# signature of a hand-recalled inventory: it drifts toward whatever the last
+# person remembered, and nothing can say so.
+#
+# Note the markers below are split wherever this file has to NAME one, so the
+# scan reads its own source clean instead of being excluded by path — the
+# `verify-no-trace.py` precedent. Excluding it would make a real version claim
+# in the battery itself invisible, which is the failure one level up.
+#
+# So: the same mechanism `PUBLISHED_FIGURES` uses one preflight up, on the
+# other number this project publishes about itself. The source of truth is
+# the workspace `Cargo.toml` version — not a literal repeated here, because a
+# gate holding its own copy of the answer is a second place for it to be
+# wrong.
+#
+# **Two classes, because these claims do not have one provenance.**
+#   current — states the version the tree IS. Must equal the workspace
+#             version; this is the arm that catches a forgotten bump.
+#   as-of   — states when something was last VERIFIED ("updated for vX.Y.Z").
+#             Deliberately NOT bumped: moving it asserts a re-verification
+#             nobody performed, which is the doc-claim-as-evidence failure
+#             this project's first rule is about. Checked only for naming a
+#             release that exists, and reported so it stays visible.
+#
+# **Scope, stated so it is not mistaken for complete.** This finds a version
+# behind one of the three IDENTITY MARKERS below. A surface that states the
+# version some new way — "Undercroft 1.2", a badge, a JSON field — is
+# invisible to it, and the honest close for that is a row here when it is
+# written, not a wider regex that would sweep in the CHANGELOG's history and
+# every `since 1.0.0` in the docs. Both halves of that boundary are probed
+# below rather than asserted.
+echo "═══ preflight: version surfaces ═══"
+
+WS_VERSION=$(awk '/^\[workspace\.package\]/{p=1;next} p&&/^\[/{p=0} p&&/^version *=/{gsub(/[^0-9.]/,"");print;exit}' Cargo.toml)
+if ! printf '%s' "$WS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "FAIL  could not read the workspace version from Cargo.toml (got '$WS_VERSION')."
+  echo "      Every comparison below is against it, so a broken read would compare"
+  echo "      every surface to nothing and pass."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+VER_IDENT='([Ee]ngine v|updated for v|releases/latest">v)[0-9]+\.[0-9]+\.[0-9]+'
+# label|class|file|pattern|count
+VERSION_SURFACES=(
+  'architecture engine version|current|architecture/index.html|[Ee]ngine v|3'
+  'landing release button|current|website/landing/index.html|releases/latest">v|1'
+  'parity comparison as-of|as-of|docs/PARITY.md|updated for v|1'
+)
+
+# PREMISE, both directions. A matcher that finds nothing reports what a fully
+# bumped tree reports, and a matcher that finds everything would "cover" the
+# docs by flagging prose. Neither zero is believed until this passes.
+PROBE_V='9.9.9'
+PROBE_HIT=$(printf '%s\n' "  <p class=\"sb-foot\">Engine v${PROBE_V} · BUSL-1.1</p>" \
+            | grep -oE "$VER_IDENT" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+if [ "$PROBE_HIT" != "$PROBE_V" ]; then
+  echo "FAIL  the version extractor did not match a known-positive (got '$PROBE_HIT')."
+  echo "      It examined nothing, which is not the same as a tree with no drift."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if printf '%s\n' 'the columns were clear TEXT before 1.0.0 (ROADMAP A10)' \
+   | grep -qE "$VER_IDENT"; then
+  echo "FAIL  the version extractor matched historical prose. Widened this far it"
+  echo "      would flag every 'since 1.0.0' in the docs, and a gate that cries"
+  echo "      wolf on the CHANGELOG gets switched off."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+VER_FAIL=0
+# Direction 1: every file carrying a version identity has a row. This is the
+# arm that stops a NEW ungated surface from shipping — the one a hand list
+# cannot do, because nobody knows to add to it.
+#
+# `--untracked` is load-bearing and was measured, not assumed: without it a
+# file states its version invisibly until someone runs `git add`, so the
+# author who wrote it gets a green battery and the gate only bites in CI. It
+# still honours `.gitignore`, so `.handover/`, `.battery/` and `target/` stay
+# out — verified to return the identical file set on a clean tree, i.e. it
+# widens coverage without buying noise.
+VER_FILES=$(git grep -l --untracked -E "$VER_IDENT" -- . || true)
+VER_FILE_N=$(printf '%s\n' "$VER_FILES" | grep -c . || true)
+if [ "${VER_FILE_N:-0}" -lt 1 ]; then
+  echo "FAIL  no file in the tree carries a version identity. The three markers"
+  echo "      have all moved, so this preflight is now scanning for nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  found=0
+  for row in "${VERSION_SURFACES[@]}"; do
+    IFS='|' read -r _l _c rfile _p _n <<< "$row"
+    [ "$rfile" = "$f" ] && found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "FAIL  $f states a version and has no VERSION_SURFACES row — classify it"
+    echo "      (current / as-of) so the next release knows whether to move it"
+    VER_FAIL=1
+  fi
+done <<< "$VER_FILES"
+
+# Direction 2: every row still names a live surface, at the count it declares.
+# A row whose pattern has stopped matching reads as a checked surface while
+# checking nothing — the same stale-row failure PUBLISHED_FIGURES guards.
+for row in "${VERSION_SURFACES[@]}"; do
+  IFS='|' read -r label class rfile pat want <<< "$row"
+  if [ ! -f "$rfile" ]; then
+    echo "FAIL  VERSION_SURFACES names $rfile ($label), which does not exist"
+    VER_FAIL=1
+    continue
+  fi
+  got=$(grep -oE "$pat[0-9]+\.[0-9]+\.[0-9]+" "$rfile" | grep -c . || true)
+  if [ "${got:-0}" -ne "$want" ]; then
+    echo "FAIL  $label: $rfile carries $got version claim(s), the row declares $want."
+    echo "      Either a surface was added without a row, or one was removed and"
+    echo "      the row outlived it"
+    VER_FAIL=1
+    continue
+  fi
+  vers=$(grep -oE "$pat[0-9]+\.[0-9]+\.[0-9]+" "$rfile" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
+  for v in $vers; do
+    case "$class" in
+      current)
+        if [ "$v" != "$WS_VERSION" ]; then
+          echo "FAIL  $label: $rfile says v$v, the workspace says $WS_VERSION."
+          echo "      A release bumped the version and did not move this surface"
+          VER_FAIL=1
+        fi
+        ;;
+      as-of)
+        # Not compared to the workspace ON PURPOSE — see the class note above.
+        # It must still name a release that happened, or it is not an as-of
+        # marker, it is a typo wearing one's clothes.
+        if ! grep -qE "^## $v( |\$)" CHANGELOG.md; then
+          echo "FAIL  $label: $rfile is marked as-of v$v, which is not a release"
+          echo "      heading in CHANGELOG.md"
+          VER_FAIL=1
+        else
+          echo "note  $label: $rfile records v$v (as-of; not bumped by a release —"
+          echo "      moving it asserts a re-verification, so it moves when someone"
+          echo "      re-verifies it, and the workspace is $WS_VERSION)"
+        fi
+        ;;
+      *)
+        echo "FAIL  $label: unknown class '$class' (want: current / as-of)"
+        VER_FAIL=1
+        ;;
+    esac
+  done
+done
+
+if [ "$VER_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    every version surface agrees with the workspace ($WS_VERSION), over $VER_FILE_N file(s)"
+
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   echo ""
   echo "preflights only — no suite was run, by request (--preflight-only)"

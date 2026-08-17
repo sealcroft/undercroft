@@ -1407,8 +1407,10 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the seven host-side preflights
-and no suite**, which is what CI invokes. The script is the one thing that
+**`bash tests/battery.sh --preflight-only` runs the nine host-side preflights
+and no suite**, which is what CI invokes. (This sentence said "seven" while
+the tree ran eight, and nothing could say so — the count of the gates is
+itself an ungated figure, filed as **O42**.) The script is the one thing that
 runs on the host rather than in a container, and it has to be: it *drives*
 Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
 `git ls-files --eol` over the WHOLE tree — none of which any image carries.
@@ -2486,11 +2488,38 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   cannot express.
 - Release flow: full Docker battery (always `--build`) → **`UPGRADING.md`
   updated if anything can stop a running deployment, and `undercroft config
-  check` able to detect it** → PR → CI green →
+  check` able to detect it** → **set the CHANGELOG and ROADMAP release date
+  to the date the tag will actually be cut, as the LAST edit before tagging**
+  (it is written when the release is prepared and the tag is a separate,
+  later step, so it drifts by exactly as long as the prep sits in review —
+  `1.1.0` was prepared on 2026-08-14 and dated that, three days before it
+  could be tagged) → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
   post-merge CI green → Pages live-verified. Version bumps touch
   workspace `Cargo.toml` + `Cargo.lock` (via a Docker `cargo update
   --workspace` — battery images COPY source and never update the host
-  lock), `.claude-plugin/plugin.json`, CHANGELOG, ROADMAP, and the
-  landing hero release button.
+  lock), `.claude-plugin/plugin.json`, CHANGELOG, ROADMAP, `CLAUDE.md`'s
+  own "Current release" sentence, the landing hero release button, and
+  **`architecture/index.html`'s three `Engine v…` strings**.
+  **That list is no longer the authority, and this is why.** The `1.0.0`
+  release commit moved **five** version-identity strings across **three**
+  files, and the list named only ONE of those three (the landing hero) —
+  so the `1.1.0` release-prep commit bumped that one and left the other
+  two behind, which is what a hand-recalled inventory always does: drift
+  toward whatever the last person remembered, with nothing able to say
+  so. (Counted from `git show 6976983`, not recalled — an earlier draft
+  of this very paragraph said "eight surfaces, four omitted" and was
+  wrong in both figures.) The
+  authority is the **`version surfaces` preflight** in
+  `tests/battery.sh`, which reads the workspace version out of
+  `Cargo.toml` (never a literal of its own) and counts every version
+  claim in the tree against it, in both directions: a surface that
+  forgot to move fails, and a NEW surface with no inventory row fails
+  too. Prose above, gate below — and the gate is the one to trust.
+  Note it classifies claims, because they do not share a provenance: a
+  `current` claim states the version the tree IS, while an **`as-of`**
+  claim (`docs/PARITY.md`'s "updated for v…") states when something was
+  last VERIFIED and is deliberately NOT bumped by a release — moving it
+  would assert a re-verification nobody performed. Re-verify it, then
+  move it.
