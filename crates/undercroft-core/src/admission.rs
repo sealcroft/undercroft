@@ -523,7 +523,7 @@ mod tests {
         ] {
             assert!(
                 emitted.contains(want),
-                "premise: no probe trips {want:?} — this test would pass by                  examining nothing (emitted: {emitted:?})"
+                "premise: no probe trips {want:?} — this test would pass by examining nothing (emitted: {emitted:?})"
             );
         }
 
@@ -605,7 +605,7 @@ mod tests {
         let vocab: BTreeSet<String> = SIGNAL_CODES.iter().map(|c| (*c).to_string()).collect();
         assert_eq!(
             emitted, vocab,
-            "SIGNAL_CODES and what the engine can emit have drifted — left is              emitted, right is declared"
+            "SIGNAL_CODES and what the engine can emit have drifted — left is emitted, right is declared"
         );
     }
 }

@@ -1439,6 +1439,28 @@ test by construction:
   the documented "a checker that cannot run reports the same thing as a clean
   tree" trap, one level up.
 
+- **A SCRIPTED COUNTERFACTUAL THAT FAILS TO APPLY STILL PRINTS A PASS**, and
+  the pass is the thing you will read. A revert-run-restore pipeline whose
+  anchor no longer matches leaves the file untouched, so the test that follows
+  exercises the FIXED tree and reports `test result: ok` — which is exactly
+  what a working counterfactual would print if the fix were absent, i.e. the
+  one output that cannot distinguish the two cases. Observed 2026-08-14: the
+  `assert a in s` fired and said `anchor`, and the pipeline ran the test
+  anyway, one line below. **The assert is necessary and not sufficient — the
+  pipeline must STOP.** Chain the run behind the edit (`&&`), or check the
+  edit landed before believing anything after it. Same family as the
+  `2>/dev/null` on a formatter, one level up: a step that failed and a step
+  that succeeded must not produce the same transcript.
+- **A REGEX SWEEP DAMAGES WHAT IT WAS NOT AIMED AT, and "I verified the
+  instances" does not cover the ones the pattern also matches.** Same day: a
+  pass to collapse rustfmt-mangled space runs inside message literals — six
+  instances read and verified first — matched 58 lines across 13 files, and
+  ate the deliberate column padding in `config check`'s output
+  (`"  ok      {name}"`, `"  warn    {name}"`), which is alignment rather than
+  damage. Caught only by reading the diff. **A sweep is a hypothesis about
+  every line it will touch, not about the lines you sampled**; read the whole
+  diff or fix the instances by hand. Where the class is genuinely tree-wide,
+  the answer is a GATE plus per-instance fixes, never a blind pattern.
 - **A counterfactual must exercise the ARTIFACT, not a copy of it.** The
   ROADMAP-heading gate was "proved" by typing a correct `awk` inline in the
   shell while the version written to `tests/battery.sh` carried a literal

@@ -260,6 +260,11 @@ surviving as hardening rather than as defects, one refuted**:
 | **O39** | D10 | 1/3 | **REFUTED — not work** | this campaign's own O29 | closed by verification |
 
 **All six are closed** — five fixed, one refuted by its own verification.
+**O40 was filed on 2026-08-14 while fixing one of them**: rustfmt-collapsed
+space runs inside message literals, tree-wide and pre-existing. It is filed
+rather than swept because the obvious regex was RUN and ate deliberate column
+padding in `config check`'s aligned output — the naive fix is worse than the
+defect.
 O38's fix found the better defect underneath it: two variables the engine
 honours that no document in the repository named.
 
@@ -1950,6 +1955,58 @@ exactly this reviewer. Restoring such a row to a *different* wing would be a
 new capability on three surfaces and is not filed as one: no vault can now
 produce the state, and inventing an operator-chosen destination is the kind
 of guessing this engine refuses everywhere else.
+
+---
+
+### O40 — rustfmt-collapsed space runs inside message literals, tree-wide
+
+Found 2026-08-14 while fixing one instance of it, and filed rather than swept
+because **the obvious sweep provably breaks working code** — see below.
+
+A `\`-continued string literal in Rust keeps the leading whitespace of the
+continued line unless the author writes the continuation backslash, and
+**rustfmt does not reformat string literals**, so a literal that was once
+wrapped can end up carrying a run of 10–25 spaces mid-sentence. The operator
+reads `…this batch is one transaction, so none of                  it was
+written`.
+
+**Measured**: a regex for a 3+ space run between two word characters inside a
+line containing `"` matches roughly **50 lines across 13 files** —
+`undercroft-cli` (`main.rs`, `mcp.rs`, `parity.rs`, `config_check.rs`),
+`undercroft-orchestrator` (`main.rs`, `proxy.rs`, `config_check.rs`),
+`undercroft-store` (`lib.rs`, `kg.rs`, `manage.rs`, `forget.rs`,
+`latestage.rs`) and `undercroft-index`. All pre-existing. Every one is
+user-facing text: refusals, warnings, pre-flight output.
+
+**Why this is filed and not swept, which is the useful part.** That regex was
+run. It matched 58 lines and **ate deliberate column padding** in
+`config check`'s output — `"  ok      {name}"`, `"  seen    {name}"`,
+`"  warn    {name}"` are aligned on purpose, and collapsing them turns a
+readable table into ragged text. Caught by reading the diff; reverted whole.
+So the naive fix is worse than the defect, and any future attempt must
+distinguish *prose continuation* from *intentional alignment* — a distinction
+no pattern over spaces can make, because the two are byte-identical.
+
+**Shape of the fix.** A gate first, per-instance fixes second:
+
+1. a test that flags a 3+ space run inside a string literal, with an explicit
+   allowlist of literals that align on purpose (the `config_check` tables, the
+   bench harness's column headers, `normalize.rs` and `convo.rs`, whose
+   fixtures test trailing-whitespace handling and MUST keep their runs);
+2. then fix the flagged instances by hand so the gate passes.
+
+The allowlist is the load-bearing half and the reason this is not a
+five-minute job: it is a judgement per literal about whether the spaces are
+content.
+
+**Gate:** the test fails on a newly-introduced run and passes on the
+allowlisted ones, with a premise probe asserting it scanned a non-zero number
+of files — and a counterfactual that re-introduces one run and observes the
+failure, rather than trusting a green.
+
+**Two instances are already fixed** and are not in the count above: both were
+in gates this campaign wrote (`the_signal_vocabulary_is_exactly_what_the_
+engine_can_emit`), so they were mine.
 
 ---
 
