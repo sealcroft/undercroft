@@ -555,7 +555,7 @@ pub mod pgvector {
             // unsatisfiable, which is why the connector had to come with it.
             if !dsn_is_loopback(dsn) && !dsn_demands_tls(dsn) {
                 return Err(IndexError::Transport(format!(
-                    "the pgvector DSN points at a non-loopback host without TLS. Embeddings                      are plaintext-derived and would cross the network in the clear. Add                      `sslmode=require` to {} — the connector is rustls, so it verifies the                      chain and the hostname, which libpq's `require` does not — and declare                      the server's root with {} if it is self-signed. There is no override.",
+                    "the pgvector DSN points at a non-loopback host without TLS. Embeddings are plaintext-derived and would cross the network in the clear. Add `sslmode=require` to {} — the connector is rustls, so it verifies the chain and the hostname, which libpq's `require` does not — and declare the server's root with {} if it is self-signed. There is no override.",
                     "UNDERCROFT_PGVECTOR_DSN", CA_VAR
                 )));
             }

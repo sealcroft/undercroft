@@ -101,6 +101,29 @@ accept. Costs: a one-time model export, a feature-compiled binary
 ~2.5× faster per forward, and supports int8 quantized models), and the
 model's RAM inside the engine process.
 
+The **reranker and the ColBERT encoder are separate model roles** with
+the same shape, and each records its own identity:
+
+```bash
+UNDERCROFT_RERANKER=onnx           # or `ort`, or `colbert-ort`
+UNDERCROFT_RERANK_MODEL=/models/reranker.onnx
+UNDERCROFT_RERANK_TOKENIZER=/models/reranker-tokenizer.json
+UNDERCROFT_RERANK_NAME=bge-reranker-v2   # optional; default `onnx-reranker`
+
+UNDERCROFT_COLBERT_MODEL=/models/colbert.onnx
+UNDERCROFT_COLBERT_TOKENIZER=/models/colbert-tokenizer.json
+UNDERCROFT_COLBERT_NAME=colbertv2        # optional; default `colbert`
+```
+
+`UNDERCROFT_RERANK_NAME` and `UNDERCROFT_COLBERT_NAME` are the names those
+roles record for themselves, exactly as `UNDERCROFT_ONNX_NAME` is for the
+embedder — declare them when you swap a model so the vault's stored
+identity says which one produced its artifacts rather than a generic
+default. **Neither appeared in any document until 2026-08-14** (ROADMAP
+O38): they were reachable, classed in `ENGINE_ENV_VARS`, validated by
+`undercroft config check`, and undocumented, which is the quietest way for
+a declaration to be unusable.
+
 Honest boundaries: tract runs **BERT-family** models (DeBERTa rerankers
 are out; ColBERT exports need fixed-shape plans); the compose
 `onnx-build` / `ort-build` services compile-check both features in CI.

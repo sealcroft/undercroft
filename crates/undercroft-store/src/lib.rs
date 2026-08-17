@@ -2337,7 +2337,7 @@ impl PalaceStore {
         match self.kg_unblinded_rows() {
             Ok(0) => {}
             Ok(n) => self.unhealed.push(format!(
-                "{n} knowledge-graph row(s) still hold their subject, predicate or entity                  name in CLEAR at rest: the A10 blind-index migration skipped them because                  their own HMAC does not verify, and migrating a tampered row would launder                  it. `undercroft verify` names them; this vault is not marked migrated, so a                  writable open retries"
+                "{n} knowledge-graph row(s) still hold their subject, predicate or entity name in CLEAR at rest: the A10 blind-index migration skipped them because their own HMAC does not verify, and migrating a tampered row would launder it. `undercroft verify` names them; this vault is not marked migrated, so a writable open retries"
             )),
             // Advisory: a vault too old to have the columns is refused by
             // `check_read_schema` on the read-only path and migrated on the
@@ -2352,7 +2352,7 @@ impl PalaceStore {
         match self.unkeyed_fingerprint_rows() {
             Ok(0) => {}
             Ok(n) => self.unhealed.push(format!(
-                "{n} content fingerprint(s) are still an UNKEYED SHA-256 of a cited drawer's                  verbatim content, in a clear column: the U12 migration skipped them because                  their receipt does not verify, and re-tagging a tampered binding would                  launder it. An offline reader holding a candidate document can confirm it.                  `undercroft verify` names them; this vault is not marked migrated, so a                  writable open retries"
+                "{n} content fingerprint(s) are still an UNKEYED SHA-256 of a cited drawer's verbatim content, in a clear column: the U12 migration skipped them because their receipt does not verify, and re-tagging a tampered binding would launder it. An offline reader holding a candidate document can confirm it. `undercroft verify` names them; this vault is not marked migrated, so a writable open retries"
             )),
             Err(_) => {}
         }
@@ -18420,7 +18420,7 @@ mod tests {
             if let Some(h) = hits.iter().find(|h| h.drawer.content == content) {
                 assert_eq!(
                     h.lexical_morph, 0.0,
-                    "{query} claimed a morphological relation to {content:?} —                      a digit edit is not morphology"
+                    "{query} claimed a morphological relation to {content:?} — a digit edit is not morphology"
                 );
                 assert_eq!(h.lexical_exact, 0.0, "{query} claimed exact evidence");
             }

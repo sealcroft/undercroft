@@ -491,7 +491,7 @@ impl PalaceStore {
         // (ROADMAP C6).
         if !crate::is_drawer_id(id) {
             return Err(StoreError::Invalid(format!(
-                "token artifact id {id:?} is not a drawer id (32 lowercase hex): a drawer id                  is derived, and it is an AEAD associated-data component"
+                "token artifact id {id:?} is not a drawer id (32 lowercase hex): a drawer id is derived, and it is an AEAD associated-data component"
             )));
         }
         if dequantize_tokens(packed).is_none() {

@@ -2,6 +2,78 @@
 
 ## Unreleased — 1.1.0
 
+### round five: eleven dimensions audited, six findings, five fixed and one refuted
+
+The pre-release drift audit the conventions require, run solo rather than as
+a fan-out, with the adversarial verification the charter specifies — three
+lenses per finding (correctness / reachability / novelty), default to REFUTED
+when uncertain, survives on ≥2 of 3. Round four's per-dimension cap of 8 was
+removed: it had excluded 35 unverified findings and ranked WITHIN dimensions,
+which round four's own method note calls indefensible.
+
+**O37 — the house Pages site served cleartext, and round four found it and
+never filed it.** Recorded in a gitignored handover file and absent from
+`ROADMAP.md`, so nothing moved it for nine days, an entire fix campaign, a
+release-readiness review and a merge to `main`. The apex answered
+`HTTP/1.1 200 OK` with 17,447 bytes over http while `/undercroft/` answered
+`301` — the same server, so the per-repo Enforce-HTTPS setting. Fixed on the
+maintainer's instruction, with the certificate state checked FIRST
+(`approved`; a pending certificate would have taken the site down instead of
+securing it), and verified by the measurement that found it. The defect was
+one boolean; the filing failure cost everything in between, which is the
+argument for *"open threads written down AS WORK"* being a hard rule.
+
+**O34 — `PalaceStats` disagreed with itself.** O32 fenced `stats().wings`
+against the reserved wing and left `stats().rooms` counting
+`DISTINCT wing, room` across it, so `undercroft stats` printed a wing list
+omitting the review queue beside a room count including it.
+
+**O38 — the architecture page documented 72 of the 81 variables `CLAUDE.md`
+claimed for it**, and the miscount was hiding the better defect:
+`UNDERCROFT_COLBERT_NAME` and `UNDERCROFT_RERANK_NAME` were named in NO
+document in the repository — reachable, classed, validated by `config check`,
+and unfindable, so every vault swapping a reranker or ColBERT export stored
+the generic default. Both now in `docs/EMBEDDERS.md`; the claim now says 72
+and names all nine exclusions.
+
+**O40 — twenty message literals carried rustfmt-collapsed space runs**, so an
+operator read a gap mid-sentence in refusals, warnings and pre-flight output.
+The obvious sweep was RUN and ate the deliberate column padding in
+`config check`'s aligned output; it was reverted whole. Measured, the two
+populations are bimodal — alignment at 3–9 spaces, continuations at
+18/22/26/34 — but they **overlap at 10–14**, so no rule over spaces separates
+them. Fixed by hand-classified line with a per-line premise assert, and gated
+with seven individually named exceptions.
+
+**O35 and O36 survive as hardening rather than defects**, which is what the
+reachability lens is for: no user can reach `rooms(QUARANTINE_WING)` (the MCP
+argument fence blocks the only caller-supplied path) and nobody can reach O36
+at all — it needs a future author to define a `*_CODE` constant in the wrong
+file. Both closed anyway: the reliance is recorded at `rooms()` and pinned by
+a test that passes on both trees BY DESIGN and says so, and the co-location
+the vocabulary gate assumed is now enforced.
+
+**O39 was refuted by its own verification** and closed as not-work. A wrapper
+function's name changes no behaviour on any surface, so it failed
+reachability. Extending O29's "a graph-shaped name hid the gap" from an
+INVENTORY to a wrapper is pattern-matching on words rather than mechanism.
+The refutation is kept so it is not re-raised.
+
+**Verified clean, recorded so round six need not redo it:** the write choke
+point has exactly two callers and no third write path; no surface asserts on
+the pre-O30 `invalid name` text; `ENGINE_ENV_VARS` holds 81 entries against
+81 true engine variables; a destination-diverted write appends the same chain
+record as a content-diverted one; the trace scanner examined 292 files and
+all 119 Flate streams across the 11 regenerated PDFs; and branch protection
+on `main` is real — `required_status_checks: ["CI verdict"]`, force-pushes
+and deletions blocked, verified against the live API with a 404 negative
+control, which closes the other half of round four's D9 finding.
+
+**Honest limits, stated rather than implied:** run solo, so the independence
+the charter's phase 2 assumes is partial — the same person raised and
+verified the findings. Depth was one or two questions per dimension rather
+than the charter's full list.
+
 ### a payload may not author what only the screen authors
 
 ROADMAP **O31**, filed while closing O30 and closed last of the campaign.

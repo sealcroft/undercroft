@@ -201,7 +201,7 @@ impl PalaceStore {
                             this.audit_index_push(&backend, &collection, *pushed, plaintext)
                         {
                             undercroft_obs::diag_warn!(
-                                "the partial index push could not be recorded on the chain                                  ({audit}); {} record(s) DID leave the vault",
+                                "the partial index push could not be recorded on the chain ({audit}); {} record(s) DID leave the vault",
                                 *pushed
                             );
                         }

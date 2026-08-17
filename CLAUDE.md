@@ -1071,16 +1071,29 @@ Consequences that are binding, not advisory:
   version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus all **81**
+  which inlines them and documents every layer plus **72 of the 81**
   `UNDERCROFT_*` variables the engine honours — 64 written out in full
-  across the env table's 60 rows, plus 17 siblings abbreviated to a
+  across the env table's 60 rows, plus **8** siblings abbreviated to a
   suffix inside the row that owns them (`_TOKENIZER` three times, one
   per model role), which is why grepping the page for full names
-  undercounts it. (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
+  undercounts it. **This line said "all 81" and "17 abbreviated" until
+  2026-08-14, and both halves were wrong** (ROADMAP O38): counted, the
+  page carries 64 + 8, and NINE variables appear on it in no form at all
+  — the six `UNDERCROFT_ORCH_*`, which belong to the control plane and
+  are documented in `docs/MULTI_TENANCY.md` and `docs/AGENTS.md` rather
+  than on the engine's page, plus `UNDERCROFT_COLBERT_NAME`,
+  `UNDERCROFT_ONNX_NAME` and `UNDERCROFT_RERANK_NAME`. The exclusion of
+  the six is a scoping decision and is now stated; the model-name three
+  are simply absent from this page, and two of them were absent from
+  EVERY document until O38 put them in `docs/EMBEDDERS.md`. The wrong
+  sentence sat directly above the rule that would have caught it.
+  (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
   pin for the orchestrator→engine hop, which had no transport policy at
   all until the post-1.0.0 drift audit; 79/64/60 since
   `UNDERCROFT_OTLP_CA`, the pin for the traces hop, which had none
-  either and whose exporter could not do TLS at all.) Count the truth,
+  either and whose exporter could not do TLS at all. Those historical
+  figures used the same wrong arithmetic and are left as the record of
+  what was believed.) Count the truth,
   never a number in prose:
   `grep -rhoE '"UNDERCROFT_[A-Z0-9_]+"' crates/ | sort -u` over every
   crate except `undercroft-bench`, whose `UNDERCROFT_VS_*`/`UNDERCROFT_TEST_*`
@@ -1192,8 +1205,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (737 run,
-                                      # 4 #[ignore]d = 741 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (740 run,
+                                      # 4 #[ignore]d = 744 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1426,6 +1439,28 @@ test by construction:
   the documented "a checker that cannot run reports the same thing as a clean
   tree" trap, one level up.
 
+- **A SCRIPTED COUNTERFACTUAL THAT FAILS TO APPLY STILL PRINTS A PASS**, and
+  the pass is the thing you will read. A revert-run-restore pipeline whose
+  anchor no longer matches leaves the file untouched, so the test that follows
+  exercises the FIXED tree and reports `test result: ok` — which is exactly
+  what a working counterfactual would print if the fix were absent, i.e. the
+  one output that cannot distinguish the two cases. Observed 2026-08-14: the
+  `assert a in s` fired and said `anchor`, and the pipeline ran the test
+  anyway, one line below. **The assert is necessary and not sufficient — the
+  pipeline must STOP.** Chain the run behind the edit (`&&`), or check the
+  edit landed before believing anything after it. Same family as the
+  `2>/dev/null` on a formatter, one level up: a step that failed and a step
+  that succeeded must not produce the same transcript.
+- **A REGEX SWEEP DAMAGES WHAT IT WAS NOT AIMED AT, and "I verified the
+  instances" does not cover the ones the pattern also matches.** Same day: a
+  pass to collapse rustfmt-mangled space runs inside message literals — six
+  instances read and verified first — matched 58 lines across 13 files, and
+  ate the deliberate column padding in `config check`'s output
+  (`"  ok      {name}"`, `"  warn    {name}"`), which is alignment rather than
+  damage. Caught only by reading the diff. **A sweep is a hypothesis about
+  every line it will touch, not about the lines you sampled**; read the whole
+  diff or fix the instances by hand. Where the class is genuinely tree-wide,
+  the answer is a GATE plus per-instance fixes, never a blind pattern.
 - **A counterfactual must exercise the ARTIFACT, not a copy of it.** The
   ROADMAP-heading gate was "proved" by typing a correct `awk` inline in the
   shell while the version written to `tests/battery.sh` carried a literal

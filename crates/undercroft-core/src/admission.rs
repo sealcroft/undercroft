@@ -523,7 +523,7 @@ mod tests {
         ] {
             assert!(
                 emitted.contains(want),
-                "premise: no probe trips {want:?} — this test would pass by                  examining nothing (emitted: {emitted:?})"
+                "premise: no probe trips {want:?} — this test would pass by examining nothing (emitted: {emitted:?})"
             );
         }
 
@@ -557,8 +557,46 @@ mod tests {
         }
         assert!(
             declared.len() >= 3,
-            "premise: the constant scan found {} — it examined nothing, which              is not the same as a file with no constants in it",
+            "premise: the constant scan found {} — it examined nothing, which is not the same as a file with no constants in it",
             declared.len()
+        );
+        // ROADMAP O36: this gate reads ONE file, so it is correct only while
+        // every `*_CODE` constant lives in it. That was true and unenforced —
+        // a future constant in another module, emitted from the store BY
+        // CONSTANT rather than by literal, would be missed by this scan and
+        // by the store's literal gate alike, and both would stay green over a
+        // code outside the declared vocabulary. Which is the exact condition
+        // this test exists to prevent.
+        //
+        // Enforcing the assumption is cheaper than widening the scan, and it
+        // says out loud what the scan silently relies on.
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut strays: Vec<String> = Vec::new();
+        let mut files = 0usize;
+        for entry in std::fs::read_dir(&src_dir).expect("the crate's own sources are readable") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            files += 1;
+            if path.file_name().and_then(|n| n.to_str()) == Some("admission.rs") {
+                continue;
+            }
+            for line in std::fs::read_to_string(&path).unwrap().lines() {
+                if line.trim_start().starts_with("pub const") && line.contains("_CODE: &str") {
+                    strays.push(format!("{}: {}", path.display(), line.trim()));
+                }
+            }
+        }
+        // PREMISE on the walk itself: a directory read that finds nothing
+        // reports exactly what a clean crate reports.
+        assert!(
+            files >= 5,
+            "premise: walked {files} source files — the scan examined nothing"
+        );
+        assert!(
+            strays.is_empty(),
+            "a signal-code constant lives outside admission.rs, where the scan above cannot see it — move it, or widen the scan: {strays:?}"
         );
         emitted.extend(declared);
 
@@ -567,7 +605,7 @@ mod tests {
         let vocab: BTreeSet<String> = SIGNAL_CODES.iter().map(|c| (*c).to_string()).collect();
         assert_eq!(
             emitted, vocab,
-            "SIGNAL_CODES and what the engine can emit have drifted — left is              emitted, right is declared"
+            "SIGNAL_CODES and what the engine can emit have drifted — left is emitted, right is declared"
         );
     }
 }

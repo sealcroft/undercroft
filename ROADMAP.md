@@ -244,24 +244,87 @@ O7 (whenever a major is cut) → O6. O23 stays filed.
 **Status 2026-08-13: O15, O10, O25, O20, O26, O14, O19, O27, O28, O30, O29,
 O32, O33 and O31 are CLOSED**, which emptied the engine-side queue.
 
-**Refilled 2026-08-14 by a PARTIAL round-five audit** — three of eleven
-dimensions, run solo, no adversarial verification. **O34**, **O35** and
-**O36** are its findings, all LOW to LOW-MEDIUM, none a live exposure, and
-**two of the three were introduced by this campaign's own units** (O32 fenced
-one `stats()` field and not its neighbour; O33's gate assumes a co-location
-nothing enforces). Beside them: **O7** (release-gated — its fix renames
-`palace.db`, so it cannot ride a minor), **O6** (a GitHub web-UI click no
-REST endpoint exposes) and **O23**, filed and deliberately unscheduled.
+**Refilled 2026-08-14 by round five — ALL ELEVEN DIMENSIONS RUN, AND EVERY
+FINDING ADVERSARIALLY VERIFIED** on the charter's three lenses (correctness /
+reachability / novelty, default to REFUTED when uncertain, survives on ≥2 of
+3). Solo rather than by fan-out. Six findings in, **three confirmed, two
+surviving as hardening rather than as defects, one refuted**:
 
-**The audit's own coverage is the thing to read before trusting its verdict.**
-Eight dimensions did not run, including the two most obviously owed by the
-units just landed: **D5** (`invalid name` became `invalid <field>` on every
-surface, and nothing has swept suites, docs, client examples or `ui.html` for
-the old text) and **D7** (the published figures moved four times in one
-session). Full charter and findings are in `.handover/DRIFT_SWEEP_PLAN_R5.md`
-and `.handover/SWEEP5_FINDINGS.md` — gitignored, so these three entries are
-the committed record. A weaker result than round four's, and the honest
-reading is that it reflects the SCOPE rather than the tree. **`.handover/AUDIT_CONTINUATION.md`
+| | dimension | lenses | verdict | origin | status |
+|---|---|---|---|---|---|
+| **O37** | D9 | 3/3 | CONFIRMED — the only live exposure | round FOUR found it and never filed it | **CLOSED 2026-08-14** |
+| **O34** | D3 | 3/3 | CONFIRMED | this campaign's own O32 | **CLOSED 2026-08-14** |
+| **O38** | D7 | 3/3 | CONFIRMED | pre-existing doc claim | **CLOSED 2026-08-14** |
+| **O35** | D3 | 2/3 | hardening — no user-reachable path today | pre-existing, exposed by O32 | **CLOSED 2026-08-14** |
+| **O36** | D11 | 2/3 | hardening — needs a future author, not a user | this campaign's own O33 | **CLOSED 2026-08-14** |
+| **O39** | D10 | 1/3 | **REFUTED — not work** | this campaign's own O29 | closed by verification |
+
+**All six are closed** — five fixed, one refuted by its own verification.
+**O40 was filed while fixing one of them and is now CLOSED too**:
+rustfmt-collapsed space runs inside message literals, twenty of them,
+tree-wide and pre-existing. It was filed rather than swept on the day because
+the obvious regex was RUN and ate deliberate column padding in `config
+check`'s aligned output; closing it needed a hand-classified line list and a
+gate with seven individually named exceptions, since the two populations
+overlap at 10–14 spaces and no rule over spaces separates them.
+O38's fix found the better defect underneath it: two variables the engine
+honours that no document in the repository named.
+
+**Nothing engine-side is open.** What remains is **O7** (release-gated — its
+fix renames `palace.db`), **O6** (a GitHub web-UI click) and **O23** (filed,
+deliberately unscheduled, with the argument for leaving it).
+
+**What the reachability lens changed, and it is the point of running it.**
+O35 and O36 were written as defects and are not: no user can reach
+`rooms(QUARANTINE_WING)` today (the MCP argument fence blocks the only
+caller-supplied path, and no CLI or `/v1` route passes a wing there), and no
+user can reach O36 at all — it needs a future author to add a constant in the
+wrong file. Both describe a real mechanism and neither describes a live
+defect. Filed as hardening, ranked accordingly, and **not** to be read as
+"the engine leaks queue room names", which is what the first write-up
+implied.
+
+**Verification evidence worth keeping.** O37 strengthened under the
+correctness lens rather than weakening: the apex answers `HTTP/1.1 200 OK`
+with 17,447 bytes over cleartext while `…/undercroft/` answers
+`HTTP/1.1 301 Moved Permanently` **from the same server**, which is the
+per-repo Enforce-HTTPS setting and not a curl artifact. O38's "8 abbreviated"
+was inferred from suffix counts and is now attributed: one `_NPROBE` hit is
+`UNDERCROFT_IVF_NPROBE` written in full, the other is the bare suffix, so the
+count is 8 and the page documents 72 of 81. O34's reachability is the CLI
+itself — `undercroft stats` prints `rooms:` and a `wings:` list in one
+output.
+
+**O37 is the one to read.** It is not the most severe defect; it is the most
+severe process failure. Round four's D9 found the house Pages site serving
+cleartext, recorded it in a gitignored handover file, and never filed it —
+so nothing moved it and it is still true. *"A gap is a gap"* applies to an
+audit's own output.
+
+Beside these: **O7** (release-gated — its fix renames `palace.db`, so it
+cannot ride a minor), **O6** (a GitHub web-UI click no REST endpoint exposes)
+and **O23**, filed and deliberately unscheduled.
+
+**Verified CLEAN, recorded so round six need not redo it:** the write choke
+point has exactly two callers and no third write path (D2); no surface
+asserts on the pre-O30 `invalid name` text and the new refusals class as
+`Invalid` → 400 (D5); `ENGINE_ENV_VARS` holds 81 entries against 81 true
+engine variables (D1); a destination-diverted write appends the same chain
+record as a content-diverted one, the diversion happening before the
+transaction and the signals riding inside HMAC-covered `meta` (D6); the trace
+scanner examined 292 files and all 119 Flate streams across the 11
+regenerated PDFs (D8); and **branch protection on `main` is real** —
+`required_status_checks: ["CI verdict"]`, force-pushes and deletions blocked,
+verified against the live API with a 404 negative control, which closes the
+other half of round four's D9 finding (D9).
+
+**What round five did NOT do**, stated because a partial method read as a
+complete one is the failure above: no adversarial verification of any
+finding, and depth within each dimension was one or two questions rather than
+the charter's full list. Treat all six as PLAUSIBLE-to-CONFIRMED. The charter
+is `.handover/DRIFT_SWEEP_PLAN_R5.md` and the working notes
+`.handover/SWEEP5_FINDINGS.md`; both are gitignored, so these entries are the
+committed record. **`.handover/AUDIT_CONTINUATION.md`
 §1a now carries a verdict for 21 of the ~47 unclosed sweep rows and names the
 26 that are still unprobed** — eight more are verified OPEN there and are
 schedulable without re-deriving them.
@@ -1901,7 +1964,279 @@ of guessing this engine refuses everywhere else.
 
 ---
 
-### O34 — `PalaceStats` disagrees with itself about whether the review queue exists
+### O40 — CLOSED 2026-08-14: twenty collapsed literals rejoined, and a gate with a named allowlist
+
+Found 2026-08-14 while fixing one instance of it, and filed rather than swept
+because **the obvious sweep provably breaks working code** — see below.
+
+A `\`-continued string literal in Rust keeps the leading whitespace of the
+continued line unless the author writes the continuation backslash, and
+**rustfmt does not reformat string literals**, so a literal that was once
+wrapped can end up carrying a run of 10–25 spaces mid-sentence. The operator
+reads `…this batch is one transaction, so none of                  it was
+written`.
+
+**Measured**: a regex for a 3+ space run between two word characters inside a
+line containing `"` matches roughly **50 lines across 13 files** —
+`undercroft-cli` (`main.rs`, `mcp.rs`, `parity.rs`, `config_check.rs`),
+`undercroft-orchestrator` (`main.rs`, `proxy.rs`, `config_check.rs`),
+`undercroft-store` (`lib.rs`, `kg.rs`, `manage.rs`, `forget.rs`,
+`latestage.rs`) and `undercroft-index`. All pre-existing. Every one is
+user-facing text: refusals, warnings, pre-flight output.
+
+**Why this is filed and not swept, which is the useful part.** That regex was
+run. It matched 58 lines and **ate deliberate column padding** in
+`config check`'s output — `"  ok      {name}"`, `"  seen    {name}"`,
+`"  warn    {name}"` are aligned on purpose, and collapsing them turns a
+readable table into ragged text. Caught by reading the diff; reverted whole.
+So the naive fix is worse than the defect, and any future attempt must
+distinguish *prose continuation* from *intentional alignment* — a distinction
+no pattern over spaces can make, because the two are byte-identical.
+
+**Shape of the fix.** A gate first, per-instance fixes second:
+
+1. a test that flags a 3+ space run inside a string literal, with an explicit
+   allowlist of literals that align on purpose (the `config_check` tables, the
+   bench harness's column headers, `normalize.rs` and `convo.rs`, whose
+   fixtures test trailing-whitespace handling and MUST keep their runs);
+2. then fix the flagged instances by hand so the gate passes.
+
+The allowlist is the load-bearing half and the reason this is not a
+five-minute job: it is a judgement per literal about whether the spaces are
+content.
+
+**Gate:** the test fails on a newly-introduced run and passes on the
+allowlisted ones, with a premise probe asserting it scanned a non-zero number
+of files — and a counterfactual that re-introduces one run and observes the
+failure, rather than trusting a green.
+
+**Two instances are already fixed** and are not in the count above: both were
+in gates this campaign wrote (`the_signal_vocabulary_is_exactly_what_the_
+engine_can_emit`), so they were mine.
+
+#### What closing it took, and the discriminator that does NOT exist
+
+**Twenty literals rejoined by hand-classified line, not by pattern.** Every
+target was read and judged first; the script that applied them carries a
+per-line premise assert that the line still holds a run, so a drifted line
+number stops it rather than editing something else. The whole diff was then
+read: 20 lines, all prose, no alignment touched.
+
+**The threshold is 10 spaces and it is NOT sufficient on its own.** Measured
+across the tree, the two populations are bimodal — alignment clusters at 3–9
+(157 instances, all genuine) and continuations at 18/22/26/34, which are the
+Rust indent depths. But they OVERLAP at 10–14: `"  tunnels:             {}"`
+is a 13-space output column and `"  pair          n     R@1"` is a 10-space
+table header, while `"…exactly once —              a rename…"` at 14 is a
+continuation. **So the allowlist is the load-bearing half exactly as this
+entry predicted**, and it names seven exceptions individually: two table
+layouts, a deliberate `
+`-indented MCP message, a doc comment's example
+output, and three SQL statements.
+
+**Gate:** `no_message_literal_carries_a_collapsed_space_run` in `parity.rs`,
+beside the CRLF walker it borrows. Both arms executed — re-introducing a run
+names the file, line and run length; breaking the walker fires "scanned only
+0 files". Adding an ALLOWED entry is a claim that the spaces are CONTENT, and
+that is the judgement the gate deliberately does not try to make for you.
+
+---
+
+### O37 — CLOSED 2026-08-14: the house Pages site enforces HTTPS, nine days after round four found it
+
+Round-five **F5**, D9. **The finding is second; the first is that it went
+missing.** `.handover/AUDIT_CONTINUATION.md:251` records round four's D9
+having found "the house Pages site downgrades to http". It appears NOWHERE in
+this file. It was never filed as work, so nothing ever moved it, and it is
+still true nine days later. *"A gap is a gap"* applies to an audit's own
+output, and this is what it looks like when it does not.
+
+**Measured 2026-08-14, with a negative control** (an absent path returns 404,
+so the server is not answering 200 to everything):
+
+| URL | result |
+|---|---|
+| `http://sealcroft.com/` | **200, 0 redirects** — served over cleartext |
+| `https://sealcroft.com/` | 200 |
+| `http://sealcroft.com/undercroft/` | 200, **1 redirect → https** |
+| `https://sealcroft.com/undercroft/docs/` | 200 |
+
+So the setting differs per repo: `sealcroft/undercroft` enforces HTTPS and
+`sealcroft/sealcroft.github.io` — which serves the apex, the first page a
+visitor sees — does not.
+
+**Why it is worth more than its severity suggests.** This project's entire
+argument is a hardened, local-first, integrity-checked memory engine; its
+house page is the front door of that claim and is served over a channel any
+network adversary can rewrite. `docs/THREAT_MODEL.md` A4 is about exactly
+that adversary reaching a served surface.
+
+**Shape of the fix.** Enable Enforce HTTPS on `sealcroft/sealcroft.github.io`
+— Settings → Pages, or `PUT /repos/sealcroft/sealcroft.github.io/pages` with
+`https_enforced: true`. **It is an outward-facing settings change on a live
+property and must not be made without the maintainer's word**, which is why
+this is filed rather than done.
+
+**Gate:** `curl -sS -o /dev/null -w '%{num_redirects} %{url_effective}' -L
+http://sealcroft.com/` reports one redirect ending in `https://`, with an
+absent-path 404 beside it as the negative control. Worth a line in the
+release checklist, since Pages liveness is already verified there and this is
+the same class of check.
+
+#### Applied 2026-08-14, on the maintainer's explicit instruction
+
+**The precondition was checked before the change, not after.**
+`GET /repos/sealcroft/sealcroft.github.io/pages` reported
+`https_certificate_state: approved` and `protected_domain_state: verified`,
+which is what makes enabling safe: with a pending certificate, enforcing
+HTTPS takes the site down rather than securing it. Read the target before
+overwriting it.
+
+`PUT /repos/sealcroft/sealcroft.github.io/pages` with
+`https_enforced: true`; read back as `true`.
+
+**Verified by the gate above — the same measurement that found it, with the
+same negative control:**
+
+| | before | after |
+|---|---|---|
+| `http://sealcroft.com/` | `200 OK`, 17,447 bytes cleartext | **`301` → `https://sealcroft.com/`** |
+| `http://sealcroft.com/undercroft/` | `301` | `301` (unchanged) |
+| absent path | 404 | 404 (control holds) |
+
+**What this entry is really a record of.** The defect was one boolean. Round
+four found it, wrote it in a gitignored file, and never filed it — so it
+survived nine days, an entire fix campaign, a release-readiness review and a
+merge to `main`. The engineering cost of the fix was a single API call; the
+cost of the FILING failure was everything in between. That asymmetry is the
+argument for *"open threads written down AS WORK"* being a hard rule rather
+than a preference, and it is why round five's charter now says an audit's
+own output is subject to the same rule as the tree's.
+
+---
+
+### O38 — CLOSED 2026-08-14: the claim is corrected, and it was hiding two undocumented variables
+
+Round-five **F4**, D7.
+
+`CLAUDE.md` states the architecture reference "documents every layer plus all
+**81** `UNDERCROFT_*` variables the engine honours — 64 written out in full
+across the env table's 60 rows, plus 17 siblings abbreviated to a suffix
+inside the row that owns them".
+
+The arithmetic is right and the characterisation is not. Counted at
+`63caca6`: **64** appear in full in `<code>` tags (matching), and of the
+remaining 17, only **8** appear abbreviated (`_QUERY_MODEL`, `_TOKENIZER`
+three times, `_DPROJ`, `_KSIM`, `_NPROBE`, `_SEED`). **Nine appear nowhere on
+the page in any form**: `UNDERCROFT_COLBERT_NAME`, `UNDERCROFT_ONNX_NAME`,
+`UNDERCROFT_RERANK_NAME`, and all six `UNDERCROFT_ORCH_*`.
+
+So the page documents 72 of 81, and the sentence claiming otherwise is in the
+same file as the rule *"Count the truth, never a number in prose"*.
+
+**The six `ORCH_*` are the interesting third.** They are in
+`ENGINE_ENV_VARS`, and `undercroft config check` validates them (O24) — so
+by this project's own definition the engine honours them, and an operator
+reading the env table will not find them.
+
+**Shape of the fix.** Either add the nine (the six `ORCH_*` at minimum, since
+a fleet operator has no other single table) or correct the sentence to say 72
+and name what is excluded and why. **Gate:** a preflight counting
+`<code>UNDERCROFT_*</code>` plus declared suffixes on the page against
+`ENGINE_ENV_VARS`, both directions — the shape `PUBLISHED_FIGURES` already
+uses for the landing tiles.
+
+#### What closing it found, and it was better than the finding
+
+**The miscount was pointing at a documentation hole.** Asked where the nine
+ARE documented rather than only where they are not:
+
+- the six `UNDERCROFT_ORCH_*` are in `docs/MULTI_TENANCY.md`,
+  `docs/AGENTS.md` and `website/src/observability.md`. They belong to the
+  control plane, so the engine's architecture page omitting them is a
+  legitimate scoping decision — it just was not stated;
+- `UNDERCROFT_ONNX_NAME` is in `docs/EMBEDDERS.md`;
+- **`UNDERCROFT_COLBERT_NAME` and `UNDERCROFT_RERANK_NAME` were documented
+  NOWHERE.** Reachable, classed `Tunes` in `ENGINE_ENV_VARS`, validated by
+  `undercroft config check`, honoured by the code — and named in no document
+  in the repository.
+
+That is the quietest way for a declaration to be unusable: an operator
+swapping a reranker or a ColBERT export had no way to learn that the identity
+those roles record is declarable, so every such vault stored the generic
+default (`onnx-reranker`, `colbert`) and no artifact said which model
+produced it.
+
+**Fixed both halves.** `docs/EMBEDDERS.md` gained the reranker and ColBERT
+role block beside the embedder's, with both names and their defaults;
+`CLAUDE.md` now says 72 of 81, names all nine exclusions, and says which are
+scoping and which were absent. **The gate is deliberately NOT the filed
+preflight**: the count that was wrong is prose about a hand-authored page,
+and a preflight enforcing "the page lists every engine variable" would have
+forced the six control-plane variables onto it — encoding the wrong answer in
+a gate. The durable fix is that the two undocumented variables are now
+documented and the sentence states its own exclusions; a future variable
+absent from every document remains findable the way this one was, by asking
+where it IS documented rather than counting one page.
+
+**Stated residual:** `UNDERCROFT_COLBERT_NAME`, `UNDERCROFT_ONNX_NAME` and
+`UNDERCROFT_RERANK_NAME` still do not appear on `architecture/index.html`.
+They are documented in `docs/EMBEDDERS.md`, the page's env table is not
+claimed to be exhaustive any more, and adding three rows to a hand-authored
+table is a judgement about that page rather than a defect.
+
+---
+
+### O39 — REFUTED 2026-08-14 by its own verification: a naming preference, not a finding
+
+Round-five **F6**, D10. Raised as a finding, put through the three lenses,
+and it **failed two of them** — so it is closed as not-work rather than left
+on the list, which is what "default to refuted when uncertain" is for.
+
+**Correctness** ✓ — the name really is graph-scoped.
+**Reachability** ✗ — no user reaches a function name; there is no surface,
+no payload and no configuration that behaves differently because of it.
+**Novelty** ✓ — not recorded anywhere.
+
+1 of 3. **And the reason it fails is instructive**: O29's finding was that a
+graph-shaped NAME on an INVENTORY hid a gap, because the name decided what
+question the inventory asked. A wrapper function's name decides nothing —
+`screen_kg_record` has one job, five call sites, and the size bound on
+`object` is a genuine reason for it to exist separately. Extending "the name
+hid the gap" from an inventory to a wrapper is pattern-matching on the words
+rather than on the mechanism, and this project's own doctrine warns about
+exactly that when a RULE is applied backwards.
+
+Left in place deliberately. Recorded rather than deleted because *the
+refutation is the useful artifact* — the next session should not re-raise it.
+
+---
+
+### O39-original — the raised text, kept for the record
+
+Round-five **F6**, D10. LOW, and recorded because it is the exact class O29
+fixed one level up.
+
+O29 moved the screening mechanism to `admission::screen_agent_text` and
+replaced `KG_SCREENED_FIELDS` with the owner-keyed
+`admission::SCREENED_FIELDS`, on the argument that *"a graph-shaped name is
+what hid the gap"*. The delegating wrapper is still called
+`screen_kg_record`, and it is now one caller of a general mechanism rather
+than the mechanism itself.
+
+Nothing is broken. It is a naming-versus-scope mismatch of exactly the kind
+that made the original defect invisible, left in place by the unit that
+diagnosed it.
+
+**Shape of the fix.** Rename to something that says what it is (a fact-owner
+call site), or leave it and record why the graph keeps a wrapper — the size
+bound on `object` is a genuine reason. **Gate:** none needed; this is a
+readability decision, and the honest resolution may be to write the reason
+down rather than to rename.
+
+---
+
+### O34 — CLOSED 2026-08-14: `stats()` counts wings and rooms on the same side of the fence
 
 Round-five **F1**, and it is this campaign's own defect: O32 fenced one field
 of `stats()` and not its neighbour.
@@ -1924,7 +2259,7 @@ quarantined, `stats().wings` and `stats().rooms` agree the wing is absent;
 
 ---
 
-### O35 — `rooms()` is fenced by a check in another crate, and by nothing of its own
+### O35 — CLOSED 2026-08-14: the reliance is recorded at `rooms()` and pinned by a test
 
 Round-five **F2**. Pre-existing, made visible by O32's asymmetry.
 
@@ -1948,7 +2283,7 @@ boundary and the comment says so.
 
 ---
 
-### O36 — the signal-vocabulary gate assumes co-location and nothing enforces it
+### O36 — CLOSED 2026-08-14: the co-location the gate assumes is now enforced
 
 Round-five **F3**, and the gate is one this campaign wrote (O33).
 

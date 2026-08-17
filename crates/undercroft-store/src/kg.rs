@@ -4013,7 +4013,7 @@ mod tests {
             assert!(
                 !db.windows(digest.len())
                     .any(|win| win == digest.as_bytes()),
-                "an unkeyed digest of {w:?} is on disk — a confirmation                  oracle for anyone with a candidate word list"
+                "an unkeyed digest of {w:?} is on disk — a confirmation oracle for anyone with a candidate word list"
             );
         }
         // The four-component FACT recipe as well, not only the single-word
