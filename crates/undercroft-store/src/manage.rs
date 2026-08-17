@@ -802,7 +802,15 @@ impl PalaceStore {
     /// * MCP `undercroft_list_rooms` — safe because the quarantine fence
     ///   inspects every string ARGUMENT and refuses the reserved wing before
     ///   the tool runs. Pinned by
-    ///   `the_mcp_fence_is_what_keeps_queue_room_names_from_an_agent`;
+    ///   `mcp_cannot_read_rule_on_or_destroy_the_review_queue` in
+    ///   `undercroft-cli`'s `mcp.rs`, which drives this very tool with the
+    ///   reserved wing as its argument and requires a refusal. **This line
+    ///   cited `the_mcp_fence_is_what_keeps_queue_room_names_from_an_agent`
+    ///   until 2026-08-17 and no such test has ever existed** (ROADMAP O35,
+    ///   corrected under O44) — the boundary was genuinely pinned the whole
+    ///   time, by the test now named, but a citation that resolves to
+    ///   nothing is the "a test NAME is not verification" rule failing in
+    ///   the direction where the name does not even exist;
     /// * no CLI or `/v1` route passes a caller-supplied wing here at all.
     ///
     /// So a NEW route that did would leak, and nothing in this function would

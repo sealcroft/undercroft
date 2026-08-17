@@ -1,6 +1,191 @@
 # Changelog
 
-## Unreleased — 1.1.0
+## 1.1.0 — 2026-08-18
+
+### README, docs/ and website/ swept against the code: one drift, and it was in the doc that promised it had been counted (O45)
+
+The scope the previous sweep left unchecked. **One real drift.**
+
+`docs/remote-server.md` claimed *"All 35 routes, counted against `route()` …
+rather than remembered"*; `route()` dispatches **36**. Missing:
+`POST /v1/vaults/{id}/verify-forgetting`, the route **O14** added — which
+updated `docs/AGENTS.md` §10 correctly and left the second route reference
+behind. A doc that promises it was counted is the worst place for a stale
+count, because the promise is what stops the next reader checking.
+
+Fixed, and **gated**: the battery now compares route SETS in both directions
+for BOTH documents against the dispatch. Sets rather than counts, because a
+size check passes when one route is swapped for another.
+
+**Everything else checked out**, and two of the checks are worth recording
+because they *looked* like defects and were not:
+
+- `docs/AGENTS.md` §9 documents **all 34** MCP tools, and §10 matches the
+  dispatch exactly in both directions. A first pass reported "10 tools
+  missing" — **wrong**, because the table groups tools into rows by suffix
+  (`` `undercroft_list_wings` / `_list_rooms` / `_get_taxonomy` ``) and a
+  full-name grep cannot see them. That is the **identical error O38 made**,
+  reproduced in the same session that diagnosed it, and caught only by
+  reading the table instead of trusting the count.
+- All **81** engine variables are documented across README/`docs/`/`website/`
+  — six only in abbreviated form (`docs/EMBEDDERS.md`: "`_KEY` carries a
+  bearer, `_DIM` overrides the dimension"), which the same suffix-aware check
+  resolves. A full-name scan called them undocumented.
+- `docs/PARITY.md`'s "~35 tools" is **upstream's** count in a comparison
+  table, not ours. `110 checks`, `49 pairs`, `19 languages` and `10
+  languages` all match the tree.
+
+**The lesson repeats and is now the third instance:** this codebase documents
+families of names by abbreviating them into the row that owns them, so **any
+full-name scan of any reference here undercounts**, and the undercount reads
+as a documentation gap. Ask what the scan can SEE before believing a miss.
+
+### round five re-verified end to end: four findings hold, two carried defects of their own (O44)
+
+All six of round five's findings were re-checked against the code, on the
+principle O43 established — **a finding that replaces a value must have the
+OLD value re-measured, not just the new one computed.**
+
+| | verdict |
+|---|---|
+| O34 `stats()` wings/rooms fence | **holds** — `WHERE wing <> ?1` landed, and `stats_counts_wings_and_rooms_on_the_same_side_of_the_fence` gates it |
+| O35 `rooms()` reliance recorded | **holds**, but cited a pinning test that **does not exist** → O44 |
+| O36 vocabulary gate co-location | **holds** — the gate reads the crate's `src` directory, not one file |
+| O37 house Pages HTTPS | **holds**, re-verified live: `http://` → 301 → `https://` on apex and product path, `https://` 200 |
+| O38 architecture coverage figure | **REGRESSION** → O43 |
+| O39 naming preference | **holds** as refuted; a wrapper's name changes no behaviour |
+
+**O44 — O35 cited a pinning test that has never existed.** Its doc comment
+attributes the MCP half of the boundary to
+`the_mcp_fence_is_what_keeps_queue_room_names_from_an_agent`; that string
+occurs exactly once in the tree, in the comment citing it. The boundary is
+genuinely pinned — by `mcp_cannot_read_rule_on_or_destroy_the_review_queue`,
+which drives `undercroft_list_rooms` with the reserved wing and requires a
+refusal — so this is a citation defect, not a coverage gap. It is filed
+anyway because of what it does to a reader: grep the cited name, find
+nothing, and conclude either that the boundary is unpinned or that the
+comment cannot be trusted. Both are wrong and one invites a redundant test.
+*A test NAME is not verification*, failing in its sharpest form.
+
+**Deliberately not turned into a gate.** Every long snake_case identifier
+cited in a doc comment under `crates/` was resolved against the tree: 39
+candidates, 8 unresolved, and **seven of those eight were legitimate** — two
+SQL index names, a reference to a *former* test the comment says it replaces,
+a removed MCP tool, a local binding, a findable prefix, one historical
+narration. At that ratio a mechanical citation check is noise, and a noisy
+gate gets switched off. Recorded as a method to re-run instead.
+
+### the correction was the regression: a round-five fix replaced a correct figure with a wrong one (O43, O42)
+
+**A docs-vs-code sweep of the doctrine, the architecture reference and the
+code found that O38 — the round-five item whose entire purpose was correcting
+the architecture page's coverage figure — had corrected a CORRECT claim into
+a false one**, and asserted in bold that the original had been wrong in both
+halves. It had not been.
+
+The doctrine said the page documents *all 81* `UNDERCROFT_*` variables, 64 in
+full and 17 abbreviated. O38 changed that to *72 of the 81*, 8 abbreviated,
+9 absent, and added a scoping rationale for the nine. Measured two ways — an
+awk implementation and an independent one in a second language, agreeing
+digit for digit — the page documents **81: 64 in full, 17 abbreviated, none
+absent**.
+
+**The cause is a measurement that could not see what it was counting.** The
+page abbreviates families to bare suffixes inside the row that owns them
+(`UNDERCROFT_ORCH_ADDR · _DB · _KEY · _ADMIN_TOKEN · …` is one row). Counting
+full names alone undercounts by 17; counting suffixes globally credits
+`_NAME` from the ONNX row to `UNDERCROFT_COLBERT_NAME`, a different variable
+in a different row. Neither observable separates documented from absent —
+*ask what a gate can SEE*, third instance here and the first in prose rather
+than code. O38 recognised eight abbreviations, read the other nine as absent,
+and then explained why they ought to be. **A wrong measurement dressed in a
+plausible rationale is the most expensive thing this project produces**,
+because the rationale stops the next reader checking.
+
+The tell was one command: O38 claimed the page's coverage, and `git log --
+architecture/index.html` shows round five never touched that page.
+
+**O42 is closed in the same unit rather than deferred**, and closing it is
+what made the above provable. A `prose figures` preflight (the tenth) counts
+eight figures the doctrine states about the tree — preflights, crates, MCP
+tools, diagrams, the env-variable total, the full/abbreviated split, and
+`IRREGULAR` pairs — against what the tree measures, with row-scoped
+attribution for the env figures. Reinstating O38's exact numbers fails it and
+names both. It also caught its own arrival: adding it made the preflight
+count ten while the doctrine still said nine.
+
+**Also fixed: the layout section pointed at the wrong crate.** `AR_ROOTS`,
+`AR_PATTERNS` and `ar_root_family` were described inside the
+`crates/undercroft-core` bullet, interleaved into the era-marker material,
+while all three live in `crates/undercroft-store`. The layout section's whole
+job is saying where things live. Found by extracting every symbol each crate
+bullet names and checking which crate defines it; the other 44 hits are
+legitimate cross-references and were deliberately left alone, because a sweep
+is a hypothesis about every line it touches. The `2859` generated Arabic
+forms were verified by re-implementing the generator and running it (2,880
+instances, 2,859 distinct), and every other published constant — `0.56`,
+`0.45`, `4096`, `64`, `256`, `5`, `201`, `144 × 20` — was checked against the
+code and is correct.
+
+**The process lesson.** Round five ran solo, and its own handover records
+that as its known weakness. A finding that REPLACES a value needs the old
+value re-measured, not just the new one computed — O38 asserted the original
+was wrong without measuring it. When a fix's output is a number contradicting
+a number already in the tree, the burden is on the new number.
+
+### the release's own version claim is gated, not remembered (O41)
+
+**Found while verifying the release-prep commit, and it was wrong about
+itself.** That commit is titled "bump every version surface".
+`architecture/index.html` still carried the PREVIOUS version behind its three
+`Engine v…` markers on a tree whose workspace said `1.1.0`, so merging it
+would have shipped a release whose own architecture document names the
+release before it.
+
+**The cause is the inventory, not the commit.** Counted from the `1.0.0`
+release commit rather than recalled, that release moved **five**
+version-identity strings across **three** files — and `CLAUDE.md`'s
+release-flow list named only ONE of those three, the landing hero button. So
+the release-prep commit bumped the one the list named and left the other two.
+A hand-recalled list drifts toward whatever the last person remembered, and
+— the half that matters — it cannot fail when a NEW surface starts stating a
+version, because nobody knows to add to it. The tree already gates the
+analogous figure (`PUBLISHED_FIGURES`, which exists because the landing
+page's test-count tiles rotted repeatedly); the version, the other number
+this project publishes about itself, was in prose.
+
+A `version surfaces` preflight now counts every version claim against the
+workspace version read out of `Cargo.toml` — never a literal of its own —
+in both directions: a surface that forgot to move fails, and a file stating
+a version with no inventory row fails. Claims are **classified**, because
+they do not share a provenance: `current` must equal the workspace version,
+while an **`as-of`** claim (`docs/PARITY.md`'s `updated for v…` marker) is
+deliberately not bumped, since moving it would assert a re-verification
+nobody performed. It is left naming `1.0.0` on purpose and printed on every
+run.
+
+Note the cost, because it is real and it is the rename lesson again: this
+entry cannot QUOTE a marker with a version attached without tripping the gate
+it describes. Describe the class, never the token — and the alternative,
+excluding `CHANGELOG.md` and `ROADMAP.md` by path, would make a genuine
+version claim in either of them invisible.
+
+**Two defects in the fix itself, reported as mine.** The gate matched its own
+source — the fifth occurrence in this tree of *a gate whose own text is part
+of what it measures* — and is closed by **splitting the needles** so the scan
+reads itself clean, not by excluding the path, which would make a real
+version claim in the battery invisible. And `git grep` does not see untracked
+files, so a newly authored surface was invisible until `git add`: the author
+got a green battery and the gate bit only in CI. `--untracked` closes it and
+was measured to return the identical file set on a clean tree.
+
+Four counterfactual arms were run, each failing for its own reason, with the
+edit chained ahead of the test so a failed edit stops the pipeline: a
+forgotten bump, a new ungated surface (untracked and tracked), a stale row
+whose count no longer matches, and an as-of marker naming a non-release.
+**O42 is filed** for what this could not close: the count of the preflights
+is itself an ungated figure — `CLAUDE.md` said seven while the tree ran
+eight.
 
 ### round five: eleven dimensions audited, six findings, five fixed and one refuted
 
@@ -28,13 +213,22 @@ against the reserved wing and left `stats().rooms` counting
 `DISTINCT wing, room` across it, so `undercroft stats` printed a wing list
 omitting the review queue beside a room count including it.
 
-**O38 — the architecture page documented 72 of the 81 variables `CLAUDE.md`
-claimed for it**, and the miscount was hiding the better defect:
-`UNDERCROFT_COLBERT_NAME` and `UNDERCROFT_RERANK_NAME` were named in NO
-document in the repository — reachable, classed, validated by `config check`,
-and unfindable, so every vault swapping a reranker or ColBERT export stored
-the generic default. Both now in `docs/EMBEDDERS.md`; the claim now says 72
-and names all nine exclusions.
+**O38 — ~~the architecture page documented 72 of the 81 variables `CLAUDE.md`
+claimed for it~~. THIS WAS WRONG AND WAS ITSELF THE REGRESSION** — see O43 in
+the entry above, and read that before this bullet. The page documents **all
+81** (64 in full, 17 abbreviated to a suffix inside the row that owns them);
+the doctrine said so correctly before O38 rewrote it. The miscount came from
+counting full names and hand-classifying the remainder, which cannot see a
+family abbreviated into one row.
+
+**The half of O38 that stands**, and it is a real defect it deserves credit
+for: `UNDERCROFT_COLBERT_NAME` and `UNDERCROFT_RERANK_NAME` were written out
+in full in NO document — reachable, classed, validated by `config check`, and
+unfindable by anyone grepping for the name, so every vault swapping a
+reranker or ColBERT export stored the generic default. Both are now in
+`docs/EMBEDDERS.md`. *"Not written out in full anywhere"* and *"absent from
+the architecture page"* are different claims, and collapsing them is exactly
+what produced the wrong count.
 
 **O40 — twenty message literals carried rustfmt-collapsed space runs**, so an
 operator read a gap mid-sentence in refusals, warnings and pre-flight output.

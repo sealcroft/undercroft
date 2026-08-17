@@ -760,6 +760,396 @@ if [ -n "$CI_BAD" ]; then
 fi
 echo "ok    $VERDICT_JOB needs all $CI_NEEDS_N other job(s) of $CI_N"
 
+# ── preflight: every version surface states the version the tree IS ────────
+# **A version in prose is the same class of claim as a count in prose**, and
+# the release flow was carrying it in someone's head. `CLAUDE.md` listed the
+# surfaces a version bump touches — `Cargo.toml`, `Cargo.lock`,
+# `plugin.json`, CHANGELOG, ROADMAP, the landing hero button — and the 1.0.0
+# release commit (`6976983`) actually moved EIGHT, four of them not on that
+# list. The 1.1.0 release-prep commit then bumped the six it named plus
+# `CLAUDE.md`'s own sentence from memory, and left `architecture/index.html`
+# stating the PREVIOUS version in all three of its places. That is the
+# signature of a hand-recalled inventory: it drifts toward whatever the last
+# person remembered, and nothing can say so.
+#
+# Note the markers below are split wherever this file has to NAME one, so the
+# scan reads its own source clean instead of being excluded by path — the
+# `verify-no-trace.py` precedent. Excluding it would make a real version claim
+# in the battery itself invisible, which is the failure one level up.
+#
+# So: the same mechanism `PUBLISHED_FIGURES` uses one preflight up, on the
+# other number this project publishes about itself. The source of truth is
+# the workspace `Cargo.toml` version — not a literal repeated here, because a
+# gate holding its own copy of the answer is a second place for it to be
+# wrong.
+#
+# **Two classes, because these claims do not have one provenance.**
+#   current — states the version the tree IS. Must equal the workspace
+#             version; this is the arm that catches a forgotten bump.
+#   as-of   — states when something was last VERIFIED ("updated for vX.Y.Z").
+#             Deliberately NOT bumped: moving it asserts a re-verification
+#             nobody performed, which is the doc-claim-as-evidence failure
+#             this project's first rule is about. Checked only for naming a
+#             release that exists, and reported so it stays visible.
+#
+# **Scope, stated so it is not mistaken for complete.** This finds a version
+# behind one of the three IDENTITY MARKERS below. A surface that states the
+# version some new way — "Undercroft 1.2", a badge, a JSON field — is
+# invisible to it, and the honest close for that is a row here when it is
+# written, not a wider regex that would sweep in the CHANGELOG's history and
+# every `since 1.0.0` in the docs. Both halves of that boundary are probed
+# below rather than asserted.
+echo "═══ preflight: version surfaces ═══"
+
+WS_VERSION=$(awk '/^\[workspace\.package\]/{p=1;next} p&&/^\[/{p=0} p&&/^version *=/{gsub(/[^0-9.]/,"");print;exit}' Cargo.toml)
+if ! printf '%s' "$WS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "FAIL  could not read the workspace version from Cargo.toml (got '$WS_VERSION')."
+  echo "      Every comparison below is against it, so a broken read would compare"
+  echo "      every surface to nothing and pass."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+VER_IDENT='([Ee]ngine v|updated for v|releases/latest">v)[0-9]+\.[0-9]+\.[0-9]+'
+# label|class|file|pattern|count
+VERSION_SURFACES=(
+  'architecture engine version|current|architecture/index.html|[Ee]ngine v|3'
+  'landing release button|current|website/landing/index.html|releases/latest">v|1'
+  'parity comparison as-of|as-of|docs/PARITY.md|updated for v|1'
+)
+
+# PREMISE, both directions. A matcher that finds nothing reports what a fully
+# bumped tree reports, and a matcher that finds everything would "cover" the
+# docs by flagging prose. Neither zero is believed until this passes.
+PROBE_V='9.9.9'
+PROBE_HIT=$(printf '%s\n' "  <p class=\"sb-foot\">Engine v${PROBE_V} · BUSL-1.1</p>" \
+            | grep -oE "$VER_IDENT" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+if [ "$PROBE_HIT" != "$PROBE_V" ]; then
+  echo "FAIL  the version extractor did not match a known-positive (got '$PROBE_HIT')."
+  echo "      It examined nothing, which is not the same as a tree with no drift."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if printf '%s\n' 'the columns were clear TEXT before 1.0.0 (ROADMAP A10)' \
+   | grep -qE "$VER_IDENT"; then
+  echo "FAIL  the version extractor matched historical prose. Widened this far it"
+  echo "      would flag every 'since 1.0.0' in the docs, and a gate that cries"
+  echo "      wolf on the CHANGELOG gets switched off."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+VER_FAIL=0
+# Direction 1: every file carrying a version identity has a row. This is the
+# arm that stops a NEW ungated surface from shipping — the one a hand list
+# cannot do, because nobody knows to add to it.
+#
+# `--untracked` is load-bearing and was measured, not assumed: without it a
+# file states its version invisibly until someone runs `git add`, so the
+# author who wrote it gets a green battery and the gate only bites in CI. It
+# still honours `.gitignore`, so `.handover/`, `.battery/` and `target/` stay
+# out — verified to return the identical file set on a clean tree, i.e. it
+# widens coverage without buying noise.
+VER_FILES=$(git grep -l --untracked -E "$VER_IDENT" -- . || true)
+VER_FILE_N=$(printf '%s\n' "$VER_FILES" | grep -c . || true)
+if [ "${VER_FILE_N:-0}" -lt 1 ]; then
+  echo "FAIL  no file in the tree carries a version identity. The three markers"
+  echo "      have all moved, so this preflight is now scanning for nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  found=0
+  for row in "${VERSION_SURFACES[@]}"; do
+    IFS='|' read -r _l _c rfile _p _n <<< "$row"
+    [ "$rfile" = "$f" ] && found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "FAIL  $f states a version and has no VERSION_SURFACES row — classify it"
+    echo "      (current / as-of) so the next release knows whether to move it"
+    VER_FAIL=1
+  fi
+done <<< "$VER_FILES"
+
+# Direction 2: every row still names a live surface, at the count it declares.
+# A row whose pattern has stopped matching reads as a checked surface while
+# checking nothing — the same stale-row failure PUBLISHED_FIGURES guards.
+for row in "${VERSION_SURFACES[@]}"; do
+  IFS='|' read -r label class rfile pat want <<< "$row"
+  if [ ! -f "$rfile" ]; then
+    echo "FAIL  VERSION_SURFACES names $rfile ($label), which does not exist"
+    VER_FAIL=1
+    continue
+  fi
+  got=$(grep -oE "$pat[0-9]+\.[0-9]+\.[0-9]+" "$rfile" | grep -c . || true)
+  if [ "${got:-0}" -ne "$want" ]; then
+    echo "FAIL  $label: $rfile carries $got version claim(s), the row declares $want."
+    echo "      Either a surface was added without a row, or one was removed and"
+    echo "      the row outlived it"
+    VER_FAIL=1
+    continue
+  fi
+  vers=$(grep -oE "$pat[0-9]+\.[0-9]+\.[0-9]+" "$rfile" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
+  for v in $vers; do
+    case "$class" in
+      current)
+        if [ "$v" != "$WS_VERSION" ]; then
+          echo "FAIL  $label: $rfile says v$v, the workspace says $WS_VERSION."
+          echo "      A release bumped the version and did not move this surface"
+          VER_FAIL=1
+        fi
+        ;;
+      as-of)
+        # Not compared to the workspace ON PURPOSE — see the class note above.
+        # It must still name a release that happened, or it is not an as-of
+        # marker, it is a typo wearing one's clothes.
+        if ! grep -qE "^## $v( |\$)" CHANGELOG.md; then
+          echo "FAIL  $label: $rfile is marked as-of v$v, which is not a release"
+          echo "      heading in CHANGELOG.md"
+          VER_FAIL=1
+        else
+          echo "note  $label: $rfile records v$v (as-of; not bumped by a release —"
+          echo "      moving it asserts a re-verification, so it moves when someone"
+          echo "      re-verifies it, and the workspace is $WS_VERSION)"
+        fi
+        ;;
+      *)
+        echo "FAIL  $label: unknown class '$class' (want: current / as-of)"
+        VER_FAIL=1
+        ;;
+    esac
+  done
+done
+
+if [ "$VER_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    every version surface agrees with the workspace ($WS_VERSION), over $VER_FILE_N file(s)"
+
+# ── preflight: a figure in prose is counted against the tree ───────────────
+# ROADMAP O42, and it was filed because `CLAUDE.md` claimed "seven host-side
+# preflights" while the tree ran eight, and nothing could say so. Closing it
+# immediately paid for itself: the SAME sweep found that the architecture
+# reference's coverage figure had been rewritten from a correct value to a
+# wrong one (`all 81` / `17 abbreviated` -> `72 of the 81` / `8` / `9 absent`)
+# by a round-five item whose entire purpose was correcting that figure. See
+# ROADMAP O43.
+#
+# `PUBLISHED_FIGURES` above covers the landing page's tiles and the per-suite
+# check counts. This covers the OTHER class: numbers the doctrine states about
+# the tree in prose, which nothing recomputes.
+#
+# **The env-variable figures need ROW-SCOPED attribution, and that is the
+# whole lesson of O43.** The architecture page abbreviates a family of
+# variables to bare suffixes inside the row that owns them
+# (`UNDERCROFT_ORCH_ADDR . _DB . _KEY . ...`). Counting only full names
+# undercounts by 17; counting suffixes GLOBALLY credits `_NAME` from the ONNX
+# row to `UNDERCROFT_COLBERT_NAME`, a different variable in a different row.
+# Neither observable distinguishes documented from absent. The reconstruction
+# below pairs each suffix only with full names in ITS OWN row, and it was
+# cross-checked against an independent implementation in a second language
+# before being believed — both return 64 + 17 + 0.
+echo "═══ preflight: prose figures ═══"
+
+pf_word() {
+  case "$1" in
+    one) echo 1;; two) echo 2;; three) echo 3;; four) echo 4;; five) echo 5;;
+    six) echo 6;; seven) echo 7;; eight) echo 8;; nine) echo 9;; ten) echo 10;;
+    eleven) echo 11;; twelve) echo 12;; thirteen) echo 13;; fourteen) echo 14;;
+    fifteen) echo 15;; sixteen) echo 16;; seventeen) echo 17;;
+    eighteen) echo 18;; nineteen) echo 19;; twenty) echo 20;;
+    *) echo "$1";;
+  esac
+}
+
+PF_ARCH="architecture/index.html"
+PF_STORE="crates/undercroft-store/src/lib.rs"
+
+# The engine's variables, from the crates. `undercroft-bench` is excluded
+# because its UNDERCROFT_VS_*/UNDERCROFT_TEST_* belong to the harness, which
+# is the same boundary CLAUDE.md's own counting recipe draws.
+PF_VARS=$(git grep -hoE '"UNDERCROFT_[A-Z0-9_]+"' -- crates/ ':!crates/undercroft-bench' \
+          | tr -d '"' | sort -u)
+PF_ENV_TOTAL=$(printf '%s\n' "$PF_VARS" | grep -c . || true)
+
+# Row-scoped reconstruction: family prefix of a full name in a row, joined to
+# every bare suffix in the SAME row.
+PF_RECON=$(awk '
+  /<code>UNDERCROFT_/ {
+    nf = 0; ns = 0; tmp = $0
+    while (match(tmp, /<code>UNDERCROFT_[A-Z0-9_]+<\/code>/)) {
+      fulls[++nf] = substr(tmp, RSTART + 6, RLENGTH - 13)
+      tmp = substr(tmp, RSTART + RLENGTH)
+    }
+    tmp = $0
+    while (match(tmp, /<code>_[A-Z0-9_]+<\/code>/)) {
+      sufs[++ns] = substr(tmp, RSTART + 6, RLENGTH - 13)
+      tmp = substr(tmp, RSTART + RLENGTH)
+    }
+    for (i = 1; i <= nf; i++) {
+      f = fulls[i]; k = 0
+      for (j = length(f); j > 0; j--) if (substr(f, j, 1) == "_") { k = j; break }
+      if (k > 1) { fam = substr(f, 1, k - 1)
+        for (m = 1; m <= ns; m++) print fam sufs[m] }
+    }
+    for (i = 1; i <= nf; i++) delete fulls[i]
+    for (m = 1; m <= ns; m++) delete sufs[m]
+  }' "$PF_ARCH" | sort -u)
+
+PF_ENV_FULL=0; PF_ENV_ABBREV=0; PF_ENV_ABSENT=0; PF_ABSENT_LIST=""
+while IFS= read -r v; do
+  [ -z "$v" ] && continue
+  if grep -q "<code>$v</code>" "$PF_ARCH"; then
+    PF_ENV_FULL=$((PF_ENV_FULL + 1))
+  elif printf '%s\n' "$PF_RECON" | grep -qx "$v"; then
+    PF_ENV_ABBREV=$((PF_ENV_ABBREV + 1))
+  else
+    PF_ENV_ABSENT=$((PF_ENV_ABSENT + 1)); PF_ABSENT_LIST="$PF_ABSENT_LIST $v"
+  fi
+done <<< "$PF_VARS"
+
+PF_PREFLIGHTS=$(grep -c '^echo "═══ preflight:' tests/battery.sh || true)
+PF_CRATES=$(find crates -mindepth 1 -maxdepth 1 -type d | grep -c . || true)
+PF_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
+         | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
+PF_DIAGRAMS=$(find architecture/diagrams -name '*.svg' | grep -c . || true)
+PF_IRREGULAR=$(awk '/^const IRREGULAR/,/^\];/' "$PF_STORE" | grep -oE '\),' | grep -c . || true)
+
+# PREMISE. Every truth below is a count, and a broken extractor returns a
+# number too — zero. A zero here would silently agree with nothing.
+if [ "${PF_ENV_TOTAL:-0}" -lt 50 ] || [ "${PF_PREFLIGHTS:-0}" -lt 5 ] ||
+   [ "${PF_CRATES:-0}" -lt 5 ] || [ "${PF_MCP:-0}" -lt 10 ] ||
+   [ "${PF_DIAGRAMS:-0}" -lt 5 ] || [ "${PF_IRREGULAR:-0}" -lt 50 ]; then
+  echo "FAIL  a truth-side reader came back implausibly small:"
+  echo "      env=$PF_ENV_TOTAL preflights=$PF_PREFLIGHTS crates=$PF_CRATES"
+  echo "      mcp=$PF_MCP diagrams=$PF_DIAGRAMS irregular=$PF_IRREGULAR"
+  echo "      A reader that examined nothing reports what an accurate tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$((PF_ENV_FULL + PF_ENV_ABBREV + PF_ENV_ABSENT))" -ne "$PF_ENV_TOTAL" ]; then
+  echo "FAIL  the env classification lost a variable:"
+  echo "      $PF_ENV_FULL + $PF_ENV_ABBREV + $PF_ENV_ABSENT != $PF_ENV_TOTAL"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# label|file|sed-with-one-capture|truth
+PROSE_FIGURES=(
+  "host-side preflights|CLAUDE.md|s/.*runs the ([a-z]+) host-side preflights.*/\\1/p|$PF_PREFLIGHTS"
+  "workspace crates|CLAUDE.md|s/.*workspace root \\(([0-9]+) crates.*/\\1/p|$PF_CRATES"
+  "MCP tools|CLAUDE.md|s/.*\\*\\*([0-9]+) tools \\(incl\\..*/\\1/p|$PF_MCP"
+  "architecture diagrams|CLAUDE.md|s/.*reference: ([a-z]+) theme-aware.*/\\1/p|$PF_DIAGRAMS"
+  "engine env variables|CLAUDE.md|s/.*plus \\*\\*all ([0-9]+)\\*\\*.*/\\1/p|$PF_ENV_TOTAL"
+  "env vars written in full|CLAUDE.md|s/.*— \\*\\*([0-9]+)\\*\\* written out in.*/\\1/p|$PF_ENV_FULL"
+  "env vars abbreviated|CLAUDE.md|s/.*plus \\*\\*([0-9]+)\\*\\* siblings abbreviated.*/\\1/p|$PF_ENV_ABBREV"
+  "IRREGULAR pairs|CLAUDE.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
+)
+
+PROSE_FAIL=0
+for row in "${PROSE_FIGURES[@]}"; do
+  IFS='|' read -r label pfile pat truth <<< "$row"
+  raw=$(sed -nE "$pat" "$pfile" | head -1)
+  if [ -z "$raw" ]; then
+    echo "FAIL  $label: the reader found no published figure in $pfile."
+    echo "      Either the sentence was reworded (update the row) or it was"
+    echo "      deleted — a row that matches nothing checks nothing."
+    PROSE_FAIL=1
+    continue
+  fi
+  got=$(pf_word "$raw")
+  if [ "$got" != "$truth" ]; then
+    echo "FAIL  $label: $pfile publishes $raw, the tree measures $truth"
+    PROSE_FAIL=1
+  fi
+done
+
+if [ "$PF_ENV_ABSENT" -ne 0 ]; then
+  echo "note  $PF_ENV_ABSENT engine variable(s) appear on $PF_ARCH in no form:$PF_ABSENT_LIST"
+fi
+if [ "$PROSE_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    ${#PROSE_FIGURES[@]} prose figures agree with the tree"
+echo "      (env: $PF_ENV_FULL full + $PF_ENV_ABBREV row-abbreviated + $PF_ENV_ABSENT absent = $PF_ENV_TOTAL)"
+
+# ── the `/v1` surface: TWO documents describe it, and both must be complete ─
+# ROADMAP O45. `docs/remote-server.md` said "All 35 routes, counted against
+# `route()` ... rather than remembered" while `route()` dispatched 36: O14
+# added `POST …/verify-forgetting`, updated `docs/AGENTS.md` §10, and did not
+# update the other route reference. A doc that PROMISES it was counted is the
+# worst place for a stale count, because the promise is what stops the reader
+# checking.
+#
+# Sets, not sizes, and in BOTH directions — a count alone passes when one
+# route is swapped for another. The `{id}` placeholders are normalised to the
+# binding names `route()` uses so the two spellings can be compared at all.
+V1_ARMS=$(awk '/match \(method\.as_str\(\), segs\.as_slice\(\)\)/,/^        }$/' \
+            crates/undercroft-cli/src/tenant.rs \
+          | grep -oE '\("(GET|POST|PUT|PATCH|DELETE)", &\["[^]]*\]\)' \
+          | sed -E 's/\("([A-Z]+)", &\[(.*)\]\)/\1 \2/' | tr -d '"' | sed 's/, /\//g' | sort -u)
+V1_N=$(printf '%s\n' "$V1_ARMS" | grep -c . || true)
+# PREMISE: the dispatch is the authority here, so a failed read must not be
+# allowed to agree with a doc that lists nothing either.
+if [ "${V1_N:-0}" -lt 20 ]; then
+  echo "FAIL  read $V1_N route(s) out of tenant.rs's dispatch; it has dozens."
+  echo "      The match block moved or was reshaped — this reader examined nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+v1_doc_routes() { # v1_doc_routes <file> <extractor-regex>
+  grep -ohE "$2" "$1" \
+    | sed -E 's/^\| *//; s/ *\| *`/ /; s/`//g; s/^([A-Z]+) +/\1 /' \
+    | sed -e 's#/v1#v1#' -e 's#{drawer_id}#drawer_id#g' -e 's#{key}#key#g' \
+          -e 's#{id}#id#g' -e 's#{[a-z_]*}#X#g' \
+    | awk '{print $1" "$2}' | sort -u
+}
+V1_RS=$(v1_doc_routes docs/remote-server.md '^(GET|POST|PUT|PATCH|DELETE) +/v1/[a-z{}/_-]+')
+V1_AG=$(v1_doc_routes docs/AGENTS.md '^\| *(GET|POST|PUT|PATCH|DELETE) *\| *`/v1/[^`]*`')
+
+V1_FAIL=0
+for pair in "docs/remote-server.md|$V1_RS" "docs/AGENTS.md|$V1_AG"; do
+  dfile="${pair%%|*}"; dlist="${pair#*|}"
+  dn=$(printf '%s\n' "$dlist" | grep -c . || true)
+  if [ "${dn:-0}" -lt 20 ]; then
+    echo "FAIL  $dfile: the route extractor found $dn route(s). The table's shape"
+    echo "      changed, and an extractor that reads nothing agrees with everything."
+    V1_FAIL=1
+    continue
+  fi
+  missing=$(comm -23 <(printf '%s\n' "$V1_ARMS") <(printf '%s\n' "$dlist"))
+  extra=$(comm -13 <(printf '%s\n' "$V1_ARMS") <(printf '%s\n' "$dlist"))
+  if [ -n "$missing" ]; then
+    echo "FAIL  $dfile does not document $(printf '%s\n' "$missing" | grep -c .) live route(s):"
+    printf '        %s\n' $(printf '%s\n' "$missing" | tr ' ' '~') | tr '~' ' '
+    V1_FAIL=1
+  fi
+  if [ -n "$extra" ]; then
+    echo "FAIL  $dfile documents $(printf '%s\n' "$extra" | grep -c .) route(s) that no longer exist:"
+    printf '        %s\n' $(printf '%s\n' "$extra" | tr ' ' '~') | tr '~' ' '
+    V1_FAIL=1
+  fi
+done
+if [ "$V1_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    both /v1 route references match the dispatch exactly ($V1_N routes)"
+
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   echo ""
   echo "preflights only — no suite was run, by request (--preflight-only)"

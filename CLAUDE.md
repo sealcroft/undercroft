@@ -7,9 +7,12 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.0.0** — the
-version reset when the project was renamed; every earlier tag and release
-belonged to it under its former name and was withdrawn. `main` is branch
+(repo `sealcroft/sealcroft.github.io`). Current release **1.1.0** — MINOR
+over the `1.0.0` that reset the version when the project was renamed (every
+earlier tag belonged to it under its former name and was withdrawn). **The
+tree carries `1.1.0` only once the release PR merges; the TAG is a separate,
+explicit step** — a build reporting a version it was never tagged as is worse
+than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.
 Forking cannot be disabled while the repos are public, and they must stay
 public — GitHub Free will not serve Pages from a private repo.
@@ -197,15 +200,6 @@ Consequences that are binding, not advisory:
   marker names it (`2568` is a quantity, `พ.ศ. 2568` is 2025) — the same trade
   `month_name_is_deliberate` makes, and the only route by which 令和/民國 mean
   anything since those are written with a year and no month.
-  `AR_ROOTS` × `AR_PATTERNS` → `ar_root_family`: Arabic is root-and-pattern, so
-  144 roots poured into 20 templates generate 2859 forms once and two words meet
-  only when ONE ROOT explains both. An ALLOWLIST — a form the table cannot
-  generate matches nothing — which is why it succeeds where three subsequence
-  families failed: `بيت`→`بيوت` and `يجب`→`يجيب` are the same string operation
-  and no rule over shape separates them. Measured HALF the shipped skeleton
-  rule's promiscuity (3.25 vs 6.67) while taking 5 of its 6 drops. Ours, of
-  necessity: every mature Arabic resource is GPL, research-only or LDC-
-  non-redistributable (CAMeL Tools' code is MIT, its database is not).
   `AMBIGUOUS_ERA_MARKERS` (bare `م`/`ه`) take TWO signals strongest-first, the
   `DateOrder` shape: `a_year_noun_governs` the number (reusing `AR_UNITS`'
   `Unit::Year` vocabulary through `ar_unit`, so every plural and article comes
@@ -316,7 +310,24 @@ Consequences that are binding, not advisory:
   what makes a 3-char stem safe here when floor-3 containment measured 33.3
   (en) / 68.5 (de) mean links and this measures 1.08 / 0.98, capped at 5. Both
   are PAIRWISE — a stemmer builds an equivalence class one false friend
-  poisons (`πολύ`/`πόλη` is why Snowball Greek was rejected). `-er` is
+  poisons (`πολύ`/`πόλη` is why Snowball Greek was rejected).
+  `AR_ROOTS` × `AR_PATTERNS` → `ar_root_family` is the same channel's Arabic
+  arm and lives here too, in this crate — the guide filed it under
+  `undercroft-core`'s `temporal.rs` until 2026-08-17, interleaved into the era
+  material, which is a map pointing at the wrong crate: Arabic is
+  root-and-pattern, so 144 roots poured into 20 templates generate **2859**
+  forms once (verified by re-implementing the generator and running it —
+  2,880 instances, 2,859 distinct) and two words meet only when ONE ROOT
+  explains both. An ALLOWLIST — a form the table cannot generate matches
+  nothing — which is why it succeeds where three subsequence families failed:
+  `بيت`→`بيوت` and `يجب`→`يجيب` are the same string operation and no rule over
+  shape separates them. Measured HALF the shipped skeleton rule's promiscuity
+  (3.25 vs 6.67) while taking 5 of its 6 drops. Ours, of necessity: every
+  mature Arabic resource is GPL, research-only or LDC-non-redistributable
+  (CAMeL Tools' code is MIT, its database is not). Note the era-marker
+  machinery it used to sit beside — `AR_UNITS`, `ar_unit` — genuinely IS in
+  `undercroft-core`, which is what made the misfiling easy to read past.
+  `-er` is
   German-only via `MorphLang` on `SearchOptions` (`suffixes_for`), fed by the
   request's existing `language` — ONE declaration, two consumers: the date
   scanner (en/ar) and morphology (en/de). For English `-er` admits
@@ -1071,29 +1082,42 @@ Consequences that are binding, not advisory:
   version than the deployment is a check of something else
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus **72 of the 81**
-  `UNDERCROFT_*` variables the engine honours — 64 written out in full
-  across the env table's 60 rows, plus **8** siblings abbreviated to a
-  suffix inside the row that owns them (`_TOKENIZER` three times, one
-  per model role), which is why grepping the page for full names
-  undercounts it. **This line said "all 81" and "17 abbreviated" until
-  2026-08-14, and both halves were wrong** (ROADMAP O38): counted, the
-  page carries 64 + 8, and NINE variables appear on it in no form at all
-  — the six `UNDERCROFT_ORCH_*`, which belong to the control plane and
-  are documented in `docs/MULTI_TENANCY.md` and `docs/AGENTS.md` rather
-  than on the engine's page, plus `UNDERCROFT_COLBERT_NAME`,
-  `UNDERCROFT_ONNX_NAME` and `UNDERCROFT_RERANK_NAME`. The exclusion of
-  the six is a scoping decision and is now stated; the model-name three
-  are simply absent from this page, and two of them were absent from
-  EVERY document until O38 put them in `docs/EMBEDDERS.md`. The wrong
-  sentence sat directly above the rule that would have caught it.
+  which inlines them and documents every layer plus **all 81**
+  `UNDERCROFT_*` variables the engine honours — **64** written out in
+  full across the env table's 60 rows, plus **17** siblings abbreviated
+  to a suffix inside the row that owns them (`UNDERCROFT_ORCH_ADDR ·
+  _DB · _KEY · _ADMIN_TOKEN · …` is one row; `_TOKENIZER` and `_NAME`
+  appear once per model role), which is why grepping the page for full
+  names undercounts it by exactly those 17.
+  **This paragraph claimed "72 of the 81", "8 abbreviated" and "NINE
+  absent" between 2026-08-14 and 2026-08-17, and all three were wrong**
+  — ROADMAP **O43**. O38 rewrote a CORRECT line ("all 81", "17
+  abbreviated") into a false one and asserted, confidently and in bold,
+  that both halves of the original had been wrong. They had not. The
+  page was never changed by O38 at all: `git log -- architecture/
+  index.html` runs O24 → O20 → O14 → O30 → O32 and then straight to
+  2026-08-17, so nothing about its coverage moved in round five.
+  **What went wrong is a counting method that could not SEE what it was
+  counting.** A bare `<code>_SUFFIX</code>` only tells you which
+  variable it means once you attribute it to the ROW it sits in: `_NAME`
+  in the ONNX row means `UNDERCROFT_ONNX_NAME` and says nothing about
+  `UNDERCROFT_COLBERT_NAME`, which is abbreviated in its own row one
+  line below. Count suffixes globally and you credit the wrong
+  variables; count only full names and you miss all 17. O38 recognised
+  eight of the abbreviations and read the other nine — the six
+  `UNDERCROFT_ORCH_*` sharing one row, and the three `_NAME` — as
+  absent, then wrote a scoping rationale explaining why they *ought* to
+  be absent, which is the most expensive kind of wrong: a wrong
+  measurement dressed in a reason. **This figure is now GATED** by the
+  `prose figures` preflight, row-scoped, so it is counted rather than
+  argued about.
   (77/62/58 until `UNDERCROFT_ORCH_ENGINE_CA` — the CA
   pin for the orchestrator→engine hop, which had no transport policy at
   all until the post-1.0.0 drift audit; 79/64/60 since
   `UNDERCROFT_OTLP_CA`, the pin for the traces hop, which had none
   either and whose exporter could not do TLS at all. Those historical
-  figures used the same wrong arithmetic and are left as the record of
-  what was believed.) Count the truth,
+  figures are left as the record of what was believed at the time.)
+  Count the truth,
   never a number in prose:
   `grep -rhoE '"UNDERCROFT_[A-Z0-9_]+"' crates/ | sort -u` over every
   crate except `undercroft-bench`, whose `UNDERCROFT_VS_*`/`UNDERCROFT_TEST_*`
@@ -1151,7 +1175,22 @@ Consequences that are binding, not advisory:
 - `docs/AGENTS.md` — the scenario-driven agent implementation guide
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
-  variables change
+  variables change. **`/v1` is described by TWO documents** — this one's §10
+  and `docs/remote-server.md` — and keeping only one is what O45 was: O14
+  added a route, updated §10, and left the other reference claiming "All 35
+  routes, counted against `route()` … rather than remembered". Both are
+  gated now, as SETS in both directions rather than counts, because a count
+  passes when one route is swapped for another.
+  **A full-name scan of any reference in this repo UNDERCOUNTS, and the
+  undercount reads as a documentation gap.** Every reference here groups
+  families into one row and abbreviates the siblings to a suffix —
+  `` `undercroft_list_wings` / `_list_rooms` / `_get_taxonomy` `` in the tool
+  table, `UNDERCROFT_ORCH_ADDR · _DB · _KEY` on the architecture page,
+  "`_KEY` carries a bearer, `_DIM` overrides the dimension" in
+  `docs/EMBEDDERS.md`. Three separate sweeps have now "found" phantom gaps
+  this way, including O38, which shipped its miscount as a correction. Match
+  the suffix form too, or you are measuring the notation rather than the
+  coverage
 - `docs/AMB_REPLICATION.md` — how to run the Agent Memory Benchmark's
   own protocol against this engine with **Claude subagents in the two
   model roles and no external LLM API**. Deliberately carries **no AMB
@@ -1404,8 +1443,13 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the seven host-side preflights
-and no suite**, which is what CI invokes. The script is the one thing that
+**`bash tests/battery.sh --preflight-only` runs the ten host-side preflights
+and no suite**, which is what CI invokes. (This sentence said "seven" while
+the tree ran eight, and nothing could say so. **It is gated now** — ROADMAP
+**O42** — by the `prose figures` preflight, which counts this number and
+seven other figures the doctrine states about the tree against what the tree
+actually measures. It caught its own arrival: adding that preflight made the
+count ten while this sentence still said nine.) The script is the one thing that
 runs on the host rather than in a container, and it has to be: it *drives*
 Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
 `git ls-files --eol` over the WHOLE tree — none of which any image carries.
@@ -2483,11 +2527,41 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   cannot express.
 - Release flow: full Docker battery (always `--build`) → **`UPGRADING.md`
   updated if anything can stop a running deployment, and `undercroft config
-  check` able to detect it** → PR → CI green →
+  check` able to detect it** → **set the CHANGELOG and ROADMAP release date
+  to the date the tag will actually be cut, as the LAST edit before tagging**
+  (it is written when the release is prepared and the tag is a separate,
+  later step, so it drifts by exactly as long as the prep sits in review —
+  `1.1.0` was prepared on 2026-08-14 and dated that, three days before it
+  could be tagged, **and then drifted a second time while still unreleased**,
+  which is the argument for making this a step rather than a number someone
+  sets once and trusts. A release date is not a fact about the work; it is a
+  fact about the tag, and the tag does not exist yet) → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
   post-merge CI green → Pages live-verified. Version bumps touch
   workspace `Cargo.toml` + `Cargo.lock` (via a Docker `cargo update
   --workspace` — battery images COPY source and never update the host
-  lock), `.claude-plugin/plugin.json`, CHANGELOG, ROADMAP, and the
-  landing hero release button.
+  lock), `.claude-plugin/plugin.json`, CHANGELOG, ROADMAP, `CLAUDE.md`'s
+  own "Current release" sentence, the landing hero release button, and
+  **`architecture/index.html`'s three `Engine v…` strings**.
+  **That list is no longer the authority, and this is why.** The `1.0.0`
+  release commit moved **five** version-identity strings across **three**
+  files, and the list named only ONE of those three (the landing hero) —
+  so the `1.1.0` release-prep commit bumped that one and left the other
+  two behind, which is what a hand-recalled inventory always does: drift
+  toward whatever the last person remembered, with nothing able to say
+  so. (Counted from `git show 6976983`, not recalled — an earlier draft
+  of this very paragraph said "eight surfaces, four omitted" and was
+  wrong in both figures.) The
+  authority is the **`version surfaces` preflight** in
+  `tests/battery.sh`, which reads the workspace version out of
+  `Cargo.toml` (never a literal of its own) and counts every version
+  claim in the tree against it, in both directions: a surface that
+  forgot to move fails, and a NEW surface with no inventory row fails
+  too. Prose above, gate below — and the gate is the one to trust.
+  Note it classifies claims, because they do not share a provenance: a
+  `current` claim states the version the tree IS, while an **`as-of`**
+  claim (`docs/PARITY.md`'s "updated for v…") states when something was
+  last VERIFIED and is deliberately NOT bumped by a release — moving it
+  would assert a re-verification nobody performed. Re-verify it, then
+  move it.
