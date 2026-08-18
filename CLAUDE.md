@@ -734,6 +734,25 @@ Consequences that are binding, not advisory:
   reviewer's own `--wing quarantine-pending` scope); the residue is stated —
   remotely the floor bounds what came BACK, not what was generated, i.e. an
   availability cost, never an integrity one. Telemetry is at parity too),
+  **the READ choke point** (`Read::{Returned(ReadOp), Internal(InternalRead)}`,
+  ROADMAP O50, 2026-08-18) — the peer of `Screen` on the other side. `get` and
+  `recent` take a REQUIRED witness, so a new read path does not compile until
+  its author says whether it returns content to a caller or is the engine
+  reading for itself. It exists because `audit_read` had exactly TWO call
+  sites, both `"search"`, while `UNDERCROFT_READ_AUDIT=chain` is documented
+  for *insider/exfil accounting*: `get`, `recent`, `list_drawers`, diary,
+  tunnel, closet, hallways and the admission queue returned verbatim content
+  and recorded NOTHING, so walking `GET …/drawers` then `GET …/drawers/{id}`
+  exfiltrated a vault leaving zero records while one search left one. Nine
+  doors now record exactly one each; bulk doors pass `InternalRead::BulkMember`
+  to their inner `recent` so the trail says one list rather than N gets; and
+  `read/search` canonicals are BYTE-IDENTICAL to those written before, because
+  the field order is untouched and non-search reads simply leave the scope
+  fields empty. `ReadOp::ALL` is counted against the driver table both ways, so
+  a variant added without a record fails the build. **The KG is a SECOND funnel
+  and is still unaudited** (`kg_query`, `kg_timeline`, `kg_entities`,
+  `lookup_canonical`, `kg_receipts` return distilled drawer words) — stated in
+  `SECURITY.md`'s out-of-scope list rather than left implied),
   read/egress auditing (the consultation-filed gap, closed 2026-08-04:
   **exports chain-audited unconditionally on every surface** —
   `audit_export`, one `egress/export` record binding surface + recipient
@@ -1512,6 +1531,24 @@ test by construction:
   reported `ok` — a broken scanner and a clean tree are indistinguishable, so
   it shipped. Source the code out of the file, or invoke the command, and
   give every scanner a **premise probe** that fails when it examined nothing.
+
+**A WAIT THAT CANNOT TIME OUT IS NOT A WAIT, IT IS A HANG.** On 2026-08-18
+two background shells polled `until grep -q 'BATTERY OK\|BATTERY FAILED'
+<log>; do sleep 30; done` for nearly three hours. The sentinel never arrived
+because the battery had aborted under `set -u` *before* printing its verdict
+line — so the loop was waiting on a string that could not appear, and had no
+bound that would make it say so. Nothing was lost (they held no locks and
+wrote nothing) but nothing was learned either, and the real failure was
+already visible in the log.
+
+Two rules follow, and they are the premise-probe discipline applied to the
+agent's own tooling rather than to a gate. **Bound every wait** — an
+iteration cap and a loud failure when it expires, because "not finished yet"
+and "will never finish" are indistinguishable to an unbounded poller, which
+is this file's oldest lesson wearing different clothes. And **watch the
+PROCESS, not a sentinel in a file it may never write**: a backgrounded
+command already notifies on exit, so polling its output for a magic string
+adds a failure mode the notification does not have.
 
 **So: compile after EVERY structural edit, before making the next one.**
 Batching them hides which edit broke what, and this session batched them four

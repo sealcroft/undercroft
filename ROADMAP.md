@@ -468,11 +468,14 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 8 verified rows
+### Still open from round four — 9 verified rows
 
-`#25` (reporting half only), `#23` (KG funnel only), `#28`, `#29`, `#37`,
-`#44`, `#45`,
-`#47`, `#48`. All MED or lower, all silent-failing, all PATCH or MINOR.
+`#23` (KG funnel only), `#25` (reporting half only), `#28`, `#29`, `#37`,
+`#44`, `#45`, `#47`, `#48`. All MED or lower, all silent-failing, all PATCH
+or MINOR. The heading read `8` while the list held 9 until 2026-08-18 — my
+own miscount, of exactly the class this campaign spent its length fixing, and
+now GATED: the `prose figures` preflight counts the heading against the
+entries beneath it.
 
 **`#26` is CLOSED by O48** — it *was* the `UNDERCROFT_FDE_IVF_MIN`
 garbage-is-less-conservative-than-unset claim, and the "a declaration that

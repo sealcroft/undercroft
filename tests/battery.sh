@@ -1126,6 +1126,28 @@ for row in "${PROSE_FIGURES[@]}"; do
   fi
 done
 
+# The round-four open-row heading against the rows it lists. Self-consistent
+# and therefore mechanically checkable, unlike the rows' contents — and it
+# drifted the day it was written (heading 8, list 9), which is why it is here.
+RF_HEAD=$(grep -oE '^### Still open from round four — [0-9]+ verified rows' ROADMAP.md           | grep -oE '[0-9]+' | head -1)
+if [ -n "$RF_HEAD" ]; then
+  # ONLY the list paragraph — the prose beneath it names closed rows too
+  # (`#26 is CLOSED by O48`), and sweeping those in made this gate's first
+  # run report 11 for a list of 9. Start after the heading, skip blanks, stop
+  # at the first blank line that follows content.
+  RF_LIST=$(awk '/^### Still open from round four/{f=1;next}
+                 f&&/^$/{ if (seen) exit; next }
+                 f{ seen=1; print }' ROADMAP.md             | grep -oE '`#[0-9]+`' | sort -u | grep -c . || true)
+  if [ "${RF_LIST:-0}" -lt 1 ]; then
+    echo "FAIL  the round-four open list matched no rows — the paragraph moved,"
+    echo "      and a reader that finds nothing must not agree with any heading"
+    PROSE_FAIL=1
+  elif [ "$RF_HEAD" != "$RF_LIST" ]; then
+    echo "FAIL  round-four open rows: the heading says $RF_HEAD, the list holds $RF_LIST"
+    PROSE_FAIL=1
+  fi
+fi
+
 if [ "$PF_ENV_ABSENT" -ne 0 ]; then
   echo "note  $PF_ENV_ABSENT engine variable(s) appear on $PF_ARCH in no form:$PF_ABSENT_LIST"
 fi

@@ -65,6 +65,43 @@ so rather than implying it checked them.
 
 ---
 
+## 1.1.1 (unreleased)
+
+### `UNDERCROFT_READ_AUDIT=chain` now records EVERY content read, not only searches
+
+**Nothing to change, but plan for the volume.** Before this, one chain record
+was appended per `search` and none for anything else — `get`, `recent`, the
+drawer list, diary, tunnel, closet, hallways and the admission queue returned
+verbatim content and recorded nothing. That made the trail useless for the
+purpose the variable is documented for (insider/exfil accounting): walking
+`GET /v1/…/drawers` then `GET …/drawers/{id}` left no evidence at all.
+
+**Who is affected:** only deployments that have *declared*
+`UNDERCROFT_READ_AUDIT=chain`. The default is off and its behaviour is
+unchanged.
+
+**What changes for them:** more chain records, proportional to reads rather
+than to searches, so the audit table and the vault file grow faster. Each
+record is small and metadata-only (a KEYED fingerprint of the subject, never
+the id or the text in clear), and each is one row plus one chain step. Bulk
+doors record ONCE per call, not once per row returned, so listing a thousand
+drawers appends one record.
+
+**What does NOT change:** `read/search` records are byte-identical to the ones
+written before — same canonical, same field order — so nothing already in a
+chain is reinterpreted, and `verify` replays across the boundary unchanged.
+
+**Detect it before a restart:** `undercroft config check` reports the
+declaration, and its description now reads *"every content read appends a
+chain record"* rather than *"every search…"*.
+
+**Still not covered, deliberately:** the knowledge-graph browse routes
+(`kg_query`, `kg_timeline`, `kg_entities`, `lookup_canonical`, `kg_receipts`)
+return distilled drawer words through a second funnel and do not yet record.
+It is enumerated in `SECURITY.md`'s out-of-scope list.
+
+---
+
 ## 1.1.0
 
 **These are fixes, not contract changes**, and the distinction is worth
