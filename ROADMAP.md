@@ -144,6 +144,71 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O57 — CLOSED 2026-08-19: five round-four rows lived only in a gitignored file, and my own "nothing left" claim was wrong
+
+**The correction first, because it is mine.** O56's commit message and the
+handover both said *"round four now has NO PATCH-shaped work left"*. That was
+false when I wrote it. The ROADMAP's own round-four section said, in the
+paragraph directly under the list I was editing, that five rows *"are recorded
+in `.handover/SWEEP4_FIX_PLAN.md`, which is gitignored — filing them here as
+work is itself outstanding, and it is the O37 failure class"*. I replaced the
+list above that paragraph and did not read it, which also left the section
+incoherent: a note explaining a nine-row count floating under a three-row
+sentence.
+
+So the claim was wrong in the ordinary way claims here go wrong — asserted
+from the part of the file I had just edited rather than from the file.
+
+**All five are now resolved in the tracked file, each verified against the
+code rather than inherited:**
+
+* **`#46` — verified CLOSED.** O11 already widened `verify`'s orphan-label leg
+  to bare drawer ids, with the discriminating argument the finding asked for
+  written into the field doc.
+* **`#49` — half FIXED here, half filed as an OPEN QUESTION.** `del/` is
+  fenced from the agent surface with the reason *"Operator acts on the
+  corpus"*. That is false: `delete_drawer` appends `del/{id}`,
+  `delete_tunnel` appends `del/tunnel/{id}`, and MCP advertises
+  `undercroft_delete_drawer`, `_delete_tunnel` and `_delete_by_source` — so an
+  agent deletes and then **cannot see the deletion it performed**. The fence
+  stays (the same namespace holds `forget_with_proof`'s operator-attested
+  destructions, and unfencing it wholesale hands those over); the REASON is
+  corrected, and the residual it was hiding is now stated where the fence is
+  declared. Splitting agent-initiated from operator-attested destruction is a
+  behaviour change to an agent surface and gets its own argument.
+* **`#51` — does not describe this tree.** There is no kind-filter exclusion
+  count: `SearchNotes` carries `trust_excluded` alone, and
+  `trust_excluded_wing_count` counts WINGS. Recorded as unverifiable rather
+  than closed — "I could not find it" and "it is not there" are different
+  claims, and only the second would justify striking a row.
+* **`#52` — verified CLOSED.** `is_integrity_verdict`'s own doc records that
+  the gap it used to document was closed for `/v1 …/supersessions` and then
+  `/v1 …/kg/receipts`.
+* **`#56` — two of three corrected, the third scoped honestly.** O1 said all
+  twenty release assets are `.tar.gz`; `release.yml` packs `7z a -tzip` on
+  Windows at both matrices, so it was wrong about the one platform whose users
+  cannot untar. O6 said the org avatar is *"byte-for-byte"* the house mark —
+  GitHub re-encodes an uploaded avatar, so the bytes served are not the bytes
+  uploaded and the check actually run compared the rendered design. Both are
+  claims stronger than their evidence, in entries whose own subject is
+  verifying artifacts properly. The third detail (four manifest entries or
+  three) needs the anonymous registry token flow against the live registry and
+  is **not** verified from this tree; the entry now says so instead of
+  repeating a number.
+
+**Ninth filing, ninth incomplete or wrong** — and this time two of the five
+were already closed and one describes code that does not exist. A filing is a
+hypothesis, and a filing inherited from a synthesis is a hypothesis about a
+hypothesis.
+
+**No gate, and that is the honest answer rather than a gap.** What failed here
+is a claim about the tree made without reading it, and the mechanism that
+catches that class is already in place — the `prose figures` preflight for
+counted figures, the ROADMAP-heading gate for statuses. Neither can see "a
+sentence two paragraphs down contradicts the one you just wrote", and a
+scanner for that would be a prose gate with a one-instance history, which
+`CLAUDE.md`'s own rule for new doctrine rejects.
+
 ### O56 — CLOSED 2026-08-18: `pool_div` names the tiers it actually reaches, and the FDE measurement is filed rather than guessed
 
 **Round-four #47**, taken at the grade round four's own synthesis argued for
@@ -951,19 +1016,53 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 3 verified rows
+### Round four — the full accounting, every row resolved
 
-`#44`, `#45`, `#48` — **all three MINOR, so none of them can land in `1.1.1`,
-which is a PATCH release.** They are naming/semantic corrections (`writes`
-counts more than writes; `record` carries three senses; `POST …/anchor` and
-the CLI answer differently about one lag), and the PATCH-legal half of each is
-only its documentation. Filed for `1.2.0` below rather than half-landed here:
-adding a field beside the misleading one is MINOR by this project's own test,
-and renaming it is MAJOR.
-All MED or lower, all silent-failing, all PATCH or MINOR. The heading read
-`8` while the list held 9 until 2026-08-18 — my own miscount, of exactly the
-class this campaign spent its length fixing, and now GATED: the `prose
-figures` preflight counts the heading against the entries beneath it.
+**All 70 findings are now accounted for in THIS file.** Five of them lived
+only in `.handover/SWEEP4_SYNTHESIS.md`, which is gitignored — the O37 failure
+class this section already warned about, still open in the section that warned
+about it. They are resolved below, each verified against the code on
+2026-08-19 rather than inherited from the synthesis.
+
+**Open, and MINOR — filed for `1.2.0` as M1–M3:** `#44` (`writes` counts reads
+and exports), `#45` (one drawer count has two names; `record` has three
+senses), `#48` (`POST …/anchor` and the CLI answer differently about one lag).
+None can land in `1.1.1`, which is a PATCH release: each changes a reported
+value, and the only PATCH-legal part of each is its documentation.
+
+**Open, and an OPEN QUESTION:** `#49`'s second half. `del/` is fenced from the
+agent surface, and its stated reason — *"Operator acts on the corpus"* — was
+false: `delete_drawer` appends `del/{id}`, MCP advertises
+`undercroft_delete_drawer`, so **an agent cannot see a deletion it performed**.
+The reason is corrected (O57) and the fence is unchanged, because the same
+namespace holds `forget_with_proof`'s operator-attested destructions.
+Separating the two namespaces would give an agent its own deletion history and
+is a behaviour change to an agent surface — decided on its own argument, not
+on the strength of a mismatched comment.
+
+**Verified CLOSED, and they were closed before this session:**
+
+* `#46` — `verify`'s orphan-label leg. **O11 already widened it to bare drawer
+  ids**, and the field doc carries the discriminating argument the finding
+  asked for: destruction is a choke point, one `DELETE FROM drawers` appends
+  `del/{id}` in the same transaction, so no live row AND no tombstone cannot
+  happen legitimately.
+* `#52` — the fleet's integrity classifier. `is_integrity_verdict`'s own doc
+  now records that the gap it used to document was closed, for
+  `/v1 …/supersessions` and then `/v1 …/kg/receipts`.
+
+**Does not describe this tree:** `#51` — *"the `kind`-filter exclusion count
+counts rows the retrieval policy had already excluded"*. There is no
+kind-filter exclusion count. `SearchNotes` carries `trust_excluded` alone, and
+`trust_excluded_wing_count` counts WINGS under a trust floor. Recorded as
+unverifiable rather than closed, because "I could not find it" and "it is not
+there" are different claims and only the second would justify deleting a row.
+
+**Corrected here:** `#56`'s three details, two of which were checkable from the
+repo and now are (O57). The third — whether the GHCR manifest list holds four
+entries or three — needs the anonymous registry token flow against the live
+registry and is **not** verified from this tree; the entry says so rather than
+repeating a number.
 
 **`#23` is CLOSED by O51** — the KG funnel was its remaining half, so the row
 is now closed on both funnels. It came off this list on 2026-08-18, taking
@@ -1499,8 +1598,13 @@ and what it found fresh, is above under **OPEN after the round-three audit**.
 
 ### O1 — CLOSED 2026-08-10: binaries shipped and the image is public
 The `v1.0.0` release workflow completed successfully and **20 assets** are
-published, correctly named `undercroft-v1.0.0-<target>[-ort].tar.gz` plus
-`.sha256` — five targets, both variants. The release button on the landing
+published — five targets, both variants — named
+`undercroft-v1.0.0-<target>[-ort].tar.gz` plus `.sha256`, **except the two
+Windows assets, which are `.zip`**. This sentence said `.tar.gz` for all
+twenty until 2026-08-19 (round-four #56, ROADMAP O57): `release.yml` packs
+`7z a -tzip` on Windows and `tar -czf` everywhere else, at both the default
+and the `ort` matrix, so the claim was wrong about exactly the platform whose
+users cannot untar. Verified by reading the workflow, not the release page. The release button on the landing
 page is now honest.
 
 **What was wrong:** `ghcr.io/sealcroft/undercroft` answered **HTTP 403 to an
@@ -1802,9 +1906,16 @@ trusting its filename: `undercroft-mark-512.png` is 512×512 and
 
 **The org avatar is DONE — verified 2026-08-10, and this entry was stale.**
 `https://avatars.githubusercontent.com/u/314753270` serves the **Sealcroft
-house mark**, byte-for-byte the design at
-`sealcroft.com/assets/sealcroft-mark-512.png` — which is the right choice of
-the two, since the house is not the product. Nobody could have noticed from
+house mark** — the same design as `sealcroft.com/assets/sealcroft-mark-512.png`,
+which is the right choice of the two, since the house is not the product.
+
+**This said "byte-for-byte" until 2026-08-19 and could not have** (round-four
+#56, ROADMAP O57). GitHub re-encodes and re-scales an uploaded avatar, so the
+bytes it serves are not the bytes uploaded, and the check that was actually
+run compared the RENDERED design rather than a digest. The claim was stronger
+than its evidence — this project's own recurring defect, in the entry that
+records verifying an image by reading its IHDR rather than trusting its
+filename. Nobody could have noticed from
 inside the repo: an upload leaves no trace here.
 
 **Note the two halves needed DIFFERENT checks, and only one was conclusive

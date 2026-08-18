@@ -5,6 +5,39 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### five round-four rows were tracked only in a gitignored file, and a claim of mine was wrong (O57)
+
+**The correction first, because it is mine.** O56 said *"round four now has no
+PATCH-shaped work left"*. That was false when I wrote it: the ROADMAP's own
+round-four section said, in the paragraph directly under the list I had just
+edited, that five rows lived only in a gitignored handover and that filing them
+was itself outstanding. I replaced the list above that paragraph without
+reading it — which also left the section incoherent.
+
+All five are resolved in the tracked file now, each verified against the code
+rather than inherited. `#46` and `#52` were **already closed** (O11 widened the
+orphan-label leg; the fleet classifier's own doc records its fix). `#51` **does
+not describe this tree** — there is no kind-filter exclusion count — and is
+recorded as unverifiable rather than struck, because "I could not find it" and
+"it is not there" are different claims.
+
+**`#49` is half fixed here.** `del/` is fenced from the agent surface with the
+reason *"Operator acts on the corpus"*, and that is false: `delete_drawer`
+appends `del/{id}` and MCP advertises `undercroft_delete_drawer`, so an agent
+deletes and then cannot see the deletion it performed. The fence stays — the
+same namespace holds operator-attested destructions — but the reason is
+corrected and the residual it hid is stated where the fence is declared.
+Splitting the two namespaces is a behaviour change to an agent surface and is
+filed as an open question.
+
+**`#56`: two claims corrected, the third scoped.** O1 said all twenty release
+assets are `.tar.gz`; `release.yml` packs `7z a -tzip` on Windows. O6 said the
+org avatar is "byte-for-byte" the house mark; GitHub re-encodes an uploaded
+avatar, so the bytes served are not the bytes uploaded. Both were claims
+stronger than their evidence, in entries whose own subject is verifying
+artifacts properly. The third (manifest-entry count) needs the live registry
+and now says so rather than repeating a number.
+
 ### `pool_div` names the tiers it actually reaches (O56)
 
 **Round-four #47**, taken at the grade its own round's synthesis argued for:

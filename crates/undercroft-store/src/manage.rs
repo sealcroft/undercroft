@@ -1721,8 +1721,28 @@ pub const AGENT_FENCED_NAMESPACES: &[&str] = &[
     // what is about to expire.
     "retention/",
     "retention-clear/",
-    // Attested destruction, and egress. Operator acts on the corpus.
+    // Attested destruction, and egress.
+    //
+    // **The reason here used to read "Operator acts on the corpus", and that
+    // is not what `del/` holds** (ROADMAP O57, round-four #49). `delete_drawer`
+    // appends `del/{id}` and `delete_tunnel` appends `del/tunnel/{id}`, and
+    // MCP advertises `undercroft_delete_drawer`, `_delete_tunnel` and
+    // `_delete_by_source` — so an agent deletes, the deletion is recorded
+    // here, and the fence means **the agent cannot see a deletion it
+    // performed itself**. The fence is still right: the same namespace holds
+    // `forget_with_proof`'s operator-attested destructions, and unfencing it
+    // wholesale would hand those over. What was wrong was the stated reason,
+    // which described only half of what is behind the door and made the
+    // residual invisible to anyone reading it.
+    //
+    // The residual, stated rather than implied: an agent's own history is
+    // incomplete about its own deletions. Separating agent-initiated from
+    // operator-attested destruction into two namespaces would fix that and is
+    // a behaviour change to an agent surface — filed as an open question
+    // rather than taken on the strength of a mismatched comment.
     "del/",
+    // Egress: a full-palace export. Operator acts on the corpus, and this one
+    // really is only that.
     "egress/",
     // The read-audit trail. An agent reading which queries were run is a
     // side channel on other principals' retrieval, not its own history.
