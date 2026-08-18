@@ -144,6 +144,52 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O59 — CLOSED 2026-08-19: O51's own rule, applied to O51 — three surfaces still said "per search"
+
+**The session-end docs-vs-code sweep, and it found my own work.** O51 changed
+what `UNDERCROFT_READ_AUDIT=chain` records — from one entry per SEARCH to one
+per content-returning READ, across two funnels — and updated six surfaces.
+**Three more stated the same claim and were missed**, including the public
+landing page:
+
+* `website/landing/index.html` told every visitor *"record per search — a
+  keyed fingerprint of the query"*. The most-read surface in the project, and
+  the one furthest from the code.
+* `docs/THREAT_MODEL.md` said *"each search appends a record too"* in the
+  paragraph ABOVE the "what it covers" block O51 rewrote — so the same
+  document contradicted itself, correct in one place and stale two paragraphs
+  up.
+* `docs/integrations.md` said a read-only server *"does not … append a
+  read-audit record per search"* — the sentence's sibling in `docs/AGENTS.md`
+  was fixed by O51 and this copy was not.
+
+**That is the rule O51 quoted, broken by O51.** *"A claim lives on every
+surface that states it"* — and the way it failed is the documented one: I
+searched for the surfaces I expected rather than for the CLAIM. A `grep` for
+`READ_AUDIT` finds the variable; these three say "per search" without naming
+it, so they were invisible to the search that found the other six.
+
+**What the sweep also confirmed, and confirming costs less than assuming.**
+The four namespaces O51 added (`read/kg-query`, `-timeline`, `-entities`,
+`-canonical`) are fenced from the agent surface: `AGENT_FENCED_NAMESPACES`
+matches `record_id NOT LIKE 'read/%'`, a prefix, and the `MINTED` inventory
+that gates it already classifies `read/` as fenced. Verified by reading the
+SQL and the inventory rather than trusting the prefix.
+
+Two other claims were checked and are correct as they stand:
+`website/src/runbook.md` and `docs/MULTI_TENANCY.md` describe the read-only
+posture suppressing the record, which is unchanged, and
+`docs/CONSULTATION_REVIEW.md` is an as-of document dated 2026-07-31 whose
+statement was true when written — deliberately not bumped, on the
+`docs/PARITY.md` precedent.
+
+**No gate.** The gateable half of this class — counted figures — already has
+the `prose figures` preflight, and a scanner for "a sentence that paraphrases
+a claim without naming its variable" is a prose gate that would have to
+understand paraphrase. What it needs instead is the discipline this entry
+records: **search for the CLAIM, not for the identifier**, and expect the
+public surface to be the one furthest behind.
+
 ### O58 — CLOSED 2026-08-19: the control plane's pre-flight gets the axis the engine's got, and the join now compares it
 
 **A drift I created in this session, found by drift-checking my own work.**

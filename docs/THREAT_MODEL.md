@@ -462,9 +462,10 @@ appends an `egress/export` record binding the surface, the recipient
 (when the export names one), the record counts and the export's own
 manifest digest. That one is **not** behind a declaration — an egress
 is worth recording whether or not the deployment opted into anything.
-Under `UNDERCROFT_READ_AUDIT=chain` each search appends a record too,
-carrying a **keyed fingerprint of the query** (never its text), the
-scope and the hit count.
+Under `UNDERCROFT_READ_AUDIT=chain` each content-returning READ appends a
+record too — searches, by-id and bulk drawer reads, and the knowledge graph's
+own doors — carrying a **keyed fingerprint of the subject** (never its text),
+the scope and the count.
 
 **What it covers, since 2026-08-18 (ROADMAP O50 and O51).** Every
 content-returning read appends exactly one chain record, across **both**

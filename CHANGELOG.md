@@ -5,6 +5,25 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### three surfaces still said "per search", including the landing page (O59)
+
+**The session-end sweep, finding my own work.** O51 changed what
+`UNDERCROFT_READ_AUDIT=chain` records — one entry per content-returning READ,
+not per search — and updated six surfaces. Three more stated the same claim:
+the public landing page, `docs/THREAT_MODEL.md` (in the paragraph above the
+block O51 rewrote, so the document contradicted itself), and
+`docs/integrations.md` (whose sibling sentence in `docs/AGENTS.md` was fixed).
+
+That is the rule O51 quoted, broken by O51 — and it failed the documented way:
+I searched for the surfaces I expected rather than for the CLAIM. A grep for
+`READ_AUDIT` finds the variable; these three say "per search" without naming
+it. **Search for the claim, not the identifier**, and expect the public
+surface to be the one furthest behind.
+
+Also confirmed rather than assumed: O51's four new `read/kg-*` namespaces are
+fenced from the agent surface — the fence is a `NOT LIKE 'read/%'` prefix
+match and the `MINTED` inventory that gates it already classifies `read/`.
+
 ### the control plane's pre-flight gets the axis the engine's got (O58)
 
 **A drift created in this session and found by drift-checking it.** O52 gave
