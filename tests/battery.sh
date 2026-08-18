@@ -350,10 +350,49 @@ fi
 echo "ok    the former name is absent from tracked content"
 echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /      /'
 
+# ROADMAP O47 (round-four #36). This gate was ONE-DIRECTIONAL: it flagged a
+# body saying CLOSED under a heading that did not, and could not flag the
+# opposite — a heading claiming CLOSED over work that is not done. That is
+# the direction a session WRITING closures gets wrong, and it underwrites
+# every closure this campaign has recorded.
+#
+# **What is decidable, and what is not.** Whether the work is actually done is
+# semantic; no textual gate decides it, and pretending otherwise would ship a
+# scanner that reads as broader than it is (the O33 failure). Two proxies ARE
+# decidable, and both were measured against the tree before being encoded:
+#
+#   * a closure must carry EVIDENCE — a gate, a test or a counterfactual.
+#     Measured: 42 closed entries, 0 without. It is an invariant this file
+#     already holds, so encoding it costs nothing and catches the closure
+#     written in a hurry with nothing behind it.
+#   * a closure must say WHEN. Measured: 1 legitimate exception, `CLOSED by
+#     doctrine`, which is a ruling rather than a date and is named below.
+#
+# **What was REJECTED, and why it is recorded rather than attempted.** The
+# obvious check — a CLOSED heading over a body still using open-work
+# vocabulary ("Not scheduled", "Shape of a fix") — was built and measured at
+# THREE false positives in 42, and `<details>` does not separate them: in
+# O10, O20 and O25 that phrasing refers to OTHER work the entry mentions, not
+# to its own status. At that rate the gate would be noise, and a noisy gate
+# gets switched off (the O44 reasoning). Recorded as unreachable rather than
+# shipped at 7% wrong.
+#
+# Note #36's own filing said this gate "examines 7 of ~25 `###` sections".
+# Measured, it examines 47 of 60 — the 13 it skips are prose sections with no
+# `[A-Z][0-9]+` id, which are correctly out of scope. The coverage half of
+# that filing was stale; the one-directional half was right.
 echo "═══ preflight: ROADMAP headings ═══"
 ROADMAP_DRIFT=$(awk '
   function flush() {
-    if (sec != "") { seen++; if (body ~ /CLOSED/ && sec !~ /CLOSED/) print sec }
+    if (sec != "") {
+      seen++
+      if (body ~ /CLOSED/ && sec !~ /CLOSED/) print "body-closed-heading-open|" sec
+      if (sec ~ /CLOSED/) {
+        if (body !~ /[Gg]ate|[Cc]ounterfactual|test/) print "closure-without-evidence|" sec
+        if (sec !~ /CLOSED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ &&
+            sec !~ /CLOSED by doctrine/) print "closure-without-a-date|" sec
+      }
+    }
   }
   /^### [A-Z][0-9]+/ { flush(); sec = $0; body = ""; next }
   /^## /              { flush(); sec = "";  body = ""; next }
@@ -376,16 +415,30 @@ if [ "$ROADMAP_DRIFT" = "PREMISE-FAILED-no-sections-examined" ]; then
   exit 1
 fi
 if [ -n "$ROADMAP_DRIFT" ]; then
-  echo "FAIL  these ROADMAP entries say CLOSED in the body and not in the heading."
-  echo "      A reader skims headings; one that contradicts its own section is"
-  echo "      how an item that does not exist ends up in a handover:"
-  printf '        %s
-' "$ROADMAP_DRIFT"
+  while IFS='|' read -r kind sec; do
+    [ -z "$kind" ] && continue
+    case "$kind" in
+      body-closed-heading-open)
+        echo "FAIL  this entry says CLOSED in the body and not in the heading."
+        echo "      A reader skims headings; one that contradicts its own section"
+        echo "      is how an item that does not exist ends up in a handover:" ;;
+      closure-without-evidence)
+        echo "FAIL  this heading claims CLOSED and the body names no gate, test or"
+        echo "      counterfactual. Every other closed entry here carries one, so"
+        echo "      this is a closure with nothing behind it — the direction a"
+        echo "      session writing closures gets wrong (ROADMAP O47):" ;;
+      closure-without-a-date)
+        echo "FAIL  this heading claims CLOSED without saying WHEN. Use"
+        echo "      'CLOSED <yyyy-mm-dd>', or 'CLOSED by doctrine' for a ruling:" ;;
+    esac
+    printf '        %s\n' "$sec"
+  done <<< "$ROADMAP_DRIFT"
   echo ""
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
-echo "ok    every closed ROADMAP entry says so in its heading"
+echo "ok    every closed ROADMAP entry says so in its heading, with a date and"
+echo "      its evidence (both directions; 'is the work done' stays semantic)"
 
 # ── preflight: every compose file DECLARES its project name ────────────────
 # Undeclared, Compose derives the project from the DIRECTORY, so every

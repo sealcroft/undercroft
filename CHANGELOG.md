@@ -5,6 +5,36 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### the heading gate gained its missing direction, and its limit is stated (O47)
+
+**Round-four #36**, taken first because it underwrote every closure this
+campaign has written. The gate flagged a body saying CLOSED under a heading
+that did not, and **could not flag the opposite** — a heading claiming CLOSED
+over work that is not done, which is the direction a session *writing*
+closures gets wrong.
+
+Whether the work is actually done is semantic and no textual gate decides it.
+Two proxies are decidable, and both were **measured before being encoded**: a
+closure must carry evidence (a gate, test or counterfactual — 42 closed
+entries, **0** without one), and a closure must say when (**1** legitimate
+exception, `CLOSED by doctrine`, named in the gate).
+
+**What was rejected matters as much as what shipped.** The obvious check — a
+CLOSED heading over a body still using open-work vocabulary — was built and
+measured at **3 false positives in 42**, with `<details>` failing to separate
+them: in O10, O20 and O25 that phrasing refers to *other* work the entry
+mentions. At 7% wrong the gate is noise, and a noisy gate gets switched off.
+Recorded as unreachable rather than shipped.
+
+#36's filing also claimed the gate "examines 7 of ~25 sections". Measured, it
+examines **47 of 60**; the 13 skipped are prose sections correctly out of
+scope. Stale coverage claim, exact one-directional claim.
+
+**Residual, stated:** a heading claiming CLOSED with a date and a cited gate,
+over unfinished work, still passes. The gate demands evidence *exists*, not
+that it is true — and this campaign has twice found closures whose evidence
+was wrong (O38's figure, O35's citation).
+
 ### the import route refuses a malformed vector instead of reshaping it (O46)
 
 **Round-four #50** — the first of that sweep's verified-open rows to be

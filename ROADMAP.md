@@ -196,17 +196,72 @@ the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
 asserts the refusal AND the premise (a well-formed vector still imports),
 because a route that refused everything would pass the refusal arms alone.
 
-### Still open from round four — 12 verified rows
+### O47 — CLOSED 2026-08-18: the heading gate gained its missing direction, and its limit is stated
 
-`#23`, `#25`, `#26`, `#27`, `#28`, `#29`, `#36`, `#37`, `#44`, `#45`, `#47`,
+**Round-four #36**, and it underwrote every closure this campaign wrote —
+including the five recorded above it, which is why it was taken first.
+
+The gate flagged a body saying CLOSED under a heading that did not, and
+**could not flag the opposite**: a heading claiming CLOSED over work that is
+not done. That is the direction a session *writing* closures gets wrong.
+
+**#36's filing was half right, and the half that was wrong is instructive.**
+It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
+**47 of 60** — the 13 it skips are prose sections with no `[A-Z][0-9]+` id and
+are correctly out of scope. The coverage complaint was stale; the
+one-directional complaint was exact.
+
+**What is decidable, and what is not.** Whether the work is *actually done* is
+semantic, and no textual gate decides it. Shipping something that appeared to
+decide it would be the O33 failure — a scanner that reads as broader than it
+is. Two proxies are decidable, and both were **measured against the tree
+before being encoded**:
+
+* **a closure must carry evidence** — a gate, a test or a counterfactual.
+  Measured: 42 closed entries, **0** without one. Already an invariant here,
+  so encoding it costs nothing and catches the closure written in a hurry
+  with nothing behind it.
+* **a closure must say when.** Measured: **1** legitimate exception,
+  `CLOSED by doctrine` (a ruling, not a date), which is named in the gate.
+
+**What was REJECTED, and this is the part worth keeping.** The obvious check —
+a CLOSED heading over a body still using open-work vocabulary ("Not
+scheduled", "Shape of a fix") — was built and measured at **3 false positives
+in 42**, and `<details>` does not separate them: in O10, O20 and O25 that
+phrasing refers to *other* work the entry mentions, not to its own status. At
+7% wrong the gate is noise, and a noisy gate gets switched off. Recorded as
+unreachable rather than shipped.
+
+**Counterfactuals, three arms, each with the edit confirmed applied first:** a
+closure with no evidence → exit 1 naming it; a closure with no date → exit 1;
+and the original direction still fires. The premise probe is unchanged and
+still fails when the scan examines zero sections.
+
+**Residual, stated plainly:** a heading that claims CLOSED, carries a date and
+cites a gate, over work that is not finished, still passes. The gate now
+demands evidence *exists*, not that it is true. Only reading closes that, and
+this campaign has twice found closures whose evidence was wrong (O38's figure,
+O35's citation) — so the residual is real and named rather than implied.
+
+### Still open from round four — 11 verified rows
+
+`#23`, `#25`, `#26`, `#27`, `#28`, `#29`, `#37`, `#44`, `#45`, `#47`,
 `#48`. All MED or lower, all silent-failing, all PATCH or MINOR. **They are
 recorded in `.handover/SWEEP4_FIX_PLAN.md`, which is gitignored** — filing
 them here as work is itself outstanding, and it is the O37 failure class
 (a finding that lives only in a gitignored file is a finding that will be
-lost). `#36` is the one to take first: the ROADMAP heading gate is
-one-directional — it flags a body saying CLOSED under an open heading and
-CANNOT flag a heading claiming CLOSED over an open body, which is the
-direction a session writing closures gets wrong.
+lost). `#36` was taken first and is CLOSED as **O47** above — it underwrote
+every closure here, so it had to be the one that went first.
+
+**`#25` is the next by rank, and size it honestly**: 14 `Tunes` resolvers
+swallow their parse failure against the class contract their own doctrine
+states (`POOL_DIV=0` sets the pool to the whole corpus; `FDE_IVF_MIN` garbage
+is LESS conservative than unset, enabling a tier that is default-off because
+"the operator makes that call"). Its plan wants a new
+`undercroft-core/src/config.rs` that both binaries call, plus
+`ENGINE_ENV_VARS` gaining a `Parse::{Checked,Opaque}` axis. **Verify that plan
+against the code before trusting it** — its line numbers have already drifted
+once (it cited `tenant.rs:1930` for what is now `:2041`).
 
 ## 2.0.0 — nothing is filed here yet
 
