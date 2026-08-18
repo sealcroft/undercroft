@@ -5,6 +5,23 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### the control plane's pre-flight gets the axis the engine's got (O58)
+
+**A drift created in this session and found by drift-checking it.** O52 gave
+the engine's `config check` a `Parse::{Checked,Opaque}` axis;
+`undercroft-orchestrator` has its own `config check` with the identical
+`Accepted` catch-all and did not follow — a capability added to one surface
+and not its sibling, which is the shape all 65 of this project's drifts had.
+
+It matters more here because the two inventories are already joined: a test
+reads the engine's `parity.rs` as SOURCE (the only route two crates that never
+link each other have) and asserts they agree on every `UNDERCROFT_ORCH_*` name
+and class. After O52 they carried different SHAPES and the join could not see
+it. `ORCH_ENV_VARS` carries the axis now, the engine's both-ways gate runs on
+this binary too, and **the join compares the axis** — panicking if the two
+disagree, and also if the engine's field is absent, so removing it there fails
+here rather than silently reverting the join. Counterfactual executed.
+
 ### five round-four rows were tracked only in a gitignored file, and a claim of mine was wrong (O57)
 
 **The correction first, because it is mine.** O56 said *"round four now has no

@@ -144,6 +144,52 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O58 — CLOSED 2026-08-19: the control plane's pre-flight gets the axis the engine's got, and the join now compares it
+
+**A drift I created in this session, found by drift-checking my own work.**
+O52 gave the ENGINE's `config check` a `Parse::{Checked,Opaque}` axis so it
+could say which declarations it had actually run a parse for, instead of
+printing *"no parse to run; the consumer validates it"* whether or not one
+existed. `undercroft-orchestrator` has its **own** `config check` (O21) with
+the identical `Finding::Accepted` catch-all, the identical message, and a
+gate covering `Protects` only — and it did not follow.
+
+That is the 65-drift shape exactly: a capability added to one surface and not
+its sibling. Created by the fix rather than found by it, which is why it is
+reported as mine.
+
+**It matters more here than the general case**, because these two inventories
+are already JOINED: `the_orchestrator_and_the_engine_agree_on_every_orch_
+variable` reads the engine's `parity.rs` as SOURCE — the only route two
+crates that deliberately do not link each other have — and asserts they agree
+on every `UNDERCROFT_ORCH_*` name and class. After O52 they carried different
+SHAPES, and the join could not see it: it compared `(name, class)` and the
+engine had grown a third field.
+
+**Three things, so the two cannot drift again:**
+
+* `ORCH_ENV_VARS` carries `(name, ConfigClass, Parse)` — six `Checked`, two
+  `Opaque` (`UNDERCROFT_ORCH_ADDR` and `_DB`: a listen address this command
+  must not bind and a database path it must not open).
+* `every_checked_variable_is_pre_flighted_and_every_opaque_one_is_not`, the
+  engine's O52 gate on this binary, both directions, with the same
+  two-halves premise arm so a one-valued axis cannot report clean.
+* **The join compares the axis**, parsing the engine's third field out of its
+  source, and panics with a message naming the disagreement in the operator's
+  terms: *"one of these two commands is telling an operator it checked a
+  declaration the other says has no parse to run"*. It also panics if the
+  engine's `Parse` field is ABSENT, so removing the axis there fails here
+  rather than silently reverting the join to two-field comparison.
+
+**Counterfactual, executed:** flipping `UNDERCROFT_ORCH_RATE_LIMIT` to
+`Opaque` in the engine's inventory alone fails the join, naming the variable
+and both verdicts. Restored from a scoped file copy.
+
+**`Parse` is duplicated rather than imported**, exactly as `ConfigClass`
+already is, because the control plane deliberately never links the engine —
+and the join is what makes duplication safe, which is the same argument
+`undercroft-config` settled for the resolvers themselves.
+
 ### O57 — CLOSED 2026-08-19: five round-four rows lived only in a gitignored file, and my own "nothing left" claim was wrong
 
 **The correction first, because it is mine.** O56's commit message and the
