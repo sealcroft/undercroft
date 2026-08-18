@@ -144,6 +144,49 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O56 — CLOSED 2026-08-18: `pool_div` names the tiers it actually reaches, and the FDE measurement is filed rather than guessed
+
+**Round-four #47**, taken at the grade round four's own synthesis argued for
+rather than the one it was filed at. The synthesis is worth quoting because it
+decided this unit: *"graded as a measured recall defect it invites exactly the
+wrong fix. The doc sentence is the defect; the tier's behaviour is an open
+measurement."*
+
+**The three code facts, verified rather than inherited.** `pool_div` appears
+**zero** times in `fdeidx.rs` (the PQ tier consults it at `pqidx.rs:807`, the
+per-wing tier at `:1890`, the FTS arm at `lib.rs:5535`). `refine_semantic` is
+set in the `pq_enabled` branch only, so the exact-cosine second stage is
+PQ-only. And the field doc claimed the corpus-scaled pool applies to *"the
+semantic prefilters"* — plural, which includes MUVERA FDE.
+
+**So with `UNDERCROFT_RETRIEVAL=fde` the pool is the fixed
+`max(256, depth·32)`**, and the cure `pool_div` exists to provide — against a
+leak measured at R@5 100 → 96.8% from 131k to 1M with a fixed 256 pool — is
+not applied, while **three** surfaces said it was: the field doc,
+`architecture/index.html`'s env row and `docs/AGENTS.md`. All three now name
+the tiers.
+
+**One half of the filing is not a defect at all.** The missing stage-2 refine
+is DELIBERATE and `search_inner` says so where it declines to do it: *"FDE
+keeps its token-aware ordering (a single-vector cut would fight MaxSim)"*.
+Reading it as a gap would have invited undoing a stated design decision.
+
+**The behaviour stays open, and that is the judgement.** Wiring `pool_div`
+into the FDE tier is one line, and the PQ tier's 96.8% makes it look obvious —
+which is precisely the trap: it would be graded on a measurement of a
+DIFFERENT tier, with no stage-2 to bound the latency that follows. FDE's
+unscoped recall at 131k–1M is **unmeasured**; `pqscale` is the instrument for
+the PQ tier and no FDE analogue exists. Filed for a release that can carry the
+measurement, not fixed on an inference.
+
+**Gate:** `the_fde_tier_does_not_consult_pool_div_and_the_docs_say_so` pins
+the GAP in both directions — it asserts the PQ tiers DO consult it (the
+premise arm, without which the test would pass on a tree with no prefilters),
+asserts `fdeidx.rs` does not, and asserts the field doc still says which. The
+moment someone wires it in, the test fails and names the three documents that
+have to move with it. A gate that makes closing a gap visible is the only kind
+that keeps a filed gap from quietly becoming the design.
+
 ### O55 — CLOSED 2026-08-18: the line-ending preflight is probed, and the comment claiming it already was is gone
 
 **Round-four #37**, filed as *"the CRLF preflight has no premise probe while
@@ -908,9 +951,15 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 4 verified rows
+### Still open from round four — 3 verified rows
 
-`#44`, `#45`, `#47`, `#48`.
+`#44`, `#45`, `#48` — **all three MINOR, so none of them can land in `1.1.1`,
+which is a PATCH release.** They are naming/semantic corrections (`writes`
+counts more than writes; `record` carries three senses; `POST …/anchor` and
+the CLI answer differently about one lag), and the PATCH-legal half of each is
+only its documentation. Filed for `1.2.0` below rather than half-landed here:
+adding a field beside the misleading one is MINOR by this project's own test,
+and renaming it is MAJOR.
 All MED or lower, all silent-failing, all PATCH or MINOR. The heading read
 `8` while the list held 9 until 2026-08-18 — my own miscount, of exactly the
 class this campaign spent its length fixing, and now GATED: the `prose
@@ -999,11 +1048,94 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.2.0 — nothing is filed here yet
+## 1.2.0 — three round-four rows, all naming or reporting contracts
 
-Reserved for a documented contract that changes. The `palace` terminology
-rename (below) is the candidate most likely to land here, since it would move
-a CLI subcommand and a room literal.
+MINOR: new capability, backward compatible. Each of these adds a field or a
+value beside one that stays, because **renaming any of them is MAJOR by this
+file's own test** (a documented value that stops being accepted). They were
+verified against the code on 2026-08-18 and deliberately NOT half-landed in
+`1.1.1`, which is a PATCH release: the only PATCH-legal part of each is its
+documentation, and shipping the doc alone would leave the misleading name in
+place while claiming the row was closed.
+
+### M1 — round-four #44: `writes` names the audit-chain height, which counts reads and exports
+
+`PalaceStats.writes` is the committed chain height, read from `chain_meta`.
+The chain has never held writes alone — `audit_export` appends an
+`egress/export` record unconditionally — and **O50 and O51 made the gap much
+larger in this very release**: under `UNDERCROFT_READ_AUDIT=chain` there are
+now thirteen content-returning doors that each append a record. A field
+called `writes` therefore counts reads, and it is surfaced under that name on
+CLI `vault status`, `/v1/…/stats`, `/v1/…/anchor` and the admin console.
+
+That growth is mine, from this session, and it is reported as mine rather
+than as a discovery.
+
+**Fix:** add `chain_records` (or `chain_height`) beside `writes`, populate
+both from the same read, and mark `writes` deprecated in the docs with the
+release it goes away in. **Rejected:** renaming in place — a MAJOR that would
+break every dashboard and every `jq` a fleet operator has written.
+
+**Gate:** a test asserting the two fields are equal and both populated from
+one `chain_state()` call, plus `parity.rs::HAND_PROJECTED` so the CLI's
+hand-written projection cannot ship one and not the other.
+
+### M2 — round-four #45: one drawer count has two names, and `record` has three senses
+
+`PalaceStats.records` is the drawer count. `/v1/…/stats` serializes it as
+`"drawers"`; the CLI and MCP print `records`. So the same number has two
+names depending on the transport — the drift class this project keeps
+closing, in the field an operator reads first.
+
+Worse, `record` carries three senses across the agent surfaces: a DRAWER
+(`PalaceStats.records`), an AUDIT-CHAIN entry (`chain_append`, `record_id`),
+and a declared `kind` on a drawer's metadata. An agent reading two of those
+in one session has no way to know they are different things.
+
+**Fix:** add `"records"` beside `"drawers"` on `/v1` (both populated, same
+value), and settle one word per sense in the docs — drawer / chain record /
+kind — then make the surfaces follow it. **Rejected:** changing `/v1`'s key
+in place, for the same reason as M1.
+
+**Gate:** a test asserting the two `/v1` keys carry the same value, and a
+prose gate is deliberately NOT proposed — a vocabulary rule with a
+three-instance history is exactly the "untested by history" shape
+`CLAUDE.md` warns about.
+
+### M3 — round-four #48: two surfaces answer differently about one anchor lag, and each is right for its own lifecycle
+
+`undercroft vault anchor` reads `store.anchor_at_open()` as well as
+`tighten_anchor()`'s return, and its own comment says why: a fresh CLI process
+OPENS the store first, the open runs the same reconciliation, so by the time
+the command can ask, the answer is `Current` and **the lag it just closed
+would go unreported**.
+
+`POST /v1/vaults/{id}/anchor` reads only `tighten_anchor()`'s return.
+`anchor_at_open` appears nowhere in `tenant.rs` — verified. On a long-lived
+server that is correct: the handle is cached, never re-opens, and the CALL
+does the work. But `store_for` OPENS a vault the server has not served yet, so
+the first `POST …/anchor` to any such vault heals the lag in the open and then
+answers `"behind_by": 0` about a lag that was real a millisecond earlier.
+
+So the two surfaces disagree about the same vault depending on which door you
+came in by — the shape A31 and the two-handles `writes` defect both had.
+
+**Fix:** the route reports the same pair the CLI does, taking
+`anchor_at_open()` when the open did the fast-forward. **Rejected:** making
+the CLI match the route instead — that would delete the only report of a lag
+the CLI's own open closed, which is the case the CLI arm exists for.
+
+**Gate:** an e2e arm that anchors a vault the server has NOT yet served and
+asserts `behind_by` is the real lag rather than 0, driven after an
+out-of-band write that leaves the anchor behind. It is MINOR rather than
+PATCH because `behind_by` changes value for an existing caller, and a
+monitoring rule keyed on `behind_by == 0` would start firing.
+
+---
+
+Also reserved for a documented contract that changes: the `palace`
+terminology rename (below) is the other candidate, since it would move a CLI
+subcommand and a room literal.
 
 ---
 

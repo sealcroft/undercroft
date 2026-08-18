@@ -1155,12 +1155,15 @@ instead of intersecting corpus-wide candidates; smaller wings full-scan
 themselves, bounded and exact; `off` disables the per-wing tier only —
 every declared scope, wing or room, is resolved before candidates are
 drawn, so no scoped query can be starved by the corpus top-k) ·
-`UNDERCROFT_POOL_DIV` (64 — semantic prefilters fetch at least `live/div`
-stage-1 ADC candidates, and an exact-cosine second stage over just those
-candidates' embeddings cuts back to hydration size, so recall follows the
-wide pool while hydration stays fixed; measured: fixed 256 leaked R@5
-100→96.8% by 1M drawers; `off` = fixed floor, the measured-leaky
-behavior) ·
+`UNDERCROFT_POOL_DIV` (64 — the **PQ, per-wing PQ and FTS** tiers fetch at
+least `live/div` stage-1 candidates, and for the two PQ tiers an
+exact-cosine second stage over just those candidates' embeddings cuts back
+to hydration size, so recall follows the wide pool while hydration stays
+fixed; measured: fixed 256 leaked R@5 100→96.8% by 1M drawers; `off` =
+fixed floor, the measured-leaky behavior. The **FDE tier does not consult
+it** — it draws the fixed `max(256, depth·32)` — and whether that leaks at
+scale is unmeasured; this line said "semantic prefilters", which claimed a
+coverage it never had) ·
 `UNDERCROFT_PQ_PAGE_MIN` (off by default — sealed page tier: one AEAD
 page per IVF list, lazy per-probe decrypt) ·
 `UNDERCROFT_TOK_PQ_MIN` (256) · `UNDERCROFT_FDE_PQ_MIN` (256) ·

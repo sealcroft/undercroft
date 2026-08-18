@@ -5,6 +5,41 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### `pool_div` names the tiers it actually reaches (O56)
+
+**Round-four #47**, taken at the grade its own round's synthesis argued for:
+*"the doc sentence is the defect; the tier's behaviour is an open
+measurement."*
+
+`pool_div` appears **zero** times in `fdeidx.rs` — the PQ tier consults it,
+the per-wing tier consults it, the FTS arm consults it, MUVERA FDE does not.
+The field doc said the corpus-scaled pool applies to *"the semantic
+prefilters"*, plural, and `architecture/index.html` and `docs/AGENTS.md` said
+the same. So with `UNDERCROFT_RETRIEVAL=fde` the pool is the fixed
+`max(256, depth·32)` and the cure this knob exists to provide — against a leak
+measured at R@5 100 → 96.8% by 1M drawers — is not applied, while three
+surfaces said it was. All three now name the tiers.
+
+**Half the filing is not a defect:** the missing stage-2 refine is deliberate
+and `search_inner` says so where it declines to do it — a single-vector cut
+would fight MaxSim.
+
+**The behaviour stays open on purpose.** Wiring `pool_div` into FDE is one
+line that the PQ tier's 96.8% makes look obvious, which is the trap: it would
+be graded on a measurement of a different tier, with no stage-2 to bound the
+latency. FDE's recall at scale is unmeasured and `pqscale` has no FDE
+analogue.
+
+**Gate:** `the_fde_tier_does_not_consult_pool_div_and_the_docs_say_so` pins
+the gap in both directions — the PQ tiers must consult it (the premise arm),
+`fdeidx.rs` must not, and the field doc must still say which. Closing the gap
+fails the test and names the three documents that move with it.
+
+**Also filed:** round-four `#44`, `#45` and `#48` are MINOR and cannot land in
+a PATCH release, so they are written into ROADMAP `1.2.0` as M1–M3 with their
+mechanism, the alternative rejected and a gate each — rather than half-landed
+here as documentation while the misleading names stay.
+
 ### the line-ending preflight is probed, and the comment claiming it already was is gone (O55)
 
 **Round-four #37**, and understated as filed. The CRLF check had no premise

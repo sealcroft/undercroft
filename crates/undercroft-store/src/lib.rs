@@ -842,7 +842,7 @@ pub(crate) const TUNED: &[(&str, TuneShape, &str)] = &[
             unset: pqidx::POOL_DIV_DEFAULT,
             min: 1,
         },
-        "divisor sizing the stage-1 candidate pool (live/N)",
+        "divisor sizing the stage-1 pool for the PQ, wing-PQ and FTS tiers (live/N; the FDE tier does not consult it)",
     ),
     (
         "UNDERCROFT_IVF_MIN",
@@ -2210,13 +2210,31 @@ pub struct PalaceStore {
     /// but pays corpus-shaped candidate generation). See
     /// `pqidx::WING_PQ_MIN_DEFAULT`.
     wing_pq_min: usize,
-    /// Corpus-scaled stage-1 candidate pool: the semantic prefilters fetch
-    /// at least `live_rows / pool_div` ADC candidates (on top of the 256
-    /// floor and the depth·32 term), and `refine_by_exact_cosine` cuts the
-    /// pool back to hydration size with the true vectors. `usize::MAX` ⇒
-    /// scaling off, the fixed floor only — the measured recall-leak defect
-    /// (R@5 100 → 96.8 from 131k to 1M at a fixed 256 pool).
+    /// Corpus-scaled stage-1 candidate pool: **the PQ tier, the per-wing PQ
+    /// tier and the FTS prefilter** fetch at least `live_rows / pool_div`
+    /// candidates (on top of the 256 floor and the depth·32 term), and for
+    /// the two PQ tiers `refine_by_exact_cosine` cuts the pool back to
+    /// hydration size with the true vectors. `usize::MAX` ⇒ scaling off, the
+    /// fixed floor only — the measured recall-leak defect (R@5 100 → 96.8
+    /// from 131k to 1M at a fixed 256 pool).
     /// `UNDERCROFT_POOL_DIV` (number, `off`) / [`Self::set_pool_div`].
+    ///
+    /// **NOT the FDE tier, and this sentence used to say otherwise** (ROADMAP
+    /// O56, round-four #47). It read *"the semantic prefilters"*, which
+    /// includes FDE, and `pool_div` appears nowhere in `fdeidx.rs`: with
+    /// `UNDERCROFT_RETRIEVAL=fde` the pool is `pool_k`, i.e. the fixed
+    /// `max(256, depth·32)` unscoped, so the cure this knob exists to provide
+    /// is not applied and an operator reading this believed it was. The
+    /// missing stage-2 is a different matter and is DELIBERATE — a
+    /// single-vector cut would fight MaxSim, which `search_inner` says where
+    /// it declines to do it.
+    ///
+    /// **Whether FDE actually leaks at scale is UNMEASURED**, and the honest
+    /// grade of this row turns on that: transferring the PQ tier's 96.8%
+    /// figure would invite wiring `pool_div` in on the strength of a
+    /// measurement of a different tier, with no stage-2 to bound the latency
+    /// that follows. `pqscale` is the instrument for the PQ tier; the FDE
+    /// analogue does not exist. Filed rather than guessed.
     pool_div: usize,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
@@ -11951,6 +11969,53 @@ mod tests {
         // cleanly rather than double-destroying or breaking the chain.
         assert!(s.admission_deny(&qid2).is_err());
         assert!(s.verify().unwrap().ok(), "chain green after window 4");
+    }
+
+    /// ROADMAP O56 (round-four #47). **Which tiers consult `pool_div` is
+    /// pinned, so the documentation cannot drift back into claiming more
+    /// than the code does.**
+    ///
+    /// The field doc said the corpus-scaled pool applies to *"the semantic
+    /// prefilters"* — plural, which includes MUVERA FDE — and `pool_div`
+    /// appears nowhere in `fdeidx.rs`. With `UNDERCROFT_RETRIEVAL=fde` the
+    /// pool is the fixed `max(256, depth·32)`, so the cure this knob exists
+    /// to provide is simply not applied while three surfaces said it was.
+    ///
+    /// **This pins a GAP, deliberately.** Wiring `pool_div` into the FDE tier
+    /// is a one-line change that the PQ tier's measured 96.8% leak makes look
+    /// obvious — and it would be graded on a measurement of a DIFFERENT tier,
+    /// with no stage-2 refine to bound the latency that follows (FDE's is
+    /// deliberately absent: a single-vector cut would fight MaxSim). So the
+    /// gap stays open and MEASURED-FIRST, and this test is what makes closing
+    /// it visible: the moment `fdeidx.rs` learns the word, this fails and
+    /// whoever wired it in has to move the three documents with it.
+    #[test]
+    fn the_fde_tier_does_not_consult_pool_div_and_the_docs_say_so() {
+        let fdeidx = include_str!("fdeidx.rs");
+        let lib = include_str!("lib.rs");
+        // PREMISE: the two tiers that DO consult it must be visible from
+        // here, or this test is asserting the absence of a symbol nothing
+        // uses anywhere and would pass on a tree with no prefilters at all.
+        let pqidx = include_str!("pqidx.rs");
+        assert!(
+            pqidx.matches("self.pool_div").count() >= 2,
+            "premise failed: the PQ tiers do not consult pool_div either, so \
+             this test proves nothing about the FDE tier"
+        );
+        assert!(
+            !fdeidx.contains("pool_div"),
+            "the FDE tier now consults `pool_div`. That is a real change and \
+             it needs company: the field doc on `PalaceStore::pool_div`, \
+             `architecture/index.html`'s env row and `docs/AGENTS.md` all say \
+             the FDE tier does NOT consult it. Measure the tier first \
+             (`pqscale` has no FDE analogue), then move all three."
+        );
+        // ...and the field doc must keep saying so, in the words a reader
+        // would search for.
+        assert!(
+            lib.contains("NOT the FDE tier"),
+            "the `pool_div` field doc no longer states which tiers consult it"
+        );
     }
 
     /// ROADMAP O53 (round-four #28). The two filter-afterwards arms accepted
