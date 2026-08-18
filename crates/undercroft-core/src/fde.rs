@@ -39,16 +39,37 @@ pub struct FdeParams {
     pub seed: u64,
 }
 
+/// The construction defaults, as named constants rather than literals inside
+/// `Default::default()`.
+///
+/// ROADMAP O52: `undercroft-store`'s `TUNED` table states each declared knob's
+/// unset value ONCE, so the pre-flight and the engine cannot disagree about it
+/// — and a `const` table cannot call `Default::default()`. Naming them here
+/// keeps one statement of each default and makes `Default` a consumer of it
+/// rather than the place it lives.
+pub const FDE_REPS_DEFAULT: usize = 8;
+/// See [`FDE_REPS_DEFAULT`]. Bounded above at 16: buckets per repetition are
+/// `2^ksim`, so this is a real ceiling and not a stylistic one.
+pub const FDE_KSIM_DEFAULT: usize = 4;
+/// See [`FDE_REPS_DEFAULT`].
+pub const FDE_DPROJ_DEFAULT: usize = 16;
+/// See [`FDE_REPS_DEFAULT`]. `"muvera.1"` as bytes.
+pub const FDE_SEED_DEFAULT: u64 = 0x6d75_7665_7261_2e31;
+/// The inclusive upper bound on `ksim`, stated so the declaration's parse and
+/// the construction agree. It used to be a `.clamp(1, 16)` applied AFTER an
+/// `unwrap_or`, so `UNDERCROFT_FDE_KSIM=32` was silently taken as 16.
+pub const FDE_KSIM_MAX: usize = 16;
+
 impl Default for FdeParams {
     /// `8 × 2^4 × 16` → 2048-dim FDEs (8 KB f32 per drawer): the small end
     /// of the paper's quality band, sized for drawer-scale token counts
     /// (~10²) rather than web-passage corpora.
     fn default() -> Self {
         Self {
-            reps: 8,
-            ksim: 4,
-            dproj: 16,
-            seed: 0x6d75_7665_7261_2e31, // "muvera.1"
+            reps: FDE_REPS_DEFAULT,
+            ksim: FDE_KSIM_DEFAULT,
+            dproj: FDE_DPROJ_DEFAULT,
+            seed: FDE_SEED_DEFAULT,
         }
     }
 }

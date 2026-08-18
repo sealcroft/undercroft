@@ -193,22 +193,20 @@ fn params_unpack(b: &[u8]) -> Option<(FdeParams, usize)> {
 /// `_KSIM` / `_DPROJ` / `_SEED`. Only consulted the first time a palace
 /// builds its FDE index — afterwards the persisted copy wins (stored FDEs
 /// and future query FDEs must come from the same construction).
+/// ROADMAP O52: these four went through the store's `TUNED` table, so an
+/// unreadable declaration now WARNS and behaves as if absent — the contract
+/// O48 gave the eleven knobs in `assemble`, which its sweep of "the store"
+/// did not reach because these live here instead. Each was
+/// `.parse().ok().unwrap_or(d)` followed by `.max(1)` or `.clamp(1, 16)`, so a
+/// typo was swallowed and then an out-of-range value was swallowed again: a
+/// declared `ksim` of 32 was silently taken as 16. The bounds are part of the
+/// table now, which is also what lets the pre-flight agree with this.
 fn params_from_env() -> FdeParams {
-    let get = |k: &str, d: usize| {
-        std::env::var(k)
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(d)
-    };
-    let d = FdeParams::default();
     FdeParams {
-        reps: get("UNDERCROFT_FDE_REPS", d.reps).max(1),
-        ksim: get("UNDERCROFT_FDE_KSIM", d.ksim).clamp(1, 16),
-        dproj: get("UNDERCROFT_FDE_DPROJ", d.dproj).max(1),
-        seed: std::env::var("UNDERCROFT_FDE_SEED")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(d.seed),
+        reps: crate::tuned("UNDERCROFT_FDE_REPS"),
+        ksim: crate::tuned("UNDERCROFT_FDE_KSIM"),
+        dproj: crate::tuned("UNDERCROFT_FDE_DPROJ"),
+        seed: crate::tuned_u64("UNDERCROFT_FDE_SEED"),
     }
 }
 

@@ -5,6 +5,69 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### `undercroft config check` says which declarations it actually checked (O52)
+
+**Round-four #25's reporting half.** The command rendered any declaration it
+had no arm for as *"no parse to run; the consumer validates it"* — honest
+about a URL or a bearer, and a false claim about a knob whose parse somebody
+forgot to wire up. Nothing could tell the two apart. Round-four #9 had closed
+that for the `Protects` class; the `Tunes` class had no such gate, and O48
+made the gap actively false by teaching eleven resolvers to validate values
+this command still described as unvalidated.
+
+`ENGINE_ENV_VARS` now carries `(name, ConfigClass, Parse)`, counted against
+the code in both directions on both axes: a `Checked` variable the command
+runs no parse for fails the build, and an `Opaque` one that IS pre-flighted
+fails it too. **49 of the 81 are `Checked`, 32 `Opaque`.** Reachable coverage
+went from 33 declarations to 49; the rest now say WHICH kind of unchecked
+they are.
+
+**One table made that affordable.** `check_declaration` is handed a
+`(name, raw)` pair and has no call site to read a knob's unset value from, so
+`undercroft-store`'s `TUNED` states each one ONCE — shape, unset value,
+bounds — and the engine's resolver and the pre-flight both read it. Two
+consumers, one statement. A knob whose unset depends on another variable has
+no row and says why (`UNDERCROFT_LATE_TOP_N` falls through to
+`UNDERCROFT_RERANK_TOP_N`, valid or not, which O48 preserved deliberately).
+
+**Three findings the filing did not contain**, each the class this unit
+existed to close. `fdeidx::params_from_env` held four more silent swallows —
+`UNDERCROFT_FDE_REPS`, `_KSIM`, `_DPROJ`, `_SEED`, each `unwrap_or` then
+`.max(1)` or `.clamp(1, 16)`, so a declared `ksim` of 32 silently became 16 —
+missed because O48 swept "the store's `assemble`" and these live one file
+over. `UNDERCROFT_RERANKER` refuses an unknown spelling at start-up but its
+parse was tangled with the attachment, so the pre-flight said "no parse to
+run" about a declaration whose consumer bails; it is `check_reranker` now,
+which `attach_reranker` calls for its own refusal. And
+`UNDERCROFT_LLM_API`/`_EMBED_API` fell past both vocabulary arms into
+inferring the API shape from the URL — a declaration silently replaced by an
+inference.
+
+The four sites O48 filed as remaining are closed here too, because a
+pre-flight needs a pure parse to call and giving it one is the same edit as
+fixing the swallow: `UNDERCROFT_METRICS` (where `=yes` meant OFF in silence),
+`_SAMPLE_INTERVAL_MS`, `_EMBED_DIM` (a declaration meant to pin the vector
+width, demoted to a suggestion when it did not parse) and `_ORT_POOL`.
+
+**Counterfactual, executed:** with the table's fall-through reverted, the gate
+fails and names all fifteen knobs individually. **Two premise arms**, so an
+axis where every entry landed on one value cannot report a clean tree.
+`UPGRADING.md` records the two knobs whose resolved value genuinely moves.
+
+**Measured on 1,700 real drawers**, every declaration driven twice — through
+`config check` and through a real `search` on that vault — asserting the
+pre-flight predicts what the engine does, with valid values as the negative
+control. One knob class does not agree and that is a finding: the four FDE
+construction knobs sit behind an attached ColBERT encoder, so on a default
+build they are never read at run time at all, which makes the pre-flight the
+only place an operator can learn the declaration is bad.
+
+**My own defects, both caught by gates:** the two API resolvers were appended
+after `#[cfg(test)] mod tests` (clippy's "items after a test module" — the
+documented "read what is adjacent to the anchor" hazard), and a message
+literal shipped with a 26-space run because my editing scripts kept eating
+backslash line-continuations, caught by O40's own gate.
+
 ### the knowledge graph's readers append a chain record too — the second funnel (O51)
 
 **Round-four #23, the half O50 named and left.** A knowledge-graph fact IS

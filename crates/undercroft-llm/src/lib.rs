@@ -137,12 +137,8 @@ impl LlmClient {
         let base = std::env::var("UNDERCROFT_LLM_URL").map_err(|_| LlmError::NotConfigured)?;
         let model =
             std::env::var("UNDERCROFT_LLM_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
-        let kind = match std::env::var("UNDERCROFT_LLM_API").ok().as_deref() {
-            Some("openai") => ApiKind::OpenAi,
-            Some("ollama") => ApiKind::Ollama,
-            _ if base.contains("/v1") => ApiKind::OpenAi,
-            _ => ApiKind::Ollama,
-        };
+        let declared = std::env::var("UNDERCROFT_LLM_API").ok();
+        let kind = resolve_api_kind("UNDERCROFT_LLM_API", declared.as_deref(), &base);
         let key = std::env::var("UNDERCROFT_LLM_KEY").unwrap_or_default();
         Self::with_key(&base, &model, kind, &key)
     }
@@ -500,6 +496,46 @@ impl LlmClient {
             }
         }
         Ok(cleaned)
+    }
+}
+
+/// Which API shape a served runtime speaks: DECLARED, else inferred from the
+/// URL, which is what absence has always given.
+///
+/// ROADMAP O52. `UNDERCROFT_LLM_API` and `UNDERCROFT_EMBED_API` were
+/// `match .as_deref() { Some("openai") => .., Some("ollama") => .., _ if
+/// base.contains("/v1") => .., _ => .. }`, so `UNDERCROFT_LLM_API=opneai`
+/// fell past both arms into the URL sniff — a declaration silently replaced by
+/// an inference. No resolved value moves: an unreadable declaration lands
+/// exactly where an absent one does, which is the `Tunes` contract.
+pub fn resolve_api_kind(name: &str, raw: Option<&str>, base_url: &str) -> ApiKind {
+    match check_api_kind(name, raw) {
+        Ok(Some(k)) => k,
+        Ok(None) => infer_api_kind(base_url),
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            infer_api_kind(base_url)
+        }
+    }
+}
+
+/// The declaration's parse alone, pure so `undercroft config check` runs this
+/// same vocabulary rather than a second copy of it.
+pub fn check_api_kind(name: &str, raw: Option<&str>) -> Result<Option<ApiKind>, String> {
+    let Some(v) = raw else { return Ok(None) };
+    match undercroft_core::config::one_of(name, Some(v), &["openai", "ollama"], "openai") {
+        Ok(k) if k == "openai" => Ok(Some(ApiKind::OpenAi)),
+        Ok(_) => Ok(Some(ApiKind::Ollama)),
+        Err(f) => Err(f.why),
+    }
+}
+
+/// What an ABSENT declaration gives: the shape the URL implies.
+fn infer_api_kind(base_url: &str) -> ApiKind {
+    if base_url.contains("/v1") {
+        ApiKind::OpenAi
+    } else {
+        ApiKind::Ollama
     }
 }
 

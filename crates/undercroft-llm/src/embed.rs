@@ -97,17 +97,24 @@ impl HttpEmbedder {
         let base = std::env::var("UNDERCROFT_EMBED_URL").map_err(|_| LlmError::NotConfigured)?;
         let model = std::env::var("UNDERCROFT_EMBED_MODEL")
             .unwrap_or_else(|_| "nomic-embed-text".to_string());
-        let kind = match std::env::var("UNDERCROFT_EMBED_API").ok().as_deref() {
-            Some("openai") => ApiKind::OpenAi,
-            Some("ollama") => ApiKind::Ollama,
-            _ if base.contains("/v1") => ApiKind::OpenAi,
-            _ => ApiKind::Ollama,
-        };
+        let api = std::env::var("UNDERCROFT_EMBED_API").ok();
+        let kind = crate::resolve_api_kind("UNDERCROFT_EMBED_API", api.as_deref(), &base);
         let key = std::env::var("UNDERCROFT_EMBED_KEY").unwrap_or_default();
-        let declared = std::env::var("UNDERCROFT_EMBED_DIM")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&d| d > 0);
+        // ROADMAP O52: an unreadable dimension used to be swallowed and the
+        // endpoint probed instead, so a declaration meant to PIN the vector
+        // width silently became a suggestion. It still falls back to probing —
+        // that is what absence gives — but it says so first.
+        let dim_raw = std::env::var("UNDERCROFT_EMBED_DIM").ok();
+        let declared = match undercroft_core::config::positive_usize(
+            "UNDERCROFT_EMBED_DIM",
+            dim_raw.as_deref(),
+        ) {
+            Ok(d) => d,
+            Err(f) => {
+                undercroft_obs::diag_warn!("{}", f.why);
+                f.value
+            }
+        };
         Self::connect(&base, &model, kind, &key, declared)
     }
 

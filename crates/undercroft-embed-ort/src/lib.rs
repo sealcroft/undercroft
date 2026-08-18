@@ -259,11 +259,22 @@ impl OrtReranker {
     ) -> Result<Self, OrtError> {
         let tokenizer =
             Tokenizer::from_file(tokenizer_path).map_err(|e| OrtError::Tokenizer(e.to_string()))?;
-        let pool = std::env::var("UNDERCROFT_ORT_POOL")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n >= 1)
-            .unwrap_or_else(cores);
+        // ROADMAP O52: an unreadable declaration used to be swallowed, so
+        // `UNDERCROFT_ORT_POOL=4x` silently used the core count with no signal.
+        // The fallback is unchanged — absence and garbage both mean "derive it
+        // from the cores" — but it is reported now.
+        let pool_raw = std::env::var("UNDERCROFT_ORT_POOL").ok();
+        let pool = match undercroft_core::config::positive_usize(
+            "UNDERCROFT_ORT_POOL",
+            pool_raw.as_deref(),
+        ) {
+            Ok(n) => n,
+            Err(f) => {
+                undercroft_obs::diag_warn!("{}", f.why);
+                f.value
+            }
+        }
+        .unwrap_or_else(cores);
         // pool == 1 ⇒ a single all-core session (the batched/few-core mode);
         // pool > 1 ⇒ single-thread sessions the forwards fan out across.
         let per_session_threads = if pool > 1 { 1 } else { cores() };

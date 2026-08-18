@@ -83,6 +83,48 @@ fn bearer_matches(header: &str, expected: &str) -> bool {
 /// [`undercroft_store::resolve_assertion_secret`] is an HMAC key: it is never
 /// put in a header, both sides compute with the same bytes, and trailing
 /// whitespace changes nothing about whether it works.
+/// The sampler's tick interval when nothing else wakes the loop. Named
+/// rather than a bare `2000` in two places (ROADMAP O52).
+pub(crate) const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 2000;
+
+/// `UNDERCROFT_METRICS`: whether `/metrics` is served.
+///
+/// ROADMAP O52. This was `.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+/// .unwrap_or(false)`, so `UNDERCROFT_METRICS=yes` silently meant OFF — an
+/// operator who asked for a metrics endpoint got a server without one and no
+/// signal. Off is still what an unreadable declaration gives, which is the
+/// conservative direction and the `Tunes` contract; it says so now.
+///
+/// The off spellings are recognised rather than merely tolerated: `0`,
+/// `false` and `off` already behaved as off, so naming them widens no contract
+/// — it stops warning about values that were always correct.
+pub(crate) fn resolve_metrics(declared: Option<&str>) -> Result<bool, String> {
+    let Some(v) = declared else { return Ok(false) };
+    match undercroft_core::config::one_of(
+        "UNDERCROFT_METRICS",
+        Some(v),
+        &["1", "true", "0", "false", "off"],
+        "0",
+    ) {
+        Ok(k) => Ok(k == "1" || k == "true"),
+        Err(f) => Err(f.why),
+    }
+}
+
+/// `UNDERCROFT_SAMPLE_INTERVAL_MS`: the telemetry sampler's tick floor.
+///
+/// ROADMAP O52 — the same swallow one variable over, with a floor of 100 ms
+/// that a declared `50` used to hit in silence.
+pub(crate) fn resolve_sample_interval_ms(declared: Option<&str>) -> Result<u64, String> {
+    undercroft_core::config::bounded_u64(
+        "UNDERCROFT_SAMPLE_INTERVAL_MS",
+        declared,
+        DEFAULT_SAMPLE_INTERVAL_MS,
+        100,
+    )
+    .map_err(|f| f.why)
+}
+
 pub(crate) fn resolve_mcp_token(declared: Option<&str>) -> Result<Option<String>, String> {
     match declared {
         None => Ok(None),
@@ -127,9 +169,14 @@ pub fn serve_http(
     }
 
     // Prometheus /metrics is opt-in (loopback + behind the bearer gate).
-    let metrics_enabled = std::env::var("UNDERCROFT_METRICS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let metrics_enabled = match resolve_metrics(std::env::var("UNDERCROFT_METRICS").ok().as_deref())
+    {
+        Ok(on) => on,
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            false
+        }
+    };
 
     let mut handler = McpHandler::new(store, read_only);
     let mut tenancy = tenancy;
@@ -158,11 +205,17 @@ pub fn serve_http(
     // sampler can tick between requests (negligible cost; only the tick body
     // is feature-gated).
     let sample_interval = Duration::from_millis(
-        std::env::var("UNDERCROFT_SAMPLE_INTERVAL_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|&ms| ms >= 100)
-            .unwrap_or(2000),
+        match resolve_sample_interval_ms(
+            std::env::var("UNDERCROFT_SAMPLE_INTERVAL_MS")
+                .ok()
+                .as_deref(),
+        ) {
+            Ok(ms) => ms,
+            Err(why) => {
+                undercroft_obs::diag_warn!("{why}");
+                DEFAULT_SAMPLE_INTERVAL_MS
+            }
+        },
     );
 
     // Track the last sampler tick by wall clock, not by loop idleness: under

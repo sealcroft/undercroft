@@ -1247,6 +1247,34 @@ fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
     Ok(())
 }
 
+/// The `UNDERCROFT_RERANKER` vocabulary, and what this build can honour.
+///
+/// ROADMAP O52. `attach_reranker` refuses an unknown spelling and refuses a
+/// backend this build lacks — both hard errors that stop start-up — but that
+/// parse was tangled with the ATTACHMENT, so `undercroft config check` could
+/// not reach it and printed *"no parse to run; the consumer validates it"*
+/// about a declaration whose consumer bails. Exactly round-four #9's shape,
+/// one variable it did not name. Pure, so the pre-flight runs this and
+/// `attach_reranker` runs this, and they cannot disagree.
+pub(crate) fn check_reranker(raw: &str) -> Result<(), String> {
+    match raw {
+        "" => Ok(()),
+        "onnx" | "colbert" if !cfg!(feature = "onnx") => Err(format!(
+            "UNDERCROFT_RERANKER={raw} requires a build with the 'onnx' feature \
+             (cargo build -p undercroft-cli --features onnx)"
+        )),
+        "ort" | "colbert-ort" if !cfg!(feature = "ort") => Err(format!(
+            "UNDERCROFT_RERANKER={raw} requires a build with the 'ort' feature \
+             (cargo build -p undercroft-cli --features ort)"
+        )),
+        "onnx" | "colbert" | "ort" | "colbert-ort" => Ok(()),
+        other => Err(format!(
+            "unknown UNDERCROFT_RERANKER {other:?} \
+             (expected: onnx, ort, colbert, colbert-ort, or unset)"
+        )),
+    }
+}
+
 /// Attach the second retrieval stage via `UNDERCROFT_RERANKER`: `onnx` /
 /// `colbert` load the tract backend (`onnx` feature), `ort` / `colbert-ort`
 /// the ONNX Runtime backend (`ort` feature) — same model files and
@@ -1312,12 +1340,9 @@ fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
             );
         }
         Ok("") | Err(_) => Ok(()),
-        Ok(other) => {
-            bail!(
-                "unknown UNDERCROFT_RERANKER {other:?} \
-                 (expected: onnx, ort, colbert, colbert-ort, or unset)"
-            )
-        }
+        // One statement of the vocabulary, so the refusal an operator sees at
+        // start-up is the one `config check` showed them beforehand.
+        Ok(other) => bail!("{}", check_reranker(other).unwrap_err()),
     }
 }
 
@@ -3610,10 +3635,14 @@ fn run(cli: Cli) -> Result<()> {
             println!(
                 "{validated} declaration(s) validated against the resolver that runs at start-up."
             );
-            println!("{accepted} more are declared with no parse to run — this command has NOT");
-            println!("checked those: a path, a URL, a token or a model name is validated by the");
-            println!("thing that consumes it, and claiming otherwise would be a stronger");
-            println!("statement than the truth.");
+            println!(
+                "{accepted} more are declared Opaque — no parse exists to run, so this command"
+            );
+            println!("has NOT checked those: a path, a URL, a token or a model name is validated");
+            println!("by the thing that consumes it, and claiming otherwise would be a stronger");
+            println!("statement than the truth. Which declarations are Opaque is DECLARED in the");
+            println!("inventory and counted against this command in both directions, so the");
+            println!("number cannot grow by somebody forgetting to wire a parse up.");
             println!("{fatal} would REFUSE to start. {warned} would warn and keep the default.");
             if fatal > 0 {
                 // Exit 1, deliberately, and not the integrity code: a

@@ -1280,8 +1280,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (748 run,
-                                      # 4 #[ignore]d = 752 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (750 run,
+                                      # 4 #[ignore]d = 754 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1364,7 +1364,7 @@ docker compose run --rm test          # cargo unit + integration tests (748 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (358 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (362 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -2509,11 +2509,29 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   vault is in, the default is *off* and a silent fallback removes what was
   asked for — so garbage REFUSES to open. That is "integrity is not a tier"
   extended by one step: a protection an operator declared must not become a
-  tier by typo. `parity.rs::ENGINE_ENV_VARS` carries `(name, ConfigClass)`
-  and is counted against the code in both directions, so a new variable does
-  not compile until someone classifies it; `undercroft config check` runs
-  every declaration through the resolver that will run at start-up, opening
-  nothing, so an upgrade fails in a pipeline instead of at a restart.
+  tier by typo. `parity.rs::ENGINE_ENV_VARS` carries
+  `(name, ConfigClass, Parse)` and is counted against the code in both
+  directions on BOTH axes, so a new variable does not compile until someone
+  classifies it; `undercroft config check` runs every declaration through the
+  resolver that will run at start-up, opening nothing, so an upgrade fails in
+  a pipeline instead of at a restart.
+  **The second axis exists because "I ran no parse" and "there is no parse to
+  run" are different claims that READ IDENTICALLY (O52).** `check_one` falls
+  to a catch-all rendering an unknown name as `Accepted` — printed as *"no
+  parse to run; the consumer validates it"* — which is honest about a path or
+  a bearer and a false claim about a knob whose arm somebody forgot. #9
+  closed that for `Protects` with an exempt list counted both ways; O48 then
+  WIDENED it for `Tunes`, teaching eleven resolvers to validate values the
+  pre-flight still described as unvalidated. `Parse::{Checked,Opaque}` is
+  declared per variable and counted both ways: a `Checked` one the command
+  runs no parse for fails the build, an `Opaque` one that IS pre-flighted
+  fails it too. What makes `Checked` affordable is `undercroft-store`'s
+  `TUNED` table — every numeric knob's unset value and bounds stated ONCE,
+  read by the engine's resolver AND by `check_declaration`, so the two cannot
+  report different values. A knob whose unset depends on ANOTHER variable has
+  no row and says why (`UNDERCROFT_LATE_TOP_N` falls through to
+  `UNDERCROFT_RERANK_TOP_N`, valid or not, which is a compatibility promise).
+  49 of the 81 are `Checked`, 32 `Opaque` — counted, not remembered.
   **The class is not the whole rule: a declaration is either a CLOSED
   VOCABULARY or OPAQUE PAYLOAD, and that decides what EMPTY means and whether
   the value may be TRIMMED.** A vocabulary variable (`UNDERCROFT_ADMISSION`)

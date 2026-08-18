@@ -285,7 +285,40 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
                     None => "no per-vault assertions".into(),
                 })
             }),
-        _ => Ok(None),
+        // ---- the tuning knobs (ROADMAP O52) -----------------------------
+        // Every store-owned numeric knob, through the ONE table that states
+        // its shape. `config check` used to print "no parse to run; the
+        // consumer validates it" about all of these, which was true before
+        // O48 taught the consumer to validate them and false afterwards.
+        "UNDERCROFT_FUSION" => parse_fusion(Some(raw)).map(|f| {
+            Some(match f {
+                Fusion::Legacy => "the legacy lexical blend".to_string(),
+                Fusion::Bm25 => "the Okapi BM25 blend".to_string(),
+            })
+        }),
+        "UNDERCROFT_FUSION_WEIGHT" => parse_fusion_weight(Some(raw))
+            .map(|w| Some(format!("semantic share of the blend is {w}"))),
+        "UNDERCROFT_SEMANTIC_FLOOR" => parse_semantic_floor(Some(raw)).map(|f| {
+            Some(match f {
+                Some(f) => format!("unrelated-pair floor pinned at {f}"),
+                None => "the embedder's own measured floor".to_string(),
+            })
+        }),
+        "UNDERCROFT_TRAIN_SOURCE_CAP" => parse_train_source_cap(Some(raw)).map(|c| {
+            Some(if c == usize::MAX {
+                "no per-wing cap on a training sample".to_string()
+            } else {
+                format!("a wing may supply at most 1/{c} of any training sample")
+            })
+        }),
+        "UNDERCROFT_LATE_TOP_N" => parse_late_top_n(Some(raw))
+            .map(|n| n.map(|n| format!("late-interaction rescore depth {n}"))),
+        _ => match tune_shape(name) {
+            Some((shape, what)) => {
+                parse_tuned(name, shape, Some(raw)).map(|v| Some(format!("{what}: {v}")))
+            }
+            None => Ok(None),
+        },
     }
 }
 
@@ -578,7 +611,7 @@ pub(crate) fn chain_append(
 pub(crate) fn rerank_top_n() -> usize {
     // `min` 1: a top-N of zero would rerank nothing, which the old
     // `.filter(|&n| n > 0)` already declined — silently.
-    tune_no_off("UNDERCROFT_RERANK_TOP_N", DEFAULT_RERANK_TOP_N, 1)
+    tuned("UNDERCROFT_RERANK_TOP_N")
 }
 
 /// Depth of the late-interaction rescore — see [`DEFAULT_LATE_TOP_N`].
@@ -735,63 +768,257 @@ fn scoped_keep(hydrate_k: usize, scope_live: usize) -> usize {
         .max(scope_live.min(SCOPE_HYDRATE_FLOOR))
 }
 
-/// Resolve the cosine→`semantic` calibration zero for a store at open:
-/// `UNDERCROFT_SEMANTIC_FLOOR` declares it (a raw cosine in `[0.0, 0.98]`;
-/// `off` = 0, the shipped hash map), else the embedder's own measured or
-/// declared floor ([`Embedder::semantic_floor`]), else 0. Resolved ONCE —
-/// a measuring embedder pays probe forwards for this, and the map runs in
-/// the per-candidate hot path.
-/// ROADMAP O48 (round-four #25). The `off | <usize>` knobs were each
-/// `v.parse().unwrap_or(DEFAULT)`, which swallows a bad declaration in
-/// silence — against the `Tunes` contract these very variables are classified
-/// under (*"garbage warns and keeps that default"*).
+/// The per-wing share of any global training sample, unset
+/// (`UNDERCROFT_TRAIN_SOURCE_CAP`). Named rather than a bare `4` in two
+/// places, on the O52 rule that one statement of a default is what keeps the
+/// pre-flight and the engine from disagreeing about it.
+const DEFAULT_TRAIN_SOURCE_CAP: usize = 4;
+
+/// The SHAPE of one declared tuning knob: what an absent declaration gives,
+/// and what the parse will accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TuneShape {
+    /// `off | <usize>` — `off` disables the tier, a number sets its threshold.
+    OffOrUsize { unset: usize, min: usize },
+    /// A bare integer with no `off` spelling. Deliberately distinct: routing
+    /// these through the `off`-aware helper would newly accept `off` where it
+    /// has never been documented, i.e. widen a contract under cover of a fix.
+    BareUsize { unset: usize, min: usize },
+    /// `Option<usize>` — absent means "the tier computes its own".
+    OptUsize { min: usize },
+    /// A bare integer with a real upper bound as well as a lower one.
+    RangeUsize {
+        unset: usize,
+        min: usize,
+        max: usize,
+    },
+    /// A 64-bit integer (an RNG seed).
+    BareU64 { unset: u64, min: u64 },
+}
+
+/// **Every store-owned numeric tuning knob, stated ONCE.**
 ///
-/// ONE adapter, so warn-and-keep is a single decision rather than eleven
-/// copies of it. `unset` is what an absent declaration gives and therefore
-/// what an unreadable one gives too: `undercroft_core::config` makes garbage
-/// behave exactly like absence, which is what fixes `UNDERCROFT_FDE_IVF_MIN`
-/// (garbage there used to enable a tier that is default-OFF) without a
-/// special case anyone has to remember.
-fn tune(name: &str, unset: usize, min: usize) -> usize {
-    match undercroft_core::config::off_or_usize(
-        name,
-        std::env::var(name).ok().as_deref(),
-        unset,
-        min,
-    ) {
-        Ok(v) => v,
-        Err(f) => {
-            undercroft_obs::diag_warn!("{}", f.why);
-            f.value
+/// ROADMAP O52 (round-four #25, the reporting half). O48 gave these knobs the
+/// `Tunes` contract — an unreadable declaration warns and behaves as if
+/// absent — by routing them through `undercroft_core::config`. It left the
+/// unset value and the minimum at each CALL SITE, which was fine for the
+/// engine and impossible for the pre-flight: `check_declaration` is handed a
+/// `(name, raw)` pair and has no call site to read them from, so it fell to
+/// the catch-all and `undercroft config check` printed *"no parse to run; the
+/// consumer validates it"* about declarations whose consumer had just been
+/// taught to validate them.
+///
+/// One table, two consumers, so the pre-flight cannot report one value while
+/// the engine picks another — and neither can drift, because there is only one
+/// statement of each knob's shape.
+pub(crate) const TUNED: &[(&str, TuneShape, &str)] = &[
+    (
+        "UNDERCROFT_FTS_PREFILTER_MIN",
+        TuneShape::OffOrUsize {
+            unset: DEFAULT_FTS_PREFILTER_MIN,
+            min: 0,
+        },
+        "row count above which an hmac-only vault cuts candidates to the FTS top-K",
+    ),
+    (
+        "UNDERCROFT_TOK_PQ_MIN",
+        TuneShape::OffOrUsize {
+            unset: latestage::TOK_PQ_MIN_DEFAULT,
+            min: 0,
+        },
+        "token rows above which the ColBERT token codebook is trained",
+    ),
+    (
+        "UNDERCROFT_WING_PQ_MIN",
+        TuneShape::OffOrUsize {
+            unset: pqidx::WING_PQ_MIN_DEFAULT,
+            min: 0,
+        },
+        "wing size above which a wing gets its own codebook and IVF",
+    ),
+    (
+        "UNDERCROFT_POOL_DIV",
+        TuneShape::OffOrUsize {
+            unset: pqidx::POOL_DIV_DEFAULT,
+            min: 1,
+        },
+        "divisor sizing the stage-1 candidate pool (live/N)",
+    ),
+    (
+        "UNDERCROFT_IVF_MIN",
+        TuneShape::OffOrUsize {
+            unset: pqidx::IVF_MIN_DEFAULT,
+            min: 0,
+        },
+        "coded rows above which the PQ tier partitions into IVF lists",
+    ),
+    (
+        "UNDERCROFT_IVF_NPROBE",
+        TuneShape::OptUsize { min: 1 },
+        "IVF lists probed per query (absent = the tier computes its own)",
+    ),
+    (
+        "UNDERCROFT_PQ_PAGE_MIN",
+        TuneShape::OffOrUsize {
+            unset: usize::MAX,
+            min: 0,
+        },
+        "coded rows above which the sealed PQ page tier is used (unset = off)",
+    ),
+    (
+        "UNDERCROFT_FDE_PQ_MIN",
+        TuneShape::OffOrUsize {
+            unset: fdeidx::FDE_PQ_MIN_DEFAULT,
+            min: 0,
+        },
+        "FDE rows above which the FDE tier quantizes its vectors",
+    ),
+    (
+        "UNDERCROFT_FDE_IVF_MIN",
+        TuneShape::OffOrUsize {
+            unset: usize::MAX,
+            min: 0,
+        },
+        "FDE rows above which the inverted FDE tier is used (unset = off)",
+    ),
+    (
+        "UNDERCROFT_FDE_NPROBE",
+        TuneShape::OptUsize { min: 1 },
+        "FDE lists probed per query (absent = the tier computes its own)",
+    ),
+    (
+        "UNDERCROFT_RERANK_TOP_N",
+        TuneShape::BareUsize {
+            unset: DEFAULT_RERANK_TOP_N,
+            min: 1,
+        },
+        "hits handed to the cross-encoder reranker",
+    ),
+    // The four FDE construction parameters. They live in `fdeidx.rs`'s
+    // `params_from_env`, NOT in `assemble`, which is why O48's sweep of
+    // "eleven resolvers in the store" did not reach them — a scoping phrase in
+    // a filing deciding what its answer could contain, exactly as O29's did.
+    // Each was `.parse().ok().unwrap_or(d)` and then `.max(1)` or
+    // `.clamp(1, 16)`, so a typo was swallowed twice over.
+    (
+        "UNDERCROFT_FDE_REPS",
+        TuneShape::BareUsize {
+            unset: undercroft_core::fde::FDE_REPS_DEFAULT,
+            min: 1,
+        },
+        "FDE repetitions (first build only; the persisted copy wins afterwards)",
+    ),
+    (
+        "UNDERCROFT_FDE_KSIM",
+        TuneShape::RangeUsize {
+            unset: undercroft_core::fde::FDE_KSIM_DEFAULT,
+            min: 1,
+            max: undercroft_core::fde::FDE_KSIM_MAX,
+        },
+        "FDE SimHash bits per repetition (first build only)",
+    ),
+    (
+        "UNDERCROFT_FDE_DPROJ",
+        TuneShape::BareUsize {
+            unset: undercroft_core::fde::FDE_DPROJ_DEFAULT,
+            min: 1,
+        },
+        "FDE projection dimension (first build only)",
+    ),
+    (
+        "UNDERCROFT_FDE_SEED",
+        TuneShape::BareU64 {
+            unset: undercroft_core::fde::FDE_SEED_DEFAULT,
+            min: 0,
+        },
+        "FDE construction seed (first build only)",
+    ),
+];
+
+/// The shape declared for `name`, or `None` if this is not a tuning knob.
+pub(crate) fn tune_shape(name: &str) -> Option<(TuneShape, &'static str)> {
+    TUNED
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, s, what)| (*s, *what))
+}
+
+/// Run a tuning declaration through the parse its shape names, returning what
+/// the engine will actually use. **Pure**: the caller supplies the raw value,
+/// so the engine and the pre-flight reach the same code — which is the whole
+/// point of the table above.
+pub(crate) fn parse_tuned(
+    name: &str,
+    shape: TuneShape,
+    raw: Option<&str>,
+) -> Result<String, String> {
+    use undercroft_core::config as cfg;
+    let render = |v: usize| {
+        if v == usize::MAX {
+            "off".to_string()
+        } else {
+            v.to_string()
         }
+    };
+    match shape {
+        TuneShape::OffOrUsize { unset, min } => cfg::off_or_usize(name, raw, unset, min)
+            .map(render)
+            .map_err(|f| f.why),
+        TuneShape::BareUsize { unset, min } => cfg::bounded_usize(name, raw, unset, min)
+            .map(render)
+            .map_err(|f| f.why),
+        TuneShape::RangeUsize { unset, min, max } => {
+            cfg::in_range_usize(name, raw, unset, min, max)
+                .map(render)
+                .map_err(|f| f.why)
+        }
+        TuneShape::OptUsize { min } => match raw {
+            None => Ok("the tier computes its own".to_string()),
+            Some(v) => cfg::bounded_usize(name, Some(v), 0, min)
+                .map(render)
+                .map_err(|f| f.why),
+        },
+        TuneShape::BareU64 { unset, min } => cfg::bounded_u64(name, raw, unset, min)
+            .map(|v| v.to_string())
+            .map_err(|f| f.why),
     }
 }
 
-/// A bare-integer knob with NO `off` spelling. Deliberately separate from
-/// [`tune`]: routing these through the `off | <usize>` helper would newly
-/// accept `off` on variables where it has never been documented, which is
-/// widening the contract under cover of a fix.
-fn tune_no_off(name: &str, unset: usize, min: usize) -> usize {
-    match undercroft_core::config::bounded_usize(
-        name,
-        std::env::var(name).ok().as_deref(),
-        unset,
-        min,
-    ) {
-        Ok(v) => v,
-        Err(f) => {
-            undercroft_obs::diag_warn!("{}", f.why);
-            f.value
-        }
+/// One tuning knob, resolved from the environment, warning if it cannot be
+/// read. The three shapes share this so warn-and-behave-as-absent is a single
+/// decision rather than one per knob.
+fn tuned(name: &str) -> usize {
+    let (shape, _) = tune_shape(name).expect("every tuned knob has a TUNED row");
+    let raw = std::env::var(name).ok();
+    match shape {
+        TuneShape::OffOrUsize { unset, min } => warn_or(undercroft_core::config::off_or_usize(
+            name,
+            raw.as_deref(),
+            unset,
+            min,
+        )),
+        TuneShape::BareUsize { unset, min } => warn_or(undercroft_core::config::bounded_usize(
+            name,
+            raw.as_deref(),
+            unset,
+            min,
+        )),
+        TuneShape::RangeUsize { unset, min, max } => warn_or(
+            undercroft_core::config::in_range_usize(name, raw.as_deref(), unset, min, max),
+        ),
+        other => unreachable!("{name} is {other:?}, not a plain usize knob"),
     }
 }
 
 /// The `Option<usize>` knobs, where absent means "the tier computes its own".
-/// Same contract: unreadable is reported and then treated as absent.
-fn tune_opt(name: &str) -> Option<usize> {
+fn tuned_opt(name: &str) -> Option<usize> {
+    let (shape, _) = tune_shape(name).expect("every tuned knob has a TUNED row");
+    let TuneShape::OptUsize { min } = shape else {
+        unreachable!("{name} is {shape:?}, not an optional knob")
+    };
     let raw = std::env::var(name).ok();
     let v = raw.as_deref()?;
-    match undercroft_core::config::bounded_usize(name, Some(v), 0, 1) {
+    match undercroft_core::config::bounded_usize(name, Some(v), 0, min) {
         Ok(n) => Some(n),
         Err(f) => {
             undercroft_obs::diag_warn!("{}", f.why);
@@ -800,20 +1027,86 @@ fn tune_opt(name: &str) -> Option<usize> {
     }
 }
 
+/// A 64-bit tuning knob (the FDE seed).
+fn tuned_u64(name: &str) -> u64 {
+    let (shape, _) = tune_shape(name).expect("every tuned knob has a TUNED row");
+    let TuneShape::BareU64 { unset, min } = shape else {
+        unreachable!("{name} is {shape:?}, not a 64-bit knob")
+    };
+    warn_or(undercroft_core::config::bounded_u64(
+        name,
+        std::env::var(name).ok().as_deref(),
+        unset,
+        min,
+    ))
+}
+
+/// The per-wing training-sample cap (`UNDERCROFT_TRAIN_SOURCE_CAP`), as a
+/// pure parse so the pre-flight runs it (ROADMAP O52). `off` removes the cap.
+pub(crate) fn parse_train_source_cap(raw: Option<&str>) -> Result<usize, String> {
+    let Some(v) = raw else {
+        return Ok(DEFAULT_TRAIN_SOURCE_CAP);
+    };
+    if v.trim().eq_ignore_ascii_case("off") {
+        return Ok(usize::MAX);
+    }
+    match v.trim().parse::<usize>() {
+        Ok(d) if d >= 2 => Ok(d),
+        _ => Err(format!(
+            "UNDERCROFT_TRAIN_SOURCE_CAP={v:?} is not an integer >= 2 or 'off'; using {DEFAULT_TRAIN_SOURCE_CAP}"
+        )),
+    }
+}
+
+/// [`warn_or`] for the resolvers whose error is a plain message: warn and use
+/// the value an absent declaration would have given.
+fn warn_or_str<T>(r: Result<T, String>, unset: T) -> T {
+    match r {
+        Ok(v) => v,
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            unset
+        }
+    }
+}
+
+/// Report an unreadable declaration and use what an absent one would give.
+fn warn_or<T>(r: Result<T, undercroft_core::config::Fallback<T>>) -> T {
+    match r {
+        Ok(v) => v,
+        Err(f) => {
+            undercroft_obs::diag_warn!("{}", f.why);
+            f.value
+        }
+    }
+}
+
 fn resolve_semantic_floor<E: Embedder + ?Sized>(embedder: &E) -> f32 {
-    match std::env::var("UNDERCROFT_SEMANTIC_FLOOR") {
-        Ok(v) if v.eq_ignore_ascii_case("off") => 0.0,
-        Ok(v) => match v.trim().parse::<f32>() {
-            Ok(f) if f.is_finite() && (0.0..=0.98).contains(&f) => f,
-            _ => {
-                undercroft_obs::diag_warn!(
-                    "UNDERCROFT_SEMANTIC_FLOOR={v:?} is not a cosine in [0.0, 0.98]; \
-                     using the embedder's own floor"
-                );
-                embedder.semantic_floor().unwrap_or(0.0)
-            }
-        },
-        Err(_) => embedder.semantic_floor().unwrap_or(0.0),
+    let declared = std::env::var("UNDERCROFT_SEMANTIC_FLOOR").ok();
+    match parse_semantic_floor(declared.as_deref()) {
+        Ok(Some(f)) => f,
+        Ok(None) => embedder.semantic_floor().unwrap_or(0.0),
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            embedder.semantic_floor().unwrap_or(0.0)
+        }
+    }
+}
+
+/// The `UNDERCROFT_SEMANTIC_FLOOR` declaration's parse (ROADMAP O52). `None`
+/// means "use the embedder's own measured floor", which is what absence gives
+/// — so this is pure and the pre-flight can run it without an embedder,
+/// reporting the DECLARATION rather than the resolved cosine.
+pub(crate) fn parse_semantic_floor(raw: Option<&str>) -> Result<Option<f32>, String> {
+    let Some(v) = raw else { return Ok(None) };
+    if v.trim().eq_ignore_ascii_case("off") {
+        return Ok(Some(0.0));
+    }
+    match v.trim().parse::<f32>() {
+        Ok(f) if f.is_finite() && (0.0..=0.98).contains(&f) => Ok(Some(f)),
+        _ => Err(format!(
+            "UNDERCROFT_SEMANTIC_FLOOR={v:?} is not a cosine in [0.0, 0.98]; using the embedder's own floor"
+        )),
     }
 }
 
@@ -908,18 +1201,29 @@ fn resolve_admission_rate(env: Option<&str>) -> Result<Option<(u32, u32)>, Store
 
 /// Pure for the same reason as [`resolve_late_top_n`].
 fn resolve_fusion_weight(env: Option<&str>) -> f32 {
-    match env {
-        None => DEFAULT_FUSION_WEIGHT,
-        Some(v) => match v.trim().parse::<f32>() {
-            Ok(w) if w.is_finite() => w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX),
-            _ => {
-                undercroft_obs::diag_warn!(
-                    "UNDERCROFT_FUSION_WEIGHT={v:?} is not a number; \
-                     using {DEFAULT_FUSION_WEIGHT}"
-                );
-                DEFAULT_FUSION_WEIGHT
-            }
-        },
+    match parse_fusion_weight(env) {
+        Ok(w) => w,
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            DEFAULT_FUSION_WEIGHT
+        }
+    }
+}
+
+/// The `UNDERCROFT_FUSION_WEIGHT` declaration's parse, pure so the pre-flight
+/// reaches it (ROADMAP O52). The CLAMP is deliberately not an error: the
+/// bound exists so no configuration can retire a channel, and a value outside
+/// it is a legible intent to push the blend as far as it goes. Only an
+/// unreadable value falls back.
+pub(crate) fn parse_fusion_weight(raw: Option<&str>) -> Result<f32, String> {
+    let Some(v) = raw else {
+        return Ok(DEFAULT_FUSION_WEIGHT);
+    };
+    match v.trim().parse::<f32>() {
+        Ok(w) if w.is_finite() => Ok(w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX)),
+        _ => Err(format!(
+            "UNDERCROFT_FUSION_WEIGHT={v:?} is not a number; using {DEFAULT_FUSION_WEIGHT}"
+        )),
     }
 }
 
@@ -932,9 +1236,10 @@ fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
     // compatibility promise, and honouring only valid values there would
     // quadruple rescore depth for a deployment that changed nothing.
     if let Some(v) = late {
-        match undercroft_core::config::bounded_usize("UNDERCROFT_LATE_TOP_N", Some(v), 0, 1) {
-            Ok(n) => return n,
-            Err(f) => undercroft_obs::diag_warn!("{}", f.why),
+        match parse_late_top_n(Some(v)) {
+            Ok(Some(n)) => return n,
+            Ok(None) => {}
+            Err(why) => undercroft_obs::diag_warn!("{why}"),
         }
     }
     match rerank {
@@ -950,6 +1255,22 @@ fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
             .unwrap_or(DEFAULT_RERANK_TOP_N),
         None => DEFAULT_LATE_TOP_N,
     }
+}
+
+/// The `UNDERCROFT_LATE_TOP_N` declaration's parse, pure so the pre-flight
+/// reaches it (ROADMAP O52).
+///
+/// **It has no table row on purpose.** `TUNED` states each knob's UNSET value,
+/// and this knob's depends on a SECOND variable — an absent `LATE_TOP_N` falls
+/// through to whatever `UNDERCROFT_RERANK_TOP_N` resolves to, valid or not,
+/// which is a compatibility promise O48 deliberately preserved. So the table
+/// cannot describe it, and this function is the one statement of its parse
+/// instead, called by the resolver and by `check_declaration`.
+pub(crate) fn parse_late_top_n(raw: Option<&str>) -> Result<Option<usize>, String> {
+    let Some(v) = raw else { return Ok(None) };
+    undercroft_core::config::bounded_usize("UNDERCROFT_LATE_TOP_N", Some(v), 0, 1)
+        .map(Some)
+        .map_err(|f| f.why)
 }
 
 /// How the semantic and lexical signals are combined at rank time.
@@ -982,17 +1303,39 @@ pub enum Fusion {
 
 impl Fusion {
     fn from_env() -> Self {
-        match std::env::var("UNDERCROFT_FUSION").ok().as_deref() {
-            Some(v) if v.eq_ignore_ascii_case("legacy") => Fusion::Legacy,
-            Some(v) if v.eq_ignore_ascii_case("rrf") => {
-                undercroft_obs::diag_warn!(
-                    "UNDERCROFT_FUSION=rrf was removed (measured −7.3pp vs bm25); \
-                     falling back to bm25"
-                );
+        match parse_fusion(std::env::var("UNDERCROFT_FUSION").ok().as_deref()) {
+            Ok(f) => f,
+            Err(why) => {
+                undercroft_obs::diag_warn!("{why}");
                 Fusion::Bm25
             }
-            _ => Fusion::Bm25,
         }
+    }
+}
+
+/// The `UNDERCROFT_FUSION` declaration's parse, as a pure function.
+///
+/// ROADMAP O52: an unknown spelling used to fall through the `match` to
+/// `Fusion::Bm25` in SILENCE, so `UNDERCROFT_FUSION=legcy` gave the default
+/// with no signal — the `Tunes` swallow O48 closed for the numeric knobs,
+/// still open on this vocabulary. Pure so the pre-flight runs this same code
+/// rather than a second copy of the vocabulary.
+pub(crate) fn parse_fusion(raw: Option<&str>) -> Result<Fusion, String> {
+    // `rrf` gets its own message: it was a real spelling that was REMOVED
+    // after measuring -7.3pp against bm25, so an operator who set it is not
+    // making a typo and deserves to be told which.
+    if let Some(v) = raw {
+        if v.trim().eq_ignore_ascii_case("rrf") {
+            return Err(
+                "UNDERCROFT_FUSION=rrf was removed (measured -7.3pp vs bm25); ".to_string()
+                    + "ignoring the declaration and behaving as if it were unset",
+            );
+        }
+    }
+    match undercroft_core::config::one_of("UNDERCROFT_FUSION", raw, &["bm25", "legacy"], "bm25") {
+        Ok(v) if v == "legacy" => Ok(Fusion::Legacy),
+        Ok(_) => Ok(Fusion::Bm25),
+        Err(f) => Err(f.why),
     }
 }
 
@@ -2970,7 +3313,7 @@ impl PalaceStore {
     ) -> Result<Self, StoreError> {
         // `off` disables the prefilter here rather than setting a sentinel,
         // so the shared helper's `usize::MAX` is mapped back to `None`.
-        let fts_raw = tune("UNDERCROFT_FTS_PREFILTER_MIN", DEFAULT_FTS_PREFILTER_MIN, 0);
+        let fts_raw = tuned("UNDERCROFT_FTS_PREFILTER_MIN");
         let fts_min = (fts_raw != usize::MAX).then_some(fts_raw);
         let external_dim = embedder
             .model_name()
@@ -3018,17 +3361,12 @@ impl PalaceStore {
                         .collect()
                 })
                 .unwrap_or_default(),
-            train_source_cap: match std::env::var("UNDERCROFT_TRAIN_SOURCE_CAP") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().ok().filter(|&d| d >= 2).unwrap_or_else(|| {
-                    undercroft_obs::diag_warn!(
-                        "UNDERCROFT_TRAIN_SOURCE_CAP={v:?} is not an integer >= 2 or 'off'; \
-                         using 4"
-                    );
-                    4
-                }),
-                Err(_) => 4,
-            },
+            train_source_cap: warn_or_str(
+                parse_train_source_cap(
+                    std::env::var("UNDERCROFT_TRAIN_SOURCE_CAP").ok().as_deref(),
+                ),
+                DEFAULT_TRAIN_SOURCE_CAP,
+            ),
             external_dim,
             hnsw_enabled: false,
             #[cfg(feature = "hnsw")]
@@ -3039,31 +3377,31 @@ impl PalaceStore {
             pq_cache: std::cell::RefCell::new(None),
             tok_pq: std::cell::RefCell::new(None),
             tok_pq_checked: std::cell::Cell::new(false),
-            tok_pq_min: tune("UNDERCROFT_TOK_PQ_MIN", latestage::TOK_PQ_MIN_DEFAULT, 0),
+            tok_pq_min: tuned("UNDERCROFT_TOK_PQ_MIN"),
             pq_verified: std::cell::Cell::new(false),
             pq_live: std::cell::Cell::new(0),
             wing_pq: std::cell::RefCell::new(std::collections::HashMap::new()),
-            wing_pq_min: tune("UNDERCROFT_WING_PQ_MIN", pqidx::WING_PQ_MIN_DEFAULT, 0),
+            wing_pq_min: tuned("UNDERCROFT_WING_PQ_MIN"),
             // `min` is 1 here and 0 above ON PURPOSE. A `_MIN` threshold of
             // zero is a legitimate, if aggressive, choice — the tier is
             // simply always on — and refusing it would narrow input that was
             // never documented as invalid. `POOL_DIV` is a DIVISOR: zero
             // parses, and every consumer guards it with `.max(1)`, so it
             // silently means "the pool is the whole live corpus".
-            pool_div: tune("UNDERCROFT_POOL_DIV", pqidx::POOL_DIV_DEFAULT, 1),
-            ivf_min: tune("UNDERCROFT_IVF_MIN", pqidx::IVF_MIN_DEFAULT, 0),
-            ivf_nprobe: tune_opt("UNDERCROFT_IVF_NPROBE"),
+            pool_div: tuned("UNDERCROFT_POOL_DIV"),
+            ivf_min: tuned("UNDERCROFT_IVF_MIN"),
+            ivf_nprobe: tuned_opt("UNDERCROFT_IVF_NPROBE"),
             // Resolved once at open like every other tunable, rather than read
             // from the environment on each search.
             late_top_n: late_top_n(),
-            pq_page_min: tune("UNDERCROFT_PQ_PAGE_MIN", usize::MAX, 0),
+            pq_page_min: tuned("UNDERCROFT_PQ_PAGE_MIN"),
             fde_enabled: false,
             fde_encoder: std::cell::RefCell::new(None),
             fde_cache: std::cell::RefCell::new(None),
             fde_checked: std::cell::Cell::new(false),
             fde_pq: std::cell::RefCell::new(None),
             fde_pq_checked: std::cell::Cell::new(false),
-            fde_pq_min: tune("UNDERCROFT_FDE_PQ_MIN", fdeidx::FDE_PQ_MIN_DEFAULT, 0),
+            fde_pq_min: tuned("UNDERCROFT_FDE_PQ_MIN"),
             fde_ivf: std::cell::RefCell::new(None),
             fde_ivf_checked: std::cell::Cell::new(false),
             // Default OFF: the containment gate measured probed containment
@@ -3075,8 +3413,8 @@ impl PalaceStore {
             // a "default" whose ONLY consumer was this fallback — i.e. a typo TURNED THE TIER ON, the
             // one knob whose garbage was less conservative than saying
             // nothing, against the comment three lines up.
-            fde_ivf_min: tune("UNDERCROFT_FDE_IVF_MIN", usize::MAX, 0),
-            fde_nprobe: tune_opt("UNDERCROFT_FDE_NPROBE"),
+            fde_ivf_min: tuned("UNDERCROFT_FDE_IVF_MIN"),
+            fde_nprobe: tuned_opt("UNDERCROFT_FDE_NPROBE"),
             qmatrix_cache: std::cell::RefCell::new(None),
             // Stated by the caller, never defaulted: `open_inner` passes
             // false and `open_inner_read_only` true, and every other door is

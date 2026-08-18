@@ -144,6 +144,139 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O52 — CLOSED 2026-08-18: a pre-flight that says "I checked nothing" and one that says "there is nothing to check" are different claims
+
+**Round-four #25, the reporting half**, and it had grown since it was filed.
+
+`undercroft config check` renders any declaration it has no arm for as
+`Finding::Accepted`, printed as *"no parse to run; the consumer validates
+it"*. That sentence is honest about `UNDERCROFT_QDRANT_URL` and a lie about a
+knob whose parse somebody forgot to wire up, and **nothing could tell the two
+apart**. Round-four #9 closed it for the `Protects` class with an exempt list
+counted both ways. The `Tunes` class had no such gate — and O48 then made the
+gap actively false, teaching eleven store resolvers to validate values this
+command was still describing as unvalidated. Six surfaces, including the
+architecture page's own doctrine paragraph, say this command validates every
+`UNDERCROFT_*` declaration.
+
+**`Parse::{Checked,Opaque}` is the axis, counted in both directions.** A
+`Checked` variable the command runs no parse for fails the build; an `Opaque`
+one that IS pre-flighted fails it too, because that is good news which has to
+be recorded rather than left to rot. **49 of the 81 are `Checked`, 32
+`Opaque`** — counted from the inventory, not remembered. Before this unit 33
+were reachable, so the pre-flight's real coverage went from 41% to 60% of the
+surface, and the other 40% now says which kind of unchecked it is.
+
+**One table is what made `Checked` affordable, and its absence is why O48
+could not do this half.** `check_declaration` is handed a `(name, raw)` pair;
+O48 left every knob's unset value and minimum at its CALL SITE, where a
+pre-flight cannot reach them. `undercroft-store`'s `TUNED` states each knob's
+shape ONCE — `OffOrUsize`, `BareUsize`, `OptUsize`, `RangeUsize`, `BareU64`,
+with its unset value and bounds — and both the engine's resolver and
+`check_declaration` read it. Two consumers, one statement, so they cannot
+report different values.
+
+**A knob the table cannot describe says so rather than being forced in.**
+`UNDERCROFT_LATE_TOP_N`'s unset value depends on a SECOND variable — absent, it
+falls through to whatever `UNDERCROFT_RERANK_TOP_N` resolves to, *valid or
+not*, which O48 deliberately preserved as a compatibility promise. It has no
+row and a named pure parse instead, with that reason written where the row
+would have been.
+
+**Three findings this unit made that the filing did not contain**, each the
+same class it was chartered to close:
+
+* **Four more silent swallows in the store, which O48's own scope claimed to
+  cover.** `fdeidx::params_from_env` holds `UNDERCROFT_FDE_REPS`, `_KSIM`,
+  `_DPROJ` and `_SEED` as `.parse().ok().unwrap_or(d)` followed by `.max(1)` or
+  `.clamp(1, 16)` — swallowed twice over, so a declared `ksim` of 32 silently
+  became 16. O48 swept *"eleven resolvers in the store's `assemble`"* and these
+  are not in `assemble`. A scoping phrase in a filing deciding what its answer
+  can contain, exactly as O29's did.
+* **`UNDERCROFT_RERANKER` is round-four #9's shape on a variable #9 did not
+  name.** `attach_reranker` refuses an unknown spelling and refuses a backend
+  this build lacks — both hard errors that stop start-up — but that parse was
+  tangled with the ATTACHMENT, so the pre-flight could not reach it and said
+  "no parse to run" about a declaration whose consumer bails. Extracted to
+  `check_reranker`, which `attach_reranker` now calls for its own refusal, so
+  the message an operator sees at start-up is the one they were shown before.
+* **Two API vocabularies where a declaration was silently replaced by an
+  inference.** `UNDERCROFT_LLM_API=opneai` and `UNDERCROFT_EMBED_API=opneai`
+  fell past both `match` arms into sniffing `/v1` out of the URL. The
+  inference is still what an unreadable declaration gets — that is what
+  absence gives, and no resolved value moves — but it says so now.
+
+**And the four sites O48 filed as remaining are closed here**, because the
+pre-flight needs a pure parse to call and giving it one is the same edit as
+fixing the swallow: `UNDERCROFT_METRICS` (where `=yes` meant OFF in silence),
+`UNDERCROFT_SAMPLE_INTERVAL_MS`, `UNDERCROFT_EMBED_DIM` (a declaration meant
+to PIN the vector width, silently demoted to a suggestion when it did not
+parse) and `UNDERCROFT_ORT_POOL`. That last one is why `positive_usize` lives
+in `undercroft-core`: `--features ort` is not a default build, so a pre-flight
+arm calling the ort crate would be unreachable from the binary an operator
+actually runs.
+
+**Counterfactual, executed against the artifact.** With the `TUNED`
+fall-through in `check_declaration` reverted to `Ok(None)` — the edit asserted
+applied before the test ran — the gate fails and names all fifteen knobs
+individually: *"UNDERCROFT_POOL_DIV — declared Checked, but this command runs
+no parse for it."* Restored from a scoped file copy, not `git checkout`.
+
+**Two premise arms, because a one-sided axis would pass silently.** The gate
+asserts both classes are populated (`checked >= 40 && opaque >= 20`), so an
+axis where every entry landed on one value cannot report a clean tree — the
+same trap `every_protects_variable_is_pre_flighted_or_exempt` guards with its
+`protects >= 20`. A second test asserts every `Opaque` entry really does
+report as unchecked, which is the direction that keeps the operator-facing
+totals meaning what they say.
+
+**Measured on a real corpus, and it produced a finding of its own.** 1,700
+LoCoMo drawers across 20 wings, every declaration driven twice — once through
+`config check` and once through a real `search` on that vault — asserting the
+pre-flight PREDICTS what the engine DOES. `UNDERCROFT_POOL_DIV=64x` and `=0`,
+`UNDERCROFT_FUSION=legcy` and `UNDERCROFT_TRAIN_SOURCE_CAP=1` all report
+identically on both sides, and valid values (`POOL_DIV=32`, `FDE_KSIM=8`,
+`FUSION=legacy`) stay silent on both — the negative control, without which a
+build that warned about everything would pass.
+
+`UNDERCROFT_FDE_KSIM` does not, and the reason is worth recording rather than
+smoothing over. `params_from_env` sits behind a token dimension, i.e. behind
+an attached ColBERT encoder, so on a DEFAULT build it is never reached: a
+fresh vault mined under `UNDERCROFT_RETRIEVAL=fde` with `KSIM=32` emits
+nothing at mine time and nothing at search. **So for those four knobs the
+pre-flight is the only place an operator can be told their declaration is
+unreadable before the day they attach a model** — which strengthens the case
+for wiring them rather than weakening it. My probe's first version asserted
+they would agree, and that expectation was wrong, not the code.
+
+**Drift-checked on every surface that states the claim:** `CLAUDE.md`'s
+configuration doctrine, `architecture/index.html`'s doctrine paragraph,
+`UPGRADING.md` (two knobs genuinely resolve differently and it says which),
+the command's own summary text, and `tests/e2e.sh`, which drives it through
+the CLI — a garbage tuning knob warns and names itself, a degenerate divisor
+reports its minimum, and an opaque declaration says which kind of unchecked
+it is.
+
+**My own defects in this unit, both caught by gates rather than by me.** I
+appended the two API resolvers to the END of `undercroft-llm/src/lib.rs`,
+which put them after `#[cfg(test)] mod tests` — clippy's *"items after a test
+module"*, and precisely the documented "read what is ADJACENT to the anchor"
+hazard, since I never looked at what the end of that file already held. And a
+message literal shipped with a 26-space run inside it, caught by O40's own
+gate: my editing scripts kept eating the backslash line-continuations, which
+is the *"escape handling"* trap in this file's scripted-edit list, met three
+times in one session before I started building the backslash explicitly.
+
+**Residual, stated:** `Opaque` is a claim that no parse EXISTS, and nothing
+proves it. A future variable wrongly classified `Opaque` would satisfy the
+gate by having no arm — which is the honest limit of an inventory, and the
+reason the class carries its reason in prose beside each surface that reads
+it.
+
+**Gate:** `every_checked_variable_is_pre_flighted_and_every_opaque_one_is_not`
+and `the_two_totals_an_operator_reads_are_the_two_halves_of_the_axis`, plus
+four e2e checks.
+
 ### O51 — CLOSED 2026-08-18: the knowledge graph is a second read funnel, and it records now
 
 **Round-four #23's remaining half**, which O50 named in its own closure and
@@ -593,9 +726,9 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 8 verified rows
+### Still open from round four — 7 verified rows
 
-`#25` (reporting half only), `#28`, `#29`, `#37`, `#44`, `#45`, `#47`, `#48`.
+`#28`, `#29`, `#37`, `#44`, `#45`, `#47`, `#48`.
 All MED or lower, all silent-failing, all PATCH or MINOR. The heading read
 `8` while the list held 9 until 2026-08-18 — my own miscount, of exactly the
 class this campaign spent its length fixing, and now GATED: the `prose
@@ -604,6 +737,10 @@ figures` preflight counts the heading against the entries beneath it.
 **`#23` is CLOSED by O51** — the KG funnel was its remaining half, so the row
 is now closed on both funnels. It came off this list on 2026-08-18, taking
 the count from 9 to 8.
+
+**`#25` is CLOSED by O52** — the reporting half was its remainder, and O52
+also closed the four out-of-store sites O48 filed with it, took the count
+from 8 to 7, and found three more instances of the same class on the way.
 
 **`#26` is CLOSED by O48** — it *was* the `UNDERCROFT_FDE_IVF_MIN`
 garbage-is-less-conservative-than-unset claim, and the "a declaration that
@@ -617,15 +754,15 @@ them here as work is itself outstanding, and it is the O37 failure class
 lost). `#36` was taken first and is CLOSED as **O47** above — it underwrote
 every closure here, so it had to be the one that went first.
 
-**`#25` is HALF closed — see O48 above.** The behaviour half is done: the
-store's eleven silent resolvers now warn and fall back to what absence gives.
-**The reporting half remains**: `config check` returns `Accepted` for every
-name with no arm and tells the operator it checked the environment, and
-`ENGINE_ENV_VARS` needs a `Parse::{Checked,Opaque}` axis so the inventory can
-be counted both ways. Still silent outside the store: `cli/http.rs`'s
-`UNDERCROFT_METRICS` and `_SAMPLE_INTERVAL_MS`, `llm/embed.rs`'s `_EMBED_DIM`,
-`embed-ort`'s `_ORT_POOL`. Those want the shared inventory first — closing
-them one at a time is the second-implementation trap O48 avoided.
+**`#25` is FULLY closed — O48 (behaviour) + O52 (reporting).** O48 gave the
+store's eleven silent resolvers the `Tunes` contract; O52 added the
+`Parse::{Checked,Opaque}` axis, wired an arm for every `Checked` variable
+through one shared `TUNED` table, and closed the four out-of-store sites this
+note named — `UNDERCROFT_METRICS`, `_SAMPLE_INTERVAL_MS`, `_EMBED_DIM` and
+`_ORT_POOL`. This note's instinct was right and worth recording: it said those
+four *"want the shared inventory first — closing them one at a time is the
+second-implementation trap O48 avoided"*, and that is exactly how O52 took
+them, as consumers of one table rather than four separate fixes.
 
 <details>
 <summary>the original sizing note, kept</summary>

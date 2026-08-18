@@ -75,97 +75,125 @@ pub enum ConfigClass {
     Tunes,
 }
 
-use ConfigClass::{Protects, Tunes};
+/// **Whether `undercroft config check` runs a real parse for a declaration.**
+///
+/// ROADMAP O52 (round-four #25, the reporting half). `check_one` falls to a
+/// catch-all that renders an unknown name as `Finding::Accepted`, printed as
+/// *"no parse to run; the consumer validates it"* — and that message is
+/// indistinguishable between a variable that genuinely has nothing to parse
+/// (a path, a URL, a bearer, a model name) and one whose parse somebody
+/// forgot to wire up. The `Protects` half of that gap was closed by
+/// round-four #9's both-directions gate; the `Tunes` half was not, and O48
+/// widened it by teaching eleven `Tunes` resolvers to validate values the
+/// pre-flight still described as unvalidated.
+///
+/// So the axis is declared per variable and counted against the code in BOTH
+/// directions by [`super::config_check::tests`]: a `Checked` variable the
+/// pre-flight runs no parse for fails the build, and an `Opaque` one that IS
+/// pre-flighted fails it too — good news that has to be recorded rather than
+/// left to rot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Parse {
+    /// `undercroft config check` runs the real resolver for this declaration.
+    Checked,
+    /// There is no parse to run. Its only real validation is the thing that
+    /// consumes it — an endpoint that answers, a file that opens, a model
+    /// that loads. Saying so is honest; saying "checked" would not be.
+    Opaque,
+}
 
-pub const ENGINE_ENV_VARS: &[(&str, ConfigClass)] = &[
-    ("UNDERCROFT_ADMISSION", Protects),
-    ("UNDERCROFT_ADMISSION_LLM", Protects),
-    ("UNDERCROFT_ADMISSION_RATE", Protects),
-    ("UNDERCROFT_ADMIT_TRUSTED_SOURCES", Protects),
-    ("UNDERCROFT_ASSERTION_SECRET", Protects),
-    ("UNDERCROFT_CHROMA_URL", Tunes),
-    ("UNDERCROFT_COLBERT_MODEL", Tunes),
-    ("UNDERCROFT_COLBERT_NAME", Tunes),
-    ("UNDERCROFT_COLBERT_QUERY_MODEL", Tunes),
-    ("UNDERCROFT_COLBERT_TOKENIZER", Tunes),
-    ("UNDERCROFT_EMBEDDER", Protects),
-    ("UNDERCROFT_EMBED_API", Tunes),
-    ("UNDERCROFT_EMBED_CA", Protects),
-    ("UNDERCROFT_EMBED_DIM", Tunes),
-    ("UNDERCROFT_EMBED_KEY", Tunes),
-    ("UNDERCROFT_EMBED_MODEL", Tunes),
-    ("UNDERCROFT_EMBED_URL", Tunes),
-    ("UNDERCROFT_FDE_DPROJ", Tunes),
-    ("UNDERCROFT_FDE_IVF_MIN", Tunes),
-    ("UNDERCROFT_FDE_KSIM", Tunes),
-    ("UNDERCROFT_FDE_NPROBE", Tunes),
-    ("UNDERCROFT_FDE_PQ_MIN", Tunes),
-    ("UNDERCROFT_FDE_REPS", Tunes),
-    ("UNDERCROFT_FDE_SEED", Tunes),
-    ("UNDERCROFT_FORCE_EMBEDDER", Protects),
-    ("UNDERCROFT_FTS_PREFILTER_MIN", Tunes),
-    ("UNDERCROFT_FUSION", Tunes),
-    ("UNDERCROFT_FUSION_WEIGHT", Tunes),
-    ("UNDERCROFT_HOME", Tunes),
-    ("UNDERCROFT_INDEX_CA", Protects),
-    ("UNDERCROFT_IVF_MIN", Tunes),
-    ("UNDERCROFT_IVF_NPROBE", Tunes),
-    ("UNDERCROFT_LANG", Tunes),
-    ("UNDERCROFT_LATE_TOP_N", Tunes),
-    ("UNDERCROFT_LLM_API", Tunes),
-    ("UNDERCROFT_LLM_CA", Protects),
-    ("UNDERCROFT_LLM_KEY", Tunes),
-    ("UNDERCROFT_LLM_MODEL", Tunes),
-    ("UNDERCROFT_LLM_URL", Tunes),
-    ("UNDERCROFT_LOG", Tunes),
-    ("UNDERCROFT_LOG_FORMAT", Tunes),
-    ("UNDERCROFT_MCP_HTTP_TOKEN", Protects),
-    ("UNDERCROFT_METRICS", Tunes),
-    ("UNDERCROFT_MILVUS_URL", Tunes),
-    ("UNDERCROFT_ONNX_MODEL", Tunes),
-    ("UNDERCROFT_ONNX_NAME", Tunes),
-    ("UNDERCROFT_ONNX_TOKENIZER", Tunes),
-    ("UNDERCROFT_ORCH_ADDR", Tunes),
-    ("UNDERCROFT_ORCH_ADMIN_TOKEN", Protects),
-    ("UNDERCROFT_ORCH_DB", Tunes),
-    ("UNDERCROFT_ORCH_ENGINE_CA", Protects),
-    ("UNDERCROFT_ORCH_KEY", Protects),
+use ConfigClass::{Protects, Tunes};
+use Parse::{Checked, Opaque};
+
+pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
+    ("UNDERCROFT_ADMISSION", Protects, Checked),
+    ("UNDERCROFT_ADMISSION_LLM", Protects, Checked),
+    ("UNDERCROFT_ADMISSION_RATE", Protects, Checked),
+    ("UNDERCROFT_ADMIT_TRUSTED_SOURCES", Protects, Opaque),
+    ("UNDERCROFT_ASSERTION_SECRET", Protects, Checked),
+    ("UNDERCROFT_CHROMA_URL", Tunes, Opaque),
+    ("UNDERCROFT_COLBERT_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_COLBERT_NAME", Tunes, Opaque),
+    ("UNDERCROFT_COLBERT_QUERY_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_COLBERT_TOKENIZER", Tunes, Opaque),
+    ("UNDERCROFT_EMBEDDER", Protects, Checked),
+    ("UNDERCROFT_EMBED_API", Tunes, Checked),
+    ("UNDERCROFT_EMBED_CA", Protects, Checked),
+    ("UNDERCROFT_EMBED_DIM", Tunes, Checked),
+    ("UNDERCROFT_EMBED_KEY", Tunes, Opaque),
+    ("UNDERCROFT_EMBED_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_EMBED_URL", Tunes, Opaque),
+    ("UNDERCROFT_FDE_DPROJ", Tunes, Checked),
+    ("UNDERCROFT_FDE_IVF_MIN", Tunes, Checked),
+    ("UNDERCROFT_FDE_KSIM", Tunes, Checked),
+    ("UNDERCROFT_FDE_NPROBE", Tunes, Checked),
+    ("UNDERCROFT_FDE_PQ_MIN", Tunes, Checked),
+    ("UNDERCROFT_FDE_REPS", Tunes, Checked),
+    ("UNDERCROFT_FDE_SEED", Tunes, Checked),
+    ("UNDERCROFT_FORCE_EMBEDDER", Protects, Opaque),
+    ("UNDERCROFT_FTS_PREFILTER_MIN", Tunes, Checked),
+    ("UNDERCROFT_FUSION", Tunes, Checked),
+    ("UNDERCROFT_FUSION_WEIGHT", Tunes, Checked),
+    ("UNDERCROFT_HOME", Tunes, Opaque),
+    ("UNDERCROFT_INDEX_CA", Protects, Checked),
+    ("UNDERCROFT_IVF_MIN", Tunes, Checked),
+    ("UNDERCROFT_IVF_NPROBE", Tunes, Checked),
+    ("UNDERCROFT_LANG", Tunes, Opaque),
+    ("UNDERCROFT_LATE_TOP_N", Tunes, Checked),
+    ("UNDERCROFT_LLM_API", Tunes, Checked),
+    ("UNDERCROFT_LLM_CA", Protects, Checked),
+    ("UNDERCROFT_LLM_KEY", Tunes, Opaque),
+    ("UNDERCROFT_LLM_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_LLM_URL", Tunes, Opaque),
+    ("UNDERCROFT_LOG", Tunes, Opaque),
+    ("UNDERCROFT_LOG_FORMAT", Tunes, Opaque),
+    ("UNDERCROFT_MCP_HTTP_TOKEN", Protects, Checked),
+    ("UNDERCROFT_METRICS", Tunes, Checked),
+    ("UNDERCROFT_MILVUS_URL", Tunes, Opaque),
+    ("UNDERCROFT_ONNX_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_ONNX_NAME", Tunes, Opaque),
+    ("UNDERCROFT_ONNX_TOKENIZER", Tunes, Opaque),
+    ("UNDERCROFT_ORCH_ADDR", Tunes, Opaque),
+    ("UNDERCROFT_ORCH_ADMIN_TOKEN", Protects, Checked),
+    ("UNDERCROFT_ORCH_DB", Tunes, Opaque),
+    ("UNDERCROFT_ORCH_ENGINE_CA", Protects, Checked),
+    ("UNDERCROFT_ORCH_KEY", Protects, Checked),
     // The control plane's metrics listener (O20). `_ADDR` is `Protects`
     // because declaring it OPENS a network surface, and `_TOKEN` because it
     // is what makes a non-loopback listener legal at all.
-    ("UNDERCROFT_ORCH_METRICS_ADDR", Protects),
-    ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects),
-    ("UNDERCROFT_ORCH_RATE_LIMIT", Protects),
-    ("UNDERCROFT_ORT_POOL", Tunes),
+    ("UNDERCROFT_ORCH_METRICS_ADDR", Protects, Checked),
+    ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects, Checked),
+    ("UNDERCROFT_ORCH_RATE_LIMIT", Protects, Checked),
+    ("UNDERCROFT_ORT_POOL", Tunes, Checked),
     // An OUTWARD PATH, and `architecture/index.html` has always named it as
     // one of the four. `Tunes` made `config check` print "warn … keeps the
     // conservative default" for a declaration that now stops the process,
     // because the pre-flight derives fatal-vs-warn from this class alone.
-    ("UNDERCROFT_OTLP_ENDPOINT", Protects),
-    ("UNDERCROFT_OTLP_CA", Protects),
-    ("UNDERCROFT_OTLP_HEADERS", Tunes),
-    ("UNDERCROFT_PASSPHRASE", Protects),
-    ("UNDERCROFT_PGVECTOR_DSN", Tunes),
-    ("UNDERCROFT_POOL_DIV", Tunes),
-    ("UNDERCROFT_PQ_PAGE_MIN", Tunes),
-    ("UNDERCROFT_QDRANT_URL", Tunes),
-    ("UNDERCROFT_READ_AUDIT", Protects),
-    ("UNDERCROFT_RERANKER", Tunes),
-    ("UNDERCROFT_RERANK_MODEL", Tunes),
-    ("UNDERCROFT_RERANK_NAME", Tunes),
-    ("UNDERCROFT_RERANK_TOKENIZER", Tunes),
-    ("UNDERCROFT_RERANK_TOP_N", Tunes),
-    ("UNDERCROFT_RETRIEVAL", Protects),
-    ("UNDERCROFT_SAMPLE_INTERVAL_MS", Tunes),
-    ("UNDERCROFT_SEARCH_TRACE", Tunes),
-    ("UNDERCROFT_SEMANTIC_FLOOR", Tunes),
-    ("UNDERCROFT_SEMANTIC_GATE", Protects),
-    ("UNDERCROFT_SERVICE_NAME", Tunes),
-    ("UNDERCROFT_TOK_PQ_MIN", Tunes),
-    ("UNDERCROFT_TRAIN_SOURCE_CAP", Tunes),
-    ("UNDERCROFT_TRUST_FLOOR", Protects),
-    ("UNDERCROFT_WEAVIATE_URL", Tunes),
-    ("UNDERCROFT_WING_PQ_MIN", Tunes),
+    ("UNDERCROFT_OTLP_ENDPOINT", Protects, Checked),
+    ("UNDERCROFT_OTLP_CA", Protects, Checked),
+    ("UNDERCROFT_OTLP_HEADERS", Tunes, Opaque),
+    ("UNDERCROFT_PASSPHRASE", Protects, Checked),
+    ("UNDERCROFT_PGVECTOR_DSN", Tunes, Opaque),
+    ("UNDERCROFT_POOL_DIV", Tunes, Checked),
+    ("UNDERCROFT_PQ_PAGE_MIN", Tunes, Checked),
+    ("UNDERCROFT_QDRANT_URL", Tunes, Opaque),
+    ("UNDERCROFT_READ_AUDIT", Protects, Checked),
+    ("UNDERCROFT_RERANKER", Tunes, Checked),
+    ("UNDERCROFT_RERANK_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_RERANK_NAME", Tunes, Opaque),
+    ("UNDERCROFT_RERANK_TOKENIZER", Tunes, Opaque),
+    ("UNDERCROFT_RERANK_TOP_N", Tunes, Checked),
+    ("UNDERCROFT_RETRIEVAL", Protects, Checked),
+    ("UNDERCROFT_SAMPLE_INTERVAL_MS", Tunes, Checked),
+    ("UNDERCROFT_SEARCH_TRACE", Tunes, Opaque),
+    ("UNDERCROFT_SEMANTIC_FLOOR", Tunes, Checked),
+    ("UNDERCROFT_SEMANTIC_GATE", Protects, Checked),
+    ("UNDERCROFT_SERVICE_NAME", Tunes, Opaque),
+    ("UNDERCROFT_TOK_PQ_MIN", Tunes, Checked),
+    ("UNDERCROFT_TRAIN_SOURCE_CAP", Tunes, Checked),
+    ("UNDERCROFT_TRUST_FLOOR", Protects, Checked),
+    ("UNDERCROFT_WEAVIATE_URL", Tunes, Opaque),
+    ("UNDERCROFT_WING_PQ_MIN", Tunes, Checked),
 ];
 
 pub const MCP_TOOLS: &[&str] = &[
@@ -1001,7 +1029,7 @@ mod tests {
         );
 
         let inventoried: std::collections::BTreeSet<&str> =
-            ENGINE_ENV_VARS.iter().map(|(n, _)| *n).collect();
+            ENGINE_ENV_VARS.iter().map(|(n, _, _)| *n).collect();
         assert_eq!(
             inventoried.len(),
             ENGINE_ENV_VARS.len(),
@@ -1028,7 +1056,7 @@ mod tests {
         // probe above already carried exactly this filter; the half that
         // DECIDES did not, which is the "ask what the checker sees when it
         // reads itself" trap inside a checker written to avoid it.
-        for (name, _) in ENGINE_ENV_VARS {
+        for (name, _, _) in ENGINE_ENV_VARS {
             let read_for_real = found
                 .get(*name)
                 .is_some_and(|sites| sites.iter().any(|p| !p.ends_with("parity.rs")));

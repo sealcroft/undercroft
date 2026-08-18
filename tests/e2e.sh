@@ -630,6 +630,23 @@ check "clean env starts"          0 "This environment starts"        -- \
   "$BIN" config-check
 check "opens nothing, and says so" 0 "no vault, no database"          -- \
   "$BIN" config-check
+# ROADMAP O52: a TUNING declaration that does not parse. It warns rather than
+# refusing (its default is already the conservative choice), but it must be
+# REPORTED — before this, `config check` printed "no parse to run; the consumer
+# validates it" about a knob whose consumer O48 had just taught to validate it,
+# and exited 0 while the engine warned at every start-up.
+check "a bad tuning knob warns"   0 "warn"                            -- \
+  env UNDERCROFT_POOL_DIV=64x "$BIN" config-check
+check "and it names the knob"     0 "UNDERCROFT_POOL_DIV"             -- \
+  env UNDERCROFT_POOL_DIV=64x "$BIN" config-check
+# The degenerate value is the sharper case: `0` PARSES, and every consumer then
+# guards it with `.max(1)`, so it silently meant "the pool is the whole corpus".
+check "a degenerate divisor warns" 0 "minimum"                        -- \
+  env UNDERCROFT_POOL_DIV=0 "$BIN" config-check
+# ...and a knob that is genuinely unparseable-by-nature says WHICH kind of
+# unchecked it is, rather than one message covering both cases.
+check "an opaque declaration says so" 0 "declared Opaque"             -- \
+  env UNDERCROFT_QDRANT_URL=https://q.example "$BIN" config-check --verbose
 # A declaration that turns a protection on and does not parse: exit 1, named.
 check "a bad protection refuses"  1 "REFUSES"                         -- \
   env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" config-check

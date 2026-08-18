@@ -80,6 +80,64 @@ pub fn bounded_usize(
     bounded(name, v, v.trim(), unset, min)
 }
 
+/// [`bounded_usize`] for the knobs whose natural width is 64 bits — an RNG
+/// seed and a millisecond interval. Kept as its own entry point rather than
+/// making the numeric helper generic, because generic bounds here would buy
+/// one line and cost the readability of the message this returns.
+pub fn bounded_u64(
+    name: &str,
+    raw: Option<&str>,
+    unset: u64,
+    min: u64,
+) -> Result<u64, Fallback<u64>> {
+    let Some(v) = raw else { return Ok(unset) };
+    let t = v.trim();
+    match t.parse::<u64>() {
+        Ok(n) if n >= min => Ok(n),
+        Ok(n) => Err(Fallback {
+            value: unset,
+            why: format!(
+                "{name}={v:?} is below the minimum of {min} (got {n}); \
+                 ignoring the declaration and behaving as if it were unset"
+            ),
+        }),
+        Err(_) => Err(Fallback {
+            value: unset,
+            why: format!(
+                "{name}={v:?} is not a number; ignoring the declaration and \
+                 behaving as if it were unset"
+            ),
+        }),
+    }
+}
+
+/// A bare integer with a real upper bound as well as a lower one.
+///
+/// `UNDERCROFT_FDE_KSIM` was `parse().ok().unwrap_or(d).clamp(1, 16)`, so a
+/// declared 32 was silently taken as 16 — the swallow O48 closed, wearing a
+/// clamp instead of an `unwrap_or`. A range the construction enforces has to
+/// be part of the DECLARATION's parse, or the pre-flight and the engine
+/// disagree about the same value.
+pub fn in_range_usize(
+    name: &str,
+    raw: Option<&str>,
+    unset: usize,
+    min: usize,
+    max: usize,
+) -> Result<usize, Fallback<usize>> {
+    let v = bounded_usize(name, raw, unset, min)?;
+    if v > max {
+        return Err(Fallback {
+            value: unset,
+            why: format!(
+                "{name}={v} is above the maximum of {max}; ignoring the \
+                 declaration and behaving as if it were unset"
+            ),
+        });
+    }
+    Ok(v)
+}
+
 fn bounded(
     name: &str,
     raw: &str,
@@ -102,6 +160,30 @@ fn bounded(
                 "{name}={raw:?} is not a number; ignoring the declaration and \
                  behaving as if it were unset"
             ),
+        }),
+    }
+}
+
+/// A knob whose absence means "derive it" rather than "use this constant":
+/// a session-pool size derived from the core count, an embedding dimension
+/// probed from the endpoint. `None` is what absence gives, and therefore what
+/// an unreadable declaration gives.
+///
+/// ROADMAP O52. Both of its callers were
+/// `.ok().and_then(|v| v.parse().ok()).filter(|&n| n >= 1)`, which swallows a
+/// typo in silence and then, for the embedder, PROBES the endpoint instead of
+/// using the dimension the operator declared — a declaration that reads as a
+/// pin and behaves as a suggestion.
+pub fn positive_usize(
+    name: &str,
+    raw: Option<&str>,
+) -> Result<Option<usize>, Fallback<Option<usize>>> {
+    let Some(v) = raw else { return Ok(None) };
+    match bounded_usize(name, Some(v), 0, 1) {
+        Ok(n) => Ok(Some(n)),
+        Err(f) => Err(Fallback {
+            value: None,
+            why: f.why,
         }),
     }
 }
