@@ -422,20 +422,21 @@ impl Tenancy {
             Some("hmac-only") | Some("hmac_only") => SecurityLevel::HmacOnly,
             _ => SecurityLevel::Sealed,
         };
-        if self.manager.exists(&id) {
-            return Err(RestError::new(409, "vault already exists"));
-        }
-        let vault = self
-            .manager
-            .create(&id, level)
-            .map_err(|e| RestError::new(400, e.to_string()))?;
+        // ROADMAP O54: through `vault_err`, and WITHOUT a duplicate existence
+        // check in front of it. `create` already answers `AlreadyExists`, so
+        // the pre-check was a second implementation of one decision — and the
+        // flattening below it turned every OTHER verdict into 400, telling a
+        // caller their request was malformed when the disk was full, the
+        // directory was unwritable, or key derivation failed. A server
+        // failure reported as a client error is the one class of status a
+        // caller cannot act on.
+        let vault = self.manager.create(&id, level).map_err(vault_err)?;
         // If an external embedder was requested, open once to record the
         // identity so subsequent opens enforce it.
         if let Some(spec) = body.get("embedder").and_then(Value::as_str) {
             if let Some((name, dim)) = undercroft_core::parse_external_spec(spec) {
                 let emb = Box::new(undercroft_core::ExternalEmbedder::new(&name, dim));
-                PalaceStore::open_with_embedder(vault, emb)
-                    .map_err(|e| RestError::new(500, e.to_string()))?;
+                PalaceStore::open_with_embedder(vault, emb).map_err(store_err)?;
             } else if spec != "hash" && !spec.is_empty() {
                 return Err(RestError::new(
                     400,
@@ -459,10 +460,7 @@ impl Tenancy {
                 "vault listing is disabled under per-vault assertions",
             ));
         }
-        let ids = self
-            .manager
-            .list()
-            .map_err(|e| RestError::new(500, e.to_string()))?;
+        let ids = self.manager.list().map_err(vault_err)?;
         Ok((200, Body::Json(json!({ "vaults": ids }))))
     }
 
@@ -471,10 +469,7 @@ impl Tenancy {
         // Dropping the Tenancy's handle does not close the `/mcp` one.
         self.deny_co_resident(id, "deleting a vault", "delete it while nothing serves it")?;
         self.stores.remove(id);
-        let deleted = self
-            .manager
-            .delete(id)
-            .map_err(|e| RestError::new(400, e.to_string()))?;
+        let deleted = self.manager.delete(id).map_err(vault_err)?;
         if deleted {
             Ok((200, Body::Json(json!({ "id": id, "deleted": true }))))
         } else {
@@ -2755,6 +2750,61 @@ fn respond(req: Request, code: u16, body: &str, content_type: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    /// ROADMAP O54 (round-four #29). **Every `VaultError` reaching `/v1` is
+    /// classified by `vault_err`, and this counts the call sites rather than
+    /// trusting that they were.**
+    ///
+    /// `POST /v1/vaults` and `DELETE /v1/vaults/{id}` flattened it to
+    /// `RestError::new(400, e.to_string())`, so a disk that was full, a
+    /// directory that could not be created and a key derivation that failed
+    /// all answered **400 Bad Request** — telling the caller their request
+    /// was malformed when the server had failed. `vault_err` is the one place
+    /// that decides: 404 for `NotFound`, 409 for `AlreadyExists` and for the
+    /// two integrity verdicts (with `class: "integrity"`, which the fleet's
+    /// tooling keys on), 400 for `BadName`, 500 for everything else.
+    ///
+    /// A source count rather than a behaviour test because the failures are
+    /// filesystem states a test cannot reach portably — and because the
+    /// defect is "somebody wrote a new call site and mapped it by hand",
+    /// which only a count can see.
+    #[test]
+    fn every_vault_manager_call_is_classified_by_vault_err() {
+        let src = include_str!("tenant.rs");
+        let mut sites = 0usize;
+        let mut unclassified = Vec::new();
+        for (i, line) in src.lines().enumerate() {
+            let Some(rest) = line.split_once("self.manager.").map(|(_, r)| r) else {
+                continue;
+            };
+            // `exists` and `unlock` are not mapped on their own line: the
+            // first returns a bool, the second is already `.map_err(vault_err)`
+            // one line below its `match`.
+            if rest.starts_with("exists(") || rest.starts_with("unlock(") {
+                continue;
+            }
+            if !line.contains(".map_err(") {
+                continue;
+            }
+            sites += 1;
+            if !line.contains("map_err(vault_err)") {
+                unclassified.push(format!("  tenant.rs:{}: {}", i + 1, line.trim()));
+            }
+        }
+        // PREMISE. A scanner whose pattern stopped matching would report a
+        // clean tree, which is this project's oldest trap.
+        assert!(
+            sites >= 4,
+            "premise failed: only {sites} classified manager call(s) found — \
+             this scanner examined nothing"
+        );
+        assert!(
+            unclassified.is_empty(),
+            "a VaultError reaches /v1 without `vault_err` classifying it, so its \
+             status is whatever that line happened to type:\n{}",
+            unclassified.join("\n")
+        );
+    }
     use super::*;
     use std::io::{Read as _, Write as _};
     use tempfile::TempDir;

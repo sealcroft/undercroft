@@ -5,6 +5,33 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### a server failure stops being reported as a bad request (O54)
+
+**Round-four #29.** `POST /v1/vaults` and `DELETE /v1/vaults/{id}` mapped
+their `VaultError` by hand to 400, bypassing `vault_err`. `create` reaches
+`fs::create_dir_all`, key derivation and `save_manifest`; `delete` reaches
+`fs::remove_dir_all` — so a full disk, an unwritable directory or a failed key
+derivation answered **400 Bad Request**, telling the caller their request was
+malformed when the server had failed. They answer 500 now, which a fleet
+operator's tooling can retry.
+
+**A second implementation went with it.** `create_vault` checked
+`manager.exists()` and returned 409 itself, in front of a `create` that
+already answers `AlreadyExists` — which is why the duplicate case was right by
+accident while every other verdict was wrong. `manager.list()` and the
+post-create `open_with_embedder` went through the same door in the same edit.
+
+**Checked rather than repeated:** `delete` never returns an integrity verdict,
+because it does not unlock — so no `class: "integrity"` was being lost there,
+and claiming it would have been a plausible statement about the wrong
+function.
+
+**Gate:** `every_vault_manager_call_is_classified_by_vault_err` counts the
+source sites and fails on any mapped by hand, with a premise arm so a scanner
+whose pattern stopped matching cannot report clean. Counterfactual executed.
+Two e2e checks cover what a caller observes: duplicate create 409, absent
+delete 404.
+
 ### a filtered candidate pool is accepted on completeness, not on a threshold that could never fire (O53)
 
 **Round-four #28.** FTS5 and the HNSW graph cannot be asked "within this

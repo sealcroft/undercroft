@@ -1413,6 +1413,23 @@ rest_code() { # <name> <expected-code> -- <curl args...>
 rest_body "create vault"        '"created":true'  -- -X POST "$API/vaults" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"id":"acme","level":"sealed"}'
 rest_code "missing assertion 401" 401 -- -X POST "$API/vaults/acme/search" -d '{"query":"x"}'
+# ROADMAP O54: a duplicate create answers 409, and it does so through the ONE
+# classifier. Both vault routes used to flatten every VaultError to 400 —
+# the duplicate case was caught by a second existence check in front of the
+# call, so this status was right by accident while every other verdict (a
+# full disk, an unwritable directory, a failed key derivation) answered "bad
+# request" about a server failure. The pre-check is gone; this is `vault_err`
+# answering.
+rest_code "duplicate vault create is 409" 409 -- -X POST "$API/vaults" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"id":"acme","level":"sealed"}'
+# Deliberately NOT tested here: a `BadName` from `create` itself. The route
+# validates the name before calling it, so that arm is unreachable over /v1 —
+# and a bad id fails the per-vault assertion first anyway, with 401. The
+# unit gate covers `vault_err`'s mapping; this file covers what a caller
+# can actually observe.
+# ...and deleting a vault that does not exist is 404, not 400.
+rest_code "deleting an absent vault is 404" 404 -- -X DELETE "$API/vaults/nosuchvault" \
+  -H "X-Vault-Assertion: $(sign nosuchvault)"
 rest_body "save drawer"         '"created":true'  -- -X POST "$API/vaults/acme/drawers" \
   -H "X-Vault-Assertion: $(sign acme)" \
   -d '{"text":"we picked postgres for the billing service","wing":"eng","room":"decisions"}'

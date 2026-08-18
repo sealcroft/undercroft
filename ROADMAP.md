@@ -144,6 +144,57 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O54 — CLOSED 2026-08-18: a server failure stops being reported as a bad request
+
+**Round-four #29.** `POST /v1/vaults` and `DELETE /v1/vaults/{id}` mapped
+their `VaultError` with `.map_err(|e| RestError::new(400, e.to_string()))`,
+bypassing `vault_err` — the function that exists to decide exactly this and
+whose own doc comment says *"two surfaces stating different doctrines about
+one vault is the thing the class exists to prevent"*.
+
+**What that flattened, read from the code rather than assumed.** `create`
+reaches `fs::create_dir_all`, `assemble` (key derivation) and
+`save_manifest`; `delete` reaches `fs::remove_dir_all`. **A full disk, an
+unwritable directory or a failed key derivation therefore answered 400 Bad
+Request** — telling the caller their request was malformed when the server
+had failed, which is the one status class a caller cannot act on. `500` is
+what `vault_err` gives them, and a fleet operator's tooling can retry it.
+
+**One verdict the filing implied and the code does not support**, checked
+rather than repeated: `delete` never returns `ManifestTampered` or
+`CorruptManifest`, because it does not unlock. So no integrity verdict was
+being flattened on that route, and saying otherwise would have been a
+plausible claim about the wrong function.
+
+**A second implementation removed in the same edit.** `create_vault` checked
+`manager.exists()` and returned 409 itself, in front of a `create` that
+already answers `AlreadyExists`. That pre-check is why the duplicate case was
+*right by accident* while every other verdict was wrong — the one status
+anyone had tested was the one not decided by the flattened line. It is gone;
+`vault_err` answers 409 now, from one statement.
+
+**Two more sites went through the same door while it was open**, since a
+classifier used by three of five callers is the arrangement that produced
+this: `manager.list()` (flattened to 500 by hand) and the post-create
+`open_with_embedder` (a `StoreError`, now through `store_err`, which is what
+classes an integrity verdict as 409 rather than 500).
+
+**Gate:** `every_vault_manager_call_is_classified_by_vault_err` counts the
+call sites in the source and fails on any `self.manager.…` mapped by hand,
+with a premise arm (`sites >= 4`) so a scanner whose pattern stopped matching
+cannot report a clean tree. A source count rather than a behaviour test
+because the failures are filesystem states a test cannot reach portably, and
+because the defect's real shape is "somebody added a call site and mapped it
+by hand", which only a count can see. **Counterfactual executed:** reverting
+`delete_vault` fails the gate, naming `tenant.rs:472` and quoting the line.
+
+**Two e2e checks** drive what a caller can actually observe: a duplicate
+create is 409, and deleting an absent vault is 404. A third arm — a `BadName`
+from `create` — was written and then removed rather than adjusted: the route
+validates the name before calling `create`, so that error is unreachable over
+`/v1`, and the probe was answering 401 because a mismatched id fails the
+per-vault assertion first. My arm was wrong, not the code.
+
 ### O53 — CLOSED 2026-08-18: a filtered pool is accepted on completeness, not on a threshold that could never fire
 
 **Round-four #28.** The two retrieval arms that cannot be asked "within this
@@ -814,9 +865,9 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 6 verified rows
+### Still open from round four — 5 verified rows
 
-`#29`, `#37`, `#44`, `#45`, `#47`, `#48`.
+`#37`, `#44`, `#45`, `#47`, `#48`.
 All MED or lower, all silent-failing, all PATCH or MINOR. The heading read
 `8` while the list held 9 until 2026-08-18 — my own miscount, of exactly the
 class this campaign spent its length fixing, and now GATED: the `prose
