@@ -576,11 +576,9 @@ pub(crate) fn chain_append(
 }
 
 pub(crate) fn rerank_top_n() -> usize {
-    std::env::var("UNDERCROFT_RERANK_TOP_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_RERANK_TOP_N)
+    // `min` 1: a top-N of zero would rerank nothing, which the old
+    // `.filter(|&n| n > 0)` already declined — silently.
+    tune_no_off("UNDERCROFT_RERANK_TOP_N", DEFAULT_RERANK_TOP_N, 1)
 }
 
 /// Depth of the late-interaction rescore — see [`DEFAULT_LATE_TOP_N`].
@@ -743,6 +741,65 @@ fn scoped_keep(hydrate_k: usize, scope_live: usize) -> usize {
 /// declared floor ([`Embedder::semantic_floor`]), else 0. Resolved ONCE —
 /// a measuring embedder pays probe forwards for this, and the map runs in
 /// the per-candidate hot path.
+/// ROADMAP O48 (round-four #25). The `off | <usize>` knobs were each
+/// `v.parse().unwrap_or(DEFAULT)`, which swallows a bad declaration in
+/// silence — against the `Tunes` contract these very variables are classified
+/// under (*"garbage warns and keeps that default"*).
+///
+/// ONE adapter, so warn-and-keep is a single decision rather than eleven
+/// copies of it. `unset` is what an absent declaration gives and therefore
+/// what an unreadable one gives too: `undercroft_core::config` makes garbage
+/// behave exactly like absence, which is what fixes `UNDERCROFT_FDE_IVF_MIN`
+/// (garbage there used to enable a tier that is default-OFF) without a
+/// special case anyone has to remember.
+fn tune(name: &str, unset: usize, min: usize) -> usize {
+    match undercroft_core::config::off_or_usize(
+        name,
+        std::env::var(name).ok().as_deref(),
+        unset,
+        min,
+    ) {
+        Ok(v) => v,
+        Err(f) => {
+            undercroft_obs::diag_warn!("{}", f.why);
+            f.value
+        }
+    }
+}
+
+/// A bare-integer knob with NO `off` spelling. Deliberately separate from
+/// [`tune`]: routing these through the `off | <usize>` helper would newly
+/// accept `off` on variables where it has never been documented, which is
+/// widening the contract under cover of a fix.
+fn tune_no_off(name: &str, unset: usize, min: usize) -> usize {
+    match undercroft_core::config::bounded_usize(
+        name,
+        std::env::var(name).ok().as_deref(),
+        unset,
+        min,
+    ) {
+        Ok(v) => v,
+        Err(f) => {
+            undercroft_obs::diag_warn!("{}", f.why);
+            f.value
+        }
+    }
+}
+
+/// The `Option<usize>` knobs, where absent means "the tier computes its own".
+/// Same contract: unreadable is reported and then treated as absent.
+fn tune_opt(name: &str) -> Option<usize> {
+    let raw = std::env::var(name).ok();
+    let v = raw.as_deref()?;
+    match undercroft_core::config::bounded_usize(name, Some(v), 0, 1) {
+        Ok(n) => Some(n),
+        Err(f) => {
+            undercroft_obs::diag_warn!("{}", f.why);
+            None
+        }
+    }
+}
+
 fn resolve_semantic_floor<E: Embedder + ?Sized>(embedder: &E) -> f32 {
     match std::env::var("UNDERCROFT_SEMANTIC_FLOOR") {
         Ok(v) if v.eq_ignore_ascii_case("off") => 0.0,
@@ -863,8 +920,18 @@ fn resolve_fusion_weight(env: Option<&str>) -> f32 {
 }
 
 fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
-    if let Some(n) = late.and_then(|v| v.parse().ok()).filter(|&n| n > 0) {
-        return n;
+    // ROADMAP O48: a declared-but-unreadable `UNDERCROFT_LATE_TOP_N` used to
+    // fall through in silence. It still falls through — the resolved value is
+    // byte-identical — but it now SAYS so, which is the whole of the `Tunes`
+    // contract. The `rerank` arm below is deliberately NOT touched: its own
+    // comment records that an unparseable value resolving to 50 is a
+    // compatibility promise, and honouring only valid values there would
+    // quadruple rescore depth for a deployment that changed nothing.
+    if let Some(v) = late {
+        match undercroft_core::config::bounded_usize("UNDERCROFT_LATE_TOP_N", Some(v), 0, 1) {
+            Ok(n) => return n,
+            Err(f) => undercroft_obs::diag_warn!("{}", f.why),
+        }
     }
     match rerank {
         // Present at all ⇒ this stage tracks the old knob, *including* values
@@ -2733,11 +2800,10 @@ impl PalaceStore {
         embedder: Box<dyn Embedder + Send>,
         read_only: bool,
     ) -> Result<Self, StoreError> {
-        let fts_min = match std::env::var("UNDERCROFT_FTS_PREFILTER_MIN") {
-            Ok(v) if v.eq_ignore_ascii_case("off") => None,
-            Ok(v) => Some(v.parse().unwrap_or(DEFAULT_FTS_PREFILTER_MIN)),
-            Err(_) => Some(DEFAULT_FTS_PREFILTER_MIN),
-        };
+        // `off` disables the prefilter here rather than setting a sentinel,
+        // so the shared helper's `usize::MAX` is mapped back to `None`.
+        let fts_raw = tune("UNDERCROFT_FTS_PREFILTER_MIN", DEFAULT_FTS_PREFILTER_MIN, 0);
+        let fts_min = (fts_raw != usize::MAX).then_some(fts_raw);
         let external_dim = embedder
             .model_name()
             .starts_with("external:")
@@ -2805,65 +2871,44 @@ impl PalaceStore {
             pq_cache: std::cell::RefCell::new(None),
             tok_pq: std::cell::RefCell::new(None),
             tok_pq_checked: std::cell::Cell::new(false),
-            tok_pq_min: match std::env::var("UNDERCROFT_TOK_PQ_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(latestage::TOK_PQ_MIN_DEFAULT),
-                Err(_) => latestage::TOK_PQ_MIN_DEFAULT,
-            },
+            tok_pq_min: tune("UNDERCROFT_TOK_PQ_MIN", latestage::TOK_PQ_MIN_DEFAULT, 0),
             pq_verified: std::cell::Cell::new(false),
             pq_live: std::cell::Cell::new(0),
             wing_pq: std::cell::RefCell::new(std::collections::HashMap::new()),
-            wing_pq_min: match std::env::var("UNDERCROFT_WING_PQ_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(pqidx::WING_PQ_MIN_DEFAULT),
-                Err(_) => pqidx::WING_PQ_MIN_DEFAULT,
-            },
-            pool_div: match std::env::var("UNDERCROFT_POOL_DIV") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(pqidx::POOL_DIV_DEFAULT),
-                Err(_) => pqidx::POOL_DIV_DEFAULT,
-            },
-            ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(pqidx::IVF_MIN_DEFAULT),
-                Err(_) => pqidx::IVF_MIN_DEFAULT,
-            },
-            ivf_nprobe: std::env::var("UNDERCROFT_IVF_NPROBE")
-                .ok()
-                .and_then(|v| v.parse().ok()),
+            wing_pq_min: tune("UNDERCROFT_WING_PQ_MIN", pqidx::WING_PQ_MIN_DEFAULT, 0),
+            // `min` is 1 here and 0 above ON PURPOSE. A `_MIN` threshold of
+            // zero is a legitimate, if aggressive, choice — the tier is
+            // simply always on — and refusing it would narrow input that was
+            // never documented as invalid. `POOL_DIV` is a DIVISOR: zero
+            // parses, and every consumer guards it with `.max(1)`, so it
+            // silently means "the pool is the whole live corpus".
+            pool_div: tune("UNDERCROFT_POOL_DIV", pqidx::POOL_DIV_DEFAULT, 1),
+            ivf_min: tune("UNDERCROFT_IVF_MIN", pqidx::IVF_MIN_DEFAULT, 0),
+            ivf_nprobe: tune_opt("UNDERCROFT_IVF_NPROBE"),
             // Resolved once at open like every other tunable, rather than read
             // from the environment on each search.
             late_top_n: late_top_n(),
-            pq_page_min: match std::env::var("UNDERCROFT_PQ_PAGE_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(usize::MAX),
-                Err(_) => usize::MAX,
-            },
+            pq_page_min: tune("UNDERCROFT_PQ_PAGE_MIN", usize::MAX, 0),
             fde_enabled: false,
             fde_encoder: std::cell::RefCell::new(None),
             fde_cache: std::cell::RefCell::new(None),
             fde_checked: std::cell::Cell::new(false),
             fde_pq: std::cell::RefCell::new(None),
             fde_pq_checked: std::cell::Cell::new(false),
-            fde_pq_min: match std::env::var("UNDERCROFT_FDE_PQ_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(fdeidx::FDE_PQ_MIN_DEFAULT),
-                Err(_) => fdeidx::FDE_PQ_MIN_DEFAULT,
-            },
+            fde_pq_min: tune("UNDERCROFT_FDE_PQ_MIN", fdeidx::FDE_PQ_MIN_DEFAULT, 0),
             fde_ivf: std::cell::RefCell::new(None),
             fde_ivf_checked: std::cell::Cell::new(false),
             // Default OFF: the containment gate measured probed containment
             // below flat's at every fraction (0.96 quarter / 0.993 half at
             // 500k vs flat 1.000) — opting in trades a small tail of exact
             // top-10 members for scan time; the operator makes that call.
-            fde_ivf_min: match std::env::var("UNDERCROFT_FDE_IVF_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(fdeidx::FDE_IVF_MIN_DEFAULT),
-                Err(_) => usize::MAX,
-            },
-            fde_nprobe: std::env::var("UNDERCROFT_FDE_NPROBE")
-                .ok()
-                .and_then(|v| v.parse().ok()),
+            // The unset value is `usize::MAX` (tier off), so an UNREADABLE
+            // declaration now leaves it off too. It used to fall back to
+            // a "default" whose ONLY consumer was this fallback — i.e. a typo TURNED THE TIER ON, the
+            // one knob whose garbage was less conservative than saying
+            // nothing, against the comment three lines up.
+            fde_ivf_min: tune("UNDERCROFT_FDE_IVF_MIN", usize::MAX, 0),
+            fde_nprobe: tune_opt("UNDERCROFT_FDE_NPROBE"),
             qmatrix_cache: std::cell::RefCell::new(None),
             // Stated by the caller, never defaulted: `open_inner` passes
             // false and `open_inner_read_only` true, and every other door is

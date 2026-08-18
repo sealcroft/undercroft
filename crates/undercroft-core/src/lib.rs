@@ -7,6 +7,7 @@
 
 pub mod admission;
 pub mod chunk;
+pub mod config;
 pub mod convo;
 pub mod drawer;
 pub mod embed;

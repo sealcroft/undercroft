@@ -62,13 +62,21 @@ pub(crate) const FDE_PQ_MIN_DEFAULT: usize = 256;
 /// Sampling cap and k-means iterations for FDE-codebook training.
 const FDE_PQ_SAMPLE: usize = 4096;
 const FDE_PQ_ITERS: usize = 10;
-/// Suggested coded-row count for opting the inverted tier in
-/// (`UNDERCROFT_FDE_IVF_MIN` set without a parseable number falls back
-/// here). The tier is **off by default**: the containment gate measured
-/// probed containment below flat's at every fraction (0.960 quarter /
-/// 0.993 half at N=500k vs flat 1.000), so activating it is an explicit
-/// operator trade of a small exact-top-10 tail for scan time.
-pub(crate) const FDE_IVF_MIN_DEFAULT: usize = 500_000;
+// `FDE_IVF_MIN_DEFAULT = 500_000` was deleted by ROADMAP O48, and what it
+// was FOR is the finding. Its doc read: "Suggested coded-row count for
+// opting the inverted tier in (`UNDERCROFT_FDE_IVF_MIN` set without a
+// parseable number falls back here). The tier is **off by default**." Those
+// two sentences contradict each other — a constant whose ONLY consumer was
+// the value a typo produced, sitting under a comment saying the tier is off
+// unless asked for. Once garbage stopped enabling the tier, clippy found it
+// dead, which is the cleanest possible confirmation that it was never a
+// default at all.
+//
+// The measurement it carried is real and kept: the containment gate found
+// probed containment below flat's at every fraction (0.960 quarter / 0.993
+// half at N=500k vs flat 1.000), so ~500k coded rows is a reasonable place
+// for an operator to START considering the trade — an exact-top-10 tail for
+// scan time. That is guidance for a human, not a fallback for a parser.
 const FDE_IVF_ITERS: usize = 10;
 
 /// The FDE RAM cache: raw vectors below the codebook threshold, PQ codes

@@ -5,6 +5,51 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### a `Tunes` declaration that cannot be read now says so, and behaves as if absent (O48)
+
+**Round-four #25, the behaviour half.** `ConfigClass::Tunes` is documented in
+three places as *"garbage warns and keeps that default"*. Eleven store
+resolvers were `v.parse().unwrap_or(DEFAULT)` — the failure swallowed in
+silence, so `UNDERCROFT_POOL_DIV=64x` gave the default with no signal that the
+declaration had not taken effect.
+
+Both concrete claims verified against the code: `POOL_DIV=0` parses and every
+consumer guards it with `.max(1)`, so a zero silently means *the pool is the
+whole live corpus*; and `UNDERCROFT_FDE_IVF_MIN` resolved unset to "tier off"
+but **garbage to "tier on"** — a typo enabling a tier its own comment says is
+default-off because the operator makes that call.
+
+**The fix improves on the plan.** Rather than special-casing that one knob —
+which leaves the next one to be remembered — `undercroft_core::config` makes
+the contract *"a declaration that cannot be read behaves exactly as if it were
+absent"*, so every knob is conservative **by construction** and that defect
+becomes an impossible state rather than a fixed one. The helper lives in core
+because it is the only crate every consumer shares, and it returns its message
+instead of logging it, so core gains no `undercroft-obs` dependency for three
+string parses.
+
+Two judgement calls, recorded: `min` is 1 for the `POOL_DIV` divisor and 0 for
+`_MIN` thresholds, since a threshold of zero is legitimate and refusing it
+would narrow input never documented as invalid; and `resolve_late_top_n`'s
+`rerank` arm is untouched, because an unparseable value resolving to 50 there
+is a documented compatibility promise. **No resolved value moved** — pinned by
+a pre-existing test.
+
+**The fix uncovered its own sharpest evidence.** With garbage no longer
+enabling the FDE tier, clippy reported `FDE_IVF_MIN_DEFAULT` as **dead code**
+— its only consumer had been the typo path. Its doc comment said so without
+noticing: *"Suggested coded-row count … (set without a parseable number falls
+back here). The tier is **off by default**."* Two sentences that contradict
+each other. It was never a default; it was the value a mistake produced, with
+a comment explaining that as though it were a feature. Deleted, its
+measurement kept as guidance for a human rather than a fallback for a parser.
+
+**Scope stated rather than implied:** this is the behaviour half only. The
+reporting half — `config check` answering `Accepted` for every name with no
+arm, and `ENGINE_ENV_VARS` gaining a `Parse::{Checked,Opaque}` axis — remains,
+along with the silent sites outside the store. Closing those piecemeal is the
+second-implementation trap this fix exists to avoid.
+
 ### the heading gate gained its missing direction, and its limit is stated (O47)
 
 **Round-four #36**, taken first because it underwrote every closure this

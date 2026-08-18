@@ -196,6 +196,98 @@ the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
 asserts the refusal AND the premise (a well-formed vector still imports),
 because a route that refused everything would pass the refusal arms alone.
 
+### O48 — CLOSED 2026-08-18: a `Tunes` declaration that cannot be read now says so, and behaves as if absent
+
+**Round-four #25**, the behaviour half. `ConfigClass::Tunes` is documented in
+`parity.rs`, in `CLAUDE.md` and on the architecture page as *"garbage warns
+and keeps that default"*. Eleven store resolvers were
+`v.parse().unwrap_or(DEFAULT)` — the failure swallowed in silence, so an
+operator who typed `UNDERCROFT_POOL_DIV=64x` got the default and no signal
+that their declaration had not taken effect.
+
+**Both of the filing's concrete claims verified against the code** (its line
+numbers had drifted, as expected):
+
+* `UNDERCROFT_POOL_DIV=0` parses fine, and every consumer guards it with
+  `.max(1)` — so a zero silently means *the pool is the whole live corpus*.
+  Not a crash; a declaration that reads as a tuning value and behaves as a
+  switch.
+* `UNDERCROFT_FDE_IVF_MIN` resolved UNSET to `usize::MAX` (tier off) and
+  GARBAGE to `FDE_IVF_MIN_DEFAULT` (tier **on**) — a typo enabling a tier
+  whose own comment three lines above says it is default-off "because the
+  operator makes that call". Garbage being *less* conservative than silence
+  inverts the doctrine's own "every default is the conservative choice".
+
+**The fix improves on the plan, and the improvement is the point.** The plan
+said to special-case `FDE_IVF_MIN`'s garbage fallback. Special-casing one knob
+leaves the next one to be remembered. `undercroft_core::config` instead makes
+the contract **"a declaration that cannot be read behaves exactly as if it
+were ABSENT"** — so every knob is conservative by construction and that defect
+becomes an impossible state rather than a fixed one. It is pinned by
+`an_unreadable_declaration_behaves_exactly_as_an_absent_one`, which asserts it
+across unset values of `0`, `4096` and `usize::MAX`.
+
+**Where it lives, and why.** `undercroft-core`: it is the only crate every
+consumer shares — `undercroft-embed-ort` and `undercroft-orchestrator` do not
+depend on `undercroft-store`, so a helper there would be copied. Core has no
+`undercroft-obs` dependency and must not gain one for three string parses, so
+`Fallback<T>` carries the message **and** the value, and the caller warns
+however it already warns. That shape makes it structurally impossible for a
+pre-flight to report one value while the engine picks another.
+
+**Three adapters in the store, not eleven copies**: `tune` (the `off | <usize>`
+shape), `tune_no_off` (bare integers — deliberately separate, because routing
+those through the `off` helper would newly accept `off` on variables where it
+has never been documented, which is widening a contract under cover of a fix),
+and `tune_opt`.
+
+**Two judgement calls, recorded because they are where this could go wrong:**
+
+1. `min` is **1** for `POOL_DIV` and **0** for every `_MIN` threshold. A
+   threshold of zero is a legitimate if aggressive choice — the tier is simply
+   always on — and refusing it would narrow input never documented as invalid.
+   A divisor of zero is degenerate.
+2. `resolve_late_top_n`'s **`rerank` arm is untouched**. Its own comment
+   records that an unparseable `UNDERCROFT_RERANK_TOP_N` resolving to 50 is a
+   compatibility promise, and honouring only valid values there would
+   quadruple rescore depth for a deployment that changed nothing. Only the
+   `late` arm gained its warning, and **no resolved value moved** — pinned by
+   the pre-existing `the_two_rescore_depths_resolve_independently`, which
+   already asserts `Some("0") → 37` and `Some("abc") → DEFAULT`.
+
+**Scope, stated rather than implied. This is the behaviour half only.** The
+filing's other half — `config check` reporting `Accepted` for every name with
+no arm, and `ENGINE_ENV_VARS` gaining a `Parse::{Checked,Opaque}` axis so the
+inventory can be counted both ways — is **not** done here, and is filed below
+as the remainder of #25. The sites outside the store (`cli/http.rs`'s
+`UNDERCROFT_METRICS` and `_SAMPLE_INTERVAL_MS`, `llm/embed.rs`'s `_EMBED_DIM`,
+`embed-ort`'s `_ORT_POOL`) are also still silent. Closing those without the
+shared inventory would be the second-implementation trap this entry exists to
+avoid.
+
+**What the fix uncovered, and it is the sharpest evidence in this entry.**
+Once garbage stopped enabling the FDE tier, **clippy reported
+`FDE_IVF_MIN_DEFAULT` as dead code** — the constant's only consumer had been
+the typo path. Its own doc said so without noticing: *"Suggested coded-row
+count for opting the inverted tier in (`UNDERCROFT_FDE_IVF_MIN` set without a
+parseable number falls back here). The tier is **off by default**."* Those two
+sentences contradict each other. It was never a default; it was the value a
+mistake produced, and it had a doc comment explaining that as if it were a
+feature. Deleted, with the measurement it carried (probed containment 0.960
+quarter / 0.993 half at N=500k vs flat 1.000, so ~500k rows is where an
+operator might start considering the trade) kept as guidance for a human
+rather than a fallback for a parser.
+
+**Gate:** the four contract tests in `undercroft_core::config`, of which
+`an_unreadable_declaration_behaves_exactly_as_an_absent_one` is the one that
+makes the `FDE_IVF_MIN` class unreachable, plus the pre-existing rescore-depth
+test proving no resolved value moved. And, unusually, **the compiler**: with
+the fallback gone the constant has no consumer, so re-introducing that class
+of defect means re-introducing a constant that `-D dead-code` will reject
+until something uses it.
+
+---
+
 ### O47 — CLOSED 2026-08-18: the heading gate gained its missing direction, and its limit is stated
 
 **Round-four #36**, and it underwrote every closure this campaign wrote —
@@ -253,6 +345,19 @@ them here as work is itself outstanding, and it is the O37 failure class
 lost). `#36` was taken first and is CLOSED as **O47** above — it underwrote
 every closure here, so it had to be the one that went first.
 
+**`#25` is HALF closed — see O48 above.** The behaviour half is done: the
+store's eleven silent resolvers now warn and fall back to what absence gives.
+**The reporting half remains**: `config check` returns `Accepted` for every
+name with no arm and tells the operator it checked the environment, and
+`ENGINE_ENV_VARS` needs a `Parse::{Checked,Opaque}` axis so the inventory can
+be counted both ways. Still silent outside the store: `cli/http.rs`'s
+`UNDERCROFT_METRICS` and `_SAMPLE_INTERVAL_MS`, `llm/embed.rs`'s `_EMBED_DIM`,
+`embed-ort`'s `_ORT_POOL`. Those want the shared inventory first — closing
+them one at a time is the second-implementation trap O48 avoided.
+
+<details>
+<summary>the original sizing note, kept</summary>
+
 **`#25` is the next by rank, and size it honestly**: 14 `Tunes` resolvers
 swallow their parse failure against the class contract their own doctrine
 states (`POOL_DIV=0` sets the pool to the whole corpus; `FDE_IVF_MIN` garbage
@@ -262,6 +367,8 @@ is LESS conservative than unset, enabling a tier that is default-off because
 `ENGINE_ENV_VARS` gaining a `Parse::{Checked,Opaque}` axis. **Verify that plan
 against the code before trusting it** — its line numbers have already drifted
 once (it cited `tenant.rs:1930` for what is now `:2041`).
+
+</details>
 
 ## 2.0.0 — nothing is filed here yet
 
