@@ -5,6 +5,23 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### the line-ending preflight is probed, and the comment claiming it already was is gone (O55)
+
+**Round-four #37**, and understated as filed. The CRLF check had no premise
+probe *and* carried a comment asserting that its two historical failure modes
+were "exercised below rather than assumed" — nothing exercised anything. A
+false claim about a gate is worse than a missing gate: a reader asking "is
+this probed?" reads the sentence and stops.
+
+Three versions of this check have shipped broken and **two read a dirty tree
+as clean**, which is invisible by construction — a broken scanner and a clean
+tree print the same thing. The selection is a function now
+(`crlf_offenders`), so the probe runs the same code rather than a second copy,
+and the fixture covers both directions in one assertion: one CRLF offender,
+one clean file, one binary and one `crates/` path, and the selector must print
+*exactly* the offender. Both counterfactuals executed — the historical `$3`
+bug prints nothing, a match-everything selector prints all three.
+
 ### a server failure stops being reported as a bad request (O54)
 
 **Round-four #29.** `POST /v1/vaults` and `DELETE /v1/vaults/{id}` mapped

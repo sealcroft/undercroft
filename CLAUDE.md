@@ -1606,8 +1606,10 @@ has stopped matching its real one); everything else — `tests/`, `deploy/`,
 `docs/`, `website/`, compose files — by the `tests/battery.sh` preflight, host-side,
 via `git ls-files --eol` (git owns the concept, so ask git rather than
 hand-rolling byte detection: three hand-rolled attempts each failed, twice as
-a false negative and once declaring the whole repo corrupt). **Write files in
-BINARY mode on this repo.**
+a false negative and once declaring the whole repo corrupt — and its selector
+is PROBED in both directions since O55, because it had no probe at all while
+its own comment claimed the two failure modes were exercised). **Write files
+in BINARY mode on this repo.**
 
 **A local LLM is available for consultation** (maintainer's machine): LM Studio
 on `http://localhost:1234/v1`, OpenAI-compatible, model id `deephat-v1-7b` — a

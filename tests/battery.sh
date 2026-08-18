@@ -75,7 +75,7 @@ echo "═══ preflight: line endings ═══"
 # wrong, no extension allowlist to keep in step, and no dependency on Python.
 #
 # Two hand-rolled attempts preceded this and each was broken in a DIFFERENT
-# direction, which is why both are exercised below rather than assumed:
+# direction. Both are named here because the probe below is shaped by them:
 #   * `grep -qU $'\r'` inside a `while read` subshell — the `$'\r'` never
 #     expanded, so the pattern was empty, `grep -q ''` matched every file and
 #     the check declared the whole repo corrupt (false POSITIVE);
@@ -84,12 +84,42 @@ echo "═══ preflight: line endings ═══"
 #     read as clean (false NEGATIVE).
 # A check whose output does not measure what it claims is the same defect
 # whichever way it points.
+# The selection, as a FUNCTION so the probe below runs the SAME code rather
+# than a second copy of it (ROADMAP O55). It reads `git ls-files --eol` output
+# on stdin and prints the offending paths.
+#
 # The attribute is field 4, not 3 (`i/lf  w/crlf  attr/text=auto  eol=lf`) —
 # matching on `$3` was this check's third bug and read every file as clean.
-# Hence `$0`, and hence the two-direction test that finally caught it.
-CRLF_HITS=$(git ls-files --eol 2>/dev/null \
-  | awk '$2 == "w/crlf" && $0 ~ /eol=lf/ { print $NF }' \
-  | grep -v '^crates/' || true)
+# Hence `$0`.
+crlf_offenders() {
+  awk '$2 == "w/crlf" && $0 ~ /eol=lf/ { print $NF }' | grep -v '^crates/' || true
+}
+
+# **The premise probe, in BOTH directions** (ROADMAP O55, round-four #37).
+# This check had none — while the comment above it claimed the two historical
+# failure modes were "exercised below rather than assumed", which they were
+# not. A false claim about a gate is worse than a missing gate: a reader
+# asking "is this probed?" reads the sentence and stops. Three versions of
+# this check were broken and two of them read a dirty tree as CLEAN, which is
+# indistinguishable from a clean tree in the output.
+CRLF_PROBE=$(printf '%s\n' \
+  'i/lf	w/crlf	attr/text=auto eol=lf	tests/dirty.sh' \
+  'i/lf	w/lf	attr/text=auto eol=lf	tests/clean.sh' \
+  'i/	w/	attr/-text	assets/binary.png' \
+  'i/lf	w/crlf	attr/text=auto eol=lf	crates/excluded.rs' \
+  | crlf_offenders)
+if [ "$CRLF_PROBE" != "tests/dirty.sh" ]; then
+  echo "FAIL  the CRLF selector does not select. On a fixture holding one CRLF"
+  echo "      offender, one clean file, one binary and one crates/ path it"
+  echo "      should print exactly 'tests/dirty.sh'; it printed:"
+  printf '        %s\n' ${CRLF_PROBE:-<nothing>}
+  echo "      A scanner that matches nothing reports exactly what a clean tree"
+  echo "      reports, and this check has been broken that way twice before."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+CRLF_HITS=$(git ls-files --eol 2>/dev/null | crlf_offenders)
 if [ -n "$CRLF_HITS" ]; then
   echo "FAIL  these tracked files have CRLF line endings, which .gitattributes"
   echo "      forbids (a CRLF script fails in the containers). Normalise in"

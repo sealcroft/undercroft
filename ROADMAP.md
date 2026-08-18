@@ -144,6 +144,49 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O55 — CLOSED 2026-08-18: the line-ending preflight is probed, and the comment claiming it already was is gone
+
+**Round-four #37**, filed as *"the CRLF preflight has no premise probe while
+its sibling twenty lines below does"*. True, and understated: the check
+carried a comment asserting that its two historical failure modes **were**
+exercised — *"which is why both are exercised below rather than assumed"* —
+and nothing exercised anything. **A false claim about a gate is worse than a
+missing gate**, because a reader asking "is this probed?" reads the sentence
+and stops. That is this project's own first rule (a comment is not a gate)
+turned on the file that enforces the rest of them.
+
+**The stakes are recorded in that same comment.** Three versions of this
+check have shipped broken, and **two read a dirty tree as CLEAN**: a
+`grep -qU $'\r'` whose pattern never expanded (matched everything), an awk
+that stripped the CR before `$0` saw it (matched nothing), and a version
+matching the attribute on `$3` instead of `$0` — which read every file as
+clean for a whole commit. A false negative here is invisible by construction:
+a broken scanner and a clean tree print the same thing.
+
+**The selection is a function now** (`crlf_offenders`, reading
+`git ls-files --eol` output on stdin), so the probe runs the SAME code rather
+than a second copy — the rule this file states as *"source the code out of
+the file, or invoke the command"*, after its own ROADMAP-heading gate was
+"proved" by typing correct awk in a shell while the version written to disk
+was broken.
+
+**The fixture covers both directions in one assertion**: one CRLF offender,
+one clean file, one binary (`attr/-text`, so its `w/` field is empty) and one
+`crates/` path that the companion cargo gate owns. The selector must print
+*exactly* `tests/dirty.sh` — so a matcher that selects nothing fails, and one
+that selects everything fails too.
+
+**Both counterfactuals executed against the artifact.** Reintroducing the
+historical `$3` bug: *"the CRLF selector does not select … it printed:"* with
+nothing under it. Reintroducing a match-everything selector: the same failure,
+listing `tests/dirty.sh`, `tests/clean.sh` and `assets/binary.png`. Restored
+from a scoped file copy both times.
+
+**Scope, stated:** this probes the SELECTOR, which is where all three
+historical bugs lived. It does not probe `git ls-files --eol` itself — that is
+git's own concept, which is precisely why asking git replaced three
+hand-rolled byte scans.
+
 ### O54 — CLOSED 2026-08-18: a server failure stops being reported as a bad request
 
 **Round-four #29.** `POST /v1/vaults` and `DELETE /v1/vaults/{id}` mapped
@@ -865,9 +908,9 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 5 verified rows
+### Still open from round four — 4 verified rows
 
-`#37`, `#44`, `#45`, `#47`, `#48`.
+`#44`, `#45`, `#47`, `#48`.
 All MED or lower, all silent-failing, all PATCH or MINOR. The heading read
 `8` while the list held 9 until 2026-08-18 — my own miscount, of exactly the
 class this campaign spent its length fixing, and now GATED: the `prose
