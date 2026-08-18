@@ -196,6 +196,59 @@ the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
 asserts the refusal AND the premise (a well-formed vector still imports),
 because a route that refused everything would pass the refusal arms alone.
 
+### O49 — CLOSED 2026-08-18: an undeclared model identity is no longer silent (and why it is not yet DERIVED)
+
+**Round-four #27.** `UNDERCROFT_ONNX_NAME` and its five siblings default to a
+shared LITERAL — `"onnx-sentence"`, `"onnx-reranker"`, `"colbert"` — so two
+different model files, loaded on two different days, record **one** vector
+space identity.
+
+**What that disarms.** The store's whole defence against a silent model swap
+is that identity: `EmbedderMismatch` refuses to search across a change,
+because doing so degrades recall invisibly, and recovery is the explicit
+`UNDERCROFT_FORCE_EMBEDDER=1` + `repair` path. A constant default turns that
+check off for every deployment that never set the name. The ColBERT case is
+the same one level down — its token matrices are stored per drawer, so a
+swapped ColBERT model ranks new queries against old matrices.
+
+**Why this WARNS rather than deriving an identity from the model file, and
+this is the whole judgement.** Deriving one is correct and is filed for
+`2.0.0`. It cannot ship in a patch: every existing vault has
+`"onnx-sentence"` recorded, so a derived identity makes the next start-up an
+`EmbedderMismatch` and demands `FORCE_EMBEDDER` + `repair` from deployments
+that changed nothing. That is *"a default that changes what is retrievable"* —
+**MAJOR** by this file's own test — and shipping it as a fix would be the
+same silent breakage this entry is about, pointed the other way.
+
+So what gets closed here is the defect's **silence**: 67 of round four's 70
+findings produced no signal at all, and that is the property being fixed. All
+six sites now warn at construction, naming the variable, the identity being
+recorded, the model file(s) it came from, and what goes wrong later.
+
+**Both feature-gated crates gained `undercroft-obs`** — zero-dependency by
+default, so a default build gains nothing — because neither could reach a
+warning otherwise, exactly as `undercroft-core` cannot.
+
+**My own defect in this unit, reported as mine.** The scripted edit that
+patched three sites assumed `model` was in scope at all of them. In both
+`late.rs` files ColBERT has **two** model files, `doc` and `query`, and no
+`model` at all — it did not compile. I had read the diff for `lib.rs` and
+assumed the others matched, which is the documented scripted-edit hazard
+("a change you have not read"). Fixing it improved the warning: it now names
+both ColBERT files, either of which can change. **Neither crate is compiled
+by CI clippy** — only `onnx-build` and `ort-build` reach them — so nothing
+but running those two containers would have caught it.
+
+**Severity, honestly split:** the embedder and ColBERT identities are
+load-bearing (they gate stored vectors and stored token matrices). The
+reranker identity is not — a reranker stores nothing — so its warning is
+consistency rather than protection.
+
+**Gate:** `the_undeclared_identity_warning_names_the_variable_the_value_and_
+the_risk`, plus `onnx-build` and `ort-build` compiling all six sites.
+
+---
+
 ### O48 — CLOSED 2026-08-18: a `Tunes` declaration that cannot be read now says so, and behaves as if absent
 
 **Round-four #25**, the behaviour half. `ConfigClass::Tunes` is documented in
@@ -335,10 +388,17 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 11 verified rows
+### Still open from round four — 9 verified rows
 
-`#23`, `#25`, `#26`, `#27`, `#28`, `#29`, `#37`, `#44`, `#45`, `#47`,
-`#48`. All MED or lower, all silent-failing, all PATCH or MINOR. **They are
+`#23`, `#25` (reporting half only), `#28`, `#29`, `#37`, `#44`, `#45`,
+`#47`, `#48`. All MED or lower, all silent-failing, all PATCH or MINOR.
+
+**`#26` is CLOSED by O48** — it *was* the `UNDERCROFT_FDE_IVF_MIN`
+garbage-is-less-conservative-than-unset claim, and the "a declaration that
+cannot be read behaves as if absent" contract closes it by construction
+rather than by a special case. Recorded here rather than left in the list,
+because a row that quietly stays listed after its defect is gone is the same
+staleness this campaign keeps finding. **They are
 recorded in `.handover/SWEEP4_FIX_PLAN.md`, which is gitignored** — filing
 them here as work is itself outstanding, and it is the O37 failure class
 (a finding that lives only in a gitignored file is a finding that will be
@@ -370,7 +430,45 @@ once (it cited `tenant.rs:1930` for what is now `:2041`).
 
 </details>
 
-## 2.0.0 — nothing is filed here yet
+## 2.0.0 — one item is filed
+
+### Derive a model embedder's identity from the model, not from a constant
+
+Filed by **O49** (round-four #27), which fixed that defect's *silence* and
+deliberately left its *cause*, because the cause cannot move in a patch.
+
+Today `UNDERCROFT_ONNX_NAME` and its siblings default to a shared literal, so
+two different models record one vector-space identity and the store's
+`EmbedderMismatch` check — the only thing standing between a silent model
+swap and silently degraded recall — never fires. O49 makes that loud at
+construction. It does not make it impossible.
+
+**Why it is MAJOR.** Every existing vault has `"onnx-sentence"` recorded. A
+derived identity makes the next start-up an `EmbedderMismatch` demanding
+`UNDERCROFT_FORCE_EMBEDDER=1` + `repair` from a deployment that changed
+nothing — *"a default that changes what is retrievable"*, which is this
+file's own test for a major.
+
+**Shape of a fix.** Derive from the model file rather than a constant when
+the name is undeclared. A whole-file digest is the strongest and costs a
+second read of a possibly large file at every process start; a digest over
+(path, length, head and tail bytes) is O(1) and discriminates accidental
+swaps, which is the actual threat — an operator replacing a model and
+forgetting to rename, not an adversary forging a collision. Whichever is
+chosen, the trade must be stated rather than implied.
+
+**It needs a migration path, and that is the real work.** Options: record a
+derived identity only for vaults created after the change; accept the old
+literal as an alias for one release; or ship it with an `UPGRADING.md` entry
+and a `config check` arm that detects the situation before a restart. The
+third is the pattern this project already uses, and the first is what avoids
+touching anyone's existing corpus.
+
+**Gate:** a vault written under the old constant must still open without an
+integrity verdict, and two different model files must produce two different
+identities.
+
+## 1.2.0 — nothing is filed here yet
 
 Reserved for a documented contract that changes. The `palace` terminology
 rename (below) is the candidate most likely to land here, since it would move

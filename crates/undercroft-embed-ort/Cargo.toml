@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
+undercroft-obs = { path = "../undercroft-obs" }
 thiserror = { workspace = true }
 ort = "=2.0.0-rc.10"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }

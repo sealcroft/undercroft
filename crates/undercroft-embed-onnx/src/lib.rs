@@ -175,7 +175,17 @@ pub fn from_env() -> Result<OnnxEmbedder, OnnxError> {
         .map_err(|_| OnnxError::Model("UNDERCROFT_ONNX_MODEL is not set".into()))?;
     let tokenizer = std::env::var("UNDERCROFT_ONNX_TOKENIZER")
         .map_err(|_| OnnxError::Tokenizer("UNDERCROFT_ONNX_TOKENIZER is not set".into()))?;
-    let name = std::env::var("UNDERCROFT_ONNX_NAME").unwrap_or_else(|_| "onnx-sentence".into());
+    let name = std::env::var("UNDERCROFT_ONNX_NAME").unwrap_or_else(|_| {
+        undercroft_obs::diag_warn!(
+            "{}",
+            undercroft_core::config::undeclared_model_identity(
+                "UNDERCROFT_ONNX_NAME",
+                "onnx-sentence",
+                &model,
+            )
+        );
+        "onnx-sentence".into()
+    });
     OnnxEmbedder::load(
         std::path::Path::new(&model),
         std::path::Path::new(&tokenizer),

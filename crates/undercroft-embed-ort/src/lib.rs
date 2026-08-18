@@ -217,7 +217,17 @@ pub fn embedder_from_env() -> Result<OrtEmbedder, OrtError> {
         .map_err(|_| OrtError::Model("UNDERCROFT_ONNX_MODEL is not set".into()))?;
     let tokenizer = std::env::var("UNDERCROFT_ONNX_TOKENIZER")
         .map_err(|_| OrtError::Tokenizer("UNDERCROFT_ONNX_TOKENIZER is not set".into()))?;
-    let name = std::env::var("UNDERCROFT_ONNX_NAME").unwrap_or_else(|_| "onnx-sentence".into());
+    let name = std::env::var("UNDERCROFT_ONNX_NAME").unwrap_or_else(|_| {
+        undercroft_obs::diag_warn!(
+            "{}",
+            undercroft_core::config::undeclared_model_identity(
+                "UNDERCROFT_ONNX_NAME",
+                "onnx-sentence",
+                &model,
+            )
+        );
+        "onnx-sentence".into()
+    });
     OrtEmbedder::load(
         std::path::Path::new(&model),
         std::path::Path::new(&tokenizer),
@@ -329,7 +339,17 @@ pub fn reranker_from_env() -> Result<OrtReranker, OrtError> {
         .map_err(|_| OrtError::Model("UNDERCROFT_RERANK_MODEL is not set".into()))?;
     let tokenizer = std::env::var("UNDERCROFT_RERANK_TOKENIZER")
         .map_err(|_| OrtError::Tokenizer("UNDERCROFT_RERANK_TOKENIZER is not set".into()))?;
-    let name = std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| "onnx-reranker".into());
+    let name = std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| {
+        undercroft_obs::diag_warn!(
+            "{}",
+            undercroft_core::config::undeclared_model_identity(
+                "UNDERCROFT_RERANK_NAME",
+                "onnx-reranker",
+                &model,
+            )
+        );
+        "onnx-reranker".into()
+    });
     OrtReranker::load(
         std::path::Path::new(&model),
         std::path::Path::new(&tokenizer),

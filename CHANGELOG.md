@@ -5,6 +5,40 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### an undeclared model identity is no longer silent — and why it is not yet derived (O49)
+
+**Round-four #27.** `UNDERCROFT_ONNX_NAME` and its five siblings default to a
+shared literal, so two different model files record **one** vector-space
+identity — which disarms the only check standing between a silent model swap
+and silently degraded recall (`EmbedderMismatch`, recoverable solely through
+`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`). ColBERT is the same one level down:
+its token matrices are stored per drawer.
+
+**Deliberately warns rather than deriving an identity from the model.** Every
+existing vault has `"onnx-sentence"` recorded, so a derived identity would
+make the next start-up an `EmbedderMismatch` and demand a manual repair from
+deployments that changed nothing — *"a default that changes what is
+retrievable"*, MAJOR by this project's own test. Shipping that as a patch
+would be the same silent breakage, pointed the other way. **Filed for 2.0.0
+with its migration options**; what closes here is the *silence*, which is the
+property 67 of round four's 70 findings shared. All six sites now warn at
+construction, naming the variable, the identity recorded, the model file(s)
+and the later consequence.
+
+Both feature-gated crates gained `undercroft-obs` (zero-dependency by
+default) because neither could otherwise reach a warning.
+
+**My own defect:** the scripted edit assumed `model` was in scope at all six
+sites. In both `late.rs` files ColBERT has *two* model files, `doc` and
+`query`, and no `model` — it did not compile. I had read the diff for one
+file and assumed the rest matched. Fixing it improved the warning, which now
+names both ColBERT files. **CI clippy compiles neither crate** — only
+`onnx-build` and `ort-build` reach them, and running both is what caught it.
+
+Severity split honestly: the embedder and ColBERT identities gate stored
+vectors and stored token matrices; the reranker stores nothing, so its
+warning is consistency rather than protection.
+
 ### a `Tunes` declaration that cannot be read now says so, and behaves as if absent (O48)
 
 **Round-four #25, the behaviour half.** `ConfigClass::Tunes` is documented in

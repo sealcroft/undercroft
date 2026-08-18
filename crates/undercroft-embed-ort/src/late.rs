@@ -237,7 +237,17 @@ pub fn colbert_from_env() -> Result<OrtColbert, OrtError> {
         .map_err(|_| OrtError::Model("UNDERCROFT_COLBERT_QUERY_MODEL is not set".into()))?;
     let tokenizer = std::env::var("UNDERCROFT_COLBERT_TOKENIZER")
         .map_err(|_| OrtError::Tokenizer("UNDERCROFT_COLBERT_TOKENIZER is not set".into()))?;
-    let name = std::env::var("UNDERCROFT_COLBERT_NAME").unwrap_or_else(|_| "colbert".into());
+    let name = std::env::var("UNDERCROFT_COLBERT_NAME").unwrap_or_else(|_| {
+        undercroft_obs::diag_warn!(
+            "{}",
+            undercroft_core::config::undeclared_model_identity(
+                "UNDERCROFT_COLBERT_NAME",
+                "colbert",
+                &format!("{doc} (doc) + {query} (query)"),
+            )
+        );
+        "colbert".into()
+    });
     OrtColbert::load(
         std::path::Path::new(&doc),
         std::path::Path::new(&query),

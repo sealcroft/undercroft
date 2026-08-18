@@ -130,6 +130,41 @@ pub fn one_of(
     })
 }
 
+/// The warning an undeclared model identity owes its operator.
+///
+/// ROADMAP O49 (round-four #27). `UNDERCROFT_ONNX_NAME` and its five siblings
+/// default to a shared LITERAL — `"onnx-sentence"`, `"onnx-reranker"`,
+/// `"colbert"` — so two different model files, loaded on two different days,
+/// record **one** vector-space identity. The store's whole defence against a
+/// silent model swap is that identity: `EmbedderMismatch` refuses to search
+/// across one, because doing so degrades recall invisibly. A constant default
+/// disarms exactly that check for every deployment that never set the name,
+/// and the ColBERT case is the same one level down — its token matrices are
+/// stored per drawer.
+///
+/// **Why this warns rather than deriving an identity from the model file.**
+/// Deriving one would be correct and is filed for `2.0.0`: every existing
+/// vault has `"onnx-sentence"` recorded, so a derived identity turns the next
+/// start-up into `EmbedderMismatch` and demands an explicit
+/// `UNDERCROFT_FORCE_EMBEDDER=1` plus `repair` from deployments that changed
+/// nothing. That is *"a default that changes what is retrievable"* — MAJOR by
+/// this project's own test — and shipping it in a patch would be exactly the
+/// silent breakage this entry is about, pointed the other way.
+///
+/// So the defect's SILENCE is what gets fixed here: 67 of round four's 70
+/// findings produced no signal at all, and that is the property being closed.
+pub fn undeclared_model_identity(var: &str, shared_default: &str, model_path: &str) -> String {
+    format!(
+        "{var} is not set, so this model records the shared identity \
+         {shared_default:?} (loaded from {model_path:?}). A DIFFERENT model \
+         loaded later without {var} records the SAME identity, and the store \
+         cannot then tell the vector space changed — searches would silently \
+         rank new queries against vectors from the old model. Set {var} to \
+         something that names this model, and change it whenever the model \
+         file changes."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +203,21 @@ mod tests {
         assert!(e.why.contains("minimum"), "{}", e.why);
         // A threshold whose 0 is meaningful is unaffected: min = 0.
         assert_eq!(bounded_usize("X", Some("0"), 9, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn the_undeclared_identity_warning_names_the_variable_the_value_and_the_risk() {
+        let w = undeclared_model_identity("UNDERCROFT_ONNX_NAME", "onnx-sentence", "/m/a.onnx");
+        // An operator must be able to act on it: which knob, what was
+        // recorded, where it came from, and what goes wrong later.
+        for needle in [
+            "UNDERCROFT_ONNX_NAME",
+            "onnx-sentence",
+            "/m/a.onnx",
+            "SAME identity",
+        ] {
+            assert!(w.contains(needle), "warning must name {needle}: {w}");
+        }
     }
 
     #[test]
