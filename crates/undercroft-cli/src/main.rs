@@ -920,7 +920,9 @@ fn build_export_payload(
         records.push(b'\n');
         counts.drawers += 1;
     }
-    for (name, etype) in store.kg_export_entities()? {
+    for (name, etype) in store.kg_export_entities(undercroft_store::Read::Internal(
+        undercroft_store::InternalRead::ExportAudited,
+    ))? {
         serde_json::to_writer(
             &mut records,
             &serde_json::json!({ "entity": { "name": name, "etype": etype } }),
@@ -928,7 +930,9 @@ fn build_export_payload(
         records.push(b'\n');
         counts.kg_entities += 1;
     }
-    for exp in store.kg_export()? {
+    for exp in store.kg_export(undercroft_store::Read::Internal(
+        undercroft_store::InternalRead::ExportAudited,
+    ))? {
         serde_json::to_writer(&mut records, &serde_json::json!({ "triple": exp }))?;
         records.push(b'\n');
         counts.kg_triples += 1;
@@ -2941,11 +2945,20 @@ fn run(cli: Cli) -> Result<()> {
                     as_of,
                     direction,
                 } => {
-                    let facts = store.kg_query_entity(entity, as_of.as_deref(), direction)?;
+                    let facts = store.kg_query_entity(
+                        entity,
+                        as_of.as_deref(),
+                        direction,
+                        undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+                    )?;
                     print_triples(&facts);
                 }
                 KgAction::Rel { predicate, as_of } => {
-                    let facts = store.kg_query_relationship(predicate, as_of.as_deref())?;
+                    let facts = store.kg_query_relationship(
+                        predicate,
+                        as_of.as_deref(),
+                        undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+                    )?;
                     print_triples(&facts);
                 }
                 KgAction::Invalidate {
@@ -2972,7 +2985,10 @@ fn run(cli: Cli) -> Result<()> {
                     println!("Superseded: {subject} --{predicate}--> {new_object} ({id})");
                 }
                 KgAction::Timeline { entity } => {
-                    let facts = store.kg_timeline(entity.as_deref())?;
+                    let facts = store.kg_timeline(
+                        entity.as_deref(),
+                        undercroft_store::Read::Returned(undercroft_store::ReadOp::KgTimeline),
+                    )?;
                     print_triples(&facts);
                 }
                 KgAction::Stats => {
@@ -3054,7 +3070,10 @@ fn run(cli: Cli) -> Result<()> {
                             .unwrap_or_default()
                     );
                 }
-                KgAction::Canonical { key } => match store.lookup_canonical(key)? {
+                KgAction::Canonical { key } => match store.lookup_canonical(
+                    key,
+                    undercroft_store::Read::Returned(undercroft_store::ReadOp::KgCanonical),
+                )? {
                     Some(t) => {
                         println!("{} --{}--> {}", t.subject, t.predicate, t.object);
                         println!(

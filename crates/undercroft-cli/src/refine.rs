@@ -356,7 +356,12 @@ mod tests {
 
         // Nothing was lifted: no fact, and no mirror drawer either.
         assert!(
-            store.kg_export().unwrap().is_empty(),
+            store
+                .kg_export(undercroft_store::Read::Internal(
+                    undercroft_store::InternalRead::Verification
+                ))
+                .unwrap()
+                .is_empty(),
             "a refused refine writes no fact"
         );
         assert!(

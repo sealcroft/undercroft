@@ -749,17 +749,34 @@ Consequences that are binding, not advisory:
   `read/search` canonicals are BYTE-IDENTICAL to those written before, because
   the field order is untouched and non-search reads simply leave the scope
   fields empty. `ReadOp::ALL` is counted against the driver table both ways, so
-  a variant added without a record fails the build. **The KG is a SECOND funnel
-  and is still unaudited** (`kg_query`, `kg_timeline`, `kg_entities`,
-  `lookup_canonical`, `kg_receipts` return distilled drawer words) — stated in
-  `SECURITY.md`'s out-of-scope list rather than left implied),
+  a variant added without a record fails the build. **The KG is a SECOND
+  funnel and it records too since O51** — `kg-query` (both arms, one namespace
+  because one TOOL is what a caller drives), `kg-timeline`, `kg-entities`,
+  `kg-canonical`; the witness is required on each `pub` reader, so the
+  compiler enumerated 49 store and 18 surface sites. Two lessons the second
+  funnel taught that the first did not. **The record goes on the DOOR, never
+  on the shared helper**: `all_triples` decodes the whole graph for every arm
+  of `kg_query_entity`, which then filters, so recording there would say 40
+  where 3 left — over-reporting an exfil trail is a false claim, not a
+  conservative one. And **the filing named five doors and one was not a
+  door**: `kg_verify_receipts` reaches neither decoder and returns
+  `(triple_id, source_drawer_id, verdict)`, so it and `kg_stats` are
+  DELIBERATE exclusions carrying that reason on three surfaces — auditing
+  them to match a filing would put a read record on a door no content passes
+  through. `PalaceStore::record_read` is the ONE place deciding whether a
+  read is written down; it was three inline copies after O50 and this unit
+  would have made it eleven, which is how the write screen came to have three
+  ways past it. Residual, stated: a new `pub` STORE reader on `all_triples`
+  reusing an existing `ReadOp` still passes the namespace gate — the drawer
+  funnel carries the same residual for a reader that avoids `get`/`recent`),
   read/egress auditing (the consultation-filed gap, closed 2026-08-04:
   **exports chain-audited unconditionally on every surface** —
   `audit_export`, one `egress/export` record binding surface + recipient
   + counts + the export's own manifest digest; read-only replicas warn
   and serve; **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
   `audit_read` at the search_inner + remote tails covers every path, one
-  record per search with a KEYED query fingerprint (never text, pinned
+  record per READ (per search until O50/O51) with a KEYED subject
+  fingerprint (never text, pinned
   by a db+WAL byte scan), scope and hit count; runs behind `&self` via
   `unchecked_transaction` and deliberately does NOT anchor — the
   anchor-lag boundary is stated: read records anchor at the next store
@@ -1347,7 +1364,7 @@ docker compose run --rm test          # cargo unit + integration tests (748 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (355 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (358 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate

@@ -478,14 +478,12 @@ impl PalaceStore {
             hits.len(),
             self.is_sealed(),
         );
-        if self.read_audit {
-            self.audit_read(
-                crate::ReadOp::Search,
-                query,
-                crate::ReadScope::from_opts(opts),
-                hits.len(),
-            )?;
-        }
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Search),
+            query,
+            crate::ReadScope::from_opts(opts),
+            hits.len(),
+        )?;
         Ok(hits)
     }
 

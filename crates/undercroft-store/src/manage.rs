@@ -561,16 +561,14 @@ impl PalaceStore {
                 source_file: drawer.meta.source_file,
             });
         }
-        // ROADMAP O50: one record for this door, guarded by `read_audit`
-        // (never by "was it declared" — a read-only open force-disables it).
-        if self.read_audit {
-            self.audit_read(
-                crate::ReadOp::List,
-                wing.unwrap_or(""),
-                crate::ReadScope::wing_only(wing),
-                out.len(),
-            )?;
-        }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::List),
+            wing.unwrap_or(""),
+            crate::ReadScope::wing_only(wing),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -917,16 +915,14 @@ impl PalaceStore {
             crate::Read::Internal(crate::InternalRead::BulkMember),
         )?;
         entries.retain(|d| d.meta.room == "diary");
-        // ROADMAP O50: one record for this door, guarded by `read_audit`
-        // (never by "was it declared" — a read-only open force-disables it).
-        if self.read_audit {
-            self.audit_read(
-                crate::ReadOp::Diary,
-                agent,
-                crate::ReadScope::none(),
-                entries.len(),
-            )?;
-        }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Diary),
+            agent,
+            crate::ReadScope::none(),
+            entries.len(),
+        )?;
         Ok(entries)
     }
 
@@ -1399,14 +1395,12 @@ impl PalaceStore {
                 // ROADMAP O50: the tunnel is the door, so it records — the
                 // inner `recent` is a BulkMember and stays silent, or the
                 // trail would say "recent" for a read nobody asked that way.
-                if self.read_audit {
-                    self.audit_read(
-                        crate::ReadOp::Tunnel,
-                        id,
-                        crate::ReadScope::wing_only(Some(&wing)),
-                        out.len(),
-                    )?;
-                }
+                self.record_read(
+                    crate::Read::Returned(crate::ReadOp::Tunnel),
+                    id,
+                    crate::ReadScope::wing_only(Some(&wing)),
+                    out.len(),
+                )?;
                 Ok(out)
             }
             None => Ok(Vec::new()),
@@ -1515,16 +1509,14 @@ impl PalaceStore {
                 .then(x.entity_a.cmp(&y.entity_a))
         });
         out.truncate(top);
-        // ROADMAP O50: one record for this door, guarded by `read_audit`
-        // (never by "was it declared" — a read-only open force-disables it).
-        if self.read_audit {
-            self.audit_read(
-                crate::ReadOp::Hallways,
-                wing,
-                crate::ReadScope::wing_only(Some(wing)),
-                out.len(),
-            )?;
-        }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Hallways),
+            wing,
+            crate::ReadScope::wing_only(Some(wing)),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -1591,16 +1583,14 @@ impl PalaceStore {
                 ids.join(",")
             ));
         }
-        // ROADMAP O50: one record for this door, guarded by `read_audit`
-        // (never by "was it declared" — a read-only open force-disables it).
-        if self.read_audit {
-            self.audit_read(
-                crate::ReadOp::Closet,
-                wing.unwrap_or(""),
-                crate::ReadScope::wing_only(wing),
-                out.len(),
-            )?;
-        }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Closet),
+            wing.unwrap_or(""),
+            crate::ReadScope::wing_only(wing),
+            out.len(),
+        )?;
         Ok(out)
     }
 

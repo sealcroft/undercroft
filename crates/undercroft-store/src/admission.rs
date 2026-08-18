@@ -552,16 +552,14 @@ impl PalaceStore {
                 filed_at: d.meta.filed_at.clone(),
             });
         }
-        // ROADMAP O50: one record for this door, guarded by `read_audit`
-        // (never by "was it declared" — a read-only open force-disables it).
-        if self.read_audit {
-            self.audit_read(
-                crate::ReadOp::AdmissionList,
-                "",
-                crate::ReadScope::none(),
-                out.len(),
-            )?;
-        }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::AdmissionList),
+            "",
+            crate::ReadScope::none(),
+            out.len(),
+        )?;
         Ok(out)
     }
 

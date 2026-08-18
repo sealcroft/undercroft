@@ -855,11 +855,15 @@ fn resolve_trust_floor(env: Option<&str>) -> Result<Option<String>, StoreError> 
     Ok(Some(v))
 }
 
-/// `UNDERCROFT_READ_AUDIT`: `chain` puts a record on the audit chain for
-/// every search (declared — a per-query append is a real durability
-/// cost); unset/`off` = the byte-identical default. Garbage REFUSES to
-/// open: a deployment that declared read auditing believes reads leave a
-/// trail, and silently running without one is the failure mode.
+/// `UNDERCROFT_READ_AUDIT`: `chain` puts one record on the audit chain for
+/// every content-returning read — searches and by-id and bulk drawer reads
+/// (O50), and the knowledge graph's own doors (O51). Declared, because a
+/// per-read append is a real durability cost; unset/`off` = the
+/// byte-identical default. Garbage REFUSES to open: a deployment that
+/// declared read auditing believes reads leave a trail, and silently
+/// running without one is the failure mode. (This comment said "for every
+/// search" until O51 — accurate before O50 and stale after it, which is
+/// exactly the class of drift O50's own entry was about.)
 fn resolve_read_audit(env: Option<&str>) -> Result<bool, StoreError> {
     match env.map(str::trim) {
         None => Ok(false),
@@ -1320,6 +1324,19 @@ pub enum Read {
 
 /// The surface doors, one namespace each. `Search.as_str()` is `"search"` so
 /// the existing `read/search` records stay byte-identical.
+///
+/// **Two funnels, not one.** The first nine are the DRAWER doors (O50). The
+/// `Kg*` four are the knowledge graph's own, which O50 named as the gap it
+/// left: `decode_triple` and `entity_name_from_rest` return words distilled
+/// out of drawers, so a caller walking `kg-entities` for names and then
+/// `kg-query` per name reads the same corpus through a different door.
+///
+/// Deliberately NOT here, with the reason, because a filing is a hypothesis:
+/// `kg_verify_receipts` was filed as a fifth KG reader and is not one. It
+/// reaches neither decoder — it returns `(triple_id, source_drawer_id,
+/// verdict)`, i.e. identifiers and an enum, and the one drawer it reads it
+/// reads as `InternalRead::Verification` to compare a fingerprint that never
+/// leaves. `kg_stats` is the same class one door over (counts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReadOp {
     Search,
@@ -1331,6 +1348,10 @@ pub enum ReadOp {
     Closet,
     Hallways,
     AdmissionList,
+    KgQuery,
+    KgTimeline,
+    KgEntities,
+    KgCanonical,
 }
 
 impl ReadOp {
@@ -1348,6 +1369,10 @@ impl ReadOp {
         ReadOp::Closet,
         ReadOp::Hallways,
         ReadOp::AdmissionList,
+        ReadOp::KgQuery,
+        ReadOp::KgTimeline,
+        ReadOp::KgEntities,
+        ReadOp::KgCanonical,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -1361,6 +1386,10 @@ impl ReadOp {
             ReadOp::Closet => "closet",
             ReadOp::Hallways => "hallways",
             ReadOp::AdmissionList => "admission-list",
+            ReadOp::KgQuery => "kg-query",
+            ReadOp::KgTimeline => "kg-timeline",
+            ReadOp::KgEntities => "kg-entities",
+            ReadOp::KgCanonical => "kg-canonical",
         }
     }
 }
@@ -4600,14 +4629,8 @@ impl PalaceStore {
                         StoreError::Integrity(id.clone())
                     })?;
                 let drawer = self.decode(&id, &meta_json, &content_rest)?;
-                // ROADMAP O50. Guarded by `self.read_audit`, never by "was it
-                // declared": `open_read_only` force-disables that flag, and it
-                // is the only thing keeping a read-only handle from writing.
-                if let Read::Returned(op) = read {
-                    if self.read_audit {
-                        self.audit_read(op, &id, ReadScope::none(), 1)?;
-                    }
-                }
+                // ROADMAP O50, through the one recording door.
+                self.record_read(read, &id, ReadScope::none(), 1)?;
                 Ok(Some(drawer))
             }
         }
@@ -4746,16 +4769,12 @@ impl PalaceStore {
         }
         // ROADMAP O50: ONE record for the bulk read, not one per row — the
         // caller made a single request and the trail should say so.
-        if let Read::Returned(op) = read {
-            if self.read_audit {
-                self.audit_read(
-                    op,
-                    wing.unwrap_or(""),
-                    ReadScope::wing_only(wing),
-                    out.len(),
-                )?;
-            }
-        }
+        self.record_read(
+            read,
+            wing.unwrap_or(""),
+            ReadScope::wing_only(wing),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -5482,14 +5501,12 @@ impl PalaceStore {
             hits.len(),
             self.is_sealed(),
         );
-        if self.read_audit {
-            self.audit_read(
-                ReadOp::Search,
-                query,
-                ReadScope::from_opts(opts),
-                hits.len(),
-            )?;
-        }
+        self.record_read(
+            Read::Returned(ReadOp::Search),
+            query,
+            ReadScope::from_opts(opts),
+            hits.len(),
+        )?;
         Ok(hits)
     }
 
@@ -5533,6 +5550,29 @@ impl PalaceStore {
     /// never re-anchors. The advice failed precisely on the deployment it
     /// was written for. There is still no callable anchor-tightening
     /// operation outside `open` (ROADMAP A31).
+    /// **The one place that decides whether a read is recorded.** It was
+    /// three inline copies of `if let Read::Returned(op) = read { if
+    /// self.read_audit { .. } }` after O50, and the KG funnel would have
+    /// made it eight — which is how the write side's screen came to be
+    /// applied per call site with three ways past it. `Internal` never
+    /// records, by the reason its variant carries; a read-only handle never
+    /// records because `open_read_only` force-disables the flag, and that
+    /// flag is the only thing keeping such a handle from writing.
+    fn record_read(
+        &self,
+        read: Read,
+        subject: &str,
+        scope: ReadScope<'_>,
+        returned: usize,
+    ) -> Result<(), StoreError> {
+        if let Read::Returned(op) = read {
+            if self.read_audit {
+                self.audit_read(op, subject, scope, returned)?;
+            }
+        }
+        Ok(())
+    }
+
     fn audit_read(
         &self,
         op: ReadOp,
@@ -11537,6 +11577,16 @@ mod tests {
             .collect();
         let tunnel = s.create_tunnel("w", "w2", "related").unwrap();
         s.upsert(&drawer("w2", "r", "the other wing", 1)).unwrap();
+        // ROADMAP O51: the second funnel. Its four doors return words
+        // distilled out of the drawers above, so they belong to the same
+        // accounting — and `kg-canonical` needs an APPROVED CANONICAL fact
+        // or its door answers `None`, which the premise arm would (rightly)
+        // read as a driver that proved nothing.
+        let fact = s
+            .kg_add("ada", "works-at", "acme", None, None, 1.0, None)
+            .unwrap();
+        s.kg_set_authority(&fact, "canonical", "approved", Some("ada-employer"))
+            .unwrap();
 
         let count = |s: &PalaceStore| -> i64 {
             s.conn
@@ -11621,6 +11671,39 @@ mod tests {
             "admission-list",
             Box::new(|s: &mut PalaceStore| s.admission_pending().unwrap().len().max(1)),
         ));
+        drivers.push((
+            "kg-query",
+            Box::new(|s: &mut PalaceStore| {
+                s.kg_query_entity("ada", None, "outgoing", Read::Returned(ReadOp::KgQuery))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "kg-timeline",
+            Box::new(|s: &mut PalaceStore| {
+                s.kg_timeline(None, Read::Returned(ReadOp::KgTimeline))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "kg-entities",
+            Box::new(|s: &mut PalaceStore| {
+                s.kg_entities(50, 0, Read::Returned(ReadOp::KgEntities))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "kg-canonical",
+            Box::new(|s: &mut PalaceStore| {
+                s.lookup_canonical("ada-employer", Read::Returned(ReadOp::KgCanonical))
+                    .unwrap()
+                    .iter()
+                    .count()
+            }),
+        ));
 
         for (name, drive) in &drivers {
             let before = count(&s);
@@ -11678,6 +11761,25 @@ mod tests {
             count(&s) - before,
             0,
             "a dry-run dedup and a write performed internal lookups and recorded them as reads"
+        );
+        // ROADMAP O51, the KG funnel's half of the same rule. `kg_supersede`
+        // decodes the whole graph to decide what to close and `kg_export`
+        // decodes every word — the first is a WRITE deciding, the second is
+        // already recorded once by `audit_export`. Either recording a read
+        // here would describe traffic no caller generated, and the export
+        // one would double-count a real egress.
+        s.kg_add("ada", "works-at", "acme", None, None, 1.0, None)
+            .unwrap();
+        let before = count(&s);
+        s.kg_supersede("ada", "works-at", "zephyr", None).unwrap();
+        s.kg_export(Read::Internal(InternalRead::ExportAudited))
+            .unwrap();
+        s.kg_export_entities(Read::Internal(InternalRead::ExportAudited))
+            .unwrap();
+        assert_eq!(
+            count(&s) - before,
+            0,
+            "a graph write and an audited export recorded reads of their own"
         );
         assert!(s.verify().unwrap().ok());
     }

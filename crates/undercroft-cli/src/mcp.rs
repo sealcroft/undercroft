@@ -203,7 +203,12 @@ fn authority_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()> 
     // no such argument (its `new_object` is the replacement, not a filter) and
     // closes every active fact for the pair, so it is fenced unconditionally.
     let only = opt_str(args, "object");
-    for t in store.kg_query_entity(subject, None, "outgoing")? {
+    for t in store.kg_query_entity(
+        subject,
+        None,
+        "outgoing",
+        undercroft_store::Read::Internal(undercroft_store::InternalRead::PolicyFence),
+    )? {
         if t.predicate != predicate
             || t.authority_class.as_deref() != Some("canonical")
             || t.review_state.as_deref() != Some("approved")
@@ -996,6 +1001,7 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 req_str(args, "entity")?,
                 opt_str(args, "as_of"),
                 opt_str(args, "direction").unwrap_or("outgoing"),
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
             )?;
             Ok(serde_json::to_string_pretty(&facts)?)
         }
@@ -1018,7 +1024,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             Ok(format!("superseded; new fact {id}"))
         }
         "undercroft_kg_timeline" => {
-            let tl = store.kg_timeline(opt_str(args, "entity"))?;
+            let tl = store.kg_timeline(
+                opt_str(args, "entity"),
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgTimeline),
+            )?;
             Ok(serde_json::to_string_pretty(&tl)?)
         }
         "undercroft_kg_stats" => {
@@ -1027,7 +1036,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
         }
         "undercroft_lookup_canonical" => {
             let key = req_str(args, "key")?;
-            match store.lookup_canonical(key)? {
+            match store.lookup_canonical(
+                key,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgCanonical),
+            )? {
                 Some(fact) => Ok(serde_json::to_string_pretty(&fact)?),
                 // Explicit prose, not an empty list: the caller must be able
                 // to tell "no declared truth" from a tool failure, and must
@@ -1394,7 +1406,10 @@ mod tests {
         // The door still answers, which is the whole point of the refusal.
         assert_eq!(
             h.store
-                .lookup_canonical("prod-db-host")
+                .lookup_canonical(
+                    "prod-db-host",
+                    undercroft_store::Read::Returned(undercroft_store::ReadOp::KgCanonical)
+                )
                 .unwrap()
                 .unwrap()
                 .id,

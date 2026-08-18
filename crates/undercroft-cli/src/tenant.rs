@@ -1245,7 +1245,13 @@ impl Tenancy {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
         let store = self.store_for(id)?;
-        let rows = store.kg_entities(limit, offset).map_err(store_err)?;
+        let rows = store
+            .kg_entities(
+                limit,
+                offset,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgEntities),
+            )
+            .map_err(store_err)?;
         let entities: Vec<Value> = rows
             .into_iter()
             .map(|(name, etype, created)| {
@@ -1269,7 +1275,12 @@ impl Tenancy {
         let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
         let triples = store
-            .kg_query_entity(&entity, as_of.as_deref(), &direction)
+            .kg_query_entity(
+                &entity,
+                as_of.as_deref(),
+                &direction,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+            )
             .map_err(store_err)?;
         Ok((
             200,
@@ -1287,7 +1298,12 @@ impl Tenancy {
         let entity = query_param(req, "entity").map(|v| pct_decode(&v));
         let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
-        let triples = store.kg_timeline(entity.as_deref()).map_err(store_err)?;
+        let triples = store
+            .kg_timeline(
+                entity.as_deref(),
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgTimeline),
+            )
+            .map_err(store_err)?;
         Ok((
             200,
             Body::Json(json!({
@@ -1305,7 +1321,13 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let key = pct_decode(key);
         let store = self.store_for(id)?;
-        match store.lookup_canonical(&key).map_err(store_err)? {
+        match store
+            .lookup_canonical(
+                &key,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgCanonical),
+            )
+            .map_err(store_err)?
+        {
             Some(t) => Ok((200, Body::Json(json!({ "fact": t })))),
             None => Err(RestError::new(
                 404,
@@ -1917,12 +1939,22 @@ impl Tenancy {
         // The meta-rows gap, closed on this surface too: entities, facts
         // (receipts and authority tier travel; receipt tags re-key at the
         // destination) and tunnels ride the same NDJSON stream.
-        for (name, etype) in store.kg_export_entities().map_err(store_err)? {
+        for (name, etype) in store
+            .kg_export_entities(undercroft_store::Read::Internal(
+                undercroft_store::InternalRead::ExportAudited,
+            ))
+            .map_err(store_err)?
+        {
             out.push_str(&json!({ "entity": { "name": name, "etype": etype } }).to_string());
             out.push('\n');
             counts.kg_entities += 1;
         }
-        for exp in store.kg_export().map_err(store_err)? {
+        for exp in store
+            .kg_export(undercroft_store::Read::Internal(
+                undercroft_store::InternalRead::ExportAudited,
+            ))
+            .map_err(store_err)?
+        {
             out.push_str(&json!({ "triple": exp }).to_string());
             out.push('\n');
             counts.kg_triples += 1;

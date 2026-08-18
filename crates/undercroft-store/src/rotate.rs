@@ -1058,8 +1058,16 @@ mod tests {
                     all_verified("receipt", v.into_iter().map(|x| x.verdict).collect())
                 }),
             ),
-            ok("kg_export_entities", s.kg_export_entities().map(|_| ())),
-            ok("kg_export", s.kg_export().map(|_| ())),
+            ok(
+                "kg_export_entities",
+                s.kg_export_entities(crate::Read::Internal(crate::InternalRead::ExportAudited))
+                    .map(|_| ()),
+            ),
+            ok(
+                "kg_export",
+                s.kg_export(crate::Read::Internal(crate::InternalRead::ExportAudited))
+                    .map(|_| ()),
+            ),
             ok("list_tunnels", s.list_tunnels(None).map(|_| ())),
             ok(
                 "verify",
@@ -1620,7 +1628,14 @@ mod tests {
         store
             .kg_add("heron", "feeds-on", "small fish", None, None, 0.8, None)
             .unwrap();
-        let before = store.kg_query_entity("heron", None, "outgoing").unwrap();
+        let before = store
+            .kg_query_entity(
+                "heron",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         assert_eq!(before.len(), 2, "premise: two facts before rotating");
 
         let mgr = VaultManager::open(dir.path(), None).unwrap();
@@ -1628,7 +1643,14 @@ mod tests {
         store.rotate_keys(next).unwrap();
 
         for (what, mut s) in [("in-place", store), ("reopened", reopen(&dir))] {
-            let facts = s.kg_query_entity("heron", None, "outgoing").unwrap();
+            let facts = s
+                .kg_query_entity(
+                    "heron",
+                    None,
+                    "outgoing",
+                    crate::Read::Returned(crate::ReadOp::KgQuery),
+                )
+                .unwrap();
             assert_eq!(facts.len(), 2, "{what}: facts lost");
             assert!(
                 facts.iter().any(|t| t.object == "the reeds"),
@@ -1639,7 +1661,7 @@ mod tests {
                 "{what}: the sealed SUBJECT did not survive: {facts:?}"
             );
             assert!(
-                s.kg_entities(10, 0)
+                s.kg_entities(10, 0, crate::Read::Returned(crate::ReadOp::KgEntities))
                     .unwrap()
                     .iter()
                     .any(|(n, _, _)| n == "heron"),
@@ -1647,8 +1669,19 @@ mod tests {
             );
             // Export decodes every row, so it fails on the first bad one —
             // the shape the e2e hit.
-            assert_eq!(s.kg_export().unwrap().len(), 2, "{what}: export");
-            assert!(!s.kg_export_entities().unwrap().is_empty(), "{what}");
+            assert_eq!(
+                s.kg_export(crate::Read::Internal(crate::InternalRead::ExportAudited))
+                    .unwrap()
+                    .len(),
+                2,
+                "{what}: export"
+            );
+            assert!(
+                !s.kg_export_entities(crate::Read::Internal(crate::InternalRead::ExportAudited))
+                    .unwrap()
+                    .is_empty(),
+                "{what}"
+            );
             assert!(s.verify().unwrap().ok(), "{what}: verify");
             // And a fact re-added after the rotation still lands on the
             // same row: ids are keyed with the KG secret, which rotation
@@ -1881,7 +1914,14 @@ mod tests {
                 store.kg_verify().unwrap().is_empty(),
                 "{level:?}: rotation must not read as tampering"
             );
-            let facts = store.kg_query_entity("ada", None, "outgoing").unwrap();
+            let facts = store
+                .kg_query_entity(
+                    "ada",
+                    None,
+                    "outgoing",
+                    crate::Read::Returned(crate::ReadOp::KgQuery),
+                )
+                .unwrap();
             let by = |p: &str| {
                 facts
                     .iter()

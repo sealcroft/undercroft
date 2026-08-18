@@ -122,7 +122,7 @@ when the agent forgets to save.
 
 Add `--read-only` to serve recall without write access. The posture reaches
 the OPEN as well as the tool gate, so a read-only stdio server does not
-migrate the embedder or append a read-audit record per search:
+migrate the embedder or append a read-audit record per read:
 
 ```json
 { "mcpServers": { "undercroft": { "command": "undercroft", "args": ["serve-mcp", "--read-only"] } } }
@@ -1113,8 +1113,11 @@ threshold is deployment-shaped, so it is declared, never defaulted; an
 unreadable declaration refuses to open rather than silently running
 unscreened; consulted only when `UNDERCROFT_ADMISSION=quarantine`) ·
 `UNDERCROFT_READ_AUDIT` (unset — `chain` appends one audit-chain record
-per search: a keyed fingerprint of the query (never its text), the
-declared scope, and the hit count, on every search path. A per-query
+per content-returning READ, not per search: a keyed fingerprint of the
+subject (never its text), the declared scope, and the count. Both funnels
+— the drawer doors `search`/`get`/`recent`/`list`/diary/tunnel/closet/
+hallways/admission-queue, and the graph doors `kg-query`/`kg-timeline`/
+`kg-entities`/`kg-canonical`. Bulk doors record ONCE per call. A per-read
 chain append is a real durability cost, so it is declared; garbage
 refuses to open; a read-only open warns and serves unaudited. One
 boundary, stated rather than hidden: read records deliberately do **not**

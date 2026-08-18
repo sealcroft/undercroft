@@ -997,6 +997,32 @@ if [ "$W4" -eq "$((W3 + 1))" ]; then
 else
   echo "FAIL  declared read audit appends ($W3 -> $W4)"; FAIL=$((FAIL+1))
 fi
+# ROADMAP O51: the SECOND funnel, driven through the surface a user has.
+# The knowledge graph returns words distilled out of drawers, so its own
+# doors record too — verified here and not only in the store's unit gate,
+# because every one of this project's 65 drifts was a capability proved on
+# one surface and assumed on the others.
+env UNDERCROFT_READ_AUDIT=chain "$BIN" kg query alice > /dev/null
+check "verify green with kg read records" 0 "audit chain:     ok"     -- "$BIN" verify
+W5="$(chain_writes)"
+if [ "$W5" -eq "$((W4 + 1))" ]; then
+  echo "ok    declared read audit appends for a kg query"; PASS=$((PASS+1))
+else
+  echo "FAIL  declared read audit appends for a kg query ($W4 -> $W5)"; FAIL=$((FAIL+1))
+fi
+# ...and the deliberate exclusions stay silent. `kg stats` returns counts and
+# `kg receipts` returns identifiers and verdicts; neither reaches a word
+# decoder, so recording them would describe an exfiltration that cannot
+# happen through those doors.
+env UNDERCROFT_READ_AUDIT=chain "$BIN" kg stats > /dev/null
+env UNDERCROFT_READ_AUDIT=chain "$BIN" kg receipts > /dev/null
+"$BIN" verify > /dev/null
+W6="$(chain_writes)"
+if [ "$W6" -eq "$W5" ]; then
+  echo "ok    kg stats and receipts append nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  kg stats and receipts append nothing ($W5 -> $W6)"; FAIL=$((FAIL+1))
+fi
 
 echo "== HTTP MCP server =="
 # Non-loopback bind without token must be refused.

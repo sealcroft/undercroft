@@ -67,7 +67,7 @@ so rather than implying it checked them.
 
 ## 1.1.1 (unreleased)
 
-### `UNDERCROFT_READ_AUDIT=chain` now records EVERY content read, not only searches
+### `UNDERCROFT_READ_AUDIT=chain` now records EVERY content read, on both funnels
 
 **Nothing to change, but plan for the volume.** Before this, one chain record
 was appended per `search` and none for anything else — `get`, `recent`, the
@@ -75,6 +75,12 @@ drawer list, diary, tunnel, closet, hallways and the admission queue returned
 verbatim content and recorded nothing. That made the trail useless for the
 purpose the variable is documented for (insider/exfil accounting): walking
 `GET /v1/…/drawers` then `GET …/drawers/{id}` left no evidence at all.
+
+The knowledge graph was the same gap through a second door and is closed in
+the same release: `kg-query`, `kg-timeline`, `kg-entities` and `kg-canonical`
+return words distilled out of drawers, so walking `GET …/kg/entities` for
+names and then `GET …/kg/query` per name read the same corpus and left the
+same nothing.
 
 **Who is affected:** only deployments that have *declared*
 `UNDERCROFT_READ_AUDIT=chain`. The default is off and its behaviour is
@@ -95,10 +101,12 @@ chain is reinterpreted, and `verify` replays across the boundary unchanged.
 declaration, and its description now reads *"every content read appends a
 chain record"* rather than *"every search…"*.
 
-**Still not covered, deliberately:** the knowledge-graph browse routes
-(`kg_query`, `kg_timeline`, `kg_entities`, `lookup_canonical`, `kg_receipts`)
-return distilled drawer words through a second funnel and do not yet record.
-It is enumerated in `SECURITY.md`'s out-of-scope list.
+**Deliberately still silent, so the volume estimate is not a surprise in the
+other direction:** `GET …/kg/receipts` and `GET …/kg/stats` record nothing.
+They return identifiers, verdicts and counts and reach no word decoder. The
+engine's own internal reads record nothing either, each for a reason its
+`InternalRead` variant carries. `SECURITY.md`'s out-of-scope list states
+what remains.
 
 ---
 

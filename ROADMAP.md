@@ -144,6 +144,131 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O51 — CLOSED 2026-08-18: the knowledge graph is a second read funnel, and it records now
+
+**Round-four #23's remaining half**, which O50 named in its own closure and
+deliberately left. O50 closed the DRAWER funnel: `get`, `recent`, `list`,
+diary, tunnel, closet, hallways, the admission queue. This closes the other
+one.
+
+**Why it is the same defect and not a lesser cousin.** A knowledge-graph
+fact is drawer words. `decode_triple` unseals a subject, a predicate and an
+object; `entity_name_from_rest` unseals an entity name; every one of those
+came out of verbatim content that a drawer read would have been recorded
+for. So the exfil walk O50 closed had a parallel one door over — `GET
+…/kg/entities` for the names, then `GET …/kg/query` per name — reading the
+same corpus and leaving the same zero records. On a vault whose whole purpose
+is a long-running agent's distilled memory, that is arguably the more
+attractive door: the graph is the compressed index of everything the drawers
+say.
+
+**The doors, one namespace each:** `kg-query` (both `kg_query_entity` and
+`kg_query_relationship`, one namespace because one TOOL is what a caller
+drives — `undercroft_kg_query`, `GET …/kg/query`, `kg query`/`kg rel`),
+`kg-timeline`, `kg-entities`, `kg-canonical`. The `Read` witness is a
+required argument on each, so the compiler enumerated the call sites rather
+than a reviewer: 49 in the store, 18 on the surfaces, every one now a stated
+decision. `ReadOp::ALL` gains the four and the both-ways gate counts them.
+
+**The filing was wrong about one of its five names.** It listed `kg_receipts`
+alongside the four. `kg_verify_receipts` is not a content door: it reaches
+neither decoder, returns `(triple_id, source_drawer_id, verdict)` — two
+identifiers and an enum — and the one drawer it reads it reads as
+`InternalRead::Verification`, to compare a fingerprint that never leaves the
+process. Auditing it to satisfy the filing would have put a read record on a
+door no content passes through, which is a false entry in an evidence trail.
+It and `kg_stats` are now named as deliberate exclusions, with that reason,
+on three surfaces. A filing is a hypothesis; this is the fifth consecutive
+one this campaign has had to correct.
+
+**Where the record is written decides whether one number is true.** The
+tempting choke point was `all_triples`, the private whole-graph decode that
+three of the four doors call — one function, every path through it. It is the
+wrong place, and the reason is arithmetic rather than taste: every arm of
+`kg_query_entity` decodes the WHOLE graph and filters afterwards, so a record
+written in the helper would report 40 where 3 left the process.
+**Over-reporting an exfiltration trail is a false claim, not a conservative
+one.** The `pub` doors record, with their own post-filter counts;
+`all_triples` carries no witness and its doc says why.
+
+**One recording door, not eight.** O50 left the decision — `if let
+Read::Returned(op) = read { if self.read_audit { … } }` — written out inline
+at three sites. Four KG doors plus the four O50 sites in `manage.rs`,
+`admission.rs` and `remote.rs` would have made it eleven copies of one
+judgement, which is exactly how the WRITE screen came to be applied per call
+site with three ways past it (the finding that produced `Screen`).
+`PalaceStore::record_read` is the single place now, and all eleven sites call
+it. The read-only posture is safer for it: `open_read_only` force-disables
+the flag, and there is one place that consults it.
+
+**Both counterfactual arms executed, and both against the artifact.**
+Reverting `kg_timeline`'s recording in place — the edit asserted applied
+before the test ran — fails the gate with *"kg-timeline returned 1 row(s) but
+appended 0 read-audit record(s)"*. Removing the `kg-entities` driver while
+keeping its `ReadOp` fails the other direction, printing both namespace sets.
+The premise arm earned its keep here: `kg-canonical` answers `None` without
+an approved canonical fact in the fixture, and a driver returning nothing
+would otherwise have passed while auditing nothing.
+
+**Measured on a real corpus, because a fixture is structurally blind to
+cost.** 1,700 drawers mined from the LoCoMo feed into 20 wings, 600 facts
+over 200 entities. `kg query` 6 ms → 30 ms with `UNDERCROFT_READ_AUDIT=chain`;
+`kg timeline` 8 ms → 33 ms. That looked alarming until it was compared
+against a door O50 had already closed on the same vault under the same
+declaration: `wake-up` (a `recent`) goes 8 ms → 35 ms. The ~25 ms is one
+fsynced chain append under `synchronous=FULL` — the documented, declared
+durability cost of the variable, identical on both funnels and not something
+this unit introduced. `kg stats` and `kg receipts` add nothing, confirmed by
+counting the chain: two audited doors and two excluded ones grew it by
+exactly two. A distinctive entity name queried under the declaration reaches
+no byte of `palace.db` or its WAL (premise-probed against a known-positive
+file, so a scan that finds nothing at all cannot pass).
+
+**A false measurement of my own, caught by its own premise arm.** The first
+version of that probe timed `undercroft recall`, which is not a subcommand,
+and reported a confident 2 ms for an error path — the exact shape this file
+warns about. Every timed command in the probe now has to exit 0 before it is
+timed.
+
+**Drift-checked on every surface that reaches it**, by reading each rather
+than assuming symmetry: CLI (`kg query`, `kg rel`, `kg timeline`, `kg
+canonical`, `export`), MCP (`undercroft_kg_query`, `undercroft_kg_timeline`,
+`undercroft_lookup_canonical`, and the `authority_fence`, which reads to
+decide a REFUSAL and is therefore `PolicyFence`), `/v1` (`kg/entities`,
+`kg/query`, `kg/timeline`, `kg/canonical/{key}`, `export`), and the
+orchestrator, which proxies `/v1` and inherits it. Both export paths were
+verified to call `audit_export` before being classed `ExportAudited` — the
+claim was checked, not inherited. `tests/e2e.sh` drives it through the CLI:
+one record for a `kg query`, none for `kg stats` or `kg receipts`.
+
+**A stale doc comment O50 left, fixed here:** `resolve_read_audit` still
+said the declaration records "for every search". Accurate before O50, false
+after it, and inside the very resolver whose description the O50 unit changed
+one file over.
+
+**Residual, narrower than before and stated rather than implied:** the
+witness is a required argument on every `pub` reader, so no SURFACE can
+forget it — but a new `pub` STORE reader built on `all_triples` and reusing
+an existing `ReadOp` would satisfy the both-ways namespace gate while
+recording nothing. The drawer funnel carries the identical residual for a
+reader that avoids `get`/`recent`. Closing it needs a different mechanism
+than a wider inventory — the class is "a private helper is reachable from a
+new public door", which no namespace count can see.
+
+**My own defect in this unit.** Restoring the tree after the first
+counterfactual, I ran `git checkout -- crates/undercroft-store/src/kg.rs`,
+which reverted the whole file rather than the one block the counterfactual
+had changed — discarding every door edit in it. Nothing shipped wrong: the
+redo is equivalent and every gate was re-run against the restored tree. The
+lesson is this file's own scripted-edit discipline pointed at the agent's
+recovery path rather than its edits — **a counterfactual needs a restore
+scoped to what it changed**, so the second arm used a file copy in the
+scratch directory and a premise probe on the restore.
+
+**Gate:** `every_content_returning_read_appends_exactly_one_chain_record`
+(extended, both directions), `an_internal_lookup_appends_no_read_record`
+(extended with a graph write and an audited export), and three e2e checks.
+
 ### O46 — CLOSED 2026-08-18: the import route refuses a malformed vector instead of reshaping it
 
 **Round-four #50**, the first of that sweep's verified-open rows to be closed,
@@ -468,14 +593,17 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 9 verified rows
+### Still open from round four — 8 verified rows
 
-`#23` (KG funnel only), `#25` (reporting half only), `#28`, `#29`, `#37`,
-`#44`, `#45`, `#47`, `#48`. All MED or lower, all silent-failing, all PATCH
-or MINOR. The heading read `8` while the list held 9 until 2026-08-18 — my
-own miscount, of exactly the class this campaign spent its length fixing, and
-now GATED: the `prose figures` preflight counts the heading against the
-entries beneath it.
+`#25` (reporting half only), `#28`, `#29`, `#37`, `#44`, `#45`, `#47`, `#48`.
+All MED or lower, all silent-failing, all PATCH or MINOR. The heading read
+`8` while the list held 9 until 2026-08-18 — my own miscount, of exactly the
+class this campaign spent its length fixing, and now GATED: the `prose
+figures` preflight counts the heading against the entries beneath it.
+
+**`#23` is CLOSED by O51** — the KG funnel was its remaining half, so the row
+is now closed on both funnels. It came off this list on 2026-08-18, taking
+the count from 9 to 8.
 
 **`#26` is CLOSED by O48** — it *was* the `UNDERCROFT_FDE_IVF_MIN`
 garbage-is-less-conservative-than-unset claim, and the "a declaration that

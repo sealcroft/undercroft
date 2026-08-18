@@ -5,6 +5,77 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### the knowledge graph's readers append a chain record too — the second funnel (O51)
+
+**Round-four #23, the half O50 named and left.** A knowledge-graph fact IS
+drawer words: `decode_triple` and `entity_name_from_rest` return subjects,
+predicates, objects and entity names distilled out of verbatim content. So
+the exfil walk O50 closed had a parallel one door over — `GET …/kg/entities`
+for names, then `GET …/kg/query` per name — reading the same corpus and
+leaving the same nothing. Four doors record one each now: `kg-query` (both
+its entity and predicate arms, one namespace because one tool is what a
+caller drives), `kg-timeline`, `kg-entities` and `kg-canonical`, across CLI,
+MCP and `/v1`.
+
+**The filing was wrong about one of its five names, and that is reported
+rather than quietly dropped.** It listed `kg_receipts` as a fifth reader. It
+is not one: `kg_verify_receipts` reaches neither decoder and returns
+`(triple_id, source_drawer_id, verdict)` — identifiers and an enum — and the
+one drawer it reads it reads as `InternalRead::Verification` to compare a
+fingerprint that never leaves. Auditing it to match the filing would have put
+a read record on a door through which no content passes. It and `kg_stats`
+are now named as deliberate exclusions, with that reason, in `SECURITY.md`,
+`docs/THREAT_MODEL.md` and `UPGRADING.md`.
+
+**Where the record is written decides whether one number is true.**
+`all_triples` — the private whole-graph decode — was the tempting choke
+point, and it is the wrong one: every arm of `kg_query_entity` decodes the
+whole graph and then filters, so a record written there would say 40 where 3
+left the process. Over-reporting an exfil trail is a false claim, not a
+conservative one. The `pub` doors record, with their own post-filter counts;
+`all_triples` carries no witness and says why.
+
+**One recording door, not eight.** O50 left the decision
+(`if let Read::Returned(op) … if self.read_audit …`) written out inline at
+three sites; this unit would have made it eight, which is precisely how the
+write-side screen came to be applied per call site with three ways past it.
+`PalaceStore::record_read` is now the single place that decides whether a
+read is written down, and all eleven sites call it.
+
+**Gated both ways, and both arms executed.** The driver table gains the four
+KG doors — including an approved canonical fact, without which `kg-canonical`
+answers `None` and its premise arm rightly reports that the driver proved
+nothing. Reverting `kg_timeline`'s recording fails the gate with *"kg-timeline
+returned 1 row(s) but appended 0 read-audit record(s)"*; removing the
+`kg-entities` driver while keeping its `ReadOp` fails the namespace
+comparison. `an_internal_lookup_appends_no_read_record` gains the opposite
+direction: a graph write and an audited export must add nothing. Exercised
+through the CLI in `tests/e2e.sh` as well, because a capability proved on one
+surface and assumed on the others is how all 65 of this project's drifts were
+born.
+
+**Measured on a real corpus** (1,700 LoCoMo drawers across 20 wings, 600
+facts over 200 entities): `kg query` 6 ms → 30 ms under
+`UNDERCROFT_READ_AUDIT=chain`, `kg timeline` 8 ms → 33 ms — and `wake-up`, a
+drawer door O50 had already closed, goes 8 ms → 35 ms on the same vault. The
+~25 ms is one fsynced chain append under `synchronous=FULL`, the declared
+durability cost of the variable, identical on both funnels. `kg stats` and
+`kg receipts` add nothing.
+
+**Residual, narrower than before and stated:** the witness is a required
+argument on every `pub` reader, so no SURFACE can forget it — but a new `pub`
+store reader built on `all_triples` and reusing an existing `ReadOp` would
+pass the namespace gate while recording nothing. The drawer funnel carries
+the identical residual.
+
+**My own defect in this unit, reported as mine.** Restoring the tree after
+the first counterfactual I ran `git checkout -- kg.rs`, which reverted the
+whole file rather than the one reverted block, discarding every door change
+in it. Nothing shipped wrong — the redo is byte-equivalent and the gates were
+re-run — but the lesson is the documented one wearing new clothes: a
+counterfactual needs a restore path scoped to what it changed, so the second
+arm used a file copy in the scratch directory instead.
+
 ### every content-returning drawer read now appends a chain record (O50)
 
 **Round-four #23.** `UNDERCROFT_READ_AUDIT=chain` is documented for *"insider
@@ -36,7 +107,8 @@ then counts observed namespaces against `ReadOp::ALL` in both directions, so a
 
 **Scope stated as a limit:** this closes the *drawer* funnel. The knowledge
 graph is a second funnel and its browse routes remain unaudited — filed, and
-written into `SECURITY.md`'s out-of-scope list.
+written into `SECURITY.md`'s out-of-scope list. (Closed by O51 above, in the
+same release.)
 
 **Also fixed, found because it masked this work:** when a suite produced no
 summary, the battery's published-figures reader fed *"no results line found"*
