@@ -2322,7 +2322,21 @@ project.*
 is done; the full Docker battery runs at every unit and a real corpus is
 loaded at every unit (definition of done, items 5 and 6). **When the context
 window reaches roughly 90%, STOP TAKING NEW UNITS and spend what is left
-updating every governance surface** — CHANGELOG, ROADMAP, this file, whichever
+updating every governance surface**
+— and **MEASURE that 90%, never estimate it: `bash
+tests/context-check.sh`**. This rule was stated for weeks with no way to
+evaluate it, so it was applied by feel and applied WRONG, repeatedly and in
+one direction: on 2026-08-18 the agent announced it was near the budget at a
+measured **54%**, having assumed a 200,000-token window when the real one is
+**1,000,000** — every estimate out by ~2.7×, always toward stopping early and
+handing over work that could have been finished. A threshold nobody can
+measure is not a rule, it is a mood; this file's own first rule — *count the
+truth, never a number in prose* — applies to the agent's own state as much as
+to the tree. The reader takes the live session transcript's `usage` records
+(`input + cache_creation + cache_read`), which is MEASURED; only the window
+is declared, it is labelled as such in the output, and it fails loudly rather
+than printing 0% when it cannot read a transcript, because a broken reader
+and an empty context look identical downstream — CHANGELOG, ROADMAP, this file, whichever
 docs carry the claim you changed, and the three `.handover/` files with the
 marker re-pointed at `HEAD`.
 
