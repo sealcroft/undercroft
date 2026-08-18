@@ -466,7 +466,29 @@ Under `UNDERCROFT_READ_AUDIT=chain` each search appends a record too,
 carrying a **keyed fingerprint of the query** (never its text), the
 scope and the hit count.
 
-Two boundaries come with it, both stated rather than hidden. A
+**What it covers, since 2026-08-18 (ROADMAP O50).** Every content-returning
+read appends exactly one chain record: `search`, `get`, `recent`, the drawer
+`list`, a `diary` read, a `tunnel` follow, the `closet` index, `hallways` and
+the admission queue listing. Until O50 it covered **searches only** — `get`
+and the bulk reads returned verbatim content and appended nothing, so an
+insider holding a valid token could walk `GET /v1/…/drawers` for ids and
+`GET …/drawers/{id}` for each and exfiltrate the whole vault leaving zero
+records, while the same person running one search left one. That is the
+opposite of what this row is for, and it was accurate-but-narrow on every
+prose surface ("one record per search") while being enumerated as a limit
+nowhere.
+
+**What it still does not cover, stated as a limit rather than left implied:**
+the knowledge graph's own browse routes (`kg_query`, `kg_timeline`,
+`kg_entities`, `lookup_canonical`, `kg_receipts`) return distilled drawer
+words and are **not** yet audited — they are a second funnel, filed as the
+remainder of round-four #23. The engine's own reads are deliberately silent
+and say why in `InternalRead`: hydration inside a search that already
+records, lookups performed to decide a write, index maintenance,
+verification, a policy fence, and an export that `audit_export` already
+records unconditionally.
+
+Three boundaries come with it, all stated rather than hidden. A
 **read-only** process cannot append, so it serves an export and says the
 egress went unaudited, and it disables read auditing with a warning at
 open — the replica precedent: warn and serve, never silently pretend.

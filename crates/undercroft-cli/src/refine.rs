@@ -123,7 +123,11 @@ pub(crate) fn refine(
     // Read the verbatim side only: never re-distil fact-drawers, or a
     // second call would compound its own output into the graph.
     let sources: Vec<Drawer> = store
-        .recent(opts.wing, opts.limit)?
+        .recent(
+            opts.wing,
+            opts.limit,
+            undercroft_store::Read::Internal(undercroft_store::InternalRead::WritePathLookup),
+        )?
         .into_iter()
         .filter(|d| d.meta.room != opts.fact_room)
         .filter(|d| opts.room.is_none_or(|r| d.meta.room == r))
@@ -322,7 +326,13 @@ mod tests {
         // Premise, and the reason the refusal is load-bearing rather than
         // decorative: the read it stands in front of really does return the
         // pending drawer when the wing is named.
-        let visible = store.recent(Some(QUARANTINE_WING), 100).unwrap();
+        let visible = store
+            .recent(
+                Some(QUARANTINE_WING),
+                100,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Recent),
+            )
+            .unwrap();
         assert_eq!(
             visible.len(),
             1,
@@ -351,7 +361,11 @@ mod tests {
         );
         assert!(
             store
-                .recent(None, 100)
+                .recent(
+                    None,
+                    100,
+                    undercroft_store::Read::Returned(undercroft_store::ReadOp::Recent)
+                )
                 .unwrap()
                 .iter()
                 .all(|d| d.meta.room != "facts"),

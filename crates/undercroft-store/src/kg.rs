@@ -2217,7 +2217,10 @@ impl PalaceStore {
                     {
                         ReceiptVerdict::Tampered
                     } else {
-                        match self.get(&did)? {
+                        match self.get(
+                            &did,
+                            crate::Read::Internal(crate::InternalRead::Verification),
+                        )? {
                             None => ReceiptVerdict::Dangling,
                             // Recomputed under the SAME recipe the write path
                             // used, so a legacy row the migration refused to
@@ -2462,7 +2465,10 @@ impl PalaceStore {
         // exception rather than the rule.
         let source_fp = match (claimed, t.source_drawer_id.as_deref()) {
             (true, Some(did)) => self
-                .get(did)?
+                .get(
+                    did,
+                    crate::Read::Internal(crate::InternalRead::WritePathLookup),
+                )?
                 .map(|d| keyed_content_fp(&self.vault, &secret, &d.content)),
             _ => None,
         };
@@ -6149,7 +6155,13 @@ mod tests {
         // A `SourceChanged` verdict is still reachable, so `Verified` above
         // is not a comparison that always says yes.
         let mut s = PalaceStore::open(mgr.unlock("u12").unwrap()).unwrap();
-        let mut edited = s.get(&cited_id).unwrap().unwrap();
+        let mut edited = s
+            .get(
+                &cited_id,
+                crate::Read::Internal(crate::InternalRead::Verification),
+            )
+            .unwrap()
+            .unwrap();
         edited.content = "Ptolemy wired nothing at all.".into();
         s.upsert(&edited).unwrap();
         assert_eq!(

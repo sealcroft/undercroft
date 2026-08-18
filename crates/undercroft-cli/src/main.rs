@@ -2105,7 +2105,11 @@ fn run(cli: Cli) -> Result<()> {
             }
             println!("\n## L1 — ESSENTIAL STORY (vault '{vault}')");
             let store = open_store(&cli, vault)?;
-            let recent = store.recent(wing.as_deref(), 15)?;
+            let recent = store.recent(
+                wing.as_deref(),
+                15,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Recent),
+            )?;
             if recent.is_empty() {
                 // "Empty" only when it IS empty. A declared trust floor above
                 // `standard` with no wing yet assigned that class empties
@@ -3067,7 +3071,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::Drawer { action, vault } => {
             let mut store = open_store(&cli, vault)?;
             match action {
-                DrawerAction::Get { id } => match store.get(id)? {
+                DrawerAction::Get { id } => match store.get(
+                    id,
+                    undercroft_store::Read::Returned(undercroft_store::ReadOp::Get),
+                )? {
                     Some(d) => {
                         println!("id:     {}", d.id);
                         println!("wing:   {}/{}", d.meta.wing, d.meta.room);

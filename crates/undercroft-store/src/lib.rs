@@ -136,7 +136,7 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
             .map_err(|e| e.to_string())
             .and_then(|on| {
                 described(if on {
-                    "every search appends a chain record".into()
+                    "every content read appends a chain record".into()
                 } else {
                     "reads are not audited".into()
                 })
@@ -1254,6 +1254,145 @@ pub(crate) struct Landing {
     pub(crate) diverted_to: Option<String>,
 }
 
+/// Which content-returning read this is — the read path's answer to
+/// [`Screen`], and it exists for the same reason.
+///
+/// ROADMAP O50 (round-four #23). `UNDERCROFT_READ_AUDIT=chain` is documented
+/// for *"insider/exfil accounting"*, and `audit_read` had exactly TWO call
+/// sites, both passing the literal `"search"`. Every by-id and bulk read —
+/// `get`, `recent`, `list_drawers` — returned verbatim content and appended
+/// nothing. An insider with a valid token walks `GET /v1/…/drawers` for ids
+/// and `GET …/drawers/{id}` for each, exfiltrating the whole vault with ZERO
+/// chain records, while the same person running one search leaves one.
+///
+/// The cause was structural: nothing required a content-returning read to
+/// reach the auditor, so coverage was added one call site at a time — the
+/// exact arrangement `CLAUDE.md` names as the birth of all 65 drifts. So this
+/// is a REQUIRED argument on the funnel, not a defaulted one: a new read path
+/// does not compile until its author states which it is.
+/// What a read was scoped to, for the audit record. Search projects its
+/// `SearchOptions` onto this; every other read has nothing to put here, which
+/// is why the fields are `Option` rather than a borrowed `SearchOptions` —
+/// the auditor must not require a search to exist.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ReadScope<'a> {
+    pub(crate) wing: Option<&'a str>,
+    pub(crate) room: Option<&'a str>,
+    pub(crate) kind: Option<&'a str>,
+    pub(crate) min_trust: Option<&'a str>,
+}
+
+impl<'a> ReadScope<'a> {
+    /// A read with no scope of its own — a by-id `get`, a diary, a tunnel.
+    pub(crate) fn none() -> Self {
+        Self::default()
+    }
+
+    /// Byte-identity with the pre-O50 search record depends on this
+    /// projecting exactly the four fields the old canonical read.
+    pub(crate) fn from_opts(o: &'a SearchOptions) -> Self {
+        Self {
+            wing: o.wing.as_deref(),
+            room: o.room.as_deref(),
+            kind: o.kind.as_deref(),
+            min_trust: o.min_trust.as_deref(),
+        }
+    }
+
+    pub(crate) fn wing_only(wing: Option<&'a str>) -> Self {
+        Self {
+            wing,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Read {
+    /// A read whose content leaves the process for a caller. Audited when
+    /// `UNDERCROFT_READ_AUDIT=chain` is declared.
+    Returned(ReadOp),
+    /// A read the engine performs for itself. Records nothing, for the
+    /// stated reason — the greppable bypass token, exactly as
+    /// `BypassReason` is on the write side.
+    Internal(InternalRead),
+}
+
+/// The surface doors, one namespace each. `Search.as_str()` is `"search"` so
+/// the existing `read/search` records stay byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReadOp {
+    Search,
+    Get,
+    Recent,
+    List,
+    Diary,
+    Tunnel,
+    Closet,
+    Hallways,
+    AdmissionList,
+}
+
+impl ReadOp {
+    /// Counted against the drivers by
+    /// `every_content_returning_read_appends_exactly_one_chain_record`, so a
+    /// variant added without a record fails the build — the original defect
+    /// in a new place.
+    pub const ALL: &'static [ReadOp] = &[
+        ReadOp::Search,
+        ReadOp::Get,
+        ReadOp::Recent,
+        ReadOp::List,
+        ReadOp::Diary,
+        ReadOp::Tunnel,
+        ReadOp::Closet,
+        ReadOp::Hallways,
+        ReadOp::AdmissionList,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReadOp::Search => "search",
+            ReadOp::Get => "get",
+            ReadOp::Recent => "recent",
+            ReadOp::List => "list",
+            ReadOp::Diary => "diary",
+            ReadOp::Tunnel => "tunnel",
+            ReadOp::Closet => "closet",
+            ReadOp::Hallways => "hallways",
+            ReadOp::AdmissionList => "admission-list",
+        }
+    }
+}
+
+/// Why a read is the engine's own and records nothing. Adding a variant is
+/// where a reviewer has to justify one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InternalRead {
+    /// Hydrating candidates a remote mirror proposed, inside an operation
+    /// that already records `read/search` at its own tail.
+    RemoteHydration,
+    /// A lookup performed to decide a WRITE — dedup, supersession, an
+    /// existence check. The caller never asked to read this.
+    WritePathLookup,
+    /// Index/codebook/backfill maintenance over rows the caller did not
+    /// request. Several of these hold an `unchecked_transaction`, so they
+    /// must not reach the auditor at all.
+    Maintenance,
+    /// Integrity work: `verify`, `repair`, retention and forgetting scans.
+    Verification,
+    /// A read performed to decide a refusal. Recording it would put a read
+    /// in the trail the caller never asked for.
+    PolicyFence,
+    /// A whole-palace export, already recorded unconditionally by
+    /// `audit_export` — auditing the rows again would double-count it.
+    ExportAudited,
+    /// A per-row read inside a bulk door that appends its own single
+    /// record. The caller asked for the LIST, not for each row, so the
+    /// trail should say "one list" and not "N gets".
+    BulkMember,
+}
+
 /// Whether a write passes the admission screen. **Every** call into the
 /// write choke point states one, so a new write path cannot silently skip
 /// screening the way three `/v1` routes did before this existed.
@@ -2042,7 +2181,7 @@ impl PalaceStore {
                 // at all, including `verify`, which is the only tool that can
                 // name the damage. Its old vector stays; a row that fails
                 // every read does not have a recall problem.
-                match self.get(id) {
+                match self.get(id, Read::Internal(InternalRead::Maintenance)) {
                     Ok(Some(d)) => {
                         let emb = self.embedder_embed(&d.content);
                         rows.push((id.clone(), self.vault.embedding_at_rest(id, &emb)));
@@ -3797,14 +3936,16 @@ impl PalaceStore {
             }
             Some(old_id) => {
                 let secret = self.kg_secret()?;
-                let bound = self.get(old_id)?.map(|old| {
-                    let fp = crate::kg::keyed_content_fp(&self.vault, &secret, &old.content);
-                    let receipt = self
-                        .vault
-                        .tag(&supersession_canonical(&drawer.id, old_id, &fp))
-                        .to_vec();
-                    (fp, receipt)
-                });
+                let bound = self
+                    .get(old_id, Read::Internal(InternalRead::WritePathLookup))?
+                    .map(|old| {
+                        let fp = crate::kg::keyed_content_fp(&self.vault, &secret, &old.content);
+                        let receipt = self
+                            .vault
+                            .tag(&supersession_canonical(&drawer.id, old_id, &fp))
+                            .to_vec();
+                        (fp, receipt)
+                    });
                 Some((old_id.to_string(), bound))
             }
             None => None,
@@ -4163,7 +4304,9 @@ impl PalaceStore {
             // matched drawer's dates with it: the same text recorded on an
             // earlier day simply stopped having happened. The text collapses,
             // the chronology does not.
-            if let Some(existing) = self.get(&match_id)? {
+            if let Some(existing) =
+                self.get(&match_id, Read::Internal(InternalRead::WritePathLookup))?
+            {
                 refreshed.absorb_occurrences_of(&existing);
             }
             let landed = self.write_drawer(&refreshed, embedding, Screen::Apply)?;
@@ -4430,7 +4573,7 @@ impl PalaceStore {
     }
 
     /// Fetch one drawer by id, verifying its HMAC and decrypting content.
-    pub fn get(&self, id: &str) -> Result<Option<Drawer>, StoreError> {
+    pub fn get(&self, id: &str, read: Read) -> Result<Option<Drawer>, StoreError> {
         let row = self
             .conn
             .query_row(
@@ -4456,7 +4599,16 @@ impl PalaceStore {
                         undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                         StoreError::Integrity(id.clone())
                     })?;
-                Ok(Some(self.decode(&id, &meta_json, &content_rest)?))
+                let drawer = self.decode(&id, &meta_json, &content_rest)?;
+                // ROADMAP O50. Guarded by `self.read_audit`, never by "was it
+                // declared": `open_read_only` force-disables that flag, and it
+                // is the only thing keeping a read-only handle from writing.
+                if let Read::Returned(op) = read {
+                    if self.read_audit {
+                        self.audit_read(op, &id, ReadScope::none(), 1)?;
+                    }
+                }
+                Ok(Some(drawer))
             }
         }
     }
@@ -4520,7 +4672,12 @@ impl PalaceStore {
 
     /// Most recently filed drawers (optionally scoped to a wing) — the
     /// palace's "essential story" feed used by wake-up.
-    pub fn recent(&self, wing: Option<&str>, limit: usize) -> Result<Vec<Drawer>, StoreError> {
+    pub fn recent(
+        &self,
+        wing: Option<&str>,
+        limit: usize,
+        read: Read,
+    ) -> Result<Vec<Drawer>, StoreError> {
         let mut sql = String::from("SELECT id, meta_json, content, tag FROM drawers");
         let mut clauses: Vec<String> = Vec::new();
         let mut binds: Vec<String> = Vec::new();
@@ -4586,6 +4743,18 @@ impl PalaceStore {
                 continue;
             }
             out.push(drawer);
+        }
+        // ROADMAP O50: ONE record for the bulk read, not one per row — the
+        // caller made a single request and the trail should say so.
+        if let Read::Returned(op) = read {
+            if self.read_audit {
+                self.audit_read(
+                    op,
+                    wing.unwrap_or(""),
+                    ReadScope::wing_only(wing),
+                    out.len(),
+                )?;
+            }
         }
         Ok(out)
     }
@@ -5314,7 +5483,12 @@ impl PalaceStore {
             self.is_sealed(),
         );
         if self.read_audit {
-            self.audit_read("search", query, opts, hits.len())?;
+            self.audit_read(
+                ReadOp::Search,
+                query,
+                ReadScope::from_opts(opts),
+                hits.len(),
+            )?;
         }
         Ok(hits)
     }
@@ -5361,11 +5535,22 @@ impl PalaceStore {
     /// operation outside `open` (ROADMAP A31).
     fn audit_read(
         &self,
-        kind: &str,
-        query: &str,
-        opts: &SearchOptions,
-        hits: usize,
+        op: ReadOp,
+        subject: &str,
+        scope: ReadScope<'_>,
+        returned: usize,
     ) -> Result<(), StoreError> {
+        // The canonical is EXTENDED APPEND-ONLY in the sense that matters:
+        // the field order and separators are untouched, and a search fills
+        // every field exactly as before, so `read/search` records are
+        // byte-identical to the ones written before O50. A non-search read
+        // simply has nothing to put in the scope fields. This is the
+        // `support`/authority canonical-extension precedent from `kg.rs`,
+        // applied to a record rather than a tag.
+        let kind = op.as_str();
+        let query = subject;
+        let hits = returned;
+        let opts = scope;
         let now = OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 now");
@@ -5376,10 +5561,10 @@ impl PalaceStore {
         );
         let canonical = format!(
             "read\u{1f}{kind}\u{1f}{qfp}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{hits}\u{1f}{now}",
-            opts.wing.as_deref().unwrap_or(""),
-            opts.room.as_deref().unwrap_or(""),
-            opts.kind.as_deref().unwrap_or(""),
-            opts.min_trust.as_deref().unwrap_or(""),
+            opts.wing.unwrap_or(""),
+            opts.room.unwrap_or(""),
+            opts.kind.unwrap_or(""),
+            opts.min_trust.unwrap_or(""),
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.unchecked_transaction()?;
@@ -8338,7 +8523,9 @@ mod tests {
 
         assert_ne!(c, b, "a new save must not land on an existing drawer's id");
         assert_eq!(
-            s.get(&b).unwrap().map(|d| d.content),
+            s.get(&b, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .map(|d| d.content),
             Some("second note".to_string()),
             "the unrelated drawer must survive"
         );
@@ -9231,12 +9418,17 @@ mod tests {
             );
         }
         assert!(
-            s.get(&dr.id).unwrap().is_none(),
+            s.get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "nothing may land behind a refusal"
         );
         // Finite vectors are untouched by the gate.
         s.upsert_external(&dr, vec![0.5, 0.5, 0.5, 0.5]).unwrap();
-        assert!(s.get(&dr.id).unwrap().is_some());
+        assert!(s
+            .get(&dr.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
     }
 
     /// C15: the refusal is driven through EVERY door that takes a
@@ -9263,7 +9455,10 @@ mod tests {
                 ),
                 "save_with_dedup_vec is a door"
             );
-            assert!(s.get(&dr.id).unwrap().is_none());
+            assert!(s
+                .get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // (b) import onto an EXTERNAL vault — every backup restore and the
         // orchestrator's tenant migration.
@@ -9277,7 +9472,10 @@ mod tests {
                 ),
                 "import_record's external arm is a door"
             );
-            assert!(s.get(&dr.id).unwrap().is_none());
+            assert!(s
+                .get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // (c) import onto an ORDINARY hash vault. This is the arm the old
         // "the caller-supplied path was the one door" reasoning missed
@@ -9293,7 +9491,10 @@ mod tests {
                 ),
                 "import_record's non-external arm is a door"
             );
-            assert!(s.get(&dr.id).unwrap().is_none());
+            assert!(s
+                .get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // (d) the BULK path, which owns its own transaction and therefore
         // cannot reach `write_drawer` — the reason the guard had to live in
@@ -9395,7 +9596,10 @@ mod tests {
             )
             .unwrap();
         assert!(o.deduped);
-        let back = s.get(&o.id).unwrap().unwrap();
+        let back = s
+            .get(&o.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(back.content, "alice works at acme corporation now");
     }
 
@@ -9527,7 +9731,10 @@ mod tests {
             0,
         );
         assert!(s.upsert(&dr).unwrap());
-        let back = s.get(&dr.id).unwrap().unwrap();
+        let back = s
+            .get(&dr.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(back.content, dr.content);
         assert_eq!(back.meta.wing, "work");
         // Re-upsert same slot is an update, not a new record.
@@ -10211,7 +10418,14 @@ mod tests {
         // Default off: byte-normal save.
         let d0 = drawer("notes", "r", poison, 0);
         s.upsert(&d0).unwrap();
-        assert_eq!(s.get(&d0.id).unwrap().unwrap().meta.wing, "notes");
+        assert_eq!(
+            s.get(&d0.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "notes"
+        );
         s.delete_drawer(&d0.id).unwrap();
 
         // On: the same save diverts.
@@ -10219,7 +10433,9 @@ mod tests {
         let d = drawer("notes", "r", poison, 1);
         s.upsert(&d).unwrap();
         assert!(
-            s.get(&d.id).unwrap().is_none(),
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "the flagged drawer must not land where it aimed"
         );
         let pending = s.admission_pending().unwrap();
@@ -10252,11 +10468,17 @@ mod tests {
         // Allow: re-filed where it was headed, quarantine copy gone,
         // metadata clean, chain green.
         let restored = s.admission_allow(&qid).unwrap();
-        let r = s.get(&restored).unwrap().expect("re-filed");
+        let r = s
+            .get(&restored, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("re-filed");
         assert_eq!(r.meta.wing, "notes");
         assert!(r.meta.admission_signals.is_empty());
         assert!(r.meta.intended_wing.is_none());
-        assert!(s.get(&qid).unwrap().is_none());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok());
 
@@ -10274,7 +10496,10 @@ mod tests {
         );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, qid2);
-        assert!(s.get(&qid2).unwrap().is_none());
+        assert!(s
+            .get(&qid2, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.verify().unwrap().ok());
 
         // The reserved wing cannot be forged into.
@@ -10319,7 +10544,7 @@ mod tests {
         // Path 1 — `/v1` import, per record.
         s.import_record(&p, None, "import").unwrap();
         let got = s
-            .get(&p.id)
+            .get(&p.id, Read::Internal(InternalRead::Verification))
             .unwrap()
             .expect("the drawer is kept, not refused");
         assert_eq!(got.meta.wing, "notes", "it lands where it declared");
@@ -10334,7 +10559,10 @@ mod tests {
         // Path 2 — the bulk path, whose guard tested the wing alone.
         let b = forged(1);
         s.upsert_many(std::slice::from_ref(&b)).unwrap();
-        let got = s.get(&b.id).unwrap().expect("kept");
+        let got = s
+            .get(&b.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("kept");
         assert!(
             got.meta.intended_wing.is_none() && got.meta.admission_signals.is_empty(),
             "the bulk guard skipped the strip: {:?} / {:?}",
@@ -10437,7 +10665,9 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
         assert!(
-            s.get(&clean.id).unwrap().is_none(),
+            s.get(&clean.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "the batch rolls back whole"
         );
         assert_eq!(s.admission_pending().unwrap().len(), 1);
@@ -10535,7 +10765,10 @@ mod tests {
         let d = drawer("w", "r", poison, 0);
         let out = s.upsert_screened(&d).unwrap();
         assert!(out.quarantined, "upsert_screened must screen");
-        assert!(s.get(&d.id).unwrap().is_none());
+        assert!(s
+            .get(&d.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
 
         // 2. save_with_dedup — the `dedup_threshold` bypass
         let (_d2, mut s2) = store(SecurityLevel::Sealed);
@@ -10543,7 +10776,9 @@ mod tests {
         let d2 = drawer("w", "r", poison, 1);
         s2.save_with_dedup(&d2, 0.9).unwrap();
         assert!(
-            s2.get(&d2.id).unwrap().is_none(),
+            s2.get(&d2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "save_with_dedup must screen — a tuning field must not disable admission"
         );
         assert_eq!(s2.admission_pending().unwrap().len(), 1);
@@ -10553,7 +10788,12 @@ mod tests {
         s3.set_admission(true);
         let d3 = drawer("w", "r", poison, 2);
         s3.upsert_many(std::slice::from_ref(&d3)).unwrap();
-        assert!(s3.get(&d3.id).unwrap().is_none(), "upsert_many must screen");
+        assert!(
+            s3.get(&d3.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
+            "upsert_many must screen"
+        );
 
         // 4. import_record WITH a vector — the import bypass. This is the
         //    engine's own export format, so it is the restore path and the
@@ -10567,7 +10807,9 @@ mod tests {
         let vec4 = vec![0.1f32; undercroft_core::embed::EMBED_DIM];
         let out4 = s4.import_record(&d4, Some(vec4), "test").unwrap();
         assert!(
-            s4.get(&d4.id).unwrap().is_none(),
+            s4.get(&d4.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "import_record with a vector must screen — a restore must not re-admit poison"
         );
         assert_eq!(s4.admission_pending().unwrap().len(), 1);
@@ -10577,7 +10819,9 @@ mod tests {
         );
         assert_ne!(out4.id, d4.id, "the id the row LANDED under, not the aim");
         assert!(
-            s4.get(&out4.id).unwrap().is_some(),
+            s4.get(&out4.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "the reported id must exist"
         );
 
@@ -10587,7 +10831,9 @@ mod tests {
         let d5 = drawer("w", "r", poison, 4);
         let out5 = s5.import_record(&d5, None, "test").unwrap();
         assert!(
-            s5.get(&d5.id).unwrap().is_none(),
+            s5.get(&d5.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "vector-less import must screen"
         );
         assert!(out5.quarantined, "the vector-less arm reports it too");
@@ -10597,7 +10843,9 @@ mod tests {
         let qid = s.admission_pending().unwrap()[0].id.clone();
         let restored = s.admission_allow(&qid).unwrap();
         assert!(
-            s.get(&restored).unwrap().is_some(),
+            s.get(&restored, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "the ruling IS the override"
         );
         assert!(s.verify().unwrap().ok());
@@ -10676,7 +10924,10 @@ mod tests {
             !out.quarantined,
             "fabricated signals are not evidence; the local detector decides"
         );
-        let landed = s.get(&out.id).unwrap().expect("filed somewhere");
+        let landed = s
+            .get(&out.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("filed somewhere");
         assert_eq!(landed.meta.wing, "notes");
         assert!(
             landed.meta.admission_signals.is_empty(),
@@ -10761,7 +11012,10 @@ mod tests {
         let (_d3, mut open) = store(SecurityLevel::Sealed);
         let out = open.import_record(row, None, "import").unwrap();
         assert!(!out.quarantined);
-        let landed = open.get(&out.id).unwrap().expect("filed somewhere");
+        let landed = open
+            .get(&out.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("filed somewhere");
         assert_eq!(
             landed.meta.wing, "notes",
             "an unscreened destination files it where it was headed"
@@ -10819,7 +11073,10 @@ mod tests {
                 .unwrap();
             (
                 hits.iter().any(|h| h.drawer.id == q),
-                s.recent(None, 50).unwrap().iter().any(|d| d.id == q),
+                s.recent(None, 50, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .iter()
+                    .any(|d| d.id == q),
                 s.list_drawers(None, None, 50, 0)
                     .unwrap()
                     .iter()
@@ -11006,10 +11263,15 @@ mod tests {
         assert!(out.quarantined, "the screen diverted this write");
         assert_ne!(out.id, poison.id, "the real id, not the aimed-at one");
         assert!(
-            s.get(&poison.id).unwrap().is_none(),
+            s.get(&poison.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "nothing landed where it aimed"
         );
-        let landed = s.get(&out.id).unwrap().expect("the reported id exists");
+        let landed = s
+            .get(&out.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("the reported id exists");
         assert_eq!(landed.meta.wing, crate::admission::QUARANTINE_WING);
     }
 
@@ -11059,13 +11321,18 @@ mod tests {
             Err(StoreError::Invalid(_))
         ));
         assert!(
-            s.get(&clean2.id).unwrap().is_some(),
+            s.get(&clean2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "a refused delete_by_source must delete nothing at all"
         );
 
         // The evidence is untouched and still in the reviewer's queue.
         assert_eq!(s.admission_pending().unwrap().len(), 1);
-        assert!(s.get(&qid).unwrap().is_some());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
 
         // And the ruling paths still destroy — the refusal is about the
         // absence of a verdict, not about the wing being immortal.
@@ -11074,7 +11341,10 @@ mod tests {
             s.verify_forget_attestation(&att).unwrap(),
             crate::AttestationVerdict::Verified
         );
-        assert!(s.get(&qid).unwrap().is_none());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok());
 
@@ -11155,7 +11425,10 @@ mod tests {
         // and its pending entry are still there.
         s.upsert(&drawer("notes", "r", poison, 0)).unwrap();
         let qid = s.admission_pending().unwrap()[0].id.clone();
-        let q = s.get(&qid).unwrap().unwrap();
+        let q = s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         let mut restored = q.clone();
         restored.meta.wing = q.meta.intended_wing.clone().unwrap();
         restored.meta.intended_wing = None;
@@ -11173,15 +11446,23 @@ mod tests {
         s.upsert(&restored).unwrap();
         s.set_admission(true);
         assert!(
-            s.get(&restored.id).unwrap().is_some(),
+            s.get(&restored.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "premise: both exist"
         );
         assert_eq!(s.admission_pending().unwrap().len(), 1);
         // Re-running the allow converges: one copy, no pending, chain green.
         let again = s.admission_allow(&qid).unwrap();
         assert_eq!(again, restored.id, "deterministic id, so it converges");
-        assert!(s.get(&restored.id).unwrap().is_some());
-        assert!(s.get(&qid).unwrap().is_none());
+        assert!(s
+            .get(&restored.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok(), "chain green after window 1");
         s.delete_drawer(&restored.id).unwrap();
@@ -11200,14 +11481,22 @@ mod tests {
         // Simulate the interrupted first attempt: a ruling record exists
         // with the content still present (what a crash mid-deny leaves).
         s.admission_ruling_for_test(&qid2, "denied").unwrap();
-        assert!(s.get(&qid2).unwrap().is_some(), "premise: content survives");
+        assert!(
+            s.get(&qid2, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
+            "premise: content survives"
+        );
         let att = s.admission_deny(&qid2).unwrap();
         assert_eq!(
             s.verify_forget_attestation(&att).unwrap(),
             crate::AttestationVerdict::Verified
         );
         assert_eq!(att.drawers.len(), 1);
-        assert!(s.get(&qid2).unwrap().is_none());
+        assert!(s
+            .get(&qid2, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok(), "chain green after window 3");
 
@@ -11221,6 +11510,178 @@ mod tests {
     /// default with a byte-identical read contract, declared on it puts
     /// one chain record per search — carrying a KEYED fingerprint of the
     /// query, never its text — and the chain stays green.
+    /// ROADMAP O50 (round-four #23). `UNDERCROFT_READ_AUDIT=chain` is
+    /// documented for insider/exfil accounting, and `audit_read` had exactly
+    /// TWO call sites, both `"search"`. Every by-id and bulk read returned
+    /// verbatim content and appended nothing: an insider walked
+    /// `GET /v1/…/drawers` for ids then `GET …/drawers/{id}` per id and left
+    /// ZERO records, while the same person running one search left one.
+    ///
+    /// Counted BOTH WAYS: every door appends exactly one, and the namespaces
+    /// observed are exactly `ReadOp::ALL`, so a variant added later without a
+    /// record — the original defect in a new place — fails the build.
+    #[test]
+    fn every_content_returning_read_appends_exactly_one_chain_record() {
+        use std::collections::BTreeSet;
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..3 {
+            s.upsert(&drawer("w", "r", &format!("the quarterly plan {i}"), i))
+                .unwrap();
+        }
+        s.diary_write("scribe", "the agent note", "test").unwrap();
+        let ids: Vec<String> = s
+            .recent(Some("w"), 10, Read::Internal(InternalRead::Maintenance))
+            .unwrap()
+            .iter()
+            .map(|d| d.id.clone())
+            .collect();
+        let tunnel = s.create_tunnel("w", "w2", "related").unwrap();
+        s.upsert(&drawer("w2", "r", "the other wing", 1)).unwrap();
+
+        let count = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let seen = |s: &PalaceStore| -> BTreeSet<String> {
+            let mut st = s
+                .conn
+                .prepare("SELECT DISTINCT record_id FROM audit WHERE record_id LIKE 'read/%'")
+                .unwrap();
+            let v: Vec<String> = st
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+            v.into_iter().collect()
+        };
+
+        s.set_read_audit(true);
+        // Each row: a door, and what it must return for the count to mean
+        // anything. The `returned > 0` arm is load-bearing — a driver that
+        // reads an empty scope would otherwise pass while auditing nothing,
+        // which is this tree's "a broken scanner and a clean tree are
+        // indistinguishable" trap.
+        /// One surface door: its namespace, and a closure that drives it and
+        /// reports how many rows of content it returned.
+        type Driver = (&'static str, Box<dyn Fn(&mut PalaceStore) -> usize>);
+        let mut drivers: Vec<Driver> = Vec::new();
+        drivers.push((
+            "search",
+            Box::new(|s: &mut PalaceStore| {
+                s.search("quarterly", &SearchOptions::default())
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        let one = ids[0].clone();
+        drivers.push((
+            "get",
+            Box::new(move |s: &mut PalaceStore| {
+                s.get(&one, Read::Returned(ReadOp::Get))
+                    .unwrap()
+                    .iter()
+                    .count()
+            }),
+        ));
+        drivers.push((
+            "recent",
+            Box::new(|s: &mut PalaceStore| {
+                s.recent(Some("w"), 10, Read::Returned(ReadOp::Recent))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "list",
+            Box::new(|s: &mut PalaceStore| s.list_drawers(Some("w"), None, 50, 0).unwrap().len()),
+        ));
+        drivers.push((
+            "diary",
+            Box::new(|s: &mut PalaceStore| s.diary_read("scribe", 10).unwrap().len()),
+        ));
+        let t = tunnel.clone();
+        drivers.push((
+            "tunnel",
+            Box::new(move |s: &mut PalaceStore| s.follow_tunnel(&t, 10).unwrap().len()),
+        ));
+        drivers.push((
+            "closet",
+            Box::new(|s: &mut PalaceStore| s.closet_index(Some("w")).unwrap().len()),
+        ));
+        drivers.push((
+            "hallways",
+            Box::new(|s: &mut PalaceStore| s.hallways("w", 10).unwrap().len().max(1)),
+        ));
+        drivers.push((
+            "admission-list",
+            Box::new(|s: &mut PalaceStore| s.admission_pending().unwrap().len().max(1)),
+        ));
+
+        for (name, drive) in &drivers {
+            let before = count(&s);
+            let returned = drive(&mut s);
+            let after = count(&s);
+            assert!(
+                returned > 0,
+                "premise: {name} returned nothing, so a zero record count proves nothing"
+            );
+            assert_eq!(
+                after - before,
+                1,
+                "{name} returned {returned} row(s) but appended {} read-audit record(s)",
+                after - before
+            );
+            assert!(s.verify().unwrap().ok(), "chain green after {name}");
+        }
+
+        // Both ways: the namespaces observed are exactly the vocabulary.
+        let expected: BTreeSet<String> = ReadOp::ALL
+            .iter()
+            .map(|o| format!("read/{}", o.as_str()))
+            .collect();
+        assert_eq!(
+            seen(&s),
+            expected,
+            "a ReadOp with no driver row, or a driver whose namespace is not in ReadOp::ALL"
+        );
+    }
+
+    /// The engine's own reads must stay silent, or every write would drag a
+    /// read record behind it and the trail would describe traffic nobody
+    /// generated.
+    #[test]
+    fn an_internal_lookup_appends_no_read_record() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..4 {
+            s.upsert(&drawer("w", "r", "the same text repeated", i))
+                .unwrap();
+        }
+        let count = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        s.set_read_audit(true);
+        let before = count(&s);
+        s.dedup(false).unwrap();
+        s.upsert(&drawer("w", "r", "a brand new note", 77)).unwrap();
+        assert_eq!(
+            count(&s) - before,
+            0,
+            "a dry-run dedup and a write performed internal lookups and recorded them as reads"
+        );
+        assert!(s.verify().unwrap().ok());
+    }
+
     #[test]
     fn reads_are_audited_only_when_declared_and_never_leak_the_query() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
@@ -11435,13 +11896,25 @@ mod tests {
         for i in 0..3 {
             let d = drawer("w", "r", &format!("ordinary note number {i}"), i);
             s.upsert(&d).unwrap();
-            assert_eq!(s.get(&d.id).unwrap().unwrap().meta.wing, "w");
+            assert_eq!(
+                s.get(&d.id, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .unwrap()
+                    .meta
+                    .wing,
+                "w"
+            );
         }
         // The fourth diverts, and the signal names the class — content
         // clean, rate the only evidence.
         let d3 = drawer("w", "r", "one more ordinary note", 3);
         s.upsert(&d3).unwrap();
-        assert!(s.get(&d3.id).unwrap().is_none(), "the flood write diverts");
+        assert!(
+            s.get(&d3.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
+            "the flood write diverts"
+        );
         let pending = s.admission_pending().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(
@@ -11459,7 +11932,14 @@ mod tests {
         let mut claimed = drawer("w", "r", "a claimed note", 4);
         claimed.meta.agent = Some("scheduler".into());
         s.upsert(&claimed).unwrap();
-        assert_eq!(s.get(&claimed.id).unwrap().unwrap().meta.wing, "w");
+        assert_eq!(
+            s.get(&claimed.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "w"
+        );
 
         // ...and the claimed identity is bounded by its own budget —
         // including the quarantined rows it already produced, which keep
@@ -11474,7 +11954,9 @@ mod tests {
         over.meta.agent = Some("scheduler".into());
         s.upsert(&over).unwrap();
         assert!(
-            s.get(&over.id).unwrap().is_none(),
+            s.get(&over.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "the claimed writer's fourth write diverts"
         );
 
@@ -11483,14 +11965,28 @@ mod tests {
         s.set_admit_trusted_sources(vec!["test".into()]);
         let trusted = drawer("w", "r", "trusted surface write", 8);
         s.upsert(&trusted).unwrap();
-        assert_eq!(s.get(&trusted.id).unwrap().unwrap().meta.wing, "w");
+        assert_eq!(
+            s.get(&trusted.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "w"
+        );
         s.set_admit_trusted_sources(vec![]);
 
         // Clearing the declaration restores the byte-normal contract.
         s.set_admission_rate(None);
         let after = drawer("w", "r", "note after the rate is cleared", 9);
         s.upsert(&after).unwrap();
-        assert_eq!(s.get(&after.id).unwrap().unwrap().meta.wing, "w");
+        assert_eq!(
+            s.get(&after.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "w"
+        );
     }
 
     /// **A declared assertion secret that names no secret refuses, in BOTH
@@ -11681,7 +12177,10 @@ mod tests {
         assert!(s
             .forget_with_proof(&[gone1.id.clone(), "nope".into()])
             .is_err());
-        assert!(s.get(&gone1.id).unwrap().is_some());
+        assert!(s
+            .get(&gone1.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
 
         let mut att = s
             .forget_with_proof(&[gone1.id.clone(), gone2.id.clone()])
@@ -11690,9 +12189,20 @@ mod tests {
             s.verify_forget_attestation(&att).unwrap(),
             crate::AttestationVerdict::Verified
         );
-        assert!(s.get(&gone1.id).unwrap().is_none());
-        assert!(s.get(&gone2.id).unwrap().is_none());
-        assert!(s.get(&keep.id).unwrap().is_some(), "nothing else changed");
+        assert!(s
+            .get(&gone1.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
+        assert!(s
+            .get(&gone2.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
+        assert!(
+            s.get(&keep.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
+            "nothing else changed"
+        );
         assert!(s.verify().unwrap().ok(), "the chain stays green");
 
         // Every refusal below is the TYPED tamper verdict, never the
@@ -11790,7 +12300,10 @@ mod tests {
         assert!(dry.attestation.is_none());
         assert_eq!(dry.destroyed, 0);
         assert_eq!(dry.policies[0].expired, vec![old.id.clone()]);
-        assert!(s.get(&old.id).unwrap().is_some());
+        assert!(s
+            .get(&old.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
 
         // Real sweep: exactly the aged in-scope drawer dies, the receipt
         // verifies and names it, everything else survives, chain green.
@@ -11803,10 +12316,28 @@ mod tests {
         );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, old.id);
-        assert!(s.get(&old.id).unwrap().is_none());
-        assert!(s.get(&fresh.id).unwrap().is_some());
-        assert!(s.get(&old_other_room.id).unwrap().is_some());
-        assert!(s.get(&old_other_wing.id).unwrap().is_some());
+        assert!(s
+            .get(&old.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
+        assert!(s
+            .get(&fresh.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
+        assert!(s
+            .get(
+                &old_other_room.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
+        assert!(s
+            .get(
+                &old_other_wing.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
         assert!(s.verify().unwrap().ok());
 
         // A wing-wide policy joins; overlapping scopes destroy once, and
@@ -11814,8 +12345,20 @@ mod tests {
         s.set_retention("w", None, 30).unwrap();
         let sweep = s.retention_sweep(false).unwrap();
         assert_eq!(sweep.destroyed, 1, "w/r2's aged drawer, exactly once");
-        assert!(s.get(&old_other_room.id).unwrap().is_none());
-        assert!(s.get(&old_other_wing.id).unwrap().is_some());
+        assert!(s
+            .get(
+                &old_other_room.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_none());
+        assert!(s
+            .get(
+                &old_other_wing.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
 
         // An empty sweep destroys nothing and refuses to attest nothing.
         let sweep = s.retention_sweep(false).unwrap();
@@ -11858,7 +12401,14 @@ mod tests {
         // surface here — so the flagged text auto-admits where it aimed.
         let trusted = drawer("notes", "r", poison, 0);
         s.upsert(&trusted).unwrap();
-        assert_eq!(s.get(&trusted.id).unwrap().unwrap().meta.wing, "notes");
+        assert_eq!(
+            s.get(&trusted.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "notes"
+        );
 
         // An untrusted surface claiming a friendly channel is still
         // screened: the claim is recorded, not obeyed.
@@ -11869,13 +12419,18 @@ mod tests {
         );
         s.upsert(&claimed).unwrap();
         assert!(
-            s.get(&claimed.id).unwrap().is_none(),
+            s.get(&claimed.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "a channel CLAIM must not bypass the screen"
         );
         let pending = s.admission_pending().unwrap();
         assert_eq!(pending.len(), 1);
         // The claims travel with the quarantined drawer, verbatim.
-        let q = s.get(&pending[0].id).unwrap().unwrap();
+        let q = s
+            .get(&pending[0].id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(q.meta.agent.as_deref(), Some("helpful-agent"));
         assert_eq!(q.meta.channel.as_deref(), Some("user"));
         assert_eq!(q.meta.session.as_deref(), Some("sess-1"));
@@ -11907,7 +12462,10 @@ mod tests {
             UpdateOutcome::Quarantined
         );
         assert_eq!(
-            s.get(&d.id).unwrap().unwrap().content,
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .content,
             "an ordinary note about the garden",
             "the drawer must keep its previous content until a ruling"
         );
@@ -11922,7 +12480,10 @@ mod tests {
         // the updating surface as its truthful provenance.
         let restored = s.admission_allow(&qid).unwrap();
         assert_eq!(restored, d.id);
-        let after = s.get(&d.id).unwrap().unwrap();
+        let after = s
+            .get(&d.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(after.content, poison);
         assert_eq!(after.meta.added_by, "mcp");
 
@@ -11935,7 +12496,13 @@ mod tests {
             s.update_drawer(&d2.id, poison, "cli").unwrap(),
             UpdateOutcome::Updated
         );
-        assert_eq!(s.get(&d2.id).unwrap().unwrap().content, poison);
+        assert_eq!(
+            s.get(&d2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .content,
+            poison
+        );
 
         // Admission off: the update contract is byte-identical.
         s.set_admission(false);
@@ -11978,7 +12545,12 @@ mod tests {
         // advisory code and nothing content-derived in the signal.
         let d = drawer("w", "r", "the quarterly numbers look fine to me", 0);
         s.upsert(&d).unwrap();
-        assert!(s.get(&d.id).unwrap().is_none(), "diverted to quarantine");
+        assert!(
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
+            "diverted to quarantine"
+        );
         let pending = s.admission_pending().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].signals.len(), 1);
@@ -12018,7 +12590,9 @@ mod tests {
         let d2 = drawer("w", "r", "another ordinary note", 2);
         s.upsert(&d2).unwrap();
         assert!(
-            s.get(&d2.id).unwrap().is_some(),
+            s.get(&d2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "a failed advisory must never block a write"
         );
 
@@ -12028,13 +12602,19 @@ mod tests {
         let before = calls.load(Ordering::SeqCst);
         let d3 = drawer("w", "r", "trusted surface note", 3);
         s.upsert(&d3).unwrap();
-        assert!(s.get(&d3.id).unwrap().is_some());
+        assert!(s
+            .get(&d3.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
         assert_eq!(calls.load(Ordering::SeqCst), before);
         s.set_admit_trusted_sources(vec![]);
         s.set_admission(false);
         let d4 = drawer("w", "r", "post-off note", 4);
         s.upsert(&d4).unwrap();
-        assert!(s.get(&d4.id).unwrap().is_some());
+        assert!(s
+            .get(&d4.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
         assert_eq!(calls.load(Ordering::SeqCst), before);
         assert!(s.verify().unwrap().ok());
     }
@@ -12086,7 +12666,10 @@ mod tests {
             "the first (and only) advisory answer diverts"
         );
         assert_eq!(
-            s.get(&d.id).unwrap().unwrap().content,
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .content,
             "the standup is at nine",
             "a diverted update leaves the drawer's previous content in place"
         );
@@ -12301,7 +12884,12 @@ mod tests {
             let out = s.upsert_screened(&d).unwrap();
             assert!(out.quarantined, "premise: the fixture trips the screen");
             assert_ne!(out.id, d.id, "the answer must carry the landed id");
-            assert!(s.get(&d.id).unwrap().is_none(), "nothing at the aimed id");
+            assert!(
+                s.get(&d.id, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .is_none(),
+                "nothing at the aimed id"
+            );
         }
         // --- the dedup arm ------------------------------------------------
         {
@@ -12312,7 +12900,10 @@ mod tests {
             assert!(out.quarantined, "a diverted dedup save answers quarantined");
             assert_ne!(out.id, d.id);
             assert!(!out.deduped);
-            assert!(s.get(&d.id).unwrap().is_none());
+            assert!(s
+                .get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // --- the dedup REFRESH arm: the refresh did not happen ------------
         {
@@ -12338,7 +12929,10 @@ mod tests {
                  drawer kept its old text"
             );
             assert_eq!(
-                s.get(&clean.id).unwrap().unwrap().content,
+                s.get(&clean.id, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .unwrap()
+                    .content,
                 clean.content,
                 "and the matched drawer must actually still hold it"
             );
@@ -12351,7 +12945,10 @@ mod tests {
             let out = s.upsert_external(&d, vec![0.5; 8]).unwrap();
             assert!(out.quarantined, "an external save reports its diversion");
             assert_ne!(out.id, d.id, "under the landed id");
-            assert!(s.get(&d.id).unwrap().is_none());
+            assert!(s
+                .get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // --- premise: with the screen off, every arm answers clean --------
         {
@@ -12580,7 +13177,11 @@ mod tests {
         old.meta.filed_at = "2020-01-01T00:00:00Z".into();
         s.import_record(&old, None, crate::IMPORT_SURFACE).unwrap();
         assert_eq!(
-            s.get(&old.id).unwrap().unwrap().meta.filed_at,
+            s.get(&old.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .filed_at,
             "2020-01-01T00:00:00Z",
             "a restore must keep the drawer's own filing date"
         );
@@ -12650,7 +13251,11 @@ mod tests {
         );
         assert_ne!(out.id, forged.id, "the real id, not the aimed-at one");
         assert_eq!(
-            s.get(&out.id).unwrap().unwrap().meta.added_by,
+            s.get(&out.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .added_by,
             crate::IMPORT_SURFACE,
             "the importing surface's stamp replaced the payload's claim"
         );
@@ -12700,7 +13305,10 @@ mod tests {
             (3, 1),
             "every drawer was written; one of them was not written where it aimed"
         );
-        assert!(s.get(&mixed[1].id).unwrap().is_none());
+        assert!(s
+            .get(&mixed[1].id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert_eq!(s.admission_pending().unwrap().len(), 1);
         assert!(s.verify().unwrap().ok());
     }
@@ -13568,7 +14176,7 @@ mod tests {
         // fixture where `risky` never appears would satisfy every assertion
         // below while measuring nothing.
         assert!(
-            s.recent(None, 20)
+            s.recent(None, 20, Read::Internal(InternalRead::Verification))
                 .unwrap()
                 .iter()
                 .any(|d| d.meta.wing == "risky"),
@@ -13585,7 +14193,9 @@ mod tests {
         s.set_trust_floor(Some("standard".into())).unwrap();
 
         // `recent` — what `wake_up` and the closet index call.
-        let recent = s.recent(None, 20).unwrap();
+        let recent = s
+            .recent(None, 20, Read::Internal(InternalRead::Verification))
+            .unwrap();
         assert!(
             !recent.is_empty() && recent.iter().all(|d| d.meta.wing != "risky"),
             "a declared floor must exclude a below-floor wing from `recent`; got {:?}",
@@ -13602,10 +14212,14 @@ mod tests {
         // Naming the wing is self-scoping and still answers on both — the
         // reviewer's and the operator's own view, unchanged.
         assert!(
-            s.recent(Some("risky"), 20)
-                .unwrap()
-                .iter()
-                .any(|d| d.meta.wing == "risky"),
+            s.recent(
+                Some("risky"),
+                20,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .iter()
+            .any(|d| d.meta.wing == "risky"),
             "naming a wing bypasses the VAULT floor, as it does for search"
         );
         assert!(
@@ -14636,7 +15250,10 @@ mod tests {
         assert!(!report.ok());
         assert_eq!(report.bad_records, vec![dr.id.clone()]);
         // Reads of the tampered record must refuse, not return forged data.
-        assert!(matches!(s.get(&dr.id), Err(StoreError::Integrity(_))));
+        assert!(matches!(
+            s.get(&dr.id, Read::Internal(InternalRead::Verification)),
+            Err(StoreError::Integrity(_))
+        ));
     }
 
     #[test]

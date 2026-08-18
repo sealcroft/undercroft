@@ -1300,6 +1300,13 @@ for i in "${!NAMES[@]}"; do
   line=$(suite_summary ".battery/$n.log")
   measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
   case "$measured" in
+    # The sed above leaves the line UNCHANGED when it does not match, so
+    # `measured` can be a whole sentence — including `suite_summary`'s own
+    # "no results line found — this reader examined nothing". That contains
+    # spaces, so it used to reach the arithmetic as $(( no + nothing )) and
+    # abort the script under `set -u`, MASKING the suite failure that
+    # produced it. A reader that crashes on the failure path cannot report.
+    *[!0-9[:blank:]]*) continue ;;
     *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
     *)     continue ;;
   esac

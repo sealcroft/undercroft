@@ -993,7 +993,13 @@ impl Tenancy {
         {
             review_door(under_assertions, named_wing.as_deref())?;
         }
-        match store.get(drawer_id).map_err(store_err)? {
+        match store
+            .get(
+                drawer_id,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Get),
+            )
+            .map_err(store_err)?
+        {
             Some(d) => {
                 // Same rule as search: the sealed reading is the record, the
                 // live one is the answer. `drawer` stays byte-faithful to

@@ -118,6 +118,16 @@ Out of scope (documented threat-model boundaries):
 - A consistent old database + manifest pair restored **together** by an
   attacker with full disk control (documented residual; external witness
   is the planned mitigation).
+- **The knowledge-graph browse routes are not read-audited.** Under
+  `UNDERCROFT_READ_AUDIT=chain` every content-returning DRAWER read appends
+  one record (ROADMAP O50) — `search`, `get`, `recent`, `list`, diary,
+  tunnel, closet, hallways, admission queue. The graph's own readers
+  (`kg_query`, `kg_timeline`, `kg_entities`, `lookup_canonical`,
+  `kg_receipts`) return distilled drawer words through a second funnel and
+  do not yet record. Enumerated here as a limit rather than left implied,
+  and filed as the remainder of round-four #23. Until O50 this list omitted
+  the far larger gap — that `get` and every bulk read were unaudited
+  entirely — which is why it is written out now.
 - The **anchor lag on audited reads**. Under
   `UNDERCROFT_READ_AUDIT=chain` a read appends a chain record but
   deliberately does not fast-forward the manifest anchor, so a stripped

@@ -5,6 +5,45 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### every content-returning drawer read now appends a chain record (O50)
+
+**Round-four #23.** `UNDERCROFT_READ_AUDIT=chain` is documented for *"insider
+/exfil accounting"*, and `audit_read` had exactly **two** call sites, both
+`"search"`. Every by-id and bulk read returned verbatim content and appended
+nothing — so an insider with a valid token could walk `GET /v1/…/drawers` for
+ids, `GET …/drawers/{id}` for each, and exfiltrate the whole vault leaving
+**zero** records, while the same person running one search left one.
+
+**Both causes closed together**, because either alone re-opens it. The
+mechanical one: there was no choke point, so coverage had been added a call
+site at a time. `Read::{Returned(ReadOp), Internal(InternalRead)}` is now a
+required argument on `get` and `recent` — the write path's `Screen` precedent
+applied to reads — and the compiler enumerated 26 store sites and 8 surface
+sites, each now a stated decision. The governance one: the limit was accurate
+on every prose surface ("one record per search") and enumerated as a limit
+nowhere; `docs/THREAT_MODEL.md` and `SECURITY.md` now state both what is
+covered and what is not.
+
+Nine doors record exactly one each — search, get, recent, list, diary, tunnel,
+closet, hallways, admission queue — and `read/search` records stay
+**byte-identical** to those written before. Bulk doors pass `BulkMember` to
+their inner `recent`, so the trail says one list rather than N gets.
+
+**Gated both ways:** the driver table asserts each door returned something
+(the premise arm), appended exactly one record, and left the chain green —
+then counts observed namespaces against `ReadOp::ALL` in both directions, so a
+`ReadOp` added later without a record fails the build.
+
+**Scope stated as a limit:** this closes the *drawer* funnel. The knowledge
+graph is a second funnel and its browse routes remain unaudited — filed, and
+written into `SECURITY.md`'s out-of-scope list.
+
+**Also fixed, found because it masked this work:** when a suite produced no
+summary, the battery's published-figures reader fed *"no results line found"*
+into arithmetic and aborted the script under `set -u`, so a failed build
+reported `line 1303: no: unbound variable` instead of the failure. A reader
+that crashes on the failure path cannot report one.
+
 ### an undeclared model identity is no longer silent — and why it is not yet derived (O49)
 
 **Round-four #27.** `UNDERCROFT_ONNX_NAME` and its five siblings default to a

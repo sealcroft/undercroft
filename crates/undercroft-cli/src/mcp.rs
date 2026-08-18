@@ -715,7 +715,11 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
         }
         "undercroft_wake_up" => {
             let wing = args.get("wing").and_then(Value::as_str);
-            let recent = store.recent(wing, 15)?;
+            let recent = store.recent(
+                wing,
+                15,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Recent),
+            )?;
             if recent.is_empty() {
                 return Ok(empty_reason(store));
             }
@@ -810,7 +814,10 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
         }
         "undercroft_get_drawer" => {
             let id = req_str(args, "id")?;
-            match store.get(id)? {
+            match store.get(
+                id,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Get),
+            )? {
                 Some(d) => Ok(serde_json::to_string_pretty(&d)?),
                 None => anyhow::bail!("no drawer with id {id}"),
             }

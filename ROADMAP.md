@@ -196,6 +196,86 @@ the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
 asserts the refusal AND the premise (a well-formed vector still imports),
 because a route that refused everything would pass the refusal arms alone.
 
+### O50 — CLOSED 2026-08-18: every content-returning DRAWER read appends a chain record
+
+**Round-four #23**, the largest of the remaining rows, and the one whose
+declared purpose its own behaviour contradicted.
+
+`UNDERCROFT_READ_AUDIT=chain` is documented for *"insider/exfil
+accounting"*. `audit_read` had exactly **two** call sites, both passing the
+literal `"search"`. Every by-id and bulk read — `get`, `recent`,
+`list_drawers`, diary, tunnel, closet, hallways, the admission queue —
+returned verbatim content and appended nothing.
+
+**The reachable consequence, not a theoretical one.** An insider holding a
+valid token walks `GET /v1/…/drawers` for ids, then `GET …/drawers/{id}` for
+each, and exfiltrates the whole vault leaving **zero** chain records — while
+the same person running one search leaves one. The same shape holds over MCP
+(`undercroft_list_drawers` + `undercroft_get_drawer`) and through the
+orchestrator's `/t/*` data plane.
+
+**Both causes closed together, because either alone re-opens it.**
+
+*Mechanical.* There was no choke point on the read path, so coverage had been
+added one call site at a time — the arrangement `CLAUDE.md` names as the birth
+of all 65 drifts. `Read::{Returned(ReadOp), Internal(InternalRead)}` is now a
+REQUIRED argument on `get` and `recent`, the write path's `Screen` precedent
+applied to reads: a new read path does not compile until its author states
+which it is. The compiler enumerated **26 store sites and 8 surface sites**;
+every one is now a stated decision rather than an omission. `InternalRead` is
+the greppable bypass token, each variant carrying its reason —
+`RemoteHydration`, `WritePathLookup`, `Maintenance`, `Verification`,
+`PolicyFence`, `ExportAudited`, `BulkMember`.
+
+*Governance.* The limit was stated everywhere and enumerated as a limit
+nowhere: every prose surface said "one record per search" and was therefore
+ACCURATE, while the two files whose job is enumerating what a mitigation does
+NOT cover both omitted it. `docs/THREAT_MODEL.md` and `SECURITY.md` now say
+what is covered and what is not.
+
+**Byte-identity was a requirement, not a hope.** `audit_read`'s canonical
+keeps its field order and separators, and a search fills every field exactly
+as before, so `read/search` records written before O50 and after it are
+identical. Non-search reads simply have nothing to put in the scope fields —
+the `support`/authority canonical-extension precedent, applied to a record.
+
+**One record per door, not per row.** `diary_read`, `follow_tunnel`,
+`closet_index` and `hallways` pass `BulkMember` to the inner `recent` so only
+the door records; `admission_pending` does the same for its per-id `get`. A
+caller made one request and the trail says so.
+
+**Counterfactual, executed.** With `get`'s auditing reverted in place (edit
+asserted applied first), the gate fails exactly as designed: *"get returned 1
+row(s) but appended 0 read-audit record(s)"*.
+
+**Gate:** `every_content_returning_read_appends_exactly_one_chain_record`
+drives nine doors through a table, asserting per row that the door RETURNED
+something (the premise arm — without it a driver reading an empty scope passes
+while auditing nothing), that the record count grew by exactly one, and that
+the chain stays green. It then counts the observed namespaces against
+`ReadOp::ALL` **both ways**, so a `ReadOp` added later without a record — the
+original defect in a new place — fails the build.
+`an_internal_lookup_appends_no_read_record` guards the opposite direction: a
+dry-run dedup and an ordinary write must add nothing.
+
+**Scope, stated as a limit rather than implied.** This closes the **drawer**
+funnel. The knowledge graph is a SECOND funnel (`decode_triple`,
+`entity_name_from_rest`) whose readers return distilled drawer words and are
+still unaudited — `kg_query`, `kg_timeline`, `kg_entities`,
+`lookup_canonical`, `kg_receipts`. Filed as the remainder of #23 and written
+into `SECURITY.md`'s out-of-scope list, because a gap named in a doc is a gap;
+a gap named nowhere is the defect this entry is about.
+
+**A defect in the battery, found because it MASKED this work.** When a suite
+produces no summary, `suite_summary` returns *"no results line found — this
+reader examined nothing"*; the published-figures reader fed that string into
+arithmetic and aborted the whole script under `set -u`. So the run that should
+have said "the build failed" said `line 1303: no: unbound variable` instead. A
+reader that crashes on the failure path cannot report a failure. Guarded with
+a numeric check and probed against both shapes.
+
+---
+
 ### O49 — CLOSED 2026-08-18: an undeclared model identity is no longer silent (and why it is not yet DERIVED)
 
 **Round-four #27.** `UNDERCROFT_ONNX_NAME` and its five siblings default to a
@@ -388,9 +468,10 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 9 verified rows
+### Still open from round four — 8 verified rows
 
-`#23`, `#25` (reporting half only), `#28`, `#29`, `#37`, `#44`, `#45`,
+`#25` (reporting half only), `#23` (KG funnel only), `#28`, `#29`, `#37`,
+`#44`, `#45`,
 `#47`, `#48`. All MED or lower, all silent-failing, all PATCH or MINOR.
 
 **`#26` is CLOSED by O48** — it *was* the `UNDERCROFT_FDE_IVF_MIN`

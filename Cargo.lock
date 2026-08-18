@@ -3547,6 +3547,7 @@ dependencies = [
  "tokenizers",
  "tract-onnx",
  "undercroft-core",
+ "undercroft-obs",
 ]
 
 [[package]]
@@ -3558,6 +3559,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers",
  "undercroft-core",
+ "undercroft-obs",
 ]
 
 [[package]]
