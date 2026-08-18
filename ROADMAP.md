@@ -144,6 +144,94 @@ PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
 are still open. Nothing here changes a documented contract.
 
+### O53 — CLOSED 2026-08-18: a filtered pool is accepted on completeness, not on a threshold that could never fire
+
+**Round-four #28.** The two retrieval arms that cannot be asked "within this
+scope" — FTS5 and the HNSW graph — draw a top-k over everything and let the
+scope filter the answer. Both then decided whether the filtered pool was a
+fair substitute for scanning the scope exactly, and both asked
+`inscope.len() >= depth`, i.e. **five**, while every semantic tier sizes its
+pool by the scope through `scoped_pool_k`/`scoped_keep`.
+
+**The test cannot answer its own question.** Its own comment says the risk is
+that *"deeper in-scope matches may exist below the cut"* — a question about
+TRUNCATION — and a count of what survived the filter says nothing about what
+sat below the cut. The exact answer is free and was already in hand:
+`seqs.len() >= k` is true precisely when `LIMIT k` may have hidden something.
+So the old test was wrong in **both** directions: it surrendered on small
+COMPLETE pools, where the source had returned every match it has and the
+in-scope subset is exact at any size, and it accepted thin TRUNCATED ones,
+which is the recall leak.
+
+**Why nothing reported it, and the arithmetic is the point.** The expected
+in-scope count is `scope_live · k / n`, and `k` grows with the corpus at the
+same rate the scope's share shrinks — so it is about `scope_live / 64` at the
+default divisor, independent of corpus size. Any scope that reaches this code
+is above `SCOPE_HYDRATE_FLOOR` (smaller ones are scanned exactly), so the
+expected pool is above 16 and `>= 5` was effectively **unreachable**. A guard
+that cannot fire is indistinguishable from one that never needed to.
+
+**Measured, on a real corpus, both before and after.** 6,940 drawers in an
+hmac-only vault (the only level where FTS exists), a 1,730-row wing as the
+scope:
+
+| | scoped pool | queries differing from the exact scope scan |
+|---|---|---|
+| before | **70–80** candidates (unscoped, same query: 256) | 2 of 18 |
+| after | surrenders to the bounded exact scan | 1 of 18 |
+| unscoped control | 256 | 2 of 19 |
+
+The control is what makes the residual honest: the FTS prefilter changes
+answers by design — a non-empty lexical pool cuts semantic-only matches out of
+the scan, which `needs_full_scan`'s own comment states — and it does so
+unscoped at the same rate. So the scoped path is no longer *worse* than the
+prefilter's own baseline, which is the whole claim. **Latency is unchanged,
+69 ms either way**, because the scan it surrenders to is bounded by the scope.
+
+**The instrument had to be built before the claim could be made, and building
+it immediately caught a defect in my own probe.** `UNDERCROFT_SEARCH_TRACE`
+reported phase TIMES and nothing about pool SIZE, which is what every
+scope-geometry claim in this tree turns on and what no external instrument can
+read. It reports `pool: N candidate(s) in a scope of M` now. The first thing
+it said was `in a scope of 85` — because `mine` is idempotent over
+(wing, room, source, chunk_index), so mining one feed fifteen times into one
+wing yields the SAME 85 drawers, my "1,275-row scope" was 85, that is below
+the scan floor, and the prefilter was never engaged. **My first eighteen-query
+comparison reported "0 differences" having measured nothing at all** — this
+file's oldest trap, and the pool counter is the only reason it was caught. The
+probe now asserts the scope exceeds the floor before believing any comparison,
+and builds its corpus from per-wing DISTINCT files.
+
+**Counterfactual, executed against the artifact.** Restoring the `>= depth`
+body in place — the edit asserted applied before the test ran, restored from a
+scoped file copy — fails the gate on its first arm: *"a complete pool is exact
+at any size and must not be discarded"*.
+
+**One decision, one place.** `PalaceStore::accept_filtered_pool` is called by
+both arms. They were two copies of the same six lines, which is how they came
+to share a defect; the HNSW arm is behind an experimental feature that neither
+CI clippy nor the battery compiles, so a fix applied to FTS alone would have
+left it and nothing would have said so.
+
+**Deliberately NOT changed: the size of the draw.** The FTS `k` is
+corpus-shaped (`max(256, depth·32).max(n/pool_div)`) rather than scope-shaped,
+and that is CORRECT for a filter-afterwards arm — a scope-sized `k` would be
+SMALLER and would find fewer in-scope rows, not more. Sizing the draw so the
+scope receives a full pool would mean widening on under-delivery, which is
+what the PQ/FDE tiers do and what the doctrine explicitly says these two arms
+do not. Recorded as the alternative considered and rejected, not overlooked.
+
+**Residual, stated:** a non-truncated pool is accepted at any size, so a
+scoped query can still be answered from a handful of lexical matches when
+those are genuinely all there are. That is the FTS prefilter's documented
+design rather than a scope defect — the unscoped control differs from a full
+scan at the same rate — and closing it means retiring the lexical prefilter,
+not sizing it.
+
+**Gate:** `a_filtered_pool_is_accepted_on_completeness_and_on_the_scoped_floor`,
+six arms over both directions plus the unscoped fallback and the
+floor-capped-at-the-scope case.
+
 ### O52 — CLOSED 2026-08-18: a pre-flight that says "I checked nothing" and one that says "there is nothing to check" are different claims
 
 **Round-four #25, the reporting half**, and it had grown since it was filed.
@@ -726,9 +814,9 @@ demands evidence *exists*, not that it is true. Only reading closes that, and
 this campaign has twice found closures whose evidence was wrong (O38's figure,
 O35's citation) — so the residual is real and named rather than implied.
 
-### Still open from round four — 7 verified rows
+### Still open from round four — 6 verified rows
 
-`#28`, `#29`, `#37`, `#44`, `#45`, `#47`, `#48`.
+`#29`, `#37`, `#44`, `#45`, `#47`, `#48`.
 All MED or lower, all silent-failing, all PATCH or MINOR. The heading read
 `8` while the list held 9 until 2026-08-18 — my own miscount, of exactly the
 class this campaign spent its length fixing, and now GATED: the `prose

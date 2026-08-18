@@ -5116,6 +5116,58 @@ impl PalaceStore {
         Ok(out)
     }
 
+    /// **Is a filtered top-k a safe substitute for scanning the scope
+    /// exactly?** ROADMAP O53 (round-four #28), and the ONE place both
+    /// filter-afterwards arms ask it.
+    ///
+    /// FTS5 and the HNSW graph cannot be asked "within this scope", so they
+    /// draw a top-k over everything and the scope filters the answer. Two
+    /// things follow, and the old test conflated them.
+    ///
+    /// **Truncation is the real question.** If the source returned FEWER than
+    /// `k` rows it was not truncated: every match it has is in hand, so the
+    /// in-scope subset is COMPLETE at any size — one candidate is a correct
+    /// pool. If it returned exactly `k`, deeper in-scope rows may sit below
+    /// the cut, and only then does the pool's width have to earn its place.
+    /// The old test was `inscope.len() >= depth`, which cannot distinguish
+    /// the two and is wrong in both directions: it surrendered on small
+    /// COMPLETE pools (a needless full scan) and accepted thin TRUNCATED ones.
+    ///
+    /// **And the floor was `depth`, not the scoped floor** every semantic
+    /// tier uses. Measured on a 6,940-drawer hmac-only corpus with a
+    /// 1,730-row wing: the scoped pool was **70–80 candidates** where the
+    /// same query unscoped got 256, `depth` is 5 so the guard never fired,
+    /// and 2 of 18 queries returned a different answer from the exact scope
+    /// scan. That is the 89.6% wing-recall leak `scopescale` measured on the
+    /// semantic side, in the one arm the scope-sized policy never reached.
+    ///
+    /// The expected in-scope count is `scope_live * k / n`, which for the
+    /// default divisor is about `scope_live / 64` — so `>= depth` is
+    /// unreachable for any scope large enough to get here at all (a scope at
+    /// or below `SCOPE_HYDRATE_FLOOR` is scanned exactly and never reaches
+    /// this code). The guard could not fire, which is why nothing reported it.
+    fn accept_filtered_pool(
+        inscope: Vec<i64>,
+        truncated: bool,
+        scope_live: Option<usize>,
+        hydrate_k: usize,
+        depth: usize,
+    ) -> Option<Vec<i64>> {
+        if !truncated {
+            return Some(inscope);
+        }
+        // `min(l)` because a floor above the scope's own population could
+        // never be met, turning "surrender when thin" into "always surrender".
+        let floor = scope_live.map_or(depth, |l| scoped_keep(hydrate_k, l).min(l));
+        if inscope.len() >= floor {
+            Some(inscope)
+        } else {
+            // Surrender to the bounded exact scan: the `WHERE` clause below
+            // is bounded by the scope, so this is exact and cannot starve.
+            None
+        }
+    }
+
     /// Hybrid search: hashed-embedding cosine + lexical term overlap +
     /// recency decay. Sealed vaults decrypt-scan; nothing derived from
     /// plaintext is read from disk indexes. hmac-only vaults above the
@@ -5460,12 +5512,9 @@ impl PalaceStore {
             {
                 match (self.hnsw_candidates(&qvec, pool_k)?, &scope) {
                     (Some(seqs), Some(s)) => {
+                        let truncated = seqs.len() >= pool_k;
                         let inscope: Vec<i64> = seqs.into_iter().filter(|q| s.admits(q)).collect();
-                        if inscope.len() >= depth {
-                            Some(inscope)
-                        } else {
-                            None
-                        }
+                        Self::accept_filtered_pool(inscope, truncated, scope_live, hydrate_k, depth)
                     }
                     (other, _) => other,
                 }
@@ -5492,13 +5541,17 @@ impl PalaceStore {
                         // bounded exact scan takes over rather than starve.
                         match (self.fts_candidates(&qterms, k), &scope) {
                             (Some(seqs), Some(s)) => {
+                                // `LIMIT k` returning exactly k is the exact
+                                // answer to "may deeper in-scope matches sit
+                                // below the cut?" — the question the old
+                                // `inscope.len() >= depth` test was standing
+                                // in for and could not answer.
+                                let truncated = seqs.len() >= k;
                                 let inscope: Vec<i64> =
                                     seqs.into_iter().filter(|q| s.admits(q)).collect();
-                                if inscope.len() >= depth {
-                                    Some(inscope)
-                                } else {
-                                    None
-                                }
+                                Self::accept_filtered_pool(
+                                    inscope, truncated, scope_live, hydrate_k, depth,
+                                )
                             }
                             (other, _) => other,
                         }
@@ -5510,6 +5563,22 @@ impl PalaceStore {
             }
         };
         phase_ms("candidates", &mut t_phase);
+        // The other half of the question this trace exists to answer. Timing
+        // alone says a phase was slow; the POOL SIZE says whether the answer
+        // was ranked from twenty candidates or two thousand, which is what
+        // every scope-geometry claim in this tree turns on and what no
+        // instrument could read from outside the process (ROADMAP O53).
+        if trace {
+            eprintln!(
+                "search-trace pool: {} candidate(s){}",
+                candidates.as_ref().map_or(0, Vec::len),
+                match (&scope, scope_live) {
+                    (Some(_), Some(l)) => format!(" in a scope of {l}"),
+                    (Some(_), None) => " under an exclusion".to_string(),
+                    _ => String::new(),
+                }
+            );
+        }
         // Second stage on the semantic pools (PQ, per-wing PQ): the
         // corpus-scaled stage-1 pool is cut by exact cosine over the
         // candidates' embeddings alone — but only down to `stage1/8`
@@ -11882,6 +11951,69 @@ mod tests {
         // cleanly rather than double-destroying or breaking the chain.
         assert!(s.admission_deny(&qid2).is_err());
         assert!(s.verify().unwrap().ok(), "chain green after window 4");
+    }
+
+    /// ROADMAP O53 (round-four #28). The two filter-afterwards arms accepted
+    /// a scoped pool as small as `depth` — 5 — where every semantic tier
+    /// sizes its pool by the scope. Measured on a 6,940-drawer hmac-only
+    /// corpus with a 1,730-row wing: 70–80 candidates scoped against 256
+    /// unscoped, and 2 of 18 queries answered differently from the exact
+    /// scope scan.
+    ///
+    /// Both directions, because the old test was wrong in both: it
+    /// surrendered on small COMPLETE pools (a needless full scan) and
+    /// accepted thin TRUNCATED ones (the recall leak).
+    #[test]
+    fn a_filtered_pool_is_accepted_on_completeness_and_on_the_scoped_floor() {
+        let hydrate_k = 256;
+        let depth = 5;
+        let scope = Some(8192);
+        // scoped_keep(256, 8192) = 1024 — the floor a truncated pool must meet.
+        assert_eq!(scoped_keep(hydrate_k, 8192), 1024, "premise: the floor");
+
+        // NOT truncated: the source returned everything it has, so the
+        // in-scope subset is complete and safe at ANY size. The old test
+        // threw this away and scanned.
+        let tiny: Vec<i64> = (0..3).collect();
+        assert_eq!(
+            PalaceStore::accept_filtered_pool(tiny.clone(), false, scope, hydrate_k, depth),
+            Some(tiny),
+            "a complete pool is exact at any size and must not be discarded"
+        );
+
+        // Truncated and thin: this is the leak. `depth` is 5, so the old test
+        // accepted it; the scoped floor is 1024, so it surrenders.
+        let thin: Vec<i64> = (0..70).collect();
+        assert!(
+            PalaceStore::accept_filtered_pool(thin, true, scope, hydrate_k, depth).is_none(),
+            "a truncated 70-candidate pool over an 8192-row scope must surrender"
+        );
+
+        // Truncated and wide: the pool earns its place.
+        let wide: Vec<i64> = (0..1024).collect();
+        assert!(
+            PalaceStore::accept_filtered_pool(wide, true, scope, hydrate_k, depth).is_some(),
+            "a truncated pool at the scoped floor is a fair substitute"
+        );
+
+        // The floor can never exceed the scope's own population, or
+        // "surrender when thin" would become "always surrender".
+        let all: Vec<i64> = (0..40).collect();
+        assert!(
+            PalaceStore::accept_filtered_pool(all, true, Some(40), hydrate_k, depth).is_some(),
+            "a pool holding the whole scope must be accepted"
+        );
+
+        // Unscoped (no narrowing resolved) keeps the historical `depth` test:
+        // there is no scope population to size a floor against.
+        assert!(
+            PalaceStore::accept_filtered_pool((0..4).collect(), true, None, hydrate_k, depth)
+                .is_none()
+        );
+        assert!(
+            PalaceStore::accept_filtered_pool((0..5).collect(), true, None, hydrate_k, depth)
+                .is_some()
+        );
     }
 
     /// Read-path auditing (the consultation-filed gap, closed): off by

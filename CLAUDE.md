@@ -382,7 +382,7 @@ Consequences that are binding, not advisory:
   100.0% at every checkpoint 131k→1M — 20.4/32.6/59.1/112.7 ms/q since
   the parallel-fuse pass** (was 34.4/69.6/138.4/280.6; the search
   hotspot was `bm25_raw`'s serial per-candidate scan, found by the
-  opt-in `UNDERCROFT_SEARCH_TRACE=1` phase trace AFTER parallel
+  opt-in `UNDERCROFT_SEARCH_TRACE=1` phase-and-POOL trace AFTER parallel
   hydration measured zero — hydration, stage-2 decrypts and the BM25 tf
   rows now all fan out with rayon, order-preserving and byte-identical;
   dim/4 codes remain the unused shrink lever). Scoped queries:
@@ -415,6 +415,25 @@ Consequences that are binding, not advisory:
   selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
   filter their top-k and surrender to the bounded exact scan when the
   scope's share cannot fill the page), pools SIZED BY THE SCOPE.
+  **"Cannot fill the page" was `inscope.len() >= depth` — five — until O53,
+  and that test cannot answer its own question.** It conflates two things: a
+  source that returned FEWER than `k` rows was NOT truncated, so its in-scope
+  subset is COMPLETE and exact at any size (one candidate is a correct pool),
+  while a source that returned exactly `k` may be hiding deeper in-scope rows
+  below the cut. `seqs.len() >= k` is the exact, free answer, and the old test
+  was wrong in BOTH directions — surrendering on small complete pools and
+  accepting thin truncated ones. The floor when truncated is now
+  `scoped_keep`, capped at the scope's own population, i.e. the same policy
+  every semantic tier already used. It could not fire before: the expected
+  in-scope count is `scope_live·k/n` ≈ `scope_live/64`, and any scope reaching
+  this code is above `SCOPE_HYDRATE_FLOOR`, so `>= 5` was unreachable and
+  nothing reported it. Measured on 6,940 hmac-only drawers with a 1,730-row
+  wing: **70–80 scoped candidates against 256 unscoped**, and 2 of 18 queries
+  answered differently from the exact scope scan; after, 1 of 18, against an
+  unscoped control that differs at 2 of 19 — i.e. the scoped path stopped
+  being worse than the prefilter's own baseline. Latency unchanged (69 ms both
+  ways), because the scan it surrenders to is bounded by the scope.
+  `PalaceStore::accept_filtered_pool` is the one place both arms ask it.
   **A NARROWING and an EXCLUSION are not the same relation and
   `SeqFilter::{Only,AllBut}` is what keeps them apart** — one
   representation served both until 2026-08-11 and it was always the wrong
@@ -1280,8 +1299,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (750 run,
-                                      # 4 #[ignore]d = 754 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (751 run,
+                                      # 4 #[ignore]d = 755 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

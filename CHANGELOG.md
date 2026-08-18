@@ -5,6 +5,54 @@
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves.
 
+### a filtered candidate pool is accepted on completeness, not on a threshold that could never fire (O53)
+
+**Round-four #28.** FTS5 and the HNSW graph cannot be asked "within this
+scope", so they draw a top-k over everything and the scope filters the answer.
+Both then decided whether that filtered pool was a fair substitute for
+scanning the scope exactly, and both asked `inscope.len() >= depth` — **five**
+— while every semantic tier sizes its pool by the scope.
+
+**The test could not answer its own question.** Its stated risk is that
+*"deeper in-scope matches may exist below the cut"*, which is a question about
+TRUNCATION, and a count of survivors says nothing about what sat below the
+cut. `seqs.len() >= k` is the exact, free answer. The old test was wrong in
+both directions: it surrendered on small COMPLETE pools (a needless full scan)
+and accepted thin TRUNCATED ones (the leak). When truncated, the floor is now
+`scoped_keep` capped at the scope's own population — the policy the semantic
+tiers already used.
+
+**Why nothing reported it:** the expected in-scope count is `scope_live·k/n`,
+and `k` grows with the corpus exactly as the scope's share shrinks, so it is
+about `scope_live/64` regardless of corpus size. Every scope reaching this
+code is above the scan floor, so the pool was always well above 5 and the
+guard was effectively unreachable.
+
+**Measured on 6,940 hmac-only drawers with a 1,730-row wing:** the scoped pool
+was **70–80 candidates** against 256 for the same query unscoped, and 2 of 18
+queries answered differently from the exact scope scan. After: the thin
+truncated pool surrenders, 1 of 18 differs — against an unscoped control that
+differs at 2 of 19, so the scoped path is no longer worse than the prefilter's
+own baseline. Latency unchanged at 69 ms either way, since the scan it
+surrenders to is bounded by the scope.
+
+**`UNDERCROFT_SEARCH_TRACE` now reports pool size**, not just phase times —
+the measurement above is impossible without it — and it immediately caught a
+defect in the probe written to use it: `mine` is idempotent, so mining one
+feed fifteen times into one wing yields the same 85 drawers, the "1,275-row
+scope" was 85, that is below the scan floor, and the first eighteen-query
+comparison reported "0 differences" having never engaged the prefilter at all.
+
+**Not changed, and recorded as considered:** the FTS draw stays corpus-shaped.
+A scope-sized `k` would be smaller and find fewer in-scope rows; sizing the
+draw so the scope receives a full pool means widening on under-delivery, which
+is what the PQ/FDE tiers do and what these two arms deliberately do not.
+
+**Residual:** a non-truncated pool is accepted at any size, so a scoped query
+can still be answered from a handful of lexical matches when those are all
+there are. That is the prefilter's documented design — the unscoped control
+shows the same rate — not a scope defect.
+
 ### `undercroft config check` says which declarations it actually checked (O52)
 
 **Round-four #25's reporting half.** The command rendered any declaration it

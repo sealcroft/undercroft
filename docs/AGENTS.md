@@ -1064,8 +1064,9 @@ Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw` — `hnsw` is an
 in-process index and **single-vault only**: `serve-http` refuses it and
 names the fix, so choose `pq` or `fde` for a multi-tenant server) ·
 `UNDERCROFT_SEARCH_TRACE` (unset — any value prints a per-phase timing
-trace of each search to stderr, the instrument that found this project's
-own search hotspot. **Presence-triggered**: `0` and `off` turn it ON
+trace of each search to stderr, plus the candidate pool size and the
+scope it was drawn against, the instrument that found this project's
+own search hotspot and then a scoped pool a quarter the unscoped one. **Presence-triggered**: `0` and `off` turn it ON
 too; unset it to turn it off) · `UNDERCROFT_FUSION`
 (`bm25` default |`legacy`; `rrf` removed — measured −7.3pp, warns and falls
 back to `bm25`) · `UNDERCROFT_FUSION_WEIGHT` (0.55 — the blend's semantic

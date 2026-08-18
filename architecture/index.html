@@ -1880,7 +1880,7 @@
     <tr><td><code>UNDERCROFT_PQ_PAGE_MIN</code></td><td>off</td><td>Sealed PQ page tier: one AEAD page per IVF list, decrypted lazily per probe</td></tr>
     <tr><td><code>UNDERCROFT_TOK_PQ_MIN</code> · <code>UNDERCROFT_FDE_PQ_MIN</code></td><td>256</td><td>Row count at which the token-matrix and FDE quantization tiers engage. <strong>Not opt-in</strong>: once the corresponding tier is in use these self-activate, so a recall measurement past 256 rows is measuring PQ-coded artifacts unless you set <code>off</code></td></tr>
     <tr><td><code>UNDERCROFT_FDE_IVF_MIN</code></td><td>off</td><td>The FDE inverted tier — genuinely opt-in, kept off by its measured containment gate</td></tr>
-    <tr><td><code>UNDERCROFT_SEARCH_TRACE</code></td><td>unset</td><td>Per-phase search timing to stderr — the instrument that located this project's own search hotspot. <strong>Presence-triggered</strong>: any value turns it ON, including <code>0</code> and <code>off</code>; unset it to turn it off</td></tr>
+    <tr><td><code>UNDERCROFT_SEARCH_TRACE</code></td><td>unset</td><td>Per-phase search timing to stderr, plus the candidate pool size and the scope it was drawn against — the instrument that located this project's own search hotspot, and the one that caught a scoped pool of 70 where the same query unscoped got 256. <strong>Presence-triggered</strong>: any value turns it ON, including <code>0</code> and <code>off</code>; unset it to turn it off</td></tr>
     <tr><td><code>UNDERCROFT_FDE_REPS</code> · <code>_KSIM</code> · <code>_DPROJ</code> · <code>_NPROBE</code> · <code>_SEED</code></td><td>tuned</td><td>FDE construction and probe parameters</td></tr>
   </tbody>
 </table>
