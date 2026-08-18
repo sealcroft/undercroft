@@ -138,6 +138,76 @@ CHANGELOG under `## Unreleased`. The eight worth naming:
 
 ---
 
+## 1.1.1 — unreleased
+
+PATCH: fixes whose only observable change is that a defect is gone. Opened
+2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
+are still open. Nothing here changes a documented contract.
+
+### O46 — CLOSED 2026-08-18: the import route refuses a malformed vector instead of reshaping it
+
+**Round-four #50**, the first of that sweep's verified-open rows to be closed,
+and it was graded LOW on a reading that understated it.
+
+`POST /v1/vaults/{id}/import` parsed a caller-supplied `vector` with
+`filter_map(|v| v.as_f64().map(|f| f as f32))`. That fails **silently in two
+directions at once**:
+
+* a non-numeric ELEMENT was dropped and the rest kept — `[1.0, "x", 2.0]`
+  became a two-element vector the caller never sent;
+* a `vector` that was not an array at all read as **absent** rather than as
+  bad input.
+
+The sibling save route on the same surface has always refused both, through
+`parse_vector`. So one surface had two answers for one question, which is the
+class this store has now fixed several times (`writes` on two handles,
+`records:` vs `"drawers":`, `stats()`'s wings vs rooms).
+
+**Why LOW understates it.** A caller-supplied vector is untrusted input, and
+this is the same family as the non-finite channel refused at the write choke
+point: the store cannot distinguish a deliberately short vector from a
+truncated one, so the failure surfaces later as a wrong ANSWER rather than
+now as an error. The route is also the one every programmatic restore and the
+orchestrator's tenant migration drive.
+
+**Fix.** The route calls `parse_vector` — the existing shared parser, not a
+second copy — and prefixes its message with the line number, because every
+other refusal on that path names its line and a restore of a large NDJSON is
+unactionable without it.
+
+**Counterfactual, executed.** The pre-fix parse was restored in place with
+the edit asserted applied before the test ran (`assert new in s`, then the
+revert, then a `grep` confirming it landed). Against the reverted code the
+test fails exactly where it should: `[1.0, "x", 2.0]` answers **200** with
+`"imported":1`. Restored, it passes.
+
+**Stated rather than overclaimed:** the counterfactual establishes that the
+ROUTE accepted the truncated vector; it does not establish what the store
+subsequently does with a two-element vector in a 384-dimension space. The fix
+is at the boundary where caller input is parsed, which is the right place
+regardless of the answer downstream.
+
+**Drift check.** `/v1` import is the only door that takes a caller-supplied
+vector on this path: the CLI's import has no `vector` key, MCP advertises
+none, and the orchestrator's migration drives this same route and inherits
+the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
+
+**Gate:** `import_refuses_a_malformed_vector_instead_of_reshaping_it`, which
+asserts the refusal AND the premise (a well-formed vector still imports),
+because a route that refused everything would pass the refusal arms alone.
+
+### Still open from round four — 12 verified rows
+
+`#23`, `#25`, `#26`, `#27`, `#28`, `#29`, `#36`, `#37`, `#44`, `#45`, `#47`,
+`#48`. All MED or lower, all silent-failing, all PATCH or MINOR. **They are
+recorded in `.handover/SWEEP4_FIX_PLAN.md`, which is gitignored** — filing
+them here as work is itself outstanding, and it is the O37 failure class
+(a finding that lives only in a gitignored file is a finding that will be
+lost). `#36` is the one to take first: the ROADMAP heading gate is
+one-directional — it flags a body saying CLOSED under an open heading and
+CANNOT flag a heading claiming CLOSED over an open body, which is the
+direction a session writing closures gets wrong.
+
 ## 2.0.0 — nothing is filed here yet
 
 Reserved for a documented contract that changes. The `palace` terminology
@@ -2572,6 +2642,68 @@ defect, and low.
 answer the same question. **Gate:** on a vault whose only drawer in a wing is
 quarantined, `stats().wings` and `stats().rooms` agree the wing is absent;
 `/v1 …/stats` and `ui.html` render the same numbers.
+
+---
+
+### O46 — MOVED to the `1.1.1` section above
+
+Filed here first by mistake. This section is *"decisions and external actions,
+**not code**"*, and O46 changes shipped behaviour — a route that answered 200
+now answers 400 — so it belongs under the release that will carry it. Left as
+a pointer rather than deleted, because the misfiling is the same class the
+`1.1.0` sweep kept finding: a heading that describes something other than what
+sits under it.
+
+<details>
+<summary>original placement, superseded</summary>
+
+**Round-four #50**, the first of that sweep's verified-open rows to be closed,
+and it was graded LOW on a reading that understated it.
+
+`POST /v1/vaults/{id}/import` parsed a caller-supplied `vector` with
+`filter_map(|v| v.as_f64().map(|f| f as f32))`. That fails **silently in two
+directions at once**:
+
+* a non-numeric ELEMENT was dropped and the rest kept — `[1.0, "x", 2.0]`
+  became a two-element vector the caller never sent;
+* a `vector` that was not an array at all read as **absent** rather than as
+  bad input.
+
+The sibling save route on the same surface has always refused both, through
+`parse_vector`. So one surface had two answers for one question, which is the
+class this store has now fixed several times (`writes` on two handles,
+`records:` vs `"drawers":`, `stats()`'s wings vs rooms).
+
+**Why LOW understates it.** A caller-supplied vector is untrusted input, and
+this is the same family as the non-finite channel refused at the write choke
+point: the store cannot distinguish a deliberately short vector from a
+truncated one, so the failure surfaces later as a wrong ANSWER rather than
+now as an error. The route is also the one every programmatic restore and the
+orchestrator's tenant migration drive.
+
+**Fix.** The route calls `parse_vector` — the existing shared parser, not a
+second copy — and prefixes its message with the line number, because every
+other refusal on that path names its line and a restore of a large NDJSON is
+unactionable without it.
+
+**Counterfactual, executed.** The pre-fix parse was restored in place with
+the edit asserted applied before the test ran (`assert new in s`, then the
+revert, then a `grep` confirming it landed). Against the reverted code the
+test fails exactly where it should: `[1.0, "x", 2.0]` answers **200** with
+`"imported":1`. Restored, it passes.
+
+**Stated rather than overclaimed:** the counterfactual establishes that the
+ROUTE accepted the truncated vector; it does not establish what the store
+subsequently does with a two-element vector in a 384-dimension space. The fix
+is at the boundary where caller input is parsed, which is the right place
+regardless of the answer downstream.
+
+**Drift check.** `/v1` import is the only door that takes a caller-supplied
+vector on this path: the CLI's import has no `vector` key, MCP advertises
+none, and the orchestrator's migration drives this same route and inherits
+the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
+
+</details>
 
 ---
 

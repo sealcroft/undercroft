@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+PATCH: the only observable change is that a defect is gone. No documented
+contract moves.
+
+### the import route refuses a malformed vector instead of reshaping it (O46)
+
+**Round-four #50** — the first of that sweep's verified-open rows to be
+closed, and it was graded LOW on a reading that understates it.
+
+`POST /v1/vaults/{id}/import` parsed a caller-supplied `vector` with
+`filter_map`, so it failed **silently in two directions at once**: a
+non-numeric element was dropped and the rest kept — `[1.0, "x", 2.0]` became
+a two-element vector nobody sent — and a `vector` that was not an array read
+as *absent* rather than as bad input. The sibling save route on the same
+surface has always refused both, so one surface held two answers to one
+question.
+
+A caller-supplied vector is untrusted input, and this is the family of the
+non-finite channel already refused at the write choke point: the store cannot
+tell a deliberately short vector from a truncated one, so the failure
+surfaces later as a wrong *answer* rather than now as an error. This route is
+also the one every programmatic restore and the orchestrator's tenant
+migration drive.
+
+It now calls `parse_vector` — the existing shared parser, not a second copy —
+and prefixes the line number, because every other refusal on that path names
+its line and a large NDJSON restore is unactionable without it.
+
+**Counterfactual executed**, with the edit asserted applied before the test
+ran: against the reverted parse, `[1.0, "x", 2.0]` answers **200** with
+`"imported": 1`. Stated rather than overclaimed — that shows the *route*
+accepted it, not what the store then does with a two-element vector in a
+384-dimension space.
+
 ## 1.1.0 — 2026-08-18
 
 ### README, docs/ and website/ swept against the code: one drift, and it was in the doc that promised it had been counted (O45)

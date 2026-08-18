@@ -2038,11 +2038,28 @@ impl Tenancy {
             let drawer_val = obj.get("drawer").cloned().unwrap_or_else(|| obj.clone());
             let drawer: Drawer = serde_json::from_value(drawer_val)
                 .map_err(|e| RestError::new(400, format!("line {}: {e}", n + 1)))?;
-            let vector = obj.get("vector").and_then(Value::as_array).map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect()
-            });
+            // ROADMAP O46 (round-four #50). This was
+            // `obj.get("vector").and_then(Value::as_array).map(|a| a.iter()
+            //  .filter_map(|v| v.as_f64().map(|f| f as f32)).collect())`,
+            // which fails SILENTLY in two directions at once: a non-numeric
+            // element was dropped and the rest kept — so `[1.0, "x", 2.0]`
+            // became a 2-element vector the caller never sent — and a
+            // `vector` that is not an array at all read as ABSENT rather
+            // than as bad input.
+            //
+            // The sibling save route on this same surface has always refused
+            // both through `parse_vector`. A caller-supplied vector is
+            // untrusted input, and reshaping it quietly is the same family
+            // as the non-finite channel that is refused at the write choke
+            // point: the store cannot tell a deliberately short vector from
+            // a truncated one, and a wrong-dimension embedding is a wrong
+            // ANSWER later, not an error now.
+            //
+            // ONE implementation, not a second copy — the line number is
+            // added to the message the shared parser produced, because every
+            // other refusal on this path names its line.
+            let vector = parse_vector(&obj, "vector")
+                .map_err(|e| RestError::new(e.code, format!("line {}: {}", n + 1, e.message)))?;
             // Optional portable token artifact: {"model": "...", "b64": "..."}.
             let tok = match obj.get("tok") {
                 Some(t) => {
@@ -3660,6 +3677,57 @@ mod tests {
     fn one_record() -> String {
         let d = Drawer::new("ops", "r", "imported line".into(), None, 7, "export");
         format!("{}\n", json!({ "drawer": d }))
+    }
+
+    /// ROADMAP O46 (round-four #50). The import route parsed a
+    /// caller-supplied `vector` with `filter_map`, so it failed silently in
+    /// TWO directions: a non-numeric element was dropped and the remainder
+    /// kept — `[1.0, "x", 2.0]` became a 2-element vector nobody sent — and a
+    /// `vector` that was not an array read as ABSENT rather than as bad
+    /// input. The sibling save route on this same surface always refused
+    /// both.
+    ///
+    /// This asserts the REFUSAL and the PREMISE together, because a route
+    /// that rejected everything would pass the refusal arms alone.
+    #[test]
+    fn import_refuses_a_malformed_vector_instead_of_reshaping_it() {
+        let d = Drawer::new("ops", "r", "imported line".into(), None, 7, "export");
+
+        let with_vector = |v: serde_json::Value| -> String {
+            format!("{}\n", json!({ "drawer": d, "vector": v }))
+        };
+
+        // PREMISE: a well-formed vector still imports. Without this, every
+        // assertion below is satisfied by a route that refuses all input.
+        let mut s = surface(false);
+        let payload = signed_payload("", &with_vector(json!([0.5, 0.25, 0.125])), |_| {});
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&payload));
+        assert_eq!(code, 200, "premise: a numeric vector must import — {body}");
+
+        // A non-numeric ELEMENT is refused, not dropped. Before the fix this
+        // answered 200 and stored a vector one element shorter than the
+        // caller sent, which the store cannot distinguish from a deliberately
+        // short one.
+        let mut s = surface(false);
+        let payload = signed_payload("", &with_vector(json!([1.0, "x", 2.0])), |_| {});
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&payload));
+        assert_eq!(code, 400, "a non-numeric element must refuse — {body}");
+        assert!(
+            body.contains("array of numbers"),
+            "the refusal must say what was wrong: {body}"
+        );
+        // Every other refusal on this path names its line, and so must this
+        // one — a restore of a large NDJSON is unactionable without it.
+        assert!(
+            body.contains("line 1"),
+            "the refusal must name its line: {body}"
+        );
+
+        // A `vector` that is not an array at all is bad input, not absence.
+        let mut s = surface(false);
+        let payload = signed_payload("", &with_vector(json!("not-an-array")), |_| {});
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&payload));
+        assert_eq!(code, 400, "a non-array vector must refuse — {body}");
     }
 
     /// **`"signed": m.sig.is_some()` was field presence reported as a
