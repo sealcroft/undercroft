@@ -894,12 +894,24 @@ if ! printf '%s' "$WS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   exit 1
 fi
 
-VER_IDENT='([Ee]ngine v|updated for v|releases/latest">v)[0-9]+\.[0-9]+\.[0-9]+'
+VER_IDENT='([Ee]ngine v|updated for v|releases/latest">v|"version": "|Current release \*\*)[0-9]+\.[0-9]+\.[0-9]+'
 # label|class|file|pattern|count
+#
+# **The two entries at the bottom were named by `CLAUDE.md`'s release flow and
+# counted by nothing** until the `1.1.1` cut (ROADMAP O60). That list says a
+# version bump touches the plugin manifest and this file's own "Current
+# release" sentence; this inventory covered three surfaces and neither of
+# them. So the gate the doctrine points at — *"prose above, gate below, and
+# the gate is the one to trust"* — was NARROWER than the prose pointing at it,
+# which is the O24 shape: several documents describe a coverage the code does
+# not have. Found by running the release, which is the only thing that
+# exercises this path.
 VERSION_SURFACES=(
   'architecture engine version|current|architecture/index.html|[Ee]ngine v|3'
   'landing release button|current|website/landing/index.html|releases/latest">v|1'
   'parity comparison as-of|as-of|docs/PARITY.md|updated for v|1'
+  'plugin manifest|current|.claude-plugin/plugin.json|"version": "|1'
+  'doctrine current-release sentence|current|CLAUDE.md|Current release \*\*|1'
 )
 
 # PREMISE, both directions. A matcher that finds nothing reports what a fully

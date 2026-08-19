@@ -7,11 +7,11 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.1.0** — MINOR
-over the `1.0.0` that reset the version when the project was renamed (every
-earlier tag belonged to it under its former name and was withdrawn). **The
-tree carries `1.1.0` only once the release PR merges; the TAG is a separate,
-explicit step** — a build reporting a version it was never tagged as is worse
+(repo `sealcroft/sealcroft.github.io`). Current release **1.1.1** — a PATCH
+over `1.1.0`, which was a MINOR over the `1.0.0` that reset the version when
+the project was renamed (every earlier tag belonged to it under its former
+name and was withdrawn). **The tree carries `1.1.1` only once the release PR
+merges; the TAG is a separate, explicit step** — a build reporting a version it was never tagged as is worse
 than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.
 Forking cannot be disabled while the repos are public, and they must stay

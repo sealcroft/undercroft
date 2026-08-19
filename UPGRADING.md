@@ -65,7 +65,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.1.1 (unreleased)
+## 1.1.1 (released 2026-08-19)
 
 ### A tuning declaration that cannot be read is reported, and no longer clamped into one that can
 

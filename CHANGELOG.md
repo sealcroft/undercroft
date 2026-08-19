@@ -1,9 +1,29 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 — released 2026-08-19
 
 PATCH: the only observable change is that a defect is gone. No documented
-contract moves.
+contract moves. **Fifteen units** — O46 through O60, counted from the ROADMAP
+section rather than remembered — every one CI-green as it landed: the read
+choke point and its second funnel, the pre-flight's coverage axis on both
+binaries, a scoped candidate pool that could not be too small to notice, a
+status class, a probed preflight, and three drifts this release created and
+then found by sweeping its own work.
+
+### the version-surfaces gate was narrower than the doctrine pointing at it (O60)
+
+**Found by cutting the release.** `CLAUDE.md`'s release flow names the surfaces
+a version bump touches and says the gate, not the list, is the authority.
+Bumping to `1.1.1` flagged two surfaces; the prose names two more the gate did
+not count — `.claude-plugin/plugin.json` and `CLAUDE.md`'s own "Current
+release" sentence. Both would have gone stale under a green gate, and `1.1.0`
+shipped with the same hole. `VERSION_SURFACES` carries five rows now, with a
+counterfactual executed on each new entry.
+
+Also corrected: the lineage sentence read "1.1.0 — MINOR over the 1.0.0 that
+reset the version", and a mechanical bump would have produced "1.1.1 — MINOR",
+which is wrong. A version bump is not always a find-and-replace; this one had
+a release CLASS in it.
 
 ### three surfaces still said "per search", including the landing page (O59)
 

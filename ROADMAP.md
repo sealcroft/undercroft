@@ -138,11 +138,49 @@ CHANGELOG under `## Unreleased`. The eight worth naming:
 
 ---
 
-## 1.1.1 — unreleased
+## 1.1.1 — released 2026-08-19
 
 PATCH: fixes whose only observable change is that a defect is gone. Opened
 2026-08-18, the day after `1.1.0` shipped, to carry the round-four rows that
-are still open. Nothing here changes a documented contract.
+were still open, and cut once every one of them was closed or filed against a
+release that can hold it. Nothing here changes a documented contract.
+
+### O60 — CLOSED 2026-08-19: the version-surfaces gate was narrower than the doctrine pointing at it
+
+**Found by cutting the release, which is the only thing that exercises this
+path.** `CLAUDE.md`'s release flow names the surfaces a version bump touches
+and then says the list is not the authority: *"prose above, gate below — and
+the gate is the one to trust."* Bumping the workspace to `1.1.1` and running
+that gate flagged **two** surfaces. The prose names **two more it did not
+count**: `.claude-plugin/plugin.json` and `CLAUDE.md`'s own *"Current
+release"* sentence.
+
+So the gate the doctrine defers to was narrower than the doctrine — the O24
+shape exactly, where several documents describe a coverage the code does not
+have, and the resolution is the same: **the documents lead**, because a claim
+consistent across surfaces is not independently invented. Both would have gone
+stale under a green gate, and `1.1.0` shipped with the same hole.
+
+`VERSION_SURFACES` carries five rows now. **Counterfactual executed on both
+new entries**: reverting each to `1.1.0` fails the preflight by name —
+*"plugin manifest: .claude-plugin/plugin.json says v1.1.0, the workspace says
+1.1.1"*. The identifier regex gained their two patterns, so the gate's own
+premise probe still governs them.
+
+**Why this keeps happening to this particular gate, stated rather than
+patched over:** its inventory is only exercised when a version actually
+moves, which is once per release. Every other inventory in this tree is
+counted on every battery. A gate that runs meaningfully once a release will
+find its gaps at release time, and the release is the worst moment to find
+them — so the entry is here to make the next widening cheap rather than
+surprising.
+
+**Also corrected in this cut:** the doctrine's release-lineage sentence read
+*"Current release 1.1.0 — MINOR over the 1.0.0 that reset the version"*, and
+mechanically bumping it would have produced *"1.1.1 — MINOR"*, which is wrong:
+`1.1.1` is a PATCH over `1.1.0`, which was the MINOR. The sentence now carries
+both hops. A version bump is not always a find-and-replace, and this one had a
+CLASS in it.
 
 ### O59 — CLOSED 2026-08-19: O51's own rule, applied to O51 — three surfaces still said "per search"
 
