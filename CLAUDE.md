@@ -1397,6 +1397,28 @@ docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (43 ch
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
+bash tests/tls-pins.sh                # every shipped CA pin is READABLE by the
+                                      # identity that pins it (7 checks). Host-side
+                                      # because it DRIVES docker: it brings the real
+                                      # Caddy terminators up and reads their volumes
+                                      # as the ENGINE's uid, taken from the Dockerfile
+                                      # rather than hardcoded so the two cannot drift.
+                                      # It exists because `deploy/observability`
+                                      # shipped UNSTARTABLE for two releases — the
+                                      # engine pinned a path inside Caddy's PKI tree,
+                                      # which is root:0600 inside 0700 dirs because it
+                                      # holds the CA private key, and the engine runs
+                                      # as uid 10001. Nothing caught it because
+                                      # nothing ever brought a terminator up:
+                                      # `obs-config` validates CONFIG FILES and starts
+                                      # no container, and a config can be flawless for
+                                      # a stack that cannot boot. It also asserts the
+                                      # CA PRIVATE key stays unreadable, because the
+                                      # obvious wrong fix (chmod the tree) would
+                                      # otherwise pass. It does NOT prove the stack
+                                      # starts — that needs the full image and four
+                                      # containers, deferred on cost with the command
+                                      # written down in ROADMAP M7
 docker compose run --rm obs-config    # the observability CONFIG suite (10 checks):
                                       # promtool check/test rules + amtool
                                       # check-config at the versions the stack
@@ -1437,6 +1459,7 @@ docker build -t undercroft .           # runtime image
 # to any non-loopback host, no override. The client container mounts the
 # terminator's CA volume and PINS the root:
 docker compose up -d embeddings embeddings-tls
+docker compose run --rm embed-tls-export  # publish the PUBLIC CA root readably
 docker compose run --rm embed-pull    # one-time model fetch into a volume
 #   then run cli/bench with (project-prefixed volume name — a bare
 #   undercroft-embed-tls mounts a fresh empty volume silently. The
@@ -1447,7 +1470,13 @@ docker compose run --rm embed-pull    # one-time model fetch into a volume
 #   before it warns about):
 #     -v undercroft_undercroft-embed-tls:/tls:ro
 #     UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=https://embeddings-tls
-#     UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt
+#     UNDERCROFT_EMBED_CA=/tls/root.crt
+#   The pin is the EXPORTED root, not the path inside Caddy's PKI tree.
+#   Caddy writes that tree as root (cert 0600 inside 0700 dirs) because it
+#   holds the CA private key, so uid 10001 cannot read it — and `cli`/`mcp`
+#   build the RUNTIME stage, which runs as exactly that uid, while `bench`
+#   builds the builder stage and runs as root. This recipe therefore worked
+#   or failed depending on which service you picked (ROADMAP M9).
 #     UNDERCROFT_EMBED_MODEL=nomic-embed-text
 ```
 

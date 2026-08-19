@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Order matters: the cheap suites that fail fastest come first, so a broken
 # tree is reported in a minute instead of forty.
-ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
+ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site tls-pins)
 
 # `--preflight-only` exists so CI can run the host-side preflights without
 # Docker. They are host-side because no image carries `ROADMAP.md`, the
@@ -713,6 +713,12 @@ declare_suite_counts() {
     | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
 }
 SUITE_COUNTS=$(declare_suite_counts)
+# Host-side suites publish their count the same way but are INVOKED
+# differently, so the compose-shaped reader above cannot see them. Without
+# this a suite that drives docker would escape the figure gate entirely —
+# published, measured, and never compared.
+SUITE_COUNTS="$SUITE_COUNTS
+$(grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\x01=\x02#')"
 if [ -z "$SUITE_COUNTS" ]; then
   echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
   echo "      and a broken reader agrees with every page it cannot read"
@@ -1350,6 +1356,20 @@ for suite in "${SUITES[@]}"; do
 
   echo ""
   echo "═══ $suite ═══"
+  # `tls-pins` brings real Caddy terminators up and reads their volumes as
+  # the engine uid, so it DRIVES docker rather than running inside a
+  # container — the same reason this script is the one thing that runs on
+  # the host. As a compose service it would need docker-in-docker to check
+  # a permission question that needs no build at all.
+  if [ "$suite" = "tls-pins" ]; then
+    mkdir -p .battery
+    bash tests/tls-pins.sh 2>&1 | tee ".battery/$suite.log"
+    code=${PIPESTATUS[0]}
+    NAMES+=("$suite")
+    CODES+=("$code")
+    [ "$code" -eq 0 ] || OVERALL=1
+    continue
+  fi
   # No pipe. A pipeline's exit status is its LAST command's, which is how a
   # `| grep` or `| tail` silently turns a failing suite into a passing one —
   # the hazard CLAUDE.md records as "never let a pipeline's tail mask an exit

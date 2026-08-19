@@ -226,13 +226,14 @@ services:
   # (crates/undercroft-llm/src/embed.rs).
   #
   #   docker compose up -d embeddings embeddings-tls
+  #   docker compose run --rm embed-tls-export      # publish the readable CA
   #   docker compose run --rm embed-pull            # once: fetch the model
   #   # NB the volume must be named with the project prefix — a bare
   #   # `undercroft-embed-tls` mounts a fresh empty volume silently:
   #   docker compose run --rm -v undercroft_undercroft-embed-tls:/tls:ro \
   #     -e UNDERCROFT_EMBEDDER=http \
   #     -e UNDERCROFT_EMBED_URL=https://embeddings-tls \
-  #     -e UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt \
+  #     -e UNDERCROFT_EMBED_CA=/tls/root.crt \
   #     -e UNDERCROFT_EMBED_MODEL=nomic-embed-text bench
   #
   # Why a container rather than a desktop runtime on the host: everything this
@@ -258,10 +259,13 @@ services:
   # The shipped TLS terminator (deploy/embeddings-tls/Caddyfile): Caddy's
   # internal CA signs a cert for `embeddings-tls`; the CA root lands on
   # the `undercroft-embed-tls` volume at
-  # /data/caddy/pki/authorities/local/root.crt, which clients mount
-  # read-only and PIN via UNDERCROFT_EMBED_CA (the declaration replaces
-  # the public roots — a pin, not an addition). This container is the
-  # only holder of the private key; the engine never needs one.
+  # /data/caddy/pki/authorities/local/root.crt — root-owned 0600 inside
+  # 0700 directories, because that tree also holds the CA PRIVATE key.
+  # Clients therefore pin the copy `embed-tls-export` publishes at
+  # /tls/root.crt (0644) rather than that path, via UNDERCROFT_EMBED_CA
+  # (the declaration replaces the public roots — a pin, not an addition).
+  # This container is the only holder of the private key; the engine never
+  # needs one, and only the certificate is ever exported.
   embeddings-tls:
     image: caddy:2.8
     depends_on:
@@ -269,6 +273,47 @@ services:
     volumes:
       - ./deploy/embeddings-tls/Caddyfile:/etc/caddy/Caddyfile:ro
       - undercroft-embed-tls:/data
+
+  # Export Caddy's PUBLIC CA root to a path any client can read.
+  #
+  # The twin of `tls-export` in deploy/observability (ROADMAP M7/M9). Caddy
+  # writes its whole PKI as root — cert 0600 inside directories at 0700 —
+  # because that tree holds the CA PRIVATE key. Anything running as the
+  # engine image's `USER undercroft` (uid 10001) therefore cannot read a pin
+  # aimed inside it, and refuses to start rather than silently un-pinning.
+  #
+  # That is not hypothetical here: the recipe above is published for
+  # "cli/bench", and of those two `bench` builds the BUILDER stage (root, so
+  # it works) while `cli` builds the RUNTIME stage (uid 10001, so it does
+  # not). One recipe, working or failing by which service you picked, with
+  # nothing saying why.
+  #
+  # Only the certificate is exported; the CA private key keeps its 0600 and
+  # never moves.
+  embed-tls-export:
+    image: alpine:3.20
+    depends_on:
+      - embeddings-tls
+    volumes:
+      - undercroft-embed-tls:/tls
+    # BOUNDED wait: Caddy generates the CA lazily, and an unbounded poll for
+    # a file that may never appear is a hang, not a wait.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        src=/tls/caddy/pki/authorities/local/root.crt
+        i=0
+        while [ ! -s "$$src" ]; do
+          i=$$((i + 1))
+          if [ "$$i" -gt 60 ]; then
+            echo "embed-tls-export: $$src never appeared after 60s" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        cp "$$src" /tls/root.crt
+        chmod 0644 /tls/root.crt
+        echo "embed-tls-export: published the public CA root as /tls/root.crt (0644)"
 
   # One-time model fetch into the shared volume. Separate from `embeddings` so
   # the download is an explicit act, not a side effect of starting a service.

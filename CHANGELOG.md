@@ -7,6 +7,30 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the same CA trap was latent in a published recipe, and nothing started a terminator (M9, M10)
+
+M7's fix was one instance. `deploy/embeddings-tls` is the same Caddy shape,
+and the recipe published in `docker-compose.yml`, `CLAUDE.md` and
+`docs/EMBEDDERS.md` pinned `UNDERCROFT_EMBED_CA` inside the same root-only
+tree — so it **worked or failed by which service you picked**: `bench` builds
+the builder stage and runs as root; `cli` and `mcp` build the runtime stage
+and run as uid 10001, reproducing the error exactly. Both documents say "run
+cli/bench". `embed-tls-export` now publishes the public root readably, the CA
+private key keeps 0600, and all three recipes are repointed.
+
+The class behind both: **of four shipped `deploy/` stacks, exactly one was
+ever started by a test.** `tests/tls-pins.sh` starts the real terminators and
+reads each published pin as the engine's uid — read from the `Dockerfile`, so
+the two cannot drift — and asserts the CA private key stays unreadable, since
+the obvious wrong fix for this family is to chmod the tree. Seven checks, a
+premise arm, and a counterfactual that fails on the pre-fix path. Host-side
+like the battery itself, because it drives docker; the published-count reader
+was widened so a host-side suite cannot escape the figure gate. Ninth CI job,
+verdict widened to eight.
+
+It does not prove the observability stack starts — the cost argument for that
+is in ROADMAP M7. It is the half that would have caught the defect.
+
 ### the console's empty state said nothing at all (M8)
 
 `GET /ui` rendered a blank shell — no vaults, no stats, an empty status line,

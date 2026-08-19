@@ -1700,6 +1700,66 @@ in the payload. **My first version asserted 3 and was wrong**; running it said
 so, which is the whole reason the arm goes on a vault with genuine
 diversions rather than a fixture.
 
+### M9 — CLOSED 2026-08-19: M7's twin, latent in a published recipe
+
+**Found by generalising M7 rather than by waiting for it to be reported.**
+`deploy/embeddings-tls` is the same Caddy shape (`caddy:2.8`, PKI on
+`undercroft-embed-tls:/data`), and the recipe published in
+`docker-compose.yml`, `CLAUDE.md` and `docs/EMBEDDERS.md` pinned
+`UNDERCROFT_EMBED_CA` at the path inside that root-only tree.
+
+**It worked or failed depending on which service you picked**, and nothing
+said why. Mapping every compose service to its build target: `bench`, `e2e`,
+`site` and the rest build `target: builder` and run as root, so the recipe
+worked; **`cli` and `mcp` build `target: runtime`, which is `USER undercroft`
+(uid 10001)**, so the identical recipe reproduced M7's error verbatim. Both
+documents say "run **cli**/bench with…".
+
+**Fix:** an `embed-tls-export` service, the twin of M7's, publishing the
+PUBLIC root at `/tls/root.crt` (0644); the CA private key keeps 0600. All
+three published recipes repointed, and the terminator's own comment corrected
+— it described the deep path as the thing "clients mount", which is what
+propagated the error into the docs in the first place.
+
+**The M7 preflight does not catch this**, and that is a real limit rather than
+an oversight: it scans compose SERVICE declarations for engine-building
+services, and this instance lived in a COMMENT. Stated when that gate was
+written; M10 is the answer.
+
+### M10 — CLOSED 2026-08-19: nothing ever brought a TLS terminator up
+
+The class M7 and M9 belong to. Measured: of four shipped `deploy/` stacks,
+**exactly one** is ever started by a test — `backends-tls`, by `backends-e2e`.
+`observability` had its CONFIGS validated and no container started;
+`embeddings-tls` was a manual recipe; `bench-vs` is wired into nothing
+runnable. A config can be flawless for a stack that cannot boot, which is
+precisely what shipped.
+
+`tests/tls-pins.sh` brings the REAL terminators up and reads the published pin
+**as the engine's uid**, taken from the `Dockerfile` rather than hardcoded so
+the two cannot drift. Seven checks across both stacks. Counterfactual
+executed: repointing the embeddings pin at the pre-fix deep path fails it,
+naming the path.
+
+Three properties worth keeping:
+
+* **It asserts the CA PRIVATE key stays unreadable.** The obvious wrong fix
+  for this whole family is `chmod -R a+rX` on the PKI tree, and without this
+  arm the suite would pass on it.
+* **It has a premise arm.** If Caddy generated no CA, every readability check
+  would pass against an empty mount — the exact shape of failure this file is
+  about.
+* **It runs HOST-side**, like `tests/battery.sh` itself and for the same
+  reason: it drives docker. As a compose service it would need
+  docker-in-docker to answer a permission question that needs no build at all.
+  The published-count reader was widened to see host-side suites, or the
+  figure would have been published, measured and never compared.
+
+**Scope, stated:** this does NOT prove the observability stack starts. That
+needs the full engine image and four containers; the cost argument and the
+exact command are in M7. This is the cheap half — three small public images,
+no Rust build — and it is the half that would have caught the defect.
+
 ### M8 — CLOSED 2026-08-19: the console's empty state said nothing at all
 
 **Raised by the maintainer, in the plainest possible terms: "I see nothing".**

@@ -67,6 +67,32 @@ so rather than implying it checked them.
 
 ## 1.2.0 (unreleased)
 
+### The embeddings-TLS recipe pins a readable path
+
+**Who is affected:** anyone following the served-embedder recipe in
+`docs/EMBEDDERS.md`, `CLAUDE.md` or `docker-compose.yml` **with the `cli` or
+`mcp` service**. With `bench` it always worked, which is why this went
+unnoticed.
+
+Those services build the runtime stage and run as uid 10001; `bench` and the
+other test services build the builder stage and run as root. The recipe
+pinned `UNDERCROFT_EMBED_CA` inside Caddy's PKI tree, which is root-owned
+`0600` inside `0700` directories because it holds the CA private key — so the
+same recipe started fine or died with `Permission denied (os error 13)`
+depending on which service you picked.
+
+**Action:** run the new export step once, and pin the exported path:
+
+```bash
+docker compose up -d embeddings embeddings-tls
+docker compose run --rm embed-tls-export      # new
+#   -e UNDERCROFT_EMBED_CA=/tls/root.crt      # was /tls/caddy/pki/authorities/local/root.crt
+```
+
+The old path still exists and is still root-only; nothing about the CA
+private key changes. If your client runs as root the old path keeps working,
+so this is not a break — it is a recipe that now works for both.
+
 ### The `deploy/observability` stack starts again — it could not, since 1.1.0
 
 **Who is affected:** anyone who ran, or tried to run,

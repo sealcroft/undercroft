@@ -125,10 +125,22 @@ jobs:
   #
   # Named `CI verdict` now: a context no leg can collide with, and one that
   # says what requiring it means.
+  tls-pins:
+    name: TLS pins are readable by the engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # No cargo, no image build: three small public images and a permission
+      # question. `deploy/observability` shipped UNSTARTABLE for two releases
+      # because the engine pinned a path inside Caddy's root-only PKI tree,
+      # and nothing here ever brought a terminator up to notice — `obs-config`
+      # validates config FILES and starts no container.
+      - run: bash tests/tls-pins.sh
+
   verdict:
     name: CI verdict
     runs-on: ubuntu-latest
-    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image]
+    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image, tls-pins]
     if: always()
     steps:
       - name: Every job must have passed
@@ -144,8 +156,8 @@ jobs:
           # to `needs:`) is unreachable from here, because a workflow cannot
           # enumerate its own jobs; `tests/battery.sh`'s CI-inventory preflight
           # reads the file and closes it.
-          if [ "$n" -lt 7 ]; then
-            echo "the verdict covers only $n job(s) and must cover 7 —"
+          if [ "$n" -lt 8 ]; then
+            echo "the verdict covers only $n job(s) and must cover 8 —"
             echo "someone narrowed needs:, which is how a green tick stops meaning anything"
             exit 1
           fi
