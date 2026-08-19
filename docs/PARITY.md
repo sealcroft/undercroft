@@ -45,6 +45,22 @@ this project, which is why the two codebases share concepts but not code
 (and why this project's license is independent of upstream's; see the
 "License lineage" section at the end).
 
+> **The `v1.0.0` label is deliberate, and it was examined on 2026-08-19 rather
+> than ignored.** It is an *as-of* claim: moving it asserts that someone
+> re-read this document against the code, and the `version surfaces` preflight
+> therefore refuses to bump it with a release. Two releases have shipped since.
+> What was checked: `1.1.1` is a PATCH, so by definition it adds no capability
+> here; `1.1.0` was a MINOR whose entries are all fix-shaped — it hardened and
+> corrected **within** the categories below (a `/v1` route for a check the CLI
+> already had, control-plane telemetry, audit closures) and introduced no new
+> category. So the content is believed current and the label is not moved,
+> because a full re-read of all 225 lines against the code has **not** been
+> done and saying otherwise would be a claim stronger than its evidence —
+> which is the defect ROADMAP `O56` and `O6` both record. The next person to
+> re-read it moves the label; nobody else should.
+
+
+
 **Security layer** (MemPalace stored everything in plaintext):
 
 - Vault isolation: per-vault SQLite databases with per-vault

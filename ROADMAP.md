@@ -78,7 +78,13 @@ contract:
 
 The twenty defects on the pre-merge blocker list, the eleven regressions the
 third audit round found inside those fixes, and T1–T15. All described in
-CHANGELOG under `## Unreleased`. The eight worth naming:
+CHANGELOG under `## 1.1.0 — 2026-08-18`. **That pointer read `## Unreleased`
+until 2026-08-19** and had been broken since the moment this section was
+dated: cutting `1.1.0` renamed the heading it names, and `CHANGELOG.md` has
+carried no `## Unreleased` section since. Note the two files use DIFFERENT
+heading conventions — this one writes `## X.Y.Z — released DATE`, the CHANGELOG
+writes `## X.Y.Z — DATE` — which is how the first attempt at this very fix
+produced a second broken pointer. The eight worth naming:
 
 * **Three claims that contradicted the code beside them** (round-four #40,
   #54, #55). "Declared, never detected" was false in three places, one of
@@ -1437,6 +1443,60 @@ These are not releasable work: two are clicks in a web UI that no REST
 endpoint exposes, and one is a naming decision. Kept out of the version
 sections deliberately, so a release plan is not padded with things a
 release cannot contain.
+
+### O61 — CLOSED 2026-08-19: a release breaks pointers that were true when written
+
+**Asked after the `1.1.1` cut: are there stales or drifts left?** Measured
+rather than answered. Three things, and the first was found by the gates
+themselves.
+
+**1. The handover marker was stale, and I made it so.** The
+handover-freshness preflight FAILED: the marker named `d0fe2db` while HEAD was
+the merge commit `61a3094`. Merging re-points nothing, and the marker is
+re-pointed by hand after each commit — so the one operation that changes HEAD
+without a commit of mine is exactly the one that breaks it. Fixed.
+
+**2. `ROADMAP.md`'s pointer into the CHANGELOG had been broken since `1.1.0`
+was cut.** Inside the `## 1.1.0 — released` section it said the fixes are
+*"described in CHANGELOG under `## Unreleased`"*. `CHANGELOG.md` has carried
+**zero** `## Unreleased` sections since that release renamed the heading. A
+reader following it finds nothing.
+
+**And the first attempt at the fix produced a second broken pointer.** I wrote
+`## 1.1.0 — released 2026-08-18`; the real heading is `## 1.1.0 — 2026-08-18`.
+**The two files use different heading conventions** — this one writes
+`released DATE`, the CHANGELOG writes the bare date — and I had just written
+the `1.1.1` CHANGELOG heading in ROADMAP's form, so the newest entry did not
+match its own file's convention either. Both corrected; the convention
+difference is now stated where the pointer is, because it is the thing that
+makes writing one of these error-prone.
+
+**3. `docs/PARITY.md`'s as-of label was examined and deliberately left.** See
+the note now in that document: `1.1.1` is a PATCH and adds nothing there;
+`1.1.0`'s entries are all fix-shaped and introduced no new CATEGORY. So the
+content is believed current — and the label stays at `v1.0.0` because a full
+re-read of its 225 lines against the code has not been done, and moving it
+would assert a verification nobody performed. That is the `O56`/`O6` defect,
+and declining to repeat it is the point.
+
+**NO GATE, and this time the reason is demonstrated rather than argued.** A
+mechanical check — every backtick-quoted `## Heading` in a tracked `.md` must
+exist as a real heading — would have caught both pointer defects above. It is
+also unbuildable without an exemption list, and the proof is this entry:
+`git grep` finds **four** such strings in the paragraph that DESCRIBES the
+defect — two mentions of `## Unreleased` and two templates
+(`## X.Y.Z — DATE`) — none of which is a pointer. Prose about a broken pointer
+necessarily contains the broken string, so the gate would flag its own
+documentation, and a prose gate with an exemption list is the shape
+`CLAUDE.md` rejects.
+
+**What the sweep confirmed clean, counted rather than remembered:** all eleven
+preflights; the MCP surface (`MCP_TOOLS` 34 = `READ_TOOLS` 22 + `WRITE_TOOLS`
+12, matching the doctrine's "34 tools … 12 of them writes"); five version
+surfaces at `1.1.1`; 81 env variables (64 full + 17 row-abbreviated); 36 `/v1`
+routes across both references; eight prose figures; the former-name scan over
+seven classes plus PDF streams. Every `1.1.0` reference remaining in the docs
+is historical (*"since 1.1.0"*, *"arrived in 1.1.0"*) and correct.
 
 ### The dependency map — read this BEFORE picking an item
 
