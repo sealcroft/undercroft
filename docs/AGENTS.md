@@ -76,6 +76,27 @@ HKDF-derived keys). When you build on it:
    so this costs you nothing until you turn it on — but do not build a write
    path that reaches the database another way.
 
+### The word `record` has three senses, and they are different things
+
+An agent that reads two of these in one session has nothing in the payloads
+telling it they are unrelated, so this settles which word means what. **The
+names on the wire are not changing** — renaming a documented field is a
+breaking change, and every one of these is documented — so the fix is that
+you know which is which:
+
+| you see | it is | where |
+|---|---|---|
+| `records` / `drawers` on `stats` | **a drawer** — one stored memory. Both names are the same number from one read; `/v1` sends both, the CLI and MCP print `records` | `undercroft stats`, `undercroft_status`, `GET /v1/vaults/{id}/stats` |
+| `record_id`, `records` inside an attestation, the chain height | **an audit-chain record** — one entry in the tamper-evident log. A drawer write makes one; so does an export, and so does every content read when `UNDERCROFT_READ_AUDIT=chain` is set | `undercroft history`, `undercroft_history`, `forget` attestations |
+| `kind` | **a declared classification on one drawer**, from a closed vocabulary — not a record type | the `kind` field on a save |
+
+The trap worth naming: `writes` on `stats` is the **audit-chain height**, so
+it counts exports and — under `UNDERCROFT_READ_AUDIT=chain` — reads. It has
+never counted writes alone. **`chain_records` is the same number under a name
+that says so — prefer it in anything you write from now on.** `writes` is
+deprecated and still populated; it will not be removed before a MAJOR, and
+nothing schedules that removal today, so no dashboard reading it is at risk.
+
 ---
 
 ## 1. Choose your scenario
@@ -338,6 +359,16 @@ store OPEN tightens it — so a server that caches its handle never does.
 `undercroft-orchestrator ops <tenant> anchor` (or `POST
 /v1/vaults/{id}/anchor`) is the explicit closer. It is classified a WRITE
 everywhere and refused on a read-only handle.
+
+Read `behind_by` as *how far behind the anchor was a moment ago*, whichever
+step closed the window. On a server that has already served the vault the CALL
+does the work, and that has always been what the route reported. But the first
+anchor to a vault the process has not served OPENS it, and the open runs the
+same reconciliation — so that call used to answer `0` about a lag it had just
+healed, while the CLI reported the same lag correctly. It reports it now, and
+**reports it once**: later calls on the cached handle answer `0`, because
+re-announcing a closed window on every call is the same defect wearing the
+other sign.
 
 **Exit 2 means an integrity verdict, here as on the engine's own CLI.** Two
 shapes carry one and neither is the HTTP status alone:
@@ -927,7 +958,7 @@ classifies it deliberately:
 | POST | `/v1/vaults` | create vault (`level`, optional `embedder`) |
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
-| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
+| GET | `/v1/vaults/{id}/stats` | stats: the drawer count under **both** `records` and `drawers` (same number, one read — `records` is what the struct, the CLI and MCP call it and what this table has always said, `drawers` is what this route shipped; neither is going away, and renaming either would be MAJOR), level, the audit-chain height under **both** `writes` (deprecated — it has never counted writes alone) and `chain_records`, chain head, wings/rooms/kg/tunnels/db_bytes, `read_only`, `unhealed`, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
 | GET | `/v1/vaults/{id}/stats/history` | the recent stats sample ring buffer (aggregate counts only, `?window=N` ≤ 300) so a fresh stream client can backfill its chart. **`telemetry` builds only** — a default build answers 501 |
 | POST | `/v1/vaults/{id}/drawers` | save (`text` — **max 100,000 bytes**, the engine's bound, enforced at the store write choke point on every surface since 2026-08-04; `wing`/`room` go through the same name guard on every write path including import — opt `kind` — closed vocabulary, 400 if unknown — opt `supersedes` — a receipted update link to the drawer this save replaces; the old drawer stays — opt `vector`, `dedup_threshold`, `content_date`, and the provenance claims `agent`/`channel`/`session`). **202 + `{"quarantined": true}` when the admission screen diverts the write**, with `id` naming where the drawer actually landed rather than where you aimed it; 200 otherwise. Every variant of this call — with a `vector`, with a `dedup_threshold`, on an external-embedding vault — goes through the same screen. Aiming a save at the reserved `quarantine-pending` wing is **400**, not a 500 "corrupt row": a signal-less write there is a caller forging "pending review", or a typo |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`); the quarantine wing is excluded unless you name it, as on `search` and `recent` |

@@ -497,8 +497,14 @@ Consequences that are binding, not advisory:
   answered `VERIFY OK` on every surface, and `backup create` gates on this
   verdict, so it archived the forgery as clean. A detector nobody calls is
   not a check. `parity.rs::HAND_PROJECTED` lists `VerifyReport` × CLI × MCP ×
-  `/v1`, so a new leg fails the build until all three project it — note the
-  admin console at `ui.html` is a FOURTH renderer and outside that gate),
+  `/v1` **and the admin console at `ui.html`, a FOURTH renderer**, so a new
+  leg fails the build until all four project it. This sentence said the
+  console was *"outside that gate"* until 2026-08-19, and it had been inside
+  it since the entry that found `orphan_labels` and `mirror_drift` unrendered
+  — a doctrine line describing the tree before its own worked example, which
+  is the shape this file keeps recording. `PalaceStats` joined it the same
+  day (ROADMAP M5), with the same result: four fields the console had never
+  read),
   knowledge graph (kg.rs — incl. the golden-values authority
   tier: `authority_class`/`review_state`/`canonical_key` DECLARED on
   closed vocabulary, HMAC-covered via a canonical extension on the
@@ -1299,8 +1305,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (754 run,
-                                      # 4 #[ignore]d = 758 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (757 run,
+                                      # 4 #[ignore]d = 761 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1383,7 +1389,7 @@ docker compose run --rm test          # cargo unit + integration tests (754 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (364 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (368 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -2340,6 +2346,20 @@ had and was still bypassable on the surface most deployments use.
    cannot move. And when a test touches PQ, FDE, the codebook or any keyed
    draw, **run it in a loop before believing a green** — the battery runs
    each test once, which for a coin flip is not a measurement.
+   **And counterfactual the FIX, not only the defect.** A filing makes TWO
+   claims — what is broken, and what to do about it — and only the first ever
+   gets re-verified, because a remedy that matches an accurate description
+   reads as done. ROADMAP M3 is the instance: its description was exact, and
+   its prescribed fix ("report the same pair the CLI does") would have made a
+   server re-announce one healed anchor window on every later call, forever,
+   because the field it names is set at open and never cleared while a server
+   caches its handle for its lifetime. The arm that caught it asserts the
+   behaviour the FIX would break, which nothing in the filing asks for.
+   Stated as this file requires of a new rule: applied backwards it
+   reclassifies nothing and confirms nothing — the past fixes it could have
+   examined were structural (a required argument, an inventory row) and had
+   no alternative shape to get wrong. **One instance, untested by history,
+   and this is its first application.**
 3. **Drift check.** If the change touches a capability reachable from more
    than one of {CLI, MCP, `/v1`, orchestrator}, verify EVERY one of them —
    by reading the other surfaces' code, not by assuming symmetry. `cargo test`
@@ -2385,6 +2405,21 @@ had and was still bypassable on the surface most deployments use.
    found TWO legs it had never rendered (`orphan_labels`, `mirror_drift`),
    both of which drive the verdict tick it prints. Ask what else reads the
    struct before believing the gate covers it.
+   **It happened again, to the struct this rule names first** (ROADMAP M5,
+   2026-08-19). The `VerifyReport` row was added and the lesson stopped
+   there, so `PalaceStats` — the struct listed above as the FIRST one this
+   drift bit — still had no `ui.html` row, and adding one found FOUR fields
+   the console had never read, including `unhealed` and `read_only`, the two
+   an operator opens a console to find. So the rule is not "add the console
+   when you notice"; it is **one row per (struct, renderer) pair, and adding
+   a row for one struct says nothing about the next**.
+   Two things a gate cannot do for you here. It cannot tell you the page is
+   STALE: `ui.html` is compiled in, so a release binary built before the edit
+   serves the old console while every gate reads the new source — prove the
+   binary carries the markup, then LOOK at the page. And it cannot tell you a
+   renderer should be exempt: a fleet OVERVIEW is a summary by construction,
+   so demanding every field there would enforce the wrong shape. Write that
+   decision down; do not leave it as a missing row.
 
 ## Session-end hygiene — leave no debt, drift or stale
 

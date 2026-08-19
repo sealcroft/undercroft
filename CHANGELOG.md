@@ -1,5 +1,160 @@
 # Changelog
 
+## Unreleased — 1.2.0
+
+MINOR: new capability, backward compatible. Every item here adds a field or a
+value **beside** one that stays, because renaming any of them would be MAJOR
+by this project's own test — a documented value that stops being accepted.
+Nothing that shipped is removed, and no existing field changes its value.
+
+### one anchor lag, two doors, two answers — and the filed fix would have introduced a second defect (M3)
+
+`store_for` OPENS a vault the server process has not served yet, and that open
+runs the same reconciliation `tighten_anchor()` does. So the first
+`POST /v1/vaults/{id}/anchor` to such a vault healed a real window and then
+answered `"behind_by": 0` about it, while `undercroft vault anchor` — which
+has read `anchor_at_open()` since A31, and whose own comment says why —
+reported the same lag correctly. Two doors, one lag, two answers, which is the
+shape A31 and the two-handles `writes` defect both had.
+
+**The filing said "the route reports the same pair the CLI does", and taken
+literally that is wrong.** `anchor_at_open` is a field set once at open and
+never cleared. A CLI process opens fresh every time; a server caches its
+handle for its lifetime — so reporting the field unconditionally makes every
+later call re-announce a window closed hours ago, and a monitoring rule alerts
+forever on one healed lag. The condition is *did THIS request cause the open*,
+which is exactly when the open's verdict is news.
+
+Both counterfactuals executed: the shipped route answers 0 where the gate
+wants 3, and the fix-as-filed answers 3 on the second call where the gate
+wants 0. Gated by a two-arm unit test and two e2e checks against a vault given
+a real lag before the server starts. `UPGRADING.md` carries the caller-visible
+change, because `behind_by` now takes a value it previously could not.
+
+**Measured on a real corpus**: 1,360 LoCoMo-mined drawers, sealed, with the
+lag made out of band and the server holding a DIFFERENT vault behind `/mcp`
+so its `Tenancy` open of the corpus is genuinely the process's first. CLI
+premise: *"the manifest was 1 record(s) behind"*. Route: `behind_by` **1**
+then **0**, first anchor 19 ms.
+
+### the vault console was a fifth renderer of `PalaceStats`, outside the gate that counts them (M5)
+
+**Found by doing M1's impact analysis before writing M1's code.**
+`parity.rs::HAND_PROJECTED` carried `PalaceStats` for the CLI and `/v1` and
+not for `ui.html` — the console `include_str!`'d into every build and served
+at `GET /ui`, which is a `/v1` CLIENT, so every field reaches its wire for
+free and stops dead unless someone renders it by hand.
+
+Measured the way the gate measures — a `.field` access inside the window the
+boundary rule gives `loadOverview()` — it read **8 of 13 fields**. The
+missing ones were `unhealed`, `read_only`, `codebooks`, and `records` (shown
+only under the route's `drawers` alias). The first two are what an operator
+opens a console to find: `unhealed` is on `stats` at all *"because a
+long-lived read-only server's start-up was hours ago"*, and this page is
+where that operator looks. The panel was clean and complete-looking either
+way.
+
+The console now shows `POSTURE`, an `UNHEALED` section that appears only when
+there is something to say, and the trained index artifacts; the `WRITES`
+gauge is relabelled **CHAIN RECORDS**, since a console has no callers to
+break. And the row is in the inventory, so the class is closed rather than
+the instance — counterfactual: with the three reads removed the gate fails
+naming exactly `["codebooks", "read_only", "unhealed"]`.
+
+**Verified by opening the page**, both postures, against a sealed vault of
+real mined drawers — and the first attempt rendered the OLD console, because
+`ui.html` is compiled in and the running binary predated the edit. A green
+gate and a stale page at the same time; only looking found it.
+
+The FLEET console is deliberately left out, with its reason recorded: a
+per-tenant overview is a summary by construction, and a gate demanding
+thirteen fields in a fleet table would enforce the wrong shape.
+
+### `writes` is the audit-chain height, and this release made that worse before naming it (M1)
+
+`PalaceStats.writes` is the committed chain height read from `chain_meta`.
+The chain has never held writes alone — `audit_export` appends an
+`egress/export` record unconditionally — and **O50/O51, in `1.1.1`, took that
+from a rounding error to a structural one**: under
+`UNDERCROFT_READ_AUDIT=chain` there are now thirteen content-returning doors
+that each append a record, so a field called `writes` counts reads, on CLI
+`vault status`, `/v1 …/stats`, `/v1 …/anchor` and the admin console.
+
+**That growth is mine, from the previous release, and it is reported as mine
+rather than as a discovery.**
+
+`chain_records` now carries the same number under a name that is true, from
+the same binding, on both routes and the CLI. `writes` stays, populated and
+unchanged: renaming it in place is MAJOR and would break every dashboard and
+`jq` a fleet operator has written. It is documented as deprecated, will not
+be removed before a MAJOR, and no MAJOR schedules its removal — so nothing
+reading it today is at risk. The CLI labels it `writes: N (audit-chain
+height)` so the output explains itself without the reader knowing the
+history.
+
+**Gate — two arms, because they fail independently and only one is about
+arithmetic.** The behavioural arm pins the pair equal at TWO different chain
+heights, so a value captured once fails. The structural arm asserts, over the
+source of `fn stats`, that exactly one `chain_state()` call exists and that
+`chain_records` is the first one's binding — the property the filing asked
+for and no value comparison can reach, since two reads agree on every quiet
+vault and only straddle a commit on a busy one. Three counterfactuals
+executed: a captured constant (behavioural arm fails at the second height), a
+genuine second `chain_state()` read (values still agree — **only** the
+structural arm fails, which is the argument for having it), and the CLI
+projection deleted (`HAND_PROJECTED` names the field).
+
+**A defect in the gate itself, found by running it and reported as mine:**
+the structural arm first counted `chain_state()` over the raw window and read
+2 — the second being the comment beside `chain_records` explaining that there
+is no second call. *A gate whose own text is part of what it measures*, which
+`CLAUDE.md` records as a recurring shape here and which had only ever been
+seen in gates reading their own inventory file. It now strips comment lines
+and asserts the stripper kept the code.
+
+**Measured on a real corpus** (definition of done, 6): 1,360 LoCoMo-mined
+drawers across 16 wings in a sealed vault. Freshly mined, `records: 1360`,
+`writes: 1360`, `chain records: 1360`. Then, with
+`UNDERCROFT_READ_AUDIT=chain` declared, ONE search and no write at all —
+**`writes` 1360 -> 1361**. The field is not misnamed in theory.
+
+### one drawer count answered to two names, decided by transport (M2)
+
+`PalaceStats.records` reached `GET /v1/vaults/{id}/stats` as `"drawers"`
+alone, while the CLI and MCP print `records` — so the same number had a
+different name depending on which door an operator came in by, in the field
+they read first. The route now sends **both**, populated from the one
+`full.records` read, and `drawers` stays first and unchanged.
+
+**The direction of this fix was decided by provenance, not by which side was
+easier to edit**, and the evidence is stronger than the filing knew: both
+`/v1` reference documents — `docs/AGENTS.md` §10 and `docs/remote-server.md`
+— have always described this payload as *"records, level, writes, chain head,
+…"*, and **neither has ever mentioned `drawers`**. So the documents already
+promised the key; the code was not keeping the promise. Breadth plus doctrine
+means keep the promise, which is exactly the rule O24 cost.
+
+Also settled, because it is the half a field name cannot fix: `docs/AGENTS.md`
+§0 now states the **three senses of `record`** — a drawer, an audit-chain
+entry, and a declared `kind` — with the surfaces each appears on, and names
+the related trap that `writes` is the chain height and has never counted
+writes alone. No prose gate is proposed for the vocabulary: a rule with a
+three-instance history is the "untested by history" shape `CLAUDE.md` warns
+about.
+
+**Gate:** `stats_reports_one_drawer_count_under_both_names` asserts the two
+keys carry the same value, with a **premise arm** requiring a non-zero count
+— with zero drawers the equality is `0 == 0` and would pass for a route that
+read neither field. Counterfactual executed: with the added line removed the
+gate fails naming the missing key. Plus one e2e check through the surface.
+
+**Found while proving that counterfactual, and filed rather than half-landed:**
+the reverted run's payload printed `"drawers":2` beside a `wings` list summing
+to 1. `PalaceStats.records` is `SELECT COUNT(*) FROM drawers`, unfenced, while
+`wings` and `rooms` both exclude the reserved quarantine wing — so O34's own
+"one quantity, two answers, inside one struct" survives O34, one field over.
+See ROADMAP `M4`.
+
 ## 1.1.1 — 2026-08-19
 
 PATCH: the only observable change is that a defect is gone. No documented

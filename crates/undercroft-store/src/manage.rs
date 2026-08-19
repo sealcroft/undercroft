@@ -53,6 +53,26 @@ pub struct PalaceStats {
     /// [`PalaceStore::chain_state`] for why the handle's cached manifest
     /// (`Vault::writes()`) is not the height.
     pub writes: u64,
+    /// **The same number as `writes`, under a name that is true (M1,
+    /// round-four #44).**
+    ///
+    /// `writes` has never counted writes alone: `audit_export` appends an
+    /// `egress/export` record unconditionally, and since O50/O51 there are
+    /// thirteen content-returning doors that each append one under
+    /// `UNDERCROFT_READ_AUDIT=chain`. So a field named for writes counts
+    /// reads — and that growth was this project's own doing, in `1.1.1`,
+    /// which is why the honest fix is a name rather than a subtraction:
+    /// there is no cheap way to answer "how many of these were writes"
+    /// without walking every record, and the chain HEIGHT is the quantity
+    /// every caller actually wants.
+    ///
+    /// `writes` stays and stays populated — renaming it in place is MAJOR
+    /// and would break every dashboard and `jq` a fleet operator has
+    /// written. Both are assigned from the ONE `chain_state()` read below,
+    /// so they cannot drift apart; gated by
+    /// `stats_reports_the_chain_height_under_both_names` in both the
+    /// behavioural and the structural direction.
+    pub chain_records: u64,
     /// The committed chain head, from the same read as `writes`.
     pub chain_head: String,
     pub level: String,
@@ -976,6 +996,11 @@ impl PalaceStore {
             kg: self.kg_stats()?,
             tunnels: self.tunnel_count()?,
             writes,
+            // M1: the same `writes` binding, not a second `chain_state()`.
+            // Two reads could straddle a concurrent commit and report one
+            // struct disagreeing with itself about its own chain — which is
+            // the defect class this whole struct keeps closing.
+            chain_records: writes,
             chain_head,
             level: self.vault.level().to_string(),
             db_bytes,
@@ -1990,6 +2015,108 @@ mod tests {
 
     fn drawer(wing: &str, room: &str, content: &str, idx: u32) -> Drawer {
         Drawer::new(wing, room, content.into(), Some("s.md".into()), idx, "test")
+    }
+
+    /// **M1 (round-four #44): the chain height answers to both names, from
+    /// ONE read.**
+    ///
+    /// Two arms, because they can fail independently and only one of them
+    /// is about arithmetic.
+    ///
+    /// The BEHAVIOURAL arm asserts the values agree and that they MOVE —
+    /// pinned equal at two different heights, so a `chain_records` hard-wired
+    /// to whatever `writes` happened to be at the first reading fails. Equal
+    /// once is not equal always.
+    ///
+    /// The STRUCTURAL arm is the one the filing asked for and a value
+    /// comparison cannot make: *both populated from one `chain_state()`
+    /// call*. Two separate reads would agree on every quiet vault and could
+    /// straddle a concurrent commit on a busy one — a defect no assertion
+    /// over one process's own numbers can reach, so it is asserted over the
+    /// SOURCE instead. Same shape as every other gate here that measures the
+    /// observable the defect actually moves.
+    #[test]
+    fn stats_reports_the_chain_height_under_both_names() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("notes", "r", "the first note", 0))
+            .unwrap();
+
+        let first = s.stats().unwrap();
+        assert!(
+            first.writes > 0,
+            "premise: the chain has committed something, or the equality \
+             below is 0 == 0 and holds for a struct that reads neither"
+        );
+        assert_eq!(
+            first.chain_records, first.writes,
+            "one height, two names, one read"
+        );
+
+        // And again at a DIFFERENT height, which is what separates "the same
+        // number" from "the same constant".
+        s.upsert(&drawer("notes", "r", "the second note", 1))
+            .unwrap();
+        let second = s.stats().unwrap();
+        assert!(
+            second.writes > first.writes,
+            "premise: the second write advanced the chain, or this arm \
+             measures the same height twice: {} -> {}",
+            first.writes,
+            second.writes
+        );
+        assert_eq!(
+            second.chain_records, second.writes,
+            "the pair tracks the height rather than a value captured once"
+        );
+
+        // STRUCTURAL: exactly one `chain_state()` inside `fn stats`. The
+        // window ends at the closing brace at its own indentation, so a
+        // neighbouring method's call cannot satisfy it.
+        let src = include_str!("manage.rs");
+        let at = src
+            .find("pub fn stats(&self)")
+            .expect("`fn stats` is not in manage.rs any more — stale gate");
+        let body = &src[at..];
+        let end = body
+            .find("\n    }\n")
+            .expect("`fn stats` has no closing brace at method indentation");
+        let window = &body[..end];
+        assert!(
+            window.len() > 200,
+            "premise: the window for `fn stats` is {} bytes, so the boundary \
+             rule is wrong and every count below is meaningless",
+            window.len()
+        );
+        // **CODE only.** The first version of this arm counted the raw
+        // window and read 2 — the second being the comment beside
+        // `chain_records` explaining that there is no second call. A gate
+        // whose own text is part of what it measures, which `CLAUDE.md`
+        // names as a recurring shape here and which was previously only
+        // observed in gates reading their own INVENTORY file. It failed
+        // loudly rather than passing, and only because it was run.
+        let code: String = window
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("Ok(PalaceStats {"),
+            "premise: the comment stripper kept the code — it did not, so \
+             the counts below examined the wrong text"
+        );
+        assert_eq!(
+            code.matches("chain_state()").count(),
+            1,
+            "`writes` and `chain_records` must come from ONE read: two would \
+             agree on a quiet vault and could straddle a commit on a busy \
+             one, which is one struct disagreeing with itself about its own \
+             chain"
+        );
+        assert!(
+            code.contains("chain_records: writes"),
+            "the second name must be the FIRST one's binding, not a second \
+             call spelled differently"
+        );
     }
 
     /// ROADMAP O34: `PalaceStats` must not disagree with itself about

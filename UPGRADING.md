@@ -65,6 +65,39 @@ so rather than implying it checked them.
 
 ---
 
+## 1.2.0 (unreleased)
+
+### `POST /v1/vaults/{id}/anchor` now reports a lag its own open closed
+
+**Who is affected:** anyone with a monitoring rule keyed on this route's
+`behind_by`, on a server that anchors a vault it has not previously served.
+Nothing else changes — the CLI is untouched, and the second and later calls to
+any vault answer exactly as before.
+
+`store_for` OPENS a vault the process has not served yet, and that open runs
+the same reconciliation the call does. So the first `POST …/anchor` to such a
+vault healed a real window and then answered `"behind_by": 0` about it, while
+`undercroft vault anchor` reported the same lag correctly — two doors, one
+lag, two answers. The route now reports the open's verdict when THIS request
+caused the open.
+
+| call | before | now |
+|---|---|---|
+| first `POST …/anchor` to a vault the server has not served, with a real lag | `"behind_by": 0` | `"behind_by": <the lag>` |
+| the same call again, handle now cached | `"behind_by": 0` | `"behind_by": 0` (unchanged) |
+| any call on an already-served vault | unchanged | unchanged |
+
+**A rule keyed on `behind_by == 0` may start firing** where it never did —
+which is the point: it was reading a zero that meant "I already fixed it and
+will not say how much", not "there was nothing to fix". A rule keyed on
+`behind_by > 0` will see one alert per vault per server lifetime at most,
+because the value is reported once and not re-announced.
+
+**Nothing to detect before a restart**, and `config check` has no arm for it:
+no declaration changes and no value is refused. It is listed here because the
+number an existing caller reads changes, which is this file's bar rather than
+`config check`'s.
+
 ## 1.1.1 (released 2026-08-19)
 
 ### A tuning declaration that cannot be read is reported, and no longer clamped into one that can

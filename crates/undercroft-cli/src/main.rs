@@ -3394,7 +3394,15 @@ fn run(cli: Cli) -> Result<()> {
                 "kg:      {} triples ({} active)",
                 st.kg.triples, st.kg.active
             );
-            println!("writes:  {}", st.writes);
+            // **`writes` is the chain HEIGHT and has never counted writes
+            // alone** (M1): an export appends a record, and so does every
+            // content-returning read under `UNDERCROFT_READ_AUDIT=chain`.
+            // Both names are printed because both are on the wire and
+            // `writes` is not going away; the label says which is which so
+            // an operator reading this output does not have to know the
+            // history to interpret the number.
+            println!("writes:  {} (audit-chain height)", st.writes);
+            println!("chain records: {}", st.chain_records);
             // The committed audit-chain head. `/v1` and MCP have always
             // carried it and the CLI silently did not — the hand-projection
             // drift, on the struct CLAUDE.md names as the first one it bit.

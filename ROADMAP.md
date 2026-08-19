@@ -1283,7 +1283,7 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.2.0 — three round-four rows, all naming or reporting contracts
+## 1.2.0 — three round-four rows, all naming or reporting contracts, plus what closing them found
 
 MINOR: new capability, backward compatible. Each of these adds a field or a
 value beside one that stays, because **renaming any of them is MAJOR by this
@@ -1293,7 +1293,18 @@ verified against the code on 2026-08-18 and deliberately NOT half-landed in
 documentation, and shipping the doc alone would leave the misleading name in
 place while claiming the row was closed.
 
-### M1 — round-four #44: `writes` names the audit-chain height, which counts reads and exports
+**All three filings were re-verified against the code on 2026-08-19 before any
+was taken, and — for the first time this campaign — all three held.** That is
+worth stating rather than assuming: the standing expectation since round four
+is that a filing is a hypothesis and the last nine were each wrong about
+something. These were not. What they DID understate is their own case: M2's
+was argued as a symmetry preference when two reference documents already
+promised the missing key.
+
+**M4 and M5 were found by closing them**, which is this file's oldest lesson
+about the difference between filing and closing.
+
+### M1 — CLOSED 2026-08-19: `writes` names the audit-chain height, which counts reads and exports
 
 `PalaceStats.writes` is the committed chain height, read from `chain_meta`.
 The chain has never held writes alone — `audit_export` appends an
@@ -1315,7 +1326,38 @@ break every dashboard and every `jq` a fleet operator has written.
 one `chain_state()` call, plus `parity.rs::HAND_PROJECTED` so the CLI's
 hand-written projection cannot ship one and not the other.
 
-### M2 — round-four #45: one drawer count has two names, and `record` has three senses
+**CLOSED.** `PalaceStats.chain_records` is assigned from the SAME `writes`
+binding `chain_state()` produced, and reaches CLI `stats`, `/v1 …/stats` and
+`/v1 …/anchor` — that last route is not a `PalaceStats` projection, so
+`HAND_PROJECTED` does not reach it and it carries its own assertion. `writes`
+is unchanged and documented as deprecated on both `/v1` references; it will
+not be removed before a MAJOR and none is scheduled, which is stated rather
+than left to be inferred from the word "deprecated".
+
+**The gate needed two arms and the filing only named one.** *"Both populated
+from one `chain_state()` call"* is not a property any comparison of VALUES
+can see: two separate reads agree on every quiet vault. Counterfactual B
+proves it — replacing the binding with a genuine second `self.chain_state()?`
+leaves the behavioural arm passing and fails only the structural one. So the
+arms are (a) equality pinned at TWO different heights, which kills a value
+captured once, and (b) a source assertion that `fn stats` contains exactly
+one `chain_state()` and that `chain_records` is the first one's binding.
+Three counterfactuals executed, including the CLI projection deleted.
+
+**My own defect, in the gate, found by running it.** The structural arm first
+counted the raw window and read 2 — the second occurrence being the COMMENT
+beside `chain_records` saying there is no second call. That is *a gate whose
+own text is part of what it measures*, which this tree has recorded four
+times for gates reading their own inventory FILE and never before for a gate
+reading the function it guards. It strips comment lines now and asserts the
+stripper kept the code, so a stripper that ate everything cannot report one.
+
+**Measured**: 1,360 LoCoMo drawers across 16 wings, sealed. Both names read
+1360 after mining; with `UNDERCROFT_READ_AUDIT=chain` set, one search and no
+write took `writes` to **1361**, and `chain records` with it. Equal across
+the move is the pair being a pair, not two numbers that matched once.
+
+### M2 — CLOSED 2026-08-19: one drawer count has two names, and `record` has three senses
 
 `PalaceStats.records` is the drawer count. `/v1/…/stats` serializes it as
 `"drawers"`; the CLI and MCP print `records`. So the same number has two
@@ -1337,7 +1379,31 @@ prose gate is deliberately NOT proposed — a vocabulary rule with a
 three-instance history is exactly the "untested by history" shape
 `CLAUDE.md` warns about.
 
-### M3 — round-four #48: two surfaces answer differently about one anchor lag, and each is right for its own lifecycle
+**CLOSED, both halves.** `"records": full.records` sits beside `"drawers"` in
+`tenant.rs`'s hand projection, from the one read; `docs/AGENTS.md` §0 carries
+the three senses as a table naming the surfaces each appears on, plus the
+`writes` trap beside them. `stats_reports_one_drawer_count_under_both_names`
+gates the pair with a **premise arm** — a non-zero count, without which the
+equality is `0 == 0` and passes for a route that reads neither field — and
+one e2e check drives it through the surface. Counterfactual executed: the
+line removed, the gate fails naming the absent key.
+
+**The filing understated its own case, and the correction is the interesting
+part.** It read as "add a synonym so two transports agree". Measured, **both**
+`/v1` reference documents have always described this payload as *"records,
+level, writes, chain head, …"* and **neither has ever named `drawers`** —
+`docs/AGENTS.md:930` and `docs/remote-server.md:61`. So this was not a
+symmetry preference, it was a promise two documents made that the code did
+not keep, and the drift-direction doctrine settles it the same way O24 was
+settled: broad agreement across surfaces means the CODE is wrong. Had the fix
+been argued on taste it could equally have been argued away.
+
+**What the filing said and this did NOT do:** *"then make the surfaces follow
+it"*. Renaming `drawers` on `/v1`, or `records` on the CLI, is the MAJOR the
+same entry's `Rejected` line refuses. The surfaces follow the vocabulary in
+the DOCS; the wire keeps every name it shipped.
+
+### M3 — CLOSED 2026-08-19: two surfaces answer differently about one anchor lag, and each is right for its own lifecycle
 
 `undercroft vault anchor` reads `store.anchor_at_open()` as well as
 `tighten_anchor()`'s return, and its own comment says why: a fresh CLI process
@@ -1365,6 +1431,187 @@ asserts `behind_by` is the real lag rather than 0, driven after an
 out-of-band write that leaves the anchor behind. It is MINOR rather than
 PATCH because `behind_by` changes value for an existing caller, and a
 monitoring rule keyed on `behind_by == 0` would start firing.
+
+**CLOSED — and the filed FIX was wrong, which the gate proved.** The filing
+says *"the route reports the same pair the CLI does"*. Written literally,
+that means reading `anchor_at_open()` unconditionally — and
+`anchor_at_open` is a FIELD set once at open and never cleared. The CLI gets
+away with it because a fresh process opens every time; a server caches its
+handle for its whole lifetime, so every later call would re-announce a window
+closed hours ago. **Counterfactual 2 executed**: with the condition removed,
+the second `POST …/anchor` answers `behind_by: 3` about a lag it reported on
+the previous call. That is a monitoring rule alerting forever on one healed
+window — the defect this entry fixes, wearing the other sign.
+
+The condition is therefore *did THIS request cause the open*
+(`!self.stores.contains_key(id)` read BEFORE `store_for`), which is exactly
+when the open's verdict is news. **Counterfactual 1** is the shipped route:
+`tighten_anchor()` alone answers `behind_by: 0` where the gate wants 3.
+
+**Gate, as filed plus the arm it needed**: a unit test with both arms, and
+TWO e2e checks driving a vault built with a real lag before the server
+process starts — `remember` anchors, then one `UNDERCROFT_READ_AUDIT=chain`
+search advances `chain_meta` without moving the manifest (A31). The first
+call reads `"behind_by":1`, the second `"behind_by":0`.
+
+**Tenth consecutive filing wrong about something, and the first where the
+error was in the FIX rather than in the evidence.** Every earlier one
+misdescribed the defect — a drifted line number, a stale coverage figure, a
+reader that is not a reader. This one described the defect exactly and
+prescribed a remedy that introduces a second one, which is harder to catch:
+the description is what gets verified, and a fix that matches the description
+reads as done. `UPGRADING.md` carries the caller-visible change.
+
+**Measured** on 1,360 LoCoMo drawers, sealed: `behind_by` 1 then 0, first
+anchor 19 ms, against a CLI premise reading *"the manifest was 1 record(s)
+behind"*. The instrument needed one correction the same discipline catches —
+the server must hold a DIFFERENT vault behind `/mcp`, because
+`serve-http --vault corpus` opens that vault for MCP at start-up and THAT
+open heals the window, leaving `Tenancy` nothing to find. A probe pointed at
+the same vault would have measured 0 and read exactly like an unfixed route.
+
+### M4 — `records` counts the quarantine wing while `wings` and `rooms` do not
+
+**Found while executing M2's counterfactual**, in the payload the reverted
+run printed: `"drawers":2` beside a `wings` list summing to **1**, on the test
+surface whose second drawer is diverted. `PalaceStats.records` is
+`self.count()` — `SELECT COUNT(*) FROM drawers`, unfenced (`lib.rs:3756`) —
+while `wings()` and the `rooms` subquery both carry
+`WHERE wing <> QUARANTINE_WING` (`manage.rs:959`).
+
+This is **O34 surviving O34**. That entry closed a wing list omitting the
+review queue beside a room count including it, and its own words were *"one
+quantity, two answers, inside one struct"* — which is still true one field
+over, on the field printed first. `undercroft stats` shows a total an
+operator cannot reconcile with the wing breakdown beneath it, and there is
+nothing on the surface saying why.
+
+**Not an exposure**: every quantity here is a count, so no reserved-wing name
+escapes. A coherence defect, like O34.
+
+**Shape of the fix, and it is NOT "fence `records` too".** Fencing it changes
+a documented count's value on three surfaces — CLI, MCP and `/v1` — which is
+the MINOR-at-least bar M3 states for `behind_by`, and it would also delete the
+only report of the vault's true row count, which `db_bytes` is measured
+against. The additive fix is the one this release keeps choosing: report the
+queue depth as its own field, so `records == sum(wings) + quarantined` and the
+three numbers reconcile without any existing value moving. That also gives the
+operator the figure `admission list` exists to surface, on the screen they are
+already looking at.
+
+**Gate:** on a vault holding one diverted drawer, `records`, the `wings` sum
+and the new field satisfy that identity, asserted through `/v1` and the CLI;
+plus `parity.rs::HAND_PROJECTED`, which fails the build until every hand
+projection of `PalaceStats` renders the new field.
+
+**Filed rather than half-landed**, per `CLAUDE.md`: it adds a field to a
+struct FIVE surfaces project — CLI, MCP, `/v1`, the vault console and the
+fleet console, which is M5's point — and M2's unit is not where that
+argument gets made.
+
+### M5 — CLOSED 2026-08-19: the vault console is a FIFTH renderer of `PalaceStats` and was outside the gate that counts them
+
+**Found by doing M1's impact analysis before writing M1's code**, which is
+the whole argument for doing it in that order.
+
+`parity.rs::HAND_PROJECTED` carries `PalaceStats` twice — `main.rs`'s
+`Command::Stats` and `tenant.rs`'s `fn stats` — and **not** `ui.html`. But
+`ui.html` is `include_str!`'d into every build, served at `GET /ui`, and is a
+`/v1` CLIENT: every field the route projects reaches its wire for free and
+stops dead unless someone renders it by hand.
+
+**Measured the way the gate measures** — a `.field` ACCESS inside the window
+the boundary rule gives `loadOverview()`, which is lines 959–985, ending at
+`runVerify()` — the console reads **8 of `PalaceStats`' 12 fields** and drops
+four: **`unhealed`**, **`read_only`**, **`codebooks`**, and `records` (which
+it reads under the route's `drawers` alias, so the number IS on screen; the
+other three are not). Premise probe: `.writes` matches twice in the same
+scan, so the reader was reading the file.
+
+The first draft of this entry said *"renders ten and drops two"*. That was
+counting the ROUTE's JSON keys, not the STRUCT's fields, and it is the O38
+error in miniature — a number that answers a neighbouring question, stated
+with confidence. Corrected before it was acted on, and left here rather than
+silently replaced.
+
+Those are precisely the ones an operator opens a console to find. `unhealed`'s
+own doc comment says it lives on `stats` rather than only in a start-up log
+line *"because a long-lived read-only server's start-up was hours ago"* — and
+a long-lived server's operator is looking at this console. It carries "this
+replica is serving a vault its writer has not finished with" and "this vault
+still holds some graph words in clear at rest". `read_only` is the posture
+itself. The console shows a clean, complete-looking stats panel either way.
+
+**The direction is settled by breadth, not by convenience.**
+`docs/THREAT_MODEL.md:282` and `docs/security.md:127` both state `unhealed` is
+readable *"on every stats surface"*, and `CLAUDE.md`'s definition of done
+item 7 says *count the renderers, not the surfaces*, naming `ui.html`
+specifically. Several documents do not independently invent the same promise:
+the CODE is wrong.
+
+This is the **same defect, on the same file, as the entry that created the
+`ui.html` row for `VerifyReport`** — which found two legs the console had
+never shown, both of which drove the verdict tick it printed. That entry
+generalised to one struct and stopped; `PalaceStats` is the struct `CLAUDE.md`
+names as the FIRST one this drift class bit.
+
+**Shape of the fix.** Add the `PalaceStats` × `ui.html` row, anchored on
+`async function loadOverview()`, and render what the row then demands:
+`unhealed`, `read_only` and `codebooks` as new panel content, and `records`
+by reading `s.records` with `s.drawers` as the fallback an older server
+still answers with.
+
+Note the ordering constraint that makes this M2's dependant rather than an
+independent unit: the gate requires a `.field` ACCESS, and until M2 the route
+sent no `records` key at all — so the row could only have been added by
+exempting a field, and the exemption would then have had to be deleted.
+
+**Rejected:** rendering the fields without adding the row — that fixes the
+instance and leaves the class, which is exactly what the `VerifyReport` row
+exists to prevent. **Also rejected:** exempting `codebooks` as "too detailed
+for a console". A codebook generation that moved means every row encoded
+against its predecessor was silently re-quantized; `CLAUDE.md` names that as
+the thing nothing else in the struct can tell you, which is an argument for
+showing it, not against.
+
+**Gate:** the `HAND_PROJECTED` row itself, which fails the build when a
+`PalaceStats` field reaches no projection; plus a counterfactual removing one
+rendered field and observing the failure. An e2e arm is deliberately NOT
+proposed: `GET /ui` serves a static document, so an e2e check could only
+assert the same substring the gate already reads, from further away.
+
+**CLOSED.** The row is in, anchored on `async function loadOverview()`, and
+the console renders what it then demanded: `POSTURE` (`read_only`), an
+`UNHEALED` section hidden when empty, a `TRAINED INDEX ARTIFACTS` line, and
+`s.records` with `s.drawers` as the fallback an older engine still answers
+with. The `WRITES` gauge is relabelled **CHAIN RECORDS** and reads
+`s.chain_records` falling back to `s.writes` — a console has no callers to
+break, so the compatibility argument that keeps `writes` on the wire does not
+apply to a label.
+
+**Counterfactual executed**: with the three added reads removed the gate
+fails naming exactly `["codebooks", "read_only", "unhealed"]` — i.e. it would
+have caught the shipped defect, which is the only thing that makes the row
+worth adding.
+
+**Verified by LOOKING at the rendered page**, both sides of the premise, on a
+sealed vault of real mined drawers. Read-only, with a torn `vault.json.next`
+planted by the e2e suite's own recipe: `POSTURE read-only` and the unhealed
+note on screen in the operator's words. Writable: `POSTURE writable`,
+`sUnhealedSect` `display:none`, zero rows. **The first attempt showed the OLD
+console** — `ui.html` is `include_str!`'d, so the running release binary
+predated the edit and the page was three panels behind a green gate. That is
+the "prove the binary is fresh" rule landing on an asset rather than on a
+flag, and only opening the page found it.
+
+**The fleet console is a deliberate exclusion, not an oversight.**
+`undercroft-orchestrator/src/ui.html` reads `s.drawers` and `s.db_bytes` per
+tenant, and it is reachable by this gate — the projection path is
+crates-relative. It gets no row because a fleet OVERVIEW is a summary by
+construction: a row per tenant showing thirteen fields is not a better
+console, and a gate demanding it would be enforcing the wrong shape. The
+argument is written here rather than left as a silent gap, which is what
+`CLAUDE.md` asks of a decision not to act.
 
 ---
 

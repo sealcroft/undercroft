@@ -1387,6 +1387,17 @@ REST_HOME="$(mktemp -d)"
 PORT=8791
 SECRET="e2e-assertion-secret-key-material"
 UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_ASSERTION_SECRET="$SECRET" "$BIN" init >/dev/null 2>&1
+# ROADMAP M3. A vault this server has NEVER served, carrying a real anchor
+# lag: the write anchors, then a read-audit record advances the committed
+# chain without moving the manifest (A31). Built here, BEFORE the server
+# starts, because the whole case is `store_for` opening a vault for the first
+# time and healing the window itself — a vault the server has already touched
+# takes the other arm and cannot see this defect.
+UNDERCROFT_HOME="$REST_HOME" "$BIN" vault create lagvault --level hmac-only >/dev/null 2>&1
+UNDERCROFT_HOME="$REST_HOME" "$BIN" remember "the anchor lag subject" \
+  --vault lagvault >/dev/null 2>&1
+UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_READ_AUDIT=chain \
+  "$BIN" search "anchor lag" --vault lagvault >/dev/null 2>&1
 UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_ASSERTION_SECRET="$SECRET" \
   "$BIN" serve-http --host 127.0.0.1 --port "$PORT" >/tmp/serve.log 2>&1 &
 SRV=$!
@@ -1409,6 +1420,20 @@ rest_code() { # <name> <expected-code> -- <curl args...>
   if [ "$code" = "$want" ]; then echo "ok    $name"; PASS=$((PASS+1))
   else echo "FAIL  $name — code $code (wanted $want)"; FAIL=$((FAIL+1)); fi
 }
+
+# ROADMAP M3, and it must be the FIRST request that touches this vault.
+# `store_for` opens it, that open fast-forwards the anchor, and until this
+# release `tighten_anchor()` was then the only thing asked — so the route
+# answered "behind_by": 0 about a window that was real a millisecond earlier,
+# while `undercroft vault anchor` reported it correctly on the same vault.
+# Two doors, one lag, two answers.
+rest_body "anchor reports a lag its own open closed" '"behind_by":1' \
+  -- -X POST "$API/vaults/lagvault/anchor" -H "X-Vault-Assertion: $(sign lagvault)"
+# And exactly once: the handle is cached now, so this is the long-lived-server
+# case. `anchor_at_open` is set at open and never cleared, so reporting it
+# unconditionally would re-announce one healed window on every later call.
+rest_body "and does not re-announce it" '"behind_by":0' \
+  -- -X POST "$API/vaults/lagvault/anchor" -H "X-Vault-Assertion: $(sign lagvault)"
 
 rest_body "create vault"        '"created":true'  -- -X POST "$API/vaults" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"id":"acme","level":"sealed"}'
@@ -1436,6 +1461,18 @@ rest_body "save drawer"         '"created":true'  -- -X POST "$API/vaults/acme/d
 rest_body "search finds it"     'postgres'        -- -X POST "$API/vaults/acme/search" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"which database for billing"}'
 rest_body "stats"               '"drawers":1'     -- "$API/vaults/acme/stats" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# M2: the same count under the name `PalaceStats`, the CLI, MCP and BOTH
+# `/v1` reference documents give it. `drawers` above stays — renaming a
+# documented key in place is MAJOR — so this asserts the pair, not a
+# replacement.
+rest_body "stats names the count both ways" '"records":1' -- "$API/vaults/acme/stats" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# M1: `writes` is the audit-chain HEIGHT — it counts exports, and every
+# content read under UNDERCROFT_READ_AUDIT=chain. `chain_records` is the same
+# number under a name that says so; `writes` stays because renaming it is
+# MAJOR.
+rest_body "stats names the chain height truthfully" '"chain_records":' -- "$API/vaults/acme/stats" \
   -H "X-Vault-Assertion: $(sign acme)"
 
 # The core multi-tenant guarantee: an assertion minted for one vault must

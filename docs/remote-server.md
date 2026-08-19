@@ -58,9 +58,15 @@ GET    /v1/vaults                                                list vault ids
 DELETE /v1/vaults/{id}                                           delete vault
 
 ── read / write ─────────────────────────────────────────────────────────
-GET    /v1/vaults/{id}/stats            (records, level, writes, chain head,
+GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer
+                                         count under both names, from one
+                                         read; level; the chain height as
+                                         writes AND chain_records — same
+                                         number, `writes` deprecated since
+                                         it counts exports and audited
+                                         reads too; chain head,
                                          wings, rooms, kg, tunnels, db_bytes,
-                                         codebooks)
+                                         read_only, unhealed, codebooks)
 GET    /v1/vaults/{id}/stats/history    ?window=N   sample ring buffer
                                          (501 without --features telemetry)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}

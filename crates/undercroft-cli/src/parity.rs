@@ -376,6 +376,24 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/tenant.rs",
         "fn stats(&mut self",
     ),
+    // **And the FIFTH renderer** (M5). The entry four rows up added
+    // `ui.html` for `VerifyReport` and stopped there — so the console, which
+    // is a `/v1` CLIENT served at `GET /ui`, stayed outside the gate for the
+    // struct `CLAUDE.md` names as the FIRST one this drift class bit.
+    //
+    // Adding the row found four fields the console had never read:
+    // `unhealed`, `read_only`, `codebooks`, and `records` (which it showed
+    // only under the route's `drawers` alias). The first two are the ones an
+    // operator opens a console to find — `unhealed` exists on `stats` at all
+    // *"because a long-lived read-only server's start-up was hours ago"*,
+    // and this page is where that operator is looking. Same argument, same
+    // file, same shape: which is the argument for the row, made by the row.
+    (
+        "undercroft-store/src/manage.rs",
+        "PalaceStats",
+        "undercroft-cli/src/ui.html",
+        "async function loadOverview()",
+    ),
     // MCP serializes `DedupReport` whole and the CLI hand-projects it, so
     // `dates_kept` — "the difference between collapsing text and losing
     // history", by its own doc comment — reached one surface only. `/v1`
