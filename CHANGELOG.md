@@ -1,5 +1,539 @@
 # Changelog
 
+## 1.1.1 — released 2026-08-19
+
+PATCH: the only observable change is that a defect is gone. No documented
+contract moves. **Fifteen units** — O46 through O60, counted from the ROADMAP
+section rather than remembered — every one CI-green as it landed: the read
+choke point and its second funnel, the pre-flight's coverage axis on both
+binaries, a scoped candidate pool that could not be too small to notice, a
+status class, a probed preflight, and three drifts this release created and
+then found by sweeping its own work.
+
+### the version-surfaces gate was narrower than the doctrine pointing at it (O60)
+
+**Found by cutting the release.** `CLAUDE.md`'s release flow names the surfaces
+a version bump touches and says the gate, not the list, is the authority.
+Bumping to `1.1.1` flagged two surfaces; the prose names two more the gate did
+not count — `.claude-plugin/plugin.json` and `CLAUDE.md`'s own "Current
+release" sentence. Both would have gone stale under a green gate, and `1.1.0`
+shipped with the same hole. `VERSION_SURFACES` carries five rows now, with a
+counterfactual executed on each new entry.
+
+Also corrected: the lineage sentence read "1.1.0 — MINOR over the 1.0.0 that
+reset the version", and a mechanical bump would have produced "1.1.1 — MINOR",
+which is wrong. A version bump is not always a find-and-replace; this one had
+a release CLASS in it.
+
+### three surfaces still said "per search", including the landing page (O59)
+
+**The session-end sweep, finding my own work.** O51 changed what
+`UNDERCROFT_READ_AUDIT=chain` records — one entry per content-returning READ,
+not per search — and updated six surfaces. Three more stated the same claim:
+the public landing page, `docs/THREAT_MODEL.md` (in the paragraph above the
+block O51 rewrote, so the document contradicted itself), and
+`docs/integrations.md` (whose sibling sentence in `docs/AGENTS.md` was fixed).
+
+That is the rule O51 quoted, broken by O51 — and it failed the documented way:
+I searched for the surfaces I expected rather than for the CLAIM. A grep for
+`READ_AUDIT` finds the variable; these three say "per search" without naming
+it. **Search for the claim, not the identifier**, and expect the public
+surface to be the one furthest behind.
+
+Also confirmed rather than assumed: O51's four new `read/kg-*` namespaces are
+fenced from the agent surface — the fence is a `NOT LIKE 'read/%'` prefix
+match and the `MINTED` inventory that gates it already classifies `read/`.
+
+### the control plane's pre-flight gets the axis the engine's got (O58)
+
+**A drift created in this session and found by drift-checking it.** O52 gave
+the engine's `config check` a `Parse::{Checked,Opaque}` axis;
+`undercroft-orchestrator` has its own `config check` with the identical
+`Accepted` catch-all and did not follow — a capability added to one surface
+and not its sibling, which is the shape all 65 of this project's drifts had.
+
+It matters more here because the two inventories are already joined: a test
+reads the engine's `parity.rs` as SOURCE (the only route two crates that never
+link each other have) and asserts they agree on every `UNDERCROFT_ORCH_*` name
+and class. After O52 they carried different SHAPES and the join could not see
+it. `ORCH_ENV_VARS` carries the axis now, the engine's both-ways gate runs on
+this binary too, and **the join compares the axis** — panicking if the two
+disagree, and also if the engine's field is absent, so removing it there fails
+here rather than silently reverting the join. Counterfactual executed.
+
+### five round-four rows were tracked only in a gitignored file, and a claim of mine was wrong (O57)
+
+**The correction first, because it is mine.** O56 said *"round four now has no
+PATCH-shaped work left"*. That was false when I wrote it: the ROADMAP's own
+round-four section said, in the paragraph directly under the list I had just
+edited, that five rows lived only in a gitignored handover and that filing them
+was itself outstanding. I replaced the list above that paragraph without
+reading it — which also left the section incoherent.
+
+All five are resolved in the tracked file now, each verified against the code
+rather than inherited. `#46` and `#52` were **already closed** (O11 widened the
+orphan-label leg; the fleet classifier's own doc records its fix). `#51` **does
+not describe this tree** — there is no kind-filter exclusion count — and is
+recorded as unverifiable rather than struck, because "I could not find it" and
+"it is not there" are different claims.
+
+**`#49` is half fixed here.** `del/` is fenced from the agent surface with the
+reason *"Operator acts on the corpus"*, and that is false: `delete_drawer`
+appends `del/{id}` and MCP advertises `undercroft_delete_drawer`, so an agent
+deletes and then cannot see the deletion it performed. The fence stays — the
+same namespace holds operator-attested destructions — but the reason is
+corrected and the residual it hid is stated where the fence is declared.
+Splitting the two namespaces is a behaviour change to an agent surface and is
+filed as an open question.
+
+**`#56`: two claims corrected, the third scoped.** O1 said all twenty release
+assets are `.tar.gz`; `release.yml` packs `7z a -tzip` on Windows. O6 said the
+org avatar is "byte-for-byte" the house mark; GitHub re-encodes an uploaded
+avatar, so the bytes served are not the bytes uploaded. Both were claims
+stronger than their evidence, in entries whose own subject is verifying
+artifacts properly. The third (manifest-entry count) needs the live registry
+and now says so rather than repeating a number.
+
+### `pool_div` names the tiers it actually reaches (O56)
+
+**Round-four #47**, taken at the grade its own round's synthesis argued for:
+*"the doc sentence is the defect; the tier's behaviour is an open
+measurement."*
+
+`pool_div` appears **zero** times in `fdeidx.rs` — the PQ tier consults it,
+the per-wing tier consults it, the FTS arm consults it, MUVERA FDE does not.
+The field doc said the corpus-scaled pool applies to *"the semantic
+prefilters"*, plural, and `architecture/index.html` and `docs/AGENTS.md` said
+the same. So with `UNDERCROFT_RETRIEVAL=fde` the pool is the fixed
+`max(256, depth·32)` and the cure this knob exists to provide — against a leak
+measured at R@5 100 → 96.8% by 1M drawers — is not applied, while three
+surfaces said it was. All three now name the tiers.
+
+**Half the filing is not a defect:** the missing stage-2 refine is deliberate
+and `search_inner` says so where it declines to do it — a single-vector cut
+would fight MaxSim.
+
+**The behaviour stays open on purpose.** Wiring `pool_div` into FDE is one
+line that the PQ tier's 96.8% makes look obvious, which is the trap: it would
+be graded on a measurement of a different tier, with no stage-2 to bound the
+latency. FDE's recall at scale is unmeasured and `pqscale` has no FDE
+analogue.
+
+**Gate:** `the_fde_tier_does_not_consult_pool_div_and_the_docs_say_so` pins
+the gap in both directions — the PQ tiers must consult it (the premise arm),
+`fdeidx.rs` must not, and the field doc must still say which. Closing the gap
+fails the test and names the three documents that move with it.
+
+**Also filed:** round-four `#44`, `#45` and `#48` are MINOR and cannot land in
+a PATCH release, so they are written into ROADMAP `1.2.0` as M1–M3 with their
+mechanism, the alternative rejected and a gate each — rather than half-landed
+here as documentation while the misleading names stay.
+
+### the line-ending preflight is probed, and the comment claiming it already was is gone (O55)
+
+**Round-four #37**, and understated as filed. The CRLF check had no premise
+probe *and* carried a comment asserting that its two historical failure modes
+were "exercised below rather than assumed" — nothing exercised anything. A
+false claim about a gate is worse than a missing gate: a reader asking "is
+this probed?" reads the sentence and stops.
+
+Three versions of this check have shipped broken and **two read a dirty tree
+as clean**, which is invisible by construction — a broken scanner and a clean
+tree print the same thing. The selection is a function now
+(`crlf_offenders`), so the probe runs the same code rather than a second copy,
+and the fixture covers both directions in one assertion: one CRLF offender,
+one clean file, one binary and one `crates/` path, and the selector must print
+*exactly* the offender. Both counterfactuals executed — the historical `$3`
+bug prints nothing, a match-everything selector prints all three.
+
+### a server failure stops being reported as a bad request (O54)
+
+**Round-four #29.** `POST /v1/vaults` and `DELETE /v1/vaults/{id}` mapped
+their `VaultError` by hand to 400, bypassing `vault_err`. `create` reaches
+`fs::create_dir_all`, key derivation and `save_manifest`; `delete` reaches
+`fs::remove_dir_all` — so a full disk, an unwritable directory or a failed key
+derivation answered **400 Bad Request**, telling the caller their request was
+malformed when the server had failed. They answer 500 now, which a fleet
+operator's tooling can retry.
+
+**A second implementation went with it.** `create_vault` checked
+`manager.exists()` and returned 409 itself, in front of a `create` that
+already answers `AlreadyExists` — which is why the duplicate case was right by
+accident while every other verdict was wrong. `manager.list()` and the
+post-create `open_with_embedder` went through the same door in the same edit.
+
+**Checked rather than repeated:** `delete` never returns an integrity verdict,
+because it does not unlock — so no `class: "integrity"` was being lost there,
+and claiming it would have been a plausible statement about the wrong
+function.
+
+**Gate:** `every_vault_manager_call_is_classified_by_vault_err` counts the
+source sites and fails on any mapped by hand, with a premise arm so a scanner
+whose pattern stopped matching cannot report clean. Counterfactual executed.
+Two e2e checks cover what a caller observes: duplicate create 409, absent
+delete 404.
+
+### a filtered candidate pool is accepted on completeness, not on a threshold that could never fire (O53)
+
+**Round-four #28.** FTS5 and the HNSW graph cannot be asked "within this
+scope", so they draw a top-k over everything and the scope filters the answer.
+Both then decided whether that filtered pool was a fair substitute for
+scanning the scope exactly, and both asked `inscope.len() >= depth` — **five**
+— while every semantic tier sizes its pool by the scope.
+
+**The test could not answer its own question.** Its stated risk is that
+*"deeper in-scope matches may exist below the cut"*, which is a question about
+TRUNCATION, and a count of survivors says nothing about what sat below the
+cut. `seqs.len() >= k` is the exact, free answer. The old test was wrong in
+both directions: it surrendered on small COMPLETE pools (a needless full scan)
+and accepted thin TRUNCATED ones (the leak). When truncated, the floor is now
+`scoped_keep` capped at the scope's own population — the policy the semantic
+tiers already used.
+
+**Why nothing reported it:** the expected in-scope count is `scope_live·k/n`,
+and `k` grows with the corpus exactly as the scope's share shrinks, so it is
+about `scope_live/64` regardless of corpus size. Every scope reaching this
+code is above the scan floor, so the pool was always well above 5 and the
+guard was effectively unreachable.
+
+**Measured on 6,940 hmac-only drawers with a 1,730-row wing:** the scoped pool
+was **70–80 candidates** against 256 for the same query unscoped, and 2 of 18
+queries answered differently from the exact scope scan. After: the thin
+truncated pool surrenders, 1 of 18 differs — against an unscoped control that
+differs at 2 of 19, so the scoped path is no longer worse than the prefilter's
+own baseline. Latency unchanged at 69 ms either way, since the scan it
+surrenders to is bounded by the scope.
+
+**`UNDERCROFT_SEARCH_TRACE` now reports pool size**, not just phase times —
+the measurement above is impossible without it — and it immediately caught a
+defect in the probe written to use it: `mine` is idempotent, so mining one
+feed fifteen times into one wing yields the same 85 drawers, the "1,275-row
+scope" was 85, that is below the scan floor, and the first eighteen-query
+comparison reported "0 differences" having never engaged the prefilter at all.
+
+**Not changed, and recorded as considered:** the FTS draw stays corpus-shaped.
+A scope-sized `k` would be smaller and find fewer in-scope rows; sizing the
+draw so the scope receives a full pool means widening on under-delivery, which
+is what the PQ/FDE tiers do and what these two arms deliberately do not.
+
+**Residual:** a non-truncated pool is accepted at any size, so a scoped query
+can still be answered from a handful of lexical matches when those are all
+there are. That is the prefilter's documented design — the unscoped control
+shows the same rate — not a scope defect.
+
+### `undercroft config check` says which declarations it actually checked (O52)
+
+**Round-four #25's reporting half.** The command rendered any declaration it
+had no arm for as *"no parse to run; the consumer validates it"* — honest
+about a URL or a bearer, and a false claim about a knob whose parse somebody
+forgot to wire up. Nothing could tell the two apart. Round-four #9 had closed
+that for the `Protects` class; the `Tunes` class had no such gate, and O48
+made the gap actively false by teaching eleven resolvers to validate values
+this command still described as unvalidated.
+
+`ENGINE_ENV_VARS` now carries `(name, ConfigClass, Parse)`, counted against
+the code in both directions on both axes: a `Checked` variable the command
+runs no parse for fails the build, and an `Opaque` one that IS pre-flighted
+fails it too. **49 of the 81 are `Checked`, 32 `Opaque`.** Reachable coverage
+went from 33 declarations to 49; the rest now say WHICH kind of unchecked
+they are.
+
+**One table made that affordable.** `check_declaration` is handed a
+`(name, raw)` pair and has no call site to read a knob's unset value from, so
+`undercroft-store`'s `TUNED` states each one ONCE — shape, unset value,
+bounds — and the engine's resolver and the pre-flight both read it. Two
+consumers, one statement. A knob whose unset depends on another variable has
+no row and says why (`UNDERCROFT_LATE_TOP_N` falls through to
+`UNDERCROFT_RERANK_TOP_N`, valid or not, which O48 preserved deliberately).
+
+**Three findings the filing did not contain**, each the class this unit
+existed to close. `fdeidx::params_from_env` held four more silent swallows —
+`UNDERCROFT_FDE_REPS`, `_KSIM`, `_DPROJ`, `_SEED`, each `unwrap_or` then
+`.max(1)` or `.clamp(1, 16)`, so a declared `ksim` of 32 silently became 16 —
+missed because O48 swept "the store's `assemble`" and these live one file
+over. `UNDERCROFT_RERANKER` refuses an unknown spelling at start-up but its
+parse was tangled with the attachment, so the pre-flight said "no parse to
+run" about a declaration whose consumer bails; it is `check_reranker` now,
+which `attach_reranker` calls for its own refusal. And
+`UNDERCROFT_LLM_API`/`_EMBED_API` fell past both vocabulary arms into
+inferring the API shape from the URL — a declaration silently replaced by an
+inference.
+
+The four sites O48 filed as remaining are closed here too, because a
+pre-flight needs a pure parse to call and giving it one is the same edit as
+fixing the swallow: `UNDERCROFT_METRICS` (where `=yes` meant OFF in silence),
+`_SAMPLE_INTERVAL_MS`, `_EMBED_DIM` (a declaration meant to pin the vector
+width, demoted to a suggestion when it did not parse) and `_ORT_POOL`.
+
+**Counterfactual, executed:** with the table's fall-through reverted, the gate
+fails and names all fifteen knobs individually. **Two premise arms**, so an
+axis where every entry landed on one value cannot report a clean tree.
+`UPGRADING.md` records the two knobs whose resolved value genuinely moves.
+
+**Measured on 1,700 real drawers**, every declaration driven twice — through
+`config check` and through a real `search` on that vault — asserting the
+pre-flight predicts what the engine does, with valid values as the negative
+control. One knob class does not agree and that is a finding: the four FDE
+construction knobs sit behind an attached ColBERT encoder, so on a default
+build they are never read at run time at all, which makes the pre-flight the
+only place an operator can learn the declaration is bad.
+
+**My own defects, both caught by gates:** the two API resolvers were appended
+after `#[cfg(test)] mod tests` (clippy's "items after a test module" — the
+documented "read what is adjacent to the anchor" hazard), and a message
+literal shipped with a 26-space run because my editing scripts kept eating
+backslash line-continuations, caught by O40's own gate.
+
+### the knowledge graph's readers append a chain record too — the second funnel (O51)
+
+**Round-four #23, the half O50 named and left.** A knowledge-graph fact IS
+drawer words: `decode_triple` and `entity_name_from_rest` return subjects,
+predicates, objects and entity names distilled out of verbatim content. So
+the exfil walk O50 closed had a parallel one door over — `GET …/kg/entities`
+for names, then `GET …/kg/query` per name — reading the same corpus and
+leaving the same nothing. Four doors record one each now: `kg-query` (both
+its entity and predicate arms, one namespace because one tool is what a
+caller drives), `kg-timeline`, `kg-entities` and `kg-canonical`, across CLI,
+MCP and `/v1`.
+
+**The filing was wrong about one of its five names, and that is reported
+rather than quietly dropped.** It listed `kg_receipts` as a fifth reader. It
+is not one: `kg_verify_receipts` reaches neither decoder and returns
+`(triple_id, source_drawer_id, verdict)` — identifiers and an enum — and the
+one drawer it reads it reads as `InternalRead::Verification` to compare a
+fingerprint that never leaves. Auditing it to match the filing would have put
+a read record on a door through which no content passes. It and `kg_stats`
+are now named as deliberate exclusions, with that reason, in `SECURITY.md`,
+`docs/THREAT_MODEL.md` and `UPGRADING.md`.
+
+**Where the record is written decides whether one number is true.**
+`all_triples` — the private whole-graph decode — was the tempting choke
+point, and it is the wrong one: every arm of `kg_query_entity` decodes the
+whole graph and then filters, so a record written there would say 40 where 3
+left the process. Over-reporting an exfil trail is a false claim, not a
+conservative one. The `pub` doors record, with their own post-filter counts;
+`all_triples` carries no witness and says why.
+
+**One recording door, not eight.** O50 left the decision
+(`if let Read::Returned(op) … if self.read_audit …`) written out inline at
+three sites; this unit would have made it eight, which is precisely how the
+write-side screen came to be applied per call site with three ways past it.
+`PalaceStore::record_read` is now the single place that decides whether a
+read is written down, and all eleven sites call it.
+
+**Gated both ways, and both arms executed.** The driver table gains the four
+KG doors — including an approved canonical fact, without which `kg-canonical`
+answers `None` and its premise arm rightly reports that the driver proved
+nothing. Reverting `kg_timeline`'s recording fails the gate with *"kg-timeline
+returned 1 row(s) but appended 0 read-audit record(s)"*; removing the
+`kg-entities` driver while keeping its `ReadOp` fails the namespace
+comparison. `an_internal_lookup_appends_no_read_record` gains the opposite
+direction: a graph write and an audited export must add nothing. Exercised
+through the CLI in `tests/e2e.sh` as well, because a capability proved on one
+surface and assumed on the others is how all 65 of this project's drifts were
+born.
+
+**Measured on a real corpus** (1,700 LoCoMo drawers across 20 wings, 600
+facts over 200 entities): `kg query` 6 ms → 30 ms under
+`UNDERCROFT_READ_AUDIT=chain`, `kg timeline` 8 ms → 33 ms — and `wake-up`, a
+drawer door O50 had already closed, goes 8 ms → 35 ms on the same vault. The
+~25 ms is one fsynced chain append under `synchronous=FULL`, the declared
+durability cost of the variable, identical on both funnels. `kg stats` and
+`kg receipts` add nothing.
+
+**Residual, narrower than before and stated:** the witness is a required
+argument on every `pub` reader, so no SURFACE can forget it — but a new `pub`
+store reader built on `all_triples` and reusing an existing `ReadOp` would
+pass the namespace gate while recording nothing. The drawer funnel carries
+the identical residual.
+
+**My own defect in this unit, reported as mine.** Restoring the tree after
+the first counterfactual I ran `git checkout -- kg.rs`, which reverted the
+whole file rather than the one reverted block, discarding every door change
+in it. Nothing shipped wrong — the redo is byte-equivalent and the gates were
+re-run — but the lesson is the documented one wearing new clothes: a
+counterfactual needs a restore path scoped to what it changed, so the second
+arm used a file copy in the scratch directory instead.
+
+### every content-returning drawer read now appends a chain record (O50)
+
+**Round-four #23.** `UNDERCROFT_READ_AUDIT=chain` is documented for *"insider
+/exfil accounting"*, and `audit_read` had exactly **two** call sites, both
+`"search"`. Every by-id and bulk read returned verbatim content and appended
+nothing — so an insider with a valid token could walk `GET /v1/…/drawers` for
+ids, `GET …/drawers/{id}` for each, and exfiltrate the whole vault leaving
+**zero** records, while the same person running one search left one.
+
+**Both causes closed together**, because either alone re-opens it. The
+mechanical one: there was no choke point, so coverage had been added a call
+site at a time. `Read::{Returned(ReadOp), Internal(InternalRead)}` is now a
+required argument on `get` and `recent` — the write path's `Screen` precedent
+applied to reads — and the compiler enumerated 26 store sites and 8 surface
+sites, each now a stated decision. The governance one: the limit was accurate
+on every prose surface ("one record per search") and enumerated as a limit
+nowhere; `docs/THREAT_MODEL.md` and `SECURITY.md` now state both what is
+covered and what is not.
+
+Nine doors record exactly one each — search, get, recent, list, diary, tunnel,
+closet, hallways, admission queue — and `read/search` records stay
+**byte-identical** to those written before. Bulk doors pass `BulkMember` to
+their inner `recent`, so the trail says one list rather than N gets.
+
+**Gated both ways:** the driver table asserts each door returned something
+(the premise arm), appended exactly one record, and left the chain green —
+then counts observed namespaces against `ReadOp::ALL` in both directions, so a
+`ReadOp` added later without a record fails the build.
+
+**Scope stated as a limit:** this closes the *drawer* funnel. The knowledge
+graph is a second funnel and its browse routes remain unaudited — filed, and
+written into `SECURITY.md`'s out-of-scope list. (Closed by O51 above, in the
+same release.)
+
+**Also fixed, found because it masked this work:** when a suite produced no
+summary, the battery's published-figures reader fed *"no results line found"*
+into arithmetic and aborted the script under `set -u`, so a failed build
+reported `line 1303: no: unbound variable` instead of the failure. A reader
+that crashes on the failure path cannot report one.
+
+### an undeclared model identity is no longer silent — and why it is not yet derived (O49)
+
+**Round-four #27.** `UNDERCROFT_ONNX_NAME` and its five siblings default to a
+shared literal, so two different model files record **one** vector-space
+identity — which disarms the only check standing between a silent model swap
+and silently degraded recall (`EmbedderMismatch`, recoverable solely through
+`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`). ColBERT is the same one level down:
+its token matrices are stored per drawer.
+
+**Deliberately warns rather than deriving an identity from the model.** Every
+existing vault has `"onnx-sentence"` recorded, so a derived identity would
+make the next start-up an `EmbedderMismatch` and demand a manual repair from
+deployments that changed nothing — *"a default that changes what is
+retrievable"*, MAJOR by this project's own test. Shipping that as a patch
+would be the same silent breakage, pointed the other way. **Filed for 2.0.0
+with its migration options**; what closes here is the *silence*, which is the
+property 67 of round four's 70 findings shared. All six sites now warn at
+construction, naming the variable, the identity recorded, the model file(s)
+and the later consequence.
+
+Both feature-gated crates gained `undercroft-obs` (zero-dependency by
+default) because neither could otherwise reach a warning.
+
+**My own defect:** the scripted edit assumed `model` was in scope at all six
+sites. In both `late.rs` files ColBERT has *two* model files, `doc` and
+`query`, and no `model` — it did not compile. I had read the diff for one
+file and assumed the rest matched. Fixing it improved the warning, which now
+names both ColBERT files. **CI clippy compiles neither crate** — only
+`onnx-build` and `ort-build` reach them, and running both is what caught it.
+
+Severity split honestly: the embedder and ColBERT identities gate stored
+vectors and stored token matrices; the reranker stores nothing, so its
+warning is consistency rather than protection.
+
+### a `Tunes` declaration that cannot be read now says so, and behaves as if absent (O48)
+
+**Round-four #25, the behaviour half.** `ConfigClass::Tunes` is documented in
+three places as *"garbage warns and keeps that default"*. Eleven store
+resolvers were `v.parse().unwrap_or(DEFAULT)` — the failure swallowed in
+silence, so `UNDERCROFT_POOL_DIV=64x` gave the default with no signal that the
+declaration had not taken effect.
+
+Both concrete claims verified against the code: `POOL_DIV=0` parses and every
+consumer guards it with `.max(1)`, so a zero silently means *the pool is the
+whole live corpus*; and `UNDERCROFT_FDE_IVF_MIN` resolved unset to "tier off"
+but **garbage to "tier on"** — a typo enabling a tier its own comment says is
+default-off because the operator makes that call.
+
+**The fix improves on the plan.** Rather than special-casing that one knob —
+which leaves the next one to be remembered — `undercroft_core::config` makes
+the contract *"a declaration that cannot be read behaves exactly as if it were
+absent"*, so every knob is conservative **by construction** and that defect
+becomes an impossible state rather than a fixed one. The helper lives in core
+because it is the only crate every consumer shares, and it returns its message
+instead of logging it, so core gains no `undercroft-obs` dependency for three
+string parses.
+
+Two judgement calls, recorded: `min` is 1 for the `POOL_DIV` divisor and 0 for
+`_MIN` thresholds, since a threshold of zero is legitimate and refusing it
+would narrow input never documented as invalid; and `resolve_late_top_n`'s
+`rerank` arm is untouched, because an unparseable value resolving to 50 there
+is a documented compatibility promise. **No resolved value moved** — pinned by
+a pre-existing test.
+
+**The fix uncovered its own sharpest evidence.** With garbage no longer
+enabling the FDE tier, clippy reported `FDE_IVF_MIN_DEFAULT` as **dead code**
+— its only consumer had been the typo path. Its doc comment said so without
+noticing: *"Suggested coded-row count … (set without a parseable number falls
+back here). The tier is **off by default**."* Two sentences that contradict
+each other. It was never a default; it was the value a mistake produced, with
+a comment explaining that as though it were a feature. Deleted, its
+measurement kept as guidance for a human rather than a fallback for a parser.
+
+**Scope stated rather than implied:** this is the behaviour half only. The
+reporting half — `config check` answering `Accepted` for every name with no
+arm, and `ENGINE_ENV_VARS` gaining a `Parse::{Checked,Opaque}` axis — remains,
+along with the silent sites outside the store. Closing those piecemeal is the
+second-implementation trap this fix exists to avoid.
+
+### the heading gate gained its missing direction, and its limit is stated (O47)
+
+**Round-four #36**, taken first because it underwrote every closure this
+campaign has written. The gate flagged a body saying CLOSED under a heading
+that did not, and **could not flag the opposite** — a heading claiming CLOSED
+over work that is not done, which is the direction a session *writing*
+closures gets wrong.
+
+Whether the work is actually done is semantic and no textual gate decides it.
+Two proxies are decidable, and both were **measured before being encoded**: a
+closure must carry evidence (a gate, test or counterfactual — 42 closed
+entries, **0** without one), and a closure must say when (**1** legitimate
+exception, `CLOSED by doctrine`, named in the gate).
+
+**What was rejected matters as much as what shipped.** The obvious check — a
+CLOSED heading over a body still using open-work vocabulary — was built and
+measured at **3 false positives in 42**, with `<details>` failing to separate
+them: in O10, O20 and O25 that phrasing refers to *other* work the entry
+mentions. At 7% wrong the gate is noise, and a noisy gate gets switched off.
+Recorded as unreachable rather than shipped.
+
+#36's filing also claimed the gate "examines 7 of ~25 sections". Measured, it
+examines **47 of 60**; the 13 skipped are prose sections correctly out of
+scope. Stale coverage claim, exact one-directional claim.
+
+**Residual, stated:** a heading claiming CLOSED with a date and a cited gate,
+over unfinished work, still passes. The gate demands evidence *exists*, not
+that it is true — and this campaign has twice found closures whose evidence
+was wrong (O38's figure, O35's citation).
+
+### the import route refuses a malformed vector instead of reshaping it (O46)
+
+**Round-four #50** — the first of that sweep's verified-open rows to be
+closed, and it was graded LOW on a reading that understates it.
+
+`POST /v1/vaults/{id}/import` parsed a caller-supplied `vector` with
+`filter_map`, so it failed **silently in two directions at once**: a
+non-numeric element was dropped and the rest kept — `[1.0, "x", 2.0]` became
+a two-element vector nobody sent — and a `vector` that was not an array read
+as *absent* rather than as bad input. The sibling save route on the same
+surface has always refused both, so one surface held two answers to one
+question.
+
+A caller-supplied vector is untrusted input, and this is the family of the
+non-finite channel already refused at the write choke point: the store cannot
+tell a deliberately short vector from a truncated one, so the failure
+surfaces later as a wrong *answer* rather than now as an error. This route is
+also the one every programmatic restore and the orchestrator's tenant
+migration drive.
+
+It now calls `parse_vector` — the existing shared parser, not a second copy —
+and prefixes the line number, because every other refusal on that path names
+its line and a large NDJSON restore is unactionable without it.
+
+**Counterfactual executed**, with the edit asserted applied before the test
+ran: against the reverted parse, `[1.0, "x", 2.0]` answers **200** with
+`"imported": 1`. Stated rather than overclaimed — that shows the *route*
+accepted it, not what the store then does with a two-element vector in a
+384-dimension space.
+
 ## 1.1.0 — 2026-08-18
 
 ### README, docs/ and website/ swept against the code: one drift, and it was in the doc that promised it had been counted (O45)

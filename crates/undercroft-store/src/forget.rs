@@ -303,7 +303,10 @@ impl PalaceStore {
             return Err(StoreError::Invalid("nothing to forget".into()));
         }
         for id in ids {
-            if self.get(id)?.is_none() {
+            if self
+                .get(id, crate::Read::Internal(crate::InternalRead::Verification))?
+                .is_none()
+            {
                 return Err(StoreError::NotFound(id.clone()));
             }
             if self.is_quarantine_pending(id)? {
@@ -348,7 +351,7 @@ impl PalaceStore {
         let mut drawers = Vec::with_capacity(ids.len());
         for id in ids {
             let d = self
-                .get(id)?
+                .get(id, crate::Read::Internal(crate::InternalRead::Verification))?
                 // NotFound, not Invalid: one status class for "not here"
                 // across every route (cluster: write-validation).
                 .ok_or_else(|| StoreError::NotFound(id.clone()))?;
@@ -589,7 +592,13 @@ impl PalaceStore {
             if !seen.contains(d.id.as_str()) {
                 return Err(fail(format!("no tombstone recorded for {}", d.id)));
             }
-            if self.get(&d.id)?.is_some() {
+            if self
+                .get(
+                    &d.id,
+                    crate::Read::Internal(crate::InternalRead::Verification),
+                )?
+                .is_some()
+            {
                 return Err(fail(format!("{} still exists", d.id)));
             }
         }
@@ -933,8 +942,20 @@ mod tests {
 
         // And the live half a rotation cannot weaken: the named drawers are
         // still gone and the unrelated one is still here.
-        assert!(store.get(&a.id).unwrap().is_none());
-        assert!(store.get(&keep.id).unwrap().is_some());
+        assert!(store
+            .get(
+                &a.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get(
+                &keep.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
         assert!(store.verify().unwrap().ok(), "the chain stays green");
     }
 
@@ -1021,6 +1042,12 @@ mod tests {
             AttestationVerdict::Verified,
             "an unsigned attestation is still a valid vault-verifiable one"
         );
-        assert!(store.get(&keep.id).unwrap().is_some());
+        assert!(store
+            .get(
+                &keep.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
     }
 }

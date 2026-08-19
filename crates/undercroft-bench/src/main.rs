@@ -3075,7 +3075,11 @@ fn distill_eval(samples: &[Value], k: usize, qa_limit: usize) -> Result<()> {
 
         // Distill: LLM facts → receipted KG fact + searchable fact-drawer in
         // the source session's room.
-        let verbatim = store.recent(Some("locomo"), 1_000_000)?;
+        let verbatim = store.recent(
+            Some("locomo"),
+            1_000_000,
+            undercroft_store::Read::Internal(undercroft_store::InternalRead::Maintenance),
+        )?;
         let mut fact_idx = 0u32;
         let t0 = Instant::now();
         for d in &verbatim {

@@ -537,7 +537,10 @@ impl PalaceStore {
         let total = missing.len() as u64;
         let mut encoded = 0u64;
         for id in missing.into_iter().take(limit) {
-            let Some(d) = self.get(&id)? else { continue };
+            let Some(d) = self.get(&id, crate::Read::Internal(crate::InternalRead::Maintenance))?
+            else {
+                continue;
+            };
             let late = self.late.as_ref().expect("checked above");
             let matrix = late.encode_doc(&d.content);
             if matrix.is_empty() {

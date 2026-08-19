@@ -75,7 +75,7 @@ echo "═══ preflight: line endings ═══"
 # wrong, no extension allowlist to keep in step, and no dependency on Python.
 #
 # Two hand-rolled attempts preceded this and each was broken in a DIFFERENT
-# direction, which is why both are exercised below rather than assumed:
+# direction. Both are named here because the probe below is shaped by them:
 #   * `grep -qU $'\r'` inside a `while read` subshell — the `$'\r'` never
 #     expanded, so the pattern was empty, `grep -q ''` matched every file and
 #     the check declared the whole repo corrupt (false POSITIVE);
@@ -84,12 +84,42 @@ echo "═══ preflight: line endings ═══"
 #     read as clean (false NEGATIVE).
 # A check whose output does not measure what it claims is the same defect
 # whichever way it points.
+# The selection, as a FUNCTION so the probe below runs the SAME code rather
+# than a second copy of it (ROADMAP O55). It reads `git ls-files --eol` output
+# on stdin and prints the offending paths.
+#
 # The attribute is field 4, not 3 (`i/lf  w/crlf  attr/text=auto  eol=lf`) —
 # matching on `$3` was this check's third bug and read every file as clean.
-# Hence `$0`, and hence the two-direction test that finally caught it.
-CRLF_HITS=$(git ls-files --eol 2>/dev/null \
-  | awk '$2 == "w/crlf" && $0 ~ /eol=lf/ { print $NF }' \
-  | grep -v '^crates/' || true)
+# Hence `$0`.
+crlf_offenders() {
+  awk '$2 == "w/crlf" && $0 ~ /eol=lf/ { print $NF }' | grep -v '^crates/' || true
+}
+
+# **The premise probe, in BOTH directions** (ROADMAP O55, round-four #37).
+# This check had none — while the comment above it claimed the two historical
+# failure modes were "exercised below rather than assumed", which they were
+# not. A false claim about a gate is worse than a missing gate: a reader
+# asking "is this probed?" reads the sentence and stops. Three versions of
+# this check were broken and two of them read a dirty tree as CLEAN, which is
+# indistinguishable from a clean tree in the output.
+CRLF_PROBE=$(printf '%s\n' \
+  'i/lf	w/crlf	attr/text=auto eol=lf	tests/dirty.sh' \
+  'i/lf	w/lf	attr/text=auto eol=lf	tests/clean.sh' \
+  'i/	w/	attr/-text	assets/binary.png' \
+  'i/lf	w/crlf	attr/text=auto eol=lf	crates/excluded.rs' \
+  | crlf_offenders)
+if [ "$CRLF_PROBE" != "tests/dirty.sh" ]; then
+  echo "FAIL  the CRLF selector does not select. On a fixture holding one CRLF"
+  echo "      offender, one clean file, one binary and one crates/ path it"
+  echo "      should print exactly 'tests/dirty.sh'; it printed:"
+  printf '        %s\n' ${CRLF_PROBE:-<nothing>}
+  echo "      A scanner that matches nothing reports exactly what a clean tree"
+  echo "      reports, and this check has been broken that way twice before."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+CRLF_HITS=$(git ls-files --eol 2>/dev/null | crlf_offenders)
 if [ -n "$CRLF_HITS" ]; then
   echo "FAIL  these tracked files have CRLF line endings, which .gitattributes"
   echo "      forbids (a CRLF script fails in the containers). Normalise in"
@@ -350,10 +380,49 @@ fi
 echo "ok    the former name is absent from tracked content"
 echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /      /'
 
+# ROADMAP O47 (round-four #36). This gate was ONE-DIRECTIONAL: it flagged a
+# body saying CLOSED under a heading that did not, and could not flag the
+# opposite — a heading claiming CLOSED over work that is not done. That is
+# the direction a session WRITING closures gets wrong, and it underwrites
+# every closure this campaign has recorded.
+#
+# **What is decidable, and what is not.** Whether the work is actually done is
+# semantic; no textual gate decides it, and pretending otherwise would ship a
+# scanner that reads as broader than it is (the O33 failure). Two proxies ARE
+# decidable, and both were measured against the tree before being encoded:
+#
+#   * a closure must carry EVIDENCE — a gate, a test or a counterfactual.
+#     Measured: 42 closed entries, 0 without. It is an invariant this file
+#     already holds, so encoding it costs nothing and catches the closure
+#     written in a hurry with nothing behind it.
+#   * a closure must say WHEN. Measured: 1 legitimate exception, `CLOSED by
+#     doctrine`, which is a ruling rather than a date and is named below.
+#
+# **What was REJECTED, and why it is recorded rather than attempted.** The
+# obvious check — a CLOSED heading over a body still using open-work
+# vocabulary ("Not scheduled", "Shape of a fix") — was built and measured at
+# THREE false positives in 42, and `<details>` does not separate them: in
+# O10, O20 and O25 that phrasing refers to OTHER work the entry mentions, not
+# to its own status. At that rate the gate would be noise, and a noisy gate
+# gets switched off (the O44 reasoning). Recorded as unreachable rather than
+# shipped at 7% wrong.
+#
+# Note #36's own filing said this gate "examines 7 of ~25 `###` sections".
+# Measured, it examines 47 of 60 — the 13 it skips are prose sections with no
+# `[A-Z][0-9]+` id, which are correctly out of scope. The coverage half of
+# that filing was stale; the one-directional half was right.
 echo "═══ preflight: ROADMAP headings ═══"
 ROADMAP_DRIFT=$(awk '
   function flush() {
-    if (sec != "") { seen++; if (body ~ /CLOSED/ && sec !~ /CLOSED/) print sec }
+    if (sec != "") {
+      seen++
+      if (body ~ /CLOSED/ && sec !~ /CLOSED/) print "body-closed-heading-open|" sec
+      if (sec ~ /CLOSED/) {
+        if (body !~ /[Gg]ate|[Cc]ounterfactual|test/) print "closure-without-evidence|" sec
+        if (sec !~ /CLOSED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ &&
+            sec !~ /CLOSED by doctrine/) print "closure-without-a-date|" sec
+      }
+    }
   }
   /^### [A-Z][0-9]+/ { flush(); sec = $0; body = ""; next }
   /^## /              { flush(); sec = "";  body = ""; next }
@@ -376,16 +445,30 @@ if [ "$ROADMAP_DRIFT" = "PREMISE-FAILED-no-sections-examined" ]; then
   exit 1
 fi
 if [ -n "$ROADMAP_DRIFT" ]; then
-  echo "FAIL  these ROADMAP entries say CLOSED in the body and not in the heading."
-  echo "      A reader skims headings; one that contradicts its own section is"
-  echo "      how an item that does not exist ends up in a handover:"
-  printf '        %s
-' "$ROADMAP_DRIFT"
+  while IFS='|' read -r kind sec; do
+    [ -z "$kind" ] && continue
+    case "$kind" in
+      body-closed-heading-open)
+        echo "FAIL  this entry says CLOSED in the body and not in the heading."
+        echo "      A reader skims headings; one that contradicts its own section"
+        echo "      is how an item that does not exist ends up in a handover:" ;;
+      closure-without-evidence)
+        echo "FAIL  this heading claims CLOSED and the body names no gate, test or"
+        echo "      counterfactual. Every other closed entry here carries one, so"
+        echo "      this is a closure with nothing behind it — the direction a"
+        echo "      session writing closures gets wrong (ROADMAP O47):" ;;
+      closure-without-a-date)
+        echo "FAIL  this heading claims CLOSED without saying WHEN. Use"
+        echo "      'CLOSED <yyyy-mm-dd>', or 'CLOSED by doctrine' for a ruling:" ;;
+    esac
+    printf '        %s\n' "$sec"
+  done <<< "$ROADMAP_DRIFT"
   echo ""
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
-echo "ok    every closed ROADMAP entry says so in its heading"
+echo "ok    every closed ROADMAP entry says so in its heading, with a date and"
+echo "      its evidence (both directions; 'is the work done' stays semantic)"
 
 # ── preflight: every compose file DECLARES its project name ────────────────
 # Undeclared, Compose derives the project from the DIRECTORY, so every
@@ -811,12 +894,24 @@ if ! printf '%s' "$WS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   exit 1
 fi
 
-VER_IDENT='([Ee]ngine v|updated for v|releases/latest">v)[0-9]+\.[0-9]+\.[0-9]+'
+VER_IDENT='([Ee]ngine v|updated for v|releases/latest">v|"version": "|Current release \*\*)[0-9]+\.[0-9]+\.[0-9]+'
 # label|class|file|pattern|count
+#
+# **The two entries at the bottom were named by `CLAUDE.md`'s release flow and
+# counted by nothing** until the `1.1.1` cut (ROADMAP O60). That list says a
+# version bump touches the plugin manifest and this file's own "Current
+# release" sentence; this inventory covered three surfaces and neither of
+# them. So the gate the doctrine points at — *"prose above, gate below, and
+# the gate is the one to trust"* — was NARROWER than the prose pointing at it,
+# which is the O24 shape: several documents describe a coverage the code does
+# not have. Found by running the release, which is the only thing that
+# exercises this path.
 VERSION_SURFACES=(
   'architecture engine version|current|architecture/index.html|[Ee]ngine v|3'
   'landing release button|current|website/landing/index.html|releases/latest">v|1'
   'parity comparison as-of|as-of|docs/PARITY.md|updated for v|1'
+  'plugin manifest|current|.claude-plugin/plugin.json|"version": "|1'
+  'doctrine current-release sentence|current|CLAUDE.md|Current release \*\*|1'
 )
 
 # PREMISE, both directions. A matcher that finds nothing reports what a fully
@@ -1073,6 +1168,28 @@ for row in "${PROSE_FIGURES[@]}"; do
   fi
 done
 
+# The round-four open-row heading against the rows it lists. Self-consistent
+# and therefore mechanically checkable, unlike the rows' contents — and it
+# drifted the day it was written (heading 8, list 9), which is why it is here.
+RF_HEAD=$(grep -oE '^### Still open from round four — [0-9]+ verified rows' ROADMAP.md           | grep -oE '[0-9]+' | head -1)
+if [ -n "$RF_HEAD" ]; then
+  # ONLY the list paragraph — the prose beneath it names closed rows too
+  # (`#26 is CLOSED by O48`), and sweeping those in made this gate's first
+  # run report 11 for a list of 9. Start after the heading, skip blanks, stop
+  # at the first blank line that follows content.
+  RF_LIST=$(awk '/^### Still open from round four/{f=1;next}
+                 f&&/^$/{ if (seen) exit; next }
+                 f{ seen=1; print }' ROADMAP.md             | grep -oE '`#[0-9]+`' | sort -u | grep -c . || true)
+  if [ "${RF_LIST:-0}" -lt 1 ]; then
+    echo "FAIL  the round-four open list matched no rows — the paragraph moved,"
+    echo "      and a reader that finds nothing must not agree with any heading"
+    PROSE_FAIL=1
+  elif [ "$RF_HEAD" != "$RF_LIST" ]; then
+    echo "FAIL  round-four open rows: the heading says $RF_HEAD, the list holds $RF_LIST"
+    PROSE_FAIL=1
+  fi
+fi
+
 if [ "$PF_ENV_ABSENT" -ne 0 ]; then
   echo "note  $PF_ENV_ABSENT engine variable(s) appear on $PF_ARCH in no form:$PF_ABSENT_LIST"
 fi
@@ -1247,6 +1364,13 @@ for i in "${!NAMES[@]}"; do
   line=$(suite_summary ".battery/$n.log")
   measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
   case "$measured" in
+    # The sed above leaves the line UNCHANGED when it does not match, so
+    # `measured` can be a whole sentence — including `suite_summary`'s own
+    # "no results line found — this reader examined nothing". That contains
+    # spaces, so it used to reach the arithmetic as $(( no + nothing )) and
+    # abort the script under `set -u`, MASKING the suite failure that
+    # produced it. A reader that crashes on the failure path cannot report.
+    *[!0-9[:blank:]]*) continue ;;
     *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
     *)     continue ;;
   esac

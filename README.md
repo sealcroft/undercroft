@@ -101,8 +101,9 @@ Every memory namespace is a **vault** — a hard isolation boundary:
   as a retrieval floor; every export leaves an audit-chain record binding
   its own manifest digest, with no flag to set (a read-only replica
   cannot write one and says so instead), and reads can be audited too
-  (`UNDERCROFT_READ_AUDIT=chain` — a keyed query fingerprint, never the
-  query text). All operator surfaces — deliberately never MCP.
+  (`UNDERCROFT_READ_AUDIT=chain` — one record per content-returning read
+  on both the drawer and knowledge-graph doors, carrying a keyed
+  fingerprint of the subject, never its text). All operator surfaces — deliberately never MCP.
 
 **Threat model:** protects memories at rest against disk theft, cross-vault
 bleed, and offline tampering of the database or manifest. It does *not* defend

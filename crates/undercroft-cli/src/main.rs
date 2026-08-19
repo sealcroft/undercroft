@@ -920,7 +920,9 @@ fn build_export_payload(
         records.push(b'\n');
         counts.drawers += 1;
     }
-    for (name, etype) in store.kg_export_entities()? {
+    for (name, etype) in store.kg_export_entities(undercroft_store::Read::Internal(
+        undercroft_store::InternalRead::ExportAudited,
+    ))? {
         serde_json::to_writer(
             &mut records,
             &serde_json::json!({ "entity": { "name": name, "etype": etype } }),
@@ -928,7 +930,9 @@ fn build_export_payload(
         records.push(b'\n');
         counts.kg_entities += 1;
     }
-    for exp in store.kg_export()? {
+    for exp in store.kg_export(undercroft_store::Read::Internal(
+        undercroft_store::InternalRead::ExportAudited,
+    ))? {
         serde_json::to_writer(&mut records, &serde_json::json!({ "triple": exp }))?;
         records.push(b'\n');
         counts.kg_triples += 1;
@@ -1243,6 +1247,34 @@ fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
     Ok(())
 }
 
+/// The `UNDERCROFT_RERANKER` vocabulary, and what this build can honour.
+///
+/// ROADMAP O52. `attach_reranker` refuses an unknown spelling and refuses a
+/// backend this build lacks — both hard errors that stop start-up — but that
+/// parse was tangled with the ATTACHMENT, so `undercroft config check` could
+/// not reach it and printed *"no parse to run; the consumer validates it"*
+/// about a declaration whose consumer bails. Exactly round-four #9's shape,
+/// one variable it did not name. Pure, so the pre-flight runs this and
+/// `attach_reranker` runs this, and they cannot disagree.
+pub(crate) fn check_reranker(raw: &str) -> Result<(), String> {
+    match raw {
+        "" => Ok(()),
+        "onnx" | "colbert" if !cfg!(feature = "onnx") => Err(format!(
+            "UNDERCROFT_RERANKER={raw} requires a build with the 'onnx' feature \
+             (cargo build -p undercroft-cli --features onnx)"
+        )),
+        "ort" | "colbert-ort" if !cfg!(feature = "ort") => Err(format!(
+            "UNDERCROFT_RERANKER={raw} requires a build with the 'ort' feature \
+             (cargo build -p undercroft-cli --features ort)"
+        )),
+        "onnx" | "colbert" | "ort" | "colbert-ort" => Ok(()),
+        other => Err(format!(
+            "unknown UNDERCROFT_RERANKER {other:?} \
+             (expected: onnx, ort, colbert, colbert-ort, or unset)"
+        )),
+    }
+}
+
 /// Attach the second retrieval stage via `UNDERCROFT_RERANKER`: `onnx` /
 /// `colbert` load the tract backend (`onnx` feature), `ort` / `colbert-ort`
 /// the ONNX Runtime backend (`ort` feature) — same model files and
@@ -1308,12 +1340,9 @@ fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
             );
         }
         Ok("") | Err(_) => Ok(()),
-        Ok(other) => {
-            bail!(
-                "unknown UNDERCROFT_RERANKER {other:?} \
-                 (expected: onnx, ort, colbert, colbert-ort, or unset)"
-            )
-        }
+        // One statement of the vocabulary, so the refusal an operator sees at
+        // start-up is the one `config check` showed them beforehand.
+        Ok(other) => bail!("{}", check_reranker(other).unwrap_err()),
     }
 }
 
@@ -2105,7 +2134,11 @@ fn run(cli: Cli) -> Result<()> {
             }
             println!("\n## L1 — ESSENTIAL STORY (vault '{vault}')");
             let store = open_store(&cli, vault)?;
-            let recent = store.recent(wing.as_deref(), 15)?;
+            let recent = store.recent(
+                wing.as_deref(),
+                15,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Recent),
+            )?;
             if recent.is_empty() {
                 // "Empty" only when it IS empty. A declared trust floor above
                 // `standard` with no wing yet assigned that class empties
@@ -2937,11 +2970,20 @@ fn run(cli: Cli) -> Result<()> {
                     as_of,
                     direction,
                 } => {
-                    let facts = store.kg_query_entity(entity, as_of.as_deref(), direction)?;
+                    let facts = store.kg_query_entity(
+                        entity,
+                        as_of.as_deref(),
+                        direction,
+                        undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+                    )?;
                     print_triples(&facts);
                 }
                 KgAction::Rel { predicate, as_of } => {
-                    let facts = store.kg_query_relationship(predicate, as_of.as_deref())?;
+                    let facts = store.kg_query_relationship(
+                        predicate,
+                        as_of.as_deref(),
+                        undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+                    )?;
                     print_triples(&facts);
                 }
                 KgAction::Invalidate {
@@ -2968,7 +3010,10 @@ fn run(cli: Cli) -> Result<()> {
                     println!("Superseded: {subject} --{predicate}--> {new_object} ({id})");
                 }
                 KgAction::Timeline { entity } => {
-                    let facts = store.kg_timeline(entity.as_deref())?;
+                    let facts = store.kg_timeline(
+                        entity.as_deref(),
+                        undercroft_store::Read::Returned(undercroft_store::ReadOp::KgTimeline),
+                    )?;
                     print_triples(&facts);
                 }
                 KgAction::Stats => {
@@ -3050,7 +3095,10 @@ fn run(cli: Cli) -> Result<()> {
                             .unwrap_or_default()
                     );
                 }
-                KgAction::Canonical { key } => match store.lookup_canonical(key)? {
+                KgAction::Canonical { key } => match store.lookup_canonical(
+                    key,
+                    undercroft_store::Read::Returned(undercroft_store::ReadOp::KgCanonical),
+                )? {
                     Some(t) => {
                         println!("{} --{}--> {}", t.subject, t.predicate, t.object);
                         println!(
@@ -3067,7 +3115,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::Drawer { action, vault } => {
             let mut store = open_store(&cli, vault)?;
             match action {
-                DrawerAction::Get { id } => match store.get(id)? {
+                DrawerAction::Get { id } => match store.get(
+                    id,
+                    undercroft_store::Read::Returned(undercroft_store::ReadOp::Get),
+                )? {
                     Some(d) => {
                         println!("id:     {}", d.id);
                         println!("wing:   {}/{}", d.meta.wing, d.meta.room);
@@ -3584,10 +3635,14 @@ fn run(cli: Cli) -> Result<()> {
             println!(
                 "{validated} declaration(s) validated against the resolver that runs at start-up."
             );
-            println!("{accepted} more are declared with no parse to run — this command has NOT");
-            println!("checked those: a path, a URL, a token or a model name is validated by the");
-            println!("thing that consumes it, and claiming otherwise would be a stronger");
-            println!("statement than the truth.");
+            println!(
+                "{accepted} more are declared Opaque — no parse exists to run, so this command"
+            );
+            println!("has NOT checked those: a path, a URL, a token or a model name is validated");
+            println!("by the thing that consumes it, and claiming otherwise would be a stronger");
+            println!("statement than the truth. Which declarations are Opaque is DECLARED in the");
+            println!("inventory and counted against this command in both directions, so the");
+            println!("number cannot grow by somebody forgetting to wire a parse up.");
             println!("{fatal} would REFUSE to start. {warned} would warn and keep the default.");
             if fatal > 0 {
                 // Exit 1, deliberately, and not the integrity code: a

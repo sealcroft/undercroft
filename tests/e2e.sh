@@ -630,6 +630,23 @@ check "clean env starts"          0 "This environment starts"        -- \
   "$BIN" config-check
 check "opens nothing, and says so" 0 "no vault, no database"          -- \
   "$BIN" config-check
+# ROADMAP O52: a TUNING declaration that does not parse. It warns rather than
+# refusing (its default is already the conservative choice), but it must be
+# REPORTED — before this, `config check` printed "no parse to run; the consumer
+# validates it" about a knob whose consumer O48 had just taught to validate it,
+# and exited 0 while the engine warned at every start-up.
+check "a bad tuning knob warns"   0 "warn"                            -- \
+  env UNDERCROFT_POOL_DIV=64x "$BIN" config-check
+check "and it names the knob"     0 "UNDERCROFT_POOL_DIV"             -- \
+  env UNDERCROFT_POOL_DIV=64x "$BIN" config-check
+# The degenerate value is the sharper case: `0` PARSES, and every consumer then
+# guards it with `.max(1)`, so it silently meant "the pool is the whole corpus".
+check "a degenerate divisor warns" 0 "minimum"                        -- \
+  env UNDERCROFT_POOL_DIV=0 "$BIN" config-check
+# ...and a knob that is genuinely unparseable-by-nature says WHICH kind of
+# unchecked it is, rather than one message covering both cases.
+check "an opaque declaration says so" 0 "declared Opaque"             -- \
+  env UNDERCROFT_QDRANT_URL=https://q.example "$BIN" config-check --verbose
 # A declaration that turns a protection on and does not parse: exit 1, named.
 check "a bad protection refuses"  1 "REFUSES"                         -- \
   env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" config-check
@@ -996,6 +1013,32 @@ if [ "$W4" -eq "$((W3 + 1))" ]; then
   echo "ok    declared read audit appends"; PASS=$((PASS+1))
 else
   echo "FAIL  declared read audit appends ($W3 -> $W4)"; FAIL=$((FAIL+1))
+fi
+# ROADMAP O51: the SECOND funnel, driven through the surface a user has.
+# The knowledge graph returns words distilled out of drawers, so its own
+# doors record too — verified here and not only in the store's unit gate,
+# because every one of this project's 65 drifts was a capability proved on
+# one surface and assumed on the others.
+env UNDERCROFT_READ_AUDIT=chain "$BIN" kg query alice > /dev/null
+check "verify green with kg read records" 0 "audit chain:     ok"     -- "$BIN" verify
+W5="$(chain_writes)"
+if [ "$W5" -eq "$((W4 + 1))" ]; then
+  echo "ok    declared read audit appends for a kg query"; PASS=$((PASS+1))
+else
+  echo "FAIL  declared read audit appends for a kg query ($W4 -> $W5)"; FAIL=$((FAIL+1))
+fi
+# ...and the deliberate exclusions stay silent. `kg stats` returns counts and
+# `kg receipts` returns identifiers and verdicts; neither reaches a word
+# decoder, so recording them would describe an exfiltration that cannot
+# happen through those doors.
+env UNDERCROFT_READ_AUDIT=chain "$BIN" kg stats > /dev/null
+env UNDERCROFT_READ_AUDIT=chain "$BIN" kg receipts > /dev/null
+"$BIN" verify > /dev/null
+W6="$(chain_writes)"
+if [ "$W6" -eq "$W5" ]; then
+  echo "ok    kg stats and receipts append nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  kg stats and receipts append nothing ($W5 -> $W6)"; FAIL=$((FAIL+1))
 fi
 
 echo "== HTTP MCP server =="
@@ -1370,6 +1413,23 @@ rest_code() { # <name> <expected-code> -- <curl args...>
 rest_body "create vault"        '"created":true'  -- -X POST "$API/vaults" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"id":"acme","level":"sealed"}'
 rest_code "missing assertion 401" 401 -- -X POST "$API/vaults/acme/search" -d '{"query":"x"}'
+# ROADMAP O54: a duplicate create answers 409, and it does so through the ONE
+# classifier. Both vault routes used to flatten every VaultError to 400 —
+# the duplicate case was caught by a second existence check in front of the
+# call, so this status was right by accident while every other verdict (a
+# full disk, an unwritable directory, a failed key derivation) answered "bad
+# request" about a server failure. The pre-check is gone; this is `vault_err`
+# answering.
+rest_code "duplicate vault create is 409" 409 -- -X POST "$API/vaults" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"id":"acme","level":"sealed"}'
+# Deliberately NOT tested here: a `BadName` from `create` itself. The route
+# validates the name before calling it, so that arm is unreachable over /v1 —
+# and a bad id fails the per-vault assertion first anyway, with 401. The
+# unit gate covers `vault_err`'s mapping; this file covers what a caller
+# can actually observe.
+# ...and deleting a vault that does not exist is 404, not 400.
+rest_code "deleting an absent vault is 404" 404 -- -X DELETE "$API/vaults/nosuchvault" \
+  -H "X-Vault-Assertion: $(sign nosuchvault)"
 rest_body "save drawer"         '"created":true'  -- -X POST "$API/vaults/acme/drawers" \
   -H "X-Vault-Assertion: $(sign acme)" \
   -d '{"text":"we picked postgres for the billing service","wing":"eng","room":"decisions"}'

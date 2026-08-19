@@ -118,6 +118,20 @@ Out of scope (documented threat-model boundaries):
 - A consistent old database + manifest pair restored **together** by an
   attacker with full disk control (documented residual; external witness
   is the planned mitigation).
+- **A `pub` reader added later on a private graph walk.** Under
+  `UNDERCROFT_READ_AUDIT=chain` every content-returning read appends one
+  record, on **both** funnels since ROADMAP O51: the drawer doors
+  (`search`, `get`, `recent`, `list`, diary, tunnel, closet, hallways,
+  admission queue) and the knowledge graph's own (`kg-query`,
+  `kg-timeline`, `kg-entities`, `kg-canonical`). The `Read` witness is a
+  required argument on every one of those, so a new SURFACE cannot forget
+  it. What is still uncovered is narrower and stated rather than implied: a
+  new `pub` store reader built on the private `all_triples` walk, reusing
+  an existing `ReadOp`, would satisfy the both-ways namespace gate without
+  recording — the same residual the drawer funnel carries for a reader that
+  avoids `get`/`recent`. Deliberately NOT on this list: `kg_verify_receipts`
+  and `kg_stats`, which return identifiers, verdicts and counts and reach
+  neither word decoder.
 - The **anchor lag on audited reads**. Under
   `UNDERCROFT_READ_AUDIT=chain` a read appends a chain record but
   deliberately does not fast-forward the manifest anchor, so a stripped

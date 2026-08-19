@@ -422,20 +422,21 @@ impl Tenancy {
             Some("hmac-only") | Some("hmac_only") => SecurityLevel::HmacOnly,
             _ => SecurityLevel::Sealed,
         };
-        if self.manager.exists(&id) {
-            return Err(RestError::new(409, "vault already exists"));
-        }
-        let vault = self
-            .manager
-            .create(&id, level)
-            .map_err(|e| RestError::new(400, e.to_string()))?;
+        // ROADMAP O54: through `vault_err`, and WITHOUT a duplicate existence
+        // check in front of it. `create` already answers `AlreadyExists`, so
+        // the pre-check was a second implementation of one decision — and the
+        // flattening below it turned every OTHER verdict into 400, telling a
+        // caller their request was malformed when the disk was full, the
+        // directory was unwritable, or key derivation failed. A server
+        // failure reported as a client error is the one class of status a
+        // caller cannot act on.
+        let vault = self.manager.create(&id, level).map_err(vault_err)?;
         // If an external embedder was requested, open once to record the
         // identity so subsequent opens enforce it.
         if let Some(spec) = body.get("embedder").and_then(Value::as_str) {
             if let Some((name, dim)) = undercroft_core::parse_external_spec(spec) {
                 let emb = Box::new(undercroft_core::ExternalEmbedder::new(&name, dim));
-                PalaceStore::open_with_embedder(vault, emb)
-                    .map_err(|e| RestError::new(500, e.to_string()))?;
+                PalaceStore::open_with_embedder(vault, emb).map_err(store_err)?;
             } else if spec != "hash" && !spec.is_empty() {
                 return Err(RestError::new(
                     400,
@@ -459,10 +460,7 @@ impl Tenancy {
                 "vault listing is disabled under per-vault assertions",
             ));
         }
-        let ids = self
-            .manager
-            .list()
-            .map_err(|e| RestError::new(500, e.to_string()))?;
+        let ids = self.manager.list().map_err(vault_err)?;
         Ok((200, Body::Json(json!({ "vaults": ids }))))
     }
 
@@ -471,10 +469,7 @@ impl Tenancy {
         // Dropping the Tenancy's handle does not close the `/mcp` one.
         self.deny_co_resident(id, "deleting a vault", "delete it while nothing serves it")?;
         self.stores.remove(id);
-        let deleted = self
-            .manager
-            .delete(id)
-            .map_err(|e| RestError::new(400, e.to_string()))?;
+        let deleted = self.manager.delete(id).map_err(vault_err)?;
         if deleted {
             Ok((200, Body::Json(json!({ "id": id, "deleted": true }))))
         } else {
@@ -993,7 +988,13 @@ impl Tenancy {
         {
             review_door(under_assertions, named_wing.as_deref())?;
         }
-        match store.get(drawer_id).map_err(store_err)? {
+        match store
+            .get(
+                drawer_id,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Get),
+            )
+            .map_err(store_err)?
+        {
             Some(d) => {
                 // Same rule as search: the sealed reading is the record, the
                 // live one is the answer. `drawer` stays byte-faithful to
@@ -1239,7 +1240,13 @@ impl Tenancy {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
         let store = self.store_for(id)?;
-        let rows = store.kg_entities(limit, offset).map_err(store_err)?;
+        let rows = store
+            .kg_entities(
+                limit,
+                offset,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgEntities),
+            )
+            .map_err(store_err)?;
         let entities: Vec<Value> = rows
             .into_iter()
             .map(|(name, etype, created)| {
@@ -1263,7 +1270,12 @@ impl Tenancy {
         let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
         let triples = store
-            .kg_query_entity(&entity, as_of.as_deref(), &direction)
+            .kg_query_entity(
+                &entity,
+                as_of.as_deref(),
+                &direction,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+            )
             .map_err(store_err)?;
         Ok((
             200,
@@ -1281,7 +1293,12 @@ impl Tenancy {
         let entity = query_param(req, "entity").map(|v| pct_decode(&v));
         let grounding = query_param(req, "grounding").map(|v| pct_decode(&v));
         let store = self.store_for(id)?;
-        let triples = store.kg_timeline(entity.as_deref()).map_err(store_err)?;
+        let triples = store
+            .kg_timeline(
+                entity.as_deref(),
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgTimeline),
+            )
+            .map_err(store_err)?;
         Ok((
             200,
             Body::Json(json!({
@@ -1299,7 +1316,13 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let key = pct_decode(key);
         let store = self.store_for(id)?;
-        match store.lookup_canonical(&key).map_err(store_err)? {
+        match store
+            .lookup_canonical(
+                &key,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgCanonical),
+            )
+            .map_err(store_err)?
+        {
             Some(t) => Ok((200, Body::Json(json!({ "fact": t })))),
             None => Err(RestError::new(
                 404,
@@ -1911,12 +1934,22 @@ impl Tenancy {
         // The meta-rows gap, closed on this surface too: entities, facts
         // (receipts and authority tier travel; receipt tags re-key at the
         // destination) and tunnels ride the same NDJSON stream.
-        for (name, etype) in store.kg_export_entities().map_err(store_err)? {
+        for (name, etype) in store
+            .kg_export_entities(undercroft_store::Read::Internal(
+                undercroft_store::InternalRead::ExportAudited,
+            ))
+            .map_err(store_err)?
+        {
             out.push_str(&json!({ "entity": { "name": name, "etype": etype } }).to_string());
             out.push('\n');
             counts.kg_entities += 1;
         }
-        for exp in store.kg_export().map_err(store_err)? {
+        for exp in store
+            .kg_export(undercroft_store::Read::Internal(
+                undercroft_store::InternalRead::ExportAudited,
+            ))
+            .map_err(store_err)?
+        {
             out.push_str(&json!({ "triple": exp }).to_string());
             out.push('\n');
             counts.kg_triples += 1;
@@ -2038,11 +2071,28 @@ impl Tenancy {
             let drawer_val = obj.get("drawer").cloned().unwrap_or_else(|| obj.clone());
             let drawer: Drawer = serde_json::from_value(drawer_val)
                 .map_err(|e| RestError::new(400, format!("line {}: {e}", n + 1)))?;
-            let vector = obj.get("vector").and_then(Value::as_array).map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect()
-            });
+            // ROADMAP O46 (round-four #50). This was
+            // `obj.get("vector").and_then(Value::as_array).map(|a| a.iter()
+            //  .filter_map(|v| v.as_f64().map(|f| f as f32)).collect())`,
+            // which fails SILENTLY in two directions at once: a non-numeric
+            // element was dropped and the rest kept — so `[1.0, "x", 2.0]`
+            // became a 2-element vector the caller never sent — and a
+            // `vector` that is not an array at all read as ABSENT rather
+            // than as bad input.
+            //
+            // The sibling save route on this same surface has always refused
+            // both through `parse_vector`. A caller-supplied vector is
+            // untrusted input, and reshaping it quietly is the same family
+            // as the non-finite channel that is refused at the write choke
+            // point: the store cannot tell a deliberately short vector from
+            // a truncated one, and a wrong-dimension embedding is a wrong
+            // ANSWER later, not an error now.
+            //
+            // ONE implementation, not a second copy — the line number is
+            // added to the message the shared parser produced, because every
+            // other refusal on this path names its line.
+            let vector = parse_vector(&obj, "vector")
+                .map_err(|e| RestError::new(e.code, format!("line {}: {}", n + 1, e.message)))?;
             // Optional portable token artifact: {"model": "...", "b64": "..."}.
             let tok = match obj.get("tok") {
                 Some(t) => {
@@ -2700,6 +2750,61 @@ fn respond(req: Request, code: u16, body: &str, content_type: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    /// ROADMAP O54 (round-four #29). **Every `VaultError` reaching `/v1` is
+    /// classified by `vault_err`, and this counts the call sites rather than
+    /// trusting that they were.**
+    ///
+    /// `POST /v1/vaults` and `DELETE /v1/vaults/{id}` flattened it to
+    /// `RestError::new(400, e.to_string())`, so a disk that was full, a
+    /// directory that could not be created and a key derivation that failed
+    /// all answered **400 Bad Request** — telling the caller their request
+    /// was malformed when the server had failed. `vault_err` is the one place
+    /// that decides: 404 for `NotFound`, 409 for `AlreadyExists` and for the
+    /// two integrity verdicts (with `class: "integrity"`, which the fleet's
+    /// tooling keys on), 400 for `BadName`, 500 for everything else.
+    ///
+    /// A source count rather than a behaviour test because the failures are
+    /// filesystem states a test cannot reach portably — and because the
+    /// defect is "somebody wrote a new call site and mapped it by hand",
+    /// which only a count can see.
+    #[test]
+    fn every_vault_manager_call_is_classified_by_vault_err() {
+        let src = include_str!("tenant.rs");
+        let mut sites = 0usize;
+        let mut unclassified = Vec::new();
+        for (i, line) in src.lines().enumerate() {
+            let Some(rest) = line.split_once("self.manager.").map(|(_, r)| r) else {
+                continue;
+            };
+            // `exists` and `unlock` are not mapped on their own line: the
+            // first returns a bool, the second is already `.map_err(vault_err)`
+            // one line below its `match`.
+            if rest.starts_with("exists(") || rest.starts_with("unlock(") {
+                continue;
+            }
+            if !line.contains(".map_err(") {
+                continue;
+            }
+            sites += 1;
+            if !line.contains("map_err(vault_err)") {
+                unclassified.push(format!("  tenant.rs:{}: {}", i + 1, line.trim()));
+            }
+        }
+        // PREMISE. A scanner whose pattern stopped matching would report a
+        // clean tree, which is this project's oldest trap.
+        assert!(
+            sites >= 4,
+            "premise failed: only {sites} classified manager call(s) found — \
+             this scanner examined nothing"
+        );
+        assert!(
+            unclassified.is_empty(),
+            "a VaultError reaches /v1 without `vault_err` classifying it, so its \
+             status is whatever that line happened to type:\n{}",
+            unclassified.join("\n")
+        );
+    }
     use super::*;
     use std::io::{Read as _, Write as _};
     use tempfile::TempDir;
@@ -3660,6 +3765,57 @@ mod tests {
     fn one_record() -> String {
         let d = Drawer::new("ops", "r", "imported line".into(), None, 7, "export");
         format!("{}\n", json!({ "drawer": d }))
+    }
+
+    /// ROADMAP O46 (round-four #50). The import route parsed a
+    /// caller-supplied `vector` with `filter_map`, so it failed silently in
+    /// TWO directions: a non-numeric element was dropped and the remainder
+    /// kept — `[1.0, "x", 2.0]` became a 2-element vector nobody sent — and a
+    /// `vector` that was not an array read as ABSENT rather than as bad
+    /// input. The sibling save route on this same surface always refused
+    /// both.
+    ///
+    /// This asserts the REFUSAL and the PREMISE together, because a route
+    /// that rejected everything would pass the refusal arms alone.
+    #[test]
+    fn import_refuses_a_malformed_vector_instead_of_reshaping_it() {
+        let d = Drawer::new("ops", "r", "imported line".into(), None, 7, "export");
+
+        let with_vector = |v: serde_json::Value| -> String {
+            format!("{}\n", json!({ "drawer": d, "vector": v }))
+        };
+
+        // PREMISE: a well-formed vector still imports. Without this, every
+        // assertion below is satisfied by a route that refuses all input.
+        let mut s = surface(false);
+        let payload = signed_payload("", &with_vector(json!([0.5, 0.25, 0.125])), |_| {});
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&payload));
+        assert_eq!(code, 200, "premise: a numeric vector must import — {body}");
+
+        // A non-numeric ELEMENT is refused, not dropped. Before the fix this
+        // answered 200 and stored a vector one element shorter than the
+        // caller sent, which the store cannot distinguish from a deliberately
+        // short one.
+        let mut s = surface(false);
+        let payload = signed_payload("", &with_vector(json!([1.0, "x", 2.0])), |_| {});
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&payload));
+        assert_eq!(code, 400, "a non-numeric element must refuse — {body}");
+        assert!(
+            body.contains("array of numbers"),
+            "the refusal must say what was wrong: {body}"
+        );
+        // Every other refusal on this path names its line, and so must this
+        // one — a restore of a large NDJSON is unactionable without it.
+        assert!(
+            body.contains("line 1"),
+            "the refusal must name its line: {body}"
+        );
+
+        // A `vector` that is not an array at all is bad input, not absence.
+        let mut s = surface(false);
+        let payload = signed_payload("", &with_vector(json!("not-an-array")), |_| {});
+        let (code, body) = s.call("POST", "/v1/vaults/acme/import", Some(&payload));
+        assert_eq!(code, 400, "a non-array vector must refuse — {body}");
     }
 
     /// **`"signed": m.sig.is_some()` was field presence reported as a

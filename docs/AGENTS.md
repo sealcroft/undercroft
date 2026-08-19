@@ -122,7 +122,7 @@ when the agent forgets to save.
 
 Add `--read-only` to serve recall without write access. The posture reaches
 the OPEN as well as the tool gate, so a read-only stdio server does not
-migrate the embedder or append a read-audit record per search:
+migrate the embedder or append a read-audit record per read:
 
 ```json
 { "mcpServers": { "undercroft": { "command": "undercroft", "args": ["serve-mcp", "--read-only"] } } }
@@ -1064,8 +1064,9 @@ Retrieval: `UNDERCROFT_RETRIEVAL` (`pq`|`fde`|`hnsw` — `hnsw` is an
 in-process index and **single-vault only**: `serve-http` refuses it and
 names the fix, so choose `pq` or `fde` for a multi-tenant server) ·
 `UNDERCROFT_SEARCH_TRACE` (unset — any value prints a per-phase timing
-trace of each search to stderr, the instrument that found this project's
-own search hotspot. **Presence-triggered**: `0` and `off` turn it ON
+trace of each search to stderr, plus the candidate pool size and the
+scope it was drawn against, the instrument that found this project's
+own search hotspot and then a scoped pool a quarter the unscoped one. **Presence-triggered**: `0` and `off` turn it ON
 too; unset it to turn it off) · `UNDERCROFT_FUSION`
 (`bm25` default |`legacy`; `rrf` removed — measured −7.3pp, warns and falls
 back to `bm25`) · `UNDERCROFT_FUSION_WEIGHT` (0.55 — the blend's semantic
@@ -1113,8 +1114,11 @@ threshold is deployment-shaped, so it is declared, never defaulted; an
 unreadable declaration refuses to open rather than silently running
 unscreened; consulted only when `UNDERCROFT_ADMISSION=quarantine`) ·
 `UNDERCROFT_READ_AUDIT` (unset — `chain` appends one audit-chain record
-per search: a keyed fingerprint of the query (never its text), the
-declared scope, and the hit count, on every search path. A per-query
+per content-returning READ, not per search: a keyed fingerprint of the
+subject (never its text), the declared scope, and the count. Both funnels
+— the drawer doors `search`/`get`/`recent`/`list`/diary/tunnel/closet/
+hallways/admission-queue, and the graph doors `kg-query`/`kg-timeline`/
+`kg-entities`/`kg-canonical`. Bulk doors record ONCE per call. A per-read
 chain append is a real durability cost, so it is declared; garbage
 refuses to open; a read-only open warns and serves unaudited. One
 boundary, stated rather than hidden: read records deliberately do **not**
@@ -1151,12 +1155,15 @@ instead of intersecting corpus-wide candidates; smaller wings full-scan
 themselves, bounded and exact; `off` disables the per-wing tier only —
 every declared scope, wing or room, is resolved before candidates are
 drawn, so no scoped query can be starved by the corpus top-k) ·
-`UNDERCROFT_POOL_DIV` (64 — semantic prefilters fetch at least `live/div`
-stage-1 ADC candidates, and an exact-cosine second stage over just those
-candidates' embeddings cuts back to hydration size, so recall follows the
-wide pool while hydration stays fixed; measured: fixed 256 leaked R@5
-100→96.8% by 1M drawers; `off` = fixed floor, the measured-leaky
-behavior) ·
+`UNDERCROFT_POOL_DIV` (64 — the **PQ, per-wing PQ and FTS** tiers fetch at
+least `live/div` stage-1 candidates, and for the two PQ tiers an
+exact-cosine second stage over just those candidates' embeddings cuts back
+to hydration size, so recall follows the wide pool while hydration stays
+fixed; measured: fixed 256 leaked R@5 100→96.8% by 1M drawers; `off` =
+fixed floor, the measured-leaky behavior. The **FDE tier does not consult
+it** — it draws the fixed `max(256, depth·32)` — and whether that leaks at
+scale is unmeasured; this line said "semantic prefilters", which claimed a
+coverage it never had) ·
 `UNDERCROFT_PQ_PAGE_MIN` (off by default — sealed page tier: one AEAD
 page per IVF list, lazy per-probe decrypt) ·
 `UNDERCROFT_TOK_PQ_MIN` (256) · `UNDERCROFT_FDE_PQ_MIN` (256) ·

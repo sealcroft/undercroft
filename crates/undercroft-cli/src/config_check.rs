@@ -45,13 +45,18 @@ enum Finding {
 /// names whose only real validation is the thing that consumes them. Folding
 /// the two together would let this command imply it had checked all of them,
 /// and "none found" is a claim about the method, never about the tree.
+///
+/// **Since O52 the split is DECLARED rather than emergent.** `accepted` is
+/// exactly the `Parse::Opaque` half of `ENGINE_ENV_VARS`, counted against
+/// this code in both directions — so the number an operator reads as "not
+/// checked" cannot quietly grow when someone adds a knob and forgets its arm.
 pub fn run(verbose: bool) -> (usize, usize, usize, usize) {
     let mut fatal = 0usize;
     let mut warned = 0usize;
     let mut validated = 0usize;
     let mut accepted = 0usize;
 
-    for (name, _) in ENGINE_ENV_VARS {
+    for (name, _, _) in ENGINE_ENV_VARS {
         let Ok(raw) = std::env::var(name) else {
             continue; // Undeclared is not a finding.
         };
@@ -66,8 +71,14 @@ pub fn run(verbose: bool) -> (usize, usize, usize, usize) {
             Finding::Accepted => {
                 accepted += 1;
                 if verbose {
+                    // Says WHICH kind of unchecked it is. Before O52 this
+                    // read the same for a path with genuinely nothing to
+                    // parse and for a knob whose parse nobody had wired up,
+                    // so the honest half of the message was carrying the
+                    // dishonest half.
                     println!(
-                        "  seen    {name}={raw:?} — no parse to run; the consumer validates it"
+                        "  seen    {name}={raw:?} — declared Opaque: no parse exists, so its \
+                         consumer is the only real validation"
                     );
                 }
             }
@@ -98,8 +109,8 @@ pub fn run(verbose: bool) -> (usize, usize, usize, usize) {
 fn check_one(name: &str, raw: &str) -> Finding {
     let class = ENGINE_ENV_VARS
         .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, c)| *c)
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, c, _)| *c)
         .unwrap_or(ConfigClass::Tunes);
     // **Declarations this crate owns are checked here, not in the store.**
     // `check_declaration` lives in `undercroft-store`, which cannot reach a
@@ -119,6 +130,9 @@ fn check_one(name: &str, raw: &str) -> Finding {
         "UNDERCROFT_RETRIEVAL" => {
             Some(crate::check_retrieval(raw).map(|()| "selects the candidate generator".into()))
         }
+        "UNDERCROFT_RERANKER" => {
+            Some(crate::check_reranker(raw).map(|()| "attaches the second retrieval stage".into()))
+        }
         "UNDERCROFT_ADMISSION_LLM" => Some(
             undercroft_llm::advisor::check_mode(raw)
                 .map(|()| "tier-2 advisory screen, toward quarantine only".into())
@@ -134,6 +148,34 @@ fn check_one(name: &str, raw: &str) -> Finding {
         "UNDERCROFT_MCP_HTTP_TOKEN" => Some(
             crate::http::resolve_mcp_token(Some(raw))
                 .map(|_| "bearer required on /mcp and /v1".into()),
+        ),
+        // ROADMAP O52. Four declarations whose parses live in this crate,
+        // `undercroft-llm` and `undercroft-embed-ort`. The last is the reason
+        // its parse sits in `undercroft-core`: `--features ort` is not a
+        // default build, so an arm calling the ort crate would be unreachable
+        // from the binary an operator actually pre-flights with.
+        "UNDERCROFT_METRICS" => Some(crate::http::resolve_metrics(Some(raw)).map(|on| {
+            if on {
+                "/metrics is served".into()
+            } else {
+                "/metrics is off".into()
+            }
+        })),
+        "UNDERCROFT_SAMPLE_INTERVAL_MS" => Some(
+            crate::http::resolve_sample_interval_ms(Some(raw))
+                .map(|ms| format!("the telemetry sampler ticks every {ms} ms")),
+        ),
+        "UNDERCROFT_LLM_API" | "UNDERCROFT_EMBED_API" => Some(
+            undercroft_llm::check_api_kind(name, Some(raw))
+                .map(|k| format!("the served runtime speaks {k:?}")),
+        ),
+        "UNDERCROFT_EMBED_DIM" | "UNDERCROFT_ORT_POOL" => Some(
+            undercroft_core::config::positive_usize(name, Some(raw))
+                .map(|n| match n {
+                    Some(n) => format!("declared as {n}"),
+                    None => "derived at start-up".into(),
+                })
+                .map_err(|f| f.why),
         ),
         _ => None,
     };
@@ -238,7 +280,7 @@ mod tests {
             PREFLIGHT_EXEMPT.iter().copied().collect();
         let mut unchecked = Vec::new();
         let mut protects = 0usize;
-        for (name, class) in ENGINE_ENV_VARS {
+        for (name, class, _) in ENGINE_ENV_VARS {
             if *class != ConfigClass::Protects {
                 continue;
             }
@@ -270,6 +312,89 @@ mod tests {
             "`config check` and the Protects class disagree:\n{}",
             unchecked.join("\n")
         );
+    }
+
+    /// **ROADMAP O52's gate: the `Parse` axis is counted against the code in
+    /// both directions.**
+    ///
+    /// The defect is not "some arms were missing" — it is that nothing could
+    /// tell. `check_one`'s catch-all renders any unknown name as `Accepted`,
+    /// printed as *"no parse to run; the consumer validates it"*, which reads
+    /// identically for a path with genuinely nothing to parse and for a knob
+    /// whose parse somebody forgot. Round-four #9 closed that for `Protects`;
+    /// this closes it for every class, which matters because O48 had just
+    /// taught eleven `Tunes` resolvers to validate values the pre-flight was
+    /// still describing as unvalidated.
+    ///
+    /// Both directions, because only the second keeps the inventory honest as
+    /// the code grows: a `Checked` entry the pre-flight runs no parse for is a
+    /// false claim to an operator, and an `Opaque` entry that IS pre-flighted
+    /// is good news that has to be recorded rather than left to rot.
+    #[test]
+    fn every_checked_variable_is_pre_flighted_and_every_opaque_one_is_not() {
+        use crate::parity::Parse;
+        let mut wrong = Vec::new();
+        let (mut checked, mut opaque) = (0usize, 0usize);
+        for (name, _, parse) in ENGINE_ENV_VARS {
+            // A value no vocabulary contains and no number parses. `Accepted`
+            // for this means the command ran no parse at all.
+            let ran_a_parse =
+                !matches!(check_one(name, "\u{1}not-a-legal-value"), Finding::Accepted);
+            match parse {
+                Parse::Checked => {
+                    checked += 1;
+                    if !ran_a_parse {
+                        wrong.push(format!(
+                            "  {name} — declared Checked, but this command runs no parse for \
+                             it. Wire an arm that calls the resolver the engine calls, or \
+                             reclassify it Opaque."
+                        ));
+                    }
+                }
+                Parse::Opaque => {
+                    opaque += 1;
+                    if ran_a_parse {
+                        wrong.push(format!(
+                            "  {name} — declared Opaque, but IS pre-flighted now. Good news: \
+                             reclassify it Checked."
+                        ));
+                    }
+                }
+            }
+        }
+        // PREMISE, both halves. A filter that matched nothing, or an axis
+        // where every entry landed on one value, would report a clean tree.
+        assert!(
+            checked >= 40 && opaque >= 20,
+            "premise failed: {checked} checked / {opaque} opaque — the axis is not populated"
+        );
+        assert!(
+            wrong.is_empty(),
+            "the Parse axis and `config check` disagree:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// The pre-flight's own arithmetic: `validated + accepted` must equal the
+    /// number of declarations it looked at, and `accepted` must be exactly the
+    /// `Opaque` ones. An operator reads those two totals as "checked" and "not
+    /// checked", so they have to mean that.
+    #[test]
+    fn the_two_totals_an_operator_reads_are_the_two_halves_of_the_axis() {
+        use crate::parity::Parse;
+        let opaque: Vec<&str> = ENGINE_ENV_VARS
+            .iter()
+            .filter(|(_, _, p)| *p == Parse::Opaque)
+            .map(|(n, _, _)| *n)
+            .collect();
+        assert!(!opaque.is_empty(), "premise: no Opaque entries");
+        for name in &opaque {
+            assert!(
+                matches!(check_one(name, "anything-at-all"), Finding::Accepted),
+                "{name} is Opaque, so it must report as unchecked rather than as \
+                 checked-and-fine"
+            );
+        }
     }
 
     /// **The validator calls the engine's own resolvers, and this is the
@@ -334,11 +459,11 @@ mod tests {
         use crate::parity::{ConfigClass, ENGINE_ENV_VARS};
         let protects = ENGINE_ENV_VARS
             .iter()
-            .filter(|(_, c)| *c == ConfigClass::Protects)
+            .filter(|(_, c, _)| *c == ConfigClass::Protects)
             .count();
         let tunes = ENGINE_ENV_VARS
             .iter()
-            .filter(|(_, c)| *c == ConfigClass::Tunes)
+            .filter(|(_, c, _)| *c == ConfigClass::Tunes)
             .count();
         assert!(
             protects > 5 && tunes > 5,
@@ -357,9 +482,9 @@ mod tests {
             "UNDERCROFT_INDEX_CA",
             "UNDERCROFT_ORCH_ENGINE_CA",
         ] {
-            let class = ENGINE_ENV_VARS.iter().find(|(n, _)| *n == name);
+            let class = ENGINE_ENV_VARS.iter().find(|(n, _, _)| *n == name);
             assert_eq!(
-                class.map(|(_, c)| *c),
+                class.map(|(_, c, _)| *c),
                 Some(ConfigClass::Protects),
                 "{name} can refuse, so it must be classified Protects"
             );

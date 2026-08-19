@@ -65,6 +65,91 @@ so rather than implying it checked them.
 
 ---
 
+## 1.1.1 (released 2026-08-19)
+
+### A tuning declaration that cannot be read is reported, and no longer clamped into one that can
+
+**Who is affected:** deployments that declare a value **outside** a knob's
+documented range. Nothing else changes: a valid declaration resolves exactly
+as before, and an absent one always did.
+
+Four FDE construction knobs were `parse().ok().unwrap_or(default)` followed by
+`.max(1)` or `.clamp(1, 16)`, so an out-of-range value was silently pulled to
+the nearest legal one. They now follow the same contract as every other
+tuning knob — an unreadable or out-of-range declaration **warns and behaves as
+if it were absent**:
+
+| declaration | before | now |
+|---|---|---|
+| `UNDERCROFT_FDE_KSIM=32` | silently 16 | warns, uses the default 4 |
+| `UNDERCROFT_FDE_REPS=0` | silently 1 | warns, uses the default 8 |
+| `UNDERCROFT_FDE_DPROJ=0` | silently 1 | warns, uses the default 16 |
+| `UNDERCROFT_FDE_SEED=abc` | silently the default | warns, uses the default |
+
+**Existing vaults are not affected.** These four are consulted only the FIRST
+time a palace builds its FDE index; afterwards the persisted copy wins, because
+stored FDEs and future query FDEs must come from the same construction. Only a
+NEW vault built under an out-of-range declaration lands anywhere different.
+
+**Detect it before a restart:** `undercroft config check` now reports all four,
+by name, with the value it will actually use. It reports every other tuning
+knob too — `UNDERCROFT_POOL_DIV`, the PQ and IVF thresholds, the FDE tier
+thresholds, `UNDERCROFT_FUSION`, `UNDERCROFT_METRICS`,
+`UNDERCROFT_SAMPLE_INTERVAL_MS`, `UNDERCROFT_ORT_POOL`, `UNDERCROFT_EMBED_DIM`
+and the two `_API` vocabularies — which it previously described as having "no
+parse to run" whether or not one existed. Exit codes are unchanged: a tuning
+knob warns and exits 0; only a `Protects` declaration refuses.
+
+**Two vocabularies stop being silently ignored**, in the conservative
+direction both times. `UNDERCROFT_METRICS=yes` meant OFF and said nothing; it
+still means off and now says so. `UNDERCROFT_LLM_API=opneai` and
+`UNDERCROFT_EMBED_API=opneai` fell past both arms into inferring the API shape
+from the URL — a declaration silently replaced by an inference. The inference
+is still what an unreadable declaration gets, since that is what absence gives.
+
+### `UNDERCROFT_READ_AUDIT=chain` now records EVERY content read, on both funnels
+
+**Nothing to change, but plan for the volume.** Before this, one chain record
+was appended per `search` and none for anything else — `get`, `recent`, the
+drawer list, diary, tunnel, closet, hallways and the admission queue returned
+verbatim content and recorded nothing. That made the trail useless for the
+purpose the variable is documented for (insider/exfil accounting): walking
+`GET /v1/…/drawers` then `GET …/drawers/{id}` left no evidence at all.
+
+The knowledge graph was the same gap through a second door and is closed in
+the same release: `kg-query`, `kg-timeline`, `kg-entities` and `kg-canonical`
+return words distilled out of drawers, so walking `GET …/kg/entities` for
+names and then `GET …/kg/query` per name read the same corpus and left the
+same nothing.
+
+**Who is affected:** only deployments that have *declared*
+`UNDERCROFT_READ_AUDIT=chain`. The default is off and its behaviour is
+unchanged.
+
+**What changes for them:** more chain records, proportional to reads rather
+than to searches, so the audit table and the vault file grow faster. Each
+record is small and metadata-only (a KEYED fingerprint of the subject, never
+the id or the text in clear), and each is one row plus one chain step. Bulk
+doors record ONCE per call, not once per row returned, so listing a thousand
+drawers appends one record.
+
+**What does NOT change:** `read/search` records are byte-identical to the ones
+written before — same canonical, same field order — so nothing already in a
+chain is reinterpreted, and `verify` replays across the boundary unchanged.
+
+**Detect it before a restart:** `undercroft config check` reports the
+declaration, and its description now reads *"every content read appends a
+chain record"* rather than *"every search…"*.
+
+**Deliberately still silent, so the volume estimate is not a surprise in the
+other direction:** `GET …/kg/receipts` and `GET …/kg/stats` record nothing.
+They return identifiers, verdicts and counts and reach no word decoder. The
+engine's own internal reads record nothing either, each for a reason its
+`InternalRead` variant carries. `SECURITY.md`'s out-of-scope list states
+what remains.
+
+---
+
 ## 1.1.0
 
 **These are fixes, not contract changes**, and the distinction is worth

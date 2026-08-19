@@ -217,7 +217,17 @@ pub fn embedder_from_env() -> Result<OrtEmbedder, OrtError> {
         .map_err(|_| OrtError::Model("UNDERCROFT_ONNX_MODEL is not set".into()))?;
     let tokenizer = std::env::var("UNDERCROFT_ONNX_TOKENIZER")
         .map_err(|_| OrtError::Tokenizer("UNDERCROFT_ONNX_TOKENIZER is not set".into()))?;
-    let name = std::env::var("UNDERCROFT_ONNX_NAME").unwrap_or_else(|_| "onnx-sentence".into());
+    let name = std::env::var("UNDERCROFT_ONNX_NAME").unwrap_or_else(|_| {
+        undercroft_obs::diag_warn!(
+            "{}",
+            undercroft_core::config::undeclared_model_identity(
+                "UNDERCROFT_ONNX_NAME",
+                "onnx-sentence",
+                &model,
+            )
+        );
+        "onnx-sentence".into()
+    });
     OrtEmbedder::load(
         std::path::Path::new(&model),
         std::path::Path::new(&tokenizer),
@@ -249,11 +259,22 @@ impl OrtReranker {
     ) -> Result<Self, OrtError> {
         let tokenizer =
             Tokenizer::from_file(tokenizer_path).map_err(|e| OrtError::Tokenizer(e.to_string()))?;
-        let pool = std::env::var("UNDERCROFT_ORT_POOL")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n >= 1)
-            .unwrap_or_else(cores);
+        // ROADMAP O52: an unreadable declaration used to be swallowed, so
+        // `UNDERCROFT_ORT_POOL=4x` silently used the core count with no signal.
+        // The fallback is unchanged — absence and garbage both mean "derive it
+        // from the cores" — but it is reported now.
+        let pool_raw = std::env::var("UNDERCROFT_ORT_POOL").ok();
+        let pool = match undercroft_core::config::positive_usize(
+            "UNDERCROFT_ORT_POOL",
+            pool_raw.as_deref(),
+        ) {
+            Ok(n) => n,
+            Err(f) => {
+                undercroft_obs::diag_warn!("{}", f.why);
+                f.value
+            }
+        }
+        .unwrap_or_else(cores);
         // pool == 1 ⇒ a single all-core session (the batched/few-core mode);
         // pool > 1 ⇒ single-thread sessions the forwards fan out across.
         let per_session_threads = if pool > 1 { 1 } else { cores() };
@@ -329,7 +350,17 @@ pub fn reranker_from_env() -> Result<OrtReranker, OrtError> {
         .map_err(|_| OrtError::Model("UNDERCROFT_RERANK_MODEL is not set".into()))?;
     let tokenizer = std::env::var("UNDERCROFT_RERANK_TOKENIZER")
         .map_err(|_| OrtError::Tokenizer("UNDERCROFT_RERANK_TOKENIZER is not set".into()))?;
-    let name = std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| "onnx-reranker".into());
+    let name = std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| {
+        undercroft_obs::diag_warn!(
+            "{}",
+            undercroft_core::config::undeclared_model_identity(
+                "UNDERCROFT_RERANK_NAME",
+                "onnx-reranker",
+                &model,
+            )
+        );
+        "onnx-reranker".into()
+    });
     OrtReranker::load(
         std::path::Path::new(&model),
         std::path::Path::new(&tokenizer),

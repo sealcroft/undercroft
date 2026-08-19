@@ -77,8 +77,17 @@ impl OnnxReranker {
             .map_err(|_| OnnxError::Model("UNDERCROFT_RERANK_MODEL is not set".into()))?;
         let tokenizer = std::env::var("UNDERCROFT_RERANK_TOKENIZER")
             .map_err(|_| OnnxError::Tokenizer("UNDERCROFT_RERANK_TOKENIZER is not set".into()))?;
-        let name =
-            std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| "onnx-reranker".into());
+        let name = std::env::var("UNDERCROFT_RERANK_NAME").unwrap_or_else(|_| {
+            undercroft_obs::diag_warn!(
+                "{}",
+                undercroft_core::config::undeclared_model_identity(
+                    "UNDERCROFT_RERANK_NAME",
+                    "onnx-reranker",
+                    &model,
+                )
+            );
+            "onnx-reranker".into()
+        });
         Self::load(
             std::path::Path::new(&model),
             std::path::Path::new(&tokenizer),

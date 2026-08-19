@@ -44,19 +44,45 @@ pub(crate) enum ConfigClass {
 
 use ConfigClass::{Protects, Tunes};
 
+/// Whether this command runs a real parse for a declaration — the engine's
+/// `parity::Parse`, duplicated deliberately.
+///
+/// ROADMAP O58. The engine gained this axis in O52 and **this binary, whose
+/// inventory is counted against the engine's in both directions, did not** —
+/// so one of two sibling pre-flights learned to say which declarations it had
+/// actually checked and the other kept printing *"no parse to run; the
+/// consumer validates it"* about all of them. That drift was introduced by
+/// O52 itself, in this session, and is reported as mine.
+///
+/// Duplicated rather than imported because the control plane deliberately
+/// never links the engine — the same reason `ConfigClass` is duplicated ten
+/// lines above. The cross-inventory gate below now compares this axis too, by
+/// reading the engine's source, so the two copies cannot drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Parse {
+    /// This command runs the real resolver for the declaration.
+    Checked,
+    /// There is no parse to run: a listen address this command must not bind,
+    /// a database path it must not open. Saying so is honest; saying
+    /// "checked" would not be.
+    Opaque,
+}
+
+use Parse::{Checked, Opaque};
+
 /// Every declaration THIS binary reads, with what a bad value does.
 ///
 /// Counted against the engine's `ENGINE_ENV_VARS` in both directions, so a
 /// variable added to one and not the other fails the build.
-pub(crate) const ORCH_ENV_VARS: &[(&str, ConfigClass)] = &[
-    ("UNDERCROFT_ORCH_ADDR", Tunes),
-    ("UNDERCROFT_ORCH_ADMIN_TOKEN", Protects),
-    ("UNDERCROFT_ORCH_DB", Tunes),
-    ("UNDERCROFT_ORCH_ENGINE_CA", Protects),
-    ("UNDERCROFT_ORCH_KEY", Protects),
-    ("UNDERCROFT_ORCH_METRICS_ADDR", Protects),
-    ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects),
-    ("UNDERCROFT_ORCH_RATE_LIMIT", Protects),
+pub(crate) const ORCH_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
+    ("UNDERCROFT_ORCH_ADDR", Tunes, Opaque),
+    ("UNDERCROFT_ORCH_ADMIN_TOKEN", Protects, Checked),
+    ("UNDERCROFT_ORCH_DB", Tunes, Opaque),
+    ("UNDERCROFT_ORCH_ENGINE_CA", Protects, Checked),
+    ("UNDERCROFT_ORCH_KEY", Protects, Checked),
+    ("UNDERCROFT_ORCH_METRICS_ADDR", Protects, Checked),
+    ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects, Checked),
+    ("UNDERCROFT_ORCH_RATE_LIMIT", Protects, Checked),
 ];
 
 /// What checking one declaration found.
@@ -71,8 +97,8 @@ enum Finding {
 fn check_one(name: &str, raw: &str) -> Finding {
     let class = ORCH_ENV_VARS
         .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, c)| *c)
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, c, _)| *c)
         .unwrap_or(Tunes);
     let result: Option<Result<String, String>> = match name {
         "UNDERCROFT_ORCH_KEY" => Some(
@@ -165,7 +191,7 @@ fn check_one(name: &str, raw: &str) -> Finding {
 /// resolver. Returns (fatal, warned, validated, accepted).
 pub(crate) fn run(verbose: bool) -> (usize, usize, usize, usize) {
     let (mut fatal, mut warned, mut validated, mut accepted) = (0, 0, 0, 0);
-    for (name, _) in ORCH_ENV_VARS {
+    for (name, _, _) in ORCH_ENV_VARS {
         let Ok(raw) = std::env::var(name) else {
             continue; // Undeclared is not a finding.
         };
@@ -180,7 +206,7 @@ pub(crate) fn run(verbose: bool) -> (usize, usize, usize, usize) {
                 accepted += 1;
                 if verbose {
                     println!(
-                        "  seen    {name}={raw:?} — no parse to run; the consumer validates it"
+                        "  seen    {name}={raw:?} — declared Opaque: no parse exists, so its consumer is the only real validation"
                     );
                 }
             }
@@ -216,7 +242,7 @@ mod tests {
     fn every_protects_variable_is_pre_flighted() {
         let mut unchecked = Vec::new();
         let mut protects = 0usize;
-        for (name, class) in ORCH_ENV_VARS {
+        for (name, class, _) in ORCH_ENV_VARS {
             if *class != Protects {
                 continue;
             }
@@ -235,6 +261,59 @@ mod tests {
         assert!(
             unchecked.is_empty(),
             "these Protects declarations have no parse in `config check`: {unchecked:?}"
+        );
+    }
+
+    /// ROADMAP O58. **The engine's O52 gate, on this binary** — every
+    /// `Checked` declaration is pre-flighted and every `Opaque` one is not,
+    /// counted in both directions.
+    ///
+    /// O52 gave the ENGINE's pre-flight a `Parse` axis so it could say which
+    /// declarations it had actually run a parse for, instead of printing "no
+    /// parse to run" whether or not one existed. This binary — whose
+    /// inventory is counted against the engine's in both directions by the
+    /// test below — kept the undifferentiated message. One of two sibling
+    /// commands learned to tell the truth about its own coverage; that is
+    /// the 65-drift shape, created by the fix rather than found by it.
+    #[test]
+    fn every_checked_variable_is_pre_flighted_and_every_opaque_one_is_not() {
+        let mut wrong = Vec::new();
+        let (mut checked, mut opaque) = (0usize, 0usize);
+        for (name, _, parse) in ORCH_ENV_VARS {
+            let ran_a_parse =
+                !matches!(check_one(name, "\u{1}not-a-legal-value"), Finding::Accepted);
+            match parse {
+                Checked => {
+                    checked += 1;
+                    if !ran_a_parse {
+                        wrong.push(format!(
+                            "  {name} — declared Checked, but this command runs no parse for \
+                             it. Wire an arm calling the resolver `serve` calls, or \
+                             reclassify it Opaque."
+                        ));
+                    }
+                }
+                Opaque => {
+                    opaque += 1;
+                    if ran_a_parse {
+                        wrong.push(format!(
+                            "  {name} — declared Opaque, but IS pre-flighted now. Good news: \
+                             reclassify it Checked, and the engine's inventory with it."
+                        ));
+                    }
+                }
+            }
+        }
+        // PREMISE, both halves: an axis where every entry landed on one value
+        // would report a clean tree.
+        assert!(
+            checked >= 5 && opaque >= 1,
+            "premise failed: {checked} checked / {opaque} opaque — the axis is not populated"
+        );
+        assert!(
+            wrong.is_empty(),
+            "the Parse axis and this pre-flight disagree:\n{}",
+            wrong.join("\n")
         );
     }
 
@@ -261,7 +340,7 @@ mod tests {
         // this line declares a variable called `UNDERCROFT_ORCH_` — the bare
         // prefix — and fails that gate. It did, on the first battery. One
         // gate's needle is another gate's input.
-        let mut engine: Vec<(String, ConfigClass)> = Vec::new();
+        let mut engine: Vec<(String, ConfigClass, Parse)> = Vec::new();
         for line in src.lines() {
             let line = line.trim();
             let Some(rest) = line.strip_prefix(concat!('(', '"', "UNDER", "CROFT_ORCH_")) else {
@@ -277,7 +356,20 @@ mod tests {
             } else {
                 panic!("unrecognised class on engine inventory line: {line}");
             };
-            engine.push((format!("UNDERCROFT_ORCH_{name_tail}"), class));
+            // The engine's third field, since O58. Reading it here is what
+            // keeps the two duplicated `Parse` enums from meaning different
+            // things — the same reason this gate reads the class.
+            let parse = if class_part.contains("Checked") {
+                Checked
+            } else if class_part.contains("Opaque") {
+                Opaque
+            } else {
+                panic!(
+                    "no Parse axis on engine inventory line: {line}. The engine gained \
+                     `parity::Parse` in O52; if it is gone, remove it here too."
+                );
+            };
+            engine.push((format!("UNDERCROFT_ORCH_{name_tail}"), class, parse));
         }
 
         // PREMISE. A parser that matched nothing reports two agreeing empty
@@ -290,20 +382,32 @@ mod tests {
             engine.len()
         );
 
-        let mine: std::collections::BTreeMap<&str, ConfigClass> =
-            ORCH_ENV_VARS.iter().map(|(n, c)| (*n, *c)).collect();
-        let theirs: std::collections::BTreeMap<&str, ConfigClass> =
-            engine.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        let mine: std::collections::BTreeMap<&str, (ConfigClass, Parse)> = ORCH_ENV_VARS
+            .iter()
+            .map(|(n, c, p)| (*n, (*c, *p)))
+            .collect();
+        let theirs: std::collections::BTreeMap<&str, (ConfigClass, Parse)> = engine
+            .iter()
+            .map(|(n, c, p)| (n.as_str(), (*c, *p)))
+            .collect();
 
-        for (name, class) in &theirs {
+        for (name, (class, parse)) in &theirs {
             match mine.get(name) {
                 None => panic!(
                     "{name} is in the engine's ENGINE_ENV_VARS and not in ORCH_ENV_VARS — \
                      this binary reads it and its pre-flight does not know it exists"
                 ),
-                Some(c) if c != class => panic!(
+                Some((c, _)) if c != class => panic!(
                     "{name} is {class:?} to the engine and {c:?} here — one of them decides \
                      whether a bad value refuses or warns, and they must not disagree"
+                ),
+                // The axis, since O58. Two pre-flights telling an operator
+                // different things about whether the SAME declaration was
+                // checked is the drift this join exists to prevent.
+                Some((_, p)) if p != parse => panic!(
+                    "{name} is {parse:?} to the engine and {p:?} here — one of these two \
+                     commands is telling an operator it checked a declaration the other \
+                     says has no parse to run"
                 ),
                 _ => {}
             }

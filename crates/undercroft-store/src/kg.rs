@@ -2217,7 +2217,10 @@ impl PalaceStore {
                     {
                         ReceiptVerdict::Tampered
                     } else {
-                        match self.get(&did)? {
+                        match self.get(
+                            &did,
+                            crate::Read::Internal(crate::InternalRead::Verification),
+                        )? {
                             None => ReceiptVerdict::Dangling,
                             // Recomputed under the SAME recipe the write path
                             // used, so a legacy row the migration refused to
@@ -2248,7 +2251,7 @@ impl PalaceStore {
     /// meta-rows gap. Since U12 that fingerprint travels as the receipted
     /// CLAIM only; see [`TripleExport`] for why the destination re-derives
     /// rather than re-keys it.
-    pub fn kg_export(&self) -> Result<Vec<TripleExport>, StoreError> {
+    pub fn kg_export(&self, read: crate::Read) -> Result<Vec<TripleExport>, StoreError> {
         let sql =
             format!("SELECT {TRIPLE_COLUMNS}, source_fp, receipt_tag FROM kg_triples ORDER BY seq");
         let mut stmt = self.conn.prepare(&sql)?;
@@ -2269,11 +2272,18 @@ impl PalaceStore {
                 source_fp: receipt.and(fp).map(hex::encode),
             });
         }
+        // Takes the witness so a new caller has to state one; every caller
+        // today is ExportAudited, which records nothing here because
+        // `audit_export` already records the egress unconditionally.
+        self.record_read(read, "", crate::ReadScope::none(), out.len())?;
         Ok(out)
     }
 
     /// Entity rows for export: `(name, etype)`, tag-verified.
-    pub fn kg_export_entities(&self) -> Result<Vec<(String, String)>, StoreError> {
+    pub fn kg_export_entities(
+        &self,
+        read: crate::Read,
+    ) -> Result<Vec<(String, String)>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(
@@ -2306,6 +2316,9 @@ impl PalaceStore {
                 etype,
             ));
         }
+        // As kg_export: the witness forces a decision, and every caller
+        // today is ExportAudited.
+        self.record_read(read, "", crate::ReadScope::none(), out.len())?;
         Ok(out)
     }
 
@@ -2462,7 +2475,10 @@ impl PalaceStore {
         // exception rather than the rule.
         let source_fp = match (claimed, t.source_drawer_id.as_deref()) {
             (true, Some(did)) => self
-                .get(did)?
+                .get(
+                    did,
+                    crate::Read::Internal(crate::InternalRead::WritePathLookup),
+                )?
                 .map(|d| keyed_content_fp(&self.vault, &secret, &d.content)),
             _ => None,
         };
@@ -2806,7 +2822,18 @@ impl PalaceStore {
     /// any kind is involved — which is what makes it immune to every
     /// crowding and starvation shape the retrieval side has to defend
     /// against.
-    pub fn lookup_canonical(&self, key: &str) -> Result<Option<Triple>, StoreError> {
+    ///
+    /// Audited as `read/kg-canonical` (ROADMAP O51): it returns a `Triple`
+    /// whose subject, predicate and object are words distilled out of a
+    /// drawer, so it is the KG funnel's by-key door and takes the same
+    /// witness `get` does. Like `get`, it records only when it FOUND
+    /// something — a miss returned no content — so the two by-key doors on
+    /// the two funnels answer the same question the same way.
+    pub fn lookup_canonical(
+        &self,
+        key: &str,
+        read: crate::Read,
+    ) -> Result<Option<Triple>, StoreError> {
         let sql = format!(
             "SELECT {TRIPLE_COLUMNS} FROM kg_triples \
              WHERE canonical_key = ?1 AND authority_class = 'canonical' \
@@ -2818,7 +2845,11 @@ impl PalaceStore {
             .prepare(&sql)?
             .query_row(params![key], TripleRow::from_row)
             .optional()?;
-        row.map(|r| self.decode_triple(r)).transpose()
+        let out = row.map(|r| self.decode_triple(r)).transpose()?;
+        if out.is_some() {
+            self.record_read(read, key, crate::ReadScope::none(), 1)?;
+        }
+        Ok(out)
     }
 
     fn decode_triple(&self, row: TripleRow) -> Result<Triple, StoreError> {
@@ -2876,6 +2907,17 @@ impl PalaceStore {
         })
     }
 
+    /// The whole graph, decoded and tag-verified. **Private, and it takes
+    /// no `Read` witness on purpose** (ROADMAP O51): it is not a door. Two
+    /// of its four callers are WRITE paths (`kg_invalidate`,
+    /// `kg_supersede`) that decode in order to decide what to close, and
+    /// the two that are doors filter afterwards — so the count that belongs
+    /// in a record is the door's, not this walk's. The witness therefore
+    /// lives on the `pub` readers, which is the boundary a surface author
+    /// actually writes against. Residual, stated: a NEW `pub` door built on
+    /// this helper and reusing an existing `ReadOp` would not be caught by
+    /// the both-ways namespace gate — the same residual O50 carries for a
+    /// new drawer door that avoids `get`/`recent`.
     fn all_triples(&self) -> Result<Vec<Triple>, StoreError> {
         let sql = format!("SELECT {TRIPLE_COLUMNS} FROM kg_triples ORDER BY seq");
         let mut stmt = self.conn.prepare(&sql)?;
@@ -2893,10 +2935,11 @@ impl PalaceStore {
         name: &str,
         as_of: Option<&str>,
         direction: &str,
+        read: crate::Read,
     ) -> Result<Vec<Triple>, StoreError> {
         let all = self.all_triples()?;
         let key = as_of.map(temporal_key);
-        Ok(all
+        let out: Vec<Triple> = all
             .into_iter()
             .filter(|t| match direction {
                 "incoming" => t.object == name,
@@ -2904,7 +2947,15 @@ impl PalaceStore {
                 _ => t.subject == name,
             })
             .filter(|t| valid_at(t, key.as_deref()))
-            .collect())
+            .collect();
+        // Recorded HERE and not in `all_triples`, and the difference is the
+        // honesty of one number. `all_triples` decodes the whole graph for
+        // every arm of this door, so a record written there would say 40
+        // where 3 left the process — over-reporting an exfil trail is a
+        // false claim, not a conservative one. The door knows what it
+        // returned; the helper does not.
+        self.record_read(read, name, crate::ReadScope::none(), out.len())?;
+        Ok(out)
     }
 
     /// Every fact using a predicate, optionally as of an instant.
@@ -2912,14 +2963,21 @@ impl PalaceStore {
         &self,
         predicate: &str,
         as_of: Option<&str>,
+        read: crate::Read,
     ) -> Result<Vec<Triple>, StoreError> {
         let key = as_of.map(temporal_key);
-        Ok(self
+        let out: Vec<Triple> = self
             .all_triples()?
             .into_iter()
             .filter(|t| t.predicate == predicate)
             .filter(|t| valid_at(t, key.as_deref()))
-            .collect())
+            .collect();
+        // The same door as kg_query_entity — ONE namespace, because one
+        // tool is what a caller drives (undercroft_kg_query, GET .../kg/query,
+        // `kg query` / `kg rel`). The subject records which arm through its
+        // keyed fingerprint.
+        self.record_read(read, predicate, crate::ReadScope::none(), out.len())?;
+        Ok(out)
     }
 
     /// Close the validity window of matching active facts. Returns how many
@@ -3099,7 +3157,11 @@ impl PalaceStore {
 
     /// Full history, optionally scoped to one entity, ordered by validity
     /// start (facts with no start sort first).
-    pub fn kg_timeline(&self, entity: Option<&str>) -> Result<Vec<Triple>, StoreError> {
+    pub fn kg_timeline(
+        &self,
+        entity: Option<&str>,
+        read: crate::Read,
+    ) -> Result<Vec<Triple>, StoreError> {
         let mut out: Vec<Triple> = self
             .all_triples()?
             .into_iter()
@@ -3123,6 +3185,12 @@ impl PalaceStore {
             ka.cmp(&kb)
                 .then_with(|| a.extracted_at.cmp(&b.extracted_at))
         });
+        self.record_read(
+            read,
+            entity.unwrap_or(""),
+            crate::ReadScope::none(),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -3132,6 +3200,7 @@ impl PalaceStore {
         &self,
         limit: usize,
         offset: usize,
+        read: crate::Read,
     ) -> Result<Vec<(String, String, String)>, StoreError> {
         // **Sorted and paged in RAM on a sealed vault, and that is not a
         // preference.** `ORDER BY name LIMIT/OFFSET` was the whole query, and
@@ -3190,8 +3259,11 @@ impl PalaceStore {
             // Alphabetical by the WORD, then the caller's page — the order an
             // hmac-only vault gets from SQL for free.
             out.sort_by(|a, b| a.0.cmp(&b.0));
-            return Ok(out.into_iter().skip(offset).take(limit).collect());
+            let page: Vec<_> = out.into_iter().skip(offset).take(limit).collect();
+            self.record_read(read, "", crate::ReadScope::none(), page.len())?;
+            return Ok(page);
         }
+        self.record_read(read, "", crate::ReadScope::none(), out.len())?;
         Ok(out)
     }
 
@@ -3502,7 +3574,14 @@ mod tests {
         s.kg_add("ana", "knows", "bob", None, None, 1.0, None)
             .unwrap();
 
-        let facts = s.kg_query_entity("ana", None, "outgoing").unwrap();
+        let facts = s
+            .kg_query_entity(
+                "ana",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         let by = |p: &str| facts.iter().find(|t| t.predicate == p).unwrap().grounding();
 
         assert_eq!(by("works_as"), Grounding::Stated, "the note says it");
@@ -3527,7 +3606,14 @@ mod tests {
             "radiologist",
             Some("works as a radiologist"),
         );
-        let facts = s.kg_query_entity("ana", None, "outgoing").unwrap();
+        let facts = s
+            .kg_query_entity(
+                "ana",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         let spans = &facts[0].support.as_ref().unwrap().spans;
         assert_eq!(spans.len(), 1);
         let (o, l) = (spans[0].offset as usize, spans[0].len as usize);
@@ -3574,7 +3660,10 @@ mod tests {
             "superseding must not look like tampering"
         );
         let closed = s
-            .kg_timeline(Some("ana"))
+            .kg_timeline(
+                Some("ana"),
+                crate::Read::Returned(crate::ReadOp::KgTimeline),
+            )
             .unwrap()
             .into_iter()
             .find(|t| t.object == "radiologist")
@@ -3601,7 +3690,14 @@ mod tests {
         .unwrap();
         s.kg_add("alice", "lives_in", "berlin", None, None, 0.9, None)
             .unwrap();
-        let facts = s.kg_query_entity("alice", None, "outgoing").unwrap();
+        let facts = s
+            .kg_query_entity(
+                "alice",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         assert_eq!(facts.len(), 2);
         assert!(facts.iter().any(|t| t.object == "acme"));
     }
@@ -3623,19 +3719,36 @@ mod tests {
             .unwrap();
 
         // Now: only globex is active.
-        let now = s.kg_query_entity("alice", None, "outgoing").unwrap();
+        let now = s
+            .kg_query_entity(
+                "alice",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         assert_eq!(now.len(), 1);
         assert_eq!(now[0].object, "globex");
 
         // As of 2024: acme was the valid fact.
         let then = s
-            .kg_query_entity("alice", Some("2024-06-15"), "outgoing")
+            .kg_query_entity(
+                "alice",
+                Some("2024-06-15"),
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
             .unwrap();
         assert_eq!(then.len(), 1);
         assert_eq!(then[0].object, "acme");
 
         // Timeline shows both, in order.
-        let tl = s.kg_timeline(Some("alice")).unwrap();
+        let tl = s
+            .kg_timeline(
+                Some("alice"),
+                crate::Read::Returned(crate::ReadOp::KgTimeline),
+            )
+            .unwrap();
         assert_eq!(tl.len(), 2);
         assert_eq!(tl[0].object, "acme");
         assert_eq!(tl[1].object, "globex");
@@ -3652,7 +3765,14 @@ mod tests {
             .kg_invalidate("bob", "uses", Some("python"), Some("2026-01-01"))
             .unwrap();
         assert_eq!(n, 1);
-        let active = s.kg_query_entity("bob", None, "outgoing").unwrap();
+        let active = s
+            .kg_query_entity(
+                "bob",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].object, "rust");
     }
@@ -3876,11 +3996,18 @@ mod tests {
             "the record must bind what the walk actually did — 3 rows moved, 0 skipped"
         );
 
-        let facts = s.kg_query_entity("alice", None, "outgoing").unwrap();
+        let facts = s
+            .kg_query_entity(
+                "alice",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         assert_eq!(facts.len(), 2, "both facts still read back: {facts:?}");
         assert!(facts.iter().any(|t| t.object == "acme"));
         assert!(s
-            .kg_entities(10, 0)
+            .kg_entities(10, 0, crate::Read::Returned(crate::ReadOp::KgEntities))
             .unwrap()
             .iter()
             .any(|(n, _, _)| n == "alice"));
@@ -4168,14 +4295,14 @@ mod tests {
                     .unwrap();
             }
             let all: Vec<String> = s
-                .kg_entities(100, 0)
+                .kg_entities(100, 0, crate::Read::Returned(crate::ReadOp::KgEntities))
                 .unwrap()
                 .into_iter()
                 .map(|(n, _, _)| n)
                 .collect();
             // And a PAGE, because paging in RAM is where an off-by-one lives.
             let page: Vec<String> = s
-                .kg_entities(2, 1)
+                .kg_entities(2, 1, crate::Read::Returned(crate::ReadOp::KgEntities))
                 .unwrap()
                 .into_iter()
                 .map(|(n, _, _)| n)
@@ -4390,13 +4517,23 @@ mod tests {
                 .map(|x| x.verdict.clone())
         };
         let bound = s
-            .kg_query_entity("c", None, "outgoing")
+            .kg_query_entity(
+                "c",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
             .unwrap()
             .first()
             .map(|t| t.id.clone())
             .unwrap();
         let unbound = s
-            .kg_query_entity("a", None, "outgoing")
+            .kg_query_entity(
+                "a",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
             .unwrap()
             .first()
             .map(|t| t.id.clone())
@@ -4591,16 +4728,31 @@ mod tests {
                 .kg_add("user", "timezone", "Europe/Berlin", None, None, 1.0, None)
                 .unwrap();
             // Not on the tier: the door answers nothing.
-            assert!(s.lookup_canonical("user-timezone").unwrap().is_none());
+            assert!(s
+                .lookup_canonical(
+                    "user-timezone",
+                    crate::Read::Returned(crate::ReadOp::KgCanonical)
+                )
+                .unwrap()
+                .is_none());
             // Promoted but unreviewed: still nothing — approval is its own
             // declaration, made by whoever reviews, not by whoever promotes.
             s.kg_set_authority(&id, "canonical", "unreviewed", Some("user-timezone"))
                 .unwrap();
-            assert!(s.lookup_canonical("user-timezone").unwrap().is_none());
+            assert!(s
+                .lookup_canonical(
+                    "user-timezone",
+                    crate::Read::Returned(crate::ReadOp::KgCanonical)
+                )
+                .unwrap()
+                .is_none());
             s.kg_set_authority(&id, "canonical", "approved", Some("user-timezone"))
                 .unwrap();
             let hit = s
-                .lookup_canonical("user-timezone")
+                .lookup_canonical(
+                    "user-timezone",
+                    crate::Read::Returned(crate::ReadOp::KgCanonical),
+                )
                 .unwrap()
                 .expect("the door answers an approved canonical fact");
             assert_eq!(hit.object, "Europe/Berlin");
@@ -4609,7 +4761,13 @@ mod tests {
             // verifies, because the state change was re-tagged, not flipped.
             s.kg_set_authority(&id, "canonical", "rejected", Some("user-timezone"))
                 .unwrap();
-            assert!(s.lookup_canonical("user-timezone").unwrap().is_none());
+            assert!(s
+                .lookup_canonical(
+                    "user-timezone",
+                    crate::Read::Returned(crate::ReadOp::KgCanonical)
+                )
+                .unwrap()
+                .is_none());
             assert!(s.kg_verify().unwrap().is_empty());
         }
     }
@@ -4628,7 +4786,10 @@ mod tests {
         s.kg_set_authority(&new, "canonical", "approved", Some("user-editor"))
             .unwrap();
         let hit = s
-            .lookup_canonical("user-editor")
+            .lookup_canonical(
+                "user-editor",
+                crate::Read::Returned(crate::ReadOp::KgCanonical),
+            )
             .unwrap()
             .expect("the door answers");
         assert_eq!(
@@ -4637,7 +4798,7 @@ mod tests {
         );
         // The superseded holder is closed, never deleted — history replays.
         let old_fact = s
-            .kg_timeline(None)
+            .kg_timeline(None, crate::Read::Returned(crate::ReadOp::KgTimeline))
             .unwrap()
             .into_iter()
             .find(|t| t.id == old)
@@ -4672,7 +4833,10 @@ mod tests {
         // The door refuses with an integrity error — poison cannot approve
         // itself by editing a column, because the state is inside the HMAC.
         assert!(matches!(
-            s.lookup_canonical("service-api-base"),
+            s.lookup_canonical(
+                "service-api-base",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            ),
             Err(crate::StoreError::Integrity(_))
         ));
         assert_eq!(s.kg_verify().unwrap(), vec![format!("kg/{id}")]);
@@ -4701,7 +4865,12 @@ mod tests {
             )
             .unwrap();
         let fact = s
-            .kg_query_entity("ada", None, "outgoing")
+            .kg_query_entity(
+                "ada",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
             .unwrap()
             .into_iter()
             .find(|t| t.id == id)
@@ -4757,7 +4926,9 @@ mod tests {
             )
             .unwrap();
 
-        let facts = src_store.kg_export().unwrap();
+        let facts = src_store
+            .kg_export(crate::Read::Internal(crate::InternalRead::ExportAudited))
+            .unwrap();
         assert_eq!(facts.len(), 2);
         assert!(facts.iter().any(|f| f.source_fp.is_some()));
         // Premise for the NULL assertion below: the plain fact left the
@@ -4773,7 +4944,9 @@ mod tests {
                 && plain.triple.canonical_key.is_none(),
             "a fact never placed on the tier exports with all three fields absent"
         );
-        let entities = src_store.kg_export_entities().unwrap();
+        let entities = src_store
+            .kg_export_entities(crate::Read::Internal(crate::InternalRead::ExportAudited))
+            .unwrap();
 
         let (_d2, mut dst) = store(SecurityLevel::Sealed);
         // Drawer first (as an import stream orders it), then the graph.
@@ -4793,14 +4966,17 @@ mod tests {
         assert_eq!(receipts[0].verdict, ReceiptVerdict::Verified);
         // The authority tier crossed: the exact door answers.
         let hit = dst
-            .lookup_canonical("ada-standup")
+            .lookup_canonical(
+                "ada-standup",
+                crate::Read::Returned(crate::ReadOp::KgCanonical),
+            )
             .unwrap()
             .expect("canonical fact imported");
         assert_eq!(hit.object, "0930-mondays");
         assert_eq!(hit.extractor.as_deref(), Some("llama3.2:1b"));
         // History stayed history.
         let closed = dst
-            .kg_timeline(None)
+            .kg_timeline(None, crate::Read::Returned(crate::ReadOp::KgTimeline))
             .unwrap()
             .into_iter()
             .find(|t| t.predicate == "office")
@@ -4900,7 +5076,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let exported = src.kg_export().unwrap();
+        let exported = src
+            .kg_export(crate::Read::Internal(crate::InternalRead::ExportAudited))
+            .unwrap();
 
         let (_d2, mut dst) = store(SecurityLevel::Sealed);
         // Premise: without the declaration the import lands, so the refusal
@@ -4959,7 +5137,10 @@ mod tests {
             .unwrap();
         src.kg_set_authority(&id, "canonical", "approved", Some("alice-doc"))
             .unwrap();
-        let clean = src.kg_export().unwrap().remove(0);
+        let clean = src
+            .kg_export(crate::Read::Internal(crate::InternalRead::ExportAudited))
+            .unwrap()
+            .remove(0);
 
         for (owner, field) in crate::admission::SCREENED_FIELDS {
             let (_d, mut s) = store(SecurityLevel::Sealed);
@@ -5059,7 +5240,10 @@ mod tests {
             .unwrap();
         src.kg_set_authority(&id, "canonical", "approved", Some("user-timezone"))
             .unwrap();
-        let good = src.kg_export().unwrap().remove(0);
+        let good = src
+            .kg_export(crate::Read::Internal(crate::InternalRead::ExportAudited))
+            .unwrap()
+            .remove(0);
 
         let (_d2, mut dst) = store(SecurityLevel::Sealed);
         // Premise: the honest export imports, so every refusal below is
@@ -5111,7 +5295,13 @@ mod tests {
         }
         // Nothing forged reached the table: the door still answers the one
         // value the honest import seated.
-        let hit = dst.lookup_canonical("user-timezone").unwrap().unwrap();
+        let hit = dst
+            .lookup_canonical(
+                "user-timezone",
+                crate::Read::Returned(crate::ReadOp::KgCanonical),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(hit.object, "Europe/Berlin");
         assert!(dst.kg_verify().unwrap().is_empty());
     }
@@ -5152,13 +5342,19 @@ mod tests {
             .unwrap();
         // Premise: the first import really did seat the key.
         assert_eq!(
-            dst.lookup_canonical("user-editor").unwrap().unwrap().object,
+            dst.lookup_canonical(
+                "user-editor",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            )
+            .unwrap()
+            .unwrap()
+            .object,
             "vim"
         );
         dst.kg_import(&declared("helix", "2099-01-01T00:00:00Z"))
             .unwrap();
         let active: Vec<Triple> = dst
-            .kg_timeline(None)
+            .kg_timeline(None, crate::Read::Returned(crate::ReadOp::KgTimeline))
             .unwrap()
             .into_iter()
             .filter(|t| t.canonical_key.as_deref() == Some("user-editor") && t.valid_to.is_none())
@@ -5170,7 +5366,13 @@ mod tests {
             active.iter().map(|t| &t.object).collect::<Vec<_>>()
         );
         assert_eq!(
-            dst.lookup_canonical("user-editor").unwrap().unwrap().object,
+            dst.lookup_canonical(
+                "user-editor",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            )
+            .unwrap()
+            .unwrap()
+            .object,
             "helix",
             "the promotion superseded the previous holder, as a local one would"
         );
@@ -5259,7 +5461,7 @@ mod tests {
             .kg_add("ghost", "rel", "value", None, None, f64::NAN, None)
             .is_err());
         let names: Vec<String> = s
-            .kg_entities(100, 0)
+            .kg_entities(100, 0, crate::Read::Returned(crate::ReadOp::KgEntities))
             .unwrap()
             .into_iter()
             .map(|(n, _, _)| n)
@@ -5273,7 +5475,7 @@ mod tests {
         s.kg_add("ghost", "rel", "value", None, None, 1.0, None)
             .unwrap();
         assert!(s
-            .kg_entities(100, 0)
+            .kg_entities(100, 0, crate::Read::Returned(crate::ReadOp::KgEntities))
             .unwrap()
             .iter()
             .any(|(n, _, _)| n == "ghost"));
@@ -5478,7 +5680,10 @@ mod tests {
         // authority extension — dropping it there would read as tampering.
         assert!(s.kg_verify().unwrap().is_empty());
         let hit = s
-            .lookup_canonical("user-timezone")
+            .lookup_canonical(
+                "user-timezone",
+                crate::Read::Returned(crate::ReadOp::KgCanonical),
+            )
             .unwrap()
             .expect("the door still answers after rotation");
         assert_eq!(hit.object, "Europe/Berlin");
@@ -5562,7 +5767,13 @@ mod tests {
             .unwrap();
         s.kg_set_authority(&id, "canonical", "approved", Some("payroll-account"))
             .unwrap();
-        assert!(s.lookup_canonical("payroll-account").unwrap().is_some());
+        assert!(s
+            .lookup_canonical(
+                "payroll-account",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            )
+            .unwrap()
+            .is_some());
 
         // The replay: same four id components, now carrying a valid_to.
         let replay = s.kg_add(
@@ -5579,7 +5790,12 @@ mod tests {
             "an ordinary add must not rewrite the approved canonical holder"
         );
         assert!(
-            s.lookup_canonical("payroll-account").unwrap().is_some(),
+            s.lookup_canonical(
+                "payroll-account",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            )
+            .unwrap()
+            .is_some(),
             "the golden value must still answer the exact-authority door"
         );
         assert!(s.verify().unwrap().ok(), "and the graph stays verifiable");
@@ -5698,7 +5914,10 @@ mod tests {
             }
         }
         let held = s
-            .lookup_canonical("payroll-account")
+            .lookup_canonical(
+                "payroll-account",
+                crate::Read::Returned(crate::ReadOp::KgCanonical),
+            )
             .unwrap()
             .expect("the door still answers the operator's value");
         assert_eq!(held.object, "IBAN-REAL");
@@ -5717,7 +5936,13 @@ mod tests {
         ))
         .expect("re-importing the same record is idempotent by fact id");
         assert_eq!(
-            s.lookup_canonical("payroll-account").unwrap().unwrap().id,
+            s.lookup_canonical(
+                "payroll-account",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            )
+            .unwrap()
+            .unwrap()
+            .id,
             id
         );
 
@@ -5788,13 +6013,26 @@ mod tests {
             Err(StoreError::Invalid(_))
         ));
         assert_eq!(
-            s.lookup_canonical("prod-db-host").unwrap().unwrap().id,
+            s.lookup_canonical(
+                "prod-db-host",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            )
+            .unwrap()
+            .unwrap()
+            .id,
             golden,
             "the door still answers"
         );
         // No half-completed state either: the refused supersede added nothing.
         assert_eq!(
-            s.kg_query_entity("acme", None, "outgoing").unwrap().len(),
+            s.kg_query_entity(
+                "acme",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery)
+            )
+            .unwrap()
+            .len(),
             2
         );
 
@@ -5826,7 +6064,13 @@ mod tests {
         s.kg_set_authority(&next, "canonical", "approved", Some("prod-db-host"))
             .unwrap();
         assert_eq!(
-            s.lookup_canonical("prod-db-host").unwrap().unwrap().id,
+            s.lookup_canonical(
+                "prod-db-host",
+                crate::Read::Returned(crate::ReadOp::KgCanonical)
+            )
+            .unwrap()
+            .unwrap()
+            .id,
             next
         );
         assert!(s.verify().unwrap().ok());
@@ -5864,7 +6108,14 @@ mod tests {
             ),
             other => panic!("expected the screen to refuse the replacement, got {other:?}"),
         }
-        let active = s.kg_query_entity("assistant", None, "outgoing").unwrap();
+        let active = s
+            .kg_query_entity(
+                "assistant",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         assert_eq!(active.len(), 1, "the old fact is still active");
         assert_eq!(active[0].object, "standup at 09:30");
 
@@ -5875,7 +6126,14 @@ mod tests {
             Err(StoreError::Invalid(_))
         ));
         assert_eq!(
-            s.kg_query_entity("assistant", None, "outgoing").unwrap()[0].object,
+            s.kg_query_entity(
+                "assistant",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery)
+            )
+            .unwrap()[0]
+                .object,
             "standup at 09:30"
         );
 
@@ -5889,7 +6147,14 @@ mod tests {
             Some("2026-02-01T00:00:00Z"),
         )
         .unwrap();
-        let active = s.kg_query_entity("assistant", None, "outgoing").unwrap();
+        let active = s
+            .kg_query_entity(
+                "assistant",
+                None,
+                "outgoing",
+                crate::Read::Returned(crate::ReadOp::KgQuery),
+            )
+            .unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].object, "standup at 10:00");
         assert!(s.verify().unwrap().ok());
@@ -5910,7 +6175,12 @@ mod tests {
         // Premise: an ordinary etype imports and refines the row, so the
         // refusals below are about the value and not about the path.
         s.kg_import_entity("ada", "person").unwrap();
-        assert_eq!(s.kg_entities(10, 0).unwrap()[0].1, "person");
+        assert_eq!(
+            s.kg_entities(10, 0, crate::Read::Returned(crate::ReadOp::KgEntities))
+                .unwrap()[0]
+                .1,
+            "person"
+        );
 
         for (what, etype) in [
             (
@@ -5932,7 +6202,7 @@ mod tests {
         assert!(s.kg_import_entity("bob", &long).is_err());
         // And nothing landed: the guard runs before the row is written.
         assert!(
-            s.kg_entities(10, 0)
+            s.kg_entities(10, 0, crate::Read::Returned(crate::ReadOp::KgEntities))
                 .unwrap()
                 .iter()
                 .all(|(n, _, _)| n != "bob"),
@@ -6149,7 +6419,13 @@ mod tests {
         // A `SourceChanged` verdict is still reachable, so `Verified` above
         // is not a comparison that always says yes.
         let mut s = PalaceStore::open(mgr.unlock("u12").unwrap()).unwrap();
-        let mut edited = s.get(&cited_id).unwrap().unwrap();
+        let mut edited = s
+            .get(
+                &cited_id,
+                crate::Read::Internal(crate::InternalRead::Verification),
+            )
+            .unwrap()
+            .unwrap();
         edited.content = "Ptolemy wired nothing at all.".into();
         s.upsert(&edited).unwrap();
         assert_eq!(
@@ -6250,7 +6526,8 @@ mod tests {
                 None,
             )
             .unwrap();
-            src.kg_export().unwrap()
+            src.kg_export(crate::Read::Internal(crate::InternalRead::ExportAudited))
+                .unwrap()
         };
         assert!(
             exported[0].source_fp.is_some(),

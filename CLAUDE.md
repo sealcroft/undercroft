@@ -7,11 +7,11 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.1.0** — MINOR
-over the `1.0.0` that reset the version when the project was renamed (every
-earlier tag belonged to it under its former name and was withdrawn). **The
-tree carries `1.1.0` only once the release PR merges; the TAG is a separate,
-explicit step** — a build reporting a version it was never tagged as is worse
+(repo `sealcroft/sealcroft.github.io`). Current release **1.1.1** — a PATCH
+over `1.1.0`, which was a MINOR over the `1.0.0` that reset the version when
+the project was renamed (every earlier tag belonged to it under its former
+name and was withdrawn). **The tree carries `1.1.1` only once the release PR
+merges; the TAG is a separate, explicit step** — a build reporting a version it was never tagged as is worse
 than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.
 Forking cannot be disabled while the repos are public, and they must stay
@@ -382,7 +382,7 @@ Consequences that are binding, not advisory:
   100.0% at every checkpoint 131k→1M — 20.4/32.6/59.1/112.7 ms/q since
   the parallel-fuse pass** (was 34.4/69.6/138.4/280.6; the search
   hotspot was `bm25_raw`'s serial per-candidate scan, found by the
-  opt-in `UNDERCROFT_SEARCH_TRACE=1` phase trace AFTER parallel
+  opt-in `UNDERCROFT_SEARCH_TRACE=1` phase-and-POOL trace AFTER parallel
   hydration measured zero — hydration, stage-2 decrypts and the BM25 tf
   rows now all fan out with rayon, order-preserving and byte-identical;
   dim/4 codes remain the unused shrink lever). Scoped queries:
@@ -415,6 +415,25 @@ Consequences that are binding, not advisory:
   selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
   filter their top-k and surrender to the bounded exact scan when the
   scope's share cannot fill the page), pools SIZED BY THE SCOPE.
+  **"Cannot fill the page" was `inscope.len() >= depth` — five — until O53,
+  and that test cannot answer its own question.** It conflates two things: a
+  source that returned FEWER than `k` rows was NOT truncated, so its in-scope
+  subset is COMPLETE and exact at any size (one candidate is a correct pool),
+  while a source that returned exactly `k` may be hiding deeper in-scope rows
+  below the cut. `seqs.len() >= k` is the exact, free answer, and the old test
+  was wrong in BOTH directions — surrendering on small complete pools and
+  accepting thin truncated ones. The floor when truncated is now
+  `scoped_keep`, capped at the scope's own population, i.e. the same policy
+  every semantic tier already used. It could not fire before: the expected
+  in-scope count is `scope_live·k/n` ≈ `scope_live/64`, and any scope reaching
+  this code is above `SCOPE_HYDRATE_FLOOR`, so `>= 5` was unreachable and
+  nothing reported it. Measured on 6,940 hmac-only drawers with a 1,730-row
+  wing: **70–80 scoped candidates against 256 unscoped**, and 2 of 18 queries
+  answered differently from the exact scope scan; after, 1 of 18, against an
+  unscoped control that differs at 2 of 19 — i.e. the scoped path stopped
+  being worse than the prefilter's own baseline. Latency unchanged (69 ms both
+  ways), because the scan it surrenders to is bounded by the scope.
+  `PalaceStore::accept_filtered_pool` is the one place both arms ask it.
   **A NARROWING and an EXCLUSION are not the same relation and
   `SeqFilter::{Only,AllBut}` is what keeps them apart** — one
   representation served both until 2026-08-11 and it was always the wrong
@@ -734,13 +753,49 @@ Consequences that are binding, not advisory:
   reviewer's own `--wing quarantine-pending` scope); the residue is stated —
   remotely the floor bounds what came BACK, not what was generated, i.e. an
   availability cost, never an integrity one. Telemetry is at parity too),
+  **the READ choke point** (`Read::{Returned(ReadOp), Internal(InternalRead)}`,
+  ROADMAP O50, 2026-08-18) — the peer of `Screen` on the other side. `get` and
+  `recent` take a REQUIRED witness, so a new read path does not compile until
+  its author says whether it returns content to a caller or is the engine
+  reading for itself. It exists because `audit_read` had exactly TWO call
+  sites, both `"search"`, while `UNDERCROFT_READ_AUDIT=chain` is documented
+  for *insider/exfil accounting*: `get`, `recent`, `list_drawers`, diary,
+  tunnel, closet, hallways and the admission queue returned verbatim content
+  and recorded NOTHING, so walking `GET …/drawers` then `GET …/drawers/{id}`
+  exfiltrated a vault leaving zero records while one search left one. Nine
+  doors now record exactly one each; bulk doors pass `InternalRead::BulkMember`
+  to their inner `recent` so the trail says one list rather than N gets; and
+  `read/search` canonicals are BYTE-IDENTICAL to those written before, because
+  the field order is untouched and non-search reads simply leave the scope
+  fields empty. `ReadOp::ALL` is counted against the driver table both ways, so
+  a variant added without a record fails the build. **The KG is a SECOND
+  funnel and it records too since O51** — `kg-query` (both arms, one namespace
+  because one TOOL is what a caller drives), `kg-timeline`, `kg-entities`,
+  `kg-canonical`; the witness is required on each `pub` reader, so the
+  compiler enumerated 49 store and 18 surface sites. Two lessons the second
+  funnel taught that the first did not. **The record goes on the DOOR, never
+  on the shared helper**: `all_triples` decodes the whole graph for every arm
+  of `kg_query_entity`, which then filters, so recording there would say 40
+  where 3 left — over-reporting an exfil trail is a false claim, not a
+  conservative one. And **the filing named five doors and one was not a
+  door**: `kg_verify_receipts` reaches neither decoder and returns
+  `(triple_id, source_drawer_id, verdict)`, so it and `kg_stats` are
+  DELIBERATE exclusions carrying that reason on three surfaces — auditing
+  them to match a filing would put a read record on a door no content passes
+  through. `PalaceStore::record_read` is the ONE place deciding whether a
+  read is written down; it was three inline copies after O50 and this unit
+  would have made it eleven, which is how the write screen came to have three
+  ways past it. Residual, stated: a new `pub` STORE reader on `all_triples`
+  reusing an existing `ReadOp` still passes the namespace gate — the drawer
+  funnel carries the same residual for a reader that avoids `get`/`recent`),
   read/egress auditing (the consultation-filed gap, closed 2026-08-04:
   **exports chain-audited unconditionally on every surface** —
   `audit_export`, one `egress/export` record binding surface + recipient
   + counts + the export's own manifest digest; read-only replicas warn
   and serve; **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
   `audit_read` at the search_inner + remote tails covers every path, one
-  record per search with a KEYED query fingerprint (never text, pinned
+  record per READ (per search until O50/O51) with a KEYED subject
+  fingerprint (never text, pinned
   by a db+WAL byte scan), scope and hit count; runs behind `&self` via
   `unchecked_transaction` and deliberately does NOT anchor — the
   anchor-lag boundary is stated: read records anchor at the next store
@@ -1244,8 +1299,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (740 run,
-                                      # 4 #[ignore]d = 744 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (754 run,
+                                      # 4 #[ignore]d = 758 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1328,7 +1383,7 @@ docker compose run --rm test          # cargo unit + integration tests (740 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (355 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (364 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -1513,6 +1568,24 @@ test by construction:
   it shipped. Source the code out of the file, or invoke the command, and
   give every scanner a **premise probe** that fails when it examined nothing.
 
+**A WAIT THAT CANNOT TIME OUT IS NOT A WAIT, IT IS A HANG.** On 2026-08-18
+two background shells polled `until grep -q 'BATTERY OK\|BATTERY FAILED'
+<log>; do sleep 30; done` for nearly three hours. The sentinel never arrived
+because the battery had aborted under `set -u` *before* printing its verdict
+line — so the loop was waiting on a string that could not appear, and had no
+bound that would make it say so. Nothing was lost (they held no locks and
+wrote nothing) but nothing was learned either, and the real failure was
+already visible in the log.
+
+Two rules follow, and they are the premise-probe discipline applied to the
+agent's own tooling rather than to a gate. **Bound every wait** — an
+iteration cap and a loud failure when it expires, because "not finished yet"
+and "will never finish" are indistinguishable to an unbounded poller, which
+is this file's oldest lesson wearing different clothes. And **watch the
+PROCESS, not a sentinel in a file it may never write**: a backgrounded
+command already notifies on exit, so polling its output for a magic string
+adds a failure mode the notification does not have.
+
 **So: compile after EVERY structural edit, before making the next one.**
 Batching them hides which edit broke what, and this session batched them four
 times. The cost of a rebuild is seconds; the cost of a disabled gate is a
@@ -1533,8 +1606,10 @@ has stopped matching its real one); everything else — `tests/`, `deploy/`,
 `docs/`, `website/`, compose files — by the `tests/battery.sh` preflight, host-side,
 via `git ls-files --eol` (git owns the concept, so ask git rather than
 hand-rolling byte detection: three hand-rolled attempts each failed, twice as
-a false negative and once declaring the whole repo corrupt). **Write files in
-BINARY mode on this repo.**
+a false negative and once declaring the whole repo corrupt — and its selector
+is PROBED in both directions since O55, because it had no probe at all while
+its own comment claimed the two failure modes were exercised). **Write files
+in BINARY mode on this repo.**
 
 **A local LLM is available for consultation** (maintainer's machine): LM Studio
 on `http://localhost:1234/v1`, OpenAI-compatible, model id `deephat-v1-7b` — a
@@ -2322,7 +2397,21 @@ project.*
 is done; the full Docker battery runs at every unit and a real corpus is
 loaded at every unit (definition of done, items 5 and 6). **When the context
 window reaches roughly 90%, STOP TAKING NEW UNITS and spend what is left
-updating every governance surface** — CHANGELOG, ROADMAP, this file, whichever
+updating every governance surface**
+— and **MEASURE that 90%, never estimate it: `bash
+tests/context-check.sh`**. This rule was stated for weeks with no way to
+evaluate it, so it was applied by feel and applied WRONG, repeatedly and in
+one direction: on 2026-08-18 the agent announced it was near the budget at a
+measured **54%**, having assumed a 200,000-token window when the real one is
+**1,000,000** — every estimate out by ~2.7×, always toward stopping early and
+handing over work that could have been finished. A threshold nobody can
+measure is not a rule, it is a mood; this file's own first rule — *count the
+truth, never a number in prose* — applies to the agent's own state as much as
+to the tree. The reader takes the live session transcript's `usage` records
+(`input + cache_creation + cache_read`), which is MEASURED; only the window
+is declared, it is labelled as such in the output, and it fails loudly rather
+than printing 0% when it cannot read a transcript, because a broken reader
+and an empty context look identical downstream — CHANGELOG, ROADMAP, this file, whichever
 docs carry the claim you changed, and the three `.handover/` files with the
 marker re-pointed at `HEAD`.
 
@@ -2441,11 +2530,29 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   vault is in, the default is *off* and a silent fallback removes what was
   asked for — so garbage REFUSES to open. That is "integrity is not a tier"
   extended by one step: a protection an operator declared must not become a
-  tier by typo. `parity.rs::ENGINE_ENV_VARS` carries `(name, ConfigClass)`
-  and is counted against the code in both directions, so a new variable does
-  not compile until someone classifies it; `undercroft config check` runs
-  every declaration through the resolver that will run at start-up, opening
-  nothing, so an upgrade fails in a pipeline instead of at a restart.
+  tier by typo. `parity.rs::ENGINE_ENV_VARS` carries
+  `(name, ConfigClass, Parse)` and is counted against the code in both
+  directions on BOTH axes, so a new variable does not compile until someone
+  classifies it; `undercroft config check` runs every declaration through the
+  resolver that will run at start-up, opening nothing, so an upgrade fails in
+  a pipeline instead of at a restart.
+  **The second axis exists because "I ran no parse" and "there is no parse to
+  run" are different claims that READ IDENTICALLY (O52).** `check_one` falls
+  to a catch-all rendering an unknown name as `Accepted` — printed as *"no
+  parse to run; the consumer validates it"* — which is honest about a path or
+  a bearer and a false claim about a knob whose arm somebody forgot. #9
+  closed that for `Protects` with an exempt list counted both ways; O48 then
+  WIDENED it for `Tunes`, teaching eleven resolvers to validate values the
+  pre-flight still described as unvalidated. `Parse::{Checked,Opaque}` is
+  declared per variable and counted both ways: a `Checked` one the command
+  runs no parse for fails the build, an `Opaque` one that IS pre-flighted
+  fails it too. What makes `Checked` affordable is `undercroft-store`'s
+  `TUNED` table — every numeric knob's unset value and bounds stated ONCE,
+  read by the engine's resolver AND by `check_declaration`, so the two cannot
+  report different values. A knob whose unset depends on ANOTHER variable has
+  no row and says why (`UNDERCROFT_LATE_TOP_N` falls through to
+  `UNDERCROFT_RERANK_TOP_N`, valid or not, which is a compatibility promise).
+  49 of the 81 are `Checked`, 32 `Opaque` — counted, not remembered.
   **The class is not the whole rule: a declaration is either a CLOSED
   VOCABULARY or OPAQUE PAYLOAD, and that decides what EMPTY means and whether
   the value may be TRIMMED.** A vocabulary variable (`UNDERCROFT_ADMISSION`)

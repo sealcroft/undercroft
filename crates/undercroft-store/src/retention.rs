@@ -299,7 +299,11 @@ impl PalaceStore {
             .collect::<Result<_, _>>()?;
         let mut out = Vec::new();
         for id in ids {
-            let Some(d) = self.get(&id)? else {
+            let Some(d) = self.get(
+                &id,
+                crate::Read::Internal(crate::InternalRead::Verification),
+            )?
+            else {
                 continue;
             };
             let filed_at = &d.meta.filed_at;

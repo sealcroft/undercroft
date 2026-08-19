@@ -462,11 +462,48 @@ appends an `egress/export` record binding the surface, the recipient
 (when the export names one), the record counts and the export's own
 manifest digest. That one is **not** behind a declaration — an egress
 is worth recording whether or not the deployment opted into anything.
-Under `UNDERCROFT_READ_AUDIT=chain` each search appends a record too,
-carrying a **keyed fingerprint of the query** (never its text), the
-scope and the hit count.
+Under `UNDERCROFT_READ_AUDIT=chain` each content-returning READ appends a
+record too — searches, by-id and bulk drawer reads, and the knowledge graph's
+own doors — carrying a **keyed fingerprint of the subject** (never its text),
+the scope and the count.
 
-Two boundaries come with it, both stated rather than hidden. A
+**What it covers, since 2026-08-18 (ROADMAP O50 and O51).** Every
+content-returning read appends exactly one chain record, across **both**
+funnels. The drawer funnel: `search`, `get`, `recent`, the drawer `list`, a
+`diary` read, a `tunnel` follow, the `closet` index, `hallways` and the
+admission queue listing. The knowledge graph, which distills drawer words
+into facts and returns them through its own readers: `kg-query`,
+`kg-timeline`, `kg-entities` and `kg-canonical`.
+
+Until O50 it covered **searches only** — `get` and the bulk reads returned
+verbatim content and appended nothing, so an insider holding a valid token
+could walk `GET /v1/…/drawers` for ids and `GET …/drawers/{id}` for each and
+exfiltrate the whole vault leaving zero records, while the same person
+running one search left one. That is the opposite of what this row is for,
+and it was accurate-but-narrow on every prose surface ("one record per
+search") while being enumerated as a limit nowhere. O50 closed the drawer
+half; O51 closed the graph half, which mattered because the graph is where a
+long-running agent's distilled memory of a corpus actually lives — walking
+`kg-entities` for names and then `kg-query` per name reads the same corpus
+through a different door.
+
+**Two exclusions, both deliberate and both stated.** `kg_verify_receipts`
+and `kg_stats` return identifiers, verdicts and counts; they reach neither
+word decoder, and the one drawer the receipt walk reads it reads internally
+to compare a fingerprint that never leaves. And the engine's own reads are
+silent by design, each saying why through an `InternalRead` variant:
+hydration inside a search that already records, lookups performed to decide
+a write, index maintenance, verification, a policy fence, and an export that
+`audit_export` already records unconditionally.
+
+**The residual, narrower than before but real:** the `Read` witness is a
+required argument on every `pub` reader, so no SURFACE can forget it — but a
+new `pub` store reader built on the private `all_triples` walk and reusing an
+existing `ReadOp` would pass the both-ways namespace gate while recording
+nothing. The drawer funnel carries the identical residual for a reader that
+avoids `get`/`recent`.
+
+Three boundaries come with it, all stated rather than hidden. A
 **read-only** process cannot append, so it serves an export and says the
 egress went unaudited, and it disables read auditing with a warning at
 open — the replica precedent: warn and serve, never silently pretend.

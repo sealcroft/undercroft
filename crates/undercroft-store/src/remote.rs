@@ -388,7 +388,11 @@ impl PalaceStore {
         for c in candidates {
             // Local load = HMAC verify + decrypt. Unknown ids (index drift
             // after deletes) are skipped, not trusted.
-            let Some(drawer) = self.get(&c.id)? else {
+            let Some(drawer) = self.get(
+                &c.id,
+                crate::Read::Internal(crate::InternalRead::RemoteHydration),
+            )?
+            else {
                 continue;
             };
             // The retrieval policy first, and off the VERIFIED meta: a
@@ -474,9 +478,12 @@ impl PalaceStore {
             hits.len(),
             self.is_sealed(),
         );
-        if self.read_audit {
-            self.audit_read("search", query, opts, hits.len())?;
-        }
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Search),
+            query,
+            crate::ReadScope::from_opts(opts),
+            hits.len(),
+        )?;
         Ok(hits)
     }
 

@@ -540,7 +540,10 @@ impl PalaceStore {
             .collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            let Some(d) = self.get(&id)? else { continue };
+            let Some(d) = self.get(&id, crate::Read::Internal(crate::InternalRead::BulkMember))?
+            else {
+                continue;
+            };
             out.push(PendingAdmission {
                 id: d.id.clone(),
                 intended_wing: d.meta.intended_wing.clone().unwrap_or_default(),
@@ -549,6 +552,14 @@ impl PalaceStore {
                 filed_at: d.meta.filed_at.clone(),
             });
         }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::AdmissionList),
+            "",
+            crate::ReadScope::none(),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -661,7 +672,7 @@ impl PalaceStore {
     /// Fetch + verify a drawer and require it to be quarantine-resident.
     fn quarantined(&self, id: &str) -> Result<Drawer, StoreError> {
         let d = self
-            .get(id)?
+            .get(id, crate::Read::Internal(crate::InternalRead::PolicyFence))?
             .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
         if d.meta.wing != QUARANTINE_WING {
             return Err(StoreError::Invalid(format!(

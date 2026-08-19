@@ -431,7 +431,10 @@ impl PalaceStore {
                     {
                         crate::kg::ReceiptVerdict::Tampered
                     } else {
-                        match self.get(&old_id)? {
+                        match self.get(
+                            &old_id,
+                            crate::Read::Internal(crate::InternalRead::Verification),
+                        )? {
                             None => crate::kg::ReceiptVerdict::Dangling,
                             // Shape-aware (U12): a pre-U12 row opened
                             // read-only still holds the bare digest, and
@@ -558,6 +561,14 @@ impl PalaceStore {
                 source_file: drawer.meta.source_file,
             });
         }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::List),
+            wing.unwrap_or(""),
+            crate::ReadScope::wing_only(wing),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -725,7 +736,7 @@ impl PalaceStore {
             return Ok(true);
         }
         Ok(self
-            .get(id)?
+            .get(id, crate::Read::Internal(crate::InternalRead::PolicyFence))?
             .is_some_and(|d| d.meta.wing == crate::admission::QUARANTINE_WING))
     }
 
@@ -754,7 +765,11 @@ impl PalaceStore {
         new_content: &str,
         via: &str,
     ) -> Result<UpdateOutcome, StoreError> {
-        let Some(mut drawer) = self.get(id)? else {
+        let Some(mut drawer) = self.get(
+            id,
+            crate::Read::Internal(crate::InternalRead::WritePathLookup),
+        )?
+        else {
             return Ok(UpdateOutcome::NotFound);
         };
         if drawer.meta.wing == crate::admission::QUARANTINE_WING {
@@ -894,8 +909,20 @@ impl PalaceStore {
     /// Most recent diary entries for an agent.
     pub fn diary_read(&self, agent: &str, limit: usize) -> Result<Vec<Drawer>, StoreError> {
         let wing = format!("agent-{agent}");
-        let mut entries = self.recent(Some(&wing), limit)?;
+        let mut entries = self.recent(
+            Some(&wing),
+            limit,
+            crate::Read::Internal(crate::InternalRead::BulkMember),
+        )?;
         entries.retain(|d| d.meta.room == "diary");
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Diary),
+            agent,
+            crate::ReadScope::none(),
+            entries.len(),
+        )?;
         Ok(entries)
     }
 
@@ -1003,10 +1030,19 @@ impl PalaceStore {
             };
             // Gather first, so a report without `apply` still says truthfully
             // how many appearances the survivor would end up holding.
-            let mut survivor = self.get(keep_id)?;
+            let mut survivor = self.get(
+                keep_id,
+                crate::Read::Internal(crate::InternalRead::WritePathLookup),
+            )?;
             let before = survivor.as_ref().map(|d| d.all_occurrences().len());
             for id in drop_ids {
-                if let (Some(keep), Some(gone)) = (survivor.as_mut(), self.get(id)?) {
+                if let (Some(keep), Some(gone)) = (
+                    survivor.as_mut(),
+                    self.get(
+                        id,
+                        crate::Read::Internal(crate::InternalRead::WritePathLookup),
+                    )?,
+                ) {
                     keep.absorb_occurrences_of(&gone);
                 }
             }
@@ -1103,7 +1139,9 @@ impl PalaceStore {
             .collect::<Result<_, _>>()?;
         let mut fixed = 0u64;
         for id in missing {
-            if let Some(d) = self.get(&id)? {
+            if let Some(d) =
+                self.get(&id, crate::Read::Internal(crate::InternalRead::Maintenance))?
+            {
                 let fp = self.fingerprint(&d.content);
                 self.conn
                     .execute("UPDATE drawers SET fp = ?1 WHERE id = ?2", params![fp, id])?;
@@ -1118,7 +1156,9 @@ impl PalaceStore {
             .query_map([], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
         for id in ids {
-            if let Some(d) = self.get(&id)? {
+            if let Some(d) =
+                self.get(&id, crate::Read::Internal(crate::InternalRead::Maintenance))?
+            {
                 let emb = self.embedder_embed(&d.content);
                 let emb_rest = self.vault.embedding_at_rest(&id, &emb);
                 self.conn.execute(
@@ -1346,7 +1386,23 @@ impl PalaceStore {
                     crate::admission::QUARANTINE_WING
                 )))
             }
-            Some(wing) => self.recent(Some(&wing), limit),
+            Some(wing) => {
+                let out = self.recent(
+                    Some(&wing),
+                    limit,
+                    crate::Read::Internal(crate::InternalRead::BulkMember),
+                )?;
+                // ROADMAP O50: the tunnel is the door, so it records — the
+                // inner `recent` is a BulkMember and stays silent, or the
+                // trail would say "recent" for a read nobody asked that way.
+                self.record_read(
+                    crate::Read::Returned(crate::ReadOp::Tunnel),
+                    id,
+                    crate::ReadScope::wing_only(Some(&wing)),
+                    out.len(),
+                )?;
+                Ok(out)
+            }
             None => Ok(Vec::new()),
         }
     }
@@ -1423,7 +1479,11 @@ impl PalaceStore {
     /// entity-derived is persisted (sealed vaults leak nothing).
     pub fn hallways(&self, wing: &str, top: usize) -> Result<Vec<Hallway>, StoreError> {
         use std::collections::HashMap;
-        let drawers = self.recent(Some(wing), 10_000)?;
+        let drawers = self.recent(
+            Some(wing),
+            10_000,
+            crate::Read::Internal(crate::InternalRead::BulkMember),
+        )?;
         let mut pairs: HashMap<(String, String), u64> = HashMap::new();
         for d in &drawers {
             let ents = extract_entities(&d.content);
@@ -1449,6 +1509,14 @@ impl PalaceStore {
                 .then(x.entity_a.cmp(&y.entity_a))
         });
         out.truncate(top);
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Hallways),
+            wing,
+            crate::ReadScope::wing_only(Some(wing)),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -1466,7 +1534,11 @@ impl PalaceStore {
     /// sealed vaults leak nothing.
     pub fn closet_index(&self, wing: Option<&str>) -> Result<Vec<String>, StoreError> {
         use std::collections::BTreeMap;
-        let drawers = self.recent(wing, 100_000)?;
+        let drawers = self.recent(
+            wing,
+            100_000,
+            crate::Read::Internal(crate::InternalRead::BulkMember),
+        )?;
         let mut rooms: BTreeMap<(String, String), Vec<&Drawer>> = BTreeMap::new();
         for d in &drawers {
             rooms
@@ -1511,6 +1583,14 @@ impl PalaceStore {
                 ids.join(",")
             ));
         }
+        // ROADMAP O50: one record for this door, through the one recording
+        // door — `record_read` owns the "does this get written" decision.
+        self.record_read(
+            crate::Read::Returned(crate::ReadOp::Closet),
+            wing.unwrap_or(""),
+            crate::ReadScope::wing_only(wing),
+            out.len(),
+        )?;
         Ok(out)
     }
 
@@ -1641,8 +1721,28 @@ pub const AGENT_FENCED_NAMESPACES: &[&str] = &[
     // what is about to expire.
     "retention/",
     "retention-clear/",
-    // Attested destruction, and egress. Operator acts on the corpus.
+    // Attested destruction, and egress.
+    //
+    // **The reason here used to read "Operator acts on the corpus", and that
+    // is not what `del/` holds** (ROADMAP O57, round-four #49). `delete_drawer`
+    // appends `del/{id}` and `delete_tunnel` appends `del/tunnel/{id}`, and
+    // MCP advertises `undercroft_delete_drawer`, `_delete_tunnel` and
+    // `_delete_by_source` — so an agent deletes, the deletion is recorded
+    // here, and the fence means **the agent cannot see a deletion it
+    // performed itself**. The fence is still right: the same namespace holds
+    // `forget_with_proof`'s operator-attested destructions, and unfencing it
+    // wholesale would hand those over. What was wrong was the stated reason,
+    // which described only half of what is behind the door and made the
+    // residual invisible to anyone reading it.
+    //
+    // The residual, stated rather than implied: an agent's own history is
+    // incomplete about its own deletions. Separating agent-initiated from
+    // operator-attested destruction into two namespaces would fix that and is
+    // a behaviour change to an agent surface — filed as an open question
+    // rather than taken on the strength of a mismatched comment.
     "del/",
+    // Egress: a full-palace export. Operator acts on the corpus, and this one
+    // really is only that.
     "egress/",
     // The read-audit trail. An agent reading which queries were run is a
     // side channel on other principals' retrieval, not its own history.
@@ -2045,7 +2145,12 @@ mod tests {
                 "the reviewer must see it ({label})"
             );
             assert!(
-                s.get(&d.id).unwrap().is_none(),
+                s.get(
+                    &d.id,
+                    crate::Read::Internal(crate::InternalRead::Verification)
+                )
+                .unwrap()
+                .is_none(),
                 "it must not land where it aimed ({label})"
             );
         }
@@ -2258,11 +2363,24 @@ mod tests {
         assert_eq!(statuses[0].supersedes, old.id);
         assert_eq!(statuses[0].verdict, ReceiptVerdict::Verified);
         assert_eq!(
-            s.get(&new.id).unwrap().unwrap().meta.supersedes.as_deref(),
+            s.get(
+                &new.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .unwrap()
+            .meta
+            .supersedes
+            .as_deref(),
             Some(old.id.as_str())
         );
         assert!(
-            s.get(&old.id).unwrap().is_some(),
+            s.get(
+                &old.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some(),
             "superseding must never delete"
         );
 
@@ -2375,9 +2493,24 @@ mod tests {
             s.update_drawer(&dr.id, "updated text", "test").unwrap(),
             UpdateOutcome::Updated
         );
-        assert_eq!(s.get(&dr.id).unwrap().unwrap().content, "updated text");
+        assert_eq!(
+            s.get(
+                &dr.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .unwrap()
+            .content,
+            "updated text"
+        );
         assert!(s.delete_drawer(&dr.id).unwrap());
-        assert!(s.get(&dr.id).unwrap().is_none());
+        assert!(s
+            .get(
+                &dr.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_none());
         // Deletion is chained — verify still passes.
         assert!(s.verify().unwrap().ok());
     }
@@ -2400,7 +2533,13 @@ mod tests {
         assert_eq!(report.removed.len(), 1, "one row collapses");
         assert_eq!(report.dates_kept, 1, "and its date is carried, not dropped");
 
-        let kept = s.get(&first.id).unwrap().unwrap();
+        let kept = s
+            .get(
+                &first.id,
+                crate::Read::Internal(crate::InternalRead::Verification),
+            )
+            .unwrap()
+            .unwrap();
         let days: Vec<_> = kept
             .all_occurrences()
             .into_iter()
@@ -2408,7 +2547,12 @@ mod tests {
             .collect();
         assert_eq!(days, ["2023-04-10", "2023-06-26"]);
         assert!(
-            s.get(&later.id).unwrap().is_none(),
+            s.get(
+                &later.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_none(),
             "the duplicate row is gone"
         );
         assert!(s.verify().unwrap().ok(), "chain and HMACs still verify");
@@ -2459,9 +2603,18 @@ mod tests {
             );
             assert_eq!(report.dates_kept, 1, "premise: a date is carried");
             assert_eq!(report.quarantined, 0);
-            assert!(s.get(&later.id).unwrap().is_none());
+            assert!(s
+                .get(
+                    &later.id,
+                    crate::Read::Internal(crate::InternalRead::Verification)
+                )
+                .unwrap()
+                .is_none());
             assert!(!s
-                .get(&first.id)
+                .get(
+                    &first.id,
+                    crate::Read::Internal(crate::InternalRead::Verification),
+                )
                 .unwrap()
                 .unwrap()
                 .meta
@@ -2488,16 +2641,24 @@ mod tests {
             "and the report must not claim dates it did not write"
         );
         assert!(
-            s.get(&later.id).unwrap().is_some(),
+            s.get(
+                &later.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some(),
             "the duplicate row survives"
         );
         assert!(
-            s.get(&first.id)
-                .unwrap()
-                .unwrap()
-                .meta
-                .occurrences
-                .is_empty(),
+            s.get(
+                &first.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .unwrap()
+            .meta
+            .occurrences
+            .is_empty(),
             "premise: the survivor really did NOT receive the absorbed date — \
              which is why deleting the duplicate would have lost it"
         );
@@ -2577,9 +2738,25 @@ mod tests {
         assert!(!report.applied);
         assert_eq!(report.removed.len(), 1);
         assert_eq!(report.dates_kept, 1);
-        assert!(s.get(&b.id).unwrap().is_some(), "dry run deletes nothing");
         assert!(
-            s.get(&a.id).unwrap().unwrap().meta.occurrences.is_empty(),
+            s.get(
+                &b.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some(),
+            "dry run deletes nothing"
+        );
+        assert!(
+            s.get(
+                &a.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .unwrap()
+            .meta
+            .occurrences
+            .is_empty(),
             "and writes nothing"
         );
     }
@@ -2596,7 +2773,17 @@ mod tests {
         let report = s.dedup(true).unwrap();
         assert_eq!(report.removed.len(), 1);
         assert_eq!(report.dates_kept, 0, "nothing new happened");
-        assert_eq!(s.get(&a.id).unwrap().unwrap().all_occurrences().len(), 1);
+        assert_eq!(
+            s.get(
+                &a.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .unwrap()
+            .all_occurrences()
+            .len(),
+            1
+        );
     }
 
     /// The duplicate a byte comparison cannot see: the same Arabic name
@@ -2671,7 +2858,13 @@ mod tests {
         let b = s.diary_write("scout", "second entry", "cli").unwrap();
         assert_ne!(a.id, b.id);
 
-        let first = s.get(&a.id).unwrap().unwrap();
+        let first = s
+            .get(
+                &a.id,
+                crate::Read::Internal(crate::InternalRead::Verification),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(first.meta.added_by, "cli", "the surface, not the agent");
         assert_eq!(first.meta.agent.as_deref(), Some("scout"));
 
@@ -2681,7 +2874,12 @@ mod tests {
         let c = s.diary_write("scout", "third entry", "cli").unwrap();
         assert_ne!(c.id, b.id, "a new entry must not land on an existing id");
         assert_eq!(
-            s.get(&b.id).unwrap().map(|d| d.content),
+            s.get(
+                &b.id,
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .map(|d| d.content),
             Some("second entry".to_string()),
             "the unrelated entry must survive"
         );

@@ -136,7 +136,7 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
             .map_err(|e| e.to_string())
             .and_then(|on| {
                 described(if on {
-                    "every search appends a chain record".into()
+                    "every content read appends a chain record".into()
                 } else {
                     "reads are not audited".into()
                 })
@@ -285,7 +285,40 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
                     None => "no per-vault assertions".into(),
                 })
             }),
-        _ => Ok(None),
+        // ---- the tuning knobs (ROADMAP O52) -----------------------------
+        // Every store-owned numeric knob, through the ONE table that states
+        // its shape. `config check` used to print "no parse to run; the
+        // consumer validates it" about all of these, which was true before
+        // O48 taught the consumer to validate them and false afterwards.
+        "UNDERCROFT_FUSION" => parse_fusion(Some(raw)).map(|f| {
+            Some(match f {
+                Fusion::Legacy => "the legacy lexical blend".to_string(),
+                Fusion::Bm25 => "the Okapi BM25 blend".to_string(),
+            })
+        }),
+        "UNDERCROFT_FUSION_WEIGHT" => parse_fusion_weight(Some(raw))
+            .map(|w| Some(format!("semantic share of the blend is {w}"))),
+        "UNDERCROFT_SEMANTIC_FLOOR" => parse_semantic_floor(Some(raw)).map(|f| {
+            Some(match f {
+                Some(f) => format!("unrelated-pair floor pinned at {f}"),
+                None => "the embedder's own measured floor".to_string(),
+            })
+        }),
+        "UNDERCROFT_TRAIN_SOURCE_CAP" => parse_train_source_cap(Some(raw)).map(|c| {
+            Some(if c == usize::MAX {
+                "no per-wing cap on a training sample".to_string()
+            } else {
+                format!("a wing may supply at most 1/{c} of any training sample")
+            })
+        }),
+        "UNDERCROFT_LATE_TOP_N" => parse_late_top_n(Some(raw))
+            .map(|n| n.map(|n| format!("late-interaction rescore depth {n}"))),
+        _ => match tune_shape(name) {
+            Some((shape, what)) => {
+                parse_tuned(name, shape, Some(raw)).map(|v| Some(format!("{what}: {v}")))
+            }
+            None => Ok(None),
+        },
     }
 }
 
@@ -576,11 +609,9 @@ pub(crate) fn chain_append(
 }
 
 pub(crate) fn rerank_top_n() -> usize {
-    std::env::var("UNDERCROFT_RERANK_TOP_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_RERANK_TOP_N)
+    // `min` 1: a top-N of zero would rerank nothing, which the old
+    // `.filter(|&n| n > 0)` already declined — silently.
+    tuned("UNDERCROFT_RERANK_TOP_N")
 }
 
 /// Depth of the late-interaction rescore — see [`DEFAULT_LATE_TOP_N`].
@@ -737,26 +768,345 @@ fn scoped_keep(hydrate_k: usize, scope_live: usize) -> usize {
         .max(scope_live.min(SCOPE_HYDRATE_FLOOR))
 }
 
-/// Resolve the cosine→`semantic` calibration zero for a store at open:
-/// `UNDERCROFT_SEMANTIC_FLOOR` declares it (a raw cosine in `[0.0, 0.98]`;
-/// `off` = 0, the shipped hash map), else the embedder's own measured or
-/// declared floor ([`Embedder::semantic_floor`]), else 0. Resolved ONCE —
-/// a measuring embedder pays probe forwards for this, and the map runs in
-/// the per-candidate hot path.
-fn resolve_semantic_floor<E: Embedder + ?Sized>(embedder: &E) -> f32 {
-    match std::env::var("UNDERCROFT_SEMANTIC_FLOOR") {
-        Ok(v) if v.eq_ignore_ascii_case("off") => 0.0,
-        Ok(v) => match v.trim().parse::<f32>() {
-            Ok(f) if f.is_finite() && (0.0..=0.98).contains(&f) => f,
-            _ => {
-                undercroft_obs::diag_warn!(
-                    "UNDERCROFT_SEMANTIC_FLOOR={v:?} is not a cosine in [0.0, 0.98]; \
-                     using the embedder's own floor"
-                );
-                embedder.semantic_floor().unwrap_or(0.0)
-            }
+/// The per-wing share of any global training sample, unset
+/// (`UNDERCROFT_TRAIN_SOURCE_CAP`). Named rather than a bare `4` in two
+/// places, on the O52 rule that one statement of a default is what keeps the
+/// pre-flight and the engine from disagreeing about it.
+const DEFAULT_TRAIN_SOURCE_CAP: usize = 4;
+
+/// The SHAPE of one declared tuning knob: what an absent declaration gives,
+/// and what the parse will accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TuneShape {
+    /// `off | <usize>` — `off` disables the tier, a number sets its threshold.
+    OffOrUsize { unset: usize, min: usize },
+    /// A bare integer with no `off` spelling. Deliberately distinct: routing
+    /// these through the `off`-aware helper would newly accept `off` where it
+    /// has never been documented, i.e. widen a contract under cover of a fix.
+    BareUsize { unset: usize, min: usize },
+    /// `Option<usize>` — absent means "the tier computes its own".
+    OptUsize { min: usize },
+    /// A bare integer with a real upper bound as well as a lower one.
+    RangeUsize {
+        unset: usize,
+        min: usize,
+        max: usize,
+    },
+    /// A 64-bit integer (an RNG seed).
+    BareU64 { unset: u64, min: u64 },
+}
+
+/// **Every store-owned numeric tuning knob, stated ONCE.**
+///
+/// ROADMAP O52 (round-four #25, the reporting half). O48 gave these knobs the
+/// `Tunes` contract — an unreadable declaration warns and behaves as if
+/// absent — by routing them through `undercroft_core::config`. It left the
+/// unset value and the minimum at each CALL SITE, which was fine for the
+/// engine and impossible for the pre-flight: `check_declaration` is handed a
+/// `(name, raw)` pair and has no call site to read them from, so it fell to
+/// the catch-all and `undercroft config check` printed *"no parse to run; the
+/// consumer validates it"* about declarations whose consumer had just been
+/// taught to validate them.
+///
+/// One table, two consumers, so the pre-flight cannot report one value while
+/// the engine picks another — and neither can drift, because there is only one
+/// statement of each knob's shape.
+pub(crate) const TUNED: &[(&str, TuneShape, &str)] = &[
+    (
+        "UNDERCROFT_FTS_PREFILTER_MIN",
+        TuneShape::OffOrUsize {
+            unset: DEFAULT_FTS_PREFILTER_MIN,
+            min: 0,
         },
-        Err(_) => embedder.semantic_floor().unwrap_or(0.0),
+        "row count above which an hmac-only vault cuts candidates to the FTS top-K",
+    ),
+    (
+        "UNDERCROFT_TOK_PQ_MIN",
+        TuneShape::OffOrUsize {
+            unset: latestage::TOK_PQ_MIN_DEFAULT,
+            min: 0,
+        },
+        "token rows above which the ColBERT token codebook is trained",
+    ),
+    (
+        "UNDERCROFT_WING_PQ_MIN",
+        TuneShape::OffOrUsize {
+            unset: pqidx::WING_PQ_MIN_DEFAULT,
+            min: 0,
+        },
+        "wing size above which a wing gets its own codebook and IVF",
+    ),
+    (
+        "UNDERCROFT_POOL_DIV",
+        TuneShape::OffOrUsize {
+            unset: pqidx::POOL_DIV_DEFAULT,
+            min: 1,
+        },
+        "divisor sizing the stage-1 pool for the PQ, wing-PQ and FTS tiers (live/N; the FDE tier does not consult it)",
+    ),
+    (
+        "UNDERCROFT_IVF_MIN",
+        TuneShape::OffOrUsize {
+            unset: pqidx::IVF_MIN_DEFAULT,
+            min: 0,
+        },
+        "coded rows above which the PQ tier partitions into IVF lists",
+    ),
+    (
+        "UNDERCROFT_IVF_NPROBE",
+        TuneShape::OptUsize { min: 1 },
+        "IVF lists probed per query (absent = the tier computes its own)",
+    ),
+    (
+        "UNDERCROFT_PQ_PAGE_MIN",
+        TuneShape::OffOrUsize {
+            unset: usize::MAX,
+            min: 0,
+        },
+        "coded rows above which the sealed PQ page tier is used (unset = off)",
+    ),
+    (
+        "UNDERCROFT_FDE_PQ_MIN",
+        TuneShape::OffOrUsize {
+            unset: fdeidx::FDE_PQ_MIN_DEFAULT,
+            min: 0,
+        },
+        "FDE rows above which the FDE tier quantizes its vectors",
+    ),
+    (
+        "UNDERCROFT_FDE_IVF_MIN",
+        TuneShape::OffOrUsize {
+            unset: usize::MAX,
+            min: 0,
+        },
+        "FDE rows above which the inverted FDE tier is used (unset = off)",
+    ),
+    (
+        "UNDERCROFT_FDE_NPROBE",
+        TuneShape::OptUsize { min: 1 },
+        "FDE lists probed per query (absent = the tier computes its own)",
+    ),
+    (
+        "UNDERCROFT_RERANK_TOP_N",
+        TuneShape::BareUsize {
+            unset: DEFAULT_RERANK_TOP_N,
+            min: 1,
+        },
+        "hits handed to the cross-encoder reranker",
+    ),
+    // The four FDE construction parameters. They live in `fdeidx.rs`'s
+    // `params_from_env`, NOT in `assemble`, which is why O48's sweep of
+    // "eleven resolvers in the store" did not reach them — a scoping phrase in
+    // a filing deciding what its answer could contain, exactly as O29's did.
+    // Each was `.parse().ok().unwrap_or(d)` and then `.max(1)` or
+    // `.clamp(1, 16)`, so a typo was swallowed twice over.
+    (
+        "UNDERCROFT_FDE_REPS",
+        TuneShape::BareUsize {
+            unset: undercroft_core::fde::FDE_REPS_DEFAULT,
+            min: 1,
+        },
+        "FDE repetitions (first build only; the persisted copy wins afterwards)",
+    ),
+    (
+        "UNDERCROFT_FDE_KSIM",
+        TuneShape::RangeUsize {
+            unset: undercroft_core::fde::FDE_KSIM_DEFAULT,
+            min: 1,
+            max: undercroft_core::fde::FDE_KSIM_MAX,
+        },
+        "FDE SimHash bits per repetition (first build only)",
+    ),
+    (
+        "UNDERCROFT_FDE_DPROJ",
+        TuneShape::BareUsize {
+            unset: undercroft_core::fde::FDE_DPROJ_DEFAULT,
+            min: 1,
+        },
+        "FDE projection dimension (first build only)",
+    ),
+    (
+        "UNDERCROFT_FDE_SEED",
+        TuneShape::BareU64 {
+            unset: undercroft_core::fde::FDE_SEED_DEFAULT,
+            min: 0,
+        },
+        "FDE construction seed (first build only)",
+    ),
+];
+
+/// The shape declared for `name`, or `None` if this is not a tuning knob.
+pub(crate) fn tune_shape(name: &str) -> Option<(TuneShape, &'static str)> {
+    TUNED
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, s, what)| (*s, *what))
+}
+
+/// Run a tuning declaration through the parse its shape names, returning what
+/// the engine will actually use. **Pure**: the caller supplies the raw value,
+/// so the engine and the pre-flight reach the same code — which is the whole
+/// point of the table above.
+pub(crate) fn parse_tuned(
+    name: &str,
+    shape: TuneShape,
+    raw: Option<&str>,
+) -> Result<String, String> {
+    use undercroft_core::config as cfg;
+    let render = |v: usize| {
+        if v == usize::MAX {
+            "off".to_string()
+        } else {
+            v.to_string()
+        }
+    };
+    match shape {
+        TuneShape::OffOrUsize { unset, min } => cfg::off_or_usize(name, raw, unset, min)
+            .map(render)
+            .map_err(|f| f.why),
+        TuneShape::BareUsize { unset, min } => cfg::bounded_usize(name, raw, unset, min)
+            .map(render)
+            .map_err(|f| f.why),
+        TuneShape::RangeUsize { unset, min, max } => {
+            cfg::in_range_usize(name, raw, unset, min, max)
+                .map(render)
+                .map_err(|f| f.why)
+        }
+        TuneShape::OptUsize { min } => match raw {
+            None => Ok("the tier computes its own".to_string()),
+            Some(v) => cfg::bounded_usize(name, Some(v), 0, min)
+                .map(render)
+                .map_err(|f| f.why),
+        },
+        TuneShape::BareU64 { unset, min } => cfg::bounded_u64(name, raw, unset, min)
+            .map(|v| v.to_string())
+            .map_err(|f| f.why),
+    }
+}
+
+/// One tuning knob, resolved from the environment, warning if it cannot be
+/// read. The three shapes share this so warn-and-behave-as-absent is a single
+/// decision rather than one per knob.
+fn tuned(name: &str) -> usize {
+    let (shape, _) = tune_shape(name).expect("every tuned knob has a TUNED row");
+    let raw = std::env::var(name).ok();
+    match shape {
+        TuneShape::OffOrUsize { unset, min } => warn_or(undercroft_core::config::off_or_usize(
+            name,
+            raw.as_deref(),
+            unset,
+            min,
+        )),
+        TuneShape::BareUsize { unset, min } => warn_or(undercroft_core::config::bounded_usize(
+            name,
+            raw.as_deref(),
+            unset,
+            min,
+        )),
+        TuneShape::RangeUsize { unset, min, max } => warn_or(
+            undercroft_core::config::in_range_usize(name, raw.as_deref(), unset, min, max),
+        ),
+        other => unreachable!("{name} is {other:?}, not a plain usize knob"),
+    }
+}
+
+/// The `Option<usize>` knobs, where absent means "the tier computes its own".
+fn tuned_opt(name: &str) -> Option<usize> {
+    let (shape, _) = tune_shape(name).expect("every tuned knob has a TUNED row");
+    let TuneShape::OptUsize { min } = shape else {
+        unreachable!("{name} is {shape:?}, not an optional knob")
+    };
+    let raw = std::env::var(name).ok();
+    let v = raw.as_deref()?;
+    match undercroft_core::config::bounded_usize(name, Some(v), 0, min) {
+        Ok(n) => Some(n),
+        Err(f) => {
+            undercroft_obs::diag_warn!("{}", f.why);
+            None
+        }
+    }
+}
+
+/// A 64-bit tuning knob (the FDE seed).
+fn tuned_u64(name: &str) -> u64 {
+    let (shape, _) = tune_shape(name).expect("every tuned knob has a TUNED row");
+    let TuneShape::BareU64 { unset, min } = shape else {
+        unreachable!("{name} is {shape:?}, not a 64-bit knob")
+    };
+    warn_or(undercroft_core::config::bounded_u64(
+        name,
+        std::env::var(name).ok().as_deref(),
+        unset,
+        min,
+    ))
+}
+
+/// The per-wing training-sample cap (`UNDERCROFT_TRAIN_SOURCE_CAP`), as a
+/// pure parse so the pre-flight runs it (ROADMAP O52). `off` removes the cap.
+pub(crate) fn parse_train_source_cap(raw: Option<&str>) -> Result<usize, String> {
+    let Some(v) = raw else {
+        return Ok(DEFAULT_TRAIN_SOURCE_CAP);
+    };
+    if v.trim().eq_ignore_ascii_case("off") {
+        return Ok(usize::MAX);
+    }
+    match v.trim().parse::<usize>() {
+        Ok(d) if d >= 2 => Ok(d),
+        _ => Err(format!(
+            "UNDERCROFT_TRAIN_SOURCE_CAP={v:?} is not an integer >= 2 or 'off'; using {DEFAULT_TRAIN_SOURCE_CAP}"
+        )),
+    }
+}
+
+/// [`warn_or`] for the resolvers whose error is a plain message: warn and use
+/// the value an absent declaration would have given.
+fn warn_or_str<T>(r: Result<T, String>, unset: T) -> T {
+    match r {
+        Ok(v) => v,
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            unset
+        }
+    }
+}
+
+/// Report an unreadable declaration and use what an absent one would give.
+fn warn_or<T>(r: Result<T, undercroft_core::config::Fallback<T>>) -> T {
+    match r {
+        Ok(v) => v,
+        Err(f) => {
+            undercroft_obs::diag_warn!("{}", f.why);
+            f.value
+        }
+    }
+}
+
+fn resolve_semantic_floor<E: Embedder + ?Sized>(embedder: &E) -> f32 {
+    let declared = std::env::var("UNDERCROFT_SEMANTIC_FLOOR").ok();
+    match parse_semantic_floor(declared.as_deref()) {
+        Ok(Some(f)) => f,
+        Ok(None) => embedder.semantic_floor().unwrap_or(0.0),
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            embedder.semantic_floor().unwrap_or(0.0)
+        }
+    }
+}
+
+/// The `UNDERCROFT_SEMANTIC_FLOOR` declaration's parse (ROADMAP O52). `None`
+/// means "use the embedder's own measured floor", which is what absence gives
+/// — so this is pure and the pre-flight can run it without an embedder,
+/// reporting the DECLARATION rather than the resolved cosine.
+pub(crate) fn parse_semantic_floor(raw: Option<&str>) -> Result<Option<f32>, String> {
+    let Some(v) = raw else { return Ok(None) };
+    if v.trim().eq_ignore_ascii_case("off") {
+        return Ok(Some(0.0));
+    }
+    match v.trim().parse::<f32>() {
+        Ok(f) if f.is_finite() && (0.0..=0.98).contains(&f) => Ok(Some(f)),
+        _ => Err(format!(
+            "UNDERCROFT_SEMANTIC_FLOOR={v:?} is not a cosine in [0.0, 0.98]; using the embedder's own floor"
+        )),
     }
 }
 
@@ -798,11 +1148,15 @@ fn resolve_trust_floor(env: Option<&str>) -> Result<Option<String>, StoreError> 
     Ok(Some(v))
 }
 
-/// `UNDERCROFT_READ_AUDIT`: `chain` puts a record on the audit chain for
-/// every search (declared — a per-query append is a real durability
-/// cost); unset/`off` = the byte-identical default. Garbage REFUSES to
-/// open: a deployment that declared read auditing believes reads leave a
-/// trail, and silently running without one is the failure mode.
+/// `UNDERCROFT_READ_AUDIT`: `chain` puts one record on the audit chain for
+/// every content-returning read — searches and by-id and bulk drawer reads
+/// (O50), and the knowledge graph's own doors (O51). Declared, because a
+/// per-read append is a real durability cost; unset/`off` = the
+/// byte-identical default. Garbage REFUSES to open: a deployment that
+/// declared read auditing believes reads leave a trail, and silently
+/// running without one is the failure mode. (This comment said "for every
+/// search" until O51 — accurate before O50 and stale after it, which is
+/// exactly the class of drift O50's own entry was about.)
 fn resolve_read_audit(env: Option<&str>) -> Result<bool, StoreError> {
     match env.map(str::trim) {
         None => Ok(false),
@@ -847,24 +1201,46 @@ fn resolve_admission_rate(env: Option<&str>) -> Result<Option<(u32, u32)>, Store
 
 /// Pure for the same reason as [`resolve_late_top_n`].
 fn resolve_fusion_weight(env: Option<&str>) -> f32 {
-    match env {
-        None => DEFAULT_FUSION_WEIGHT,
-        Some(v) => match v.trim().parse::<f32>() {
-            Ok(w) if w.is_finite() => w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX),
-            _ => {
-                undercroft_obs::diag_warn!(
-                    "UNDERCROFT_FUSION_WEIGHT={v:?} is not a number; \
-                     using {DEFAULT_FUSION_WEIGHT}"
-                );
-                DEFAULT_FUSION_WEIGHT
-            }
-        },
+    match parse_fusion_weight(env) {
+        Ok(w) => w,
+        Err(why) => {
+            undercroft_obs::diag_warn!("{why}");
+            DEFAULT_FUSION_WEIGHT
+        }
+    }
+}
+
+/// The `UNDERCROFT_FUSION_WEIGHT` declaration's parse, pure so the pre-flight
+/// reaches it (ROADMAP O52). The CLAMP is deliberately not an error: the
+/// bound exists so no configuration can retire a channel, and a value outside
+/// it is a legible intent to push the blend as far as it goes. Only an
+/// unreadable value falls back.
+pub(crate) fn parse_fusion_weight(raw: Option<&str>) -> Result<f32, String> {
+    let Some(v) = raw else {
+        return Ok(DEFAULT_FUSION_WEIGHT);
+    };
+    match v.trim().parse::<f32>() {
+        Ok(w) if w.is_finite() => Ok(w.clamp(FUSION_WEIGHT_MIN, FUSION_WEIGHT_MAX)),
+        _ => Err(format!(
+            "UNDERCROFT_FUSION_WEIGHT={v:?} is not a number; using {DEFAULT_FUSION_WEIGHT}"
+        )),
     }
 }
 
 fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
-    if let Some(n) = late.and_then(|v| v.parse().ok()).filter(|&n| n > 0) {
-        return n;
+    // ROADMAP O48: a declared-but-unreadable `UNDERCROFT_LATE_TOP_N` used to
+    // fall through in silence. It still falls through — the resolved value is
+    // byte-identical — but it now SAYS so, which is the whole of the `Tunes`
+    // contract. The `rerank` arm below is deliberately NOT touched: its own
+    // comment records that an unparseable value resolving to 50 is a
+    // compatibility promise, and honouring only valid values there would
+    // quadruple rescore depth for a deployment that changed nothing.
+    if let Some(v) = late {
+        match parse_late_top_n(Some(v)) {
+            Ok(Some(n)) => return n,
+            Ok(None) => {}
+            Err(why) => undercroft_obs::diag_warn!("{why}"),
+        }
     }
     match rerank {
         // Present at all ⇒ this stage tracks the old knob, *including* values
@@ -879,6 +1255,22 @@ fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
             .unwrap_or(DEFAULT_RERANK_TOP_N),
         None => DEFAULT_LATE_TOP_N,
     }
+}
+
+/// The `UNDERCROFT_LATE_TOP_N` declaration's parse, pure so the pre-flight
+/// reaches it (ROADMAP O52).
+///
+/// **It has no table row on purpose.** `TUNED` states each knob's UNSET value,
+/// and this knob's depends on a SECOND variable — an absent `LATE_TOP_N` falls
+/// through to whatever `UNDERCROFT_RERANK_TOP_N` resolves to, valid or not,
+/// which is a compatibility promise O48 deliberately preserved. So the table
+/// cannot describe it, and this function is the one statement of its parse
+/// instead, called by the resolver and by `check_declaration`.
+pub(crate) fn parse_late_top_n(raw: Option<&str>) -> Result<Option<usize>, String> {
+    let Some(v) = raw else { return Ok(None) };
+    undercroft_core::config::bounded_usize("UNDERCROFT_LATE_TOP_N", Some(v), 0, 1)
+        .map(Some)
+        .map_err(|f| f.why)
 }
 
 /// How the semantic and lexical signals are combined at rank time.
@@ -911,17 +1303,39 @@ pub enum Fusion {
 
 impl Fusion {
     fn from_env() -> Self {
-        match std::env::var("UNDERCROFT_FUSION").ok().as_deref() {
-            Some(v) if v.eq_ignore_ascii_case("legacy") => Fusion::Legacy,
-            Some(v) if v.eq_ignore_ascii_case("rrf") => {
-                undercroft_obs::diag_warn!(
-                    "UNDERCROFT_FUSION=rrf was removed (measured −7.3pp vs bm25); \
-                     falling back to bm25"
-                );
+        match parse_fusion(std::env::var("UNDERCROFT_FUSION").ok().as_deref()) {
+            Ok(f) => f,
+            Err(why) => {
+                undercroft_obs::diag_warn!("{why}");
                 Fusion::Bm25
             }
-            _ => Fusion::Bm25,
         }
+    }
+}
+
+/// The `UNDERCROFT_FUSION` declaration's parse, as a pure function.
+///
+/// ROADMAP O52: an unknown spelling used to fall through the `match` to
+/// `Fusion::Bm25` in SILENCE, so `UNDERCROFT_FUSION=legcy` gave the default
+/// with no signal — the `Tunes` swallow O48 closed for the numeric knobs,
+/// still open on this vocabulary. Pure so the pre-flight runs this same code
+/// rather than a second copy of the vocabulary.
+pub(crate) fn parse_fusion(raw: Option<&str>) -> Result<Fusion, String> {
+    // `rrf` gets its own message: it was a real spelling that was REMOVED
+    // after measuring -7.3pp against bm25, so an operator who set it is not
+    // making a typo and deserves to be told which.
+    if let Some(v) = raw {
+        if v.trim().eq_ignore_ascii_case("rrf") {
+            return Err(
+                "UNDERCROFT_FUSION=rrf was removed (measured -7.3pp vs bm25); ".to_string()
+                    + "ignoring the declaration and behaving as if it were unset",
+            );
+        }
+    }
+    match undercroft_core::config::one_of("UNDERCROFT_FUSION", raw, &["bm25", "legacy"], "bm25") {
+        Ok(v) if v == "legacy" => Ok(Fusion::Legacy),
+        Ok(_) => Ok(Fusion::Bm25),
+        Err(f) => Err(f.why),
     }
 }
 
@@ -1185,6 +1599,170 @@ pub struct SearchHit {
 pub(crate) struct Landing {
     pub(crate) is_new: bool,
     pub(crate) diverted_to: Option<String>,
+}
+
+/// Which content-returning read this is — the read path's answer to
+/// [`Screen`], and it exists for the same reason.
+///
+/// ROADMAP O50 (round-four #23). `UNDERCROFT_READ_AUDIT=chain` is documented
+/// for *"insider/exfil accounting"*, and `audit_read` had exactly TWO call
+/// sites, both passing the literal `"search"`. Every by-id and bulk read —
+/// `get`, `recent`, `list_drawers` — returned verbatim content and appended
+/// nothing. An insider with a valid token walks `GET /v1/…/drawers` for ids
+/// and `GET …/drawers/{id}` for each, exfiltrating the whole vault with ZERO
+/// chain records, while the same person running one search leaves one.
+///
+/// The cause was structural: nothing required a content-returning read to
+/// reach the auditor, so coverage was added one call site at a time — the
+/// exact arrangement `CLAUDE.md` names as the birth of all 65 drifts. So this
+/// is a REQUIRED argument on the funnel, not a defaulted one: a new read path
+/// does not compile until its author states which it is.
+/// What a read was scoped to, for the audit record. Search projects its
+/// `SearchOptions` onto this; every other read has nothing to put here, which
+/// is why the fields are `Option` rather than a borrowed `SearchOptions` —
+/// the auditor must not require a search to exist.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ReadScope<'a> {
+    pub(crate) wing: Option<&'a str>,
+    pub(crate) room: Option<&'a str>,
+    pub(crate) kind: Option<&'a str>,
+    pub(crate) min_trust: Option<&'a str>,
+}
+
+impl<'a> ReadScope<'a> {
+    /// A read with no scope of its own — a by-id `get`, a diary, a tunnel.
+    pub(crate) fn none() -> Self {
+        Self::default()
+    }
+
+    /// Byte-identity with the pre-O50 search record depends on this
+    /// projecting exactly the four fields the old canonical read.
+    pub(crate) fn from_opts(o: &'a SearchOptions) -> Self {
+        Self {
+            wing: o.wing.as_deref(),
+            room: o.room.as_deref(),
+            kind: o.kind.as_deref(),
+            min_trust: o.min_trust.as_deref(),
+        }
+    }
+
+    pub(crate) fn wing_only(wing: Option<&'a str>) -> Self {
+        Self {
+            wing,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Read {
+    /// A read whose content leaves the process for a caller. Audited when
+    /// `UNDERCROFT_READ_AUDIT=chain` is declared.
+    Returned(ReadOp),
+    /// A read the engine performs for itself. Records nothing, for the
+    /// stated reason — the greppable bypass token, exactly as
+    /// `BypassReason` is on the write side.
+    Internal(InternalRead),
+}
+
+/// The surface doors, one namespace each. `Search.as_str()` is `"search"` so
+/// the existing `read/search` records stay byte-identical.
+///
+/// **Two funnels, not one.** The first nine are the DRAWER doors (O50). The
+/// `Kg*` four are the knowledge graph's own, which O50 named as the gap it
+/// left: `decode_triple` and `entity_name_from_rest` return words distilled
+/// out of drawers, so a caller walking `kg-entities` for names and then
+/// `kg-query` per name reads the same corpus through a different door.
+///
+/// Deliberately NOT here, with the reason, because a filing is a hypothesis:
+/// `kg_verify_receipts` was filed as a fifth KG reader and is not one. It
+/// reaches neither decoder — it returns `(triple_id, source_drawer_id,
+/// verdict)`, i.e. identifiers and an enum, and the one drawer it reads it
+/// reads as `InternalRead::Verification` to compare a fingerprint that never
+/// leaves. `kg_stats` is the same class one door over (counts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReadOp {
+    Search,
+    Get,
+    Recent,
+    List,
+    Diary,
+    Tunnel,
+    Closet,
+    Hallways,
+    AdmissionList,
+    KgQuery,
+    KgTimeline,
+    KgEntities,
+    KgCanonical,
+}
+
+impl ReadOp {
+    /// Counted against the drivers by
+    /// `every_content_returning_read_appends_exactly_one_chain_record`, so a
+    /// variant added without a record fails the build — the original defect
+    /// in a new place.
+    pub const ALL: &'static [ReadOp] = &[
+        ReadOp::Search,
+        ReadOp::Get,
+        ReadOp::Recent,
+        ReadOp::List,
+        ReadOp::Diary,
+        ReadOp::Tunnel,
+        ReadOp::Closet,
+        ReadOp::Hallways,
+        ReadOp::AdmissionList,
+        ReadOp::KgQuery,
+        ReadOp::KgTimeline,
+        ReadOp::KgEntities,
+        ReadOp::KgCanonical,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReadOp::Search => "search",
+            ReadOp::Get => "get",
+            ReadOp::Recent => "recent",
+            ReadOp::List => "list",
+            ReadOp::Diary => "diary",
+            ReadOp::Tunnel => "tunnel",
+            ReadOp::Closet => "closet",
+            ReadOp::Hallways => "hallways",
+            ReadOp::AdmissionList => "admission-list",
+            ReadOp::KgQuery => "kg-query",
+            ReadOp::KgTimeline => "kg-timeline",
+            ReadOp::KgEntities => "kg-entities",
+            ReadOp::KgCanonical => "kg-canonical",
+        }
+    }
+}
+
+/// Why a read is the engine's own and records nothing. Adding a variant is
+/// where a reviewer has to justify one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InternalRead {
+    /// Hydrating candidates a remote mirror proposed, inside an operation
+    /// that already records `read/search` at its own tail.
+    RemoteHydration,
+    /// A lookup performed to decide a WRITE — dedup, supersession, an
+    /// existence check. The caller never asked to read this.
+    WritePathLookup,
+    /// Index/codebook/backfill maintenance over rows the caller did not
+    /// request. Several of these hold an `unchecked_transaction`, so they
+    /// must not reach the auditor at all.
+    Maintenance,
+    /// Integrity work: `verify`, `repair`, retention and forgetting scans.
+    Verification,
+    /// A read performed to decide a refusal. Recording it would put a read
+    /// in the trail the caller never asked for.
+    PolicyFence,
+    /// A whole-palace export, already recorded unconditionally by
+    /// `audit_export` — auditing the rows again would double-count it.
+    ExportAudited,
+    /// A per-row read inside a bulk door that appends its own single
+    /// record. The caller asked for the LIST, not for each row, so the
+    /// trail should say "one list" and not "N gets".
+    BulkMember,
 }
 
 /// Whether a write passes the admission screen. **Every** call into the
@@ -1632,13 +2210,31 @@ pub struct PalaceStore {
     /// but pays corpus-shaped candidate generation). See
     /// `pqidx::WING_PQ_MIN_DEFAULT`.
     wing_pq_min: usize,
-    /// Corpus-scaled stage-1 candidate pool: the semantic prefilters fetch
-    /// at least `live_rows / pool_div` ADC candidates (on top of the 256
-    /// floor and the depth·32 term), and `refine_by_exact_cosine` cuts the
-    /// pool back to hydration size with the true vectors. `usize::MAX` ⇒
-    /// scaling off, the fixed floor only — the measured recall-leak defect
-    /// (R@5 100 → 96.8 from 131k to 1M at a fixed 256 pool).
+    /// Corpus-scaled stage-1 candidate pool: **the PQ tier, the per-wing PQ
+    /// tier and the FTS prefilter** fetch at least `live_rows / pool_div`
+    /// candidates (on top of the 256 floor and the depth·32 term), and for
+    /// the two PQ tiers `refine_by_exact_cosine` cuts the pool back to
+    /// hydration size with the true vectors. `usize::MAX` ⇒ scaling off, the
+    /// fixed floor only — the measured recall-leak defect (R@5 100 → 96.8
+    /// from 131k to 1M at a fixed 256 pool).
     /// `UNDERCROFT_POOL_DIV` (number, `off`) / [`Self::set_pool_div`].
+    ///
+    /// **NOT the FDE tier, and this sentence used to say otherwise** (ROADMAP
+    /// O56, round-four #47). It read *"the semantic prefilters"*, which
+    /// includes FDE, and `pool_div` appears nowhere in `fdeidx.rs`: with
+    /// `UNDERCROFT_RETRIEVAL=fde` the pool is `pool_k`, i.e. the fixed
+    /// `max(256, depth·32)` unscoped, so the cure this knob exists to provide
+    /// is not applied and an operator reading this believed it was. The
+    /// missing stage-2 is a different matter and is DELIBERATE — a
+    /// single-vector cut would fight MaxSim, which `search_inner` says where
+    /// it declines to do it.
+    ///
+    /// **Whether FDE actually leaks at scale is UNMEASURED**, and the honest
+    /// grade of this row turns on that: transferring the PQ tier's 96.8%
+    /// figure would invite wiring `pool_div` in on the strength of a
+    /// measurement of a different tier, with no stage-2 to bound the latency
+    /// that follows. `pqscale` is the instrument for the PQ tier; the FDE
+    /// analogue does not exist. Filed rather than guessed.
     pool_div: usize,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
@@ -1975,7 +2571,7 @@ impl PalaceStore {
                 // at all, including `verify`, which is the only tool that can
                 // name the damage. Its old vector stays; a row that fails
                 // every read does not have a recall problem.
-                match self.get(id) {
+                match self.get(id, Read::Internal(InternalRead::Maintenance)) {
                     Ok(Some(d)) => {
                         let emb = self.embedder_embed(&d.content);
                         rows.push((id.clone(), self.vault.embedding_at_rest(id, &emb)));
@@ -2733,11 +3329,10 @@ impl PalaceStore {
         embedder: Box<dyn Embedder + Send>,
         read_only: bool,
     ) -> Result<Self, StoreError> {
-        let fts_min = match std::env::var("UNDERCROFT_FTS_PREFILTER_MIN") {
-            Ok(v) if v.eq_ignore_ascii_case("off") => None,
-            Ok(v) => Some(v.parse().unwrap_or(DEFAULT_FTS_PREFILTER_MIN)),
-            Err(_) => Some(DEFAULT_FTS_PREFILTER_MIN),
-        };
+        // `off` disables the prefilter here rather than setting a sentinel,
+        // so the shared helper's `usize::MAX` is mapped back to `None`.
+        let fts_raw = tuned("UNDERCROFT_FTS_PREFILTER_MIN");
+        let fts_min = (fts_raw != usize::MAX).then_some(fts_raw);
         let external_dim = embedder
             .model_name()
             .starts_with("external:")
@@ -2784,17 +3379,12 @@ impl PalaceStore {
                         .collect()
                 })
                 .unwrap_or_default(),
-            train_source_cap: match std::env::var("UNDERCROFT_TRAIN_SOURCE_CAP") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().ok().filter(|&d| d >= 2).unwrap_or_else(|| {
-                    undercroft_obs::diag_warn!(
-                        "UNDERCROFT_TRAIN_SOURCE_CAP={v:?} is not an integer >= 2 or 'off'; \
-                         using 4"
-                    );
-                    4
-                }),
-                Err(_) => 4,
-            },
+            train_source_cap: warn_or_str(
+                parse_train_source_cap(
+                    std::env::var("UNDERCROFT_TRAIN_SOURCE_CAP").ok().as_deref(),
+                ),
+                DEFAULT_TRAIN_SOURCE_CAP,
+            ),
             external_dim,
             hnsw_enabled: false,
             #[cfg(feature = "hnsw")]
@@ -2805,65 +3395,44 @@ impl PalaceStore {
             pq_cache: std::cell::RefCell::new(None),
             tok_pq: std::cell::RefCell::new(None),
             tok_pq_checked: std::cell::Cell::new(false),
-            tok_pq_min: match std::env::var("UNDERCROFT_TOK_PQ_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(latestage::TOK_PQ_MIN_DEFAULT),
-                Err(_) => latestage::TOK_PQ_MIN_DEFAULT,
-            },
+            tok_pq_min: tuned("UNDERCROFT_TOK_PQ_MIN"),
             pq_verified: std::cell::Cell::new(false),
             pq_live: std::cell::Cell::new(0),
             wing_pq: std::cell::RefCell::new(std::collections::HashMap::new()),
-            wing_pq_min: match std::env::var("UNDERCROFT_WING_PQ_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(pqidx::WING_PQ_MIN_DEFAULT),
-                Err(_) => pqidx::WING_PQ_MIN_DEFAULT,
-            },
-            pool_div: match std::env::var("UNDERCROFT_POOL_DIV") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(pqidx::POOL_DIV_DEFAULT),
-                Err(_) => pqidx::POOL_DIV_DEFAULT,
-            },
-            ivf_min: match std::env::var("UNDERCROFT_IVF_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(pqidx::IVF_MIN_DEFAULT),
-                Err(_) => pqidx::IVF_MIN_DEFAULT,
-            },
-            ivf_nprobe: std::env::var("UNDERCROFT_IVF_NPROBE")
-                .ok()
-                .and_then(|v| v.parse().ok()),
+            wing_pq_min: tuned("UNDERCROFT_WING_PQ_MIN"),
+            // `min` is 1 here and 0 above ON PURPOSE. A `_MIN` threshold of
+            // zero is a legitimate, if aggressive, choice — the tier is
+            // simply always on — and refusing it would narrow input that was
+            // never documented as invalid. `POOL_DIV` is a DIVISOR: zero
+            // parses, and every consumer guards it with `.max(1)`, so it
+            // silently means "the pool is the whole live corpus".
+            pool_div: tuned("UNDERCROFT_POOL_DIV"),
+            ivf_min: tuned("UNDERCROFT_IVF_MIN"),
+            ivf_nprobe: tuned_opt("UNDERCROFT_IVF_NPROBE"),
             // Resolved once at open like every other tunable, rather than read
             // from the environment on each search.
             late_top_n: late_top_n(),
-            pq_page_min: match std::env::var("UNDERCROFT_PQ_PAGE_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(usize::MAX),
-                Err(_) => usize::MAX,
-            },
+            pq_page_min: tuned("UNDERCROFT_PQ_PAGE_MIN"),
             fde_enabled: false,
             fde_encoder: std::cell::RefCell::new(None),
             fde_cache: std::cell::RefCell::new(None),
             fde_checked: std::cell::Cell::new(false),
             fde_pq: std::cell::RefCell::new(None),
             fde_pq_checked: std::cell::Cell::new(false),
-            fde_pq_min: match std::env::var("UNDERCROFT_FDE_PQ_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(fdeidx::FDE_PQ_MIN_DEFAULT),
-                Err(_) => fdeidx::FDE_PQ_MIN_DEFAULT,
-            },
+            fde_pq_min: tuned("UNDERCROFT_FDE_PQ_MIN"),
             fde_ivf: std::cell::RefCell::new(None),
             fde_ivf_checked: std::cell::Cell::new(false),
             // Default OFF: the containment gate measured probed containment
             // below flat's at every fraction (0.96 quarter / 0.993 half at
             // 500k vs flat 1.000) — opting in trades a small tail of exact
             // top-10 members for scan time; the operator makes that call.
-            fde_ivf_min: match std::env::var("UNDERCROFT_FDE_IVF_MIN") {
-                Ok(v) if v.eq_ignore_ascii_case("off") => usize::MAX,
-                Ok(v) => v.parse().unwrap_or(fdeidx::FDE_IVF_MIN_DEFAULT),
-                Err(_) => usize::MAX,
-            },
-            fde_nprobe: std::env::var("UNDERCROFT_FDE_NPROBE")
-                .ok()
-                .and_then(|v| v.parse().ok()),
+            // The unset value is `usize::MAX` (tier off), so an UNREADABLE
+            // declaration now leaves it off too. It used to fall back to
+            // a "default" whose ONLY consumer was this fallback — i.e. a typo TURNED THE TIER ON, the
+            // one knob whose garbage was less conservative than saying
+            // nothing, against the comment three lines up.
+            fde_ivf_min: tuned("UNDERCROFT_FDE_IVF_MIN"),
+            fde_nprobe: tuned_opt("UNDERCROFT_FDE_NPROBE"),
             qmatrix_cache: std::cell::RefCell::new(None),
             // Stated by the caller, never defaulted: `open_inner` passes
             // false and `open_inner_read_only` true, and every other door is
@@ -3752,14 +4321,16 @@ impl PalaceStore {
             }
             Some(old_id) => {
                 let secret = self.kg_secret()?;
-                let bound = self.get(old_id)?.map(|old| {
-                    let fp = crate::kg::keyed_content_fp(&self.vault, &secret, &old.content);
-                    let receipt = self
-                        .vault
-                        .tag(&supersession_canonical(&drawer.id, old_id, &fp))
-                        .to_vec();
-                    (fp, receipt)
-                });
+                let bound = self
+                    .get(old_id, Read::Internal(InternalRead::WritePathLookup))?
+                    .map(|old| {
+                        let fp = crate::kg::keyed_content_fp(&self.vault, &secret, &old.content);
+                        let receipt = self
+                            .vault
+                            .tag(&supersession_canonical(&drawer.id, old_id, &fp))
+                            .to_vec();
+                        (fp, receipt)
+                    });
                 Some((old_id.to_string(), bound))
             }
             None => None,
@@ -4118,7 +4689,9 @@ impl PalaceStore {
             // matched drawer's dates with it: the same text recorded on an
             // earlier day simply stopped having happened. The text collapses,
             // the chronology does not.
-            if let Some(existing) = self.get(&match_id)? {
+            if let Some(existing) =
+                self.get(&match_id, Read::Internal(InternalRead::WritePathLookup))?
+            {
                 refreshed.absorb_occurrences_of(&existing);
             }
             let landed = self.write_drawer(&refreshed, embedding, Screen::Apply)?;
@@ -4385,7 +4958,7 @@ impl PalaceStore {
     }
 
     /// Fetch one drawer by id, verifying its HMAC and decrypting content.
-    pub fn get(&self, id: &str) -> Result<Option<Drawer>, StoreError> {
+    pub fn get(&self, id: &str, read: Read) -> Result<Option<Drawer>, StoreError> {
         let row = self
             .conn
             .query_row(
@@ -4411,7 +4984,10 @@ impl PalaceStore {
                         undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
                         StoreError::Integrity(id.clone())
                     })?;
-                Ok(Some(self.decode(&id, &meta_json, &content_rest)?))
+                let drawer = self.decode(&id, &meta_json, &content_rest)?;
+                // ROADMAP O50, through the one recording door.
+                self.record_read(read, &id, ReadScope::none(), 1)?;
+                Ok(Some(drawer))
             }
         }
     }
@@ -4475,7 +5051,12 @@ impl PalaceStore {
 
     /// Most recently filed drawers (optionally scoped to a wing) — the
     /// palace's "essential story" feed used by wake-up.
-    pub fn recent(&self, wing: Option<&str>, limit: usize) -> Result<Vec<Drawer>, StoreError> {
+    pub fn recent(
+        &self,
+        wing: Option<&str>,
+        limit: usize,
+        read: Read,
+    ) -> Result<Vec<Drawer>, StoreError> {
         let mut sql = String::from("SELECT id, meta_json, content, tag FROM drawers");
         let mut clauses: Vec<String> = Vec::new();
         let mut binds: Vec<String> = Vec::new();
@@ -4542,7 +5123,67 @@ impl PalaceStore {
             }
             out.push(drawer);
         }
+        // ROADMAP O50: ONE record for the bulk read, not one per row — the
+        // caller made a single request and the trail should say so.
+        self.record_read(
+            read,
+            wing.unwrap_or(""),
+            ReadScope::wing_only(wing),
+            out.len(),
+        )?;
         Ok(out)
+    }
+
+    /// **Is a filtered top-k a safe substitute for scanning the scope
+    /// exactly?** ROADMAP O53 (round-four #28), and the ONE place both
+    /// filter-afterwards arms ask it.
+    ///
+    /// FTS5 and the HNSW graph cannot be asked "within this scope", so they
+    /// draw a top-k over everything and the scope filters the answer. Two
+    /// things follow, and the old test conflated them.
+    ///
+    /// **Truncation is the real question.** If the source returned FEWER than
+    /// `k` rows it was not truncated: every match it has is in hand, so the
+    /// in-scope subset is COMPLETE at any size — one candidate is a correct
+    /// pool. If it returned exactly `k`, deeper in-scope rows may sit below
+    /// the cut, and only then does the pool's width have to earn its place.
+    /// The old test was `inscope.len() >= depth`, which cannot distinguish
+    /// the two and is wrong in both directions: it surrendered on small
+    /// COMPLETE pools (a needless full scan) and accepted thin TRUNCATED ones.
+    ///
+    /// **And the floor was `depth`, not the scoped floor** every semantic
+    /// tier uses. Measured on a 6,940-drawer hmac-only corpus with a
+    /// 1,730-row wing: the scoped pool was **70–80 candidates** where the
+    /// same query unscoped got 256, `depth` is 5 so the guard never fired,
+    /// and 2 of 18 queries returned a different answer from the exact scope
+    /// scan. That is the 89.6% wing-recall leak `scopescale` measured on the
+    /// semantic side, in the one arm the scope-sized policy never reached.
+    ///
+    /// The expected in-scope count is `scope_live * k / n`, which for the
+    /// default divisor is about `scope_live / 64` — so `>= depth` is
+    /// unreachable for any scope large enough to get here at all (a scope at
+    /// or below `SCOPE_HYDRATE_FLOOR` is scanned exactly and never reaches
+    /// this code). The guard could not fire, which is why nothing reported it.
+    fn accept_filtered_pool(
+        inscope: Vec<i64>,
+        truncated: bool,
+        scope_live: Option<usize>,
+        hydrate_k: usize,
+        depth: usize,
+    ) -> Option<Vec<i64>> {
+        if !truncated {
+            return Some(inscope);
+        }
+        // `min(l)` because a floor above the scope's own population could
+        // never be met, turning "surrender when thin" into "always surrender".
+        let floor = scope_live.map_or(depth, |l| scoped_keep(hydrate_k, l).min(l));
+        if inscope.len() >= floor {
+            Some(inscope)
+        } else {
+            // Surrender to the bounded exact scan: the `WHERE` clause below
+            // is bounded by the scope, so this is exact and cannot starve.
+            None
+        }
     }
 
     /// Hybrid search: hashed-embedding cosine + lexical term overlap +
@@ -4889,12 +5530,9 @@ impl PalaceStore {
             {
                 match (self.hnsw_candidates(&qvec, pool_k)?, &scope) {
                     (Some(seqs), Some(s)) => {
+                        let truncated = seqs.len() >= pool_k;
                         let inscope: Vec<i64> = seqs.into_iter().filter(|q| s.admits(q)).collect();
-                        if inscope.len() >= depth {
-                            Some(inscope)
-                        } else {
-                            None
-                        }
+                        Self::accept_filtered_pool(inscope, truncated, scope_live, hydrate_k, depth)
                     }
                     (other, _) => other,
                 }
@@ -4921,13 +5559,17 @@ impl PalaceStore {
                         // bounded exact scan takes over rather than starve.
                         match (self.fts_candidates(&qterms, k), &scope) {
                             (Some(seqs), Some(s)) => {
+                                // `LIMIT k` returning exactly k is the exact
+                                // answer to "may deeper in-scope matches sit
+                                // below the cut?" — the question the old
+                                // `inscope.len() >= depth` test was standing
+                                // in for and could not answer.
+                                let truncated = seqs.len() >= k;
                                 let inscope: Vec<i64> =
                                     seqs.into_iter().filter(|q| s.admits(q)).collect();
-                                if inscope.len() >= depth {
-                                    Some(inscope)
-                                } else {
-                                    None
-                                }
+                                Self::accept_filtered_pool(
+                                    inscope, truncated, scope_live, hydrate_k, depth,
+                                )
                             }
                             (other, _) => other,
                         }
@@ -4939,6 +5581,22 @@ impl PalaceStore {
             }
         };
         phase_ms("candidates", &mut t_phase);
+        // The other half of the question this trace exists to answer. Timing
+        // alone says a phase was slow; the POOL SIZE says whether the answer
+        // was ranked from twenty candidates or two thousand, which is what
+        // every scope-geometry claim in this tree turns on and what no
+        // instrument could read from outside the process (ROADMAP O53).
+        if trace {
+            eprintln!(
+                "search-trace pool: {} candidate(s){}",
+                candidates.as_ref().map_or(0, Vec::len),
+                match (&scope, scope_live) {
+                    (Some(_), Some(l)) => format!(" in a scope of {l}"),
+                    (Some(_), None) => " under an exclusion".to_string(),
+                    _ => String::new(),
+                }
+            );
+        }
         // Second stage on the semantic pools (PQ, per-wing PQ): the
         // corpus-scaled stage-1 pool is cut by exact cosine over the
         // candidates' embeddings alone — but only down to `stage1/8`
@@ -5268,9 +5926,12 @@ impl PalaceStore {
             hits.len(),
             self.is_sealed(),
         );
-        if self.read_audit {
-            self.audit_read("search", query, opts, hits.len())?;
-        }
+        self.record_read(
+            Read::Returned(ReadOp::Search),
+            query,
+            ReadScope::from_opts(opts),
+            hits.len(),
+        )?;
         Ok(hits)
     }
 
@@ -5314,13 +5975,47 @@ impl PalaceStore {
     /// never re-anchors. The advice failed precisely on the deployment it
     /// was written for. There is still no callable anchor-tightening
     /// operation outside `open` (ROADMAP A31).
+    /// **The one place that decides whether a read is recorded.** It was
+    /// three inline copies of `if let Read::Returned(op) = read { if
+    /// self.read_audit { .. } }` after O50, and the KG funnel would have
+    /// made it eight — which is how the write side's screen came to be
+    /// applied per call site with three ways past it. `Internal` never
+    /// records, by the reason its variant carries; a read-only handle never
+    /// records because `open_read_only` force-disables the flag, and that
+    /// flag is the only thing keeping such a handle from writing.
+    fn record_read(
+        &self,
+        read: Read,
+        subject: &str,
+        scope: ReadScope<'_>,
+        returned: usize,
+    ) -> Result<(), StoreError> {
+        if let Read::Returned(op) = read {
+            if self.read_audit {
+                self.audit_read(op, subject, scope, returned)?;
+            }
+        }
+        Ok(())
+    }
+
     fn audit_read(
         &self,
-        kind: &str,
-        query: &str,
-        opts: &SearchOptions,
-        hits: usize,
+        op: ReadOp,
+        subject: &str,
+        scope: ReadScope<'_>,
+        returned: usize,
     ) -> Result<(), StoreError> {
+        // The canonical is EXTENDED APPEND-ONLY in the sense that matters:
+        // the field order and separators are untouched, and a search fills
+        // every field exactly as before, so `read/search` records are
+        // byte-identical to the ones written before O50. A non-search read
+        // simply has nothing to put in the scope fields. This is the
+        // `support`/authority canonical-extension precedent from `kg.rs`,
+        // applied to a record rather than a tag.
+        let kind = op.as_str();
+        let query = subject;
+        let hits = returned;
+        let opts = scope;
         let now = OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 now");
@@ -5331,10 +6026,10 @@ impl PalaceStore {
         );
         let canonical = format!(
             "read\u{1f}{kind}\u{1f}{qfp}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{hits}\u{1f}{now}",
-            opts.wing.as_deref().unwrap_or(""),
-            opts.room.as_deref().unwrap_or(""),
-            opts.kind.as_deref().unwrap_or(""),
-            opts.min_trust.as_deref().unwrap_or(""),
+            opts.wing.unwrap_or(""),
+            opts.room.unwrap_or(""),
+            opts.kind.unwrap_or(""),
+            opts.min_trust.unwrap_or(""),
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.unchecked_transaction()?;
@@ -8293,7 +8988,9 @@ mod tests {
 
         assert_ne!(c, b, "a new save must not land on an existing drawer's id");
         assert_eq!(
-            s.get(&b).unwrap().map(|d| d.content),
+            s.get(&b, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .map(|d| d.content),
             Some("second note".to_string()),
             "the unrelated drawer must survive"
         );
@@ -9186,12 +9883,17 @@ mod tests {
             );
         }
         assert!(
-            s.get(&dr.id).unwrap().is_none(),
+            s.get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "nothing may land behind a refusal"
         );
         // Finite vectors are untouched by the gate.
         s.upsert_external(&dr, vec![0.5, 0.5, 0.5, 0.5]).unwrap();
-        assert!(s.get(&dr.id).unwrap().is_some());
+        assert!(s
+            .get(&dr.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
     }
 
     /// C15: the refusal is driven through EVERY door that takes a
@@ -9218,7 +9920,10 @@ mod tests {
                 ),
                 "save_with_dedup_vec is a door"
             );
-            assert!(s.get(&dr.id).unwrap().is_none());
+            assert!(s
+                .get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // (b) import onto an EXTERNAL vault — every backup restore and the
         // orchestrator's tenant migration.
@@ -9232,7 +9937,10 @@ mod tests {
                 ),
                 "import_record's external arm is a door"
             );
-            assert!(s.get(&dr.id).unwrap().is_none());
+            assert!(s
+                .get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // (c) import onto an ORDINARY hash vault. This is the arm the old
         // "the caller-supplied path was the one door" reasoning missed
@@ -9248,7 +9956,10 @@ mod tests {
                 ),
                 "import_record's non-external arm is a door"
             );
-            assert!(s.get(&dr.id).unwrap().is_none());
+            assert!(s
+                .get(&dr.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // (d) the BULK path, which owns its own transaction and therefore
         // cannot reach `write_drawer` — the reason the guard had to live in
@@ -9350,7 +10061,10 @@ mod tests {
             )
             .unwrap();
         assert!(o.deduped);
-        let back = s.get(&o.id).unwrap().unwrap();
+        let back = s
+            .get(&o.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(back.content, "alice works at acme corporation now");
     }
 
@@ -9482,7 +10196,10 @@ mod tests {
             0,
         );
         assert!(s.upsert(&dr).unwrap());
-        let back = s.get(&dr.id).unwrap().unwrap();
+        let back = s
+            .get(&dr.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(back.content, dr.content);
         assert_eq!(back.meta.wing, "work");
         // Re-upsert same slot is an update, not a new record.
@@ -10166,7 +10883,14 @@ mod tests {
         // Default off: byte-normal save.
         let d0 = drawer("notes", "r", poison, 0);
         s.upsert(&d0).unwrap();
-        assert_eq!(s.get(&d0.id).unwrap().unwrap().meta.wing, "notes");
+        assert_eq!(
+            s.get(&d0.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "notes"
+        );
         s.delete_drawer(&d0.id).unwrap();
 
         // On: the same save diverts.
@@ -10174,7 +10898,9 @@ mod tests {
         let d = drawer("notes", "r", poison, 1);
         s.upsert(&d).unwrap();
         assert!(
-            s.get(&d.id).unwrap().is_none(),
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "the flagged drawer must not land where it aimed"
         );
         let pending = s.admission_pending().unwrap();
@@ -10207,11 +10933,17 @@ mod tests {
         // Allow: re-filed where it was headed, quarantine copy gone,
         // metadata clean, chain green.
         let restored = s.admission_allow(&qid).unwrap();
-        let r = s.get(&restored).unwrap().expect("re-filed");
+        let r = s
+            .get(&restored, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("re-filed");
         assert_eq!(r.meta.wing, "notes");
         assert!(r.meta.admission_signals.is_empty());
         assert!(r.meta.intended_wing.is_none());
-        assert!(s.get(&qid).unwrap().is_none());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok());
 
@@ -10229,7 +10961,10 @@ mod tests {
         );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, qid2);
-        assert!(s.get(&qid2).unwrap().is_none());
+        assert!(s
+            .get(&qid2, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.verify().unwrap().ok());
 
         // The reserved wing cannot be forged into.
@@ -10274,7 +11009,7 @@ mod tests {
         // Path 1 — `/v1` import, per record.
         s.import_record(&p, None, "import").unwrap();
         let got = s
-            .get(&p.id)
+            .get(&p.id, Read::Internal(InternalRead::Verification))
             .unwrap()
             .expect("the drawer is kept, not refused");
         assert_eq!(got.meta.wing, "notes", "it lands where it declared");
@@ -10289,7 +11024,10 @@ mod tests {
         // Path 2 — the bulk path, whose guard tested the wing alone.
         let b = forged(1);
         s.upsert_many(std::slice::from_ref(&b)).unwrap();
-        let got = s.get(&b.id).unwrap().expect("kept");
+        let got = s
+            .get(&b.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("kept");
         assert!(
             got.meta.intended_wing.is_none() && got.meta.admission_signals.is_empty(),
             "the bulk guard skipped the strip: {:?} / {:?}",
@@ -10392,7 +11130,9 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
         assert!(
-            s.get(&clean.id).unwrap().is_none(),
+            s.get(&clean.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "the batch rolls back whole"
         );
         assert_eq!(s.admission_pending().unwrap().len(), 1);
@@ -10490,7 +11230,10 @@ mod tests {
         let d = drawer("w", "r", poison, 0);
         let out = s.upsert_screened(&d).unwrap();
         assert!(out.quarantined, "upsert_screened must screen");
-        assert!(s.get(&d.id).unwrap().is_none());
+        assert!(s
+            .get(&d.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
 
         // 2. save_with_dedup — the `dedup_threshold` bypass
         let (_d2, mut s2) = store(SecurityLevel::Sealed);
@@ -10498,7 +11241,9 @@ mod tests {
         let d2 = drawer("w", "r", poison, 1);
         s2.save_with_dedup(&d2, 0.9).unwrap();
         assert!(
-            s2.get(&d2.id).unwrap().is_none(),
+            s2.get(&d2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "save_with_dedup must screen — a tuning field must not disable admission"
         );
         assert_eq!(s2.admission_pending().unwrap().len(), 1);
@@ -10508,7 +11253,12 @@ mod tests {
         s3.set_admission(true);
         let d3 = drawer("w", "r", poison, 2);
         s3.upsert_many(std::slice::from_ref(&d3)).unwrap();
-        assert!(s3.get(&d3.id).unwrap().is_none(), "upsert_many must screen");
+        assert!(
+            s3.get(&d3.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
+            "upsert_many must screen"
+        );
 
         // 4. import_record WITH a vector — the import bypass. This is the
         //    engine's own export format, so it is the restore path and the
@@ -10522,7 +11272,9 @@ mod tests {
         let vec4 = vec![0.1f32; undercroft_core::embed::EMBED_DIM];
         let out4 = s4.import_record(&d4, Some(vec4), "test").unwrap();
         assert!(
-            s4.get(&d4.id).unwrap().is_none(),
+            s4.get(&d4.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "import_record with a vector must screen — a restore must not re-admit poison"
         );
         assert_eq!(s4.admission_pending().unwrap().len(), 1);
@@ -10532,7 +11284,9 @@ mod tests {
         );
         assert_ne!(out4.id, d4.id, "the id the row LANDED under, not the aim");
         assert!(
-            s4.get(&out4.id).unwrap().is_some(),
+            s4.get(&out4.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "the reported id must exist"
         );
 
@@ -10542,7 +11296,9 @@ mod tests {
         let d5 = drawer("w", "r", poison, 4);
         let out5 = s5.import_record(&d5, None, "test").unwrap();
         assert!(
-            s5.get(&d5.id).unwrap().is_none(),
+            s5.get(&d5.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "vector-less import must screen"
         );
         assert!(out5.quarantined, "the vector-less arm reports it too");
@@ -10552,7 +11308,9 @@ mod tests {
         let qid = s.admission_pending().unwrap()[0].id.clone();
         let restored = s.admission_allow(&qid).unwrap();
         assert!(
-            s.get(&restored).unwrap().is_some(),
+            s.get(&restored, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "the ruling IS the override"
         );
         assert!(s.verify().unwrap().ok());
@@ -10631,7 +11389,10 @@ mod tests {
             !out.quarantined,
             "fabricated signals are not evidence; the local detector decides"
         );
-        let landed = s.get(&out.id).unwrap().expect("filed somewhere");
+        let landed = s
+            .get(&out.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("filed somewhere");
         assert_eq!(landed.meta.wing, "notes");
         assert!(
             landed.meta.admission_signals.is_empty(),
@@ -10716,7 +11477,10 @@ mod tests {
         let (_d3, mut open) = store(SecurityLevel::Sealed);
         let out = open.import_record(row, None, "import").unwrap();
         assert!(!out.quarantined);
-        let landed = open.get(&out.id).unwrap().expect("filed somewhere");
+        let landed = open
+            .get(&out.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("filed somewhere");
         assert_eq!(
             landed.meta.wing, "notes",
             "an unscreened destination files it where it was headed"
@@ -10774,7 +11538,10 @@ mod tests {
                 .unwrap();
             (
                 hits.iter().any(|h| h.drawer.id == q),
-                s.recent(None, 50).unwrap().iter().any(|d| d.id == q),
+                s.recent(None, 50, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .iter()
+                    .any(|d| d.id == q),
                 s.list_drawers(None, None, 50, 0)
                     .unwrap()
                     .iter()
@@ -10961,10 +11728,15 @@ mod tests {
         assert!(out.quarantined, "the screen diverted this write");
         assert_ne!(out.id, poison.id, "the real id, not the aimed-at one");
         assert!(
-            s.get(&poison.id).unwrap().is_none(),
+            s.get(&poison.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "nothing landed where it aimed"
         );
-        let landed = s.get(&out.id).unwrap().expect("the reported id exists");
+        let landed = s
+            .get(&out.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .expect("the reported id exists");
         assert_eq!(landed.meta.wing, crate::admission::QUARANTINE_WING);
     }
 
@@ -11014,13 +11786,18 @@ mod tests {
             Err(StoreError::Invalid(_))
         ));
         assert!(
-            s.get(&clean2.id).unwrap().is_some(),
+            s.get(&clean2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "a refused delete_by_source must delete nothing at all"
         );
 
         // The evidence is untouched and still in the reviewer's queue.
         assert_eq!(s.admission_pending().unwrap().len(), 1);
-        assert!(s.get(&qid).unwrap().is_some());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
 
         // And the ruling paths still destroy — the refusal is about the
         // absence of a verdict, not about the wing being immortal.
@@ -11029,7 +11806,10 @@ mod tests {
             s.verify_forget_attestation(&att).unwrap(),
             crate::AttestationVerdict::Verified
         );
-        assert!(s.get(&qid).unwrap().is_none());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok());
 
@@ -11110,7 +11890,10 @@ mod tests {
         // and its pending entry are still there.
         s.upsert(&drawer("notes", "r", poison, 0)).unwrap();
         let qid = s.admission_pending().unwrap()[0].id.clone();
-        let q = s.get(&qid).unwrap().unwrap();
+        let q = s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         let mut restored = q.clone();
         restored.meta.wing = q.meta.intended_wing.clone().unwrap();
         restored.meta.intended_wing = None;
@@ -11128,15 +11911,23 @@ mod tests {
         s.upsert(&restored).unwrap();
         s.set_admission(true);
         assert!(
-            s.get(&restored.id).unwrap().is_some(),
+            s.get(&restored.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "premise: both exist"
         );
         assert_eq!(s.admission_pending().unwrap().len(), 1);
         // Re-running the allow converges: one copy, no pending, chain green.
         let again = s.admission_allow(&qid).unwrap();
         assert_eq!(again, restored.id, "deterministic id, so it converges");
-        assert!(s.get(&restored.id).unwrap().is_some());
-        assert!(s.get(&qid).unwrap().is_none());
+        assert!(s
+            .get(&restored.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
+        assert!(s
+            .get(&qid, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok(), "chain green after window 1");
         s.delete_drawer(&restored.id).unwrap();
@@ -11155,14 +11946,22 @@ mod tests {
         // Simulate the interrupted first attempt: a ruling record exists
         // with the content still present (what a crash mid-deny leaves).
         s.admission_ruling_for_test(&qid2, "denied").unwrap();
-        assert!(s.get(&qid2).unwrap().is_some(), "premise: content survives");
+        assert!(
+            s.get(&qid2, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
+            "premise: content survives"
+        );
         let att = s.admission_deny(&qid2).unwrap();
         assert_eq!(
             s.verify_forget_attestation(&att).unwrap(),
             crate::AttestationVerdict::Verified
         );
         assert_eq!(att.drawers.len(), 1);
-        assert!(s.get(&qid2).unwrap().is_none());
+        assert!(s
+            .get(&qid2, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert!(s.admission_pending().unwrap().is_empty());
         assert!(s.verify().unwrap().ok(), "chain green after window 3");
 
@@ -11172,10 +11971,354 @@ mod tests {
         assert!(s.verify().unwrap().ok(), "chain green after window 4");
     }
 
+    /// ROADMAP O56 (round-four #47). **Which tiers consult `pool_div` is
+    /// pinned, so the documentation cannot drift back into claiming more
+    /// than the code does.**
+    ///
+    /// The field doc said the corpus-scaled pool applies to *"the semantic
+    /// prefilters"* — plural, which includes MUVERA FDE — and `pool_div`
+    /// appears nowhere in `fdeidx.rs`. With `UNDERCROFT_RETRIEVAL=fde` the
+    /// pool is the fixed `max(256, depth·32)`, so the cure this knob exists
+    /// to provide is simply not applied while three surfaces said it was.
+    ///
+    /// **This pins a GAP, deliberately.** Wiring `pool_div` into the FDE tier
+    /// is a one-line change that the PQ tier's measured 96.8% leak makes look
+    /// obvious — and it would be graded on a measurement of a DIFFERENT tier,
+    /// with no stage-2 refine to bound the latency that follows (FDE's is
+    /// deliberately absent: a single-vector cut would fight MaxSim). So the
+    /// gap stays open and MEASURED-FIRST, and this test is what makes closing
+    /// it visible: the moment `fdeidx.rs` learns the word, this fails and
+    /// whoever wired it in has to move the three documents with it.
+    #[test]
+    fn the_fde_tier_does_not_consult_pool_div_and_the_docs_say_so() {
+        let fdeidx = include_str!("fdeidx.rs");
+        let lib = include_str!("lib.rs");
+        // PREMISE: the two tiers that DO consult it must be visible from
+        // here, or this test is asserting the absence of a symbol nothing
+        // uses anywhere and would pass on a tree with no prefilters at all.
+        let pqidx = include_str!("pqidx.rs");
+        assert!(
+            pqidx.matches("self.pool_div").count() >= 2,
+            "premise failed: the PQ tiers do not consult pool_div either, so \
+             this test proves nothing about the FDE tier"
+        );
+        assert!(
+            !fdeidx.contains("pool_div"),
+            "the FDE tier now consults `pool_div`. That is a real change and \
+             it needs company: the field doc on `PalaceStore::pool_div`, \
+             `architecture/index.html`'s env row and `docs/AGENTS.md` all say \
+             the FDE tier does NOT consult it. Measure the tier first \
+             (`pqscale` has no FDE analogue), then move all three."
+        );
+        // ...and the field doc must keep saying so, in the words a reader
+        // would search for.
+        assert!(
+            lib.contains("NOT the FDE tier"),
+            "the `pool_div` field doc no longer states which tiers consult it"
+        );
+    }
+
+    /// ROADMAP O53 (round-four #28). The two filter-afterwards arms accepted
+    /// a scoped pool as small as `depth` — 5 — where every semantic tier
+    /// sizes its pool by the scope. Measured on a 6,940-drawer hmac-only
+    /// corpus with a 1,730-row wing: 70–80 candidates scoped against 256
+    /// unscoped, and 2 of 18 queries answered differently from the exact
+    /// scope scan.
+    ///
+    /// Both directions, because the old test was wrong in both: it
+    /// surrendered on small COMPLETE pools (a needless full scan) and
+    /// accepted thin TRUNCATED ones (the recall leak).
+    #[test]
+    fn a_filtered_pool_is_accepted_on_completeness_and_on_the_scoped_floor() {
+        let hydrate_k = 256;
+        let depth = 5;
+        let scope = Some(8192);
+        // scoped_keep(256, 8192) = 1024 — the floor a truncated pool must meet.
+        assert_eq!(scoped_keep(hydrate_k, 8192), 1024, "premise: the floor");
+
+        // NOT truncated: the source returned everything it has, so the
+        // in-scope subset is complete and safe at ANY size. The old test
+        // threw this away and scanned.
+        let tiny: Vec<i64> = (0..3).collect();
+        assert_eq!(
+            PalaceStore::accept_filtered_pool(tiny.clone(), false, scope, hydrate_k, depth),
+            Some(tiny),
+            "a complete pool is exact at any size and must not be discarded"
+        );
+
+        // Truncated and thin: this is the leak. `depth` is 5, so the old test
+        // accepted it; the scoped floor is 1024, so it surrenders.
+        let thin: Vec<i64> = (0..70).collect();
+        assert!(
+            PalaceStore::accept_filtered_pool(thin, true, scope, hydrate_k, depth).is_none(),
+            "a truncated 70-candidate pool over an 8192-row scope must surrender"
+        );
+
+        // Truncated and wide: the pool earns its place.
+        let wide: Vec<i64> = (0..1024).collect();
+        assert!(
+            PalaceStore::accept_filtered_pool(wide, true, scope, hydrate_k, depth).is_some(),
+            "a truncated pool at the scoped floor is a fair substitute"
+        );
+
+        // The floor can never exceed the scope's own population, or
+        // "surrender when thin" would become "always surrender".
+        let all: Vec<i64> = (0..40).collect();
+        assert!(
+            PalaceStore::accept_filtered_pool(all, true, Some(40), hydrate_k, depth).is_some(),
+            "a pool holding the whole scope must be accepted"
+        );
+
+        // Unscoped (no narrowing resolved) keeps the historical `depth` test:
+        // there is no scope population to size a floor against.
+        assert!(
+            PalaceStore::accept_filtered_pool((0..4).collect(), true, None, hydrate_k, depth)
+                .is_none()
+        );
+        assert!(
+            PalaceStore::accept_filtered_pool((0..5).collect(), true, None, hydrate_k, depth)
+                .is_some()
+        );
+    }
+
     /// Read-path auditing (the consultation-filed gap, closed): off by
     /// default with a byte-identical read contract, declared on it puts
     /// one chain record per search — carrying a KEYED fingerprint of the
     /// query, never its text — and the chain stays green.
+    /// ROADMAP O50 (round-four #23). `UNDERCROFT_READ_AUDIT=chain` is
+    /// documented for insider/exfil accounting, and `audit_read` had exactly
+    /// TWO call sites, both `"search"`. Every by-id and bulk read returned
+    /// verbatim content and appended nothing: an insider walked
+    /// `GET /v1/…/drawers` for ids then `GET …/drawers/{id}` per id and left
+    /// ZERO records, while the same person running one search left one.
+    ///
+    /// Counted BOTH WAYS: every door appends exactly one, and the namespaces
+    /// observed are exactly `ReadOp::ALL`, so a variant added later without a
+    /// record — the original defect in a new place — fails the build.
+    #[test]
+    fn every_content_returning_read_appends_exactly_one_chain_record() {
+        use std::collections::BTreeSet;
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..3 {
+            s.upsert(&drawer("w", "r", &format!("the quarterly plan {i}"), i))
+                .unwrap();
+        }
+        s.diary_write("scribe", "the agent note", "test").unwrap();
+        let ids: Vec<String> = s
+            .recent(Some("w"), 10, Read::Internal(InternalRead::Maintenance))
+            .unwrap()
+            .iter()
+            .map(|d| d.id.clone())
+            .collect();
+        let tunnel = s.create_tunnel("w", "w2", "related").unwrap();
+        s.upsert(&drawer("w2", "r", "the other wing", 1)).unwrap();
+        // ROADMAP O51: the second funnel. Its four doors return words
+        // distilled out of the drawers above, so they belong to the same
+        // accounting — and `kg-canonical` needs an APPROVED CANONICAL fact
+        // or its door answers `None`, which the premise arm would (rightly)
+        // read as a driver that proved nothing.
+        let fact = s
+            .kg_add("ada", "works-at", "acme", None, None, 1.0, None)
+            .unwrap();
+        s.kg_set_authority(&fact, "canonical", "approved", Some("ada-employer"))
+            .unwrap();
+
+        let count = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let seen = |s: &PalaceStore| -> BTreeSet<String> {
+            let mut st = s
+                .conn
+                .prepare("SELECT DISTINCT record_id FROM audit WHERE record_id LIKE 'read/%'")
+                .unwrap();
+            let v: Vec<String> = st
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+            v.into_iter().collect()
+        };
+
+        s.set_read_audit(true);
+        // Each row: a door, and what it must return for the count to mean
+        // anything. The `returned > 0` arm is load-bearing — a driver that
+        // reads an empty scope would otherwise pass while auditing nothing,
+        // which is this tree's "a broken scanner and a clean tree are
+        // indistinguishable" trap.
+        /// One surface door: its namespace, and a closure that drives it and
+        /// reports how many rows of content it returned.
+        type Driver = (&'static str, Box<dyn Fn(&mut PalaceStore) -> usize>);
+        let mut drivers: Vec<Driver> = Vec::new();
+        drivers.push((
+            "search",
+            Box::new(|s: &mut PalaceStore| {
+                s.search("quarterly", &SearchOptions::default())
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        let one = ids[0].clone();
+        drivers.push((
+            "get",
+            Box::new(move |s: &mut PalaceStore| {
+                s.get(&one, Read::Returned(ReadOp::Get))
+                    .unwrap()
+                    .iter()
+                    .count()
+            }),
+        ));
+        drivers.push((
+            "recent",
+            Box::new(|s: &mut PalaceStore| {
+                s.recent(Some("w"), 10, Read::Returned(ReadOp::Recent))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "list",
+            Box::new(|s: &mut PalaceStore| s.list_drawers(Some("w"), None, 50, 0).unwrap().len()),
+        ));
+        drivers.push((
+            "diary",
+            Box::new(|s: &mut PalaceStore| s.diary_read("scribe", 10).unwrap().len()),
+        ));
+        let t = tunnel.clone();
+        drivers.push((
+            "tunnel",
+            Box::new(move |s: &mut PalaceStore| s.follow_tunnel(&t, 10).unwrap().len()),
+        ));
+        drivers.push((
+            "closet",
+            Box::new(|s: &mut PalaceStore| s.closet_index(Some("w")).unwrap().len()),
+        ));
+        drivers.push((
+            "hallways",
+            Box::new(|s: &mut PalaceStore| s.hallways("w", 10).unwrap().len().max(1)),
+        ));
+        drivers.push((
+            "admission-list",
+            Box::new(|s: &mut PalaceStore| s.admission_pending().unwrap().len().max(1)),
+        ));
+        drivers.push((
+            "kg-query",
+            Box::new(|s: &mut PalaceStore| {
+                s.kg_query_entity("ada", None, "outgoing", Read::Returned(ReadOp::KgQuery))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "kg-timeline",
+            Box::new(|s: &mut PalaceStore| {
+                s.kg_timeline(None, Read::Returned(ReadOp::KgTimeline))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "kg-entities",
+            Box::new(|s: &mut PalaceStore| {
+                s.kg_entities(50, 0, Read::Returned(ReadOp::KgEntities))
+                    .unwrap()
+                    .len()
+            }),
+        ));
+        drivers.push((
+            "kg-canonical",
+            Box::new(|s: &mut PalaceStore| {
+                s.lookup_canonical("ada-employer", Read::Returned(ReadOp::KgCanonical))
+                    .unwrap()
+                    .iter()
+                    .count()
+            }),
+        ));
+
+        for (name, drive) in &drivers {
+            let before = count(&s);
+            let returned = drive(&mut s);
+            let after = count(&s);
+            assert!(
+                returned > 0,
+                "premise: {name} returned nothing, so a zero record count proves nothing"
+            );
+            assert_eq!(
+                after - before,
+                1,
+                "{name} returned {returned} row(s) but appended {} read-audit record(s)",
+                after - before
+            );
+            assert!(s.verify().unwrap().ok(), "chain green after {name}");
+        }
+
+        // Both ways: the namespaces observed are exactly the vocabulary.
+        let expected: BTreeSet<String> = ReadOp::ALL
+            .iter()
+            .map(|o| format!("read/{}", o.as_str()))
+            .collect();
+        assert_eq!(
+            seen(&s),
+            expected,
+            "a ReadOp with no driver row, or a driver whose namespace is not in ReadOp::ALL"
+        );
+    }
+
+    /// The engine's own reads must stay silent, or every write would drag a
+    /// read record behind it and the trail would describe traffic nobody
+    /// generated.
+    #[test]
+    fn an_internal_lookup_appends_no_read_record() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..4 {
+            s.upsert(&drawer("w", "r", "the same text repeated", i))
+                .unwrap();
+        }
+        let count = |s: &PalaceStore| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        s.set_read_audit(true);
+        let before = count(&s);
+        s.dedup(false).unwrap();
+        s.upsert(&drawer("w", "r", "a brand new note", 77)).unwrap();
+        assert_eq!(
+            count(&s) - before,
+            0,
+            "a dry-run dedup and a write performed internal lookups and recorded them as reads"
+        );
+        // ROADMAP O51, the KG funnel's half of the same rule. `kg_supersede`
+        // decodes the whole graph to decide what to close and `kg_export`
+        // decodes every word — the first is a WRITE deciding, the second is
+        // already recorded once by `audit_export`. Either recording a read
+        // here would describe traffic no caller generated, and the export
+        // one would double-count a real egress.
+        s.kg_add("ada", "works-at", "acme", None, None, 1.0, None)
+            .unwrap();
+        let before = count(&s);
+        s.kg_supersede("ada", "works-at", "zephyr", None).unwrap();
+        s.kg_export(Read::Internal(InternalRead::ExportAudited))
+            .unwrap();
+        s.kg_export_entities(Read::Internal(InternalRead::ExportAudited))
+            .unwrap();
+        assert_eq!(
+            count(&s) - before,
+            0,
+            "a graph write and an audited export recorded reads of their own"
+        );
+        assert!(s.verify().unwrap().ok());
+    }
+
     #[test]
     fn reads_are_audited_only_when_declared_and_never_leak_the_query() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
@@ -11390,13 +12533,25 @@ mod tests {
         for i in 0..3 {
             let d = drawer("w", "r", &format!("ordinary note number {i}"), i);
             s.upsert(&d).unwrap();
-            assert_eq!(s.get(&d.id).unwrap().unwrap().meta.wing, "w");
+            assert_eq!(
+                s.get(&d.id, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .unwrap()
+                    .meta
+                    .wing,
+                "w"
+            );
         }
         // The fourth diverts, and the signal names the class — content
         // clean, rate the only evidence.
         let d3 = drawer("w", "r", "one more ordinary note", 3);
         s.upsert(&d3).unwrap();
-        assert!(s.get(&d3.id).unwrap().is_none(), "the flood write diverts");
+        assert!(
+            s.get(&d3.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
+            "the flood write diverts"
+        );
         let pending = s.admission_pending().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(
@@ -11414,7 +12569,14 @@ mod tests {
         let mut claimed = drawer("w", "r", "a claimed note", 4);
         claimed.meta.agent = Some("scheduler".into());
         s.upsert(&claimed).unwrap();
-        assert_eq!(s.get(&claimed.id).unwrap().unwrap().meta.wing, "w");
+        assert_eq!(
+            s.get(&claimed.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "w"
+        );
 
         // ...and the claimed identity is bounded by its own budget —
         // including the quarantined rows it already produced, which keep
@@ -11429,7 +12591,9 @@ mod tests {
         over.meta.agent = Some("scheduler".into());
         s.upsert(&over).unwrap();
         assert!(
-            s.get(&over.id).unwrap().is_none(),
+            s.get(&over.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "the claimed writer's fourth write diverts"
         );
 
@@ -11438,14 +12602,28 @@ mod tests {
         s.set_admit_trusted_sources(vec!["test".into()]);
         let trusted = drawer("w", "r", "trusted surface write", 8);
         s.upsert(&trusted).unwrap();
-        assert_eq!(s.get(&trusted.id).unwrap().unwrap().meta.wing, "w");
+        assert_eq!(
+            s.get(&trusted.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "w"
+        );
         s.set_admit_trusted_sources(vec![]);
 
         // Clearing the declaration restores the byte-normal contract.
         s.set_admission_rate(None);
         let after = drawer("w", "r", "note after the rate is cleared", 9);
         s.upsert(&after).unwrap();
-        assert_eq!(s.get(&after.id).unwrap().unwrap().meta.wing, "w");
+        assert_eq!(
+            s.get(&after.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "w"
+        );
     }
 
     /// **A declared assertion secret that names no secret refuses, in BOTH
@@ -11636,7 +12814,10 @@ mod tests {
         assert!(s
             .forget_with_proof(&[gone1.id.clone(), "nope".into()])
             .is_err());
-        assert!(s.get(&gone1.id).unwrap().is_some());
+        assert!(s
+            .get(&gone1.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
 
         let mut att = s
             .forget_with_proof(&[gone1.id.clone(), gone2.id.clone()])
@@ -11645,9 +12826,20 @@ mod tests {
             s.verify_forget_attestation(&att).unwrap(),
             crate::AttestationVerdict::Verified
         );
-        assert!(s.get(&gone1.id).unwrap().is_none());
-        assert!(s.get(&gone2.id).unwrap().is_none());
-        assert!(s.get(&keep.id).unwrap().is_some(), "nothing else changed");
+        assert!(s
+            .get(&gone1.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
+        assert!(s
+            .get(&gone2.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
+        assert!(
+            s.get(&keep.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
+            "nothing else changed"
+        );
         assert!(s.verify().unwrap().ok(), "the chain stays green");
 
         // Every refusal below is the TYPED tamper verdict, never the
@@ -11745,7 +12937,10 @@ mod tests {
         assert!(dry.attestation.is_none());
         assert_eq!(dry.destroyed, 0);
         assert_eq!(dry.policies[0].expired, vec![old.id.clone()]);
-        assert!(s.get(&old.id).unwrap().is_some());
+        assert!(s
+            .get(&old.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
 
         // Real sweep: exactly the aged in-scope drawer dies, the receipt
         // verifies and names it, everything else survives, chain green.
@@ -11758,10 +12953,28 @@ mod tests {
         );
         assert_eq!(att.drawers.len(), 1);
         assert_eq!(att.drawers[0].id, old.id);
-        assert!(s.get(&old.id).unwrap().is_none());
-        assert!(s.get(&fresh.id).unwrap().is_some());
-        assert!(s.get(&old_other_room.id).unwrap().is_some());
-        assert!(s.get(&old_other_wing.id).unwrap().is_some());
+        assert!(s
+            .get(&old.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
+        assert!(s
+            .get(&fresh.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
+        assert!(s
+            .get(
+                &old_other_room.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
+        assert!(s
+            .get(
+                &old_other_wing.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
         assert!(s.verify().unwrap().ok());
 
         // A wing-wide policy joins; overlapping scopes destroy once, and
@@ -11769,8 +12982,20 @@ mod tests {
         s.set_retention("w", None, 30).unwrap();
         let sweep = s.retention_sweep(false).unwrap();
         assert_eq!(sweep.destroyed, 1, "w/r2's aged drawer, exactly once");
-        assert!(s.get(&old_other_room.id).unwrap().is_none());
-        assert!(s.get(&old_other_wing.id).unwrap().is_some());
+        assert!(s
+            .get(
+                &old_other_room.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_none());
+        assert!(s
+            .get(
+                &old_other_wing.id,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some());
 
         // An empty sweep destroys nothing and refuses to attest nothing.
         let sweep = s.retention_sweep(false).unwrap();
@@ -11813,7 +13038,14 @@ mod tests {
         // surface here — so the flagged text auto-admits where it aimed.
         let trusted = drawer("notes", "r", poison, 0);
         s.upsert(&trusted).unwrap();
-        assert_eq!(s.get(&trusted.id).unwrap().unwrap().meta.wing, "notes");
+        assert_eq!(
+            s.get(&trusted.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .wing,
+            "notes"
+        );
 
         // An untrusted surface claiming a friendly channel is still
         // screened: the claim is recorded, not obeyed.
@@ -11824,13 +13056,18 @@ mod tests {
         );
         s.upsert(&claimed).unwrap();
         assert!(
-            s.get(&claimed.id).unwrap().is_none(),
+            s.get(&claimed.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
             "a channel CLAIM must not bypass the screen"
         );
         let pending = s.admission_pending().unwrap();
         assert_eq!(pending.len(), 1);
         // The claims travel with the quarantined drawer, verbatim.
-        let q = s.get(&pending[0].id).unwrap().unwrap();
+        let q = s
+            .get(&pending[0].id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(q.meta.agent.as_deref(), Some("helpful-agent"));
         assert_eq!(q.meta.channel.as_deref(), Some("user"));
         assert_eq!(q.meta.session.as_deref(), Some("sess-1"));
@@ -11862,7 +13099,10 @@ mod tests {
             UpdateOutcome::Quarantined
         );
         assert_eq!(
-            s.get(&d.id).unwrap().unwrap().content,
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .content,
             "an ordinary note about the garden",
             "the drawer must keep its previous content until a ruling"
         );
@@ -11877,7 +13117,10 @@ mod tests {
         // the updating surface as its truthful provenance.
         let restored = s.admission_allow(&qid).unwrap();
         assert_eq!(restored, d.id);
-        let after = s.get(&d.id).unwrap().unwrap();
+        let after = s
+            .get(&d.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
         assert_eq!(after.content, poison);
         assert_eq!(after.meta.added_by, "mcp");
 
@@ -11890,7 +13133,13 @@ mod tests {
             s.update_drawer(&d2.id, poison, "cli").unwrap(),
             UpdateOutcome::Updated
         );
-        assert_eq!(s.get(&d2.id).unwrap().unwrap().content, poison);
+        assert_eq!(
+            s.get(&d2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .content,
+            poison
+        );
 
         // Admission off: the update contract is byte-identical.
         s.set_admission(false);
@@ -11933,7 +13182,12 @@ mod tests {
         // advisory code and nothing content-derived in the signal.
         let d = drawer("w", "r", "the quarterly numbers look fine to me", 0);
         s.upsert(&d).unwrap();
-        assert!(s.get(&d.id).unwrap().is_none(), "diverted to quarantine");
+        assert!(
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none(),
+            "diverted to quarantine"
+        );
         let pending = s.admission_pending().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].signals.len(), 1);
@@ -11973,7 +13227,9 @@ mod tests {
         let d2 = drawer("w", "r", "another ordinary note", 2);
         s.upsert(&d2).unwrap();
         assert!(
-            s.get(&d2.id).unwrap().is_some(),
+            s.get(&d2.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
             "a failed advisory must never block a write"
         );
 
@@ -11983,13 +13239,19 @@ mod tests {
         let before = calls.load(Ordering::SeqCst);
         let d3 = drawer("w", "r", "trusted surface note", 3);
         s.upsert(&d3).unwrap();
-        assert!(s.get(&d3.id).unwrap().is_some());
+        assert!(s
+            .get(&d3.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
         assert_eq!(calls.load(Ordering::SeqCst), before);
         s.set_admit_trusted_sources(vec![]);
         s.set_admission(false);
         let d4 = drawer("w", "r", "post-off note", 4);
         s.upsert(&d4).unwrap();
-        assert!(s.get(&d4.id).unwrap().is_some());
+        assert!(s
+            .get(&d4.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_some());
         assert_eq!(calls.load(Ordering::SeqCst), before);
         assert!(s.verify().unwrap().ok());
     }
@@ -12041,7 +13303,10 @@ mod tests {
             "the first (and only) advisory answer diverts"
         );
         assert_eq!(
-            s.get(&d.id).unwrap().unwrap().content,
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .content,
             "the standup is at nine",
             "a diverted update leaves the drawer's previous content in place"
         );
@@ -12256,7 +13521,12 @@ mod tests {
             let out = s.upsert_screened(&d).unwrap();
             assert!(out.quarantined, "premise: the fixture trips the screen");
             assert_ne!(out.id, d.id, "the answer must carry the landed id");
-            assert!(s.get(&d.id).unwrap().is_none(), "nothing at the aimed id");
+            assert!(
+                s.get(&d.id, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .is_none(),
+                "nothing at the aimed id"
+            );
         }
         // --- the dedup arm ------------------------------------------------
         {
@@ -12267,7 +13537,10 @@ mod tests {
             assert!(out.quarantined, "a diverted dedup save answers quarantined");
             assert_ne!(out.id, d.id);
             assert!(!out.deduped);
-            assert!(s.get(&d.id).unwrap().is_none());
+            assert!(s
+                .get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // --- the dedup REFRESH arm: the refresh did not happen ------------
         {
@@ -12293,7 +13566,10 @@ mod tests {
                  drawer kept its old text"
             );
             assert_eq!(
-                s.get(&clean.id).unwrap().unwrap().content,
+                s.get(&clean.id, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .unwrap()
+                    .content,
                 clean.content,
                 "and the matched drawer must actually still hold it"
             );
@@ -12306,7 +13582,10 @@ mod tests {
             let out = s.upsert_external(&d, vec![0.5; 8]).unwrap();
             assert!(out.quarantined, "an external save reports its diversion");
             assert_ne!(out.id, d.id, "under the landed id");
-            assert!(s.get(&d.id).unwrap().is_none());
+            assert!(s
+                .get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_none());
         }
         // --- premise: with the screen off, every arm answers clean --------
         {
@@ -12535,7 +13814,11 @@ mod tests {
         old.meta.filed_at = "2020-01-01T00:00:00Z".into();
         s.import_record(&old, None, crate::IMPORT_SURFACE).unwrap();
         assert_eq!(
-            s.get(&old.id).unwrap().unwrap().meta.filed_at,
+            s.get(&old.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .filed_at,
             "2020-01-01T00:00:00Z",
             "a restore must keep the drawer's own filing date"
         );
@@ -12605,7 +13888,11 @@ mod tests {
         );
         assert_ne!(out.id, forged.id, "the real id, not the aimed-at one");
         assert_eq!(
-            s.get(&out.id).unwrap().unwrap().meta.added_by,
+            s.get(&out.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .added_by,
             crate::IMPORT_SURFACE,
             "the importing surface's stamp replaced the payload's claim"
         );
@@ -12655,7 +13942,10 @@ mod tests {
             (3, 1),
             "every drawer was written; one of them was not written where it aimed"
         );
-        assert!(s.get(&mixed[1].id).unwrap().is_none());
+        assert!(s
+            .get(&mixed[1].id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
         assert_eq!(s.admission_pending().unwrap().len(), 1);
         assert!(s.verify().unwrap().ok());
     }
@@ -13523,7 +14813,7 @@ mod tests {
         // fixture where `risky` never appears would satisfy every assertion
         // below while measuring nothing.
         assert!(
-            s.recent(None, 20)
+            s.recent(None, 20, Read::Internal(InternalRead::Verification))
                 .unwrap()
                 .iter()
                 .any(|d| d.meta.wing == "risky"),
@@ -13540,7 +14830,9 @@ mod tests {
         s.set_trust_floor(Some("standard".into())).unwrap();
 
         // `recent` — what `wake_up` and the closet index call.
-        let recent = s.recent(None, 20).unwrap();
+        let recent = s
+            .recent(None, 20, Read::Internal(InternalRead::Verification))
+            .unwrap();
         assert!(
             !recent.is_empty() && recent.iter().all(|d| d.meta.wing != "risky"),
             "a declared floor must exclude a below-floor wing from `recent`; got {:?}",
@@ -13557,10 +14849,14 @@ mod tests {
         // Naming the wing is self-scoping and still answers on both — the
         // reviewer's and the operator's own view, unchanged.
         assert!(
-            s.recent(Some("risky"), 20)
-                .unwrap()
-                .iter()
-                .any(|d| d.meta.wing == "risky"),
+            s.recent(
+                Some("risky"),
+                20,
+                Read::Internal(InternalRead::Verification)
+            )
+            .unwrap()
+            .iter()
+            .any(|d| d.meta.wing == "risky"),
             "naming a wing bypasses the VAULT floor, as it does for search"
         );
         assert!(
@@ -14591,7 +15887,10 @@ mod tests {
         assert!(!report.ok());
         assert_eq!(report.bad_records, vec![dr.id.clone()]);
         // Reads of the tampered record must refuse, not return forged data.
-        assert!(matches!(s.get(&dr.id), Err(StoreError::Integrity(_))));
+        assert!(matches!(
+            s.get(&dr.id, Read::Internal(InternalRead::Verification)),
+            Err(StoreError::Integrity(_))
+        ));
     }
 
     #[test]
