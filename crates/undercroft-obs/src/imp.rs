@@ -526,13 +526,16 @@ pub(crate) fn publish_sample(sample: Sample) {
     broadcast(&mut b, &vault, &sse_frame("sample", &json));
 }
 
-pub(crate) fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool, sealed: bool) {
-    let data = if sealed {
-        serde_json::json!({ "vault": vault, "deduped": deduped })
-    } else {
-        serde_json::json!({ "vault": vault, "wing": wing, "room": room, "deduped": deduped })
-    };
-    emit(vault, "drawer-saved", data);
+pub(crate) fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool) {
+    // The location travels on every level now (M6): a frame only ever
+    // reaches a subscriber that proved per-vault authorization, and that
+    // same caller reads these names from `/v1/…/stats`. Content never
+    // travels here and never did.
+    emit(
+        vault,
+        "drawer-saved",
+        serde_json::json!({ "vault": vault, "wing": wing, "room": room, "deduped": deduped }),
+    );
 }
 
 pub(crate) fn event_drawer_quarantined(
@@ -540,22 +543,21 @@ pub(crate) fn event_drawer_quarantined(
     intended_wing: &str,
     room: &str,
     signals: &[&str],
-    sealed: bool,
 ) {
-    // Signal codes are a closed vocabulary, so they are metadata and ship
-    // even for a sealed vault; the intended location is a name and is
-    // suppressed with every other name.
-    let data = if sealed {
-        serde_json::json!({ "vault": vault, "signals": signals })
-    } else {
+    // Signal codes are a closed vocabulary — metadata, not names — and have
+    // always shipped. The intended location ships too since M6: an operator
+    // watching a poisoning attempt needs to know where it was AIMED, and
+    // `/v1/…/admission` already tells the same caller exactly that.
+    emit(
+        vault,
+        "drawer-quarantined",
         serde_json::json!({
             "vault": vault,
             "intended_wing": intended_wing,
             "room": room,
             "signals": signals,
-        })
-    };
-    emit(vault, "drawer-quarantined", data);
+        }),
+    );
 }
 
 pub(crate) fn event_drawer_deleted(vault: &str) {
@@ -566,19 +568,13 @@ pub(crate) fn event_drawer_deleted(vault: &str) {
     );
 }
 
-pub(crate) fn event_search(
-    vault: &str,
-    wing: Option<&str>,
-    room: Option<&str>,
-    hits: usize,
-    sealed: bool,
-) {
-    let data = if sealed {
-        serde_json::json!({ "vault": vault, "hits": hits })
-    } else {
-        serde_json::json!({ "vault": vault, "wing": wing, "room": room, "hits": hits })
-    };
-    emit(vault, "search", data);
+pub(crate) fn event_search(vault: &str, wing: Option<&str>, room: Option<&str>, hits: usize) {
+    // The SCOPE of a search, never its query and never a hit's text.
+    emit(
+        vault,
+        "search",
+        serde_json::json!({ "vault": vault, "wing": wing, "room": room, "hits": hits }),
+    );
 }
 
 pub(crate) fn event_kg_triple(vault: &str) {
@@ -593,11 +589,22 @@ pub(crate) fn event_chain_commit(vault: &str, records: u64) {
     );
 }
 
-pub(crate) fn event_hmac_fail(vault: &str, surface: &str) {
+pub(crate) fn event_hmac_fail(vault: &str, surface: &str, site: crate::TamperSite<'_>) {
     emit(
         vault,
         "hmac-fail",
-        serde_json::json!({ "vault": vault, "surface": surface }),
+        // `unverified` is not decoration. The subject of this frame failed
+        // its own HMAC, so `id`/`wing`/`room` are what the altered row says
+        // about itself. A consumer that renders them as findings rather than
+        // claims has been told, in the payload, not to.
+        serde_json::json!({
+            "vault": vault,
+            "surface": surface,
+            "id": site.id,
+            "wing": site.wing,
+            "room": site.room,
+            "unverified": true,
+        }),
     );
 }
 

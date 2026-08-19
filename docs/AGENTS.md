@@ -854,8 +854,17 @@ before you wire alerts:
 
 What you can and cannot see: counts, latencies, wing/room labels and
 closed-vocabulary signal codes travel; drawer content, queries and key
-material never do. A sealed vault suppresses names in the live feed and
-keeps the codes, because a code is not a name.
+material never do. **That holds on every security level, sealed included**
+— a stream subscription requires the bearer *and* the per-vault assertion,
+so a frame only reaches a caller who already reads those names from
+`GET /v1/vaults/{id}/stats`. Suppressing them blinded the vault's owner and
+withheld nothing from anyone else.
+
+A tamper frame (`hmac-fail`) additionally names the failing row and the
+location that row **claims**, flagged `unverified: true`. Treat it as a lead,
+never a finding: the record's HMAC is what just failed, so an offline writer
+who altered it could have written that location too. Confirm with
+`undercroft verify`, which checks every record rather than believing one.
 
 ## 9. Reference — MCP tools (34)
 

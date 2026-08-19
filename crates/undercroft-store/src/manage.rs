@@ -1329,7 +1329,11 @@ impl PalaceStore {
                 .verify_tag(&tunnel_canonical(&id, &from, &to, &label, &created), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("tunnel");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "tunnel");
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "tunnel",
+                        undercroft_obs::TamperSite::default(),
+                    );
                     StoreError::Integrity(format!("tunnel/{id}"))
                 })?;
             if wing.map(|w| from == w || to == w).unwrap_or(true) {
@@ -1394,7 +1398,11 @@ impl PalaceStore {
                     .verify_tag(&tunnel_canonical(id, &from, &to, &label, &created), &tag)
                     .map_err(|_| {
                         undercroft_obs::hmac_verify_failed("tunnel");
-                        undercroft_obs::event_hmac_fail(self.vault.id(), "tunnel");
+                        undercroft_obs::event_hmac_fail(
+                            self.vault.id(),
+                            "tunnel",
+                            undercroft_obs::TamperSite::default(),
+                        );
                         StoreError::Integrity(format!("tunnel/{id}"))
                     })?;
                 Some(to)
@@ -1634,7 +1642,19 @@ impl PalaceStore {
             )
             .map_err(|_| {
                 undercroft_obs::hmac_verify_failed("drawer");
-                undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                // M6, as at every other drawer tamper site: the alarm names
+                // the row and the location that row claims, marked
+                // unverified because its tag has just been rejected.
+                let (w, r) = crate::claimed_site(meta_json);
+                undercroft_obs::event_hmac_fail(
+                    self.vault.id(),
+                    "drawer",
+                    undercroft_obs::TamperSite {
+                        id: Some(id),
+                        wing: w.as_deref(),
+                        room: r.as_deref(),
+                    },
+                );
                 StoreError::Integrity(id.to_string())
             })?;
         self.decode(id, meta_json, content_rest)

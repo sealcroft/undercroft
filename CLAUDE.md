@@ -883,9 +883,11 @@ Consequences that are binding, not advisory:
   `write_drawer` emits at the choke point, and `upsert_many` — which owns
   its transaction and cannot reach the choke point — runs the same
   classifier over its batch. The frame carries the intended wing/room and
-  the closed-vocabulary signal codes; codes ship even for a sealed vault
-  since they are not names (a sealed frame suppresses the names), and
-  offsets and content never travel. `monitor.html` dispatches on
+  the closed-vocabulary signal codes; **since M6 the names travel on every
+  level too** — a frame only ever reaches a subscriber that proved per-vault
+  authorization, and that same caller reads those names from `/v1/…/stats`,
+  so blanking them blinded the owner and withheld nothing from anyone else.
+  Offsets and content never travel, which is what the gates pin now. `monitor.html` dispatches on
   `drawer-quarantined`; `website/src/observability.md` documents it.
   **The counter travels with the frame since 2026-08-05 (C11/R5)**: both
   are emitted by ONE function (`PalaceStore::emit_write_event`) off ONE
@@ -1305,8 +1307,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (757 run,
-                                      # 4 #[ignore]d = 761 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (759 run,
+                                      # 4 #[ignore]d = 763 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1391,7 +1393,7 @@ docker compose run --rm test          # cargo unit + integration tests (757 run,
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (368 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (43 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
@@ -1504,9 +1506,11 @@ ran it before the last edit" impossible rather than merely discouraged. It
 also handles the `backends-e2e` `down -v` and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
 suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the ten host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the eleven host-side preflights
 and no suite**, which is what CI invokes. (This sentence said "seven" while
-the tree ran eight, and nothing could say so. **It is gated now** — ROADMAP
+the tree ran eight, and nothing could say so — and then "ten" while the tree
+ran eleven, which the gate caught inside the very unit that caused it.
+**It is gated now** — ROADMAP
 **O42** — by the `prose figures` preflight, which counts this number and
 seven other figures the doctrine states about the tree against what the tree
 actually measures. It caught its own arrival: adding that preflight made the

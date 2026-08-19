@@ -67,6 +67,97 @@ so rather than implying it checked them.
 
 ## 1.2.0 (unreleased)
 
+### The `deploy/observability` stack starts again — it could not, since 1.1.0
+
+**Who is affected:** anyone who ran, or tried to run,
+`deploy/observability/docker-compose.observability.yml`. If you brought it up
+and saw an empty Grafana, this was why.
+
+The engine pinned its OTLP trust root at
+`/tls/caddy/pki/authorities/local/root.crt`. Caddy writes that tree as root —
+cert `0600`, directories `0700` — because it also holds the CA private key,
+and the engine image runs as uid 10001. The pin was unreadable, so the engine
+**refused to start** and restart-looped:
+
+```
+Error: the OTLP collector: the declared trust root
+/tls/caddy/pki/authorities/local/root.crt could not be read:
+Permission denied (os error 13)
+```
+
+That refusal is correct and has not changed — the engine never falls back to
+the public roots. What changed is the path: a `tls-export` service now
+publishes the PUBLIC root as `/tls/root.crt` (`0644`) and the engine pins
+that. The CA private key keeps `0600` and never moves.
+
+**Action: none, but destroy the volume if you tried before.** The exporter
+runs on every `up`, so a `docker compose up -d` is enough. If your earlier
+attempt left state you want gone, `docker compose -f
+deploy/observability/docker-compose.observability.yml down -v`.
+
+**If you worked around it** by chmod-ing the PKI tree or running the engine as
+root, undo that: the first exposes the CA private key to anything mounting the
+volume, and both are now unnecessary.
+
+**Two things that look like breakage and are not**, both now in the stack's
+README: a port already in use (Compose **merges** `ports:`, so a naive
+override appends and the collision survives — use `!override`), and the two
+headline gauges being demand-driven, so an idle deployment renders
+`undercroft_drawers` and `undercroft_audit_chain_height` empty until a stats
+call or a stream subscriber touches the vault.
+
+### A sealed vault's live telemetry now carries wing and room names to its authorized subscriber
+
+**Who is affected:** anyone running `--features telemetry` who watches a
+**sealed** vault through `GET /v1/vaults/{id}/stream`, `/stats/history`, or
+the Palace Monitor at `/monitor`. Nothing changes for hmac-only vaults, for
+`/metrics`, or for any default (non-telemetry) build, which emits nothing.
+
+Sealed vaults used to have `wings` blanked in every sample and the wing/room
+dropped from `drawer-saved`, `drawer-quarantined` and `search` frames. They
+now travel on every security level.
+
+**Why this is not a widening of who can see them.** A stream subscription is
+only created after `Tenancy::authorize` — the bearer **and**, when
+`UNDERCROFT_ASSERTION_SECRET` is set, a valid per-vault assertion — and a
+frame is fanned out only to subscribers of that same vault. That caller
+already reads every one of those names from `GET /v1/vaults/{id}/stats` and
+`/taxonomy`. The suppression withheld nothing from an unauthorized party; it
+blinded the vault's owner, who is who the live view exists for.
+
+**What has NOT changed, and is now pinned by its own check:** drawer content,
+offsets into content, and key material never travel on any frame, at any
+level.
+
+**The residual, stated plainly.** A `/v1/…/stats` call re-checks the
+assertion on every request; a stream is authorized **once** and then
+long-lived, so it outlives the window of the assertion that opened it. That
+was already true of every count it carried. If your deployment needs a
+tighter bound, terminate long-lived streams on a schedule at your proxy.
+
+**If you relied on the old behaviour** — e.g. a shared dashboard fed by a
+sealed vault's stream and shown to people who hold the bearer but should not
+see wing names — that arrangement was already leaking those names through
+`/v1/…/stats` to the same holders. Split the bearer, or put the vault behind
+per-vault assertions.
+
+### A tamper frame now names the row it caught and the location that row claims
+
+`hmac-fail` carried only `{vault, surface}`, so the Palace Monitor flashed
+**every** wing on every integrity failure — its branch for lighting a single
+wing read a field nothing ever sent. The frame now carries `id`, `wing`,
+`room` and `unverified: true`.
+
+**Treat the location as a claim, never a finding.** The record's HMAC is what
+just failed, so an offline writer who altered the row could have written that
+location too. It is a lead; `undercroft verify` is the answer, because it
+checks every record rather than believing one. The monitor renders it as
+`UNVERIFIED: claims <wing>/<room>` for exactly this reason.
+
+No action is needed. A consumer that parsed the old two-field frame keeps
+working — the fields are additive.
+
+
 ### `POST /v1/vaults/{id}/anchor` now reports a lag its own open closed
 
 **Who is affected:** anyone with a monitoring rule keyed on this route's

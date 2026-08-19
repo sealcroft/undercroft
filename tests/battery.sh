@@ -550,6 +550,73 @@ echo "ok    all $COMPOSE_N compose files declare a project name"
 # (IRREGULAR pairs, paradigm counts). Those are a different question, and
 # widening a gate past what it can actually verify is how a check starts
 # reading as though it covered more than it does.
+# ── preflight: a declared CA pin must be READABLE by the engine ────────────
+# The shipped observability stack could not start. Caddy writes its whole PKI
+# as root — the CA cert 0600 inside directories at 0700, correctly, since that
+# tree also holds the CA PRIVATE key — and the engine image runs as
+# `USER undercroft` (uid 10001). So the declared pin was unreadable and the
+# engine REFUSED to start, forever:
+#
+#   Error: the OTLP collector: the declared trust root
+#   /tls/caddy/pki/authorities/local/root.crt could not be read:
+#   Permission denied (os error 13)
+#
+# The refusal is right — `undercroft-net` never falls back to the public roots
+# — so the defect is the PATH. Only the certificate needs sharing; the private
+# key must not move. The fix exports the public root to a readable path, and
+# this stops the deep path coming back.
+#
+# Host-side with its siblings: no image carries the compose files.
+#
+# **Scope, stated rather than implied.** This catches one class — a pin aimed
+# inside a root-only PKI tree — for services running the ENGINE image, which
+# is the only consumer with a non-root uid. The same deep path appears in
+# dev/test recipes that run as root and are fine; narrowing on the image is
+# what keeps this from failing them. It does NOT prove the stack starts; that
+# needs a real bring-up, which is filed (ROADMAP M7) with its argument rather
+# than pretended here.
+echo "═══ preflight: CA pins are readable by the engine ═══"
+CA_FAIL=0
+CA_SEEN=0
+for f in $(git ls-files '*docker-compose*.yml' 'deploy/**/*.yml' 2>/dev/null); do
+  [ -f "$f" ] || continue
+  # Only services that BUILD the engine image from this repo run as uid 10001.
+  grep -q 'context: \.\./\.\.' "$f" || continue
+  while IFS= read -r line; do
+    case "$line" in *"#"*) continue ;; esac
+    CA_SEEN=$((CA_SEEN + 1))
+    case "$line" in
+      *caddy/pki/*)
+        echo "FAIL  $f declares a CA pin inside Caddy's root-only PKI tree:"
+        echo "        $(echo "$line" | sed 's/^ *//')"
+        echo "      The engine runs as uid 10001; that tree is root:0600 inside"
+        echo "      0700 dirs, so the pin is unreadable and the engine refuses"
+        echo "      to start. Export the PUBLIC root to a readable path instead"
+        echo "      — the CA private key must not move."
+        CA_FAIL=1 ;;
+    esac
+  done <<EOF
+$(grep -nE 'UNDERCROFT_[A-Z0-9_]*_CA:' "$f" || true)
+EOF
+done
+# PREMISE. A scanner that matched no declaration at all reports exactly what a
+# correct tree reports, which is the failure this whole family is about.
+if [ "$CA_SEEN" -eq 0 ]; then
+  echo "FAIL  found no UNDERCROFT_*_CA declaration in any engine-building"
+  echo "      compose file. This scanner examined nothing, which is not the"
+  echo "      same as a tree with no pins."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$CA_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
+echo "      root-only PKI tree"
+
 echo "═══ preflight: published figures ═══"
 
 LANDING="website/landing/index.html"

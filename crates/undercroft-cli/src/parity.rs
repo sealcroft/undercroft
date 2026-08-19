@@ -863,6 +863,47 @@ mod tests {
         }
     }
 
+    /// **The Palace Monitor escapes wire data before it becomes HTML**
+    /// (ROADMAP M6).
+    ///
+    /// `log()` builds an `innerHTML` string, and its `text` argument carries
+    /// wing and room names straight off the SSE stream. `validate_name`
+    /// rejects control characters and path separators but NOT `<`, `>` or
+    /// quotes, so `<img src=x onerror=…>` is a legal wing name — and on a
+    /// tamper frame the location is read from a row whose HMAC has already
+    /// failed, i.e. from bytes an offline writer chose.
+    ///
+    /// This was reachable before M6 for any non-sealed vault; M6 carries
+    /// names on every level and therefore had to close it rather than widen
+    /// it. The gate reads the SINK, not the call sites: escaping per call
+    /// site is what a future ninth call site forgets.
+    #[test]
+    fn the_palace_monitor_escapes_what_it_puts_in_html() {
+        let src = include_str!("monitor.html");
+        // PREMISE: the sink still exists and is still an innerHTML build, or
+        // this test is asserting something about a file that moved on.
+        let at = src
+            .find("function log(kind, text, ts)")
+            .expect("monitor.html has no log() sink any more — stale gate");
+        let body = &src[at..at + 600];
+        assert!(
+            body.contains("row.innerHTML"),
+            "premise: log() no longer writes innerHTML, so this gate is \
+             guarding a sink that is gone: {body}"
+        );
+        assert!(
+            body.contains("${esc(text)}"),
+            "log() interpolates `text` into innerHTML unescaped. A wing name \
+             may legally contain `<`, and a tamper frame's location comes \
+             off a row that failed its own HMAC: {body}"
+        );
+        assert!(
+            src.contains("function esc(v)") && src.contains("replace(/&/g,'&amp;')"),
+            "the escaper itself is missing, so `esc(text)` above resolves to \
+             nothing and the gate would pass on a broken page"
+        );
+    }
+
     /// The MCP tool surface matches its inventory, in BOTH directions.
     ///
     /// A tool added to the server without a line here fails; a line here

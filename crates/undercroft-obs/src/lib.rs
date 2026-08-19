@@ -224,9 +224,12 @@ pub fn hmac_verify_failed(surface: &str) {
 
 /// A request the control plane handled: route class, status, duration.
 ///
-/// `route` is a CLASS from a closed set, never the URL — the forwarded query
-/// string carries `wing=` and `room=`, which is exactly what the engine's own
-/// telemetry suppresses for sealed vaults.
+/// `route` is a CLASS from a closed set, never the URL. The forwarded query
+/// string carries `wing=` and `room=`, and a `route` label is a metric
+/// series — unbounded cardinality and, unlike the SSE stream, read by a
+/// scraper that proved nothing about any one vault. The engine's live frames
+/// carry names to an authorized subscriber (M6); a Prometheus label is a
+/// different audience and still carries none.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn orch_request(route: &str, status: u16, duration: std::time::Duration) {
     #[cfg(feature = "telemetry")]
@@ -552,22 +555,40 @@ pub fn render_prometheus_scoped(assertions_required: bool) -> Option<String> {
 //
 // These are SEPARATE from the Prometheus counters above: they carry vault +
 // location so a live UI can animate individual actions, without polluting
-// counter label cardinality. Sealed vaults pass `sealed = true` and their
-// wing/room is suppressed before it leaves the process. All no-op without
-// the `telemetry` feature.
+// counter label cardinality. All no-op without the `telemetry` feature.
+//
+// **These frames used to blank wing/room for a SEALED vault, and that was
+// overturned deliberately (ROADMAP M6).** Every recipient of a frame has
+// already proven authorization for that exact vault: a subscription is only
+// created after `Tenancy::authorize` (bearer + per-vault assertion), and
+// `broadcast` fans a frame out only to subscribers whose `vault` matches.
+// The same caller reads every one of those names from `GET /v1/…/stats` and
+// `/taxonomy`, and none of them reaches `/metrics` (there are no per-wing
+// series, by cardinality policy). So the suppression withheld nothing an
+// unauthorized party could otherwise have had — it only blinded the vault's
+// OWNER, who is the person the live view exists for.
+//
+// What must still never travel is unchanged and is what the gates now pin:
+// **drawer content, offsets into it, and keys.** A location is metadata; the
+// words are not.
+//
+// The residual, stated rather than discovered later: a `/v1/…/stats` call
+// re-checks the assertion on every request, while a stream is authorized
+// ONCE and then long-lived — so a stream outlives the window of the
+// assertion that opened it. That is true of every frame it carries, names or
+// not, and bounding stream lifetime is the fix if it ever matters.
 
 /// A drawer was filed (created or deduped) in `vault` at `wing`/`room`.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool, sealed: bool) {
+pub fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool) {
     #[cfg(feature = "telemetry")]
-    imp::event_drawer_saved(vault, wing, room, deduped, sealed);
+    imp::event_drawer_saved(vault, wing, room, deduped);
 }
 
 /// A write was DIVERTED by the admission screen into the quarantine wing
-/// of `vault`. `intended_wing`/`room` are where it was headed (suppressed
-/// for a sealed vault like every other location here); `signals` are the
-/// tier-1 signal CODES — a closed vocabulary, never the flagged text and
-/// never its offsets.
+/// of `vault`. `intended_wing`/`room` are where it was headed; `signals`
+/// are the tier-1 signal CODES — a closed vocabulary, never the flagged
+/// text and never its offsets.
 ///
 /// Its own event rather than a `drawer-saved` into a wing that happens to
 /// be named `quarantine-pending`: the single-save paths emitted nothing at
@@ -577,15 +598,9 @@ pub fn event_drawer_saved(vault: &str, wing: &str, room: &str, deduped: bool, se
 /// the monitor during a poisoning attempt is exactly the person this
 /// signal exists for.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub fn event_drawer_quarantined(
-    vault: &str,
-    intended_wing: &str,
-    room: &str,
-    signals: &[&str],
-    sealed: bool,
-) {
+pub fn event_drawer_quarantined(vault: &str, intended_wing: &str, room: &str, signals: &[&str]) {
     #[cfg(feature = "telemetry")]
-    imp::event_drawer_quarantined(vault, intended_wing, room, signals, sealed);
+    imp::event_drawer_quarantined(vault, intended_wing, room, signals);
 }
 
 /// A drawer was deleted from `vault` (location not resolved at this site).
@@ -597,15 +612,9 @@ pub fn event_drawer_deleted(vault: &str) {
 
 /// A search ran against `vault` (optionally wing/room scoped) with `hits`.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub fn event_search(
-    vault: &str,
-    wing: Option<&str>,
-    room: Option<&str>,
-    hits: usize,
-    sealed: bool,
-) {
+pub fn event_search(vault: &str, wing: Option<&str>, room: Option<&str>, hits: usize) {
     #[cfg(feature = "telemetry")]
-    imp::event_search(vault, wing, room, hits, sealed);
+    imp::event_search(vault, wing, room, hits);
 }
 
 /// A knowledge-graph triple was written/superseded in `vault`.
@@ -625,13 +634,43 @@ pub fn event_chain_commit(vault: &str, records: u64) {
     }
 }
 
+/// Where a tamper was caught, **as the failing row CLAIMS it** (ROADMAP M6).
+///
+/// Every field here comes off a record whose HMAC has just FAILED, so none
+/// of it is evidence: an offline writer who altered the row could have
+/// written this location too. It travels because "a tamper, somewhere in
+/// this vault" is not something an owner can act on, and "drawer X claiming
+/// wing Y" is — but it is marked `unverified` on the wire and must be
+/// rendered as a claim, never as a finding. That is this project's label
+/// doctrine (see `docs/LABELS.md`) applied to the one signal where the
+/// subject is by definition untrustworthy.
+///
+/// Non-drawer surfaces (`kg`, `tunnel`, `manifest`) have no drawer location
+/// and pass [`TamperSite::default`].
+#[derive(Default, Clone, Copy)]
+pub struct TamperSite<'a> {
+    /// The row's own id, as stored. Covered by the failing tag, so a
+    /// mismatch means this, the metadata or the content moved.
+    pub id: Option<&'a str>,
+    /// Wing as the unverified metadata claims it.
+    pub wing: Option<&'a str>,
+    /// Room as the unverified metadata claims it.
+    pub room: Option<&'a str>,
+}
+
 /// An HMAC / integrity verification failed on `vault` — the live tamper
 /// signal for the Palace Monitor alarm. `surface` is `drawer`/`kg`/
-/// `tunnel`/`manifest`. Metadata only (vault + surface tag).
+/// `tunnel`/`manifest`; `site` is the CLAIMED location (see [`TamperSite`]).
+/// Metadata only — never content, never offsets into it.
+///
+/// The location exists because `monitor.html` has had a branch to place the
+/// alarm on one wing since it shipped, and nothing ever sent the field it
+/// reads — so the branch was unreachable and every wing flashed red on every
+/// tamper, on every vault level.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub fn event_hmac_fail(vault: &str, surface: &str) {
+pub fn event_hmac_fail(vault: &str, surface: &str, site: TamperSite<'_>) {
     #[cfg(feature = "telemetry")]
-    imp::event_hmac_fail(vault, surface);
+    imp::event_hmac_fail(vault, surface, site);
 }
 
 // ---------------------------------------------------------------------------
@@ -639,8 +678,13 @@ pub fn event_hmac_fail(vault: &str, surface: &str) {
 // ---------------------------------------------------------------------------
 
 /// One point-in-time snapshot of a vault's aggregate counts. All fields are
-/// counts/metadata — never content. For a sealed vault `wings` is empty
-/// (names suppressed); the scalar counts still flow.
+/// counts/metadata — never content.
+///
+/// `wings` carries names on **every** security level since M6: this sample
+/// reaches only subscribers that passed `Tenancy::authorize` for this exact
+/// vault, and the ring buffer it also feeds is served behind the same check.
+/// `sealed` still travels so a UI can show the level; it no longer decides
+/// what a name is.
 #[cfg(feature = "telemetry")]
 #[derive(Clone, serde::Serialize)]
 pub struct Sample {
@@ -775,18 +819,24 @@ mod tests {
         http_request("v1_search", 200, std::time::Duration::from_millis(1));
         auth_rejected("bearer");
         set_gauge("drawers", "personal", 42.0);
-        event_drawer_saved("personal", "eng", "decisions", false, false);
+        event_drawer_saved("personal", "eng", "decisions", false);
         event_drawer_deleted("personal");
-        event_search("personal", Some("eng"), None, 3, false);
+        event_search("personal", Some("eng"), None, 3);
         event_kg_triple("personal");
         event_chain_commit("personal", 1);
-        event_drawer_quarantined(
+        event_drawer_quarantined("personal", "eng", "decisions", &["imperative-instruction"]);
+        // M6: both shapes of tamper site — a drawer that claims a location,
+        // and a surface that has none.
+        event_hmac_fail(
             "personal",
-            "eng",
-            "decisions",
-            &["imperative-instruction"],
-            false,
+            "drawer",
+            TamperSite {
+                id: Some("d1"),
+                wing: Some("eng"),
+                room: Some("decisions"),
+            },
         );
+        event_hmac_fail("personal", "manifest", TamperSite::default());
     }
 
     /// Every `undercroft_…` series literal in this crate's production code,

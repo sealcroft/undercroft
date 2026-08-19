@@ -247,8 +247,11 @@ pushes an [SSE](https://developer.mozilla.org/docs/Web/API/Server-sent_events)
 stream per vault — a periodic sample of aggregate counts plus discrete
 event pings as they happen. This is what the [Palace Monitor
 UI](#palace-monitor-ui) below consumes. Telemetry build + bearer
-required; sealed vaults stream only aggregates (wing/room names
-suppressed).
+required. **Wing and room names travel on every security level**, sealed
+included: a subscription is only created after the bearer and the per-vault
+assertion are verified, and that same caller reads those names from
+`GET /v1/vaults/<id>/stats`. Drawer content, offsets into it and key material
+never travel — which is what the suite pins.
 
 ```bash
 # live event stream (Ctrl-C to stop)

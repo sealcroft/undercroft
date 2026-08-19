@@ -1470,6 +1470,169 @@ the server must hold a DIFFERENT vault behind `/mcp`, because
 open heals the window, leaving `Tenancy` nothing to find. A probe pointed at
 the same vault would have measured 0 and read exactly like an unfixed route.
 
+### M6 — CLOSED 2026-08-19: the live view blinded the vault's OWNER, and the tamper alarm could not say where
+
+**Raised by the maintainer**, from the console: the Palace tab showed a sealed
+vault one `◈ sealed` block while OVERVIEW and BROWSE, in the same session with
+the same bearer, listed all seven wings.
+
+**Two defects, one cause.**
+
+1. `tenant.rs`'s sampler blanked `wings` for a sealed vault, and the three
+   event emitters dropped wing/room, so `monitor.html:177` collapsed the
+   palace. Decided by the vault's LEVEL, in a periodic sampler that has no
+   caller and therefore cannot consider authorization.
+2. `event_hmac_fail` carried `{vault, surface}` and nothing else — **on every
+   security level**. `monitor.html` has had `else if(d.wing){…}` since it
+   shipped, reading a field no emitter ever sent: unreachable code, so every
+   wing flashed red on every integrity failure. The renderer was waiting for
+   data the emitter never produced.
+
+**This overturned a pinned decision, and that required an argument rather
+than a reading.** Two e2e gates asserted the suppression
+(`tests/e2e-telemetry.sh`, "sealed stream suppresses wing/room" and "sealed
+quarantine frame suppresses names"). The argument that overturns them is a
+chain, each link checked in code:
+
+* `http.rs:359` — a stream subscription happens only after
+  `tenancy.authorize()`, which is `assert_or_401`: bearer plus, when
+  declared, a valid per-vault assertion. (It binds the level as `Ok(_sealed)`
+  and discards it.)
+* `imp.rs:507` — `broadcast` retains only subscribers whose `vault` matches,
+  so a frame reaches that vault's authorized subscribers and no one else.
+* `stats/history`, the other consumer of the same `Sample`, calls
+  `assert_or_401` too.
+* `/metrics` carries no per-wing series at all, by cardinality policy.
+* The same caller reads every one of those names from `GET /v1/…/stats` and
+  `/taxonomy`.
+
+So there is **no configuration in which the suppression withheld a name the
+same caller could not get one call over.** It did not protect the owner from
+an external service; it blinded the owner. The gates are REWRITTEN to pin the
+new contract, and a third pins what did not move — content never travels, at
+any level.
+
+**Rejected: a declared opt-in** (`UNDERCROFT_MONITOR_NAMES`). It would have
+added an 82nd variable, an `ENGINE_ENV_VARS` row, a `config check` arm and an
+architecture-table entry to guard a disclosure the chain above shows is not
+one. A knob that protects nothing is worse than no knob: it implies a boundary
+where there is none.
+
+**The residual, stated rather than found later:** a `/v1/…/stats` call
+re-checks the assertion on every request; a stream is authorized ONCE and is
+long-lived, so it outlives the window of the assertion that opened it. True of
+every count it already carried. Bounding stream lifetime is the fix if it ever
+matters; `UPGRADING.md` says so.
+
+**A live XSS, found while implementing and reported as mine to widen.**
+`monitor.html`'s `log()` builds `innerHTML` from wire data, and
+`validate_name` permits `<`, `>` and quotes — it blocks only control
+characters and path separators. So `<img src=x onerror=…>` is a legal wing
+name, and this was reachable for any non-sealed vault BEFORE this unit;
+carrying names on every level would have widened it, and a tamper frame's
+location is bytes an attacker chose. Closed at the SINK, so all eight call
+sites and any future one are covered. `ui.html` had an `esc()`;
+`monitor.html` never did — the two pages were written to different standards
+and nothing compared them.
+
+**Gates.** Two rewritten e2e arms plus a content-needle arm; a source gate
+that `log()` escapes and that the escaper exists (counterfactual: remove
+`esc(text)`, it names the sink); a store gate requiring every DRAWER tamper
+site to pass a real `TamperSite`, with a premise floor so a scanner that
+matched nothing cannot report a converted tree (counterfactual: revert one
+site, it names the file).
+
+**Measured live**, sealed vault, 425 mined drawers: the sample carries
+`"wings":[["conversations",85],…]`, a control needle in a saved drawer does
+not appear anywhere in the stream, and a `randomblob` tag corruption followed
+by a read yields
+`{"id":"66a98fe7…","room":"locomo_feed","surface":"drawer","unverified":true,"vault":"acme","wing":"research"}`
+with the banner reading `UNVERIFIED: claims research/locomo_feed`.
+
+**Gap, filed rather than papered over:** no e2e arm drives a tamper through a
+live stream. Doing it needs a stop-edit-restart sequence to avoid SQLite
+page-cache flake, and a flaky integrity gate is worse than a stated gap. The
+wire shape is pinned by the unit gates and was verified by hand.
+
+### M7 — CLOSED 2026-08-19: the shipped observability stack could not start, and nothing in the repo could notice
+
+**Raised by the maintainer**, from the console: *"grafana dashboard not
+working"*. It was not the dashboard. The stack's own engine never started.
+
+```
+Error: the OTLP collector: the declared trust root
+/tls/caddy/pki/authorities/local/root.crt could not be read:
+Permission denied (os error 13)
+```
+
+**The mechanism.** Caddy writes its entire PKI as root — the CA cert `0600`
+inside directories at `0700` — which is correct, because that tree also holds
+the CA PRIVATE key. The engine image runs as `USER undercroft`, uid 10001
+(`Dockerfile:70,74`), so it cannot traverse `…/pki`, let alone read the cert.
+The engine then refuses to start, restart-loops, Prometheus has no target, and
+every panel in the provisioned dashboard is empty.
+
+**The refusal is right and is not what changed.** `undercroft-net` never falls
+back to the public roots (`lib.rs:107`): *"un-pinning silently is the failure
+mode this exists to prevent."* The defect was the PATH — only the certificate
+needs sharing.
+
+**Introduced by `f24be46`** (round-four #8, "the traces hop obeys the one
+transport policy"), the commit that closed a real cleartext-OTLP hole and
+declared this pin without checking which uid would read it. **A fix that
+closed a security gap broke the deployment it shipped in.**
+
+**Why it rotted unseen: nothing in the repo brings this stack up.** No test,
+no CI job, no compose service references `docker-compose.observability.yml`.
+`obs-config` validates the Prometheus and Alertmanager CONFIGS — at the
+pinned versions, carefully — and never starts a container. A config can be
+perfectly valid for a stack that cannot boot.
+
+**Fix.** A `tls-export` service copies the PUBLIC root to `/tls/root.crt` at
+`0644`; the engine pins that. The CA private key keeps its `0600` and never
+moves. It also **closes a race the permission error was masking**:
+`depends_on: [tempo-tls]` waits for the container to START, not for Caddy to
+have generated a CA, so the engine could have raced an absent file. The
+exporter waits for it — bounded, with a loud failure — and the engine now
+waits on `service_completed_successfully`.
+
+**Rejected:** `chmod -R a+rX` on the PKI tree (exposes the CA private key to
+anything mounting that volume); running the engine as root (throws away the
+non-root image for a certificate); pinning the public roots instead (deletes
+the pin the commit existed to add).
+
+**Verified from a destroyed-volume clean state**, ports remapped but the CA
+path exactly as shipped: exporter logs *"published the public CA root as
+/tls/root.crt (0644)"*, engine starts with no permission error, `root.key`
+still `-rw-------`, Prometheus target `up`, and the dashboard draws
+(`undercroft_drawers 442`, writes 1.05/min, searches 4.2/min under load).
+**Counterfactual executed**: an override restoring the deep path reproduces
+the exact error and the container dies; the shipped config recovers.
+
+**Gate — and its scope is stated rather than implied.** An eleventh host-side
+preflight fails when a compose service that BUILDS the engine image declares a
+`UNDERCROFT_*_CA` pin inside a `caddy/pki/` tree, with a premise probe that
+refuses to pass on zero declarations. Narrowing on the engine image is
+load-bearing: the same deep path appears in four places and is CORRECT in
+three, because those consumers run as root in dev/test images. Counterfactual
+executed — it names the file, the line and the value.
+
+**What that gate does NOT do, filed rather than papered over: it does not
+prove the stack starts.** Only a real bring-up does, and that means building
+the full image and running four containers in CI. The argument for not adding
+it now is cost, not principle, and it is written here so the next person
+weighs it rather than assumes it was considered:
+`docker compose -f deploy/observability/docker-compose.observability.yml up -d
+undercroft prometheus` plus an assertion that the target reaches `up` is the
+whole check, and it would have caught this. It needs a ports-free override to
+avoid colliding with a developer's own stack.
+
+**Also fixed while here**, both found by running it rather than reading it:
+the README's bring-up section said nothing about the two ways this looks
+broken — a port already taken (and that Compose MERGES `ports:`, so a naive
+override appends and the collision silently survives), and the two headline
+gauges being demand-driven, so an idle deployment renders them empty.
+
 ### M4 — `records` counts the quarantine wing while `wings` and `rooms` do not
 
 **Found while executing M2's counterfactual**, in the payload the reverted

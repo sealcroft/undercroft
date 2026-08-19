@@ -1522,6 +1522,28 @@ pub(crate) fn calibrated_semantic(floor: f32, cos: f32) -> f32 {
     (0.5 + 0.5 * (cos - floor) / (1.0 - floor)).clamp(0.0, 1.0)
 }
 
+/// The location a row CLAIMS, for a tamper frame only (ROADMAP M6).
+///
+/// Parsed from `meta_json` **without** verifying anything, because the
+/// caller is on the failure path: the row's HMAC has already been rejected,
+/// so its metadata is exactly as trustworthy as the rest of it — which is to
+/// say, not at all. It travels marked `unverified` so an owner can go and
+/// look, and it is deliberately NOT read from the clear `wing`/`room` mirror
+/// columns either: on this path both copies are equally unauthenticated, and
+/// reading the covered field keeps the one rule (A28) that a decision reads
+/// the HMAC-covered copy rather than the mirror, even when the decision is
+/// only "where should the alarm point".
+///
+/// Returns `(None, None)` for anything unparseable, which is the ordinary
+/// case when the tampering hit `meta_json` itself.
+pub(crate) fn claimed_site(meta_json: &str) -> (Option<String>, Option<String>) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(meta_json) else {
+        return (None, None);
+    };
+    let pick = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    (pick("wing"), pick("room"))
+}
+
 pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
     out.extend_from_slice(id.as_bytes());
@@ -4074,7 +4096,6 @@ impl PalaceStore {
                     &drawer.meta.wing,
                     &drawer.meta.room,
                     deduped,
-                    self.is_sealed(),
                 );
             }
             // The purpose-built event, not a `drawer-saved` with the wing
@@ -4094,7 +4115,6 @@ impl PalaceStore {
                     intended_wing,
                     &drawer.meta.room,
                     &codes,
-                    self.is_sealed(),
                 );
             }
         }
@@ -4754,7 +4774,19 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                    // M6: point the alarm at a row rather than at the whole
+                    // palace. Everything here is what the FAILING row claims
+                    // about itself and travels marked unverified.
+                    let (w, r) = claimed_site(&meta_json);
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "drawer",
+                        undercroft_obs::TamperSite {
+                            id: Some(&id),
+                            wing: w.as_deref(),
+                            room: r.as_deref(),
+                        },
+                    );
                     StoreError::Integrity(id.clone())
                 })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -4981,7 +5013,19 @@ impl PalaceStore {
                     .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                     .map_err(|_| {
                         undercroft_obs::hmac_verify_failed("drawer");
-                        undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                        // M6: point the alarm at a row rather than at the whole
+                        // palace. Everything here is what the FAILING row claims
+                        // about itself and travels marked unverified.
+                        let (w, r) = claimed_site(&meta_json);
+                        undercroft_obs::event_hmac_fail(
+                            self.vault.id(),
+                            "drawer",
+                            undercroft_obs::TamperSite {
+                                id: Some(&id),
+                                wing: w.as_deref(),
+                                room: r.as_deref(),
+                            },
+                        );
                         StoreError::Integrity(id.clone())
                     })?;
                 let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -5106,7 +5150,19 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                    // M6: point the alarm at a row rather than at the whole
+                    // palace. Everything here is what the FAILING row claims
+                    // about itself and travels marked unverified.
+                    let (w, r) = claimed_site(&meta_json);
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "drawer",
+                        undercroft_obs::TamperSite {
+                            id: Some(&id),
+                            wing: w.as_deref(),
+                            room: r.as_deref(),
+                        },
+                    );
                     StoreError::Integrity(id.clone())
                 })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -5703,7 +5759,19 @@ impl PalaceStore {
                     .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                     .map_err(|_| {
                         undercroft_obs::hmac_verify_failed("drawer");
-                        undercroft_obs::event_hmac_fail(vault.id(), "drawer");
+                        // M6: point the alarm at a row rather than at the whole
+                        // palace. Everything here is what the FAILING row claims
+                        // about itself and travels marked unverified.
+                        let (w, r) = claimed_site(&meta_json);
+                        undercroft_obs::event_hmac_fail(
+                            vault.id(),
+                            "drawer",
+                            undercroft_obs::TamperSite {
+                                id: Some(&id),
+                                wing: w.as_deref(),
+                                room: r.as_deref(),
+                            },
+                        );
                         StoreError::Integrity(id.clone())
                     })?;
                 let drawer = Self::decode_with(vault, &id, &meta_json, &content_rest)?;
@@ -5924,7 +5992,6 @@ impl PalaceStore {
             opts.wing.as_deref(),
             opts.room.as_deref(),
             hits.len(),
-            self.is_sealed(),
         );
         self.record_read(
             Read::Returned(ReadOp::Search),
@@ -6713,7 +6780,19 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                    // M6: point the alarm at a row rather than at the whole
+                    // palace. Everything here is what the FAILING row claims
+                    // about itself and travels marked unverified.
+                    let (w, r) = claimed_site(&meta_json);
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "drawer",
+                        undercroft_obs::TamperSite {
+                            id: Some(&id),
+                            wing: w.as_deref(),
+                            room: r.as_deref(),
+                        },
+                    );
                     StoreError::Integrity(id.clone())
                 })?;
             out.push(self.decode(&id, &meta_json, &content_rest)?);
@@ -8649,6 +8728,69 @@ fn recency_boost(filed_at: &str, now: OffsetDateTime) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    /// **M6: a tamper names the row and the location that row CLAIMS.**
+    ///
+    /// Two gates, because they fail for different reasons. The first is the
+    /// parse: it must survive the ordinary case — the tampering hit
+    /// `meta_json` itself and there is nothing to read — rather than
+    /// panicking on the failure path, which is the one path that must not
+    /// have a second failure in it.
+    ///
+    /// The second is the one that matters, and it is the "someone forgot one
+    /// of N places" shape a scanner is right for: every DRAWER tamper site
+    /// must pass a real `TamperSite`, not `default()`. The alarm pointing at
+    /// the whole palace is what this unit exists to end, and a new read path
+    /// added later inherits nothing unless somebody checks.
+    #[test]
+    fn every_drawer_tamper_site_names_the_row_it_caught() {
+        // The parse, on both sides of its premise.
+        let (w, r) = crate::claimed_site(r#"{"wing":"eng","room":"decisions"}"#);
+        assert_eq!(
+            (w.as_deref(), r.as_deref()),
+            (Some("eng"), Some("decisions"))
+        );
+        assert_eq!(
+            crate::claimed_site("{ this is not json"),
+            (None, None),
+            "the ordinary case when the tampering landed in meta_json: no \
+             location, and above all no panic on the failure path"
+        );
+        assert_eq!(
+            crate::claimed_site(r#"{"room":"decisions"}"#).0,
+            None,
+            "a missing field is absent, never guessed"
+        );
+
+        // The inventory: read the sources and require a real site at every
+        // drawer-surface emit.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut drawer_sites = 0usize;
+        for f in ["lib.rs", "manage.rs"] {
+            let src = std::fs::read_to_string(root.join(f)).expect("source is readable");
+            for (i, _) in src.match_indices("event_hmac_fail(") {
+                let call = &src[i..(i + 400).min(src.len())];
+                let Some(end) = call.find(");") else { continue };
+                let call = &call[..end];
+                if !call.contains("\"drawer\"") {
+                    continue;
+                }
+                drawer_sites += 1;
+                assert!(
+                    call.contains("TamperSite {"),
+                    "a drawer tamper in {f} still fires with no location, so \
+                     the alarm points at the whole palace: {call}"
+                );
+            }
+        }
+        // PREMISE. A scanner that matched nothing reports exactly what a
+        // fully-converted tree reports.
+        assert!(
+            drawer_sites >= 6,
+            "premise: found only {drawer_sites} drawer tamper sites; the \
+             scanner is broken, not the tree"
+        );
+    }
     use super::*;
     use tempfile::TempDir;
     use undercroft_vault::{SecurityLevel, VaultManager};

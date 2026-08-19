@@ -7,6 +7,106 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the shipped observability stack could not start, and nothing could notice (M7)
+
+Reported as "the Grafana dashboard is not working". It was not the dashboard:
+the stack's own engine never started, so Prometheus had no target and every
+panel was empty.
+
+Caddy writes its PKI as root — CA cert `0600` inside `0700` directories,
+correctly, since that tree holds the CA private key — and the engine image
+runs as uid 10001. The declared OTLP trust root was therefore unreadable and
+the engine refused to start, restart-looping forever. **The refusal is
+right**: `undercroft-net` never falls back to the public roots, because a pin
+that silently un-pins is the failure mode. The defect was the path — only the
+certificate needs sharing.
+
+Introduced by `f24be46` (round-four #8), the commit that gave the OTLP hop a
+transport policy: it declared the pin without checking which uid would read
+it. **A fix that closed a security gap broke the deployment it shipped in**,
+and nothing caught it because **no test, CI job or compose service brings that
+stack up** — `obs-config` validates its configs and never starts a container.
+
+A `tls-export` service now publishes the PUBLIC root at `0644` and the engine
+pins that; the private key keeps `0600` and never moves. It also closes a race
+the permission error was masking — `depends_on` waits for a container to
+start, not for Caddy to have generated a CA — by waiting for the file, bounded,
+with the engine gated on `service_completed_successfully`.
+
+Verified from a destroyed-volume clean state: exporter publishes, engine
+starts clean, `root.key` still `-rw-------`, Prometheus target `up`, dashboard
+drawing under live load. Counterfactual: restoring the deep path reproduces
+the exact error and the container dies.
+
+**Gate:** an eleventh preflight refuses a `UNDERCROFT_*_CA` pin inside a
+`caddy/pki/` tree **for services that build the engine image** — that
+narrowing matters, since the same path appears in four places and is correct
+in three, where the consumer runs as root. It does **not** prove the stack
+starts; that needs a real bring-up, and the cost argument for deferring it is
+recorded in ROADMAP M7 rather than left implicit.
+
+### the live view showed a sealed vault one locked block, and a tamper lit the whole palace (M6)
+
+Two defects with one cause: the owner of a sealed vault could not see their
+own structure, and the integrity alarm could not say where.
+
+**The palace.** Every sample blanked `wings` for a sealed vault, and
+`drawer-saved` / `drawer-quarantined` / `search` dropped wing and room, so
+`monitor.html` collapsed the whole vault into a single `◈ sealed` block.
+Names travel on every level now. This **overturns a decision that had two
+e2e gates**, deliberately and with its argument: a stream subscription is
+created only after `Tenancy::authorize` (bearer + per-vault assertion), a
+frame reaches only subscribers of that same vault, and the same caller reads
+those names from `GET /v1/…/stats`. The suppression withheld nothing from an
+unauthorized party — it blinded the owner. The gates are **rewritten**, not
+deleted, and a new one pins what did not move: content never travels. The
+residual is stated in `UPGRADING.md` (a stream is authorized once and is
+long-lived; a `stats` call re-checks every time).
+
+**The tamper.** `event_hmac_fail` sent `{vault, surface}` — no location at
+all, on any security level. `monitor.html` has had a branch to light one wing
+since it shipped, reading a `d.wing` that nothing ever sent: **unreachable
+code, so every wing flashed red on every failure.** The frame now carries the
+row's `id`, the `wing`/`room` that row CLAIMS, and `unverified: true`. The
+claim is the point: the record's HMAC is what just failed, so an offline
+writer could have written that location too — it is a lead for `verify`,
+never a finding, and the banner says so.
+
+Verified live on a sealed vault of 425 mined drawers. A `randomblob` tag
+corruption applied out of band, then a read:
+
+```
+{"id":"66a98fe7985d870bfc97e4cff4022811","room":"locomo_feed","surface":"drawer",
+ "unverified":true,"vault":"acme","wing":"research"}
+```
+
+and the console banner: `INTEGRITY ALERT — HMAC VERIFY FAILED @ acme (drawer)
+· UNVERIFIED: claims research/locomo_feed`, with that one wing lit. A control
+write in the same session confirmed a content needle never appears in the
+stream.
+
+**A live XSS found and closed on the way, reported as mine to widen.**
+`monitor.html`'s `log()` builds `innerHTML` and interpolates wing and room
+names straight off the wire — and `validate_name` rejects control characters
+and path separators but **not** `<`, `>` or quotes, so `<img src=x
+onerror=…>` is a legal wing name. That was reachable for any non-sealed vault
+before this change; carrying names on every level would have widened it, and
+a tamper frame's location comes from bytes an attacker chose. Escaping is at
+the **sink**, so all eight call sites and every future one are covered —
+per-site escaping is what a ninth call site forgets. `ui.html` had an `esc()`
+already; `monitor.html` never did.
+
+**Gates:** the two rewritten e2e arms plus a content-needle arm; a source gate
+that `log()` escapes and that the escaper exists; and a store gate requiring
+every DRAWER tamper site to pass a real `TamperSite` — the "someone forgot one
+of N places" shape — with a premise floor so a broken scanner cannot report a
+converted tree. Counterfactuals executed on both.
+
+**Filed rather than pretended:** there is no e2e arm driving a tamper through
+a live stream. It needs a stop-edit-restart dance to avoid SQLite page-cache
+flake, and a flaky integrity gate is worse than a documented gap. The wire
+shape above was verified by hand and is pinned by the unit gates.
+
 ### one anchor lag, two doors, two answers — and the filed fix would have introduced a second defect (M3)
 
 `store_for` OPENS a vault the server process has not served yet, and that open

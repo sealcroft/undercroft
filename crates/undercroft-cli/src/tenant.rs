@@ -627,7 +627,15 @@ impl Tenancy {
                 sealed,
                 drawers: stats.records,
                 rooms: stats.rooms,
-                wings: if sealed { Vec::new() } else { stats.wings },
+                // **M6: the wing list travels on every level.** It used to
+                // be blanked for a sealed vault, which blinded the only
+                // person who can receive this frame: a subscription requires
+                // `authorize()` (bearer + per-vault assertion) and
+                // `broadcast` fans a frame out to that vault's subscribers
+                // only, so the recipient already reads these exact names from
+                // `stats` above. `sealed` still travels — the monitor shows
+                // the level — it just no longer decides what a name is.
+                wings: stats.wings,
                 kg_triples: stats.kg.triples,
                 kg_entities: stats.kg.entities,
                 kg_active: stats.kg.active,

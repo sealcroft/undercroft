@@ -476,7 +476,6 @@ impl PalaceStore {
             opts.wing.as_deref(),
             opts.room.as_deref(),
             hits.len(),
-            self.is_sealed(),
         );
         self.record_read(
             crate::Read::Returned(crate::ReadOp::Search),
