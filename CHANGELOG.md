@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.1 — released 2026-08-19
+## 1.1.1 — 2026-08-19
 
 PATCH: the only observable change is that a defect is gone. No documented
 contract moves. **Fifteen units** — O46 through O60, counted from the ROADMAP
