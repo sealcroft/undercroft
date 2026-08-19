@@ -904,6 +904,41 @@ mod tests {
         );
     }
 
+    /// **The console says what it wants before you can get it wrong.**
+    ///
+    /// `/ui` rendered a blank shell with an empty status line: no vaults, no
+    /// stats, and nothing saying a bearer was required. Reported as "I see
+    /// nothing", which is exactly what it looked like. And the server answers
+    /// a bare `unauthorized`, so even after pressing CONNECT the message
+    /// named neither what was rejected nor what to do.
+    ///
+    /// Both halves are asserted because they fail independently: a hint can
+    /// be deleted without touching the error path, and vice versa.
+    #[test]
+    fn the_console_names_the_credential_it_needs() {
+        let src = include_str!("ui.html");
+        assert!(
+            src.contains("paste the bearer"),
+            "the pre-connect state must say what it is waiting for — a blank \
+             page reads as broken, not as unauthenticated"
+        );
+        assert!(
+            src.contains("the bearer was rejected"),
+            "a 401 must name the credential; the server's own body is a bare \
+             `unauthorized`, which tells an operator nothing actionable"
+        );
+        // PREMISE: the 401 branch lives in the connect path, not in a comment
+        // that happens to quote it.
+        let at = src
+            .find("async function connect()")
+            .expect("connect() is not in ui.html any more — stale gate");
+        let window = &src[at..(at + 1800).min(src.len())];
+        assert!(
+            window.contains("401"),
+            "the 401 branch is not inside connect()"
+        );
+    }
+
     /// The MCP tool surface matches its inventory, in BOTH directions.
     ///
     /// A tool added to the server without a line here fails; a line here

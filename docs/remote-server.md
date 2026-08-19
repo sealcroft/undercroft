@@ -60,7 +60,10 @@ DELETE /v1/vaults/{id}                                           delete vault
 ── read / write ─────────────────────────────────────────────────────────
 GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer
                                          count under both names, from one
-                                         read; level; the chain height as
+                                         read; quarantined — the part of it
+                                         in the reserved review wing, which
+                                         wings/rooms exclude, so the three
+                                         reconcile; level; the chain height as
                                          writes AND chain_records — same
                                          number, `writes` deprecated since
                                          it counts exports and audited

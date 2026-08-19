@@ -7,6 +7,48 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the console's empty state said nothing at all (M8)
+
+`GET /ui` rendered a blank shell — no vaults, no stats, an empty status line,
+and nothing saying a bearer was required. Indistinguishable from a broken
+page, and reported as exactly that. The status line now says
+`paste the bearer (UNDERCROFT_MCP_HTTP_TOKEN) and press CONNECT` from load,
+and a 401 names the credential plus its usual cause (a trailing newline from
+`$(cat …)`, which HTTP strips) instead of relaying the server's bare
+`unauthorized`.
+
+Gated on both halves — they fail independently — with a premise arm proving
+the branch is inside `connect()`, and an e2e check that the served page
+actually carries the hint. The server's bare `unauthorized` body is left
+alone: changing it is a `/v1` contract question for every client, not a
+console fix, and it is filed rather than folded in.
+
+### one struct reported a total its own breakdown contradicted (M4)
+
+`PalaceStats.records` is an unfenced `COUNT(*)`, while `wings` and `rooms`
+both exclude the reserved review wing. So any vault holding a diverted drawer
+printed a total that disagreed with the breakdown beneath it, with nothing on
+the surface saying why — O34's own words, "one quantity, two answers, inside
+one struct", surviving O34 one field over.
+
+`quarantined` now reports the difference, so `records == sum(wings) +
+quarantined`. **Additive on purpose:** fencing `records` would change a
+documented count on the CLI, MCP and `/v1` at once and delete the only report
+of the vault's true row count, which `db_bytes` is measured against. No
+existing value moves. The CLI and console show it only when non-zero, since it
+explains a discrepancy that does not arise with screening off.
+
+`HAND_PROJECTED` named the three hand projections rather than memory — the
+build failed with `["quarantined"]` until CLI, `/v1` and the console each
+rendered it.
+
+**Gate:** an identity test with two premise arms — the identity holds
+trivially before a diversion, and `records > sum(wings)` after one, so it
+cannot pass for the wrong reason. Counterfactual executed. Plus an e2e arm on
+the scripted-attacker vault, the only one with real diversions, reading
+`"quarantined":4` beside `records 6` and `wings (ops 2)`. That arm caught my
+own wrong expectation of 3 on its first run.
+
 ### the shipped observability stack could not start, and nothing could notice (M7)
 
 Reported as "the Grafana dashboard is not working". It was not the dashboard:

@@ -3388,6 +3388,16 @@ fn run(cli: Cli) -> Result<()> {
             let st = store.stats()?;
             println!("vault:   {} (level: {})", store.vault().id(), st.level);
             println!("records: {}", st.records);
+            // M4: printed right under `records` and only when non-zero,
+            // because it exists to explain a discrepancy. `records` is the
+            // whole file; the wing list below excludes the review queue, so
+            // without this line the two disagree and nothing says why.
+            if st.quarantined > 0 {
+                println!(
+                    "  of which quarantined: {} (excluded from the wing list below)",
+                    st.quarantined
+                );
+            }
             println!("rooms:   {}", st.rooms);
             println!("tunnels: {}", st.tunnels);
             println!(

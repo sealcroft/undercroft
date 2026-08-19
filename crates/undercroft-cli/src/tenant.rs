@@ -517,6 +517,11 @@ impl Tenancy {
                 // they cannot drift apart — gated by
                 // `stats_reports_one_drawer_count_under_both_names`.
                 "records": full.records,
+                // M4: `records` counts every row; `wings` and `rooms` below
+                // exclude the reserved review wing. This is the difference,
+                // so a client can reconcile them instead of reading one
+                // struct that contradicts itself.
+                "quarantined": full.quarantined,
                 // The REPORT's field, not `vault.level()`. Same value
                 // today, and that is the point: a hand projection that
                 // reads a different object cannot follow the struct when

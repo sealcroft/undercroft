@@ -1284,6 +1284,16 @@ atk_check "poisoned update leaves content intact" 'release train' "$out"
 #    chain covering the whole episode verifies.
 out="$(atk GET /v1/vaults/default/admission)"
 atk_check "review queue lists the attempts" 'fixture-similarity' "$out"
+# ROADMAP M4, on the one vault in this suite that actually HAS a review
+# queue. `records` counts every row; `wings` and `rooms` exclude the reserved
+# wing — so without `quarantined` the struct contradicts itself, and this is
+# the only place a real diversion exists to catch it.
+out="$(atk GET /v1/vaults/default/stats)"
+atk_check "stats reports the review queue depth" '"quarantined":4' "$out"
+# The identity this unit exists for, visible in that same payload:
+#   records 6 = wings (ops 2) + quarantined 4
+# If a future edit changes how many writes this section diverts, the number
+# above moves with it — the arithmetic is what must stay true.
 kill $ATK_PID 2>/dev/null
 sleep 1
 check "chain green after the attack" 0 "audit chain:     ok"          -- \
@@ -1462,6 +1472,10 @@ rest_body "search finds it"     'postgres'        -- -X POST "$API/vaults/acme/s
   -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"which database for billing"}'
 rest_body "stats"               '"drawers":1'     -- "$API/vaults/acme/stats" \
   -H "X-Vault-Assertion: $(sign acme)"
+# The console's empty state tells you what it is waiting for. It rendered a
+# blank shell with no message at all, which reads as a broken page rather than
+# an unauthenticated one — reported exactly that way.
+rest_body "the console names the credential it needs" 'paste the bearer' -- "http://127.0.0.1:$PORT/ui"
 # M2: the same count under the name `PalaceStats`, the CLI, MCP and BOTH
 # `/v1` reference documents give it. `drawers` above stays — renaming a
 # documented key in place is MAJOR — so this asserts the pair, not a

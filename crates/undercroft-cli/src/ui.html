@@ -190,6 +190,7 @@
                  compatibility, but a console has no callers to break. -->
             <div class="g"><div class="k">CHAIN RECORDS</div><div class="v" id="sWrites">—</div></div>
             <div class="g"><div class="k">POSTURE</div><div class="v" id="sPosture">—</div></div>
+            <div class="g" id="sQuarGauge" style="display:none"><div class="k">QUARANTINED</div><div class="v" id="sQuar">—</div></div>
             <div class="g"><div class="k">ROOMS</div><div class="v" id="sRooms">—</div></div>
             <div class="g"><div class="k">KG TRIPLES</div><div class="v" id="sKgT">—</div></div>
             <div class="g"><div class="k">KG ENTITIES</div><div class="v" id="sKgE">—</div></div>
@@ -598,6 +599,14 @@ async function connect() {
       setStatus("ISOLATED", "live");
       renderVaults();
       toast("per-vault isolation is on — attach vaults by id");
+    } else if (String(e.message).startsWith("401")) {
+      // The server answers a bare `unauthorized`, which as a UI message says
+      // neither what was rejected nor what to do about it. Name the thing.
+      setStatus("DISCONNECTED", "alert");
+      $("connMsg").textContent =
+        "401 — the bearer was rejected. This is UNDERCROFT_MCP_HTTP_TOKEN as "
+        + "the server was started with; a trailing newline from $(cat …) is "
+        + "the usual cause, since HTTP strips it and the token can never match.";
     } else {
       setStatus("DISCONNECTED", "alert");
       $("connMsg").textContent = e.message;
@@ -991,6 +1000,13 @@ async function loadOverview() {
     // M5: the posture this handle was opened under. Silence here read as
     // "writable", which is exactly what a read-only replica looked like.
     $("sPosture").textContent = s.read_only ? "read-only" : "writable";
+    // M4: the wing table below excludes the review queue while DRAWERS
+    // counts it, so show the difference rather than leaving the operator to
+    // discover the two do not add up. Hidden at zero — which is every vault
+    // with screening off.
+    const q = s.quarantined || 0;
+    $("sQuar").textContent = q;
+    $("sQuarGauge").style.display = q ? "" : "none";
     $("sRooms").textContent = s.rooms;
     $("sKgT").textContent = (s.kg && s.kg.triples !== undefined) ? s.kg.triples : "—";
     $("sKgE").textContent = (s.kg && s.kg.entities !== undefined) ? s.kg.entities : "—";
@@ -1483,6 +1499,12 @@ async function verifyAttestation() {
   }
 }
 
+// **The empty state used to say nothing at all.** No vaults, no stats, no
+// message — a blank shell that reads as a broken page rather than as one
+// waiting for a credential. The monitor at `/monitor` at least announces
+// demo mode; this page announced nothing, and that is how it was reported.
+$("connMsg").textContent =
+  "paste the bearer (UNDERCROFT_MCP_HTTP_TOKEN) and press CONNECT";
 $("connectBtn").onclick = connect;
 $("attachBtn").onclick = attach;
 $("createBtn").onclick = createVault;

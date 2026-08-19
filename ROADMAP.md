@@ -1633,7 +1633,7 @@ broken — a port already taken (and that Compose MERGES `ports:`, so a naive
 override appends and the collision silently survives), and the two headline
 gauges being demand-driven, so an idle deployment renders them empty.
 
-### M4 — `records` counts the quarantine wing while `wings` and `rooms` do not
+### M4 — CLOSED 2026-08-19: `records` counted the quarantine wing while `wings` and `rooms` did not
 
 **Found while executing M2's counterfactual**, in the payload the reverted
 run printed: `"drawers":2` beside a `wings` list summing to **1**, on the test
@@ -1671,6 +1671,66 @@ projection of `PalaceStats` renders the new field.
 struct FIVE surfaces project — CLI, MCP, `/v1`, the vault console and the
 fleet console, which is M5's point — and M2's unit is not where that
 argument gets made.
+
+**CLOSED, additively, exactly as filed.** `PalaceStats.quarantined` counts
+the reserved wing, so `records == sum(wings) + quarantined` holds and **no
+existing value moves**. Fencing `records` was rejected for the reason filed:
+it changes a documented count on CLI, MCP and `/v1` at once, and deletes the
+only report of the vault's true row count — the number `db_bytes` is measured
+against.
+
+It reaches all three hand projections, and `HAND_PROJECTED` is what named
+them rather than memory: adding the field failed the build with
+`["quarantined"]` until the CLI, `/v1` and the console each rendered it. The
+CLI and the console show it **only when non-zero**, since it exists to explain
+a discrepancy that does not exist on a vault with screening off — which is
+every default vault.
+
+**Gate:** `stats_reconcile_records_wings_and_the_review_queue`, with a premise
+arm proving the identity holds trivially BEFORE a diversion (so the real arm
+measures the fence, not arithmetic luck) and a second premise asserting
+`records > sum(wings)` after one — because if those were equal the defect
+would not exist and the test would pass for the wrong reason. Counterfactual
+executed: pinning the field to `0` fails it.
+
+**Plus an e2e arm on the only vault in the suite with a REAL queue** — the
+scripted-attacker section, which diverts four writes. It reads
+`"quarantined":4` beside `records 6` and `wings (ops 2)`, i.e. the identity
+in the payload. **My first version asserted 3 and was wrong**; running it said
+so, which is the whole reason the arm goes on a vault with genuine
+diversions rather than a fixture.
+
+### M8 — CLOSED 2026-08-19: the console's empty state said nothing at all
+
+**Raised by the maintainer, in the plainest possible terms: "I see nothing".**
+
+`GET /ui` served an 80 KB page that rendered a blank shell — no vaults, no
+stats, and an empty status line. Nothing said a bearer was required. That is
+indistinguishable from a broken page, and it was reported as one. The Palace
+Monitor at `/monitor` at least announces demo mode and explains itself in a
+footer; this page announced nothing.
+
+The second half is the error path. `/v1/vaults` answers a bare `unauthorized`
+body, so `connMsg` showed `401: unauthorized` — a message that names neither
+what was rejected nor what to do about it, and only after the user has already
+guessed that pressing CONNECT was the next move.
+
+**Fix.** The status line carries `paste the bearer (UNDERCROFT_MCP_HTTP_TOKEN)
+and press CONNECT` from page load, and a 401 now names the credential and the
+usual cause — a trailing newline from `$(cat …)`, which HTTP strips, so the
+declared token can never match. That is not a guess: it is the failure
+`UPGRADING.md` already documents for this exact variable.
+
+**Gate:** `the_console_names_the_credential_it_needs` asserts both halves —
+they fail independently, since a hint can be deleted without touching the
+error path — with a premise arm proving the `401` branch is inside
+`connect()` rather than in a comment quoting it. Plus an e2e check that
+`GET /ui` actually serves the hint, which is the only arm that proves a user
+sees it.
+
+**Not done:** the server still answers a bare `unauthorized` body. Changing
+that is a `/v1` contract question affecting every client, not a console fix,
+and it is not what was reported. Filed here rather than folded in silently.
 
 ### M5 — CLOSED 2026-08-19: the vault console is a FIFTH renderer of `PalaceStats` and was outside the gate that counts them
 
