@@ -52,6 +52,28 @@ Consequences that are binding, not advisory:
   introduces a hole and reports it as a finding is worse than the hole.
 - **Do the impact analysis first**: establish what a change touches and what
   could fail *silently*, plan it, prove it, then present the diff.
+- **GROUND THE DECISION BEFORE ACTING — the doctrine is the first place to
+  look, not the last.** The order is: read the architecture files and folders,
+  read this doctrine, read the code. If they answer the question, **follow
+  them** — that is not a decision to narrate, it is the standard, and asking
+  about it wastes the maintainer's attention. If they do NOT answer it, do not
+  fall back on your own judgement and report afterwards: **write the options
+  out with their trade-offs and ask.** The failure this forbids is acting from
+  taste and then informing — "I did X, here is why", which hands the
+  maintainer a fait accompli dressed as a status update, and which they have
+  had to correct.
+  The corollary is that "I asked first" is not automatically compliance
+  either: an option list assembled without reading the arch files and the code
+  is a guess wearing a question mark, and it pushes the grounding work onto
+  the person answering. Do the reading, THEN present options — and present
+  them only where the reading genuinely ran out.
+  Applied backwards, as a rule here must be: it CONFIRMS the drift-direction
+  doctrine (provenance decides, and provenance lives in those files), the
+  impact-analysis rule above, and O24, whose whole lesson was that reading the
+  inventory the command already iterates was all it took. It RECLASSIFIES the
+  M9/M10 scoping and the `tls-pins` repair, both of which were chosen and then
+  reported rather than grounded and stated. It does not reclassify M6, which
+  was put as an explicit option and ruled on — that one is the shape to copy.
 - **A gap is a gap** — never dressed up as a principled refusal.
 - **A RULE written into this file gets the same scrutiny as code, and the
   test is the same one: apply it backwards.** Before a doctrine lands here,
@@ -1235,6 +1257,14 @@ Consequences that are binding, not advisory:
 - `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,
   `tests/e2e-orchestrator.sh`, `tests/obs-config.sh` — end-to-end and
   config suites (run in Docker)
+- `tests/tls-pins.sh` — every shipped CA pin is READABLE by the identity
+  that pins it (ROADMAP M7/M9/M10). **Host-side, not in Docker**, because it
+  DRIVES docker: it brings the real Caddy terminators up under throwaway
+  compose projects and reads their volumes as the ENGINE's uid, taken from
+  the `Dockerfile` so the two cannot drift. Two things it learned the hard
+  way are encoded in it: a private project name does **not** scope a
+  published PORT (hence `--no-deps`), and its first version ran `down -v` on
+  the REAL projects and destroyed a live stack
 - `docs/AGENTS.md` — the scenario-driven agent implementation guide
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
@@ -1397,8 +1427,9 @@ docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (43 ch
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
-bash tests/tls-pins.sh                # every shipped CA pin is READABLE by the
-                                      # identity that pins it (7 checks). Host-side
+bash tests/tls-pins.sh                # CA pins readable by the engine (7 checks).
+                                      # Every shipped pin, read as the ENGINE's uid.
+                                      # Host-side
                                       # because it DRIVES docker: it brings the real
                                       # Caddy terminators up and reads their volumes
                                       # as the ENGINE's uid, taken from the Dockerfile
@@ -1523,7 +1554,7 @@ one for code.** Applying it blindly across a 7-way merge spliced away closing
 braces in three `.rs` files. Resolve code conflicts on their merits; reserve
 union for additive prose.
 
-**Run the battery with `bash tests/battery.sh`** (all eight suites, or name a
+**Run the battery with `bash tests/battery.sh`** (all nine suites, or name a
 subset). It exists because two mistakes on 2026-08-06 were the same defect —
 a verdict taken from something other than the thing that decides it:
 a summary built by piping `cargo test` through `awk` reported `failed=0` from
@@ -1692,7 +1723,9 @@ images either; mount the repo instead:
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
-**Seven compose suites run as a `fail-fast: false` MATRIX, one job each.** Two
+**Seven compose suites run as a `fail-fast: false` MATRIX, one job each** —
+still seven, because `tls-pins` is host-side and gets its own job rather than
+a matrix leg, so CI runs NINE jobs of which the matrix is one. Two
 properties are load-bearing: the legs are independent, so wall-clock is the
 slowest suite rather than their sum; and **every suite runs even when one
 fails**, where the old serial job stopped at the first failure and hid the
@@ -2408,7 +2441,7 @@ had and was still bypassable on the surface most deployments use.
    UNCOMMITTED surface is the one nobody notices going stale.
 5. **The full Docker battery** at the final tree, with raw exit codes:
    `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
-   `backends-e2e`, `site`. `cargo build -p <crate>` does **not** compile
+   `backends-e2e`, `site`, `tls-pins`. `cargo build -p <crate>` does **not** compile
    integration tests — `--tests` does. **Every time, never a subset** — and
    never piped: a pipeline's status is its LAST command's, so `| tail` reports
    success over a failing battery. Confirm it ran AFTER the last edit rather

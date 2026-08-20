@@ -623,7 +623,7 @@ LANDING="website/landing/index.html"
 # label|class|source
 PUBLISHED_FIGURES=(
   "cargo tests|measured|test"
-  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e"
+  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e,tls-pins"
   "live backends|derived|BACKENDS"
   "mcp tools|derived|MCP_TOOLS"
   "bytes phoned home|claim|the local-first invariant — a promise, not a count"
@@ -718,7 +718,7 @@ SUITE_COUNTS=$(declare_suite_counts)
 # this a suite that drives docker would escape the figure gate entirely —
 # published, measured, and never compared.
 SUITE_COUNTS="$SUITE_COUNTS
-$(grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\x01=\x02#')"
+$(grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#')"
 if [ -z "$SUITE_COUNTS" ]; then
   echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
   echo "      and a broken reader agrees with every page it cannot read"

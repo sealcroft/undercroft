@@ -1700,6 +1700,40 @@ in the payload. **My first version asserted 3 and was wrong**; running it said
 so, which is the whole reason the arm goes on a vault with genuine
 diversions rather than a fixture.
 
+### M11 — CLOSED 2026-08-20 by doctrine: ground the decision before acting
+
+**Raised by the maintainer, about how this session was run rather than about
+any one change:** *"I don't like that you do stuff then you tell me on your
+own — you are supposed to check all the arch files and folders and the
+doctrine and the code, then set an elaboration of the options if you didn't
+find a solution, otherwise you follow the doctrine rules."*
+
+**The correction is an ORDER, and this session inverted it repeatedly.** The
+order is: read the architecture files and folders, read the doctrine, read the
+code. If they answer the question, follow them — silently, because that is the
+standard and narrating it spends the maintainer's attention on a decision that
+was never open. If they do not answer it, write the options out with their
+trade-offs and ask BEFORE acting.
+
+What actually happened instead, and it is worth naming because the pattern is
+invisible from the inside: the M9/M10 scope was chosen by me and reported
+afterwards ("I'd take the twin first"), and the `tls-pins` repair was
+implemented and then announced. Each was defensible and each was a fait
+accompli dressed as a status update. The maintainer had to say so.
+
+**The corollary matters as much as the rule.** "I asked first" is not
+automatically compliance: an option list assembled without reading the arch
+files and the code is a guess wearing a question mark, and it pushes the
+grounding work onto the person answering. M6 is the shape to copy — the
+authorization chain was read out of `http.rs`, `imp.rs` and the route table,
+the two gates that pinned the old behaviour were found and quoted, the
+residual was identified, and only then were three options put with their
+costs. That is grounding first, options second, action third.
+
+Filed as a `CLOSED by doctrine` entry rather than code: it changes how the
+next session works, not what the tree does. The rule is in `CLAUDE.md` under
+the binding consequences, applied backwards there as this file requires.
+
 ### M9 — CLOSED 2026-08-19: M7's twin, latent in a published recipe
 
 **Found by generalising M7 rather than by waiting for it to be reported.**

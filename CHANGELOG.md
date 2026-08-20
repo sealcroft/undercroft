@@ -7,6 +7,34 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the host-side count reader never worked, and the doctrine gained the rule this session earned (M11)
+
+Two things, both from the governance sweep rather than from a test.
+
+`tests/battery.sh`'s new host-side suite-count reader shipped with its sed
+backreferences written as the literal text `\x01=\x02` instead of `\1=\2`
+— a heredoc ate a backslash and the value went in as text. The reader
+therefore matched nothing, silently, so `tls-pins` was published, measured,
+and never compared: exactly the gap that arm was added to close. Found by the
+`published figures` preflight refusing to let the `e2e checks` tile sum a
+suite CLAUDE.md "does not publish", which was true only because the reader
+could not see it.
+
+That tile now sums all FIVE e2e suites (580 -> 587). A figure labelled "e2e
+checks" that omits an e2e suite has stopped matching its label, and the
+doctrine settles that without anyone having to be asked.
+
+**And the rule this session earned, filed as ROADMAP M11 and added to
+`CLAUDE.md`'s binding consequences:** *ground the decision before acting.*
+Read the architecture files and folders, the doctrine, and the code FIRST; if
+they answer the question, follow them rather than narrating a choice that was
+never open; if they do not, write the options out with their trade-offs and
+ask BEFORE acting. The failure it forbids is acting from taste and reporting
+afterwards — which this session did with the M9/M10 scope and the `tls-pins`
+repair, and which the maintainer had to correct. The corollary is that asking
+is not automatically compliance either: an option list assembled without doing
+the reading pushes the grounding work onto the person answering.
+
 ### the same CA trap was latent in a published recipe, and nothing started a terminator (M9, M10)
 
 M7's fix was one instance. `deploy/embeddings-tls` is the same Caddy shape,
