@@ -299,6 +299,38 @@ else
 fi
 rm -f "$BADCA"
 
+# ── the control plane's OWN tamper verdict reaches the exit code (M20) ──────
+# `instance-list` resolves each instance's sealed credential blob. Under a
+# DIFFERENT (valid-shaped) key those blobs will not open — which state.rs
+# calls "a tamper verdict or a wrong key, never a transient condition" — and
+# the command caught that error into a `refused=` note, stringified it, and
+# returned Ok(()). So the fleet's own integrity verdict printed on stdout and
+# **exited 0**, which is what a compliance script reads as fine. The exit-2
+# hook in `main` never fired because the error never escaped `run()`.
+#
+# Note this is the SAME command as the CA-pin arm above, and the two verdicts
+# must stay distinguishable: a configuration refusal is exit 1, a tamper
+# verdict is exit 2. Asserting them one after the other is what pins that.
+WRONGKEY="ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+WK_OUT="$(UNDERCROFT_ORCH_KEY="$WRONGKEY" "$ORCH" --db "$UNDERCROFT_ORCH_DB" instance-list 2>&1)"
+WK_CODE=$?
+if [ $WK_CODE -eq 2 ]; then
+  ok "a credential blob that will not open exits 2, not 0"
+else
+  fail "a credential blob that will not open exits 2, not 0" "exit $WK_CODE: $WK_OUT"
+fi
+# A listing must still LIST — one unopenable blob must not hide the fleet.
+if grep -q 'engine-b' <<<"$WK_OUT"; then
+  ok "and the listing still names every instance"
+else
+  fail "and the listing still names every instance" "$WK_OUT"
+fi
+if grep -q 'INTEGRITY VERDICT' <<<"$WK_OUT"; then
+  ok "and it says the verdict is the control plane's own"
+else
+  fail "and it says the verdict is the control plane's own" "$WK_OUT"
+fi
+
 # **A usage error exits 1, not clap's default 2.** Exit 2 is reserved for an
 # integrity verdict on every command, so a typo reaching a compliance script
 # as a tamper verdict is the collision this pins.

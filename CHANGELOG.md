@@ -7,6 +7,40 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the control plane could not state its own tamper verdict, and one door swallowed it entirely (M20)
+
+Round-four **#30** and **#31** — one gap from two sides: the orchestrator READS
+the integrity vocabulary and did not SPEAK it for its own verdicts.
+`StateError::Unsealable` is its own tamper verdict, and state.rs says so: *"a
+blob that will not open under the declared key is a tamper verdict or a wrong
+key, never a transient condition."*
+
+**`instance-list` exited 0 on it.** The arm caught the error into
+`Health::Refused(e.to_string())` and returned `Ok(())`. The reasoning behind
+that catch is right — *"a refusal is not an outage"* — and it was the whole
+story, so the error was flattened to a string, never escaped `run()`, and the
+exit-2 hook in `main()` never fired. The fleet's own tamper verdict printed on
+stdout and exited **0**. It now remembers the verdict before stringifying and
+raises it after the walk, so the listing still lists — one unopenable blob must
+not hide the rest of the fleet — and `main`'s existing hook does the
+classifying.
+
+**The HTTP surface could not emit `class` for its own verdict.** Measured:
+`"class"` appeared exactly twice in `proxy.rs`, both relaying a class an engine
+had decided. Everything else went through `err_response`, which emits
+`{"error": msg}` — so `Unsealable` reached the wire as a bare 409 on every
+admin route and the data plane. The status cannot substitute: 409 is also
+`Conflict` here, which is exactly why the engine emits `class` rather than
+leaning on 409. `StateError::is_integrity()` sits beside `status()`, one place,
+and `state_error_response` — already the single door — adds the marker.
+
+The existing classification test **asserted status and message and never the
+marker**, which is how it passed for the whole time the defect existed. It now
+asserts both the marker and its premise: an ordinary state failure must not
+carry it. Three e2e arms for the exit code, placed beside the CA-pin arm so the
+two verdicts on the same command stay distinguishable — a configuration refusal
+is exit 1, a tamper verdict is exit 2. Counterfactual executed.
+
 ### `repair` was not atomic, and M17 had just widened who could trigger it (M19)
 
 Round-four **#22**'s standing half.

@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**89** of the **104** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**90** of the **105** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 89 of 104 — stale by
+body said the gate "examines **47 of 60**". Measured, 90 of 105 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2699,6 +2699,66 @@ because the test was the thing that stopped running."* Restoring the attribute
 then produced a DUPLICATE on my own test, because the original had been
 inherited too. Both fixed; the doc comment is reunited with the test it
 describes, and each function has exactly one `#[test]`, asserted by count.
+
+### M20 — CLOSED 2026-08-20: the control plane could not state its own tamper verdict, and one door swallowed it entirely
+
+Round-four **#30** and **#31**, taken together because they are one gap seen
+from two sides: the orchestrator READS the integrity vocabulary and did not
+SPEAK it for its own verdicts.
+
+`StateError::Unsealable` is the control plane's own tamper verdict — state.rs
+says so in as many words: *"a blob that will not open under the declared key is
+a tamper verdict or a wrong key, never a transient condition."*
+
+**`#30` — `instance-list` exited 0 on it.** The arm caught the error into
+`engine::Health::Refused(e.to_string())` and returned `Ok(())`. The reasoning
+behind that catch is RIGHT and is why the defect survived review: *"a refusal
+is not an outage, and printing it as one sent operators to look at an engine
+that was fine."* True of the DISPLAY, and it was the whole story — so the error
+was flattened to a string, never escaped `run()`, and the exit-2 hook in
+`main()` never fired. The fleet's own tamper verdict printed on stdout and
+exited **0**, which is what a compliance script reads as fine.
+
+**Fix:** remember the VERDICT before stringifying, and raise it after the walk.
+The listing still lists — M18's rule, and the reason this is not simply a `?` at
+the raise site: one unopenable blob must not hide the rest of the fleet. The
+error is returned as itself so `main`'s EXISTING hook classifies it — one
+classifier, not a second exit path spelled differently here.
+
+**`#31` — the HTTP surface could not emit `class` for its own verdict.**
+Measured: `"class"` appeared exactly twice in `proxy.rs`, both inside
+`engine_response`, relaying a class an ENGINE had already decided. Every other
+response went through `err_response`, which emits `{"error": msg}` and nothing
+else. So `Unsealable` reached the wire as a bare 409 on every admin route and
+the data plane.
+
+**And the status cannot substitute for it**, which is the whole reason the
+engine emits `class` at all: 409 is also `Conflict` here, and on the engine it
+is also a co-resident refusal and a wrong read-only posture — *"those must not
+page anyone"*, in this binary's own words, in the function that reads the
+marker out of engine replies. A caller keying on 409 would page on an ordinary
+conflict.
+
+**Fix:** `is_integrity()` on `StateError`, beside `status()` and for the reason
+`status()` gives — one place, so a new call site inherits the mapping instead
+of inventing one. `state_error_response` is already the single door; it now
+adds `"class": "integrity"` when the error is one.
+
+**Gates.**
+`state_failures_are_classified_by_the_error_not_the_call_site` gains the class
+assertion — **it asserted status and message and never the marker, which is how
+it passed for the whole time the defect existed** — plus the arm that makes it
+mean something: an ordinary state failure must NOT carry the marker, or `class`
+on everything would satisfy the first assertion while destroying the
+distinction it draws. Three e2e arms for `#30`: exit **2**, the listing still
+names every instance, and the message says the verdict is the control plane's
+own. Counterfactual executed — with the raise suppressed, *"FAIL a credential
+blob that will not open exits 2, not 0"*.
+
+**Placed deliberately beside the CA-pin arm**, because those two verdicts must
+stay distinguishable on the SAME command: a configuration refusal is exit 1, a
+tamper verdict is exit 2. Asserting them one after the other is what pins that,
+and neither arm proves it alone.
 
 ---
 

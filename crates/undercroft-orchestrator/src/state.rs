@@ -79,6 +79,26 @@ impl StateError {
             StateError::Unsealable => 409,
         }
     }
+
+    /// Whether this is an INTEGRITY verdict rather than an ordinary failure
+    /// (ROADMAP M20).
+    ///
+    /// Beside `status()` for the reason `status()` gives: one place, so a new
+    /// call site inherits the mapping instead of inventing one. The two
+    /// answers are also inseparable — **409 alone does not mean integrity**
+    /// on this plane any more than it does on the engine's. `Conflict` is 409
+    /// too, and the engine emits `class` precisely because a co-resident
+    /// refusal and a wrong read-only posture also answer 409 and must not
+    /// page anyone. A caller that keyed on the status would be paging on
+    /// `Conflict`.
+    ///
+    /// This binary already CONSUMES that vocabulary — `is_integrity_verdict`
+    /// in `main.rs` reads `"class": "integrity"` out of engine replies — and
+    /// did not SPEAK it for its own verdicts, so the control plane's own
+    /// tamper verdict reached the wire as a bare 409 with no marker.
+    pub fn is_integrity(&self) -> bool {
+        matches!(self, StateError::Unsealable)
+    }
 }
 
 /// One registered engine instance (credentials stay sealed until asked for).

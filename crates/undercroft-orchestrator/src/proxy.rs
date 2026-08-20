@@ -517,6 +517,25 @@ fn err_response(status: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
 /// where it landed. The message is the error's own, so `Unsealable` —
 /// which names its remedy — survives instead of being flattened.
 fn state_error_response(e: &StateError) -> Response<std::io::Cursor<Vec<u8>>> {
+    // **And the CLASS, for the control plane's own verdicts** (ROADMAP M20).
+    // Until this line, `"class"` appeared exactly twice in this file, both
+    // inside `engine_response` — relaying a class an ENGINE had already
+    // decided. So the orchestrator could forward someone else's integrity
+    // verdict and could not state its own: `Unsealable` reached the wire as a
+    // bare 409, on every admin route and the data plane.
+    //
+    // A caller cannot recover it from the status. 409 is also `Conflict`
+    // here, which is the same reason the engine emits `class` rather than
+    // leaning on 409 — a co-resident refusal and a wrong read-only posture
+    // answer 409 too and must not page anyone. This binary already READS that
+    // vocabulary out of engine replies (`is_integrity_verdict`); it now
+    // writes it for the one verdict that is its own.
+    if e.is_integrity() {
+        return json_response(
+            e.status(),
+            &serde_json::json!({ "error": e.to_string(), "class": "integrity" }),
+        );
+    }
     err_response(e.status(), &e.to_string())
 }
 
@@ -2047,6 +2066,29 @@ mod tests {
         assert!(
             said.contains("UNDERCROFT_ORCH_KEY"),
             "the refusal names the remedy: {said}"
+        );
+        // **And it carries the CLASS** (ROADMAP M20). This test asserted the
+        // status and the message and never the marker, so it passed for the
+        // whole time the control plane could not state its own integrity
+        // verdict — 409 alone does not mean integrity here any more than it
+        // does on the engine, because `Conflict` is 409 too. A caller keying
+        // on the status would page on an ordinary conflict.
+        assert!(
+            said.contains(r#""class":"integrity""#),
+            "the control plane must state its OWN integrity verdict the way it \
+             already reads an engine's: {said}"
+        );
+
+        // The premise for that assertion, and the half that makes it mean
+        // something: a NON-integrity failure must NOT carry the marker.
+        // Without this, `class` on every response would satisfy the line
+        // above while destroying the distinction it exists to draw.
+        let conflict = admin_plane(&o, &Method::Delete, "/admin/instances/ghost", b"");
+        let mut plain = String::new();
+        conflict.into_reader().read_to_string(&mut plain).unwrap();
+        assert!(
+            !plain.contains("integrity"),
+            "an ordinary state failure must not be marked as a tamper verdict: {plain}"
         );
     }
 
