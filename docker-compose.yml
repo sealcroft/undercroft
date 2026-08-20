@@ -214,6 +214,31 @@ services:
       - ./deploy:/src/deploy:ro
       - ./tests/obs-config.sh:/src/tests/obs-config.sh:ro
 
+  # The architecture reference, VERIFIED rather than rebuilt (ROADMAP M14).
+  # `architecture/diagrams/` is the single source and everything else there is
+  # derived — the PDFs, the inlined copies in index.html, the heading ids and
+  # the sidebar — but for its whole life NOTHING invoked the script that
+  # derives them. No battery suite, no CI job, no compose service; every
+  # mention in the tree was prose telling a human to remember. So a stale
+  # inlined diagram, a reintroduced dark media query or a hand-added heading
+  # with no id could ship under a fully green battery.
+  #
+  # A stock python image and no build: `--check` only derives and compares
+  # STRINGS. Rendering needs librsvg plus the Noto families, and PDF bytes are
+  # not a stable comparison target, so what it verifies of `pdf/` is coverage
+  # in both directions rather than content — stated in build.sh's header.
+  #
+  # The mount is READ-ONLY, and that is an assertion rather than caution:
+  # `--check` must write nothing, and the old gate's real defect was that it
+  # wrote index.html BEFORE comparing, so a firing check left the file already
+  # mutated. Read-only makes "writes nothing" enforced instead of claimed.
+  arch-check:
+    image: python:3.12-slim
+    working_dir: /a
+    entrypoint: ["sh", "build.sh", "--check"]
+    volumes:
+      - ./architecture:/a:ro
+
   bench:
     build:
       context: .

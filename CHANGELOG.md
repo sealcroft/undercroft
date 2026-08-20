@@ -7,6 +7,48 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### nothing ever ran the architecture build, and its gate could not disagree with itself (M14)
+
+Round-four **#38**, both halves.
+
+**Nothing invoked `architecture/build.sh`** — no battery suite, no CI job, no
+compose service, not `pages.yml`. Every tracked mention was prose telling a
+human to remember, so a stale inlined diagram, a reintroduced dark media query
+or a hand-added `<h3>` with no id could ship under a fully green battery.
+
+**And its heading/rail gate could not fail.** It stamped a fresh id onto every
+`<h3>`, collected those same ids, built the rail from them, substituted it in,
+then re-read the ids and the rail refs out of that same rewritten document and
+compared them — both sides from one list built in one pass. Proven by running
+the previous script's own bytes on a tree with a hand-added heading: **exit
+0**, `index.html` silently rewritten, the heading stamped and given a
+manufactured rail entry. Its protection was the regeneration, never the check.
+It also wrote the file before comparing, so a firing gate left it already
+mutated, and it had no premise probe — with zero sections both sets are empty
+and it passed having examined nothing.
+
+`sh build.sh --check` is the new half: it derives everything in memory and
+fails if what is on disk differs, writing nothing at all. Comparing derived
+against on-disk is a comparison that can fail. It runs as the `arch-check`
+compose service, a battery suite and a CI matrix leg — a stock python image
+with no build, because `--check` only compares strings, and a **read-only
+mount**, so "writes nothing" is enforced rather than claimed.
+
+Scope stated and measured: `--check` verifies `index.html` and PDF coverage in
+both directions, never PDF bytes — rebuilding the 11 PDFs from byte-identical
+input produced 11 of 11 differing files, so they are demonstrably not a stable
+comparison target.
+
+Six counterfactuals executed, including the whole thing through the battery
+(exit 1, file untouched), and rebuild mode re-verified as producing a
+byte-identical `index.html` on a clean tree.
+
+Also: the battery's summary column special-cased `lint` as "the one suite with
+no summary line". `arch-check` is the second, so it is a named set now — a
+class of two written as two special cases becomes a class of three written as
+three. And `CLAUDE.md`'s claim that `build.sh` "fails if a heading and a rail
+entry disagree" is corrected, because the run above disproved it.
+
 ### two gates that could not see what they asserted, and the one CI never ran (M13)
 
 Round-four **#35** and **#19**, one defect class: a gate whose observable does

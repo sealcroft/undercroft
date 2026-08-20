@@ -1210,10 +1210,29 @@ Consequences that are binding, not advisory:
   **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
-  re-derives every `<h3>` id and the whole sidebar from the sections,
-  and fails if a heading and a rail entry disagree: a hand-added
-  heading otherwise gets no id and no rail entry and nothing complains
-  (this happened once). librsvg
+  re-derives every `<h3>` id and the whole sidebar from the sections.
+  **This sentence used to end "and fails if a heading and a rail entry
+  disagree", and that was FALSE — measured, not argued (ROADMAP M14).**
+  The old check stamped a fresh id onto every `<h3>`, collected those same
+  ids, built the rail from them, substituted it in, and only THEN re-read
+  the ids and the rail refs out of that same rewritten document. Both sides
+  came from one list built in one pass, so it could not disagree; its
+  protection was the regeneration silently fixing the problem, never the
+  check. Proven by running the pre-M14 script's own bytes on a tree with a
+  hand-added `<h3>`: **exit 0**, index.html silently rewritten, the heading
+  stamped and given a manufactured rail entry. It also wrote the file
+  BEFORE comparing, so a firing gate left it already mutated, and it had no
+  premise probe — with zero sections both sets are empty and it passed
+  having examined nothing.
+  **`sh build.sh --check` is the verify half**: it derives everything in
+  memory and fails if what is on disk differs, writing nothing at all. It
+  runs as the `arch-check` compose service — a stock python image, no build,
+  and a READ-ONLY mount so "writes nothing" is enforced rather than claimed
+  — in the battery and as a CI matrix leg. Before M14 **nothing invoked this
+  script**: no suite, no CI job, no compose service, every mention in the
+  tree being prose telling a human to remember. Scope stated: `--check`
+  verifies `index.html` and PDF COVERAGE in both directions, never PDF
+  bytes, which are not a stable comparison target. librsvg
   has no CSS-variable support, so the PDF pass flattens each `var()` to
   its light fallback; it also needs `fonts-noto-core`/`-cjk` or Thai,
   Han, Kana and Devanagari render as tofu boxes — a defect the browser
@@ -1450,6 +1469,18 @@ bash tests/tls-pins.sh                # CA pins readable by the engine (7 checks
                                       # starts — that needs the full image and four
                                       # containers, deferred on cost with the command
                                       # written down in ROADMAP M7
+docker compose run --rm arch-check    # the architecture reference is what
+                                      # diagrams/ and its own headings derive
+                                      # to. No build, stock python, READ-ONLY
+                                      # mount — `--check` must write nothing,
+                                      # and the old gate's real defect was
+                                      # writing index.html BEFORE comparing.
+                                      # Publishes no check count deliberately,
+                                      # like `lint` and `onnx-build`: it has
+                                      # three verification stages rather than
+                                      # a countable population, and inventing
+                                      # a metric to satisfy a gate is how a
+                                      # figure stops meaning anything
 docker compose run --rm obs-config    # the observability CONFIG suite (10 checks):
                                       # promtool check/test rules + amtool
                                       # check-config at the versions the stack
@@ -1554,7 +1585,7 @@ one for code.** Applying it blindly across a 7-way merge spliced away closing
 braces in three `.rs` files. Resolve code conflicts on their merits; reserve
 union for additive prose.
 
-**Run the battery with `bash tests/battery.sh`** (all nine suites, or name a
+**Run the battery with `bash tests/battery.sh`** (all ten suites, or name a
 subset). It exists because two mistakes on 2026-08-06 were the same defect —
 a verdict taken from something other than the thing that decides it:
 a summary built by piping `cargo test` through `awk` reported `failed=0` from
@@ -2474,8 +2505,8 @@ had and was still bypassable on the surface most deployments use.
    claim you changed. A claim lives on every surface that states it, and an
    UNCOMMITTED surface is the one nobody notices going stale.
 5. **The full Docker battery** at the final tree, with raw exit codes:
-   `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
-   `backends-e2e`, `site`, `tls-pins`. `cargo build -p <crate>` does **not** compile
+   `test`, `lint`, `obs-config`, `arch-check`, `e2e`, `orchestrator-e2e`,
+   `e2e-telemetry`, `backends-e2e`, `site`, `tls-pins`. `cargo build -p <crate>` does **not** compile
    integration tests — `--tests` does. **Every time, never a subset** — and
    never piped: a pipeline's status is its LAST command's, so `| tail` reports
    success over a failing battery. Confirm it ran AFTER the last edit rather

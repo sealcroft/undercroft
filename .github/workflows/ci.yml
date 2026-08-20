@@ -94,8 +94,13 @@ jobs:
         #                    every check green
         #   backends-e2e     five live vector DBs over TLS
         #   onnx-build       ONNX embedder + reranker compile check
+        #   arch-check       the architecture reference is what diagrams/ and
+        #                    its own headings derive to — no build, a stock
+        #                    python image, and a read-only mount because the
+        #                    check must write nothing (ROADMAP M14)
         suite:
           - obs-config
+          - arch-check
           - test
           - e2e
           - orchestrator-e2e

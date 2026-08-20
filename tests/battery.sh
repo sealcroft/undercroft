@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Order matters: the cheap suites that fail fastest come first, so a broken
 # tree is reported in a minute instead of forty.
-ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site tls-pins)
+ALL=(lint obs-config arch-check test e2e orchestrator-e2e e2e-telemetry backends-e2e site tls-pins)
 
 # `--preflight-only` exists so CI can run the host-side preflights without
 # Docker. They are host-side because no image carries `ROADMAP.md`, the
@@ -63,6 +63,15 @@ if [ -z "${SUITES[0]:-}" ]; then SUITES=("${ALL[@]}"); fi
 
 declare -a NAMES=() CODES=()
 OVERALL=0
+
+# Suites that legitimately print no `<suite> results: N passed, M failed` line,
+# so the O27 reader's "this reader examined nothing" is the WRONG message for
+# them rather than a finding. `lint` is silent on success by construction;
+# `arch-check` has three verification stages rather than a countable
+# population, and inventing a metric so it could satisfy a reader is how a
+# figure stops meaning anything. Both also publish no check count, which is
+# consistent: nothing to compare, so nothing skipped silently.
+NO_SUMMARY_SUITES=(lint arch-check)
 
 if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
   echo "--preflight-only and --no-preflight are contradictory" >&2
@@ -1567,16 +1576,19 @@ for i in "${!NAMES[@]}"; do
   # "0 passed" under a green battery. Harmless, and still a number that does
   # not measure what it appears to, which is the habit this file exists to
   # break. Summed instead.
-  if [ "$n" = "lint" ]; then
-    # **The one suite with no summary line, named rather than complained
-    # about.** `cargo fmt --check` and `clippy` are silent on success, so
-    # `lint` has never printed one — and the O27 reader below correctly
-    # answered "this reader examined nothing", beside a green run, every
-    # time. That is a message which misdescribes its own situation, and
-    # worse: it is the SAME string that is a real signal for the other seven
-    # suites, so printing it routinely here teaches the reader to skip it.
-    # An alarm nobody can distinguish from a real failure is the thing this
-    # project exists to remove.
+  if printf '%s\n' "${NO_SUMMARY_SUITES[@]}" | grep -qx "$n"; then
+    # **The suites with no summary line, NAMED rather than complained about.**
+    # `cargo fmt --check` and `clippy` are silent on success, so `lint` has
+    # never printed one — and the O27 reader below correctly answered "this
+    # reader examined nothing", beside a green run, every time. That is a
+    # message which misdescribes its own situation, and worse: it is the SAME
+    # string that is a real signal for every other suite, so printing it
+    # routinely teaches the reader to skip it. An alarm nobody can distinguish
+    # from a real failure is the thing this project exists to remove.
+    #
+    # A SET rather than a second `elif`, because `arch-check` joining the
+    # battery (ROADMAP M14) made this a class of two, and a class of two
+    # written as two special cases becomes a class of three written as three.
     detail=""
   elif [ "$n" = "test" ]; then
     detail=$(test_summary ".battery/$n.log")

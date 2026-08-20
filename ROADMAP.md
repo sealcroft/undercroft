@@ -2166,6 +2166,98 @@ grep — 9 jobs, `verdict` needing 8, 7 matrix legs, all unchanged — because
 this tree's rule is to re-implement a check in a second language before
 believing it.
 
+### M14 — CLOSED 2026-08-20: nothing ever ran the architecture build, and its gate could not disagree with itself
+
+Round-four **#38**, both halves, and the second is the interesting one.
+
+**Half one: nothing invoked `architecture/build.sh`.** Not a battery suite,
+not a CI job, not a compose service, not `pages.yml`. Every tracked mention
+was PROSE telling a human to remember — `CLAUDE.md`'s session-end hygiene,
+two ROADMAP lines, the script's own header. So a stale inlined diagram, a
+reintroduced dark media query, or a hand-added `<h3>` with no id could ship
+under a fully green battery. That is the M7/M10 shape this branch has now
+paid for three times: **a check that is correct and never executed.**
+
+**Half two: the heading/rail gate was tautological, and this is measured
+rather than argued.** `visit()` stamped a fresh id onto every `<h3>`,
+collected those same ids into `kids`, built the rail from `kids`, substituted
+it into the document, and only THEN re-read `ids` and `refs` out of that same
+rewritten document and compared them. Both sides came from one list built in
+one pass. Its protection came entirely from the regeneration silently fixing
+the problem; the comparison could not fail.
+
+**Proven by running the pre-M14 script's own bytes** (`git show
+HEAD:architecture/build.sh`, confirmed pre-M14 by holding zero `ARCH_MODE`
+occurrences) on a copy of the tree with a hand-added `<h3>` injected: **exit
+0**, `index.html` silently rewritten (digest `4353a5ec…` → `9472993d…`), the
+bare heading gone and the text now appearing twice — stamped, with a
+manufactured rail entry. Exactly the case the script's own comment says
+*"already happened once"*, and it would have happened again in silence.
+
+Two more the row did not name. It **wrote `index.html` BEFORE comparing**, so
+a firing gate left the file already mutated — the failure is not atomic. And
+it had **no premise probe**: with zero sections both `ids` and `refs` are
+empty, they compare equal, and it passes having examined nothing.
+
+**Fix — one derivation, two things done with it.** `sh build.sh` rebuilds as
+before; `sh build.sh --check` derives everything in memory and fails if what
+is on disk differs, **writing nothing at all**. Comparing DERIVED against
+ON-DISK is a comparison that can actually fail, which the old one could not.
+Heading-id drift is RECORDED and named rather than silently corrected, so
+`--check` can report the section, the heading text, the id it has and the id
+it derives to.
+
+**Ruled on by the maintainer** — full parity was chosen over battery-only and
+over fixing the gate while leaving it unrun. `arch-check` is a compose
+service, a battery suite and a CI matrix leg.
+
+**Three properties worth keeping.**
+
+* **A stock `python:3.12-slim` and no build.** `--check` only derives and
+  compares strings, so it needs neither librsvg nor the Noto families. The CI
+  leg is therefore nearly free, which is what made full parity affordable.
+* **The mount is READ-ONLY, and that is an assertion rather than caution.**
+  The old gate's real defect was writing before comparing; read-only makes
+  "writes nothing" enforced instead of claimed. Verified: after a battery run
+  that FAILED on an injected heading, `git status` showed `index.html`
+  unmodified.
+* **Scope is stated and now MEASURED.** `--check` verifies `index.html` and
+  PDF coverage in both directions — every diagram has a PDF, no orphan PDF
+  survives a deleted diagram — and never PDF bytes. Rebuilding the 11 PDFs
+  from byte-identical input produced **11 of 11 differing** files, so PDF
+  bytes are demonstrably not a stable comparison target. The limit was going
+  to be stated on principle; it is stated on evidence instead.
+
+**Counterfactuals executed, six.** A hand-added `<h3>` with no id (fails,
+naming section, text, `None`, and the derived id); an inlined copy altered
+(fails, naming the drift); a dark media query reintroduced **on disk** (fails
+— and it reports `(on disk)`, which the old version could not, since it only
+ever inspected the freshly-stripped derived document); a PDF removed (fails,
+`missing ['domain-model']`); an empty `diagrams/` (fails on the premise, *"this
+examined nothing"* — read UNPIPED, because my first attempt read `tail`'s exit
+code and reported 0); and the whole thing through the battery, which exits 1
+and leaves the file untouched.
+
+**Rebuild mode re-verified, not assumed.** `sh build.sh` on a copy of the real
+tree produces a **byte-identical** `index.html` — a no-op on a clean tree,
+which is what a correct derivation must be.
+
+**Also fixed here, and it is a class of two rather than a second special
+case.** The battery's summary column special-cased `lint` as *"the one suite
+with no summary line"*, because the O27 reader's *"this reader examined
+nothing"* is the wrong message for a suite that legitimately prints none —
+and its own comment says why that matters: it is the SAME string that is a
+real signal elsewhere, so printing it routinely teaches the reader to skip it.
+`arch-check` is the second such suite, so it is a named set
+(`NO_SUMMARY_SUITES`) now. A class of two written as two special cases becomes
+a class of three written as three. Both also publish no check count, which is
+consistent: nothing to compare, so nothing skipped silently.
+
+**A doc claim corrected because the code disproved it.** `CLAUDE.md` said
+`build.sh` *"fails if a heading and a rail entry disagree"*. It did not, and
+the run above is the evidence. The sentence is replaced with what the old gate
+actually did, kept rather than deleted, because the wrong claim is the record.
+
 ---
 
 Also reserved for a documented contract that changes: the `palace`
