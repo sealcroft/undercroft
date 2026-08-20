@@ -7,6 +7,63 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the heading gate absorbed the sections it should have ended, and four open items had no heading at all (M15)
+
+Round-four **#36**, plus the governance sweep it made unavoidable.
+
+**#36's headline was already refuted** — O47 gave the gate its missing
+direction — and its consequence was exact. What was open is the section
+BOUNDARY: the scanner started an entry on an id-shaped heading and ended one
+only on a level-2 heading, so the **15** other level-3 headings were ABSORBED
+into whichever entry preceded them, along with everything beneath them.
+Measured: the round-four accounting section was swallowed by **O47 itself**,
+the entry whose whole subject is this gate's limits. An inflated body is more
+likely to contain an evidence word belonging to a section it merely sat above.
+
+Counterfactual against both matchers: a synthetic CLOSED entry with no
+evidence word, followed by a non-id section containing one. New matcher exits
+1 and names it; the pre-M15 script, restored from git, exits **0** with zero
+mentions of it. Null result worth stating — applying the fix to the real
+ROADMAP found no entry relying on absorbed text.
+
+O47's body also said the gate "examines 47 of 60"; measured, 83 of 98 — a count
+in prose inside the closure written about a count in prose. Both halves are
+gated now, and the gate caught its own arrival twice.
+
+**The governance half is the larger one. Four open items had no heading.**
+Three were filed during this release and recorded ONLY inside the body of an
+entry whose heading says `CLOSED` — the tamper-through-stream arm in M6, the
+observability bring-up in M7, the bare `unauthorized` body in M8. The fourth,
+round-four `#42`, was recorded in a gitignored file and never filed at all.
+This file says both *"a newly OPENED item gets a heading here, so an open item
+is always resolvable"* and *"an entry lives in this file only while the item is
+OPEN"* — so at release the three would have left with the entries containing
+them. They are **O62–O65** now, in a new `## Open` section, each closed entry
+pointing at its heading.
+
+`#42` is verified live and is worse than filed: the house page still serves
+`656 tests passing` while the tree runs **761**, a gap that has WIDENED.
+
+The heading gate could not have caught this and a widened one should not try:
+its arms judge an entry's own status, and the evidence arm is *satisfied* by
+the word "gate" that every such gap paragraph contains. The mechanism is a
+heading, not a gate.
+
+Five more surfaces corrected because something measured contradicted them:
+`## Unversioned`'s header enumerated contents it no longer has; `CLAUDE.md`
+said "seven compose suites … one job each" (eight now, and "one job each"
+contradicts the same sentence's "the matrix is one"); the handover told the
+next session to bump four named surfaces **to 1.1.0**, reproducing the
+hand-recalled list `CLAUDE.md` disowned; §1a's verdicts were stale in status,
+which is the failure its own closing paragraph warns about; and the
+handover-freshness gate's first-marker convention is stated rather than
+implicit.
+
+**Reported as mine:** the first version of the new awk rule carried a comment
+with an apostrophe. The awk program lives inside a single-quoted shell string,
+so it ended the string and `tests/battery.sh` died at exit 2. The constraint is
+written beside the rule now.
+
 ### nothing ever ran the architecture build, and its gate could not disagree with itself (M14)
 
 Round-four **#38**, both halves.

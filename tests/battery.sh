@@ -492,6 +492,23 @@ ROADMAP_DRIFT=$(awk '
     }
   }
   /^### [A-Z][0-9]+/ { flush(); sec = $0; body = ""; next }
+  # ANY other heading at this level ENDS the current entry (ROADMAP M15). It
+  # used to fall through to the accumulator below, so the 15 non-id headings
+  # in this file were ABSORBED into whichever entry preceded them, along with
+  # everything under them until the next id or the next level-2 heading.
+  # Measured: the round-four accounting section was swallowed by O47, the
+  # entry whose whole subject is the limits of this very gate.
+  #
+  # That inflates a body, and closure-without-evidence searches the body for
+  # the words gate, counterfactual and test — so an entry could satisfy the
+  # evidence arm with words belonging to a section it merely sat above. The
+  # arm was weaker than it read, in a way no count of it could show.
+  #
+  # NOTE for the next editor: this awk program is inside a single-quoted
+  # shell string, so an apostrophe anywhere in these comments ends it and the
+  # script dies with a syntax error. That is how the first version of this
+  # comment broke the file.
+  /^### /             { flush(); sec = "";  body = ""; next }
   /^## /              { flush(); sec = "";  body = ""; next }
   { if (sec != "") body = body " " $0 }
   END {
@@ -968,6 +985,14 @@ else
   fi
   # The prompt records the commit it describes. A clean tree whose handover
   # names a different commit is a handover that has already gone stale.
+  # `head -1` and the convention it depends on, stated rather than assumed
+  # (ROADMAP M15). SESSION_START.md keeps a marker per session section and
+  # those sections run NEWEST FIRST, so the first marker is the current one.
+  # Nothing enforces that ordering — but nothing needs to, and this is worth
+  # writing down because it reads like a latent bug and is not: a section
+  # appended at the BOTTOM leaves a stale first marker, which fails the
+  # comparison below loudly. The gate fails closed on the ordering it assumes.
+  ALL_MARKERS=$(grep -cE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null || true)
   RECORDED=$(grep -oE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null | awk '{print $2}' | head -1)
   HEAD_SHA=$(git rev-parse --short HEAD 2>/dev/null)
   if [ -z "$RECORDED" ]; then
@@ -982,11 +1007,17 @@ else
     echo "FAIL  the handover describes $RECORDED; HEAD is $HEAD_SHA."
     echo "      The tree is clean, so this is the moment it should be current."
     echo "      Update the three files under $HANDOVER_DIR/ and re-run."
+    if [ "${ALL_MARKERS:-1}" -gt 1 ]; then
+      echo "      NOTE: SESSION_START.md holds $ALL_MARKERS handover-head markers and"
+      echo "      this reads the FIRST. Sections run newest-first — if you added"
+      echo "      yours at the BOTTOM, move it to the top rather than editing the"
+      echo "      historical marker, which is a record of what HEAD was then."
+    fi
     echo ""
     echo "BATTERY FAILED — preflight"
     exit 1
   fi
-  echo "ok    handover is current with HEAD ($HEAD_SHA)"
+  echo "ok    handover is current with HEAD ($HEAD_SHA), first of $ALL_MARKERS marker(s)"
 fi
 
 # ── preflight: the CI verdict job depends on EVERY job ─────────────────────
@@ -1330,6 +1361,12 @@ while IFS= read -r v; do
 done <<< "$PF_VARS"
 
 PF_PREFLIGHTS=$(grep -c '^echo "═══ preflight:' tests/battery.sh || true)
+# The ROADMAP heading gate's own coverage, which O47 stated in prose and which
+# had drifted by thirty-one entries by the time anyone re-counted (M15). Both
+# halves, because "78 of 93" is two claims: how many entries the gate examines,
+# and how many headings exist for it to have skipped.
+PF_RM_IDS=$(grep -cE '^### [A-Z][0-9]+' ROADMAP.md || true)
+PF_RM_H3=$(grep -cE '^### ' ROADMAP.md || true)
 PF_CRATES=$(find crates -mindepth 1 -maxdepth 1 -type d | grep -c . || true)
 PF_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
          | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
@@ -1367,6 +1404,8 @@ PROSE_FIGURES=(
   "env vars written in full|CLAUDE.md|s/.*— \\*\\*([0-9]+)\\*\\* written out in.*/\\1/p|$PF_ENV_FULL"
   "env vars abbreviated|CLAUDE.md|s/.*plus \\*\\*([0-9]+)\\*\\* siblings abbreviated.*/\\1/p|$PF_ENV_ABBREV"
   "IRREGULAR pairs|CLAUDE.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
+  "ROADMAP entries the heading gate examines|ROADMAP.md|s/.*\\*\\*([0-9]+)\\*\\* of the \\*\\*[0-9]+\\*\\*.*/\\1/p|$PF_RM_IDS"
+  "ROADMAP level-3 headings total|ROADMAP.md|s/.*\\*\\*[0-9]+\\*\\* of the \\*\\*([0-9]+)\\*\\*.*/\\1/p|$PF_RM_H3"
 )
 
 PROSE_FAIL=0

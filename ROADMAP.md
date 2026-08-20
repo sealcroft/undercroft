@@ -1116,9 +1116,14 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**47 of 60** — the 13 it skips are prose sections with no `[A-Z][0-9]+` id and
+**83** of the **98** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
+**Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
+thirty-one entries** — a count in prose, inside the closure written to fix a
+count in prose, which is this file's oldest joke at its own expense. They are
+GATED now, by the `prose figures` preflight, so they are counted rather than
+remembered (ROADMAP M15).
 
 **What is decidable, and what is not.** Whether the work is *actually done* is
 semantic, and no textual gate decides it. Shipping something that appeared to
@@ -1549,8 +1554,9 @@ by a read yields
 `{"id":"66a98fe7…","room":"locomo_feed","surface":"drawer","unverified":true,"vault":"acme","wing":"research"}`
 with the banner reading `UNVERIFIED: claims research/locomo_feed`.
 
-**Gap, filed rather than papered over:** no e2e arm drives a tamper through a
-live stream. Doing it needs a stop-edit-restart sequence to avoid SQLite
+**Gap, filed rather than papered over — now ROADMAP O62, which is a HEADING
+rather than a sentence inside a closed entry:** no e2e arm drives a tamper
+through a live stream. Doing it needs a stop-edit-restart sequence to avoid SQLite
 page-cache flake, and a flaky integrity gate is worse than a stated gap. The
 wire shape is pinned by the unit gates and was verified by hand.
 
@@ -1617,8 +1623,8 @@ load-bearing: the same deep path appears in four places and is CORRECT in
 three, because those consumers run as root in dev/test images. Counterfactual
 executed — it names the file, the line and the value.
 
-**What that gate does NOT do, filed rather than papered over: it does not
-prove the stack starts.** Only a real bring-up does, and that means building
+**What that gate does NOT do, filed rather than papered over — now ROADMAP
+O63: it does not prove the stack starts.** Only a real bring-up does, and that means building
 the full image and running four containers in CI. The argument for not adding
 it now is cost, not principle, and it is written here so the next person
 weighs it rather than assumes it was considered:
@@ -1840,7 +1846,8 @@ error path — with a premise arm proving the `401` branch is inside
 `GET /ui` actually serves the hint, which is the only arm that proves a user
 sees it.
 
-**Not done:** the server still answers a bare `unauthorized` body. Changing
+**Not done — now ROADMAP O64:** the server still answers a bare
+`unauthorized` body. Changing
 that is a `/v1` contract question affecting every client, not a console fix,
 and it is not what was reported. Filed here rather than folded in silently.
 
@@ -2264,6 +2271,234 @@ Also reserved for a documented contract that changes: the `palace`
 terminology rename (below) is the other candidate, since it would move a CLI
 subcommand and a room literal.
 
+### M15 — CLOSED 2026-08-20: the heading gate absorbed the sections it should have ended, and four open items had no heading at all
+
+Round-four **#36**, plus the governance sweep it made unavoidable.
+
+**#36's headline was already refuted and its consequence was exact.** O47 gave
+the gate its missing direction, so "one-directional" is no longer true. What
+O47 states as its own residual — a heading claiming CLOSED over an open body
+still passes whenever the body happens to contain the word "gate", "test" or
+"counterfactual" — remains, and is a deliberate proxy O47 measured at 7% false
+positives and rejected widening. **That ruling stands and is not reopened
+here.**
+
+**What was open is the section BOUNDARY, and it made the proxy weaker than it
+read.** The scanner started an entry on `^### [A-Z][0-9]+` and ended one only
+on `^## `. Every other level-3 heading fell through to the accumulator, so the
+**15** non-id headings in this file were ABSORBED into whichever entry preceded
+them, along with everything beneath them. Measured: the round-four accounting
+section was swallowed by **O47 itself** — the entry whose whole subject is this
+gate's limits. An inflated body is more likely to contain an evidence word
+belonging to a section it merely sat above.
+
+**Counterfactual executed, against both matchers.** A synthetic
+`### Z9 — CLOSED …` whose body names no evidence, followed by a non-id section
+mentioning a gate, a counterfactual and a test. Under the new matcher the
+battery exits 1 and names Z9. Under the pre-M15 `tests/battery.sh`, restored
+from git and confirmed by holding zero M15 references, the same fixture exits
+**0** with zero mentions of Z9 — it absorbed the following section's words and
+passed. **Null result worth stating: applying the fix to the real ROADMAP found
+no entry relying on absorbed text.** The gate got stricter and nothing broke,
+which is the outcome that deserves saying out loud rather than quietly.
+
+**A count in prose, inside the closure written about a count in prose.** O47's
+body said the gate "examines **47 of 60**". Measured, 83 of 98 — stale by
+thirty-one entries. Both halves are GATED now by the `prose figures`
+preflight (two rows: the entries examined, and the level-3 headings that
+exist for it to have skipped). It caught its own arrival twice — once when the
+rows were added, once when this unit's four new open entries moved 78/93 to
+82/97.
+
+**The governance half, and it is the larger one.**
+
+**Four open items had no heading.** Three were filed during this release and
+recorded ONLY inside the body of an entry whose heading says `CLOSED` — the
+tamper-through-stream arm inside M6, the observability bring-up inside M7, the
+bare `unauthorized` body inside M8. The fourth, round-four `#42`, was recorded
+in a gitignored file and never filed at all.
+
+**Both are the same failure, and this file names it in two adjacent
+sentences:** *"A newly OPENED item gets a heading here, so an open item is
+always resolvable"*, and *"an entry lives in this file only while the item is
+OPEN … when it closes, the entry leaves."* At release the three would have
+left WITH the `M` entries containing them — deleted as part of tidying away
+finished work. They are **O62, O63, O64 and O65** now, in a new `## Open`
+section, and each closed entry points at its heading so a reader following one
+finds the live item.
+
+**The heading gate could not have caught this and a widened one should not
+try.** Its three arms all judge an entry's OWN status; none asks whether a
+CLOSED body files separate still-open work, and the evidence arm is *satisfied*
+by the word "gate", which every one of those gap paragraphs contains. Detecting
+it needs a semantic reading, which this file has twice refused to fake with a
+scanner. The mechanism is a heading, not a gate — stated so nobody files it as
+a missing check.
+
+**`#42` is the O37 shape and is now O65.** Verified LIVE rather than inferred:
+the house page still serves `656 tests passing` while the tree runs **761** —
+the gap has WIDENED since round four measured 656-vs-689. Half the row closed
+silently at some point (the "unqualified 99.4% headline" is gone; the only
+percentages on the live page are CSS gradient stops), which is its own small
+lesson about unrecorded closures.
+
+**Five more surfaces corrected, each because something measured contradicted
+them:**
+
+* `## Unversioned`'s header enumerated its contents — *"two are clicks … and
+  one is a naming decision"* — and described neither the O6 half found already
+  done in 2026-08-10 nor O23, which is engine work. An enumeration in a header
+  goes stale exactly like a count in prose.
+* `CLAUDE.md` said **"Seven compose suites run as a MATRIX, one job each"** —
+  seven is now eight, and "one job each" contradicts the same sentence's
+  "the matrix is one" of nine jobs. A matrix expands to one check RUN per leg
+  under a single job id, which is why adding a leg leaves `verdict`'s `needs:`
+  alone and adding a job does not.
+* `.handover/AUDIT_CONTINUATION.md` §6 told the next session to bump four
+  named surfaces **to 1.1.0** — two releases stale, and reproducing the very
+  hand-recalled list `CLAUDE.md` disowned as the cause of the `1.1.0` drift.
+  Replaced with: run the `version surfaces` preflight, do not recall a list.
+* §1a's verdicts were stale in STATUS, which is what its own closing paragraph
+  warns about — *"an unprobed row and a probed-clean row must not look
+  alike"* — applied to itself within eight days. A re-verification block now
+  sits ABOVE it.
+* The handover-freshness gate reads the FIRST of several `handover-head`
+  markers. That convention was implicit; it is stated now, along with why it
+  is not the latent bug it looks like — a section appended at the bottom
+  leaves a stale first marker and fails the comparison loudly. The gate fails
+  closed on the ordering it assumes, and it reports the marker count.
+
+**My own defect in this unit, caught by running it.** The first version of the
+new awk rule carried a comment containing an apostrophe. The awk program lives
+inside a single-quoted shell string, so it terminated the string and
+`tests/battery.sh` died with a syntax error at exit 2. Fixed, and the
+constraint is now written beside the rule for the next editor.
+
+---
+
+## Open — releasable work, filed and not yet scheduled
+
+**This section exists because of where these four were living.** Three of them
+were filed during `1.2.0` and recorded only INSIDE the body of an entry whose
+heading says `CLOSED`; the fourth was found by round four, recorded in a
+gitignored file, and never filed at all. Both are the same failure and this
+file names it: *"A newly OPENED item gets a heading here, so an open item is
+always resolvable"*, and, one paragraph later, *"an entry lives in this file
+only while the item is OPEN … when it closes, the entry leaves."* So at
+release the three would have left WITH the `M` entries that contained them —
+deleted as part of tidying away finished work, which is the most expensive
+place a live item can be.
+
+They are NOT in `## Unversioned` below: that section is for work a release
+cannot contain (a web-UI click, a naming decision). All four of these are
+ordinary releasable work with no target release yet.
+
+**The heading gate could not have caught this**, and that is worth stating
+rather than assuming someone will notice. Its three arms —
+`body-closed-heading-open`, `closure-without-evidence`,
+`closure-without-a-date` — all judge the entry's OWN status. None asks whether
+a `CLOSED` body files separate still-open work, and the evidence arm is
+actually *satisfied* by the word "gate", which every one of these gap
+paragraphs contains. Detecting "this closed entry contains an open item" needs
+a semantic reading, which this file has repeatedly refused to fake with a
+scanner (O33, O47). The mechanism here is a heading, not a gate.
+
+### O62 — no e2e arm drives a tamper through a live stream
+
+Filed inside M6 and given a heading here. M6 made a tamper frame carry the
+wing and room it concerns, so `monitor.html` can localize an integrity
+failure instead of flashing every wing red. The **wire shape is pinned by
+unit gates and was verified by hand**; what does not exist is an arm driving a
+real tamper through a live SSE stream end to end.
+
+**Why it was not done:** it needs a stop-edit-restart sequence to avoid SQLite
+page-cache flake, and a flaky integrity gate is worse than a stated gap — a
+gate that fails at random teaches the reader to re-run it, which is how a real
+failure gets waved through.
+
+**Shape of the fix:** stop the server, corrupt a drawer tag out of band,
+restart, subscribe, read one frame. **Gate:** the frame carries
+`unverified:true` plus the wing and room, and the banner names them.
+
+### O63 — nothing brings the observability stack up, so nothing proves it starts
+
+Filed inside M7 and given a heading here. M7 fixed a CA pin that made
+`deploy/observability` unstartable for two releases, and M10 added
+`tests/tls-pins.sh` for the cheap half — that the pin is READABLE by the
+engine uid. Neither proves the stack STARTS.
+
+**Why it was not done: cost, not principle**, and the exact command is
+recorded so the next person weighs it rather than assumes it was considered:
+`docker compose -f deploy/observability/docker-compose.observability.yml up -d
+undercroft prometheus` plus an assertion that the target reaches `up`. It
+needs the full engine image and four containers, and a ports-free override so
+it cannot collide with a developer's own stack.
+
+**It would have caught the original defect.** `obs-config` validates config
+FILES and starts no container, and a config can be flawless for a stack that
+cannot boot.
+
+**Note what changed since M7 filed this:** `arch-check` (M14) established that
+a suite needing no Rust build is nearly free in CI. This one is not in that
+class — it builds the engine image — so the cost argument stands, but it is
+now the only battery suite that would.
+
+### O64 — `/v1` answers a bare `unauthorized` body
+
+Filed inside M8 and given a heading here. M8 fixed the CONSOLE: `GET /ui` now
+names the credential it needs from page load, and a 401 explains the usual
+cause. The server still answers a bare `unauthorized` with no structure.
+
+**Why it was not done:** it is a `/v1` contract question affecting every
+client, not a console fix, and it was not what was reported. Changing a
+response body is the kind of thing this project files rather than folds in
+silently.
+
+**The decision it needs**, which is why this is a heading and not a patch:
+every other `/v1` error carries `class` (`integrity`, and 409/400 routing
+through `vault_err`). An `unauthorized` body that grew a `class` would be
+consistent — but 401 is answered BEFORE `Tenancy::authorize` returns a vault,
+so it has no vault-scoped context, and saying more about WHY a bearer failed
+is exactly what an unauthenticated caller must not learn. Those two pull in
+opposite directions and the resolution is a ruling, not a refactor.
+
+### O65 — the house page publishes a test count that is stale by 105
+
+Round-four **#42**, never filed, and it is **still true and now worse**. The
+house page at `sealcroft.com` serves `<div class="n">656</div> tests passing`;
+the tree runs **761**. The gap has WIDENED since round four measured it at
+656-vs-689.
+
+**Verified live on 2026-08-20**, not inferred: fetched, and the tile read 656.
+The other half of the row — *"an unqualified 99.4% headline"* — is GONE; the
+only percentages the live page carries are CSS gradient stops. So half this
+row closed at some point without being recorded, which is its own small
+lesson.
+
+**Why nothing catches it.** The page lives in `sealcroft/sealcroft.github.io`,
+a different repository, so no gate here can reach it — and the `published
+figures` preflight reads `data-count="N"` markup that page does not use, so
+porting the gate is not a copy. Note the house page's OTHER figure, `34 MCP
+tools`, is currently CORRECT — which is worse than it sounds: it is a figure
+that happens to agree, and it will go stale silently the first time
+`MCP_TOOLS` moves.
+
+**Shape of the fix, and it is a decision rather than an edit.** Either the
+house page stops publishing figures it cannot gate — the cheapest honest
+option, since its job is to introduce the house rather than to report the
+engine — or the two repositories gain a shared source for them, which means a
+published artifact one can read and the other consumes. **Gate:** whichever is
+chosen, a check in this repo that fails when the house page's published
+figures disagree with the tree, or the figures are gone and there is nothing
+to check.
+
+**This is the O37 shape, and O37 is the entry this file calls "the most severe
+process failure".** Round four's D9 found the house site serving cleartext,
+recorded it in a gitignored handover file, never filed it, and it was still
+true nine days later. #42 came from the same dimension, in the same round, and
+went the same way — recorded in `SWEEP4_SYNTHESIS.md`, never given a heading,
+never moved. Filing it is the whole point of this section.
+
 ---
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
@@ -2331,10 +2566,20 @@ is the field that exists because a migration has to ask for it. Both are fixed.
 
 ## Unversioned — decisions and external actions, not code
 
-These are not releasable work: two are clicks in a web UI that no REST
-endpoint exposes, and one is a naming decision. Kept out of the version
-sections deliberately, so a release plan is not padded with things a
-release cannot contain.
+These are not releasable work. Kept out of the version sections deliberately,
+so a release plan is not padded with things a release cannot contain.
+
+**This paragraph used to say "two are clicks in a web UI … and one is a naming
+decision", and it described the section as it was, not as it is** (corrected
+2026-08-20). Half of O6 — the org avatar — was found already done in 2026-08-10,
+leaving ONE click; and **O23 is neither a click nor a naming decision**, it is
+real engine work (a deep `offset` pays a full scan) that was filed here because
+it is unscheduled rather than because a release cannot contain it. An
+enumeration in a section header goes stale every time the section changes,
+which is the same defect as a count in prose one level up. So: O6 is the click,
+O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
+with the argument for leaving it. Releasable work with no target release now
+has its own section above.
 
 ### O61 — CLOSED 2026-08-19: a release breaks pointers that were true when written
 

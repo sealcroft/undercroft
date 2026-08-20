@@ -1788,9 +1788,13 @@ images either; mount the repo instead:
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
-**Seven compose suites run as a `fail-fast: false` MATRIX, one job each** —
-still seven, because `tls-pins` is host-side and gets its own job rather than
-a matrix leg, so CI runs NINE jobs of which the matrix is one. Two
+**Eight compose suites run as a `fail-fast: false` MATRIX** — eight since
+`arch-check` joined (M14), and `tls-pins` is host-side and gets its own job
+rather than a matrix leg, so CI runs NINE jobs of which the matrix is one.
+This sentence said "one job each" while also saying the matrix is one job,
+which cannot both be true: a matrix expands to one check RUN per leg under a
+single job id, which is why adding a leg does not move `verdict`'s `needs:`
+and adding a job does. Corrected 2026-08-20; the count was stale too. Two
 properties are load-bearing: the legs are independent, so wall-clock is the
 slowest suite rather than their sum; and **every suite runs even when one
 fails**, where the old serial job stopped at the first failure and hid the
