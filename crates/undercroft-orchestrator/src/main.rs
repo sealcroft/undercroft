@@ -121,9 +121,9 @@ enum Command {
     Ops {
         /// Tenant id
         id: String,
-        /// One of: verify, anchor, supersessions, admission, admission-rule,
-        /// trust, trust-set, retention, retention-set, retention-sweep,
-        /// forget, verify-forgetting
+        /// One of: verify, repair, anchor, supersessions, admission,
+        /// admission-rule, trust, trust-set, retention, retention-set,
+        /// retention-sweep, forget, verify-forgetting
         op: String,
         /// JSON body for the operations that take one (rulings, trust and
         /// retention assignment, forget, and the attestation document

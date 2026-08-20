@@ -442,8 +442,16 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // The same anchor may appear twice under different surfaces, because the
     // ruling genuinely differs per surface — that is the whole point of
     // keying on (anchor, absent_from) rather than on the anchor alone.
-    ("Command::Repair", "v1", Absence::Drift,
-     "verify is on all three surfaces and repair is on one, so /v1 can DIAGNOSE and cannot REMEDIATE — and PalaceStats.unhealed reports what needs healing on all three. CLAUDE.md also makes repair the mandatory second half of a model-embedder swap, which a fleet operator therefore cannot perform. ROADMAP M17"),
+    // `Command::Repair` is the worked example: a Boundary on MCP, above, and
+    // it CARRIED a `Drift` row here for `/v1` until M17 closed it by adding
+    // `POST /v1/vaults/{id}/repair`. The row is gone because the absence is.
+    //
+    // **`Absence::Drift` therefore has no instances today, and that is a
+    // result rather than dead vocabulary.** It means every absence on this
+    // axis is now either argued, structural, or openly unruled — nothing is
+    // a gap someone has simply not got to. The variant stays because the
+    // doctrine's sentence is *"a boundary or a drift"*, and a vocabulary
+    // missing the word for the bad case cannot record the bad case.
 
     // ---- Unruled: measured, and the decision is the maintainer's ----------
     // Every row below is a capability reachable from the CLI and from MCP but
@@ -561,7 +569,14 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-store/src/lib.rs",
         "VerifyReport",
         "undercroft-cli/src/tenant.rs",
-        "fn verify(&mut self",
+        // Was `fn verify(&mut self` until M17 gave `/v1` a `repair` route.
+        // Both routes answer the same verdict shape, so the projection moved
+        // into ONE function they share rather than being written out twice —
+        // and this gate is what said the anchor had gone stale, listing every
+        // field it could no longer see. That is the row doing its job: the
+        // fields did not stop being projected, they stopped being projected
+        // HERE, and only an anchor that follows them can tell the difference.
+        "fn verify_report_json",
     ),
     // **The FOURTH renderer, and the doctrine's four surfaces do not name
     // it.** `ui.html` is `include_str!`'d into every build and served at

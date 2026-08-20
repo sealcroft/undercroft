@@ -403,6 +403,9 @@ impl Tenancy {
             }
             ("POST", &["v1", "vaults", id, "refine"]) => self.refine(id, req, body, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
+            // The remediation half of the line above (ROADMAP M17). A WRITE,
+            // so `mutates` needs no entry: that classifier fails closed.
+            ("POST", &["v1", "vaults", id, "repair"]) => self.repair(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
             ("POST", &["v1", "vaults", id, "anchor"]) => self.anchor(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
@@ -1192,6 +1195,75 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         let report = store.verify().map_err(store_err)?;
+        Ok((200, Body::Json(Self::verify_report_json(&report))))
+    }
+
+    /// `POST /v1/vaults/{id}/repair` — the REMEDIATION half of `verify`
+    /// (ROADMAP M17).
+    ///
+    /// `verify` has been on all three surfaces since it existed; `repair` was
+    /// on the CLI alone, so `/v1` and `/mcp` could both DIAGNOSE and neither
+    /// could remediate. That asymmetry has a cost with a name: R4 made a
+    /// read-only open REPORT what it declined to heal, on
+    /// `PalaceStats.unhealed`, on all three surfaces — and the door that heals
+    /// it was on one. `CLAUDE.md` also makes `repair` the mandatory second
+    /// half of a model-embedder swap (`UNDERCROFT_FORCE_EMBEDDER=1` +
+    /// `repair`), which a fleet operator whose only door is `/v1` therefore
+    /// could not perform at all.
+    ///
+    /// It is a WRITE, and `mutates` needs no entry for it: that function fails
+    /// closed, so anything not GET is a write unless explicitly named as a
+    /// read. A `--read-only` server refuses this before dispatch.
+    ///
+    /// **MCP is a boundary and stays one**, recorded in
+    /// `parity.rs::SURFACE_ABSENCES`: repair operates ON the storage machinery
+    /// rather than through it — it rewrites fingerprints, re-embeds and
+    /// vacuums — which is the same argument that makes `rotate` and `anchor`
+    /// operator-only.
+    ///
+    /// Residual, stated: `repair --tokens` (the ColBERT late-interaction
+    /// backfill) is NOT here. It is an unbounded loop over the corpus that the
+    /// CLI drives batch by batch, printing progress; a request handler is the
+    /// wrong shape for it and a half-finished one would be worse than its
+    /// absence. Recorded in ROADMAP M17 rather than left to be discovered.
+    fn repair(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        // **Sole-handle, for a reason that is NOT rotation's.** `rotate`
+        // refuses a co-resident vault because it re-keys and the other handle
+        // holds keys. `repair` re-EMBEDS, and `PalaceStore::repair` opens by
+        // dropping its own warmed embedding cache — *"Re-embedding below
+        // bypasses upsert; drop any warmed cache"* — which it can only do for
+        // the handle it is called on. A vault this process also serves over
+        // `/mcp` keeps a SECOND handle whose cache would survive the rewrite
+        // and go on scoring queries against vectors that no longer exist.
+        //
+        // That is the two-handles hazard A31 and the `writes` defect both had,
+        // in the one operation that rewrites the vectors themselves. Refused
+        // rather than papered over with a cache-invalidation broadcast, which
+        // would be a second mechanism for a case the operator can avoid.
+        self.deny_co_resident(id, "repairing", "run `undercroft repair <name>`")?;
+        let store = self.store_for(id)?;
+        let (report, backfilled) = store.repair().map_err(store_err)?;
+        let mut body = Self::verify_report_json(&report);
+        // The one field this route adds over `verify`. Everything else comes
+        // from the SHARED projection, so a new `VerifyReport` leg reaches both
+        // routes at once — writing the JSON out twice here is precisely the
+        // drift `HAND_PROJECTED` exists to count.
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("fingerprints_backfilled".into(), json!(backfilled));
+        }
+        Ok((200, Body::Json(body)))
+    }
+
+    /// The `/v1` projection of a `VerifyReport`, in ONE place.
+    ///
+    /// `verify` and `repair` both answer with it. It was inline in `verify`
+    /// until `repair` needed the same shape (ROADMAP M17), and copying it
+    /// would have created a SECOND hand projection of a struct
+    /// `parity.rs::HAND_PROJECTED` already tracks per surface — so a seventh
+    /// leg would have had to be added twice on this surface alone, and would
+    /// have reached one of them.
+    fn verify_report_json(report: &undercroft_store::VerifyReport) -> serde_json::Value {
         use undercroft_store::ReceiptVerdict as V;
         let count = |v: V| {
             report
@@ -1216,33 +1288,30 @@ impl Tenancy {
             .filter(|r| r.verdict == V::Tampered)
             .map(|r| r.triple_id.as_str())
             .collect();
-        Ok((
-            200,
-            Body::Json(json!({
-                "ok": report.ok(),
-                "records_checked": report.records_checked,
-                "bad_records": report.bad_records,
-                "chain_ok": report.chain_ok,
-                "orphan_labels": report.orphan_labels,
-                "mirror_drift": report.mirror_drift,
-                "supersessions": {
-                    "verified": count(V::Verified),
-                    "source_changed": count(V::SourceChanged),
-                    "dangling": count(V::Dangling),
-                    "unreceipted": count(V::Unreceipted),
-                    "tampered": count(V::Tampered),
-                },
-                "bad_supersessions": bad_supersessions,
-                "receipts": {
-                    "verified": rec_count(V::Verified),
-                    "source_changed": rec_count(V::SourceChanged),
-                    "dangling": rec_count(V::Dangling),
-                    "unreceipted": rec_count(V::Unreceipted),
-                    "tampered": rec_count(V::Tampered),
-                },
-                "bad_receipts": bad_receipts,
-            })),
-        ))
+        json!({
+            "ok": report.ok(),
+            "records_checked": report.records_checked,
+            "bad_records": report.bad_records,
+            "chain_ok": report.chain_ok,
+            "orphan_labels": report.orphan_labels,
+            "mirror_drift": report.mirror_drift,
+            "supersessions": {
+                "verified": count(V::Verified),
+                "source_changed": count(V::SourceChanged),
+                "dangling": count(V::Dangling),
+                "unreceipted": count(V::Unreceipted),
+                "tampered": count(V::Tampered),
+            },
+            "bad_supersessions": bad_supersessions,
+            "receipts": {
+                "verified": rec_count(V::Verified),
+                "source_changed": rec_count(V::SourceChanged),
+                "dangling": rec_count(V::Dangling),
+                "unreceipted": rec_count(V::Unreceipted),
+                "tampered": rec_count(V::Tampered),
+            },
+            "bad_receipts": bad_receipts,
+        })
     }
 
     /// `POST /v1/vaults/{id}/rotate` — rotate the vault onto fresh keys

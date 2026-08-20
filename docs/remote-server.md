@@ -111,6 +111,7 @@ POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
 ── maintenance / portability ────────────────────────────────────────────
 POST   /v1/vaults/{id}/refine           LLM distillation → KG
 POST   /v1/vaults/{id}/verify           (HMAC + audit-chain report)
+POST   /v1/vaults/{id}/repair           (the REMEDIATION half of verify; a write)
 POST   /v1/vaults/{id}/anchor           (tighten the manifest rollback anchor; a write)
 POST   /v1/vaults/{id}/rotate           (re-key the vault; sole-writer contract)
 GET    /v1/vaults/{id}/export           (decrypted NDJSON: {drawer, vector} per line)

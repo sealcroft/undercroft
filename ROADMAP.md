@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**85** of the **100** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**86** of the **101** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 85 of 100 — stale by
+body said the gate "examines **47 of 60**". Measured, 86 of 101 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2460,6 +2460,116 @@ what #34 is about. An absence from the CLI of something present only on `/v1`
 — vault delete, the SSE stream, the stats history ring — is not caught by a
 gate that derives its universe from `main.rs`. Those are recorded in O66 rather
 than silently left out.
+
+### M17 — CLOSED 2026-08-20: two surfaces could diagnose and neither could remediate
+
+The one `Absence::Drift` M16's inventory carried, closed rather than left as a
+row. **Raised by the maintainer** from M16's evidence.
+
+`verify` has been on all three surfaces since it existed. `repair` was on the
+CLI alone — verified by reading rather than relayed: **0** occurrences in
+`tenant.rs`'s route dispatch and **0** in `MCP_TOOLS`, against **2** and **3**
+for `verify`, with `pub fn repair` present in the store as the needle proof.
+
+**The asymmetry has a cost with a name.** R4 made a read-only open REPORT what
+it declined to heal, on `PalaceStats.unhealed`, on all three surfaces — and
+the door that heals it was on one. `CLAUDE.md` also makes `repair` the
+mandatory second half of a model-embedder swap
+(`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`), which a fleet operator whose only
+door is `/v1` therefore could not perform at all.
+
+**`POST /v1/vaults/{id}/repair`**, answering the SAME body as
+`POST …/verify` plus `fingerprints_backfilled`.
+
+**The projection is SHARED, and that is the load-bearing detail.**
+`VerifyReport` is in `HAND_PROJECTED` once per surface, so writing the JSON out
+a second time in `repair` would have created a second hand projection on the
+same surface — a seventh leg would then need adding twice on `/v1` alone and
+would have reached one of them. `verify_report_json` is the one projection both
+routes answer with, and the e2e arm asserting `repair` returns
+`records_checked` is what pins that it is shared rather than copied.
+
+**`mutates` needed no entry**, and that is the classifier working: it fails
+closed, so anything not GET is a write unless NAMED as a read. A `--read-only`
+server refuses this before dispatch, while still serving `verify`, which IS
+named.
+
+**MCP stays a boundary**, and the row stays in `SURFACE_ABSENCES` saying why:
+repair operates ON the storage machinery rather than through it — it rewrites
+fingerprints, re-embeds and vacuums — which is the argument that makes `rotate`
+and `anchor` operator-only.
+
+**A concurrency hazard found by reading the store rather than the row.**
+`PalaceStore::repair` opens by dropping its own warmed embedding cache
+(*"Re-embedding below bypasses upsert; drop any warmed cache"*), which it can
+only do for the handle it is called on. A vault the process ALSO serves over
+`/mcp` keeps a second handle whose cache would survive the rewrite and go on
+scoring queries against vectors that no longer exist. That is the two-handles
+hazard A31 and the `writes` defect both had, in the one operation that rewrites
+the vectors themselves. The route calls `deny_co_resident` — the same refusal
+`rotate` uses, for a DIFFERENT reason, which is why the comment states its own
+rather than pointing at rotation's. Rejected: a cache-invalidation broadcast, a
+second mechanism for a case the operator can avoid.
+
+**The control plane needed the same row, and its absence was the O14 lesson
+repeating verbatim.** `OPS_ROUTES` carried `("POST", "verify")` and no
+`repair`, so closing this on `/v1` alone would have left a fleet operator
+exactly where they started. O14's own comment three lines below the new entry
+says it: *"`forget` has been forwardable since this table was written;
+verifying the receipt it returns was reachable from nowhere in a fleet."*
+
+**Gates.** Three e2e arms, because the route makes three claims: it answers the
+verify verdict shape (proving the shared projection), it adds
+`fingerprints_backfilled`, and it refuses without an assertion like every
+write. Plus the two `/v1` route references, which are gated as SETS in both
+directions and named the omission immediately — *"docs/AGENTS.md does not
+document 1 live route(s): POST v1/vaults/id/repair"*, which is the gate paying
+for itself in the unit that added the route.
+
+**And the control plane has a SECOND gate, which caught the half-measure.**
+`every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias` requires
+every `OPS_ROUTES` entry to have a CLI alias, and it failed with *"POST repair
+is on the admin plane with no CLI alias — reachable by curl alone."* Adding the
+row to the proxy table alone would have made the capability forwardable and
+left the fleet operator without a command for it — the same shape as the
+absence this unit exists to close, one layer in. `undercroft-orchestrator ops
+<tenant> repair` exists now, and the subcommand's own help lists it.
+
+**And `HAND_PROJECTED` caught the consequence of the refactor, which is the
+best evidence that sharing the projection was the right move.** That inventory
+anchors the `(VerifyReport, tenant.rs)` row on a function, and the anchor was
+`fn verify(&mut self`. Moving the field reads into `verify_report_json` made
+the gate fail listing **seven** fields it could no longer see —
+`records_checked`, `bad_records`, `chain_ok`, `supersessions`,
+`orphan_labels`, `mirror_drift`, `receipts`. The fields had not stopped being
+projected; they had stopped being projected THERE, and only an anchor that
+follows them can tell those two apart. The row now points at the shared
+function.
+
+Worth recording about the failure itself: the battery's tail showed a
+figure-drift block reading *"cargo tests: CLAUDE.md publishes 762 run, this run
+measured 86"*, which is a SECONDARY symptom — a failing cargo test aborts the
+remaining targets, so 86 was a partial count. The real line was `test exit 101`
+in the exit-code table above it. *The exit code is the verdict* is this
+script's founding rule, and reading its tail first is the habit that rule
+exists to break.
+
+**Residual, stated rather than discovered later:** `repair --tokens`, the
+ColBERT late-interaction backfill, is CLI-only. It is an unbounded loop the CLI
+drives batch by batch while printing progress; a request handler is the wrong
+shape for it, and a half-finished one would be worse than its absence.
+
+**A defect of mine in this unit, and it is the one CLAUDE.md warns about most
+directly.** Removing the now-closed `Drift` row, I used a regex over the
+constant — and it ate the closing `];`, merging `SURFACE_ABSENCES` into
+`HAND_PROJECTED` and producing 21 compile errors. *"A SCRIPTED EDIT IS A CHANGE
+YOU HAVE NOT READ"*, walked into with the warning on the screen. Restored from
+the commit and removed by hand after reading the exact lines.
+
+**`Absence::Drift` now has no instances, and that is a result rather than dead
+vocabulary**: every absence on the CLI axis is argued, structural, or openly
+unruled — none is a gap nobody got to. The variant stays, because a vocabulary
+missing the word for the bad case cannot record the bad case.
 
 ---
 

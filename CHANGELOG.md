@@ -7,6 +7,63 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### two surfaces could diagnose and neither could remediate (M17)
+
+The one `Absence::Drift` M16's inventory carried, closed rather than left as a
+row.
+
+`verify` has been on all three surfaces since it existed; `repair` was on the
+CLI alone — **0** occurrences in `tenant.rs`'s route dispatch and **0** in
+`MCP_TOOLS`, against 2 and 3 for `verify`. The asymmetry has a cost with a
+name: R4 made a read-only open REPORT what it declined to heal, on
+`PalaceStats.unhealed`, on all three surfaces, and the door that heals it was
+on one. `CLAUDE.md` also makes `repair` the mandatory second half of a
+model-embedder swap, which a fleet operator whose only door is `/v1` could not
+perform at all.
+
+`POST /v1/vaults/{id}/repair` answers the SAME body as `POST …/verify` plus
+`fingerprints_backfilled`. The projection is **shared**, not copied:
+`VerifyReport` is tracked in `HAND_PROJECTED` once per surface, so a second
+inline copy would mean a future seventh leg had to be added twice on `/v1`
+alone — and would have reached one of them.
+
+`mutates` needed no entry, which is the classifier working: it fails closed, so
+anything not GET is a write unless named as a read. MCP stays a **boundary**
+with its reason recorded — repair operates ON the storage machinery rather than
+through it, the argument that makes `rotate` and `anchor` operator-only.
+
+Two things found by reading rather than by the filing. **A concurrency hazard**:
+`PalaceStore::repair` drops its own warmed embedding cache, which it can only do
+for the handle it is called on — so a vault also served over `/mcp` would keep a
+second handle scoring queries against vectors that no longer exist. The route
+refuses a co-resident vault, the same refusal `rotate` uses for a different
+reason. And **the control plane needed the same row**: `OPS_ROUTES` carried
+`verify` and no `repair`, so closing this on `/v1` alone would have left a fleet
+operator where they started — the O14 lesson repeating three lines from its own
+comment.
+
+The control plane has a **second** gate that caught the half-measure: every
+`OPS_ROUTES` entry must have a CLI alias, and it failed with *"POST repair is on
+the admin plane with no CLI alias — reachable by curl alone."* Adding the proxy
+row alone would have made the capability forwardable and left the fleet operator
+without a command for it — the same shape as the absence this unit closes, one
+layer in.
+
+`HAND_PROJECTED` caught the consequence of the refactor, which is the best
+evidence that sharing the projection was right: that inventory anchors the
+`(VerifyReport, tenant.rs)` row on a function, and moving the field reads made
+it fail listing **seven** fields it could no longer see. They had not stopped
+being projected — they had stopped being projected *there*, and only an anchor
+that follows them tells those apart. The row points at the shared function now.
+
+Residual, stated: `repair --tokens` is CLI-only; it is an unbounded loop the CLI
+drives batch by batch, and a request handler is the wrong shape for it.
+
+**Reported as mine:** removing the closed `Drift` row, I used a regex over the
+constant and it ate the closing `];`, merging two inventories and producing 21
+compile errors — *"a scripted edit is a change you have not read"*, walked into
+with the warning on screen. Restored and redone by hand.
+
 ### the CLI axis had no inventory, so every CLI-only capability was an unrecorded gap by construction (M16)
 
 Round-four **#34**, and much larger than the row said. It read "five CLI-only

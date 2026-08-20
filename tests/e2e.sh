@@ -1566,6 +1566,26 @@ rest_body "kg receipts carries a verdict" '"ok":true' -- \
 rest_body "verify reports the receipts leg" '"receipts"' -- \
   -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
 
+# ROADMAP M17. `verify` has been on all three surfaces since it existed and
+# `repair` was on the CLI alone, so this plane could DIAGNOSE and not
+# REMEDIATE — while `PalaceStats.unhealed` reports what needs healing on all
+# three. Three arms, because the route makes three separate claims.
+#
+# One: it answers the SAME verdict shape as `verify`, which is what proves the
+# projection is SHARED rather than a second hand-written copy — the drift
+# `HAND_PROJECTED` exists to count.
+rest_body "repair answers the verify verdict shape" '"records_checked"' -- \
+  -X POST "$API/vaults/acme/repair" -H "X-Vault-Assertion: $(sign acme)"
+# Two: it adds the one field `verify` does not have.
+rest_body "repair reports what it backfilled" '"fingerprints_backfilled"' -- \
+  -X POST "$API/vaults/acme/repair" -H "X-Vault-Assertion: $(sign acme)"
+# Three: it is a WRITE. `mutates` fails closed — anything not GET is a write
+# unless NAMED as a read — so a read-only server must refuse it while still
+# serving `verify`, which IS named. Asserting both halves in one place is what
+# makes this a test of the classifier rather than of one route.
+rest_code "repair needs an assertion like every write" 401 -- \
+  -X POST "$API/vaults/acme/repair"
+
 # Deployment-assigned wing trust (C3.3): assigned by the operator surface,
 # a floored search excludes below-floor wings BEFORE candidates, and the
 # response says how many wings the floor kept out.

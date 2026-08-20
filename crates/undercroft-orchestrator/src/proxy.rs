@@ -361,6 +361,19 @@ fn single_drawer_route(subpath: &str) -> bool {
 /// between `/v1` and MCP, one level up.
 const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "verify"),
+    // **The remediation half of the line above** (ROADMAP M17), and it is the
+    // O14 lesson three lines down repeating verbatim: `verify` has been
+    // forwardable since this table was written, and the operation that FIXES
+    // what it finds was reachable from nowhere in a fleet — first because the
+    // engine had no route at all, and then, for as long as this row was
+    // missing, because the control plane did not forward it.
+    //
+    // Safe while the engine is serving, on the same test as `anchor` rather
+    // than the vault KEY rotation excluded in this module's own header: it
+    // rewrites rows through the engine's own handle. The engine refuses it for
+    // a vault that process ALSO serves over `/mcp`, so the narrow unsafe case
+    // is closed there rather than by omitting the row here.
+    ("POST", "repair"),
     ("GET", "supersessions"),
     ("POST", "forget"),
     // **Minting without checking is the asymmetry above, one step on**
@@ -452,6 +465,7 @@ pub(crate) const OPS_DELIBERATELY_ABSENT: &[(&str, &str)] = &[
 pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
     Some(match op {
         "verify" => ("POST", "verify"),
+        "repair" => ("POST", "repair"),
         "anchor" => ("POST", "anchor"),
         "supersessions" => ("GET", "supersessions"),
         "admission" => ("GET", "admission"),
@@ -1472,6 +1486,7 @@ mod tests {
             "retention-sweep",
             "forget",
             "verify-forgetting",
+            "repair",
         ];
         let mut resolved = Vec::new();
         for a in aliases {
