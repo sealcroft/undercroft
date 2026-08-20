@@ -1045,8 +1045,16 @@ impl PalaceStore {
         Ok(())
     }
 
+    /// Append the record INSIDE a transaction the caller already holds.
+    ///
+    /// Takes `&Connection`, not `&Transaction`, since ROADMAP M19: a caller
+    /// that opened its transaction with a raw `BEGIN IMMEDIATE` — which is
+    /// how `write_drawer` does it, because holding a `Transaction` borrows
+    /// the connection and blocks every `&mut self` helper — has no
+    /// `Transaction` value to pass. Existing callers pass `&tx` unchanged;
+    /// `Transaction` derefs to `Connection`.
     pub(crate) fn audit_migration(
-        tx: &rusqlite::Transaction<'_>,
+        conn: &rusqlite::Connection,
         vault: &undercroft_vault::Vault,
         kind: &str,
         version: &str,
@@ -1057,7 +1065,7 @@ impl PalaceStore {
         let canonical =
             format!("migrate\u{1f}{kind}\u{1f}{version}\u{1f}{at}\u{1f}{moved}\u{1f}{skipped}");
         let tag = vault.tag(canonical.as_bytes());
-        crate::chain_append(tx, vault, &format!("migrate/{kind}"), &tag, at)
+        crate::chain_append(conn, vault, &format!("migrate/{kind}"), &tag, at)
     }
 
     /// Move a pre-A10 sealed graph onto the blind index, once.

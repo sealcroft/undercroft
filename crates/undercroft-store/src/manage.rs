@@ -1181,7 +1181,55 @@ impl PalaceStore {
     /// with the current embedder (recording its identity — this is the
     /// second half of a forced model swap), vacuum, and re-verify.
     /// Returns (report, rows_backfilled).
+    /// Backfill fingerprints, re-embed, drop the stale index, re-stamp the
+    /// embedder identity, record the run, VACUUM, and re-verify.
+    ///
+    /// **ONE transaction over everything that changes the vault** (ROADMAP
+    /// M19). It used to run every statement in autocommit, which round-four
+    /// `#22` filed and which is worse than "some work is lost": the three
+    /// statements that make the vault COHERENT again — dropping the PQ/IVF
+    /// tables, re-stamping the embedder identity, and the chain record — all
+    /// sit BELOW both rewrite loops. An abort partway therefore left
+    /// fingerprints backfilled, SOME drawers re-embedded with the new model
+    /// and the rest with the old, a codebook still quantizing vectors that no
+    /// longer exist, a vault still claiming the previous embedder identity,
+    /// and no evidence that any of it happened. A mixed vector space that
+    /// reports itself as pure.
+    ///
+    /// `self.get` returns `Err` on a drawer whose HMAC fails, so the abort is
+    /// reachable rather than theoretical — a single tampered row part-way
+    /// through the corpus is enough.
+    ///
+    /// The bracket is `write_drawer`'s: a raw `BEGIN IMMEDIATE` rather than a
+    /// `Transaction` value, because holding one borrows the connection and
+    /// blocks every `&mut self` helper this needs. `VACUUM` stays OUTSIDE —
+    /// SQLite refuses it inside a transaction — and after the commit, so the
+    /// record it rewrites is already durable.
     pub fn repair(&mut self) -> Result<(crate::VerifyReport, u64), StoreError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let (fixed, head, writes) = match self.repair_stmts() {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+        };
+        if let Err(e) = self.conn.execute_batch("COMMIT") {
+            let _ = self.conn.execute_batch("ROLLBACK");
+            return Err(e.into());
+        }
+        // Outside the transaction, in the order `audit_migration_standalone`
+        // uses: the manifest anchor is out-of-database evidence and must
+        // never run ahead of a commit that did not happen.
+        self.vault.anchor_manifest(&head, writes)?;
+        self.conn.execute_batch("VACUUM;")?;
+        Ok((self.verify()?, fixed))
+    }
+
+    /// The statements `repair` runs inside its transaction. Split out for the
+    /// reason `write_drawer_stmts` is: the caller owns the bracket, so every
+    /// `?` here is an abort that rolls the whole thing back.
+    fn repair_stmts(&mut self) -> Result<(u64, String, u64), StoreError> {
         // Re-embedding below bypasses upsert; drop any warmed cache.
         *self.emb_cache.borrow_mut() = None;
         let missing: Vec<String> = self
@@ -1232,10 +1280,19 @@ impl PalaceStore {
         //
         // Before the VACUUM so the record is in the rewritten file, and
         // `fixed` is the count an auditor cannot recompute afterwards.
+        //
+        // The INNER form (ROADMAP M19). `audit_migration_standalone` opens
+        // its own transaction and commits, which is right for a caller that
+        // has already committed its work — and its own doc comment named
+        // `repair` as one of those, which is exactly the property `#22`
+        // filed. Now the record lands in the SAME transaction as the rewrites
+        // it describes, which is this project's oldest invariant: every write
+        // updates the audit chain atomically with its data.
         let model = self.embedder.model_name().to_string();
-        self.audit_migration_standalone("repair", &model, fixed, 0)?;
-        self.conn.execute_batch("VACUUM;")?;
-        Ok((self.verify()?, fixed))
+        let at = now_rfc3339();
+        let (head, writes) =
+            Self::audit_migration(&self.conn, &self.vault, "repair", &model, &at, fixed, 0)?;
+        Ok((fixed, head, writes))
     }
 
     // ------------------------------------------------------------------
@@ -2901,6 +2958,89 @@ mod tests {
              which is why deleting the duplicate would have lost it"
         );
         assert!(s.verify().unwrap().ok());
+    }
+
+    /// ROADMAP M19 (round-four `#22`). `repair` ran every statement in
+    /// autocommit, and the three statements that make the vault COHERENT
+    /// again — dropping the PQ/IVF tables, re-stamping the embedder identity,
+    /// and the chain record — all sit BELOW both rewrite loops. So an abort
+    /// part-way left fingerprints backfilled, some drawers re-embedded and
+    /// the rest not, a stale codebook, a stale recorded identity, and no
+    /// evidence any of it ran: a mixed vector space that reports itself pure.
+    ///
+    /// The abort is reachable rather than theoretical — `get` returns `Err`
+    /// on a drawer whose HMAC fails, so one tampered row is enough. M17 then
+    /// gave this operation a `/v1` route and an orchestrator alias, which
+    /// widened who can trigger it from one operator on one host to any fleet
+    /// operator.
+    #[test]
+    fn a_failed_repair_leaves_the_vault_exactly_as_it_was() {
+        let (_d, mut s) = store();
+        for i in 0..6u32 {
+            s.upsert(&drawer("w", "r", &format!("drawer {i} about turbines"), i))
+                .unwrap();
+        }
+        // The backfill loop only touches rows with no fingerprint, so give it
+        // real work: without this it would rewrite nothing and the test would
+        // pass on a tree that never rolled anything back.
+        s.conn.execute("UPDATE drawers SET fp = NULL", []).unwrap();
+        let null_fps: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers WHERE fp IS NULL", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(null_fps, 6, "premise: every row needs a fingerprint");
+
+        // Corrupt the LAST row by insertion order. The re-embed loop reads
+        // `ORDER BY seq`, so five rows are rewritten before the sixth aborts
+        // — there is genuinely something to roll back.
+        let victim: String = s
+            .conn
+            .query_row(
+                "SELECT id FROM drawers ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        s.conn
+            .execute(
+                "UPDATE drawers SET tag = ?1 WHERE id = ?2",
+                params![vec![0u8; 32], victim],
+            )
+            .unwrap();
+        let audit_before: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get(0))
+            .unwrap();
+
+        let err = s
+            .repair()
+            .expect_err("a tampered row must abort the repair");
+        let _ = err;
+
+        // NOTHING survived. Each of these was left applied by the autocommit
+        // version, and each is a different half of the incoherence.
+        let after_nulls: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers WHERE fp IS NULL", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            after_nulls,
+            6,
+            "a rolled-back repair backfilled no fingerprints; it left {} of 6 rewritten",
+            6 - after_nulls
+        );
+        let audit_after: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            audit_before, audit_after,
+            "a repair that did not finish must not appear on the chain"
+        );
     }
 
     /// **`repair` and the embedding-space migration record themselves**, for

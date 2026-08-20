@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**88** of the **103** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**89** of the **104** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 88 of 103 — stale by
+body said the gate "examines **47 of 60**". Measured, 89 of 104 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2627,6 +2627,78 @@ cannot pass for the wrong reason.
 deliberate rather than unfinished — healing at open is the design, and making
 `stats` stop migrating would change what ordinary use does to fix an incident
 case. `--read-only` is the door for the incident; the default is unchanged.
+
+### M19 — CLOSED 2026-08-20: `repair` was not atomic, and M17 had just widened who could trigger it
+
+Round-four **#22**'s standing half. **Raised by the maintainer**, correcting me:
+I had proposed AMENDING M17's entry to note the interaction. An amendment is a
+doc change for a code defect, and the defect is that `repair` is not atomic.
+
+`repair()` ran every statement in autocommit. That is worse than "some work is
+lost", because the three statements that make the vault COHERENT again all sit
+BELOW both rewrite loops — `invalidate_embedding_space` (which drops the PQ/IVF
+tables), `record_embedder_identity`, and the chain record. So an abort part-way
+left:
+
+* fingerprints backfilled,
+* SOME drawers re-embedded with the new model and the rest with the old,
+* a codebook still quantizing vectors that no longer exist,
+* a vault still claiming the PREVIOUS embedder identity,
+* and no evidence any of it ran.
+
+**A mixed vector space that reports itself as pure**, which is the failure mode
+`invalidate_embedding_space`'s own comment describes: *"a stale codebook does
+not fail loudly, it returns the wrong candidates."*
+
+**The abort is reachable, not theoretical.** `self.get` returns `Err` on a
+drawer whose HMAC fails, so one tampered row part-way through a corpus is
+enough — and repair is precisely what an operator runs on a vault they already
+suspect.
+
+**M17 made it matter more, and that is mine.** It gave this operation a `/v1`
+route and an orchestrator alias, widening who can trigger it from one operator
+on one host to any fleet operator — and the M17 entry did not mention the
+interaction. The refuter had already narrowed `#22`'s trigger to *an embedder
+change AND a corrupt row*, which is exactly the model-embedder-swap path M17's
+own justification cites.
+
+**Fix — the bracket `write_drawer` already uses, and the inner audit form that
+already existed.** `repair` opens `BEGIN IMMEDIATE`, calls a new
+`repair_stmts` for the work, and commits; `VACUUM` stays outside (SQLite
+refuses it inside a transaction) and after the commit; `anchor_manifest` runs
+after the commit, in the order `audit_migration_standalone` uses, because the
+manifest is out-of-database evidence and must never run ahead of a commit that
+did not happen.
+
+**No new mechanism was needed, and that is the tell that the shape was already
+right.** `audit_migration_standalone` exists for callers that *"commit their own
+work first"* and its doc comment named `repair` as one of them — the defect,
+written down as a design choice. The INNER form, `audit_migration`, already took
+a caller-held transaction. It now takes `&Connection` rather than
+`&Transaction`, because a caller that opened with a raw `BEGIN IMMEDIATE` has no
+`Transaction` VALUE to pass — holding one borrows the connection and blocks
+every `&mut self` helper. Existing callers pass `&tx` unchanged; `Transaction`
+derefs to `Connection`. `chain_append` already took `&Connection`, so the whole
+change is one parameter type.
+
+**Gate + counterfactual, executed.**
+`a_failed_repair_leaves_the_vault_exactly_as_it_was` plants six drawers, nulls
+every fingerprint (so the backfill loop has real work — without it the test
+would pass on a tree that rolled nothing back), corrupts the LAST row by `seq`
+so five rewrites succeed before the sixth aborts, and asserts that afterwards
+all six fingerprints are still NULL and the audit height is unchanged. With the
+bracket removed, it fails: **"it left 5 of 6 rewritten", left: 1, right: 6.**
+
+**A defect of mine in this unit, and it is the one `CLAUDE.md` names in
+capitals.** My insertion anchor was `fn repair_records_itself_on_the_chain() {`
+— a `fn` line with `#[test]` and an eleven-line doc comment above it. The
+insertion took the attribute, so that test **silently became dead code**: it
+vanished from the run and only a `dead_code` warning said so. *"An anchor
+matched on a `fn` line with an attribute above it … no test could report it,
+because the test was the thing that stopped running."* Restoring the attribute
+then produced a DUPLICATE on my own test, because the original had been
+inherited too. Both fixed; the doc comment is reunited with the test it
+describes, and each function has exactly one `#[test]`, asserted by count.
 
 ---
 

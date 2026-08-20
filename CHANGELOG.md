@@ -7,6 +7,49 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### `repair` was not atomic, and M17 had just widened who could trigger it (M19)
+
+Round-four **#22**'s standing half.
+
+`repair()` ran every statement in autocommit — worse than "some work is lost",
+because the three statements that make the vault coherent again all sit BELOW
+both rewrite loops: dropping the PQ/IVF tables, re-stamping the embedder
+identity, and the chain record. An abort part-way left fingerprints backfilled,
+some drawers re-embedded with the new model and the rest with the old, a
+codebook still quantizing vectors that no longer exist, a vault still claiming
+the previous embedder identity, and no evidence any of it ran. **A mixed vector
+space that reports itself as pure** — and `invalidate_embedding_space`'s own
+comment says why that is the bad kind: *"a stale codebook does not fail loudly,
+it returns the wrong candidates."*
+
+The abort is reachable: `get` returns `Err` on a drawer whose HMAC fails, so one
+tampered row is enough — and repair is what you run on a vault you already
+suspect.
+
+**M17 made it matter more, and that is mine**: it gave the operation a `/v1`
+route and an orchestrator alias, widening who can trigger it from one operator
+on one host to any fleet operator, and its entry did not mention the interaction.
+
+`repair` now brackets its work in one `BEGIN IMMEDIATE` … `COMMIT`, with
+`VACUUM` outside and after, and `anchor_manifest` after the commit. **No new
+mechanism was needed**, which is the tell that the shape was already right:
+`audit_migration_standalone` exists for callers that "commit their own work
+first" and its doc named `repair` as one of them — the defect, written down as a
+design choice. The inner `audit_migration` now takes `&Connection` rather than
+`&Transaction`, because a caller using a raw `BEGIN IMMEDIATE` has no
+`Transaction` value to pass; existing callers are unchanged by deref coercion,
+and `chain_append` already took `&Connection`.
+
+Counterfactual executed: with the bracket removed the new test fails —
+*"it left 5 of 6 rewritten"*.
+
+**Reported as mine:** my insertion anchor was a `fn` line with `#[test]` above
+it, so the insertion stole the attribute and
+`repair_records_itself_on_the_chain` silently became dead code — visible only as
+a `dead_code` warning, which is exactly the trap `CLAUDE.md` records in capitals.
+Restoring it then duplicated the attribute on my own test. Both fixed, and each
+function is asserted to carry exactly one.
+
 ### the ops-parity gate stayed green over a capability nobody classified (O67 filed, one instance closed)
 
 Round-four **#33**, re-verified and measured. The orchestrator's
