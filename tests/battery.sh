@@ -617,6 +617,92 @@ fi
 echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
 echo "      root-only PKI tree"
 
+# ── preflight: a destructive compose teardown names the project it destroys ─
+# ROADMAP M12. A compose teardown carrying the volumes flag removes every
+# NAMED volume in the project it resolves to. With no `-p` and no `-f` that
+# project is whatever `./docker-compose.yml` declares — here, `undercroft`,
+# which is the developer's own — so the command reaches state that has nothing
+# to do with the suite asking for it. The battery's own backends reset did
+# exactly that: it destroyed the embedding model cache, the compose palace and
+# the embeddings CA on every run, none of which any backend needs fresh.
+#
+# This is ROADMAP M10's lesson generalised. M10 fixed `tests/tls-pins.sh` by
+# giving each stack a throwaway project after its first version destroyed a
+# live observability stack an hour after it was committed; the same file's
+# teardowns are the shape this gate ACCEPTS, and the battery's was the shape
+# it rejects. A scoped teardown is fine at any blast radius, because the
+# project name says what the radius is.
+#
+# SCOPE, stated rather than implied: `tests/*.sh` only. That is where this
+# repo drives docker from — no image carries these scripts, so no `cargo test`
+# can read them. It deliberately does NOT scan `deploy/` (those compose files
+# are declarations, not drivers) or the workflows (CI runs compose services,
+# never a teardown). A driver added anywhere else is outside this gate, and
+# that is a real limit rather than an oversight.
+echo "═══ preflight: destructive compose scope ═══"
+# The needle is ASSEMBLED so this gate does not match its own source. That is
+# the "a gate whose own text is part of what it measures" trap, this tree's
+# most-repeated gate defect — ROADMAP M1 is the most recent instance and
+# records four earlier ones for gates reading their own inventory FILE, M1
+# itself being the first for a gate reading the function it guards. No count
+# is asserted here beyond what M1 counted: the figure is in M1, and repeating
+# it in a second place is how a number in prose goes stale.
+# Written contiguously, the pattern below would match the line that defines it.
+TD_VERB="do""wn"
+# The arguments between `compose` and the verb are OPTIONAL, and getting that
+# wrong is how the first version of this gate passed on the very line it was
+# written to catch. Requiring a token there (`compose[[:space:]].*[[:space:]]`)
+# means the unscoped form — where the verb follows `compose` directly — never
+# matches, while every SCOPED form does, because `-p <proj> -f <file>` fills
+# the gap. The gate then reported "every teardown is scoped" having examined
+# only the teardowns that were already scoped. Caught by the counterfactual,
+# not by reading it: this is the tree's own "ask what a gate can SEE, not what
+# it asserts" rule landing on a gate written to enforce that rule.
+TD_SCAN=$(grep -nE "docker[[:space:]]+compose[[:space:]]+(.*[[:space:]]+)?${TD_VERB}([[:space:]]|\$)" \
+            tests/*.sh 2>/dev/null || true)
+# Only the ones that carry the volumes flag destroy named volumes; a plain
+# teardown removes containers and networks and is not this defect.
+TD_HITS=$(printf '%s\n' "$TD_SCAN" | grep -E '[[:space:]](-v|--volumes)([[:space:]]|$)' || true)
+TD_TOTAL=$(printf '%s\n' "$TD_HITS" | grep -c . || true)
+# PREMISE. A scanner that matched nothing reports exactly what a clean tree
+# reports — the failure this whole family is about, and the reason M7's CA
+# gate refuses to pass on zero declarations. `tests/tls-pins.sh` has carried
+# two scoped teardowns since M10, so zero here means the pattern broke, not
+# that the tree is clean.
+if [ "${TD_TOTAL:-0}" -lt 1 ]; then
+  echo "FAIL  the teardown scan matched no compose teardown anywhere in tests/."
+  echo "      tests/tls-pins.sh has carried two since ROADMAP M10, so this is a"
+  echo "      broken scanner rather than a clean tree — and a broken scanner"
+  echo "      reports what a clean tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+TD_FAIL=0
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  # An explicit project scope is the whole discriminator: it is what makes the
+  # blast radius a stated one instead of an inherited one.
+  if ! printf '%s\n' "$hit" | grep -qE '[[:space:]](-p|--project-name)[[:space:]]'; then
+    echo "FAIL  this teardown destroys every named volume of whatever project it"
+    echo "      resolves to, and it names no project — so it inherits the one"
+    echo "      ./docker-compose.yml declares, which is the developer's own:"
+    printf '        %s\n' "$hit"
+    TD_FAIL=1
+  fi
+done <<< "$TD_HITS"
+if [ "$TD_FAIL" -ne 0 ]; then
+  echo ""
+  echo "      Scope it with -p <throwaway-project> as tests/tls-pins.sh does,"
+  echo "      or narrow it to the services you mean with 'rm -sfv <service>...',"
+  echo "      which takes their anonymous volumes and leaves named ones alone."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $TD_TOTAL destructive compose teardown(s) in tests/, every one"
+echo "      scoped to a project it names"
+
 echo "═══ preflight: published figures ═══"
 
 LANDING="website/landing/index.html"
@@ -1350,8 +1436,37 @@ for suite in "${SUITES[@]}"; do
   # `tests/e2e-backends.sh` asserts exact record counts and therefore assumes
   # FRESH backends; a second run against warm volumes flakes. Documented in
   # CLAUDE.md, mechanised here so nobody has to remember it.
+  #
+  # The reset is NARROW, and that is the whole of ROADMAP M12. It used to be a
+  # project-wide teardown with the volumes flag and no `-p`/`-f`, so it
+  # resolved to ./docker-compose.yml — whose declared project is `undercroft`,
+  # i.e. the DEVELOPER'S OWN project — and removed every named volume that file
+  # declares. Three of the five were pure collateral: `undercroft-models` (the
+  # multi-GB weights of the four served embedders this project measures with),
+  # `undercroft-data` (the compose palace, i.e. any mined corpus), and
+  # `undercroft-embed-tls` (the embeddings CA that CLAUDE.md's own published
+  # pin recipe mounts — destroying it makes that recipe mount a fresh empty
+  # volume silently, which is the failure the recipe's own warning describes).
+  #
+  # None of that is state this suite needs fresh, and none of the five backends
+  # declares a named volume at all: qdrant, chroma, milvus and weaviate have no
+  # `volumes:` key, and pgvector's only mount is a read-only cert. Their data
+  # lives in ANONYMOUS volumes, which `rm -v` removes — so the narrow form
+  # delivers everything the wide one did for this suite, and nothing else.
+  #
+  # The terminator is recreated too, so it cannot serve a cached upstream
+  # address for a container that has just been replaced; its CA is a NAMED
+  # volume, which `rm -v` deliberately does not touch, so the pin the suite
+  # mounts survives and Caddy reuses it.
+  #
+  # ROADMAP M10 learned this for `tests/tls-pins.sh` — a private compose
+  # project name does not scope a shared host resource — and the lesson was
+  # not carried one file over to the battery's own teardown. Not silenced:
+  # a reset that fails leaves warm backends, and this suite's failure mode is
+  # then an unexplainable count assertion.
   if [ "$suite" = "backends-e2e" ]; then
-    docker compose down -v >/dev/null 2>&1 || true
+    docker compose rm -sfv \
+      qdrant chroma pgvector milvus weaviate backends-tls || true
   fi
 
   echo ""

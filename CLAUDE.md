@@ -1563,13 +1563,31 @@ green while the battery failed on a lint introduced after it. So the script
 never parses suite output to decide pass/fail — **the exit code is the
 verdict** — and it runs every suite in one pass over one tree, which makes "I
 ran it before the last edit" impossible rather than merely discouraged. It
-also handles the `backends-e2e` `down -v` and never pipes a suite (a
+also handles the `backends-e2e` reset and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
-suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the eleven host-side preflights
+suite into a passing one). **That reset is NARROW, and it was not always** —
+ROADMAP M12. It was a project-wide teardown carrying the volumes flag and no
+`-p`/`-f`, so it resolved to `docker-compose.yml`'s declared project,
+`undercroft`, which is the DEVELOPER'S OWN — and removed every named volume
+that file declares. Three were pure collateral: `undercroft-models` (the
+multi-GB weights of the four served embedders this project measures with),
+`undercroft-data` (the compose palace, i.e. any mined corpus) and
+`undercroft-embed-tls` (the embeddings CA that the pin recipe above mounts —
+destroying it makes that recipe mount a fresh empty volume silently, which is
+the failure the recipe's own warning describes). It needed none of them: the
+four HTTP backends declare no `volumes:` key at all and pgvector's only mount
+is a read-only cert, so their state is in ANONYMOUS volumes that
+`rm -sfv <service>` takes. **This is M10's lesson one file over** — a private
+compose project name does not scope a shared host resource — and the battery's
+own teardown was the place it had not been applied. Gated by the
+`destructive compose scope` preflight, which requires every compose teardown
+in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
+teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
+**`bash tests/battery.sh --preflight-only` runs the twelve host-side preflights
 and no suite**, which is what CI invokes. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
+It caught the twelfth the same way, in the unit that added it.
 **It is gated now** — ROADMAP
 **O42** — by the `prose figures` preflight, which counts this number and
 seven other figures the doctrine states about the tree against what the tree

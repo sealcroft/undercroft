@@ -7,6 +7,51 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the battery destroyed the model cache on every run, and the gate I wrote for it passed on the defect (M12)
+
+Round-four **#39**, filed 2026-08-10 and never probed until a read-only sweep
+re-verified every unresolved row against today's tree. It is worse than the
+row said: the row graded it loud, and it is **silent**.
+
+`tests/battery.sh` reset the vector backends with a project-wide compose
+teardown carrying the volumes flag and no `-p` and no `-f`. It resolved to
+`docker-compose.yml`'s declared project, `undercroft` — the developer's own —
+and removed every named volume that file declares. Three were pure collateral:
+`undercroft-models`, the Ollama cache whose own compose comment calls it "a
+one-time model fetch" and which holds the multi-GB weights of the four served
+embedders this project measures with; `undercroft-data`, the compose palace
+and therefore any mined corpus; and `undercroft-embed-tls`, the embeddings CA
+that `CLAUDE.md`'s published pin recipe mounts — destroying it makes that
+recipe mount a fresh empty volume **silently**, the exact failure the sentence
+beside it warns about.
+
+It needed none of them. The four HTTP backends declare no `volumes:` key at
+all and pgvector's only mount is a read-only cert, so every byte the suite
+needs fresh lives in an anonymous volume. The reset is now
+`docker compose rm -sfv qdrant chroma pgvector milvus weaviate backends-tls`,
+unsilenced — same freshness, no collateral.
+
+**This is M10's lesson one file over.** M10 established that a private compose
+project name does not scope a shared host resource, after `tests/tls-pins.sh`
+destroyed a live observability stack an hour after being committed. The
+battery's own teardown had the same shape the whole time, in the script every
+unit is required to run — so the cost was paid at every unit of every session
+rather than once.
+
+Gated by a twelfth host-side preflight, `destructive compose scope`: every
+compose teardown in `tests/` must name the project it destroys, with a premise
+arm that refuses to report clean when it matched nothing. Three arms executed —
+fixed tree passes, the pre-M12 tree fails naming file, line and command, and a
+deliberately blinded scanner fails rather than reporting a clean tree.
+
+**Reported as mine: the first version of that gate passed on the defect.** Its
+pattern required a token between `compose` and the verb — which every *scoped*
+teardown has, because `-p <proj> -f <file>` fills the gap, and which the
+unscoped form does not. So it matched only the teardowns that were already
+correct and announced that every teardown was scoped. The old pattern returns
+0 matches against the offending line and the corrected one returns 1. Reading
+it would not have caught that; running the counterfactual did.
+
 ### the host-side count reader never worked, and the doctrine gained the rule this session earned (M11)
 
 Two things, both from the governance sweep rather than from a test.

@@ -1948,6 +1948,108 @@ console, and a gate demanding it would be enforcing the wrong shape. The
 argument is written here rather than left as a silent gap, which is what
 `CLAUDE.md` asks of a decision not to act.
 
+### M12 — CLOSED 2026-08-20: the battery destroyed the model cache on every run, and it is M10's own lesson one file over
+
+Round-four **#39**, never probed until now, and it is worse than the row said:
+the row graded it LOUD, and it is **silent** — the command carries
+`>/dev/null 2>&1 || true`.
+
+`tests/battery.sh` reset the vector backends before `backends-e2e` with a
+project-wide compose teardown carrying the volumes flag and **no `-p` and no
+`-f`**. It therefore resolved to `./docker-compose.yml`, whose declared
+project is `undercroft` — **the developer's own** — and removed every named
+volume that file declares. Three of the five were pure collateral:
+
+* **`undercroft-models`** — the Ollama cache holding the multi-GB weights of
+  the four served embedders this project measures with, whose own compose
+  comment calls `embed-pull` *"a one-time model fetch into a volume"*. It was
+  a one-time fetch destroyed at every battery run.
+* **`undercroft-data`** — the compose palace, i.e. any mined corpus.
+* **`undercroft-embed-tls`** — the embeddings CA. Destroying it makes
+  `CLAUDE.md`'s own published pin recipe mount **a fresh empty volume
+  silently**, which is the exact failure the sentence beside that recipe
+  warns about.
+
+**And it needed none of them.** The four HTTP backends declare no `volumes:`
+key at all — qdrant, chroma, milvus and weaviate keep state in the container
+layer — and pgvector's only mount is a read-only cert. Every byte the suite
+needs fresh lives in an **anonymous** volume, which `rm -sfv <service>` takes.
+So the wide form destroyed only things the suite did not need and kept nothing
+it did.
+
+**This is M10's lesson, one file over, unapplied.** M10 established that *a
+private compose project name does not scope a shared host resource* after
+`tests/tls-pins.sh` destroyed a live observability stack an hour after it was
+committed. The battery's own teardown had the same shape the whole time, in
+the script every unit is required to run — so the cost was paid at every
+unit of every session rather than once.
+
+**The tree had already identified this command as a destructive force and
+defended everything except itself**, which is the part worth keeping. Two
+deploy files declare their own project name for exactly this reason and say
+so: `deploy/docker-compose.server.yml:25` — *"A distinct name from the test
+harness is deliberate: sharing one would make `docker compose down -v` in the
+repo destroy a running team server's data"* — and
+`deploy/observability/docker-compose.observability.yml:30` — *"sharing a
+project would let `down -v` on one destroy another's volumes."* So the blast
+radius was understood, named, and fenced **outward**, for the neighbours. The
+project the command actually resolves to is the one holding the model cache
+and the compose palace, and nothing fenced it. A defence built entirely
+outward reads as a defence.
+
+**Fix:** `docker compose rm -sfv qdrant chroma pgvector milvus weaviate
+backends-tls`, unsilenced. The terminator is recreated so it cannot serve a
+cached upstream address for a container just replaced; its CA is a NAMED
+volume, which `rm -v` deliberately does not touch, so the pin the suite mounts
+survives and Caddy reuses it.
+
+**Rejected:** a throwaway project (M10's own remedy) — it would force a full
+rebuild of the five backend containers on every run for no gain, since
+service-scoped removal already delivers the fresh anonymous state the suite's
+exact-count assertions need. **Also rejected:** keeping the wide teardown and
+excluding volumes by name — an allowlist that silently grows wrong the moment
+someone adds a volume, which is the failure mode this project files as a class
+rather than an instance.
+
+**Gate:** a twelfth host-side preflight, `destructive compose scope`. Every
+compose teardown in `tests/` must name the project it destroys; the two
+`tests/tls-pins.sh` carries are the accepted shape and are what the premise
+arm counts. Scope stated rather than implied: `tests/*.sh` only, because that
+is where this repo drives docker from — `deploy/` holds declarations rather
+than drivers, and CI runs compose services and never a teardown. A driver
+added elsewhere is outside it.
+
+**Three arms, all executed.** Fixed tree: `ok 2 destructive compose
+teardown(s) … every one scoped`. Pre-M12 tree: `FAIL … tests/battery.sh:1467:
+docker compose down -v …`, naming file, line and command. Blinded scanner
+(verb replaced with one nothing uses): `FAIL the teardown scan matched no
+compose teardown anywhere in tests/`.
+
+**My own defect, in the gate, and the counterfactual is the only thing that
+found it.** The first version's pattern required a token between `compose` and
+the verb. Every SCOPED teardown has one (`-p <proj> -f <file>` fills the gap)
+and the unscoped form does not — so the gate matched only the teardowns that
+were already correct, reported *"every teardown is scoped"*, and **passed on
+the very line it was written to catch**. Measured directly: the old pattern
+returns 0 matches against that line, the corrected one returns 1. That is this
+tree's own *ask what a gate can SEE, not what it asserts* rule landing on a
+gate written to enforce it, and the first instance where the gate and the
+defect it misses were authored in the same hour. Reading it would not have
+caught this; running it did.
+
+No ordinal is claimed for it. The first draft of this entry called it "the
+sixth instance" and of the gate comment's own five-item breakdown — both
+figures assembled rather than counted, which is precisely the O38/O43 error
+this file exists to stop repeating. M1 holds the counted figure; a second
+copy of a number is a second place for it to go stale.
+
+**Verified on the machine, both directions**, which is the standard M10 set
+for this class: sentinel files planted in `undercroft-models`,
+`undercroft-data` and `undercroft-embed-tls`, a full battery run, and all
+three volumes present with contents intact afterwards — against a `BEFORE`
+state on the same machine where those three were **absent**, having been
+destroyed by the two battery runs earlier that session.
+
 ---
 
 Also reserved for a documented contract that changes: the `palace`
