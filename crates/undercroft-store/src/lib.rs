@@ -10117,13 +10117,77 @@ mod tests {
             // no caller vector to poison — stated rather than asserted with
             // a test that could not fail. What IS asserted is that the
             // guard sits at the statement level both paths share.
+            // STRUCTURAL, and the window is the FUNCTION rather than the file.
+            // This arm counted `is_finite())` across all of `lib.rs` and
+            // asserted `>= 1` while its message claimed the guard sits in
+            // `write_drawer_stmts` — a location no whole-file count can see.
+            // The regression that matters is not an accidental second
+            // occurrence; it is the guard MOVING BACK UP into `write_drawer`,
+            // which the guard's own comment records as having already happened
+            // once (2026-08-05). Under that move the count is still 1, the
+            // message still reads the same, and all three behavioural arms
+            // still pass, because every door they drive routes through
+            // `write_drawer`. Only `upsert_many` — which calls the statements
+            // directly, owning its own transaction — silently loses the guard.
+            // ROADMAP M13.
             let src = std::fs::read_to_string(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
             )
             .unwrap();
             let guard = concat!("is_finite", "())");
-            let sites = src.matches(guard).count();
-            assert!(sites >= 1, "the non-finite guard is in write_drawer_stmts");
+
+            // The window ends at the closing brace at METHOD indentation, so a
+            // neighbouring method's text cannot satisfy it.
+            let window_of = |sig: &str| -> String {
+                let at = src
+                    .find(sig)
+                    .unwrap_or_else(|| panic!("`{sig}` is not in lib.rs any more — stale gate"));
+                let body = &src[at..];
+                let end = body.find("\n    }\n").unwrap_or_else(|| {
+                    panic!("`{sig}` has no closing brace at method indentation")
+                });
+                // CODE only. A comment naming the guard is not the guard, and
+                // a gate whose own text is part of what it measures is this
+                // tree's most-repeated gate defect.
+                body[..end]
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            let stmts = window_of("fn write_drawer_stmts(");
+            let outer = window_of("fn write_drawer(");
+            // PREMISE, both windows. A boundary rule that produced an empty or
+            // truncated span would make every assertion below vacuous, and a
+            // vacuous assertion reports exactly what a correct tree reports.
+            assert!(
+                stmts.len() > 500 && outer.len() > 200,
+                "premise: the windows are {} and {} bytes, so the boundary rule \
+                 is wrong and the location checks below mean nothing",
+                stmts.len(),
+                outer.len()
+            );
+            assert!(
+                stmts.contains("INSERT INTO drawers"),
+                "premise: the comment stripper kept the code — it did not, so \
+                 this examined the wrong text"
+            );
+            assert_eq!(
+                stmts.matches(guard).count(),
+                1,
+                "the non-finite guard must be IN `write_drawer_stmts`, the \
+                 statement-level function both write paths share — `upsert_many` \
+                 reaches only this one"
+            );
+            assert!(
+                !outer.contains(guard),
+                "the non-finite guard has moved back up into `write_drawer`. \
+                 `upsert_many` does not call it, so the bulk path — every CLI \
+                 `import` and every sealed-bundle restore — has silently lost \
+                 the refusal. This exact regression is what the guard's own \
+                 comment says happened before 2026-08-05"
+            );
         }
     }
 

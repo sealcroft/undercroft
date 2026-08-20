@@ -1600,6 +1600,22 @@ Everything a preflight cannot do with git, awk and grep belongs in a
 container it launches, not in a host interpreter: a gate that needs Python on
 the host is a gate that does not run on the next machine.
 
+**`--no-preflight` is the mirror image and it is what CI's SUITE legs use**
+(ROADMAP M13). Every matrix leg and the `tls-pins` job run
+`bash tests/battery.sh --no-preflight <suite>` rather than
+`docker compose run` directly, so CI and a local battery execute the SAME
+code — including the post-run comparison of each suite's MEASURED check count
+against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
+and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
+request and a leg dropping from 370 checks to 3 was green. The flag skips the
+twelve preflights because the dedicated `preflight` job already runs them
+once. **The shared readers — `test_summary`, `suite_summary`,
+`declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
+skipped block**, and that is not tidiness: with them inside, `--no-preflight`
+printed `command not found` twice and the battery still exited 0, the
+comparison examining nothing while reporting exactly what a clean tree
+reports.
+
 **A SCRIPTED EDIT IS A CHANGE YOU HAVE NOT READ.** Four defects in one
 session, all the same root — a `python`/`sed` edit that matched its anchor and
 damaged what was around it — and the expensive one was invisible to every

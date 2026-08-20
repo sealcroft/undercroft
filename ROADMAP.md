@@ -2050,6 +2050,122 @@ three volumes present with contents intact afterwards — against a `BEFORE`
 state on the same machine where those three were **absent**, having been
 destroyed by the two battery runs earlier that session.
 
+### M13 — CLOSED 2026-08-20: two gates that could not see what they asserted, and the one CI never ran
+
+Round-four **#35** and **#19**, taken together because they are one defect
+class: *a gate whose observable does not move when the defect appears.* Both
+were re-verified against today's code before either was touched.
+
+**#19 — the non-finite gate could not see LOCATION.** Arm (d) of
+`every_caller_supplied_vector_door_refuses_a_non_finite_component` read the
+whole of `lib.rs`, counted `is_finite())`, and asserted `>= 1` under the
+message *"the non-finite guard is in write_drawer_stmts"* — a claim about
+WHERE the guard sits, checked by a count that cannot see where anything sits.
+
+The regression that matters is not an accidental second occurrence. It is the
+guard **moving back up into `write_drawer`**, which the guard's own comment
+records as having happened before 2026-08-05: *"It sat in `write_drawer` …
+and its own comment admitted `upsert_many` did not inherit it."* Under that
+move the count is still 1, the message still reads the same, and all three
+behavioural arms still pass — every door they drive routes through
+`write_drawer`. Only `upsert_many` loses the refusal, and that is the path a
+CLI `import` and every sealed-bundle restore take.
+
+The arm is now a WINDOW scan on the M1 idiom: the body of
+`write_drawer_stmts` must contain the guard exactly once, the body of
+`write_drawer` must not contain it at all, both windows bounded by the closing
+brace at method indentation, comment lines stripped, with premise assertions
+on window size and on the stripper having kept the code.
+
+**Counterfactual executed, and it is the sharp one.** A script MOVED the guard
+into `write_drawer` — slicing the block out rather than retyping it, because
+its Rust literal carries backslash continuations. The rewritten arm fails
+`left: 0, right: 1`. The OLD arm would have passed: the token count with the
+guard moved is **2**, and `>= 1` holds. The second occurrence is this entry's
+own explanatory comment mentioning the token — so the old arm was not merely
+weak, it was being inflated by the gate's own prose, which is the M1 defect
+exactly. The window scan is immune because it strips comments.
+
+**#35 — the published check count, and what a "widened reader" did not
+widen.** The row had three sub-claims and they have three different answers.
+
+*"No suite uses `set -e`"* — TRUE and **refuted as a defect**. `check()` takes
+an EXPECTED exit code (`tests/e2e.sh:19`) and asserts non-zero ones, so
+`set -e` would abort each suite at its first negative-path check. It is a
+design fit; recorded rather than "fixed".
+
+*"No suite asserts a minimum executed-check count"* — TRUE, and O28 made it
+moot for the suites it reaches by comparing measured against published by
+EXACT EQUALITY, which is strictly stronger than a floor.
+
+*"The per-suite figures are enforced nowhere"* — the live half, in three
+pieces, all closed here:
+
+* **`tls-pins` escaped the comparison entirely.** The post-run block carried
+  its own second, compose-shaped reader (`docker compose run --rm $n`), so a
+  suite invoked as `bash tests/tls-pins.sh … (7 checks)` resolved to an empty
+  string and was skipped by the `[ -z "$published" ] && continue` one line
+  below. M10's own entry claims *"the published-count reader was widened to
+  see host-side suites, or the figure would have been published, measured and
+  never compared"* — **true of the PREFLIGHT reader it widened, and false of
+  this one.** Two implementations of one lookup; only one got the fix. There
+  is now ONE reader, defined beside `suite_summary` and used by both phases.
+* **A suite measuring ZERO was skipped**, by `[ "$measured" -eq 0 ] &&
+  continue` — the loudest possible case treated as the quietest. Reaching that
+  line means the summary parsed as two numbers, so zero means a suite printed
+  a summary having executed nothing. It is its own drift line now, because
+  "measured 0 against a published 370" is a different fact from "measured 369".
+* **CI never ran the comparison at all.** `ci.yml`'s `preflight` job runs
+  `--preflight-only`; the `suites` matrix ran `docker compose run --rm
+  <suite>` directly. So the arm that catches every surface being stale
+  TOGETHER — the only thing a preflight cannot do, since it needs a RUN — ran
+  solely on the maintainer's machine, and a pull request dropping a suite from
+  370 checks to 3 was green.
+
+**Ruled on rather than chosen** (`tests/battery.sh` states the doctrine —
+*"A gate that only runs on its author's machine is the shape this whole file
+exists to remove"* — which settles WHETHER, not HOW). The maintainer chose the
+per-leg self-check: each matrix leg and the `tls-pins` job now run
+`bash tests/battery.sh --no-preflight <suite>`, so CI and a local battery
+execute the SAME code rather than two implementations that agree until they do
+not. No new job, so `verdict`'s `needs:` and the CI-inventory preflight are
+untouched, and both load-bearing matrix properties survive: legs stay
+independent, wall-clock stays the slowest suite. The legs also inherit
+`--build` and M12's narrowed reset for free.
+
+**Rejected:** an aggregate job consuming uploaded logs (a new job, so the
+verdict's self-asserted upstream count and the CI-inventory preflight both
+move, to buy a report that reads the same); and recording it host-only (cheap
+and honest, but it leaves the gap the script's own sentence names).
+
+**My own defect, in this unit, found by RUNNING `--no-preflight` and not by
+reading it.** The first version wrapped the preflight block in
+`if [ "$NO_PREFLIGHT" -eq 0 ]` — and `test_summary`, `suite_summary` and the
+suite-count readers are DEFINED inside that region. Under the flag they
+therefore did not exist: the run printed `suite_summary: command not found`
+and `suite_count: command not found`, **and still exited 0.** The comparison
+examined nothing and reported exactly what a clean tree reports — the failure
+this entire unit is about, reproduced inside its own fix. The shared readers
+now sit outside the wrap, which pauses and resumes around them.
+
+**Also fixed, found by running the counterfactual**: the drift message told
+the reader to update the landing tile as *"the SUM of the four e2e suites"*.
+`PUBLISHED_FIGURES` sums FIVE. M11 widened the tile and left the sentence.
+
+**Counterfactuals executed, three.** Publishing `99` for `tls-pins` and
+running `--no-preflight tls-pins` exits 1 with *"tls-pins: CLAUDE.md publishes
+99, this run measured 7"* — the suite the arm could not previously see. The
+same edit under a FULL battery is caught one layer earlier by the
+`published figures` preflight (the tile sum moves), which is why the
+`--no-preflight` form is the one that proves the post-run arm. And
+`--no-preflight tls-pins` on the shipped tree runs zero preflights, zero
+`command not found`, exit 0.
+
+`ci.yml` was re-read by a real YAML parser in a container rather than by
+grep — 9 jobs, `verdict` needing 8, 7 matrix legs, all unchanged — because
+this tree's rule is to re-implement a check in a second language before
+believing it.
+
 ---
 
 Also reserved for a documented contract that changes: the `palace`

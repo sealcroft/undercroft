@@ -7,6 +7,61 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### two gates that could not see what they asserted, and the one CI never ran (M13)
+
+Round-four **#35** and **#19**, one defect class: a gate whose observable does
+not move when the defect appears.
+
+**#19.** The non-finite-embedding gate's structural arm read all of `lib.rs`,
+counted `is_finite())` and asserted `>= 1` under the message *"the non-finite
+guard is in write_drawer_stmts"* — a claim about WHERE, checked by a count
+that cannot see where. The regression that matters is the guard moving back up
+into `write_drawer`, which its own comment records as having happened once
+before: under that move the count is still 1, every behavioural arm still
+passes because every door they drive routes through `write_drawer`, and only
+`upsert_many` — the path a CLI `import` and every sealed-bundle restore take —
+loses the refusal. It is a window scan now: present exactly once in
+`write_drawer_stmts`, absent from `write_drawer`, comments stripped, premise
+arms on both windows. Counterfactual: with the guard moved the new arm fails
+`left: 0, right: 1` while the old one passes on a token count of **2** — the
+second occurrence being the gate's own comment, which is the same
+self-measurement defect one level down.
+
+**#35.** Three sub-claims, three answers. *"No suite uses `set -e`"* is true
+and **refuted as a defect** — `check()` asserts EXPECTED non-zero exits, so
+`set -e` would abort each suite at its first negative-path check. The rest was
+live:
+
+- **`tls-pins` escaped the check-count comparison entirely.** The post-run
+  block had its own second, compose-shaped reader, so a host-side suite
+  published as `bash tests/tls-pins.sh … (7 checks)` read as empty and was
+  skipped. M10's claim that "the published-count reader was widened to see
+  host-side suites" is true of the preflight reader and false of this one —
+  two implementations of one lookup, one of them fixed. There is one reader
+  now, shared by both phases.
+- **A suite measuring ZERO was skipped**, the loudest case treated as the
+  quietest. It is its own drift line now.
+- **CI never ran the comparison.** The `preflight` job runs
+  `--preflight-only`; the matrix ran compose directly. So the arm that catches
+  every surface being stale together — which needs a RUN and therefore cannot
+  be a preflight — ran only on the maintainer's machine, and a PR dropping a
+  suite from 370 checks to 3 was green. Each matrix leg and the `tls-pins` job
+  now run `bash tests/battery.sh --no-preflight <suite>`, so CI and a local
+  battery execute the same code. No new job, so the verdict's `needs:` and the
+  CI-inventory preflight are untouched.
+
+**Reported as mine:** the first version of `--no-preflight` wrapped the
+preflight block without noticing that the shared readers are defined inside
+it. Under the flag they did not exist — the run printed `suite_summary:
+command not found` and `suite_count: command not found` **and still exited
+0**, the comparison examining nothing while reporting what a clean tree
+reports. That is the failure this unit is about, reproduced inside its own
+fix, and running it is what said so.
+
+Also corrected: the drift message told the reader the landing tile is "the SUM
+of the four e2e suites". It sums five — M11 widened the tile and left the
+sentence.
+
 ### the battery destroyed the model cache on every run, and the gate I wrote for it passed on the defect (M12)
 
 Round-four **#39**, filed 2026-08-10 and never probed until a read-only sweep

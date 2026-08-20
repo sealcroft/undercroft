@@ -38,10 +38,19 @@ ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site t
 # script only inside comments. A gate that runs only where its author
 # remembers to run it is a gate the next person does not have.
 PREFLIGHT_ONLY=0
+NO_PREFLIGHT=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
     --preflight-only) PREFLIGHT_ONLY=1 ;;
+    # `--no-preflight` is the mirror image, and it exists for CI. Each matrix
+    # leg runs ONE suite through this script rather than calling `docker
+    # compose run` itself, so that the post-run check-count comparison — which
+    # only a RUN can perform, and which therefore cannot be a preflight —
+    # happens on a pull request instead of only on the maintainer's machine.
+    # Without this flag every leg would re-run all twelve preflights, which
+    # the dedicated `preflight` job already does once. ROADMAP M13.
+    --no-preflight) NO_PREFLIGHT=1 ;;
     # Exit 1, never 2. Exit 2 is this project's integrity verdict on every
     # command; a mistyped flag borrowing it is the defect T11 closed in the
     # binaries, and it would be no less wrong here.
@@ -54,6 +63,18 @@ if [ -z "${SUITES[0]:-}" ]; then SUITES=("${ALL[@]}"); fi
 
 declare -a NAMES=() CODES=()
 OVERALL=0
+
+if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
+  echo "--preflight-only and --no-preflight are contradictory" >&2
+  exit 1
+fi
+
+# Everything between here and the `--preflight-only` exit is the host-side
+# preflight block. It is wrapped rather than re-indented DELIBERATELY: shell
+# does not care about indentation, and re-indenting ~1,300 lines to add one
+# condition would bury this change in a diff nobody could read — which is the
+# hazard CLAUDE.md records about a 100-line edit showing as 1,415 lines.
+if [ "$NO_PREFLIGHT" -eq 0 ]; then
 
 # ── preflight: line endings over the WHOLE tree ─────────────────────────────
 # `.gitattributes` declares `* text=auto eol=lf` and says why: a CRLF shell
@@ -145,6 +166,16 @@ echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 # `ROADMAP.md`, so a `cargo test` cannot read it. Cheap, and it makes "do not
 # forget" mechanical instead of remembered — which is this project's whole
 # position on inventories versus prose.
+fi  # pause the preflight block: the readers below are shared with the RUN
+
+# ---------------------------------------------------------------------------
+# THE SHARED READERS. Everything from here to `suite_count` is used by BOTH
+# the preflights above and the post-run comparison at the bottom, so it is
+# defined OUTSIDE the `--no-preflight` wrap. Leaving them inside was my own
+# defect and the run said so rather than the reading: `--no-preflight` printed
+# `suite_summary: command not found` and `suite_count: command not found`, and
+# the battery still exited 0 — the comparison silently examined nothing while
+# reporting exactly what a clean tree reports. ROADMAP M13.
 # ---------------------------------------------------------------------------
 # The `test` suite's count, read by PAIRING rather than by summing (ROADMAP
 # O15).
@@ -219,6 +250,33 @@ suite_summary() { # suite_summary <log>
         printf "  ** PREMISE FAILURE: %d summary lines in one log — it holds more than one run, so this count is not trustworthy (ROADMAP O27) **", n
     }' "$1" 2>/dev/null
 }
+
+# What a suite's check count is PUBLISHED as. Defined here, beside the reader
+# that measures it, because TWO phases ask the question and they used to ask
+# it with two different implementations: the `published figures` preflight
+# (do the surfaces agree with each other?) and the post-run comparison (does
+# the run agree with the surfaces?). The second grew its own compose-shaped
+# copy, so a host-side suite — `tls-pins`, published as
+# `bash tests/tls-pins.sh … (N checks)` — resolved to an empty string there
+# and was skipped: published, measured, and never compared. ROADMAP M13.
+#
+# `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
+# that is a GNU extension and Ubuntu's default awk is mawk, which lacks it.
+# CI runs this on ubuntu-latest, so the gawk form would read empty there.
+declare_suite_counts() {
+  # Compose-invoked suites, as CLAUDE.md publishes them.
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
+  # Host-side suites publish the same figure and are INVOKED differently, so
+  # the reader above cannot see them. Both shapes or the gate is notation-
+  # shaped rather than coverage-shaped.
+  grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#'
+}
+SUITE_COUNTS=$(declare_suite_counts)
+suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
+
+if [ "$NO_PREFLIGHT" -eq 0 ]; then  # resume the preflight block
 
 # The gate for it, run host-side because no image carries this script. Both
 # arms come from the filed shape: a log reports the same figure with and
@@ -794,23 +852,16 @@ fi
 # a confusing failure on a clean tree rather than as the portability bug it
 # is. A gate that only runs on its author's machine is the shape this whole
 # file exists to remove.
-declare_suite_counts() {
-  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
-    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
-}
-SUITE_COUNTS=$(declare_suite_counts)
-# Host-side suites publish their count the same way but are INVOKED
-# differently, so the compose-shaped reader above cannot see them. Without
-# this a suite that drives docker would escape the figure gate entirely —
-# published, measured, and never compared.
-SUITE_COUNTS="$SUITE_COUNTS
-$(grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#')"
+# The reader itself is DEFINED ABOVE, beside `suite_summary`, because two
+# phases need it: this preflight (do the surfaces agree with each other?) and
+# the post-run comparison (does the run agree with the surfaces?). It lived
+# here, inside the preflight, and the post-run block therefore grew its own
+# second, compose-only copy — which could not see `tls-pins`. ROADMAP M13.
 if [ -z "$SUITE_COUNTS" ]; then
   echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
   echo "      and a broken reader agrees with every page it cannot read"
   FIG_FAIL=1
 fi
-suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
 
 # Any OTHER doc republishing a suite's count must match CLAUDE.md's.
 while IFS= read -r hit; do
@@ -1426,6 +1477,8 @@ if [ "$V1_FAIL" -ne 0 ]; then
 fi
 echo "ok    both /v1 route references match the dispatch exactly ($V1_N routes)"
 
+fi  # end of the host-side preflight block (`--no-preflight` skips it)
+
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   echo ""
   echo "preflights only — no suite was run, by request (--preflight-only)"
@@ -1560,8 +1613,18 @@ echo "════════════════════════�
 FIGURE_DRIFT=""
 for i in "${!NAMES[@]}"; do
   n="${NAMES[$i]}"
-  published=$(grep -oE "docker compose run --rm $n .*\([0-9]+ checks" CLAUDE.md 2>/dev/null \
-              | sed -E 's/.*\(([0-9]+) checks/\1/' | head -1)
+  # ONE reader, shared with the preflight. This used to be a second,
+  # compose-shaped grep written out here — `docker compose run --rm $n` — so
+  # it could not see a suite INVOKED any other way. `tls-pins` is published as
+  # `bash tests/tls-pins.sh … (7 checks)`, so `published` came back empty and
+  # the `continue` below skipped it: published, measured, and never compared.
+  # M10's own entry claims "the published-count reader was widened to see
+  # host-side suites, or the figure would have been published, measured and
+  # never compared" — true of the PREFLIGHT reader it widened, and false of
+  # this one, which is the arm that catches the case the preflight cannot
+  # (every surface stale TOGETHER). Two implementations of one lookup, and
+  # only one of them got the fix. ROADMAP M13.
+  published=$(suite_count "$n")
   [ -z "$published" ] && continue
   line=$(suite_summary ".battery/$n.log")
   measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
@@ -1576,7 +1639,18 @@ for i in "${!NAMES[@]}"; do
     *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
     *)     continue ;;
   esac
-  [ "$measured" -eq 0 ] && continue
+  # A suite that printed a summary and counted ZERO is the LOUDEST case, not
+  # the quietest, and this skipped it. Reaching here means the summary parsed
+  # as two numbers (the `case` above diverts every other shape), so
+  # `0 passed, 0 failed` is a suite that ran and executed nothing — a checker
+  # that cannot run reporting exactly what a clean tree reports, which is the
+  # failure this whole file is about. It is reported as its own drift line
+  # rather than folded into the mismatch below, because "measured 0 against a
+  # published 370" is a different fact from "measured 369". ROADMAP M13.
+  if [ "$measured" -eq 0 ]; then
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: published $published, this run measured ZERO — the suite printed a summary having executed nothing\n"
+    continue
+  fi
   if [ "$measured" != "$published" ]; then
     FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published, this run measured $measured\n"
   fi
@@ -1620,7 +1694,8 @@ if [ -n "$FIGURE_DRIFT" ]; then
   echo "them did not. This is a doc-drift verdict, NOT a suite failure:"
   printf "$FIGURE_DRIFT"
   echo "      Update CLAUDE.md, then the landing page tile (its e2e figure is the"
-  echo "      SUM of the four e2e suites) and any doc republishing the count."
+  echo "      SUM of the FIVE e2e suites named in PUBLISHED_FIGURES) and any doc"
+  printf '%s\n' "      republishing the count."
   OVERALL=1
 fi
 
