@@ -1539,6 +1539,14 @@ mod tests {
             // nobody classified. That is the failure mode it exists to
             // prevent, reachable through its own inventory.
             "verify-forgetting",
+            // Added with the engine route it names (ROADMAP M17), for the
+            // same reason `verify-forgetting` was: without a line here this
+            // gate never EXAMINES the capability, so `repair` would have sat
+            // in `OPS_ROUTES` classified by nobody and the gate would have
+            // stayed green over it. The comment above is not hypothetical —
+            // it describes what happened to this entry an hour before it was
+            // written.
+            "repair",
             "admission",
             "retention",
             "retention/sweep",

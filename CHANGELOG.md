@@ -7,6 +7,32 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the ops-parity gate stayed green over a capability nobody classified (O67 filed, one instance closed)
+
+Round-four **#33**, re-verified and measured. The orchestrator's
+`every_operator_capability_is_reachable_or_recorded_as_absent` compares two
+DERIVED inventories against a universe that is a hand-written literal — and
+that literal's own comment states the consequence: *"a new `/v1` operator route
+absent from it is counted in NEITHER direction."*
+
+Measured: `tenant.rs` defines **28** distinct per-vault subpaths; the literal
+names **16**.
+
+**It happened during this session**, which is the evidence the row needed. M17
+added `POST …/repair` and put it in `OPS_ROUTES`; the gate passed, because
+`repair` was not in the literal and so was never examined. The capability was
+classified by accident rather than by the mechanism. That one instance is
+closed — `repair` is in the literal — but adding a line per route is the defect
+restated, not the fix.
+
+**Filed as O67 rather than closed, and it is a design question rather than
+effort.** Deriving the universe from the route table makes the gate demand a
+ruling for all 28, and about half are DATA-plane reads the ops plane correctly
+does not carry because `/t/*` does. Recording each as "deliberately absent"
+would be true, useless, and would bury the four entries that mean something. The
+fix needs a third category, which is a classification decision — and inventing
+one unasked is exactly what M16 refused to do for its own rows.
+
 ### no CLI command could look at a vault without healing it, and `vault list` did it to all of them (M18)
 
 Surfaced by M16's surface audit as a blind-spot note and verified independently

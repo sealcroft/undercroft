@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**87** of the **102** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**88** of the **103** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 87 of 102 — stale by
+body said the gate "examines **47 of 60**". Measured, 88 of 103 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2715,6 +2715,49 @@ consistent — but 401 is answered BEFORE `Tenancy::authorize` returns a vault,
 so it has no vault-scoped context, and saying more about WHY a bearer failed
 is exactly what an unauthenticated caller must not learn. Those two pull in
 opposite directions and the resolution is a ruling, not a refactor.
+
+### O67 — the ops-parity gate counts against a hand-written universe, and it names 16 of 28
+
+Round-four **#33**, re-verified 2026-08-20 and MEASURED rather than restated.
+
+`every_operator_capability_is_reachable_or_recorded_as_absent` compares two
+DERIVED inventories — `OPS_ROUTES` and `OPS_DELIBERATELY_ABSENT`, both real
+consts the proxy enforces — against a universe called `engine_ops` that is a
+**hand-written literal**. The literal's own comment states the consequence
+exactly: *"a new `/v1` operator route absent from it is counted in NEITHER
+direction — so the gate whose whole job is to force every capability into
+reachable or recorded-as-absent stays green over one nobody classified."*
+
+**Measured**: `tenant.rs`'s dispatch defines **28** distinct per-vault
+subpaths; the literal names **16**. Twelve are examined by nothing.
+
+**And it happened during this very session, which is the evidence the entry
+needed.** M17 added `POST /v1/vaults/{id}/repair` and put it in `OPS_ROUTES`.
+The gate passed — because `repair` was not in the literal, so it was never
+examined. The capability was classified by accident rather than by the
+mechanism. It is in the literal now, but adding a line per route is the defect
+restated, not the fix.
+
+**Why this is filed rather than closed, and it is a DESIGN question rather than
+effort.** The obvious fix — derive `engine_ops` from `tenant.rs`'s route table,
+using the cross-crate source-reading idiom `the_orchestrator_and_the_engine_agree_on_every_orch_variable`
+already uses — makes the gate demand a ruling for all 28. But roughly half are
+DATA-plane reads (`search`, `drawers/{id}`, `taxonomy`, `stats`, `kg/query`,
+`kg/entities`, …) that the ops plane correctly does not carry because the `/t/*`
+data plane does. Recording each as "deliberately absent from the ops plane"
+would be true and useless, and would bury the four entries that mean something.
+
+So the fix needs a THIRD category — reached-via-the-data-plane — and that is a
+classification decision, not a refactor. Inventing it unasked is exactly what
+M16 refused to do for its own twenty-four rows.
+
+**Shape of the fix.** Derive the universe from `tenant.rs`. Partition it three
+ways: ops-reachable, deliberately-absent-from-ops, and data-plane (which
+`data_subpath_ok` ALREADY defines, so that third list may be derivable too
+rather than hand-written — worth checking before writing one). **Gate:** the
+existing test, with the literal replaced by the derived set and a premise arm
+requiring it to find more than twenty subpaths, so a broken extractor cannot
+silently shrink the universe to nothing.
 
 ### O66 — twenty-four surface absences are measured and unruled
 
