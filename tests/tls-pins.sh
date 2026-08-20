@@ -60,39 +60,60 @@ if [ -z "${ENGINE_UID:-}" ]; then
 fi
 pass "engine uid read from Dockerfile: $ENGINE_UID"
 
-# <compose file>|<terminator service>|<exporter service>|<volume>|<published path>
+# **Each stack runs under its OWN throwaway compose project**, and that is not
+# tidiness — the first version of this suite ran `down -v` against the REAL
+# projects, so a battery run destroyed a developer's live observability stack,
+# its Grafana state and its mined corpus. It did exactly that once, which is
+# how this comment came to exist.
+#
+# A private project also makes the suite hermetic: fresh volumes every run, so
+# a leftover exported root from a previous run cannot make it pass vacuously.
+#
+# <compose file>|<terminator>|<exporter>|<volume>|<published path>|<project>
 STACKS="
-docker-compose.yml|embeddings-tls|embed-tls-export|undercroft-embed-tls|/tls/root.crt
-deploy/observability/docker-compose.observability.yml|tempo-tls|tls-export|tempo-tls-data|/tls/root.crt
+docker-compose.yml|embeddings-tls|embed-tls-export|undercroft-embed-tls|/tls/root.crt|tlspins-embed
+deploy/observability/docker-compose.observability.yml|tempo-tls|tls-export|tempo-tls-data|/tls/root.crt|tlspins-obs
 "
 
 cleanup() {
-  while IFS='|' read -r file term exporter vol path; do
+  while IFS='|' read -r file term exporter vol path proj; do
     [ -z "${file:-}" ] && continue
-    docker compose -f "$file" down -v >/dev/null 2>&1 || true
+    docker compose -p "$proj" -f "$file" down -v >/dev/null 2>&1 || true
   done <<EOF
 $STACKS
 EOF
 }
 trap cleanup EXIT
 
-while IFS='|' read -r file term exporter vol path; do
+while IFS='|' read -r file term exporter vol path proj; do
   [ -z "${file:-}" ] && continue
   label="$(basename "$(dirname "$file")")/$term"
 
   # A clean slate: a leftover volume from a previous run could carry an
   # already-exported root and pass this suite without the exporter working.
-  docker compose -f "$file" down -v >/dev/null 2>&1 || true
+  docker compose -p "$proj" -f "$file" down -v >/dev/null 2>&1 || true
 
-  if ! docker compose -f "$file" up -d "$exporter" >/dev/null 2>&1; then
-    fail "$label: the terminator and exporter came up" \
-         "$(docker compose -f "$file" logs "$exporter" 2>&1 | tail -5)"
+  # `--no-deps`, and it is load-bearing. The terminator drags in services
+  # that PUBLISH ports — `tempo` on 3200 for the observability stack —
+  # which collide with an operator running that stack even under a private
+  # project name, because a published port is a HOST resource the project
+  # prefix does not scope. None of them is needed either: Caddy provisions
+  # its internal CA at startup whether or not the upstream it proxies is
+  # reachable, and that CA is the only thing this suite is about.
+  if ! docker compose -p "$proj" -f "$file" up -d --no-deps "$term" >/dev/null 2>&1; then
+    fail "$label: the terminator came up" \
+         "$(docker compose -p "$proj" -f "$file" logs "$term" 2>&1 | tail -5)"
+    continue
+  fi
+  if ! docker compose -p "$proj" -f "$file" up -d --no-deps "$exporter" >/dev/null 2>&1; then
+    fail "$label: the exporter came up" \
+         "$(docker compose -p "$proj" -f "$file" logs "$exporter" 2>&1 | tail -5)"
     continue
   fi
 
   # The exporter is a one-shot; wait for it to finish, bounded.
   i=0
-  until [ "$(docker compose -f "$file" ps -a --status exited -q "$exporter" | wc -l)" -gt 0 ]; do
+  until [ "$(docker compose -p "$proj" -f "$file" ps -a --status exited -q "$exporter" | wc -l)" -gt 0 ]; do
     i=$((i + 1))
     if [ "$i" -gt 90 ]; then
       fail "$label: the exporter finished" "still running after 90s"
@@ -101,14 +122,9 @@ while IFS='|' read -r file term exporter vol path; do
     sleep 1
   done
 
-  # The project prefix is what names the volume on the host. Compose declares
-  # it, so read it rather than guessing — a bare volume name silently mounts a
-  # fresh empty one, which would make every assertion below vacuous.
-  proj="$(grep -m1 '^name:' "$file" | awk '{print $2}')"
-  if [ -z "${proj:-}" ]; then
-    fail "$label: compose file declares a project name" "no 'name:' in $file"
-    continue
-  fi
+  # The project prefix names the volume on the host, and here it is the
+  # THROWAWAY project above rather than the file's own `name:` — which is
+  # precisely what keeps this suite off the operator's real volumes.
   full="${proj}_${vol}"
 
   # PREMISE. If the volume has no PKI at all, every readability assertion

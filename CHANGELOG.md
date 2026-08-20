@@ -28,6 +28,14 @@ like the battery itself, because it drives docker; the published-count reader
 was widened so a host-side suite cannot escape the figure gate. Ninth CI job,
 verdict widened to eight.
 
+**A defect of mine inside that suite, reported as mine:** its first version
+ran `down -v` against the REAL compose projects, so a battery run destroyed a
+live observability stack, its volumes and a mined corpus — which it did, once,
+on the maintainer's machine. Each stack now runs under a throwaway project, and
+`--no-deps` keeps it off published ports, which a project name does not scope.
+Verified by running it against a live stack: 10 containers, 7 volumes and
+Grafana 200 before and after, nothing leaked.
+
 It does not prove the observability stack starts — the cost argument for that
 is in ROADMAP M7. It is the half that would have caught the defect.
 

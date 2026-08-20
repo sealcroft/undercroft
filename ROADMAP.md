@@ -1755,6 +1755,24 @@ Three properties worth keeping:
   The published-count reader was widened to see host-side suites, or the
   figure would have been published, measured and never compared.
 
+**A defect of mine, in this suite, found by running the battery and then
+looking at the machine.** The first version ran `down -v` against the REAL
+compose projects, so a battery run destroyed a live observability stack — its
+containers, its volumes, its Grafana state and a mined corpus. It did exactly
+that once, on the maintainer's machine, an hour after I committed it. Each
+stack now runs under a throwaway project (`tlspins-embed`, `tlspins-obs`), so
+the suite creates and destroys only its own volumes; proven by running it
+against a live stack and observing 10 containers / 7 volumes / Grafana 200
+before and after, with zero `tlspins-*` state left behind.
+
+`--no-deps` is part of that fix and is load-bearing for a second reason: a
+private project name does NOT scope a published PORT, which is a host
+resource. The terminator's dependency chain drags in `tempo`, which publishes
+3200, so the suite collided with the very stack it was trying not to disturb.
+Neither terminator publishes ports itself, and Caddy provisions its internal
+CA at startup whether or not the upstream it proxies is reachable — so the
+dependencies were never needed at all.
+
 **Scope, stated:** this does NOT prove the observability stack starts. That
 needs the full engine image and four containers; the cost argument and the
 exact command are in M7. This is the cheap half — three small public images,
