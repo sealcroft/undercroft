@@ -1220,6 +1220,39 @@ else
 fi
 rm -f "$RO_VAULT/vault.json.next"
 
+# ── the CLI can ask for the same posture (ROADMAP M18) ─────────────────────
+# `serve-*` has had `--read-only` since R4; no CLI COMMAND had any way to ask
+# for it, so the surface an operator reaches for first during an incident was
+# the one that could not stay off the evidence. Same staging-manifest recipe
+# as above, driven through the binary a responder actually types.
+printf '{"half-written":' > "$RO_VAULT/vault.json.next"
+CLI_RO_BEFORE="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next | sort)"
+"$BIN" --read-only stats >/dev/null 2>&1 || true
+"$BIN" --read-only vault list >/dev/null 2>&1 || true
+CLI_RO_AFTER="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next 2>&1 | sort)"
+if [ "$CLI_RO_BEFORE" = "$CLI_RO_AFTER" ]; then
+  echo "ok    --read-only CLI leaves the vault byte-identical"; PASS=$((PASS+1))
+else
+  echo "FAIL  --read-only CLI leaves the vault byte-identical"
+  diff <(echo "$CLI_RO_BEFORE") <(echo "$CLI_RO_AFTER") | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# THE COUNTERFACTUAL, and it is what makes the arm above mean something: the
+# SAME command without the flag destroys the staging manifest. `vault list`
+# specifically, because it bypassed the posture entirely and did this to
+# EVERY vault on the host — the most natural first command in an incident,
+# touching everything it was asked about and everything it was not.
+if [ -f "$RO_VAULT/vault.json.next" ]; then
+  "$BIN" vault list >/dev/null 2>&1 || true
+  if [ ! -f "$RO_VAULT/vault.json.next" ]; then
+    echo "ok    a writable vault list discards it (the defect M18 closed)"; PASS=$((PASS+1))
+  else
+    echo "FAIL  a writable vault list discards it (the defect M18 closed)"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "FAIL  premise: --read-only already removed the staging manifest"; FAIL=$((FAIL+1))
+fi
+rm -f "$RO_VAULT/vault.json.next"
+
 echo "== Scripted attacker over /v1 (C3.3 gate) =="
 # The gate's last clause: an attacker with legitimate write access to the
 # REST surface tries every route to make poison retrievable, and every one

@@ -42,6 +42,32 @@ struct Cli {
     #[arg(long, global = true, env = "UNDERCROFT_HOME")]
     data_dir: Option<PathBuf>,
 
+    /// Open every vault READ-ONLY: heal nothing, migrate nothing, write
+    /// nothing. For inspecting a vault you do not want to touch.
+    ///
+    /// ROADMAP M18. A normal open is not passive — R4 records what it does:
+    /// it runs the embedder migration, fast-forwards the manifest anchor,
+    /// rebuilds the FTS index, performs the A10/U12 at-rest migrations, and
+    /// promotes or DELETES a writer's `vault.json.next`, which `CLAUDE.md`
+    /// calls "evidence destruction on the incident runbook's own path". That
+    /// is right for ordinary use and exactly wrong when you are looking at a
+    /// vault BECAUSE something went wrong with it.
+    ///
+    /// `serve-mcp` and `serve-http` have had `--read-only` since R4; no CLI
+    /// command had any way to ask for it, so the surface an operator reaches
+    /// for first during an incident was the one that could not stay off the
+    /// evidence.
+    ///
+    /// A read-only open DETECTS and REPORTS what it declined to heal
+    /// (`PalaceStats.unhealed`) instead of doing it, and runs under
+    /// `PRAGMA query_only=ON` — so a write this flag does not anticipate
+    /// fails loudly rather than happening quietly. A mutating subcommand
+    /// under this flag is therefore refused by SQLite rather than by a
+    /// classifier, which is deliberate: a list of "which commands write"
+    /// maintained by hand is the drift this project keeps closing.
+    #[arg(long, global = true)]
+    read_only: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -1090,8 +1116,29 @@ enum Posture {
     ReadOnly,
 }
 
+impl Cli {
+    /// What `--read-only` means for every open this process performs.
+    ///
+    /// One place, so a command cannot forget it — the same reason
+    /// `serve-http --read-only` decides its posture once in FRONT of dispatch
+    /// rather than per handler.
+    fn posture(&self) -> Posture {
+        if self.read_only {
+            Posture::ReadOnly
+        } else {
+            Posture::ReadWrite
+        }
+    }
+}
+
+/// The posture EVERY ordinary CLI command opens with.
+///
+/// `Posture::ReadWrite` unless `--read-only` was declared (ROADMAP M18). It
+/// was unconditionally read-write, and `Posture::ReadOnly` had exactly two
+/// call sites in this file — both `serve-* --read-only` — so no CLI command
+/// could inspect a vault without healing it.
 fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
-    open_store_as(cli, vault, Posture::ReadWrite)
+    open_store_as(cli, vault, cli.posture())
 }
 
 fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
@@ -1768,9 +1815,30 @@ fn run(cli: Cli) -> Result<()> {
                 if vaults.is_empty() {
                     println!("No vaults. Run: undercroft init");
                 }
+                // **This loop BYPASSED the posture entirely** (ROADMAP M18).
+                // It called `mgr.unlock` and `PalaceStore::open` directly
+                // rather than going through `open_store_as`, so listing
+                // performed a full read-write unlock and open on EVERY vault
+                // on the host — including ones the operator was not asking
+                // about. R4 records what that does: promote or delete a
+                // writer's staging manifest, fast-forward the anchor, run the
+                // at-rest migrations. `undercroft vault list` is the most
+                // natural first command during an incident, and it was the
+                // one that touched everything.
                 for name in vaults {
-                    let v = mgr.unlock(&name)?;
-                    let store = PalaceStore::open(v)?;
+                    let store = match open_store_as(&cli, &name, cli.posture()) {
+                        Ok(s) => s,
+                        // A listing must LIST. A vault a read-only role would
+                        // have had to migrate refuses to open that way
+                        // (`ReadOnlyUnmigrated`), and an absent database
+                        // refuses outright — neither is a reason to abandon
+                        // the other vaults, which is what propagating here
+                        // would do. Named, and the walk continues.
+                        Err(e) => {
+                            println!("{name:<20} unavailable: {e}");
+                            continue;
+                        }
+                    };
                     println!(
                         "{:<20} level={:<10} records={}",
                         name,

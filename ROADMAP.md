@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**86** of the **101** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**87** of the **102** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 86 of 101 — stale by
+body said the gate "examines **47 of 60**". Measured, 87 of 102 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2570,6 +2570,63 @@ the commit and removed by hand after reading the exact lines.
 vocabulary**: every absence on the CLI axis is argued, structural, or openly
 unruled — none is a gap nobody got to. The variant stays, because a vocabulary
 missing the word for the bad case cannot record the bad case.
+
+### M18 — CLOSED 2026-08-20: no CLI command could look at a vault without healing it, and `vault list` did it to all of them
+
+**Surfaced by M16's surface audit as a blind-spot note, and deliberately NOT
+treated as a finding until it was verified independently** — an agent's
+observation about a surface it did not enumerate is a hypothesis. Read from the
+code: `Posture::{ReadWrite, ReadOnly}` exists, `open_store` hard-codes
+`ReadWrite`, and `Posture::ReadOnly` had exactly **two** call sites in
+`main.rs`, both `serve-* --read-only`, against **32** `open_store(` sites.
+
+**A normal open is not passive, and R4 says exactly what it does**: the
+embedder migration, the manifest anchor fast-forward, the FTS rebuild, the
+A10/U12 at-rest migrations, and promoting or DELETING a writer's
+`vault.json.next` — *"the operation A32 called evidence destruction on the
+incident runbook's own path"*. That is right for ordinary use and exactly wrong
+when you are looking at a vault BECAUSE something went wrong with it. `serve-*`
+has been able to ask for the other posture since R4; **no CLI command could**,
+so the surface a responder reaches for first was the one that could not stay
+off the evidence.
+
+**`vault list` was worse than the general case, and it is the reason this is a
+unit rather than a flag.** It did not go through `open_store` at all — it
+called `mgr.unlock(&name)` and `PalaceStore::open(v)` directly, in a loop, so
+listing performed a full read-write unlock and open on **every vault on the
+host**, including the ones the operator was not asking about. The most natural
+first command in an incident touched everything.
+
+**Fix.** A global `--read-only`, resolved in ONE place (`Cli::posture`) on the
+same argument that makes `serve-http --read-only` a posture decided in front of
+dispatch rather than a guard per handler. `open_store` consults it, and
+`vault list` goes through the posture instead of around it.
+
+**A listing must LIST.** A read-only open legitimately REFUSES two conditions —
+an absent database, and a schema a read-only role would have had to migrate —
+and propagating either would abandon the remaining vaults over one bad entry.
+The loop names the vault, says it is unavailable, and continues.
+
+**Deliberately NOT done: a hand-maintained list of which subcommands write.**
+Under `--read-only` the store runs `PRAGMA query_only=ON`, so a write this flag
+did not anticipate fails loudly rather than happening quietly — which is R4's
+own design intent. A classifier listing "the mutating commands" is the drift
+this project keeps closing, and it would be a second answer to a question
+SQLite already answers correctly.
+
+**Gates — two e2e arms, and the second is what makes the first mean
+something.** Using the suite's existing staging-manifest recipe: with a torn
+`vault.json.next` planted, `--read-only stats` and `--read-only vault list`
+leave the vault **byte-identical** (md5 over `palace.db`, `vault.json`,
+`vault.json.next`). Then the counterfactual — the SAME `vault list` **without**
+the flag discards the staging manifest, which is the defect, executed. A premise
+arm fails if the read-only pass had already removed it, so the counterfactual
+cannot pass for the wrong reason.
+
+**Residual, stated:** read commands still default to read-write, and that is
+deliberate rather than unfinished — healing at open is the design, and making
+`stats` stop migrating would change what ordinary use does to fix an incident
+case. `--read-only` is the door for the incident; the default is unchanged.
 
 ---
 

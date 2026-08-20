@@ -7,6 +7,46 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### no CLI command could look at a vault without healing it, and `vault list` did it to all of them (M18)
+
+Surfaced by M16's surface audit as a blind-spot note and verified independently
+before being treated as a finding. `Posture::{ReadWrite, ReadOnly}` exists;
+`open_store` hard-coded `ReadWrite`; and `Posture::ReadOnly` had exactly **two**
+call sites in `main.rs`, both `serve-* --read-only`, against **32**
+`open_store(` sites.
+
+A normal open is not passive, and R4 says what it does: the embedder migration,
+the anchor fast-forward, the FTS rebuild, the A10/U12 at-rest migrations, and
+promoting or deleting a writer's `vault.json.next` — *"the operation A32 called
+evidence destruction on the incident runbook's own path"*. Right for ordinary
+use, exactly wrong when you are looking at a vault because something went wrong
+with it. `serve-*` could ask for the other posture; no CLI command could.
+
+**`vault list` was worse than the general case.** It bypassed `open_store`
+entirely — `mgr.unlock` plus `PalaceStore::open` in a loop — so listing did a
+full read-write open on **every vault on the host**, including ones nobody
+asked about. The most natural first command in an incident touched everything.
+
+A global `--read-only`, resolved in one place, on the same argument that makes
+`serve-http --read-only` a posture decided in front of dispatch. `vault list`
+now goes through the posture instead of around it, and names a vault it cannot
+open rather than abandoning the rest — a listing must list.
+
+Deliberately not done: a hand-maintained list of which subcommands write. Under
+`--read-only` the store runs `PRAGMA query_only=ON`, so an unanticipated write
+fails loudly, which is R4's own design intent; a classifier would be a second
+answer to a question SQLite already answers.
+
+Two e2e arms, and the second makes the first mean something: with a torn
+staging manifest planted, `--read-only stats` and `--read-only vault list`
+leave the vault byte-identical — and then the same `vault list` **without** the
+flag discards it, which is the defect, executed. A premise arm fails if the
+read-only pass had already removed it.
+
+Residual, stated: read commands still default to read-write. Healing at open is
+the design, and making `stats` stop migrating would change ordinary use to fix
+an incident case. `--read-only` is the door for the incident.
+
 ### two surfaces could diagnose and neither could remediate (M17)
 
 The one `Absence::Drift` M16's inventory carried, closed rather than left as a
