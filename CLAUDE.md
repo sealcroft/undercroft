@@ -1356,8 +1356,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (761 run,
-                                      # 4 #[ignore]d = 765 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (762 run,
+                                      # 4 #[ignore]d = 766 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2236,6 +2236,21 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   on the queue that exists to contain it, nor assign the trust class that
   decides what it may retrieve), asserted by the same test as the parity,
   so the two can never disagree about what MCP is allowed to reach.
+  **The CLI axis had no such inventory at all until M16**, so every CLI-only
+  capability was an unrecorded gap by construction — measured, **74** CLI
+  operations of which `parity.rs` named **17**. `SURFACE_ABSENCES` +
+  `SURFACE_COMPLETE` now PARTITION it (63 rows over 59 anchors, plus 15
+  reachable everywhere = 74), keyed on the `main.rs` dispatch anchor and on
+  `(anchor, absent_from)` because a ruling differs per surface — `repair` is
+  a boundary on MCP and a drift on `/v1`. **`Absence::Unruled` is a real
+  verdict, not a smaller boundary**: where the absence is a PRODUCT decision
+  the code does not settle, the row says nobody has decided and must cite the
+  entry where it is filed, because an inventory whose reasons were guessed
+  reads as ruled while being fiction — worse than none, since it stops the
+  next reader looking. Scope, stated: the gate derives its universe from
+  `main.rs`, so it is both-directional over the CLI axis only; an absence FROM
+  the CLI of something present only on `/v1` (vault delete, the SSE stream) is
+  filed in O66 rather than caught.
 - **A drift has a DIRECTION, and it is decided by provenance — never by
   which side is cheaper to edit.** Finding that the code and the documents
   disagree is half the work; the other half is deciding which one is wrong,

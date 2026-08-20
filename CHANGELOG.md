@@ -7,6 +7,51 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the CLI axis had no inventory, so every CLI-only capability was an unrecorded gap by construction (M16)
+
+Round-four **#34**, and much larger than the row said. It read "five CLI-only
+maintenance ops"; measured by an exhaustive four-surface join, adversarially
+verified: **74** CLI operations — 24 leaf `Command` variants plus 50
+sub-actions across 14 action enums — of which `parity.rs` named **17**.
+
+The mechanism was never in doubt. `CLAUDE.md` requires *"an inventory the code
+is counted against in both directions"*, and `OPERATOR_ONLY` does exactly that
+for the MCP axis while `OPS_DELIBERATELY_ABSENT` does it for the orchestrator's
+ops plane. **Nothing did it for the CLI axis.**
+
+`SURFACE_ABSENCES` + `SURFACE_COMPLETE` now PARTITION that surface: 63 rows
+over 59 distinct anchors, plus 15 reachable everywhere = **74**, the
+independently measured total. Rows key on the `main.rs` dispatch anchor (an
+anchor is derivable from source; a prose name is not) and on
+`(anchor, absent_from)`, because the ruling differs per surface —
+`Command::Repair` is a boundary on MCP and a drift on `/v1`.
+
+Rulings: **31 Boundary, 7 Structural, 1 Drift, 24 Unruled.**
+
+`Absence::Unruled` is the load-bearing choice. Two dozen absences are PRODUCT
+decisions neither the code nor the doctrine settles. The alternative was
+inventing thirty-odd reasons, and an inventory whose reasons were guessed reads
+as ruled while being fiction — worse than none, because it stops the next
+reader looking. `Unruled` says nobody has decided and must cite where the
+decision is filed (**O66**); the gate enforces that citation.
+
+Four gate arms, all executed: accounting (an anchor in neither list fails,
+naming it), stale rows (a row naming a dead anchor fails), premise (a blinded
+extractor reports "found 0 operations … a broken extractor agrees with any
+inventory"), and reason quality — **which fired twice on its own author**,
+rejecting a 21-character and a 30-character reason.
+
+**Reported as mine:** the first extractor detected a router variant by testing
+whether its line contained `Action`. It does not — a router is written `Kg {` /
+`#[command(subcommand)]` / `action: KgAction,` — so the test excluded nothing
+and the gate reported all fourteen routers as unruled. Correct by its own
+lights, which is how it told me the extractor was broken rather than the tree.
+
+Two corrections found by checking rather than relaying: the CLI's `VaultAction`
+has **no Delete**, so `/v1` can delete a vault and the CLI cannot; and MCP's
+`list_wings`/`list_rooms` against the CLI's `taxonomy` is a granularity
+difference, not an absence — encoding it would have put a false row in.
+
 ### the heading gate absorbed the sections it should have ended, and four open items had no heading at all (M15)
 
 Round-four **#36**, plus the governance sweep it made unavoidable.

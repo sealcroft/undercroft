@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**83** of the **98** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**85** of the **100** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 83 of 98 — stale by
+body said the gate "examines **47 of 60**". Measured, 85 of 100 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2373,6 +2373,93 @@ new awk rule carried a comment containing an apostrophe. The awk program lives
 inside a single-quoted shell string, so it terminated the string and
 `tests/battery.sh` died with a syntax error at exit 2. Fixed, and the
 constraint is now written beside the rule for the next editor.
+
+### M16 — CLOSED 2026-08-20: the CLI axis had no inventory, so every CLI-only capability was an unrecorded gap by construction
+
+Round-four **#34**, and it is much larger than the row said. The row read *"five
+CLI-only maintenance ops have no recorded boundary and no inventory"*. Measured
+by an exhaustive four-surface join, adversarially verified: **74** CLI
+operations — 24 leaf `Command` variants plus 50 sub-actions across 14 action
+enums — of which `parity.rs` named **17**. Fifty-seven were named nowhere.
+
+**The mechanism was never in doubt and is not a choice.** `CLAUDE.md`: *"A
+capability missing from one surface is a boundary or a drift, and which one has
+to be written down … an inventory the code is counted against in both
+directions — a tool without a line fails the build and a line without a tool
+fails it too, which a hand-maintained doc table cannot do."* `OPERATOR_ONLY`
+does this for the MCP axis and `OPS_DELIBERATELY_ABSENT` for the orchestrator's
+ops plane. **Nothing did it for the CLI axis.**
+
+`SURFACE_ABSENCES` + `SURFACE_COMPLETE` now PARTITION the CLI surface:
+**63 rows over 59 distinct anchors, plus 15 reachable everywhere = 74**, which
+is the independently measured total. Rows are keyed on the `main.rs` dispatch
+anchor (`Command::Dedup`, `BackupAction::Restore`) on the `HAND_PROJECTED`
+precedent, because an anchor is derivable from source and a prose name is not,
+and on `(anchor, absent_from)` because the ruling genuinely differs per surface
+— `Command::Repair` is a boundary on MCP and a drift on `/v1`.
+
+**Rulings: 31 Boundary, 7 Structural, 1 Drift, 24 Unruled.**
+
+**`Absence::Unruled` is the load-bearing decision of this unit.** Roughly two
+dozen absences are PRODUCT decisions that neither the code nor the doctrine
+settles — whether the remote plane should carry the agent-facing memory surface
+(diary, tunnels, closets, hallways, wake-up, the kg write family). The
+alternative was inventing thirty-odd reasons, and **an inventory whose reasons
+were guessed reads as ruled while being fiction — strictly worse than no
+inventory, because it stops the next reader looking.** `Unruled` says nobody has
+decided and carries the entry where the decision is filed (**O66**), and the
+gate REQUIRES that citation. Ruled by the maintainer over the two alternatives
+(a gate seeded with a narrowed subset; filing without building).
+
+**Boundaries ruled here, each with an argument rather than a restatement**:
+`mine`/`sweep` read a directory path the CALLER names, which remotely is a
+caller directing server-side filesystem reads; `index push` is EGRESS carrying
+plaintext-derived embeddings; the four `bundle` actions mint or read SECRET key
+material, and a server that generated your identity would hold the half only
+you may hold; `repair`, `backup create|list|restore` operate ON the storage
+machinery rather than through it — the `rotate`/`anchor` precedent, which are
+operator-only for exactly that reason.
+
+**Gate — four arms, all executed.**
+
+* **Accounting**: an anchor in neither list fails, naming it. Counterfactual:
+  `Command::Search` removed from `SURFACE_COMPLETE` → fails naming it.
+* **Stale rows**: a row naming an anchor `main.rs` no longer defines fails.
+  Counterfactual: a bogus row → fails.
+* **Premise**: the extractor blinded → *"found 0 operations in main.rs, which
+  is implausibly few — a broken extractor agrees with any inventory"*.
+* **Reason quality**: a reason under 30 characters fails, and an `Unruled` row
+  without a filed entry fails. **This arm fired twice while the inventory was
+  being written** — `Command::ServeHttp` at 21 characters and
+  `DiaryAction::Read` at 30 — which is the arm doing its job on its author.
+
+**A defect of mine, and the gate is what reported it.** The first extractor
+detected a ROUTER variant by testing whether its line contained `Action`. It
+does not: a router is written `Kg {` / `#[command(subcommand)]` /
+`action: KgAction,`, so the VARIANT line contains no `Action` at all and the
+test excluded nothing. The gate then reported all fourteen routers as unruled
+operations — correctly by its own lights, which is how it said the extractor
+was broken rather than the tree. Routers are derived from the enum names now.
+
+**A property worth recording that is NOT this gate's**: a genuinely new
+`Command` variant fails the COMPILER first, because the dispatch `match` stops
+being exhaustive. The counterfactual for the accounting arm therefore had to
+remove an existing anchor from the inventory rather than add a new variant —
+the compiler got there first. The gate covers the case the compiler cannot: a
+variant that HAS an arm and no ruling.
+
+**Two corrections to the join, both found by checking rather than relaying.**
+The CLI's `VaultAction` has **no Delete** — so `/v1` can delete a vault and the
+CLI cannot, which is the destructive lifecycle operation existing only on the
+remote plane. And MCP's `list_wings`/`list_rooms` against the CLI's single
+`taxonomy` is a GRANULARITY difference, not a capability absence; encoding it
+as one would have put a false row in the inventory.
+
+**Scope, stated:** the gate is both-directional over the **CLI axis**, which is
+what #34 is about. An absence from the CLI of something present only on `/v1`
+— vault delete, the SSE stream, the stats history ring — is not caught by a
+gate that derives its universe from `main.rs`. Those are recorded in O66 rather
+than silently left out.
 
 ---
 
@@ -2461,6 +2548,57 @@ consistent — but 401 is answered BEFORE `Tenancy::authorize` returns a vault,
 so it has no vault-scoped context, and saying more about WHY a bearer failed
 is exactly what an unauthenticated caller must not learn. Those two pull in
 opposite directions and the resolution is a ruling, not a refactor.
+
+### O66 — twenty-four surface absences are measured and unruled
+
+Filed by **M16**, which built the inventory that makes them visible and
+countable. Every row below is carried in `SURFACE_ABSENCES` as
+`Absence::Unruled` with a citation to this entry, and the gate REQUIRES that
+citation — so these cannot quietly become boundaries by being forgotten.
+
+**What needs deciding, in three groups.**
+
+**1. The agent-facing memory surface on `/v1` (17 rows).** `dedup`, `wake-up`,
+`closets`, `hallways`, `diary write|read|agents`, `tunnel
+create|list|follow|delete|traverse`, `kg add|invalidate|supersede`,
+`drawer check-dup`, `drawer delete-by-source`. All are on CLI **and** MCP and
+absent from `/v1` — the classic two-of-three shape. The question is one
+question, not seventeen: **does the remote plane carry the agent-facing memory
+surface, or is `/v1` deliberately the operator-and-search plane?** Either answer
+is defensible and the tree states neither. Note `docs/AGENTS.md` already
+carries a present-tense boundary for the kg WRITE family — *"`/v1` has no KG
+write routes except `POST …/kg/authority`"* — which settles three of these if
+it is meant as a rule rather than a description.
+
+**2. The backup family on `/v1` (3 rows).** `backup create|list|restore`. A
+fleet operator whose only door is `/v1` has no snapshot path and must reach the
+engine host's filesystem; `backup create` is also the one caller that gates
+archiving on the verify verdict. Against that, `restore` is the most
+destructive operation in the tree — `remove_dir_all` on a live vault directory,
+replaced wholesale. `list` opens no vault at all, which makes ITS absence read
+as forgotten rather than fenced.
+
+**3. Four that fit no group and each need their own answer.**
+`kg rel` (CLI-only — the one kg READ shape neither agent surface has);
+`index status` (a pure READ, so `index push`'s egress boundary does not cover
+it); `kg receipts` (on CLI and `/v1`, absent from MCP — the INVERSE of the
+operator-only shape, so that reasoning does not explain it); and
+`verify-forgetting` (same inverse shape).
+
+**Also recorded here because the M16 gate cannot reach them.** Its universe is
+derived from `main.rs`, so it is both-directional over the CLI axis only. These
+are present on `/v1` and absent from the CLI, and no gate counts them:
+
+* **vault DELETE** — `VaultAction` has Create, List, Status, Rotate, Anchor and
+  no Delete. The destructive lifecycle operation exists only on the remote
+  plane, which is a strange asymmetry in the direction nobody expects.
+* the live SSE telemetry stream, the stats history ring, and paged kg ENTITY
+  browse.
+
+**Gate, when each is ruled:** flip the row's `Absence` and replace the
+citation with the argument. The existing `every_cli_capability_is_reachable_or_ruled_absent`
+already enforces that a non-`Unruled` row carries a reason of substance, so a
+ruling cannot land as a shrug.
 
 ### O65 — the house page publishes a test count that is stale by 105
 
