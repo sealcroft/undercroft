@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**90** of the **105** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**92** of the **107** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 90 of 105 — stale by
+body said the gate "examines **47 of 60**". Measured, 92 of 107 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2759,6 +2759,86 @@ blob that will not open exits 2, not 0"*.
 stay distinguishable on the SAME command: a configuration refusal is exit 1, a
 tamper verdict is exit 2. Asserting them one after the other is what pins that,
 and neither arm proves it alone.
+
+### M21 — CLOSED 2026-08-21: the honest-exclusion count was computed under a different policy than the search
+
+Round-four **#51**. `unkinded_in_scope` counted `kind IS NULL` within the
+wing/room scope and **nothing else** — no trust floor, no quarantine fence —
+while `resolve_search_policy` removes below-floor wings and the reserved review
+wing BEFORE any candidate is drawn.
+
+So rows that were never in the kind filter's competition were counted as though
+the filter had passed over them, and reported to the caller as *"in-scope
+drawers that carry no declared kind and were not considered"*.
+
+**That is worse than an off-by-N.** The note exists for one reason, stated in
+docs/LABELS.md: a filter over a thinly-labeled corpus must say what it silently
+passed over, *"or an honest empty result is indistinguishable from a
+label-coverage gap"*. Inflating it with rows a DIFFERENT exclusion had already
+removed means it was quietly reporting a third thing, and a caller cannot tell
+the three apart from one number.
+
+**Fix — the one door, not a re-derivation.** `TrustClause::sql` is documented
+as *"One implementation for every read that narrows by trust"* and names three:
+`search`'s exact-scan arm, `recent`, and `list_drawers`. This was a **fourth**
+that did not use it — the exact shape that comment describes, since a declared
+`UNDERCROFT_TRUST_FLOOR` came to be enforced on one content read out of three
+because *"there was nothing to reuse"*.
+
+It takes the whole `SearchOptions` now rather than two strings, and that is the
+fix rather than a tidy-up: **the count cannot drift from the search it
+annotates if it is resolved from the same input by the same function.**
+
+**Gate + counterfactual, executed.** A vault with one ordinary unlabeled drawer
+and one unlabeled drawer in the reserved review wing: the count is **1**, with
+a premise arm asserting both rows really are on disk (so 1 is an exclusion
+rather than an empty corpus), and a second arm asserting a reviewer scoped INTO
+the review wing sees its row — because naming the reserved wing is how
+LABELS.md says a reviewer opts back in, and the policy returns the clause
+unchanged for it. With the policy clause removed: `left: 2, right: 1`.
+
+### M22 — CLOSED 2026-08-21: one shared model identity lived in four places, and the cause stays MAJOR
+
+Round-four **#27**, and it is **two defects wearing one row**.
+
+**The cause is MAJOR and stays filed.** `UNDERCROFT_ONNX_NAME` undeclared means
+a model records the shared identity `onnx-sentence`, so a DIFFERENT model
+loaded later records the SAME one and the store cannot tell the vector space
+changed — `EmbedderMismatch` is disarmed. Fixing that means DERIVING the
+identity from the model, which changes a value recorded in existing vaults:
+*"a documented value that stops being accepted"*, MAJOR by this file's own
+test, and `CLAUDE.md` forbids half-landing a change to an id recipe. It remains
+the 2.0.0 item, with that argument. O49 closed the SILENCE (every one of the
+six loader sites warns, naming the variable, the identity and the model file);
+this does not close the cause and says so rather than implying otherwise.
+
+**The duplication is fixable now and is its own hazard.** Measured: **twelve**
+literals — each of six loader sites wrote its identity twice, once in the
+warning and once as the value — across two crates that deliberately never link
+each other. Change one and not the others and the two backends record
+DIFFERENT identities for the SAME model, firing the mismatch guard on a vault
+whose vector space never changed. That is `#27` pointed the other way, and it
+would arrive by an ordinary edit.
+
+`SHARED_MODEL_IDENTITY`, `SHARED_RERANKER_IDENTITY` and
+`SHARED_COLBERT_IDENTITY` live in `undercroft-core::config`, beside the warning
+helper that already took the value as an argument. **The values are byte-
+identical**, deliberately: this is a de-duplication, not a rename.
+
+**Gate + counterfactual.** A source scan over all five loader files requiring
+none to write a bare identity literal, with its needles ASSEMBLED so it does
+not match its own source, and a per-file premise arm — a path that moved would
+read exactly like a crate with no duplicates. Counterfactual: one literal
+restored, and it fails naming the file and the string.
+
+**Round-four `#56`'s third sub-claim, corrected in the same unit.** O1's gate
+table said the GHCR manifest list holds three entries, *"the third, `unknown`,
+is the buildx attestation"*. It holds **four**: buildx writes an attestation
+per PLATFORM, so a two-platform index carries two `unknown/unknown` entries.
+Corrected by querying the live registry through the anonymous pull-token flow
+that entry's own gate uses, rather than by reasoning about buildx. O57 recorded
+this sub-claim as corrected while the row it names still said three — a closure
+claiming a fix it had not made.
 
 ---
 
@@ -3452,9 +3532,25 @@ visibility.)
 |---|---|
 | `tags/list` with an anonymous pull token | **200** (was 403) |
 | Manifest fetch for `:latest` — what `docker pull` does | **200** |
-| Architectures in that manifest list | `linux/amd64`, `linux/arm64` (the third, `unknown`, is the buildx attestation) |
+| Architectures in that manifest list | **FOUR** entries: `linux/amd64`, `linux/arm64`, and **two** `unknown/unknown` — buildx writes one attestation PER PLATFORM, not one per index |
 | `v1.0.0-ort` manifest | **200** |
 | **Negative control** — a package that does not exist | **403** |
+
+**The architecture row said THREE until 2026-08-20** — *"`linux/amd64`,
+`linux/arm64` (the third, `unknown`, is the buildx attestation)"* — and
+round-four `#56` filed it as *"four manifests not three"*. It is four, and the
+reason matters more than the count: buildx writes an attestation **per
+platform**, so a two-platform index carries two `unknown/unknown` entries, not
+one. The row described an index nobody had listed.
+
+Corrected by QUERYING THE LIVE REGISTRY through the same anonymous pull-token
+flow this entry's own gate uses, rather than by reasoning about buildx —
+`entries: 4`, in the order `linux/amd64`, `unknown/unknown`, `linux/arm64`,
+`unknown/unknown`. This is the third `#56` sub-claim; the other two (Windows
+ships `.zip`, and the "byte-for-byte" avatar) were corrected under O57, and
+this one was recorded as corrected there while the row it names still said
+three — a closure claiming a fix it had not made, which is the shape this file
+records most often.
 
 The negative control is load-bearing: without it a 200 could mean the check
 was answering 200 to everything, which is this project's standing rule that a

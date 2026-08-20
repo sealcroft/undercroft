@@ -6374,25 +6374,46 @@ impl PalaceStore {
     /// policy from docs/LABELS.md: a filter over a thinly-labeled corpus
     /// must say what it silently passed over, or an honest empty result is
     /// indistinguishable from a label-coverage gap.
-    pub fn unkinded_in_scope(
-        &self,
-        wing: Option<&str>,
-        room: Option<&str>,
-    ) -> Result<u64, StoreError> {
-        let mut clauses: Vec<&str> = vec!["kind IS NULL"];
-        let mut binds: Vec<&str> = Vec::new();
-        if let Some(w) = wing {
-            clauses.push("wing = ?");
-            binds.push(w);
+    /// **Under the SAME policy the search itself ran under** (ROADMAP M21).
+    ///
+    /// This counted `kind IS NULL` within the wing/room scope and nothing
+    /// else — no trust floor, no quarantine fence — while
+    /// [`Self::resolve_search_policy`] removes below-floor wings and the
+    /// reserved review wing BEFORE any candidate is drawn. So rows that were
+    /// never in the kind filter's competition were counted as though the kind
+    /// filter had passed over them, and reported to the caller as *"in-scope
+    /// drawers that carry no declared kind and were not considered"*.
+    ///
+    /// An honest-exclusion note inflated by rows a DIFFERENT exclusion had
+    /// already removed is worse than no note: its whole purpose is to let a
+    /// caller tell an empty result from a label-coverage gap, and it was
+    /// quietly reporting a third thing.
+    ///
+    /// It takes the whole `SearchOptions` now rather than two strings, which
+    /// is the fix rather than a tidy-up: the count cannot drift from the
+    /// search it annotates if it is resolved from the same input by the same
+    /// function. `TrustClause::sql` is documented as *"one implementation for
+    /// every read that narrows by trust"* and named three; this was a fourth
+    /// that did not use it.
+    pub fn unkinded_in_scope(&self, opts: &SearchOptions) -> Result<u64, StoreError> {
+        let mut sql = String::from("SELECT COUNT(*) FROM drawers WHERE kind IS NULL");
+        let mut binds: Vec<String> = Vec::new();
+        if let Some(w) = opts.wing.as_deref() {
+            binds.push(w.to_string());
+            sql.push_str(&format!(" AND wing = ?{}", binds.len()));
         }
-        if let Some(r) = room {
-            clauses.push("room = ?");
-            binds.push(r);
+        if let Some(r) = opts.room.as_deref() {
+            binds.push(r.to_string());
+            sql.push_str(&format!(" AND room = ?{}", binds.len()));
         }
-        let sql = format!(
-            "SELECT COUNT(*) FROM drawers WHERE {}",
-            clauses.join(" AND ")
-        );
+        // The one door. It folds the trust floor and the quarantine fence
+        // into a single clause, so this cannot re-derive either and cannot
+        // disagree with the search.
+        if let Some(clause) = self.resolve_search_policy(opts)? {
+            if let Some(frag) = clause.sql(&mut binds) {
+                sql.push_str(&format!(" AND {frag}"));
+            }
+        }
         let n: i64 = self
             .conn
             .query_row(&sql, rusqlite::params_from_iter(binds.iter()), |r| r.get(0))?;
@@ -15498,7 +15519,71 @@ mod tests {
             )
             .is_err());
         // The unlabeled-rows count the policy requires.
-        assert_eq!(s.unkinded_in_scope(None, None).unwrap(), 1);
+        assert_eq!(s.unkinded_in_scope(&SearchOptions::default()).unwrap(), 1);
+    }
+
+    /// ROADMAP M21 (round-four `#51`). The honest-exclusion count must be
+    /// computed under the SAME policy as the search it annotates.
+    ///
+    /// It counted `kind IS NULL` within the wing/room scope and nothing else,
+    /// while `resolve_search_policy` removes the reserved review wing before
+    /// any candidate is drawn. So a quarantined, unlabeled drawer — never in
+    /// the kind filter's competition — was reported to the caller as an
+    /// in-scope row the kind filter had passed over. The note exists to let a
+    /// caller tell an empty result from a label-coverage gap, and it was
+    /// quietly reporting a third thing.
+    #[test]
+    fn the_unlabeled_count_excludes_what_the_search_policy_already_removed() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        // One ordinary unlabeled drawer: the count this SHOULD report.
+        s.upsert(&drawer("notes", "r", "an unlabeled note about turbines", 0))
+            .unwrap();
+        // And one unlabeled drawer in the reserved review wing, which every
+        // search excludes pre-candidate.
+        let mut quar = drawer(
+            crate::admission::QUARANTINE_WING,
+            "r",
+            "diverted text about turbines",
+            1,
+        );
+        quar.meta.wing = crate::admission::QUARANTINE_WING.to_string();
+        s.write_drawer(
+            &quar,
+            s.embedder_embed(&quar.content),
+            Screen::Bypass(BypassReason::AlreadyDiverted),
+        )
+        .unwrap();
+
+        // PREMISE: both rows really are unlabeled and really are present, so
+        // a count of 1 below is an exclusion rather than an empty corpus.
+        let raw: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers WHERE kind IS NULL", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(raw, 2, "premise: two unlabeled rows exist on disk");
+
+        assert_eq!(
+            s.unkinded_in_scope(&SearchOptions::default()).unwrap(),
+            1,
+            "the quarantined row was never in the kind filter's competition, \
+             so counting it tells the caller the filter passed over a row it \
+             never saw"
+        );
+
+        // The reviewer's own scope is the one place it counts: naming the
+        // reserved wing is how docs/LABELS.md says a reviewer opts back in,
+        // and the policy returns the trust clause unchanged for it.
+        let reviewing = SearchOptions {
+            wing: Some(crate::admission::QUARANTINE_WING.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.unkinded_in_scope(&reviewing).unwrap(),
+            1,
+            "a reviewer scoped INTO the review wing sees its unlabeled row"
+        );
     }
 
     /// The kind filter cannot be starved by the corpus top-k — the same

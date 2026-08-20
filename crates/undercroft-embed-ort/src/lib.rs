@@ -222,11 +222,11 @@ pub fn embedder_from_env() -> Result<OrtEmbedder, OrtError> {
             "{}",
             undercroft_core::config::undeclared_model_identity(
                 "UNDERCROFT_ONNX_NAME",
-                "onnx-sentence",
+                undercroft_core::config::SHARED_MODEL_IDENTITY,
                 &model,
             )
         );
-        "onnx-sentence".into()
+        undercroft_core::config::SHARED_MODEL_IDENTITY.into()
     });
     OrtEmbedder::load(
         std::path::Path::new(&model),
@@ -355,11 +355,11 @@ pub fn reranker_from_env() -> Result<OrtReranker, OrtError> {
             "{}",
             undercroft_core::config::undeclared_model_identity(
                 "UNDERCROFT_RERANK_NAME",
-                "onnx-reranker",
+                undercroft_core::config::SHARED_RERANKER_IDENTITY,
                 &model,
             )
         );
-        "onnx-reranker".into()
+        undercroft_core::config::SHARED_RERANKER_IDENTITY.into()
     });
     OrtReranker::load(
         std::path::Path::new(&model),

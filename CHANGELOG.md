@@ -7,6 +7,36 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the last three round-four rows (M21, M22)
+
+**`#51` — the honest-exclusion count ran under a different policy than the
+search.** `unkinded_in_scope` counted `kind IS NULL` within the wing/room scope
+and nothing else, while `resolve_search_policy` removes below-floor wings and
+the reserved review wing before any candidate is drawn. Rows never in the kind
+filter's competition were reported to the caller as rows the filter had passed
+over. That note exists so a caller can tell an honest empty from a
+label-coverage gap — inflated by a *different* exclusion, it was quietly
+reporting a third thing. It now resolves through the same one door, and takes
+the whole `SearchOptions` so the count cannot drift from the search it
+annotates. Counterfactual: `left: 2, right: 1`.
+
+**`#27` — two defects wearing one row.** The cause stays MAJOR and stays filed:
+an undeclared identity means two different models record the same one, which
+disarms `EmbedderMismatch`, and fixing it means deriving the identity from the
+model — a value already recorded in vaults, so 2.0.0. What *is* fixable now is
+the duplication: **twelve** literals, each of six loader sites writing its
+identity twice, across two crates that never link. Change one and not the
+others and two backends record different identities for the same model — `#27`
+pointed the other way, arriving by an ordinary edit. Three constants now live
+in `undercroft-core::config`, byte-identical, with a source-scan gate whose
+needles are assembled so it cannot match itself.
+
+**`#56`'s third sub-claim.** O1's table said the GHCR manifest list holds three
+entries; it holds **four** — buildx writes an attestation per platform, so a
+two-platform index carries two. Corrected by querying the live registry through
+the anonymous pull-token flow, not by reasoning about buildx. O57 had recorded
+this as corrected while the row still said three.
+
 ### the control plane could not state its own tamper verdict, and one door swallowed it entirely (M20)
 
 Round-four **#30** and **#31** — one gap from two sides: the orchestrator READS
