@@ -12,6 +12,42 @@ cd deploy/observability
 docker compose -f docker-compose.observability.yml up --build
 ```
 
+Grafana is at `http://localhost:3000` (anonymous viewer; the **Undercroft —
+Palace** dashboard, uid `undercroft-palace`, is provisioned), Prometheus at
+`:9090`, Alertmanager at `:9093`, Loki at `:3100`, Tempo at `:3200` and the
+engine at `:8765`.
+
+**If any of those ports is already taken** — a second observability stack on
+the same host is common — remap with an override file rather than editing
+this one, and note that Compose **merges** `ports:` lists, so a plain
+override *appends* and the collision survives silently:
+
+```yaml
+# ports.override.yml — `!override` replaces; without it, both bindings exist
+services:
+  grafana:    { ports: !override ["13000:3000"] }
+  prometheus: { ports: !override ["19090:9090"] }
+```
+
+**Two headline panels are blank on an idle deployment, by design.**
+`undercroft_drawers` and `undercroft_audit_chain_height` are set by the
+sampler, which runs only for vaults with an active stream subscriber, and by
+`GET /v1/vaults/{id}/stats`. Touch either and they populate; until then
+Prometheus has no series for them and those panels render empty. That costs
+nothing when no dashboard is connected, which is the point — but it reads as
+a broken dashboard the first time you see it.
+
+**Why there is a `tls-export` service.** The engine pins Caddy's CA for the
+OTLP hop, and Caddy writes its whole PKI as root (cert `0600`, directories
+`0700`) because that tree holds the CA private key. The engine runs as uid
+10001, so a pin aimed inside that tree is unreadable and the engine **refuses
+to start** — it never falls back to the public roots, since a pin that
+silently un-pins is the failure mode. `tls-export` copies the PUBLIC root to
+`/tls/root.crt` at `0644` and the engine pins that; the private key never
+moves. It also waits for the file, which closes a race `depends_on` alone
+does not: that only waits for the container to start, not for Caddy to have
+generated anything.
+
 ```
 undercroft (telemetry) ──/metrics──▶ Prometheus ──rules──▶ Alertmanager ──▶ alert-sink
           │  │                          │                                    (webhook)

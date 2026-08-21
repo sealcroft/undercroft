@@ -41,7 +41,12 @@ services:
     # engine REFUSES to start when the declared CA file is unreadable, which
     # is deliberate (a pin that silently un-pins is the failure mode).
     depends_on:
-      - tempo-tls
+      # `service_completed_successfully`, not a bare list entry: a list waits
+      # for the container to START, and Caddy has not necessarily written its
+      # CA by then. The exporter below waits for the file, so reaching this
+      # condition means the root exists AND the engine can read it.
+      tls-export:
+        condition: service_completed_successfully
     # Create the palace + default vault on first run, then serve.
     entrypoint: ["/bin/sh", "-c"]
     command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]
@@ -57,7 +62,11 @@ services:
       # transport policy as every other outbound client since round-four #8.
       # The pin is Caddy's internal CA root, which REPLACES the public roots.
       UNDERCROFT_OTLP_ENDPOINT: "https://tempo-tls"
-      UNDERCROFT_OTLP_CA: /tls/caddy/pki/authorities/local/root.crt
+      # The PUBLIC root, exported to a readable path by `tls-export` below.
+      # Pointing this inside Caddy's PKI tree is what made the shipped stack
+      # unstartable: that tree is root-only because it holds the CA PRIVATE
+      # key, and this container runs as uid 10001.
+      UNDERCROFT_OTLP_CA: /tls/root.crt
       UNDERCROFT_SERVICE_NAME: "undercroft"
     volumes:
       - undercroft-data:/data
@@ -136,6 +145,52 @@ services:
     volumes:
       - ./tempo-tls/Caddyfile:/etc/caddy/Caddyfile:ro
       - tempo-tls-data:/data
+
+  # Export Caddy's PUBLIC CA root to a path the engine can read.
+  #
+  # **This exists because the stack could not start without it.** Caddy
+  # writes its whole PKI as root — `root.crt` at 0600 inside directories at
+  # 0700 — which is correct, since that tree also holds the CA PRIVATE key.
+  # The engine runs as `USER undercroft` (uid 10001), so the declared pin was
+  # unreadable and the engine REFUSED to start:
+  #
+  #   Error: the OTLP collector: the declared trust root
+  #   /tls/caddy/pki/authorities/local/root.crt could not be read:
+  #   Permission denied (os error 13)
+  #
+  # That refusal is right — `undercroft-net` never falls back to the public
+  # roots, because a pin that silently un-pins is the failure mode it exists
+  # to prevent. The bug was the path, not the policy: only the CERTIFICATE
+  # needs sharing. The private key keeps its 0600 and never moves.
+  #
+  # Arrived with the pin itself (ROADMAP M7): the commit that gave the OTLP
+  # hop a transport policy declared this path without checking which uid
+  # would read it, and nothing in the repo brings this stack up, so it went
+  # unnoticed.
+  tls-export:
+    image: alpine:3.20
+    depends_on:
+      - tempo-tls
+    volumes:
+      - tempo-tls-data:/tls
+    # BOUNDED wait: Caddy generates the CA lazily, and an unbounded poll for
+    # a file that may never appear is a hang, not a wait.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        src=/tls/caddy/pki/authorities/local/root.crt
+        i=0
+        while [ ! -s "$$src" ]; do
+          i=$$((i + 1))
+          if [ "$$i" -gt 60 ]; then
+            echo "tls-export: $$src never appeared after 60s — is tempo-tls healthy?" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        cp "$$src" /tls/root.crt
+        chmod 0644 /tls/root.crt
+        echo "tls-export: published the public CA root as /tls/root.crt (0644)"
 
   grafana:
     image: grafana/grafana:11.3.0

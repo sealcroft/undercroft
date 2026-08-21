@@ -135,8 +135,11 @@
     Live view of the Undercroft SSE stream (<code>/v1/vaults/&lt;id&gt;/stream</code>). Enter the palace
     bearer token, pick a vault, and connect. Until then it runs in <b>demo mode</b> with synthetic events.
     The archivist files drawers into wings as writes land; the <b>ambulance beacon</b> fires on a real
-    <b>HMAC-verify failure</b> (tamper). Sealed vaults stream aggregate counts only — wing names are
-    suppressed server-side. Metadata only; drawer contents never leave the vault.
+    <b>HMAC-verify failure</b> (tamper), and names the row it caught plus the location that row
+    <b>claims</b> — unverified by definition, since its HMAC is what just failed. Wing and room names
+    reach every subscriber that proved per-vault authorization, sealed vaults included: the same
+    caller reads them from <code>/v1/&lt;id&gt;/stats</code>. Metadata only; drawer contents, offsets
+    into them and keys never leave the vault.
   </div>
 </div>
 
@@ -153,6 +156,8 @@
   let wings=[];              // {name, count, cap, cx, cy, x, y, w, h, sealed, pulse, tamper, highlight}
   const byName=new Map();
   let sealedVault=false;
+  // Whether this stream is arriving WITHOUT wing names (M6).
+  let namesHidden=false;
 
   function layout(){
     const n=Math.max(1, wings.length);
@@ -174,11 +179,19 @@
   function setWings(list, sealed){
     // reconcile from a sample's wings [[name,count],...]
     sealedVault=!!sealed;
-    if(sealed){
+    // **The collapse follows the DATA, not the level** (M6). A sealed vault
+    // now streams its wing list to the authorized subscriber that asked for
+    // it, so there is structure to draw. One block is what we fall back to
+    // when no names arrive at all — a server that still suppresses them, or
+    // an older engine — which keeps this page working against both.
+    namesHidden = !list.length;
+    if(namesHidden){
       // aggregate only — one locked vault block
       if(!byName.has('◈ sealed')){ wings=[]; byName.clear(); ensureWing('◈ sealed', true); }
       return;
     }
+    // Leaving the aggregate state: drop the placeholder so real wings land.
+    if(byName.has('◈ sealed')){ wings=[]; byName.clear(); }
     let changed=false;
     for(const [name,count] of list){
       const wg=byName.get(name);
@@ -202,10 +215,20 @@
   function stamp(ts){ if(ts){ haveClock=true; clockT=ts; } const t=haveClock?clockT:(clockT+=7);
     const s=((t%86400)+86400)%86400; const p=n=>String(n).padStart(2,'0');
     return `${p(s/3600|0)}:${p(s/60%60|0)}:${p(s%60|0)}`; }
+  // Escape at the SINK, not at each call site. `text` carries wing and room
+  // names off the wire, and `validate_name` blocks control characters and
+  // path separators but NOT `<`, `>` or quotes — so `<img src=x onerror=…>`
+  // is a legal wing name and this line is an `innerHTML`. That was already
+  // true for every non-sealed vault before M6 carried names on every level;
+  // escaping here covers all eight call sites and any future one, which
+  // per-site escaping demonstrably does not.
+  function esc(v){ return String(v==null?'':v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   function log(kind, text, ts){
     const row=document.createElement('div'); row.className='row';
     const map={save:'SAVE',quar:'QUAR',del:'DEL',search:'SRCH',kg:'LINK',chain:'CMMT',tamper:'!TMP',info:'INFO'};
-    row.innerHTML=`<span class="t">${stamp(ts)}</span><span class="b ${kind}">${map[kind]||'·'}</span><span>${text}</span>`;
+    row.innerHTML=`<span class="t">${stamp(ts)}</span><span class="b ${kind}">${map[kind]||'·'}</span><span>${esc(text)}</span>`;
     tickerBody.prepend(row); while(tickerBody.children.length>7) tickerBody.lastChild.remove();
   }
 
@@ -232,12 +255,12 @@
     if(!quiet) { /* samples are ambient */ }
   }
   function onDrawerSaved(d){
-    const name=sealedVault ? '◈ sealed' : (d.wing||'general');
+    const name=d.wing || (namesHidden ? '◈ sealed' : 'general');
     const wg=ensureWing(name, sealedVault); wg.count++; wg.pulse=1;
     fileAt(wg);
     floaters.push({x:wg.cx,y:wg.cy-10,txt:d.deduped?'↻':'+1',life:1,col:d.deduped?AMBER:PHOS});
     if(soundOn) tick(d.deduped?540:720);
-    log('save', sealedVault?`drawer → ◈ sealed`:`drawer → ${d.wing}/${d.room}${d.deduped?' (dedup)':''}`);
+    log('save', d.wing?`drawer → ${d.wing}/${d.room}${d.deduped?' (dedup)':''}`:`drawer → ◈ sealed`);
   }
   // The admission screen diverted a write. Deliberately distinct from a
   // save: a diversion used to be either silence or a save into a wing
@@ -245,24 +268,26 @@
   // to see looked like ordinary traffic. No siren — quarantine is the
   // defense working, unlike `hmac-fail`.
   function onQuarantined(d){
-    const name=sealedVault ? '◈ sealed' : (d.intended_wing||'general');
+    const name=d.intended_wing || (namesHidden ? '◈ sealed' : 'general');
     const wg=ensureWing(name, sealedVault); wg.pulse=1;
     floaters.push({x:wg.cx,y:wg.cy-10,txt:'⚠',life:1.4,col:AMBER});
     if(soundOn) tick(300);
     const sig=(d.signals||[]).join(', ')||'flagged';
-    log('quar', sealedVault?`write quarantined · ${sig}`:`write → quarantine (was ${d.intended_wing}/${d.room}) · ${sig}`);
+    log('quar', d.intended_wing?`write → quarantine (was ${d.intended_wing}/${d.room}) · ${sig}`:`write quarantined · ${sig}`);
   }
   function onDrawerDeleted(d){
-    const wg=sealedVault?byName.get('◈ sealed'):null;
+    const wg=namesHidden?byName.get('◈ sealed'):null;
     if(wg && wg.count>0) wg.count--;
     log('del', 'drawer removed');
   }
   function onSearch(d){
     proc(1200); if(arc.state==='idle'){ arc.state='read'; arc.timer=0.6; } // don't freeze a walking archivist
     if(soundOn) tick(420);
-    if(sealedVault){ wings.forEach(w=>w.highlight=1); }
-    else if(d.wing){ const w=byName.get(d.wing); if(w) w.highlight=1; }
-    else wings.forEach(w=>w.highlight=1);
+    // Same shape as the tamper handler: highlight the scoped wing when the
+    // frame names one, otherwise the whole palace (an unscoped search, or a
+    // stream arriving without names).
+    const sw=d.wing?byName.get(d.wing):null;
+    if(sw) sw.highlight=1; else wings.forEach(w=>w.highlight=1);
     log('search', `${d.hits} hit${d.hits===1?'':'s'}${d.wing?` · ${d.wing}`:''}`);
   }
   function onKg(d){
@@ -274,13 +299,30 @@
     const wg=wings[(Math.random()*wings.length)|0]; if(wg){ floaters.push({x:wg.cx,y:wg.y+6,txt:'✔',life:1.2,col:GOLD}); }
     log('chain', 'chain block sealed');
   }
+  // **Where the tamper happened, as far as anything can say** (M6).
+  //
+  // The branch below that lights ONE wing has existed since this page
+  // shipped and could never fire: `hmac-fail` carried only `{vault,
+  // surface}`, so `d.wing` was always undefined and the whole palace flashed
+  // red on every tamper, at every level. The frame now carries the row's id
+  // and the location that row CLAIMS.
+  //
+  // "Claims" is the word that matters and it is why the banner says
+  // `unverified`: the subject of this alarm failed its own HMAC, so an
+  // offline writer who altered the row could have written this location too.
+  // It is a lead to go and check with `undercroft verify`, never a finding.
   function onTamper(d){
     failCount++; $('gFail').textContent=failCount;
-    alarm=6.5; if(sealedVault){ wings.forEach(w=>w.tamper=1); }
-    else if(d.wing){ const w=byName.get(d.wing); if(w) w.tamper=1; } else wings.forEach(w=>w.tamper=1);
+    alarm=6.5;
+    const w=d.wing?byName.get(d.wing):null;
+    if(w) w.tamper=1; else wings.forEach(x=>x.tamper=1);
     $('banner').classList.add('on'); $('stage').classList.add('alarm');
-    $('bannerText').textContent=`INTEGRITY ALERT — HMAC VERIFY FAILED @ ${d.vault||'?'} (${d.surface||'?'})`;
-    log('tamper', `HMAC mismatch · ${d.surface||'?'}`);
+    const where=d.wing?` claims ${d.wing}${d.room?'/'+d.room:''}`:'';
+    $('bannerText').textContent=
+      `INTEGRITY ALERT — HMAC VERIFY FAILED @ ${d.vault||'?'} (${d.surface||'?'})`
+      + (where?` · UNVERIFIED:${where}`:'');
+    const who=d.id?` · ${String(d.id).slice(0,12)}…`:'';
+    log('tamper', `HMAC mismatch · ${d.surface||'?'}${who}${where?` ·${where} (unverified)`:''}`);
     if(soundOn) siren(true);
   }
   function clearAlarm(){ alarm=0; wings.forEach(w=>w.tamper=0);
@@ -323,7 +365,7 @@
     // Drop the demo world — including its ticker rows — so only real vault
     // data is shown (a stale "demo mode" line outliving a LIVE connection
     // reads as a fault on quiet vaults).
-    wings=[]; byName.clear(); demoInit=false; sealedVault=false; links.length=0; floaters.length=0;
+    wings=[]; byName.clear(); demoInit=false; sealedVault=false; namesHidden=false; links.length=0; floaters.length=0;
     tickerBody.innerHTML='';
     connected=true; mode='live'; abort=new AbortController();
     setStatus('proc','CONNECTING'); $('connMsg').textContent='';

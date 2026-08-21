@@ -76,6 +76,27 @@ HKDF-derived keys). When you build on it:
    so this costs you nothing until you turn it on — but do not build a write
    path that reaches the database another way.
 
+### The word `record` has three senses, and they are different things
+
+An agent that reads two of these in one session has nothing in the payloads
+telling it they are unrelated, so this settles which word means what. **The
+names on the wire are not changing** — renaming a documented field is a
+breaking change, and every one of these is documented — so the fix is that
+you know which is which:
+
+| you see | it is | where |
+|---|---|---|
+| `records` / `drawers` on `stats` | **a drawer** — one stored memory. Both names are the same number from one read; `/v1` sends both, the CLI and MCP print `records` | `undercroft stats`, `undercroft_status`, `GET /v1/vaults/{id}/stats` |
+| `record_id`, `records` inside an attestation, the chain height | **an audit-chain record** — one entry in the tamper-evident log. A drawer write makes one; so does an export, and so does every content read when `UNDERCROFT_READ_AUDIT=chain` is set | `undercroft history`, `undercroft_history`, `forget` attestations |
+| `kind` | **a declared classification on one drawer**, from a closed vocabulary — not a record type | the `kind` field on a save |
+
+The trap worth naming: `writes` on `stats` is the **audit-chain height**, so
+it counts exports and — under `UNDERCROFT_READ_AUDIT=chain` — reads. It has
+never counted writes alone. **`chain_records` is the same number under a name
+that says so — prefer it in anything you write from now on.** `writes` is
+deprecated and still populated; it will not be removed before a MAJOR, and
+nothing schedules that removal today, so no dashboard reading it is at risk.
+
 ---
 
 ## 1. Choose your scenario
@@ -338,6 +359,16 @@ store OPEN tightens it — so a server that caches its handle never does.
 `undercroft-orchestrator ops <tenant> anchor` (or `POST
 /v1/vaults/{id}/anchor`) is the explicit closer. It is classified a WRITE
 everywhere and refused on a read-only handle.
+
+Read `behind_by` as *how far behind the anchor was a moment ago*, whichever
+step closed the window. On a server that has already served the vault the CALL
+does the work, and that has always been what the route reported. But the first
+anchor to a vault the process has not served OPENS it, and the open runs the
+same reconciliation — so that call used to answer `0` about a lag it had just
+healed, while the CLI reported the same lag correctly. It reports it now, and
+**reports it once**: later calls on the cached handle answer `0`, because
+re-announcing a closed window on every call is the same defect wearing the
+other sign.
 
 **Exit 2 means an integrity verdict, here as on the engine's own CLI.** Two
 shapes carry one and neither is the HTTP status alone:
@@ -823,8 +854,17 @@ before you wire alerts:
 
 What you can and cannot see: counts, latencies, wing/room labels and
 closed-vocabulary signal codes travel; drawer content, queries and key
-material never do. A sealed vault suppresses names in the live feed and
-keeps the codes, because a code is not a name.
+material never do. **That holds on every security level, sealed included**
+— a stream subscription requires the bearer *and* the per-vault assertion,
+so a frame only reaches a caller who already reads those names from
+`GET /v1/vaults/{id}/stats`. Suppressing them blinded the vault's owner and
+withheld nothing from anyone else.
+
+A tamper frame (`hmac-fail`) additionally names the failing row and the
+location that row **claims**, flagged `unverified: true`. Treat it as a lead,
+never a finding: the record's HMAC is what just failed, so an offline writer
+who altered it could have written that location too. Confirm with
+`undercroft verify`, which checks every record rather than believing one.
 
 ## 9. Reference — MCP tools (34)
 
@@ -856,9 +896,17 @@ because nothing stated them:
   on `/v1`, exit 2 on the CLI — never reaches the tool layer at all: the
   server fails to start instead. Defensible (a tamper verdict is not a
   per-call condition) and previously unwritten.
-- **`/v1` has no KG *write* routes** except `POST …/kg/authority`. The KG is
-  written by the CLI, by MCP (`undercroft_kg_add`) and by import; the REST
-  surface browses it. That is a present-tense boundary, not a future item.
+- **`/v1` has no DIRECT KG *write* routes** except `POST …/kg/authority`.
+  Facts are written directly by the CLI, by MCP (`undercroft_kg_add`) and by
+  import; the REST surface browses them. That is a present-tense boundary,
+  not a future item — and it is the ruling behind `KgAction::Add`,
+  `Invalidate` and `Supersede` being recorded `Absence::Boundary` in
+  `parity.rs::SURFACE_ABSENCES`.
+  **"Direct" is load-bearing**: `POST …/refine` distils drawer text into
+  facts, so this plane does CREATE them — through an extractor whose output
+  carries an attributed identity inside the fact's HMAC, never by taking a
+  caller-supplied subject/predicate/object. The boundary is about who may
+  ASSERT a fact, not about whether facts can appear.
 
 Write tools (marked **W**) are refused when the server runs `--read-only`.
 There are 12 of them, and the list is not maintained by hand: the code is
@@ -927,7 +975,7 @@ classifies it deliberately:
 | POST | `/v1/vaults` | create vault (`level`, optional `embedder`) |
 | GET | `/v1/vaults` | list vaults (403 when assertions are enabled) |
 | DELETE | `/v1/vaults/{id}` | delete vault |
-| GET | `/v1/vaults/{id}/stats` | stats: records, level, writes, chain head, wings/rooms/kg/tunnels/db_bytes, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
+| GET | `/v1/vaults/{id}/stats` | stats: the drawer count under **both** `records` and `drawers` (same number, one read — `records` is what the struct, the CLI and MCP call it and what this table has always said, `drawers` is what this route shipped; neither is going away, and renaming either would be MAJOR), `quarantined` — how many of those sit in the reserved review wing, which `wings` and `rooms` EXCLUDE, so `records == sum(wings) + quarantined` reconciles (zero unless admission screening has diverted something) — level, the audit-chain height under **both** `writes` (deprecated — it has never counted writes alone) and `chain_records`, chain head, wings/rooms/kg/tunnels/db_bytes, `read_only`, `unhealed`, plus `codebooks` — `[artifact, generation]` per trained index artifact (a generation that moved means every row encoded against its predecessor was re-quantized) |
 | GET | `/v1/vaults/{id}/stats/history` | the recent stats sample ring buffer (aggregate counts only, `?window=N` ≤ 300) so a fresh stream client can backfill its chart. **`telemetry` builds only** — a default build answers 501 |
 | POST | `/v1/vaults/{id}/drawers` | save (`text` — **max 100,000 bytes**, the engine's bound, enforced at the store write choke point on every surface since 2026-08-04; `wing`/`room` go through the same name guard on every write path including import — opt `kind` — closed vocabulary, 400 if unknown — opt `supersedes` — a receipted update link to the drawer this save replaces; the old drawer stays — opt `vector`, `dedup_threshold`, `content_date`, and the provenance claims `agent`/`channel`/`session`). **202 + `{"quarantined": true}` when the admission screen diverts the write**, with `id` naming where the drawer actually landed rather than where you aimed it; 200 otherwise. Every variant of this call — with a `vector`, with a `dedup_threshold`, on an external-embedding vault — goes through the same screen. Aiming a save at the reserved `quarantine-pending` wing is **400**, not a 500 "corrupt row": a signal-less write there is a caller forging "pending review", or a typo |
 | GET | `/v1/vaults/{id}/drawers` | paged summaries (`wing`, `room`, `limit`, `offset`); the quarantine wing is excluded unless you name it, as on `search` and `recent` |
@@ -942,12 +990,13 @@ classifies it deliberately:
 | GET | `/v1/vaults/{id}/kg/timeline` | temporal fact timeline (opt `entity`, `grounding`) |
 | GET | `/v1/vaults/{id}/kg/canonical/{key}` | the exact-authority door: the one active, approved, canonical fact for the key, or 404 — consult before semantic recall for exact/high-risk asks |
 | POST | `/v1/vaults/{id}/kg/authority` | place a fact on the authority tier (`triple_id`, `authority_class`, `review_state`, opt `canonical_key`); audited, HMAC-covered. A value outside the closed vocabulary, or a `triple_id` that names no fact, is **400** |
-| GET | `/v1/vaults/{id}/kg/receipts` | every distilled fact's receipt verdict against its cited verbatim source (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — the KG half of "alert on `tampered` without walking the list"; `GET …/supersessions` below is the drawer-level analogue. Carries **`ok`** (false when any receipt is `tampered`), the field a scripted operator classifies a 200 on; without it `ops … kg receipts` exited 0 over a forged citation while the count sat in the body |
+| GET | `/v1/vaults/{id}/kg/receipts` | every distilled fact's receipt verdict against its cited verbatim source (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — the KG half of "alert on `tampered` without walking the list"; `GET …/supersessions` below is the drawer-level analogue. Carries **`ok`** (false when any receipt is `tampered`), the field a scripted operator classifies a 200 on; without it `ops … kg receipts` exited 0 over a forged citation while the count sat in the body. **`?integrity_only=1`** answers `{ok, checked:"receipt_tags"}` alone and skips the per-fact walk: a forged receipt is one HMAC over the receipt canonical and reads no drawer, while the full walk decrypts every cited source to separate `verified`/`source_changed`/`dangling` — which no integrity decision reads. Measured 8.6 us/fact against 0.7 (`undercroft-bench receiptscale`). It exists because 1.2.0 put this route on the tenant data plane (O67) and monitoring is its most frequent caller; the parameter is additive, so the default response is unchanged |
 | POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`, `stated`/`background`, and **`quarantined`** — fact mirrors the admission screen diverted, which is not the same as facts not added: the fact is in the graph and `kg_query` serves it, while its searchable mirror sits in the reserved review wing. Pass `dry_run: true` to get `preview` (the triples it would add) and write nothing. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none. **`undercroft refine` is the same code path** (`--wing`/`--room`/`--fact-room`/`--limit`/`--dry-run`), so the two surfaces build the same vault from the same `UNDERCROFT_LLM_*` configuration; before 1.0.0 the CLI wrote no fact date, no grounding verdict and no searchable mirror |
 | POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | integrity verdict, **six legs**: HMAC every record, replay the audit chain, check every drawer supersession receipt, check every knowledge-graph fact receipt, resolve every knowledge-graph audit label, and compare every mirror column against the HMAC-covered meta. `ok` covers all six — the same verdict CLI `verify` exits 2 on and MCP prints as VERIFY FAILED — plus `records_checked`, `bad_records`, `chain_ok`, a `supersessions` count breakdown, `bad_supersessions` (links whose receipt failed its HMAC), a `receipts` count breakdown, `bad_receipts` (facts whose citation binding failed its HMAC), `orphan_labels` (an audit label naming no live record — `record_id` is outside the chain hash, so a relabel passes every other leg. Covers graph labels **and bare drawer ids**: a drawer label with no live row and no `del/{id}` tombstone is a relabel onto a drawer nothing destroyed, since the crate's single `DELETE FROM drawers` writes that tombstone in the same transaction. Prefixed namespaces stay out — `del/`, `retention-clear/`, `read/`, `egress/`, `rotate/` all have legitimate absent subjects) and `mirror_drift` (a clear `wing`/`room`/`kind`/`supersedes` column disagreeing with the covered copy — the record is intact, the column was edited offline). The **fact-receipt leg arrived in 1.1.0**: the check existed one call away and no verify path made it, so a forged citation answered `"ok": true` here, exit 0 on the CLI, `isError: false` on MCP — and `backup create` gates on this verdict, so the forgery was archived as clean |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
 | POST | `/v1/vaults/{id}/forget` | destroy the named drawers through the audit chain and return the attestation (`{ids}` in; heads + tombstone interval + content fingerprints out, unsigned — sign via CLI `forget --sign`). Verify with CLI `verify-forgetting`. Optional `backend` also issues a delete to that remote mirror FIRST, so a failure there leaves the vault intact; without it the attestation's `mirror` field WARNS that a pushed mirror may still hold the content, because destroying the local row does not reach a third party |
+| POST | `/v1/vaults/{id}/repair` | the REMEDIATION half of `verify`, and it arrived in 1.2.0 (M17) because `verify` had been on all three surfaces since it existed while `repair` was on the CLI alone — so this plane and MCP could both DIAGNOSE and neither could remediate. R4 made that concrete: a read-only open REPORTS what it declined to heal on `PalaceStats.unhealed`, on all three surfaces, and the door that heals it was on one. `CLAUDE.md` also makes `repair` the mandatory second half of a model-embedder swap (`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`), which a fleet operator whose only door is this one therefore could not perform at all. Answers the SAME body as `POST …/verify` — one shared projection, so a future seventh leg reaches both routes rather than one — plus `fingerprints_backfilled`. **A WRITE**: refused by a `--read-only` server before dispatch, since `mutates` fails closed. **Never on MCP**, and that is a recorded boundary rather than an omission (`parity.rs::SURFACE_ABSENCES`): repair operates ON the storage machinery rather than through it — it rewrites fingerprints, re-embeds and vacuums — which is the argument that makes `rotate` and `anchor` operator-only. Residual, stated: `repair --tokens`, the ColBERT late-interaction backfill, is CLI-only. It is an unbounded loop the CLI drives batch by batch, and a request handler is the wrong shape for it |
 | POST | `/v1/vaults/{id}/verify-forgetting` | check an attestation against this vault: the document goes in the body, the verdict comes back as a **typed field** — `verdict` ∈ `verified`\|`recorded`, plus `drawers`, `signed`, and (on `recorded`) `rotations_since` and `keyed_replay: "unavailable"`. The two verdicts make DIFFERENT claims: `recorded` means the MAC key that made these tombstones was destroyed by a key rotation, so the keyed replay is unavailable and the vault's preserved audit trail holds the tombstones contiguously instead — real evidence, a narrower claim, **not** a tamper verdict. A document that does not describe what this vault did is **409 + `class: "integrity"`** (the set CLI `verify-forgetting` exits 2 on); a malformed body is 400. **A READ** — served by a `--read-only` server, and never on MCP. Arrived in 1.1.0 (O14): `forget` could MINT a receipt here and nothing on this plane could check one, which on a multi-tenant deployment meant the only door an operator had could not verify its own right-to-erasure receipts |
 | GET | `/v1/vaults/{id}/admission` | drawers awaiting an admission ruling (signal codes + offsets, intended destination) plus whether screening is on |
 | POST | `/v1/vaults/{id}/admission` | rule on a quarantined drawer (`drawer_id`, `verdict` ∈ `allow`\|`deny`; chain-audited — a deny destroys through the attested-forgetting path and the response carries the receipt). Operator surface, never MCP — an agent whose write was quarantined must not rule on it |

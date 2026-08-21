@@ -448,7 +448,7 @@ docker compose run --rm obs-config        # alert rules + Alertmanager route (pr
 docker compose run --rm site              # build, assemble and check the website
 docker compose run --rm onnx-build        # compile check for the ONNX embedder feature
 
-bash tests/battery.sh                     # all eight suites, one tree, raw exit codes
+bash tests/battery.sh                     # all ten suites, one tree, raw exit codes
 ```
 
 The e2e suite drives the actual CLI the way a user would — help text, happy

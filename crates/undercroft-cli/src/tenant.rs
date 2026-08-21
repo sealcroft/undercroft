@@ -403,6 +403,9 @@ impl Tenancy {
             }
             ("POST", &["v1", "vaults", id, "refine"]) => self.refine(id, req, body, now),
             ("POST", &["v1", "vaults", id, "verify"]) => self.verify(id, req, now),
+            // The remediation half of the line above (ROADMAP M17). A WRITE,
+            // so `mutates` needs no entry: that classifier fails closed.
+            ("POST", &["v1", "vaults", id, "repair"]) => self.repair(id, req, now),
             ("POST", &["v1", "vaults", id, "rotate"]) => self.rotate(id, req, now),
             ("POST", &["v1", "vaults", id, "anchor"]) => self.anchor(id, req, now),
             ("GET", &["v1", "vaults", id, "export"]) => self.export(id, req, now),
@@ -498,6 +501,30 @@ impl Tenancy {
             Body::Json(json!({
                 "id": id,
                 "drawers": full.records,
+                // **The same number under the name the struct and every
+                // other surface give it** (M2, round-four #45). `records` is
+                // what `PalaceStats` calls it, what the CLI and MCP print,
+                // and — the part that decides the direction of this fix —
+                // what BOTH `/v1` reference documents have always said this
+                // route returns: `docs/AGENTS.md` §10 and
+                // `docs/remote-server.md` each list the payload as
+                // "records, level, writes, chain head, …" and neither has
+                // ever mentioned `drawers`. So this is the code keeping a
+                // promise the documents already made, not a synonym added
+                // for taste.
+                //
+                // `drawers` STAYS, and stays first: renaming a documented
+                // key in place is MAJOR by this project's own test, and
+                // every dashboard, `jq` and both consoles read it today.
+                // Both are populated from the one `full.records` read, so
+                // they cannot drift apart — gated by
+                // `stats_reports_one_drawer_count_under_both_names`.
+                "records": full.records,
+                // M4: `records` counts every row; `wings` and `rooms` below
+                // exclude the reserved review wing. This is the difference,
+                // so a client can reconcile them instead of reading one
+                // struct that contradicts itself.
+                "quarantined": full.quarantined,
                 // The REPORT's field, not `vault.level()`. Same value
                 // today, and that is the point: a hand projection that
                 // reads a different object cannot follow the struct when
@@ -506,6 +533,10 @@ impl Tenancy {
                 "level": full.level,
                 "external": external,
                 "writes": full.writes,
+                // M1: the audit-chain height under a name that is true. Same
+                // number, same read; `writes` stays because renaming it is
+                // MAJOR and every dashboard reads it today.
+                "chain_records": full.chain_records,
                 "chain_head": full.chain_head,
                 "wings": full.wings
                     .iter()
@@ -604,7 +635,15 @@ impl Tenancy {
                 sealed,
                 drawers: stats.records,
                 rooms: stats.rooms,
-                wings: if sealed { Vec::new() } else { stats.wings },
+                // **M6: the wing list travels on every level.** It used to
+                // be blanked for a sealed vault, which blinded the only
+                // person who can receive this frame: a subscription requires
+                // `authorize()` (bearer + per-vault assertion) and
+                // `broadcast` fans a frame out to that vault's subscribers
+                // only, so the recipient already reads these exact names from
+                // `stats` above. `sealed` still travels — the monitor shows
+                // the level — it just no longer decides what a name is.
+                wings: stats.wings,
                 kg_triples: stats.kg.triples,
                 kg_entities: stats.kg.entities,
                 kg_active: stats.kg.active,
@@ -1099,13 +1138,41 @@ impl Tenancy {
     /// route without anything being added to a list.
     fn anchor(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
+        // **M3 — and the condition is `opened_now`, not `anchor_at_open()`
+        // alone, which is where the filing's fix was incomplete.**
+        //
+        // A32/A31 gave this route a real asymmetry: on a long-lived server
+        // the handle is cached and never re-opens, so the CALL does the
+        // work and `tighten_anchor()`'s verdict is the whole story. But
+        // `store_for` OPENS a vault this process has not served yet, and
+        // that open runs the same reconciliation — so the first
+        // `POST …/anchor` to such a vault healed a real lag and then
+        // answered `"behind_by": 0` about it. The CLI does not have this
+        // problem because a fresh process always opens.
+        //
+        // Reporting `anchor_at_open()` unconditionally — the fix as filed —
+        // trades that defect for a worse one: the field is set once, at
+        // open, and never cleared, so every later call on a cached handle
+        // would keep re-reporting a lag closed hours ago as though it were
+        // current. A monitoring rule would alert forever on one healed
+        // window.
+        //
+        // So the open's verdict counts only when THIS request caused the
+        // open, which is exactly the condition under which it is news.
+        let opened_now = !self.stores.contains_key(id);
         let store = self.store_for(id)?;
+        let at_open = opened_now.then(|| store.anchor_at_open());
         let state = store.tighten_anchor().map_err(store_err)?;
         // `behind_by` is what an operator is actually asking about — how
         // much of the chain the out-of-database rollback anchor could not
-        // have vouched for a moment ago.
-        let behind_by = match state {
-            undercroft_store::AnchorState::Healed { behind_by } => behind_by,
+        // have vouched for a moment ago. Whichever of the two closed the
+        // window, the answer is how far behind it was; the arms are ordered
+        // as the CLI's are, the open first because it gets there first.
+        use undercroft_store::AnchorState;
+        let behind_by = match (state, at_open) {
+            (AnchorState::Unseeded, _) => 0,
+            (_, Some(AnchorState::Healed { behind_by })) => behind_by,
+            (AnchorState::Healed { behind_by }, _) => behind_by,
             _ => 0,
         };
         let (chain_head, writes) = store.chain_state().map_err(store_err)?;
@@ -1116,6 +1183,10 @@ impl Tenancy {
                 "behind_by": behind_by,
                 "chain_head": chain_head,
                 "writes": writes,
+                // M1, on the second route that publishes this number. The
+                // `chain_state()` tuple IS the height, so both names come
+                // from one binding here as they do in `stats()`.
+                "chain_records": writes,
             })),
         ))
     }
@@ -1124,6 +1195,75 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
         let report = store.verify().map_err(store_err)?;
+        Ok((200, Body::Json(Self::verify_report_json(&report))))
+    }
+
+    /// `POST /v1/vaults/{id}/repair` — the REMEDIATION half of `verify`
+    /// (ROADMAP M17).
+    ///
+    /// `verify` has been on all three surfaces since it existed; `repair` was
+    /// on the CLI alone, so `/v1` and `/mcp` could both DIAGNOSE and neither
+    /// could remediate. That asymmetry has a cost with a name: R4 made a
+    /// read-only open REPORT what it declined to heal, on
+    /// `PalaceStats.unhealed`, on all three surfaces — and the door that heals
+    /// it was on one. `CLAUDE.md` also makes `repair` the mandatory second
+    /// half of a model-embedder swap (`UNDERCROFT_FORCE_EMBEDDER=1` +
+    /// `repair`), which a fleet operator whose only door is `/v1` therefore
+    /// could not perform at all.
+    ///
+    /// It is a WRITE, and `mutates` needs no entry for it: that function fails
+    /// closed, so anything not GET is a write unless explicitly named as a
+    /// read. A `--read-only` server refuses this before dispatch.
+    ///
+    /// **MCP is a boundary and stays one**, recorded in
+    /// `parity.rs::SURFACE_ABSENCES`: repair operates ON the storage machinery
+    /// rather than through it — it rewrites fingerprints, re-embeds and
+    /// vacuums — which is the same argument that makes `rotate` and `anchor`
+    /// operator-only.
+    ///
+    /// Residual, stated: `repair --tokens` (the ColBERT late-interaction
+    /// backfill) is NOT here. It is an unbounded loop over the corpus that the
+    /// CLI drives batch by batch, printing progress; a request handler is the
+    /// wrong shape for it and a half-finished one would be worse than its
+    /// absence. Recorded in ROADMAP M17 rather than left to be discovered.
+    fn repair(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        // **Sole-handle, for a reason that is NOT rotation's.** `rotate`
+        // refuses a co-resident vault because it re-keys and the other handle
+        // holds keys. `repair` re-EMBEDS, and `PalaceStore::repair` opens by
+        // dropping its own warmed embedding cache — *"Re-embedding below
+        // bypasses upsert; drop any warmed cache"* — which it can only do for
+        // the handle it is called on. A vault this process also serves over
+        // `/mcp` keeps a SECOND handle whose cache would survive the rewrite
+        // and go on scoring queries against vectors that no longer exist.
+        //
+        // That is the two-handles hazard A31 and the `writes` defect both had,
+        // in the one operation that rewrites the vectors themselves. Refused
+        // rather than papered over with a cache-invalidation broadcast, which
+        // would be a second mechanism for a case the operator can avoid.
+        self.deny_co_resident(id, "repairing", "run `undercroft repair <name>`")?;
+        let store = self.store_for(id)?;
+        let (report, backfilled) = store.repair().map_err(store_err)?;
+        let mut body = Self::verify_report_json(&report);
+        // The one field this route adds over `verify`. Everything else comes
+        // from the SHARED projection, so a new `VerifyReport` leg reaches both
+        // routes at once — writing the JSON out twice here is precisely the
+        // drift `HAND_PROJECTED` exists to count.
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("fingerprints_backfilled".into(), json!(backfilled));
+        }
+        Ok((200, Body::Json(body)))
+    }
+
+    /// The `/v1` projection of a `VerifyReport`, in ONE place.
+    ///
+    /// `verify` and `repair` both answer with it. It was inline in `verify`
+    /// until `repair` needed the same shape (ROADMAP M17), and copying it
+    /// would have created a SECOND hand projection of a struct
+    /// `parity.rs::HAND_PROJECTED` already tracks per surface — so a seventh
+    /// leg would have had to be added twice on this surface alone, and would
+    /// have reached one of them.
+    fn verify_report_json(report: &undercroft_store::VerifyReport) -> serde_json::Value {
         use undercroft_store::ReceiptVerdict as V;
         let count = |v: V| {
             report
@@ -1148,33 +1288,30 @@ impl Tenancy {
             .filter(|r| r.verdict == V::Tampered)
             .map(|r| r.triple_id.as_str())
             .collect();
-        Ok((
-            200,
-            Body::Json(json!({
-                "ok": report.ok(),
-                "records_checked": report.records_checked,
-                "bad_records": report.bad_records,
-                "chain_ok": report.chain_ok,
-                "orphan_labels": report.orphan_labels,
-                "mirror_drift": report.mirror_drift,
-                "supersessions": {
-                    "verified": count(V::Verified),
-                    "source_changed": count(V::SourceChanged),
-                    "dangling": count(V::Dangling),
-                    "unreceipted": count(V::Unreceipted),
-                    "tampered": count(V::Tampered),
-                },
-                "bad_supersessions": bad_supersessions,
-                "receipts": {
-                    "verified": rec_count(V::Verified),
-                    "source_changed": rec_count(V::SourceChanged),
-                    "dangling": rec_count(V::Dangling),
-                    "unreceipted": rec_count(V::Unreceipted),
-                    "tampered": rec_count(V::Tampered),
-                },
-                "bad_receipts": bad_receipts,
-            })),
-        ))
+        json!({
+            "ok": report.ok(),
+            "records_checked": report.records_checked,
+            "bad_records": report.bad_records,
+            "chain_ok": report.chain_ok,
+            "orphan_labels": report.orphan_labels,
+            "mirror_drift": report.mirror_drift,
+            "supersessions": {
+                "verified": count(V::Verified),
+                "source_changed": count(V::SourceChanged),
+                "dangling": count(V::Dangling),
+                "unreceipted": count(V::Unreceipted),
+                "tampered": count(V::Tampered),
+            },
+            "bad_supersessions": bad_supersessions,
+            "receipts": {
+                "verified": rec_count(V::Verified),
+                "source_changed": rec_count(V::SourceChanged),
+                "dangling": rec_count(V::Dangling),
+                "unreceipted": rec_count(V::Unreceipted),
+                "tampered": rec_count(V::Tampered),
+            },
+            "bad_receipts": bad_receipts,
+        })
     }
 
     /// `POST /v1/vaults/{id}/rotate` — rotate the vault onto fresh keys
@@ -1381,7 +1518,38 @@ impl Tenancy {
     /// on would not have added up to the list beside it.
     fn kg_receipts(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
+        let integrity_only = matches!(
+            query_param(req, "integrity_only").as_deref(),
+            Some("1" | "true")
+        );
         let store = self.store_for(id)?;
+        // **The cheap door, added because this route is now reachable with a
+        // TENANT token** (ROADMAP O67) and monitoring is its most frequent
+        // caller. `ok` is `tampered == 0`, and `Tampered` is decided by one
+        // HMAC over the receipt canonical — it reads no drawer. The full walk
+        // additionally decrypts every cited drawer to separate verified /
+        // source_changed / dangling, which no integrity decision reads.
+        //
+        // Measured by `undercroft-bench receiptscale` on a sealed vault:
+        // 8.6 us/fact for the full walk against 0.7 us/fact for this, so a
+        // poller asking "is this graph sound" stops paying a corpus decrypt
+        // per poll. Both are linear; this is a constant-factor fix and is
+        // described as one rather than as a fix for an unbounded route.
+        //
+        // ADDITIVE: absent the parameter the response is byte-identical to
+        // what shipped, which is what keeps 1.2.0 a MINOR.
+        if integrity_only {
+            let forged = store.kg_any_receipt_forged().map_err(store_err)?;
+            return Ok((
+                200,
+                Body::Json(json!({
+                    "ok": !forged,
+                    // Named so nobody reads this as the full verdict set: it
+                    // answers one question and says which.
+                    "checked": "receipt_tags",
+                })),
+            ));
+        }
         let receipts = store.kg_verify_receipts().map_err(store_err)?;
         let mut summary = serde_json::Map::new();
         for verdict in [
@@ -3488,6 +3656,115 @@ mod tests {
         );
     }
 
+    /// **M3 (round-four #48): the route reports a lag its own open closed,
+    /// and does NOT re-report it afterwards.**
+    ///
+    /// `store_for` opens a vault this process has not served yet, and that
+    /// open runs the same reconciliation `tighten_anchor()` does — so the
+    /// first `POST …/anchor` to such a vault healed a real window and then
+    /// answered `"behind_by": 0` about it. The CLI has read
+    /// `anchor_at_open()` for exactly this reason since A31; the route never
+    /// mentioned it.
+    ///
+    /// **Arm 2 is the one the filing did not ask for and the fix needs.**
+    /// `anchor_at_open` is set once, at open, and never cleared, so
+    /// reporting it unconditionally would make every later call on the
+    /// now-cached handle re-announce a window closed long ago — a monitoring
+    /// rule alerting forever on one healed lag. The condition is therefore
+    /// *did THIS request open the store*, not *is the field set*.
+    #[test]
+    fn the_anchor_route_reports_a_lag_the_open_closed() {
+        let mut s = surface(false);
+
+        // Out of band, before the server has ever opened this vault: advance
+        // the committed chain without moving the manifest anchor. Read-audit
+        // records do precisely that — `chain_meta` climbs, `vault.json` does
+        // not (A31).
+        let lag = 3usize;
+        {
+            let vault = s.tenancy.manager.unlock("acme").expect("unlock acme");
+            let mut store = PalaceStore::open(vault).expect("open acme");
+            store.set_read_audit(true);
+            for _ in 0..lag {
+                store.search("postgres", &SearchOptions::default()).unwrap();
+            }
+        }
+        assert!(
+            !s.tenancy.stores.contains_key("acme"),
+            "premise: the server has NOT served this vault yet — that is the \
+             whole case, and a cached handle takes the other arm"
+        );
+
+        // ARM 1 — the defect. The open fast-forwards, so `tighten_anchor()`
+        // finds nothing to do and used to be the only thing asked.
+        let (code, body) = s.call("POST", "/v1/vaults/acme/anchor", None);
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["behind_by"].as_u64(),
+            Some(lag as u64),
+            "the route must report the window that was real a millisecond \
+             before it opened the vault: {body}"
+        );
+
+        // ARM 2 — and exactly once. The handle is cached now, so the second
+        // call is the long-lived-server case, where the CALL is the only
+        // thing that can close a window and there is none.
+        let (code, body) = s.call("POST", "/v1/vaults/acme/anchor", None);
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["behind_by"].as_u64(),
+            Some(0),
+            "a lag already reported must not be re-announced on every later \
+             call — `anchor_at_open` is never cleared: {body}"
+        );
+    }
+
+    /// **M2 (round-four #45): one drawer count, and it answers to both
+    /// names from one read.**
+    ///
+    /// `PalaceStats.records` reached this route as `"drawers"` alone, so the
+    /// same quantity had a different name depending on which transport an
+    /// operator came in by — CLI and MCP said `records`, `/v1` said
+    /// `drawers` — and BOTH `/v1` reference documents described a payload
+    /// containing `records`, which the route had never sent.
+    ///
+    /// The premise arm is the one that makes the rest mean anything: with a
+    /// count of zero, `0 == 0` passes for a route that reads neither field.
+    #[test]
+    fn stats_reports_one_drawer_count_under_both_names() {
+        let mut s = surface(false);
+        let (code, body) = s.call("GET", "/v1/vaults/acme/stats", None);
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+
+        // PREMISE: a NON-ZERO count, so equality below is a claim about two
+        // readings of one number rather than about two absent fields
+        // defaulting to the same thing.
+        let drawers = v["drawers"].as_u64().unwrap_or_else(|| {
+            panic!("`drawers` must still be sent — renaming it is MAJOR: {body}")
+        });
+        assert!(
+            drawers > 0,
+            "premise: this surface holds drawers, or the equality below is \
+             0 == 0 and proves nothing: {body}"
+        );
+
+        let records = v["records"].as_u64().unwrap_or_else(|| {
+            panic!(
+                "`records` is what `PalaceStats` calls this field, what the \
+                 CLI and MCP print, and what both `/v1` reference documents \
+                 say this route returns: {body}"
+            )
+        });
+        assert_eq!(
+            records, drawers,
+            "both names are projected from the one `full.records` read, so \
+             they cannot disagree: {body}"
+        );
+    }
+
     /// R3: the anchor heal is reachable on the surface it exists for, and
     /// it is classified as the write it is.
     ///
@@ -3504,6 +3781,24 @@ mod tests {
         assert_eq!(v["anchored"], json!(true), "{body}");
         assert!(v["chain_head"].as_str().is_some(), "{body}");
         assert!(v["behind_by"].as_u64().is_some(), "{body}");
+
+        // M1 on the SECOND route that publishes the height. This one is not
+        // a `PalaceStats` projection, so `HAND_PROJECTED` does not reach it
+        // — the pair is asserted here or nowhere.
+        let writes = v["writes"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("`writes` must still be sent: {body}"));
+        assert!(
+            writes > 0,
+            "premise: this vault has committed records, or the equality \
+             below is 0 == 0: {body}"
+        );
+        assert_eq!(
+            v["chain_records"].as_u64(),
+            Some(writes),
+            "the height under the name that is true, from the same binding: \
+             {body}"
+        );
 
         // Unknown vault takes the same class as its neighbours.
         let (code, _) = s.call("POST", "/v1/vaults/nope/anchor", None);

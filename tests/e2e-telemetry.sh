@@ -195,20 +195,37 @@ grep -q "event: sample" /tmp/plain.sse && pass "stream emits sampler frame" || f
 grep -q '"wing":"eng"' /tmp/plain.sse && pass "hmac-only stream carries wing/room" \
   || fail "wing/room missing on hmac-only vault"
 
-# sealed vault: live events suppress wing/room names.
+# ROADMAP M6. A sealed vault's live frames CARRY wing/room to a subscriber
+# that proved per-vault authorization, and still carry no content.
+#
+# This block replaces one that asserted the opposite ("sealed stream
+# suppresses wing/room"), and the reversal is a deliberate ruling rather than
+# a drift: a subscription exists only after `Tenancy::authorize` (bearer +
+# per-vault assertion), `broadcast` fans a frame out to that vault's
+# subscribers only, and the same caller reads those names from
+# `GET /v1/<id>/stats`. Blanking them withheld nothing from an unauthorized
+# party; it blinded the vault's OWNER, who is who the live view is for.
+#
+# The boundary that did NOT move is asserted second, and it is the one that
+# matters: a name is metadata, the words are not.
 curl -s "${AUTH[@]}" -X POST "$BASE" -d '{"id":"sealed","level":"sealed"}' >/dev/null
 curl -sN --max-time 3 "${AUTH[@]}" "$BASE/sealed/stream" >/tmp/sealed.sse 2>/dev/null &
 C2=$!
 sleep 1
 curl -s "${AUTH[@]}" -X POST "$BASE/sealed/drawers" \
-  -d '{"text":"acquisition plan","wing":"topsecret","room":"boardroom"}' >/dev/null
+  -d '{"text":"acquisition plan SECRETWORD","wing":"topsecret","room":"boardroom"}' >/dev/null
 wait $C2 2>/dev/null
 grep -q "event: drawer-saved" /tmp/sealed.sse && pass "sealed stream emits drawer-saved" \
   || fail "no sealed drawer-saved frame"
-if grep -qE "topsecret|boardroom" /tmp/sealed.sse; then
-  fail "sealed stream leaked wing/room names" "$(cat /tmp/sealed.sse)"
+if grep -q '"wing":"topsecret"' /tmp/sealed.sse && grep -q '"room":"boardroom"' /tmp/sealed.sse; then
+  pass "sealed stream carries wing/room to an authorized subscriber"
 else
-  pass "sealed stream suppresses wing/room"
+  fail "sealed stream withheld wing/room from its owner" "$(cat /tmp/sealed.sse)"
+fi
+if grep -q "SECRETWORD" /tmp/sealed.sse; then
+  fail "sealed stream leaked drawer CONTENT" "$(cat /tmp/sealed.sse)"
+else
+  pass "sealed stream still carries no drawer content"
 fi
 
 # history backfill endpoint returns the sample ring.
@@ -266,8 +283,8 @@ else
   pass "flagged text never reaches the stream"
 fi
 
-# Sealed vault: names are suppressed, the signal codes still ship — they
-# are a closed vocabulary, not names.
+# Sealed vault (M6): the intended location ships with the signal codes —
+# an operator watching a poisoning attempt needs to know where it was AIMED.
 curl -s "${AUTH[@]}" -X POST "$QBASE" -d '{"id":"qsealed","level":"sealed"}' >/dev/null
 curl -sN --max-time 3 "${AUTH[@]}" "$QBASE/qsealed/stream" >/tmp/quars.sse 2>/dev/null &
 C4=$!
@@ -276,8 +293,8 @@ curl -s "${AUTH[@]}" -X POST "$QBASE/qsealed/drawers" \
   -d "{\"text\":\"$POISON\",\"wing\":\"topsecret\",\"room\":\"boardroom\"}" >/dev/null
 wait $C4 2>/dev/null
 if grep -q "event: drawer-quarantined" /tmp/quars.sse \
-  && ! grep -qE "topsecret|boardroom" /tmp/quars.sse; then
-  pass "sealed quarantine frame suppresses names"
+  && grep -q '"intended_wing":"topsecret"' /tmp/quars.sse; then
+  pass "sealed quarantine frame names where the write was aimed"
 else
   fail "sealed quarantine frame wrong" "$(cat /tmp/quars.sse)"
 fi

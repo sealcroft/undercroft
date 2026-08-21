@@ -1116,9 +1116,14 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**47 of 60** — the 13 it skips are prose sections with no `[A-Z][0-9]+` id and
+**97** of the **112** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
+**Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
+thirty-one entries** — a count in prose, inside the closure written to fix a
+count in prose, which is this file's oldest joke at its own expense. They are
+GATED now, by the `prose figures` preflight, so they are counted rather than
+remembered (ROADMAP M15).
 
 **What is decidable, and what is not.** Whether the work is *actually done* is
 semantic, and no textual gate decides it. Shipping something that appeared to
@@ -1283,7 +1288,7 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.2.0 — three round-four rows, all naming or reporting contracts
+## 1.2.0 — three round-four rows, all naming or reporting contracts, plus what closing them found
 
 MINOR: new capability, backward compatible. Each of these adds a field or a
 value beside one that stays, because **renaming any of them is MAJOR by this
@@ -1293,7 +1298,18 @@ verified against the code on 2026-08-18 and deliberately NOT half-landed in
 documentation, and shipping the doc alone would leave the misleading name in
 place while claiming the row was closed.
 
-### M1 — round-four #44: `writes` names the audit-chain height, which counts reads and exports
+**All three filings were re-verified against the code on 2026-08-19 before any
+was taken, and — for the first time this campaign — all three held.** That is
+worth stating rather than assuming: the standing expectation since round four
+is that a filing is a hypothesis and the last nine were each wrong about
+something. These were not. What they DID understate is their own case: M2's
+was argued as a symmetry preference when two reference documents already
+promised the missing key.
+
+**M4 and M5 were found by closing them**, which is this file's oldest lesson
+about the difference between filing and closing.
+
+### M1 — CLOSED 2026-08-19: `writes` names the audit-chain height, which counts reads and exports
 
 `PalaceStats.writes` is the committed chain height, read from `chain_meta`.
 The chain has never held writes alone — `audit_export` appends an
@@ -1315,7 +1331,38 @@ break every dashboard and every `jq` a fleet operator has written.
 one `chain_state()` call, plus `parity.rs::HAND_PROJECTED` so the CLI's
 hand-written projection cannot ship one and not the other.
 
-### M2 — round-four #45: one drawer count has two names, and `record` has three senses
+**CLOSED.** `PalaceStats.chain_records` is assigned from the SAME `writes`
+binding `chain_state()` produced, and reaches CLI `stats`, `/v1 …/stats` and
+`/v1 …/anchor` — that last route is not a `PalaceStats` projection, so
+`HAND_PROJECTED` does not reach it and it carries its own assertion. `writes`
+is unchanged and documented as deprecated on both `/v1` references; it will
+not be removed before a MAJOR and none is scheduled, which is stated rather
+than left to be inferred from the word "deprecated".
+
+**The gate needed two arms and the filing only named one.** *"Both populated
+from one `chain_state()` call"* is not a property any comparison of VALUES
+can see: two separate reads agree on every quiet vault. Counterfactual B
+proves it — replacing the binding with a genuine second `self.chain_state()?`
+leaves the behavioural arm passing and fails only the structural one. So the
+arms are (a) equality pinned at TWO different heights, which kills a value
+captured once, and (b) a source assertion that `fn stats` contains exactly
+one `chain_state()` and that `chain_records` is the first one's binding.
+Three counterfactuals executed, including the CLI projection deleted.
+
+**My own defect, in the gate, found by running it.** The structural arm first
+counted the raw window and read 2 — the second occurrence being the COMMENT
+beside `chain_records` saying there is no second call. That is *a gate whose
+own text is part of what it measures*, which this tree has recorded four
+times for gates reading their own inventory FILE and never before for a gate
+reading the function it guards. It strips comment lines now and asserts the
+stripper kept the code, so a stripper that ate everything cannot report one.
+
+**Measured**: 1,360 LoCoMo drawers across 16 wings, sealed. Both names read
+1360 after mining; with `UNDERCROFT_READ_AUDIT=chain` set, one search and no
+write took `writes` to **1361**, and `chain records` with it. Equal across
+the move is the pair being a pair, not two numbers that matched once.
+
+### M2 — CLOSED 2026-08-19: one drawer count has two names, and `record` has three senses
 
 `PalaceStats.records` is the drawer count. `/v1/…/stats` serializes it as
 `"drawers"`; the CLI and MCP print `records`. So the same number has two
@@ -1337,7 +1384,31 @@ prose gate is deliberately NOT proposed — a vocabulary rule with a
 three-instance history is exactly the "untested by history" shape
 `CLAUDE.md` warns about.
 
-### M3 — round-four #48: two surfaces answer differently about one anchor lag, and each is right for its own lifecycle
+**CLOSED, both halves.** `"records": full.records` sits beside `"drawers"` in
+`tenant.rs`'s hand projection, from the one read; `docs/AGENTS.md` §0 carries
+the three senses as a table naming the surfaces each appears on, plus the
+`writes` trap beside them. `stats_reports_one_drawer_count_under_both_names`
+gates the pair with a **premise arm** — a non-zero count, without which the
+equality is `0 == 0` and passes for a route that reads neither field — and
+one e2e check drives it through the surface. Counterfactual executed: the
+line removed, the gate fails naming the absent key.
+
+**The filing understated its own case, and the correction is the interesting
+part.** It read as "add a synonym so two transports agree". Measured, **both**
+`/v1` reference documents have always described this payload as *"records,
+level, writes, chain head, …"* and **neither has ever named `drawers`** —
+`docs/AGENTS.md:930` and `docs/remote-server.md:61`. So this was not a
+symmetry preference, it was a promise two documents made that the code did
+not keep, and the drift-direction doctrine settles it the same way O24 was
+settled: broad agreement across surfaces means the CODE is wrong. Had the fix
+been argued on taste it could equally have been argued away.
+
+**What the filing said and this did NOT do:** *"then make the surfaces follow
+it"*. Renaming `drawers` on `/v1`, or `records` on the CLI, is the MAJOR the
+same entry's `Rejected` line refuses. The surfaces follow the vocabulary in
+the DOCS; the wire keeps every name it shipped.
+
+### M3 — CLOSED 2026-08-19: two surfaces answer differently about one anchor lag, and each is right for its own lifecycle
 
 `undercroft vault anchor` reads `store.anchor_at_open()` as well as
 `tighten_anchor()`'s return, and its own comment says why: a fresh CLI process
@@ -1366,11 +1437,2400 @@ out-of-band write that leaves the anchor behind. It is MINOR rather than
 PATCH because `behind_by` changes value for an existing caller, and a
 monitoring rule keyed on `behind_by == 0` would start firing.
 
+**CLOSED — and the filed FIX was wrong, which the gate proved.** The filing
+says *"the route reports the same pair the CLI does"*. Written literally,
+that means reading `anchor_at_open()` unconditionally — and
+`anchor_at_open` is a FIELD set once at open and never cleared. The CLI gets
+away with it because a fresh process opens every time; a server caches its
+handle for its whole lifetime, so every later call would re-announce a window
+closed hours ago. **Counterfactual 2 executed**: with the condition removed,
+the second `POST …/anchor` answers `behind_by: 3` about a lag it reported on
+the previous call. That is a monitoring rule alerting forever on one healed
+window — the defect this entry fixes, wearing the other sign.
+
+The condition is therefore *did THIS request cause the open*
+(`!self.stores.contains_key(id)` read BEFORE `store_for`), which is exactly
+when the open's verdict is news. **Counterfactual 1** is the shipped route:
+`tighten_anchor()` alone answers `behind_by: 0` where the gate wants 3.
+
+**Gate, as filed plus the arm it needed**: a unit test with both arms, and
+TWO e2e checks driving a vault built with a real lag before the server
+process starts — `remember` anchors, then one `UNDERCROFT_READ_AUDIT=chain`
+search advances `chain_meta` without moving the manifest (A31). The first
+call reads `"behind_by":1`, the second `"behind_by":0`.
+
+**Tenth consecutive filing wrong about something, and the first where the
+error was in the FIX rather than in the evidence.** Every earlier one
+misdescribed the defect — a drifted line number, a stale coverage figure, a
+reader that is not a reader. This one described the defect exactly and
+prescribed a remedy that introduces a second one, which is harder to catch:
+the description is what gets verified, and a fix that matches the description
+reads as done. `UPGRADING.md` carries the caller-visible change.
+
+**Measured** on 1,360 LoCoMo drawers, sealed: `behind_by` 1 then 0, first
+anchor 19 ms, against a CLI premise reading *"the manifest was 1 record(s)
+behind"*. The instrument needed one correction the same discipline catches —
+the server must hold a DIFFERENT vault behind `/mcp`, because
+`serve-http --vault corpus` opens that vault for MCP at start-up and THAT
+open heals the window, leaving `Tenancy` nothing to find. A probe pointed at
+the same vault would have measured 0 and read exactly like an unfixed route.
+
+### M6 — CLOSED 2026-08-19: the live view blinded the vault's OWNER, and the tamper alarm could not say where
+
+**Raised by the maintainer**, from the console: the Palace tab showed a sealed
+vault one `◈ sealed` block while OVERVIEW and BROWSE, in the same session with
+the same bearer, listed all seven wings.
+
+**Two defects, one cause.**
+
+1. `tenant.rs`'s sampler blanked `wings` for a sealed vault, and the three
+   event emitters dropped wing/room, so `monitor.html:177` collapsed the
+   palace. Decided by the vault's LEVEL, in a periodic sampler that has no
+   caller and therefore cannot consider authorization.
+2. `event_hmac_fail` carried `{vault, surface}` and nothing else — **on every
+   security level**. `monitor.html` has had `else if(d.wing){…}` since it
+   shipped, reading a field no emitter ever sent: unreachable code, so every
+   wing flashed red on every integrity failure. The renderer was waiting for
+   data the emitter never produced.
+
+**This overturned a pinned decision, and that required an argument rather
+than a reading.** Two e2e gates asserted the suppression
+(`tests/e2e-telemetry.sh`, "sealed stream suppresses wing/room" and "sealed
+quarantine frame suppresses names"). The argument that overturns them is a
+chain, each link checked in code:
+
+* `http.rs:359` — a stream subscription happens only after
+  `tenancy.authorize()`, which is `assert_or_401`: bearer plus, when
+  declared, a valid per-vault assertion. (It binds the level as `Ok(_sealed)`
+  and discards it.)
+* `imp.rs:507` — `broadcast` retains only subscribers whose `vault` matches,
+  so a frame reaches that vault's authorized subscribers and no one else.
+* `stats/history`, the other consumer of the same `Sample`, calls
+  `assert_or_401` too.
+* `/metrics` carries no per-wing series at all, by cardinality policy.
+* The same caller reads every one of those names from `GET /v1/…/stats` and
+  `/taxonomy`.
+
+So there is **no configuration in which the suppression withheld a name the
+same caller could not get one call over.** It did not protect the owner from
+an external service; it blinded the owner. The gates are REWRITTEN to pin the
+new contract, and a third pins what did not move — content never travels, at
+any level.
+
+**Rejected: a declared opt-in** (`UNDERCROFT_MONITOR_NAMES`). It would have
+added an 82nd variable, an `ENGINE_ENV_VARS` row, a `config check` arm and an
+architecture-table entry to guard a disclosure the chain above shows is not
+one. A knob that protects nothing is worse than no knob: it implies a boundary
+where there is none.
+
+**The residual, stated rather than found later:** a `/v1/…/stats` call
+re-checks the assertion on every request; a stream is authorized ONCE and is
+long-lived, so it outlives the window of the assertion that opened it. True of
+every count it already carried. Bounding stream lifetime is the fix if it ever
+matters; `UPGRADING.md` says so.
+
+**A live XSS, found while implementing and reported as mine to widen.**
+`monitor.html`'s `log()` builds `innerHTML` from wire data, and
+`validate_name` permits `<`, `>` and quotes — it blocks only control
+characters and path separators. So `<img src=x onerror=…>` is a legal wing
+name, and this was reachable for any non-sealed vault BEFORE this unit;
+carrying names on every level would have widened it, and a tamper frame's
+location is bytes an attacker chose. Closed at the SINK, so all eight call
+sites and any future one are covered. `ui.html` had an `esc()`;
+`monitor.html` never did — the two pages were written to different standards
+and nothing compared them.
+
+**Gates.** Two rewritten e2e arms plus a content-needle arm; a source gate
+that `log()` escapes and that the escaper exists (counterfactual: remove
+`esc(text)`, it names the sink); a store gate requiring every DRAWER tamper
+site to pass a real `TamperSite`, with a premise floor so a scanner that
+matched nothing cannot report a converted tree (counterfactual: revert one
+site, it names the file).
+
+**Measured live**, sealed vault, 425 mined drawers: the sample carries
+`"wings":[["conversations",85],…]`, a control needle in a saved drawer does
+not appear anywhere in the stream, and a `randomblob` tag corruption followed
+by a read yields
+`{"id":"66a98fe7…","room":"locomo_feed","surface":"drawer","unverified":true,"vault":"acme","wing":"research"}`
+with the banner reading `UNVERIFIED: claims research/locomo_feed`.
+
+**Gap, filed rather than papered over — now ROADMAP O62, which is a HEADING
+rather than a sentence inside a closed entry:** no e2e arm drives a tamper
+through a live stream. Doing it needs a stop-edit-restart sequence to avoid SQLite
+page-cache flake, and a flaky integrity gate is worse than a stated gap. The
+wire shape is pinned by the unit gates and was verified by hand.
+
+### M7 — CLOSED 2026-08-19: the shipped observability stack could not start, and nothing in the repo could notice
+
+**Raised by the maintainer**, from the console: *"grafana dashboard not
+working"*. It was not the dashboard. The stack's own engine never started.
+
+```
+Error: the OTLP collector: the declared trust root
+/tls/caddy/pki/authorities/local/root.crt could not be read:
+Permission denied (os error 13)
+```
+
+**The mechanism.** Caddy writes its entire PKI as root — the CA cert `0600`
+inside directories at `0700` — which is correct, because that tree also holds
+the CA PRIVATE key. The engine image runs as `USER undercroft`, uid 10001
+(`Dockerfile:70,74`), so it cannot traverse `…/pki`, let alone read the cert.
+The engine then refuses to start, restart-loops, Prometheus has no target, and
+every panel in the provisioned dashboard is empty.
+
+**The refusal is right and is not what changed.** `undercroft-net` never falls
+back to the public roots (`lib.rs:107`): *"un-pinning silently is the failure
+mode this exists to prevent."* The defect was the PATH — only the certificate
+needs sharing.
+
+**Introduced by `f24be46`** (round-four #8, "the traces hop obeys the one
+transport policy"), the commit that closed a real cleartext-OTLP hole and
+declared this pin without checking which uid would read it. **A fix that
+closed a security gap broke the deployment it shipped in.**
+
+**Why it rotted unseen: nothing in the repo brings this stack up.** No test,
+no CI job, no compose service references `docker-compose.observability.yml`.
+`obs-config` validates the Prometheus and Alertmanager CONFIGS — at the
+pinned versions, carefully — and never starts a container. A config can be
+perfectly valid for a stack that cannot boot.
+
+**Fix.** A `tls-export` service copies the PUBLIC root to `/tls/root.crt` at
+`0644`; the engine pins that. The CA private key keeps its `0600` and never
+moves. It also **closes a race the permission error was masking**:
+`depends_on: [tempo-tls]` waits for the container to START, not for Caddy to
+have generated a CA, so the engine could have raced an absent file. The
+exporter waits for it — bounded, with a loud failure — and the engine now
+waits on `service_completed_successfully`.
+
+**Rejected:** `chmod -R a+rX` on the PKI tree (exposes the CA private key to
+anything mounting that volume); running the engine as root (throws away the
+non-root image for a certificate); pinning the public roots instead (deletes
+the pin the commit existed to add).
+
+**Verified from a destroyed-volume clean state**, ports remapped but the CA
+path exactly as shipped: exporter logs *"published the public CA root as
+/tls/root.crt (0644)"*, engine starts with no permission error, `root.key`
+still `-rw-------`, Prometheus target `up`, and the dashboard draws
+(`undercroft_drawers 442`, writes 1.05/min, searches 4.2/min under load).
+**Counterfactual executed**: an override restoring the deep path reproduces
+the exact error and the container dies; the shipped config recovers.
+
+**Gate — and its scope is stated rather than implied.** An eleventh host-side
+preflight fails when a compose service that BUILDS the engine image declares a
+`UNDERCROFT_*_CA` pin inside a `caddy/pki/` tree, with a premise probe that
+refuses to pass on zero declarations. Narrowing on the engine image is
+load-bearing: the same deep path appears in four places and is CORRECT in
+three, because those consumers run as root in dev/test images. Counterfactual
+executed — it names the file, the line and the value.
+
+**What that gate does NOT do, filed rather than papered over — now ROADMAP
+O63: it does not prove the stack starts.** Only a real bring-up does, and that means building
+the full image and running four containers in CI. The argument for not adding
+it now is cost, not principle, and it is written here so the next person
+weighs it rather than assumes it was considered:
+`docker compose -f deploy/observability/docker-compose.observability.yml up -d
+undercroft prometheus` plus an assertion that the target reaches `up` is the
+whole check, and it would have caught this. It needs a ports-free override to
+avoid colliding with a developer's own stack.
+
+**Also fixed while here**, both found by running it rather than reading it:
+the README's bring-up section said nothing about the two ways this looks
+broken — a port already taken (and that Compose MERGES `ports:`, so a naive
+override appends and the collision silently survives), and the two headline
+gauges being demand-driven, so an idle deployment renders them empty.
+
+### M4 — CLOSED 2026-08-19: `records` counted the quarantine wing while `wings` and `rooms` did not
+
+**Found while executing M2's counterfactual**, in the payload the reverted
+run printed: `"drawers":2` beside a `wings` list summing to **1**, on the test
+surface whose second drawer is diverted. `PalaceStats.records` is
+`self.count()` — `SELECT COUNT(*) FROM drawers`, unfenced (`lib.rs:3756`) —
+while `wings()` and the `rooms` subquery both carry
+`WHERE wing <> QUARANTINE_WING` (`manage.rs:959`).
+
+This is **O34 surviving O34**. That entry closed a wing list omitting the
+review queue beside a room count including it, and its own words were *"one
+quantity, two answers, inside one struct"* — which is still true one field
+over, on the field printed first. `undercroft stats` shows a total an
+operator cannot reconcile with the wing breakdown beneath it, and there is
+nothing on the surface saying why.
+
+**Not an exposure**: every quantity here is a count, so no reserved-wing name
+escapes. A coherence defect, like O34.
+
+**Shape of the fix, and it is NOT "fence `records` too".** Fencing it changes
+a documented count's value on three surfaces — CLI, MCP and `/v1` — which is
+the MINOR-at-least bar M3 states for `behind_by`, and it would also delete the
+only report of the vault's true row count, which `db_bytes` is measured
+against. The additive fix is the one this release keeps choosing: report the
+queue depth as its own field, so `records == sum(wings) + quarantined` and the
+three numbers reconcile without any existing value moving. That also gives the
+operator the figure `admission list` exists to surface, on the screen they are
+already looking at.
+
+**Gate:** on a vault holding one diverted drawer, `records`, the `wings` sum
+and the new field satisfy that identity, asserted through `/v1` and the CLI;
+plus `parity.rs::HAND_PROJECTED`, which fails the build until every hand
+projection of `PalaceStats` renders the new field.
+
+**Filed rather than half-landed**, per `CLAUDE.md`: it adds a field to a
+struct FIVE surfaces project — CLI, MCP, `/v1`, the vault console and the
+fleet console, which is M5's point — and M2's unit is not where that
+argument gets made.
+
+**CLOSED, additively, exactly as filed.** `PalaceStats.quarantined` counts
+the reserved wing, so `records == sum(wings) + quarantined` holds and **no
+existing value moves**. Fencing `records` was rejected for the reason filed:
+it changes a documented count on CLI, MCP and `/v1` at once, and deletes the
+only report of the vault's true row count — the number `db_bytes` is measured
+against.
+
+It reaches all three hand projections, and `HAND_PROJECTED` is what named
+them rather than memory: adding the field failed the build with
+`["quarantined"]` until the CLI, `/v1` and the console each rendered it. The
+CLI and the console show it **only when non-zero**, since it exists to explain
+a discrepancy that does not exist on a vault with screening off — which is
+every default vault.
+
+**Gate:** `stats_reconcile_records_wings_and_the_review_queue`, with a premise
+arm proving the identity holds trivially BEFORE a diversion (so the real arm
+measures the fence, not arithmetic luck) and a second premise asserting
+`records > sum(wings)` after one — because if those were equal the defect
+would not exist and the test would pass for the wrong reason. Counterfactual
+executed: pinning the field to `0` fails it.
+
+**Plus an e2e arm on the only vault in the suite with a REAL queue** — the
+scripted-attacker section, which diverts four writes. It reads
+`"quarantined":4` beside `records 6` and `wings (ops 2)`, i.e. the identity
+in the payload. **My first version asserted 3 and was wrong**; running it said
+so, which is the whole reason the arm goes on a vault with genuine
+diversions rather than a fixture.
+
+### M11 — CLOSED 2026-08-20 by doctrine: ground the decision before acting
+
+**Raised by the maintainer, about how this session was run rather than about
+any one change:** *"I don't like that you do stuff then you tell me on your
+own — you are supposed to check all the arch files and folders and the
+doctrine and the code, then set an elaboration of the options if you didn't
+find a solution, otherwise you follow the doctrine rules."*
+
+**The correction is an ORDER, and this session inverted it repeatedly.** The
+order is: read the architecture files and folders, read the doctrine, read the
+code. If they answer the question, follow them — silently, because that is the
+standard and narrating it spends the maintainer's attention on a decision that
+was never open. If they do not answer it, write the options out with their
+trade-offs and ask BEFORE acting.
+
+What actually happened instead, and it is worth naming because the pattern is
+invisible from the inside: the M9/M10 scope was chosen by me and reported
+afterwards ("I'd take the twin first"), and the `tls-pins` repair was
+implemented and then announced. Each was defensible and each was a fait
+accompli dressed as a status update. The maintainer had to say so.
+
+**The corollary matters as much as the rule.** "I asked first" is not
+automatically compliance: an option list assembled without reading the arch
+files and the code is a guess wearing a question mark, and it pushes the
+grounding work onto the person answering. M6 is the shape to copy — the
+authorization chain was read out of `http.rs`, `imp.rs` and the route table,
+the two gates that pinned the old behaviour were found and quoted, the
+residual was identified, and only then were three options put with their
+costs. That is grounding first, options second, action third.
+
+Filed as a `CLOSED by doctrine` entry rather than code: it changes how the
+next session works, not what the tree does. The rule is in `CLAUDE.md` under
+the binding consequences, applied backwards there as this file requires.
+
+### M9 — CLOSED 2026-08-19: M7's twin, latent in a published recipe
+
+**Found by generalising M7 rather than by waiting for it to be reported.**
+`deploy/embeddings-tls` is the same Caddy shape (`caddy:2.8`, PKI on
+`undercroft-embed-tls:/data`), and the recipe published in
+`docker-compose.yml`, `CLAUDE.md` and `docs/EMBEDDERS.md` pinned
+`UNDERCROFT_EMBED_CA` at the path inside that root-only tree.
+
+**It worked or failed depending on which service you picked**, and nothing
+said why. Mapping every compose service to its build target: `bench`, `e2e`,
+`site` and the rest build `target: builder` and run as root, so the recipe
+worked; **`cli` and `mcp` build `target: runtime`, which is `USER undercroft`
+(uid 10001)**, so the identical recipe reproduced M7's error verbatim. Both
+documents say "run **cli**/bench with…".
+
+**Fix:** an `embed-tls-export` service, the twin of M7's, publishing the
+PUBLIC root at `/tls/root.crt` (0644); the CA private key keeps 0600. All
+three published recipes repointed, and the terminator's own comment corrected
+— it described the deep path as the thing "clients mount", which is what
+propagated the error into the docs in the first place.
+
+**The M7 preflight does not catch this**, and that is a real limit rather than
+an oversight: it scans compose SERVICE declarations for engine-building
+services, and this instance lived in a COMMENT. Stated when that gate was
+written; M10 is the answer.
+
+### M10 — CLOSED 2026-08-19: nothing ever brought a TLS terminator up
+
+The class M7 and M9 belong to. Measured: of four shipped `deploy/` stacks,
+**exactly one** is ever started by a test — `backends-tls`, by `backends-e2e`.
+`observability` had its CONFIGS validated and no container started;
+`embeddings-tls` was a manual recipe; `bench-vs` is wired into nothing
+runnable. A config can be flawless for a stack that cannot boot, which is
+precisely what shipped.
+
+`tests/tls-pins.sh` brings the REAL terminators up and reads the published pin
+**as the engine's uid**, taken from the `Dockerfile` rather than hardcoded so
+the two cannot drift. Seven checks across both stacks. Counterfactual
+executed: repointing the embeddings pin at the pre-fix deep path fails it,
+naming the path.
+
+Three properties worth keeping:
+
+* **It asserts the CA PRIVATE key stays unreadable.** The obvious wrong fix
+  for this whole family is `chmod -R a+rX` on the PKI tree, and without this
+  arm the suite would pass on it.
+* **It has a premise arm.** If Caddy generated no CA, every readability check
+  would pass against an empty mount — the exact shape of failure this file is
+  about.
+* **It runs HOST-side**, like `tests/battery.sh` itself and for the same
+  reason: it drives docker. As a compose service it would need
+  docker-in-docker to answer a permission question that needs no build at all.
+  The published-count reader was widened to see host-side suites, or the
+  figure would have been published, measured and never compared.
+
+**A defect of mine, in this suite, found by running the battery and then
+looking at the machine.** The first version ran `down -v` against the REAL
+compose projects, so a battery run destroyed a live observability stack — its
+containers, its volumes, its Grafana state and a mined corpus. It did exactly
+that once, on the maintainer's machine, an hour after I committed it. Each
+stack now runs under a throwaway project (`tlspins-embed`, `tlspins-obs`), so
+the suite creates and destroys only its own volumes; proven by running it
+against a live stack and observing 10 containers / 7 volumes / Grafana 200
+before and after, with zero `tlspins-*` state left behind.
+
+`--no-deps` is part of that fix and is load-bearing for a second reason: a
+private project name does NOT scope a published PORT, which is a host
+resource. The terminator's dependency chain drags in `tempo`, which publishes
+3200, so the suite collided with the very stack it was trying not to disturb.
+Neither terminator publishes ports itself, and Caddy provisions its internal
+CA at startup whether or not the upstream it proxies is reachable — so the
+dependencies were never needed at all.
+
+**Scope, stated:** this does NOT prove the observability stack starts. That
+needs the full engine image and four containers; the cost argument and the
+exact command are in M7. This is the cheap half — three small public images,
+no Rust build — and it is the half that would have caught the defect.
+
+### M8 — CLOSED 2026-08-19: the console's empty state said nothing at all
+
+**Raised by the maintainer, in the plainest possible terms: "I see nothing".**
+
+`GET /ui` served an 80 KB page that rendered a blank shell — no vaults, no
+stats, and an empty status line. Nothing said a bearer was required. That is
+indistinguishable from a broken page, and it was reported as one. The Palace
+Monitor at `/monitor` at least announces demo mode and explains itself in a
+footer; this page announced nothing.
+
+The second half is the error path. `/v1/vaults` answers a bare `unauthorized`
+body, so `connMsg` showed `401: unauthorized` — a message that names neither
+what was rejected nor what to do about it, and only after the user has already
+guessed that pressing CONNECT was the next move.
+
+**Fix.** The status line carries `paste the bearer (UNDERCROFT_MCP_HTTP_TOKEN)
+and press CONNECT` from page load, and a 401 now names the credential and the
+usual cause — a trailing newline from `$(cat …)`, which HTTP strips, so the
+declared token can never match. That is not a guess: it is the failure
+`UPGRADING.md` already documents for this exact variable.
+
+**Gate:** `the_console_names_the_credential_it_needs` asserts both halves —
+they fail independently, since a hint can be deleted without touching the
+error path — with a premise arm proving the `401` branch is inside
+`connect()` rather than in a comment quoting it. Plus an e2e check that
+`GET /ui` actually serves the hint, which is the only arm that proves a user
+sees it.
+
+**Not done — now ROADMAP O64:** the server still answers a bare
+`unauthorized` body. Changing
+that is a `/v1` contract question affecting every client, not a console fix,
+and it is not what was reported. Filed here rather than folded in silently.
+
+### M5 — CLOSED 2026-08-19: the vault console is a FIFTH renderer of `PalaceStats` and was outside the gate that counts them
+
+**Found by doing M1's impact analysis before writing M1's code**, which is
+the whole argument for doing it in that order.
+
+`parity.rs::HAND_PROJECTED` carries `PalaceStats` twice — `main.rs`'s
+`Command::Stats` and `tenant.rs`'s `fn stats` — and **not** `ui.html`. But
+`ui.html` is `include_str!`'d into every build, served at `GET /ui`, and is a
+`/v1` CLIENT: every field the route projects reaches its wire for free and
+stops dead unless someone renders it by hand.
+
+**Measured the way the gate measures** — a `.field` ACCESS inside the window
+the boundary rule gives `loadOverview()`, which is lines 959–985, ending at
+`runVerify()` — the console reads **8 of `PalaceStats`' 12 fields** and drops
+four: **`unhealed`**, **`read_only`**, **`codebooks`**, and `records` (which
+it reads under the route's `drawers` alias, so the number IS on screen; the
+other three are not). Premise probe: `.writes` matches twice in the same
+scan, so the reader was reading the file.
+
+The first draft of this entry said *"renders ten and drops two"*. That was
+counting the ROUTE's JSON keys, not the STRUCT's fields, and it is the O38
+error in miniature — a number that answers a neighbouring question, stated
+with confidence. Corrected before it was acted on, and left here rather than
+silently replaced.
+
+Those are precisely the ones an operator opens a console to find. `unhealed`'s
+own doc comment says it lives on `stats` rather than only in a start-up log
+line *"because a long-lived read-only server's start-up was hours ago"* — and
+a long-lived server's operator is looking at this console. It carries "this
+replica is serving a vault its writer has not finished with" and "this vault
+still holds some graph words in clear at rest". `read_only` is the posture
+itself. The console shows a clean, complete-looking stats panel either way.
+
+**The direction is settled by breadth, not by convenience.**
+`docs/THREAT_MODEL.md:282` and `docs/security.md:127` both state `unhealed` is
+readable *"on every stats surface"*, and `CLAUDE.md`'s definition of done
+item 7 says *count the renderers, not the surfaces*, naming `ui.html`
+specifically. Several documents do not independently invent the same promise:
+the CODE is wrong.
+
+This is the **same defect, on the same file, as the entry that created the
+`ui.html` row for `VerifyReport`** — which found two legs the console had
+never shown, both of which drove the verdict tick it printed. That entry
+generalised to one struct and stopped; `PalaceStats` is the struct `CLAUDE.md`
+names as the FIRST one this drift class bit.
+
+**Shape of the fix.** Add the `PalaceStats` × `ui.html` row, anchored on
+`async function loadOverview()`, and render what the row then demands:
+`unhealed`, `read_only` and `codebooks` as new panel content, and `records`
+by reading `s.records` with `s.drawers` as the fallback an older server
+still answers with.
+
+Note the ordering constraint that makes this M2's dependant rather than an
+independent unit: the gate requires a `.field` ACCESS, and until M2 the route
+sent no `records` key at all — so the row could only have been added by
+exempting a field, and the exemption would then have had to be deleted.
+
+**Rejected:** rendering the fields without adding the row — that fixes the
+instance and leaves the class, which is exactly what the `VerifyReport` row
+exists to prevent. **Also rejected:** exempting `codebooks` as "too detailed
+for a console". A codebook generation that moved means every row encoded
+against its predecessor was silently re-quantized; `CLAUDE.md` names that as
+the thing nothing else in the struct can tell you, which is an argument for
+showing it, not against.
+
+**Gate:** the `HAND_PROJECTED` row itself, which fails the build when a
+`PalaceStats` field reaches no projection; plus a counterfactual removing one
+rendered field and observing the failure. An e2e arm is deliberately NOT
+proposed: `GET /ui` serves a static document, so an e2e check could only
+assert the same substring the gate already reads, from further away.
+
+**CLOSED.** The row is in, anchored on `async function loadOverview()`, and
+the console renders what it then demanded: `POSTURE` (`read_only`), an
+`UNHEALED` section hidden when empty, a `TRAINED INDEX ARTIFACTS` line, and
+`s.records` with `s.drawers` as the fallback an older engine still answers
+with. The `WRITES` gauge is relabelled **CHAIN RECORDS** and reads
+`s.chain_records` falling back to `s.writes` — a console has no callers to
+break, so the compatibility argument that keeps `writes` on the wire does not
+apply to a label.
+
+**Counterfactual executed**: with the three added reads removed the gate
+fails naming exactly `["codebooks", "read_only", "unhealed"]` — i.e. it would
+have caught the shipped defect, which is the only thing that makes the row
+worth adding.
+
+**Verified by LOOKING at the rendered page**, both sides of the premise, on a
+sealed vault of real mined drawers. Read-only, with a torn `vault.json.next`
+planted by the e2e suite's own recipe: `POSTURE read-only` and the unhealed
+note on screen in the operator's words. Writable: `POSTURE writable`,
+`sUnhealedSect` `display:none`, zero rows. **The first attempt showed the OLD
+console** — `ui.html` is `include_str!`'d, so the running release binary
+predated the edit and the page was three panels behind a green gate. That is
+the "prove the binary is fresh" rule landing on an asset rather than on a
+flag, and only opening the page found it.
+
+**The fleet console is a deliberate exclusion, not an oversight.**
+`undercroft-orchestrator/src/ui.html` reads `s.drawers` and `s.db_bytes` per
+tenant, and it is reachable by this gate — the projection path is
+crates-relative. It gets no row because a fleet OVERVIEW is a summary by
+construction: a row per tenant showing thirteen fields is not a better
+console, and a gate demanding it would be enforcing the wrong shape. The
+argument is written here rather than left as a silent gap, which is what
+`CLAUDE.md` asks of a decision not to act.
+
+### M12 — CLOSED 2026-08-20: the battery destroyed the model cache on every run, and it is M10's own lesson one file over
+
+Round-four **#39**, never probed until now, and it is worse than the row said:
+the row graded it LOUD, and it is **silent** — the command carries
+`>/dev/null 2>&1 || true`.
+
+`tests/battery.sh` reset the vector backends before `backends-e2e` with a
+project-wide compose teardown carrying the volumes flag and **no `-p` and no
+`-f`**. It therefore resolved to `./docker-compose.yml`, whose declared
+project is `undercroft` — **the developer's own** — and removed every named
+volume that file declares. Three of the five were pure collateral:
+
+* **`undercroft-models`** — the Ollama cache holding the multi-GB weights of
+  the four served embedders this project measures with, whose own compose
+  comment calls `embed-pull` *"a one-time model fetch into a volume"*. It was
+  a one-time fetch destroyed at every battery run.
+* **`undercroft-data`** — the compose palace, i.e. any mined corpus.
+* **`undercroft-embed-tls`** — the embeddings CA. Destroying it makes
+  `CLAUDE.md`'s own published pin recipe mount **a fresh empty volume
+  silently**, which is the exact failure the sentence beside that recipe
+  warns about.
+
+**And it needed none of them.** The four HTTP backends declare no `volumes:`
+key at all — qdrant, chroma, milvus and weaviate keep state in the container
+layer — and pgvector's only mount is a read-only cert. Every byte the suite
+needs fresh lives in an **anonymous** volume, which `rm -sfv <service>` takes.
+So the wide form destroyed only things the suite did not need and kept nothing
+it did.
+
+**This is M10's lesson, one file over, unapplied.** M10 established that *a
+private compose project name does not scope a shared host resource* after
+`tests/tls-pins.sh` destroyed a live observability stack an hour after it was
+committed. The battery's own teardown had the same shape the whole time, in
+the script every unit is required to run — so the cost was paid at every
+unit of every session rather than once.
+
+**The tree had already identified this command as a destructive force and
+defended everything except itself**, which is the part worth keeping. Two
+deploy files declare their own project name for exactly this reason and say
+so: `deploy/docker-compose.server.yml:25` — *"A distinct name from the test
+harness is deliberate: sharing one would make `docker compose down -v` in the
+repo destroy a running team server's data"* — and
+`deploy/observability/docker-compose.observability.yml:30` — *"sharing a
+project would let `down -v` on one destroy another's volumes."* So the blast
+radius was understood, named, and fenced **outward**, for the neighbours. The
+project the command actually resolves to is the one holding the model cache
+and the compose palace, and nothing fenced it. A defence built entirely
+outward reads as a defence.
+
+**Fix:** `docker compose rm -sfv qdrant chroma pgvector milvus weaviate
+backends-tls`, unsilenced. The terminator is recreated so it cannot serve a
+cached upstream address for a container just replaced; its CA is a NAMED
+volume, which `rm -v` deliberately does not touch, so the pin the suite mounts
+survives and Caddy reuses it.
+
+**Rejected:** a throwaway project (M10's own remedy) — it would force a full
+rebuild of the five backend containers on every run for no gain, since
+service-scoped removal already delivers the fresh anonymous state the suite's
+exact-count assertions need. **Also rejected:** keeping the wide teardown and
+excluding volumes by name — an allowlist that silently grows wrong the moment
+someone adds a volume, which is the failure mode this project files as a class
+rather than an instance.
+
+**Gate:** a twelfth host-side preflight, `destructive compose scope`. Every
+compose teardown in `tests/` must name the project it destroys; the two
+`tests/tls-pins.sh` carries are the accepted shape and are what the premise
+arm counts. Scope stated rather than implied: `tests/*.sh` only, because that
+is where this repo drives docker from — `deploy/` holds declarations rather
+than drivers, and CI runs compose services and never a teardown. A driver
+added elsewhere is outside it.
+
+**Three arms, all executed.** Fixed tree: `ok 2 destructive compose
+teardown(s) … every one scoped`. Pre-M12 tree: `FAIL … tests/battery.sh:1467:
+docker compose down -v …`, naming file, line and command. Blinded scanner
+(verb replaced with one nothing uses): `FAIL the teardown scan matched no
+compose teardown anywhere in tests/`.
+
+**My own defect, in the gate, and the counterfactual is the only thing that
+found it.** The first version's pattern required a token between `compose` and
+the verb. Every SCOPED teardown has one (`-p <proj> -f <file>` fills the gap)
+and the unscoped form does not — so the gate matched only the teardowns that
+were already correct, reported *"every teardown is scoped"*, and **passed on
+the very line it was written to catch**. Measured directly: the old pattern
+returns 0 matches against that line, the corrected one returns 1. That is this
+tree's own *ask what a gate can SEE, not what it asserts* rule landing on a
+gate written to enforce it, and the first instance where the gate and the
+defect it misses were authored in the same hour. Reading it would not have
+caught this; running it did.
+
+No ordinal is claimed for it. The first draft of this entry called it "the
+sixth instance" and of the gate comment's own five-item breakdown — both
+figures assembled rather than counted, which is precisely the O38/O43 error
+this file exists to stop repeating. M1 holds the counted figure; a second
+copy of a number is a second place for it to go stale.
+
+**Verified on the machine, both directions**, which is the standard M10 set
+for this class: sentinel files planted in `undercroft-models`,
+`undercroft-data` and `undercroft-embed-tls`, a full battery run, and all
+three volumes present with contents intact afterwards — against a `BEFORE`
+state on the same machine where those three were **absent**, having been
+destroyed by the two battery runs earlier that session.
+
+### M13 — CLOSED 2026-08-20: two gates that could not see what they asserted, and the one CI never ran
+
+Round-four **#35** and **#19**, taken together because they are one defect
+class: *a gate whose observable does not move when the defect appears.* Both
+were re-verified against today's code before either was touched.
+
+**#19 — the non-finite gate could not see LOCATION.** Arm (d) of
+`every_caller_supplied_vector_door_refuses_a_non_finite_component` read the
+whole of `lib.rs`, counted `is_finite())`, and asserted `>= 1` under the
+message *"the non-finite guard is in write_drawer_stmts"* — a claim about
+WHERE the guard sits, checked by a count that cannot see where anything sits.
+
+The regression that matters is not an accidental second occurrence. It is the
+guard **moving back up into `write_drawer`**, which the guard's own comment
+records as having happened before 2026-08-05: *"It sat in `write_drawer` …
+and its own comment admitted `upsert_many` did not inherit it."* Under that
+move the count is still 1, the message still reads the same, and all three
+behavioural arms still pass — every door they drive routes through
+`write_drawer`. Only `upsert_many` loses the refusal, and that is the path a
+CLI `import` and every sealed-bundle restore take.
+
+The arm is now a WINDOW scan on the M1 idiom: the body of
+`write_drawer_stmts` must contain the guard exactly once, the body of
+`write_drawer` must not contain it at all, both windows bounded by the closing
+brace at method indentation, comment lines stripped, with premise assertions
+on window size and on the stripper having kept the code.
+
+**Counterfactual executed, and it is the sharp one.** A script MOVED the guard
+into `write_drawer` — slicing the block out rather than retyping it, because
+its Rust literal carries backslash continuations. The rewritten arm fails
+`left: 0, right: 1`. The OLD arm would have passed: the token count with the
+guard moved is **2**, and `>= 1` holds. The second occurrence is this entry's
+own explanatory comment mentioning the token — so the old arm was not merely
+weak, it was being inflated by the gate's own prose, which is the M1 defect
+exactly. The window scan is immune because it strips comments.
+
+**#35 — the published check count, and what a "widened reader" did not
+widen.** The row had three sub-claims and they have three different answers.
+
+*"No suite uses `set -e`"* — TRUE and **refuted as a defect**. `check()` takes
+an EXPECTED exit code (`tests/e2e.sh:19`) and asserts non-zero ones, so
+`set -e` would abort each suite at its first negative-path check. It is a
+design fit; recorded rather than "fixed".
+
+*"No suite asserts a minimum executed-check count"* — TRUE, and O28 made it
+moot for the suites it reaches by comparing measured against published by
+EXACT EQUALITY, which is strictly stronger than a floor.
+
+*"The per-suite figures are enforced nowhere"* — the live half, in three
+pieces, all closed here:
+
+* **`tls-pins` escaped the comparison entirely.** The post-run block carried
+  its own second, compose-shaped reader (`docker compose run --rm $n`), so a
+  suite invoked as `bash tests/tls-pins.sh … (7 checks)` resolved to an empty
+  string and was skipped by the `[ -z "$published" ] && continue` one line
+  below. M10's own entry claims *"the published-count reader was widened to
+  see host-side suites, or the figure would have been published, measured and
+  never compared"* — **true of the PREFLIGHT reader it widened, and false of
+  this one.** Two implementations of one lookup; only one got the fix. There
+  is now ONE reader, defined beside `suite_summary` and used by both phases.
+* **A suite measuring ZERO was skipped**, by `[ "$measured" -eq 0 ] &&
+  continue` — the loudest possible case treated as the quietest. Reaching that
+  line means the summary parsed as two numbers, so zero means a suite printed
+  a summary having executed nothing. It is its own drift line now, because
+  "measured 0 against a published 370" is a different fact from "measured 369".
+* **CI never ran the comparison at all.** `ci.yml`'s `preflight` job runs
+  `--preflight-only`; the `suites` matrix ran `docker compose run --rm
+  <suite>` directly. So the arm that catches every surface being stale
+  TOGETHER — the only thing a preflight cannot do, since it needs a RUN — ran
+  solely on the maintainer's machine, and a pull request dropping a suite from
+  370 checks to 3 was green.
+
+**Ruled on rather than chosen** (`tests/battery.sh` states the doctrine —
+*"A gate that only runs on its author's machine is the shape this whole file
+exists to remove"* — which settles WHETHER, not HOW). The maintainer chose the
+per-leg self-check: each matrix leg and the `tls-pins` job now run
+`bash tests/battery.sh --no-preflight <suite>`, so CI and a local battery
+execute the SAME code rather than two implementations that agree until they do
+not. No new job, so `verdict`'s `needs:` and the CI-inventory preflight are
+untouched, and both load-bearing matrix properties survive: legs stay
+independent, wall-clock stays the slowest suite. The legs also inherit
+`--build` and M12's narrowed reset for free.
+
+**Rejected:** an aggregate job consuming uploaded logs (a new job, so the
+verdict's self-asserted upstream count and the CI-inventory preflight both
+move, to buy a report that reads the same); and recording it host-only (cheap
+and honest, but it leaves the gap the script's own sentence names).
+
+**My own defect, in this unit, found by RUNNING `--no-preflight` and not by
+reading it.** The first version wrapped the preflight block in
+`if [ "$NO_PREFLIGHT" -eq 0 ]` — and `test_summary`, `suite_summary` and the
+suite-count readers are DEFINED inside that region. Under the flag they
+therefore did not exist: the run printed `suite_summary: command not found`
+and `suite_count: command not found`, **and still exited 0.** The comparison
+examined nothing and reported exactly what a clean tree reports — the failure
+this entire unit is about, reproduced inside its own fix. The shared readers
+now sit outside the wrap, which pauses and resumes around them.
+
+**Also fixed, found by running the counterfactual**: the drift message told
+the reader to update the landing tile as *"the SUM of the four e2e suites"*.
+`PUBLISHED_FIGURES` sums FIVE. M11 widened the tile and left the sentence.
+
+**Counterfactuals executed, three.** Publishing `99` for `tls-pins` and
+running `--no-preflight tls-pins` exits 1 with *"tls-pins: CLAUDE.md publishes
+99, this run measured 7"* — the suite the arm could not previously see. The
+same edit under a FULL battery is caught one layer earlier by the
+`published figures` preflight (the tile sum moves), which is why the
+`--no-preflight` form is the one that proves the post-run arm. And
+`--no-preflight tls-pins` on the shipped tree runs zero preflights, zero
+`command not found`, exit 0.
+
+`ci.yml` was re-read by a real YAML parser in a container rather than by
+grep — 9 jobs, `verdict` needing 8, 7 matrix legs, all unchanged — because
+this tree's rule is to re-implement a check in a second language before
+believing it.
+
+### M14 — CLOSED 2026-08-20: nothing ever ran the architecture build, and its gate could not disagree with itself
+
+Round-four **#38**, both halves, and the second is the interesting one.
+
+**Half one: nothing invoked `architecture/build.sh`.** Not a battery suite,
+not a CI job, not a compose service, not `pages.yml`. Every tracked mention
+was PROSE telling a human to remember — `CLAUDE.md`'s session-end hygiene,
+two ROADMAP lines, the script's own header. So a stale inlined diagram, a
+reintroduced dark media query, or a hand-added `<h3>` with no id could ship
+under a fully green battery. That is the M7/M10 shape this branch has now
+paid for three times: **a check that is correct and never executed.**
+
+**Half two: the heading/rail gate was tautological, and this is measured
+rather than argued.** `visit()` stamped a fresh id onto every `<h3>`,
+collected those same ids into `kids`, built the rail from `kids`, substituted
+it into the document, and only THEN re-read `ids` and `refs` out of that same
+rewritten document and compared them. Both sides came from one list built in
+one pass. Its protection came entirely from the regeneration silently fixing
+the problem; the comparison could not fail.
+
+**Proven by running the pre-M14 script's own bytes** (`git show
+HEAD:architecture/build.sh`, confirmed pre-M14 by holding zero `ARCH_MODE`
+occurrences) on a copy of the tree with a hand-added `<h3>` injected: **exit
+0**, `index.html` silently rewritten (digest `4353a5ec…` → `9472993d…`), the
+bare heading gone and the text now appearing twice — stamped, with a
+manufactured rail entry. Exactly the case the script's own comment says
+*"already happened once"*, and it would have happened again in silence.
+
+Two more the row did not name. It **wrote `index.html` BEFORE comparing**, so
+a firing gate left the file already mutated — the failure is not atomic. And
+it had **no premise probe**: with zero sections both `ids` and `refs` are
+empty, they compare equal, and it passes having examined nothing.
+
+**Fix — one derivation, two things done with it.** `sh build.sh` rebuilds as
+before; `sh build.sh --check` derives everything in memory and fails if what
+is on disk differs, **writing nothing at all**. Comparing DERIVED against
+ON-DISK is a comparison that can actually fail, which the old one could not.
+Heading-id drift is RECORDED and named rather than silently corrected, so
+`--check` can report the section, the heading text, the id it has and the id
+it derives to.
+
+**Ruled on by the maintainer** — full parity was chosen over battery-only and
+over fixing the gate while leaving it unrun. `arch-check` is a compose
+service, a battery suite and a CI matrix leg.
+
+**Three properties worth keeping.**
+
+* **A stock `python:3.12-slim` and no build.** `--check` only derives and
+  compares strings, so it needs neither librsvg nor the Noto families. The CI
+  leg is therefore nearly free, which is what made full parity affordable.
+* **The mount is READ-ONLY, and that is an assertion rather than caution.**
+  The old gate's real defect was writing before comparing; read-only makes
+  "writes nothing" enforced instead of claimed. Verified: after a battery run
+  that FAILED on an injected heading, `git status` showed `index.html`
+  unmodified.
+* **Scope is stated and now MEASURED.** `--check` verifies `index.html` and
+  PDF coverage in both directions — every diagram has a PDF, no orphan PDF
+  survives a deleted diagram — and never PDF bytes. Rebuilding the 11 PDFs
+  from byte-identical input produced **11 of 11 differing** files, so PDF
+  bytes are demonstrably not a stable comparison target. The limit was going
+  to be stated on principle; it is stated on evidence instead.
+
+**Counterfactuals executed, six.** A hand-added `<h3>` with no id (fails,
+naming section, text, `None`, and the derived id); an inlined copy altered
+(fails, naming the drift); a dark media query reintroduced **on disk** (fails
+— and it reports `(on disk)`, which the old version could not, since it only
+ever inspected the freshly-stripped derived document); a PDF removed (fails,
+`missing ['domain-model']`); an empty `diagrams/` (fails on the premise, *"this
+examined nothing"* — read UNPIPED, because my first attempt read `tail`'s exit
+code and reported 0); and the whole thing through the battery, which exits 1
+and leaves the file untouched.
+
+**Rebuild mode re-verified, not assumed.** `sh build.sh` on a copy of the real
+tree produces a **byte-identical** `index.html` — a no-op on a clean tree,
+which is what a correct derivation must be.
+
+**Also fixed here, and it is a class of two rather than a second special
+case.** The battery's summary column special-cased `lint` as *"the one suite
+with no summary line"*, because the O27 reader's *"this reader examined
+nothing"* is the wrong message for a suite that legitimately prints none —
+and its own comment says why that matters: it is the SAME string that is a
+real signal elsewhere, so printing it routinely teaches the reader to skip it.
+`arch-check` is the second such suite, so it is a named set
+(`NO_SUMMARY_SUITES`) now. A class of two written as two special cases becomes
+a class of three written as three. Both also publish no check count, which is
+consistent: nothing to compare, so nothing skipped silently.
+
+**A doc claim corrected because the code disproved it.** `CLAUDE.md` said
+`build.sh` *"fails if a heading and a rail entry disagree"*. It did not, and
+the run above is the evidence. The sentence is replaced with what the old gate
+actually did, kept rather than deleted, because the wrong claim is the record.
+
 ---
 
 Also reserved for a documented contract that changes: the `palace`
 terminology rename (below) is the other candidate, since it would move a CLI
 subcommand and a room literal.
+
+### M15 — CLOSED 2026-08-20: the heading gate absorbed the sections it should have ended, and four open items had no heading at all
+
+Round-four **#36**, plus the governance sweep it made unavoidable.
+
+**#36's headline was already refuted and its consequence was exact.** O47 gave
+the gate its missing direction, so "one-directional" is no longer true. What
+O47 states as its own residual — a heading claiming CLOSED over an open body
+still passes whenever the body happens to contain the word "gate", "test" or
+"counterfactual" — remains, and is a deliberate proxy O47 measured at 7% false
+positives and rejected widening. **That ruling stands and is not reopened
+here.**
+
+**What was open is the section BOUNDARY, and it made the proxy weaker than it
+read.** The scanner started an entry on `^### [A-Z][0-9]+` and ended one only
+on `^## `. Every other level-3 heading fell through to the accumulator, so the
+**15** non-id headings in this file were ABSORBED into whichever entry preceded
+them, along with everything beneath them. Measured: the round-four accounting
+section was swallowed by **O47 itself** — the entry whose whole subject is this
+gate's limits. An inflated body is more likely to contain an evidence word
+belonging to a section it merely sat above.
+
+**Counterfactual executed, against both matchers.** A synthetic
+`### Z9 — CLOSED …` whose body names no evidence, followed by a non-id section
+mentioning a gate, a counterfactual and a test. Under the new matcher the
+battery exits 1 and names Z9. Under the pre-M15 `tests/battery.sh`, restored
+from git and confirmed by holding zero M15 references, the same fixture exits
+**0** with zero mentions of Z9 — it absorbed the following section's words and
+passed. **Null result worth stating: applying the fix to the real ROADMAP found
+no entry relying on absorbed text.** The gate got stricter and nothing broke,
+which is the outcome that deserves saying out loud rather than quietly.
+
+**A count in prose, inside the closure written about a count in prose.** O47's
+body said the gate "examines **47 of 60**". Measured, 94 of 109 — stale by
+thirty-one entries. Both halves are GATED now by the `prose figures`
+preflight (two rows: the entries examined, and the level-3 headings that
+exist for it to have skipped). It caught its own arrival twice — once when the
+rows were added, once when this unit's four new open entries moved 78/93 to
+82/97.
+
+**The governance half, and it is the larger one.**
+
+**Four open items had no heading.** Three were filed during this release and
+recorded ONLY inside the body of an entry whose heading says `CLOSED` — the
+tamper-through-stream arm inside M6, the observability bring-up inside M7, the
+bare `unauthorized` body inside M8. The fourth, round-four `#42`, was recorded
+in a gitignored file and never filed at all.
+
+**Both are the same failure, and this file names it in two adjacent
+sentences:** *"A newly OPENED item gets a heading here, so an open item is
+always resolvable"*, and *"an entry lives in this file only while the item is
+OPEN … when it closes, the entry leaves."* At release the three would have
+left WITH the `M` entries containing them — deleted as part of tidying away
+finished work. They are **O62, O63, O64 and O65** now, in a new `## Open`
+section, and each closed entry points at its heading so a reader following one
+finds the live item.
+
+**The heading gate could not have caught this and a widened one should not
+try.** Its three arms all judge an entry's OWN status; none asks whether a
+CLOSED body files separate still-open work, and the evidence arm is *satisfied*
+by the word "gate", which every one of those gap paragraphs contains. Detecting
+it needs a semantic reading, which this file has twice refused to fake with a
+scanner. The mechanism is a heading, not a gate — stated so nobody files it as
+a missing check.
+
+**`#42` is the O37 shape and is now O65.** Verified LIVE rather than inferred:
+the house page still serves `656 tests passing` while the tree runs **761** —
+the gap has WIDENED since round four measured 656-vs-689. Half the row closed
+silently at some point (the "unqualified 99.4% headline" is gone; the only
+percentages on the live page are CSS gradient stops), which is its own small
+lesson about unrecorded closures.
+
+**Five more surfaces corrected, each because something measured contradicted
+them:**
+
+* `## Unversioned`'s header enumerated its contents — *"two are clicks … and
+  one is a naming decision"* — and described neither the O6 half found already
+  done in 2026-08-10 nor O23, which is engine work. An enumeration in a header
+  goes stale exactly like a count in prose.
+* `CLAUDE.md` said **"Seven compose suites run as a MATRIX, one job each"** —
+  seven is now eight, and "one job each" contradicts the same sentence's
+  "the matrix is one" of nine jobs. A matrix expands to one check RUN per leg
+  under a single job id, which is why adding a leg leaves `verdict`'s `needs:`
+  alone and adding a job does not.
+* `.handover/AUDIT_CONTINUATION.md` §6 told the next session to bump four
+  named surfaces **to 1.1.0** — two releases stale, and reproducing the very
+  hand-recalled list `CLAUDE.md` disowned as the cause of the `1.1.0` drift.
+  Replaced with: run the `version surfaces` preflight, do not recall a list.
+* §1a's verdicts were stale in STATUS, which is what its own closing paragraph
+  warns about — *"an unprobed row and a probed-clean row must not look
+  alike"* — applied to itself within eight days. A re-verification block now
+  sits ABOVE it.
+* The handover-freshness gate reads the FIRST of several `handover-head`
+  markers. That convention was implicit; it is stated now, along with why it
+  is not the latent bug it looks like — a section appended at the bottom
+  leaves a stale first marker and fails the comparison loudly. The gate fails
+  closed on the ordering it assumes, and it reports the marker count.
+
+**My own defect in this unit, caught by running it.** The first version of the
+new awk rule carried a comment containing an apostrophe. The awk program lives
+inside a single-quoted shell string, so it terminated the string and
+`tests/battery.sh` died with a syntax error at exit 2. Fixed, and the
+constraint is now written beside the rule for the next editor.
+
+### M16 — CLOSED 2026-08-20: the CLI axis had no inventory, so every CLI-only capability was an unrecorded gap by construction
+
+Round-four **#34**, and it is much larger than the row said. The row read *"five
+CLI-only maintenance ops have no recorded boundary and no inventory"*. Measured
+by an exhaustive four-surface join, adversarially verified: **74** CLI
+operations — 24 leaf `Command` variants plus 50 sub-actions across 14 action
+enums — of which `parity.rs` named **17**. Fifty-seven were named nowhere.
+
+**The mechanism was never in doubt and is not a choice.** `CLAUDE.md`: *"A
+capability missing from one surface is a boundary or a drift, and which one has
+to be written down … an inventory the code is counted against in both
+directions — a tool without a line fails the build and a line without a tool
+fails it too, which a hand-maintained doc table cannot do."* `OPERATOR_ONLY`
+does this for the MCP axis and `OPS_DELIBERATELY_ABSENT` for the orchestrator's
+ops plane. **Nothing did it for the CLI axis.**
+
+`SURFACE_ABSENCES` + `SURFACE_COMPLETE` now PARTITION the CLI surface:
+**63 rows over 59 distinct anchors, plus 15 reachable everywhere = 74**, which
+is the independently measured total. Rows are keyed on the `main.rs` dispatch
+anchor (`Command::Dedup`, `BackupAction::Restore`) on the `HAND_PROJECTED`
+precedent, because an anchor is derivable from source and a prose name is not,
+and on `(anchor, absent_from)` because the ruling genuinely differs per surface
+— `Command::Repair` is a boundary on MCP and a drift on `/v1`.
+
+**Rulings as this unit shipped them: 31 Boundary, 7 Structural, 1 Drift, 24
+Unruled.** The tree now reads **34 / 7 / 1 / 21** — later in this same
+release, three of M16's `Unruled` rows (the kg WRITE family) were found to
+have been ruled all along by `docs/AGENTS.md` and became `Boundary`. Both
+figures are stated because M16's own reasoning is only readable against what
+M16 measured; **O66** carries what moved and why.
+
+**`Absence::Unruled` is the load-bearing decision of this unit.** Roughly two
+dozen absences are PRODUCT decisions that neither the code nor the doctrine
+settles — whether the remote plane should carry the agent-facing memory surface
+(diary, tunnels, closets, hallways, wake-up). The
+alternative was inventing thirty-odd reasons, and **an inventory whose reasons
+were guessed reads as ruled while being fiction — strictly worse than no
+inventory, because it stops the next reader looking.** `Unruled` says nobody has
+decided and carries the entry where the decision is filed (**O66**), and the
+gate REQUIRES that citation. Ruled by the maintainer over the two alternatives
+(a gate seeded with a narrowed subset; filing without building).
+
+**Boundaries ruled here, each with an argument rather than a restatement**:
+`mine`/`sweep` read a directory path the CALLER names, which remotely is a
+caller directing server-side filesystem reads; `index push` is EGRESS carrying
+plaintext-derived embeddings; the four `bundle` actions mint or read SECRET key
+material, and a server that generated your identity would hold the half only
+you may hold; `repair`, `backup create|list|restore` operate ON the storage
+machinery rather than through it — the `rotate`/`anchor` precedent, which are
+operator-only for exactly that reason.
+
+**Gate — four arms, all executed.**
+
+* **Accounting**: an anchor in neither list fails, naming it. Counterfactual:
+  `Command::Search` removed from `SURFACE_COMPLETE` → fails naming it.
+* **Stale rows**: a row naming an anchor `main.rs` no longer defines fails.
+  Counterfactual: a bogus row → fails.
+* **Premise**: the extractor blinded → *"found 0 operations in main.rs, which
+  is implausibly few — a broken extractor agrees with any inventory"*.
+* **Reason quality**: a reason under 30 characters fails, and an `Unruled` row
+  without a filed entry fails. **This arm fired twice while the inventory was
+  being written** — `Command::ServeHttp` at 21 characters and
+  `DiaryAction::Read` at 30 — which is the arm doing its job on its author.
+
+**A defect of mine, and the gate is what reported it.** The first extractor
+detected a ROUTER variant by testing whether its line contained `Action`. It
+does not: a router is written `Kg {` / `#[command(subcommand)]` /
+`action: KgAction,`, so the VARIANT line contains no `Action` at all and the
+test excluded nothing. The gate then reported all fourteen routers as unruled
+operations — correctly by its own lights, which is how it said the extractor
+was broken rather than the tree. Routers are derived from the enum names now.
+
+**A property worth recording that is NOT this gate's**: a genuinely new
+`Command` variant fails the COMPILER first, because the dispatch `match` stops
+being exhaustive. The counterfactual for the accounting arm therefore had to
+remove an existing anchor from the inventory rather than add a new variant —
+the compiler got there first. The gate covers the case the compiler cannot: a
+variant that HAS an arm and no ruling.
+
+**Two corrections to the join, both found by checking rather than relaying.**
+The CLI's `VaultAction` has **no Delete** — so `/v1` can delete a vault and the
+CLI cannot, which is the destructive lifecycle operation existing only on the
+remote plane. And MCP's `list_wings`/`list_rooms` against the CLI's single
+`taxonomy` is a GRANULARITY difference, not a capability absence; encoding it
+as one would have put a false row in the inventory.
+
+**Scope, stated:** the gate is both-directional over the **CLI axis**, which is
+what #34 is about. An absence from the CLI of something present only on `/v1`
+— vault delete, the SSE stream, the stats history ring — is not caught by a
+gate that derives its universe from `main.rs`. Those are recorded in O66 rather
+than silently left out.
+
+### M17 — CLOSED 2026-08-20: two surfaces could diagnose and neither could remediate
+
+The one `Absence::Drift` M16's inventory carried, closed rather than left as a
+row. **Raised by the maintainer** from M16's evidence.
+
+`verify` has been on all three surfaces since it existed. `repair` was on the
+CLI alone — verified by reading rather than relayed: **0** occurrences in
+`tenant.rs`'s route dispatch and **0** in `MCP_TOOLS`, against **2** and **3**
+for `verify`, with `pub fn repair` present in the store as the needle proof.
+
+**The asymmetry has a cost with a name.** R4 made a read-only open REPORT what
+it declined to heal, on `PalaceStats.unhealed`, on all three surfaces — and
+the door that heals it was on one. `CLAUDE.md` also makes `repair` the
+mandatory second half of a model-embedder swap
+(`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`), which a fleet operator whose only
+door is `/v1` therefore could not perform at all.
+
+**`POST /v1/vaults/{id}/repair`**, answering the SAME body as
+`POST …/verify` plus `fingerprints_backfilled`.
+
+**The projection is SHARED, and that is the load-bearing detail.**
+`VerifyReport` is in `HAND_PROJECTED` once per surface, so writing the JSON out
+a second time in `repair` would have created a second hand projection on the
+same surface — a seventh leg would then need adding twice on `/v1` alone and
+would have reached one of them. `verify_report_json` is the one projection both
+routes answer with, and the e2e arm asserting `repair` returns
+`records_checked` is what pins that it is shared rather than copied.
+
+**`mutates` needed no entry**, and that is the classifier working: it fails
+closed, so anything not GET is a write unless NAMED as a read. A `--read-only`
+server refuses this before dispatch, while still serving `verify`, which IS
+named.
+
+**MCP stays a boundary**, and the row stays in `SURFACE_ABSENCES` saying why:
+repair operates ON the storage machinery rather than through it — it rewrites
+fingerprints, re-embeds and vacuums — which is the argument that makes `rotate`
+and `anchor` operator-only.
+
+**A concurrency hazard found by reading the store rather than the row.**
+`PalaceStore::repair` opens by dropping its own warmed embedding cache
+(*"Re-embedding below bypasses upsert; drop any warmed cache"*), which it can
+only do for the handle it is called on. A vault the process ALSO serves over
+`/mcp` keeps a second handle whose cache would survive the rewrite and go on
+scoring queries against vectors that no longer exist. That is the two-handles
+hazard A31 and the `writes` defect both had, in the one operation that rewrites
+the vectors themselves. The route calls `deny_co_resident` — the same refusal
+`rotate` uses, for a DIFFERENT reason, which is why the comment states its own
+rather than pointing at rotation's. Rejected: a cache-invalidation broadcast, a
+second mechanism for a case the operator can avoid.
+
+**The control plane needed the same row, and its absence was the O14 lesson
+repeating verbatim.** `OPS_ROUTES` carried `("POST", "verify")` and no
+`repair`, so closing this on `/v1` alone would have left a fleet operator
+exactly where they started. O14's own comment three lines below the new entry
+says it: *"`forget` has been forwardable since this table was written;
+verifying the receipt it returns was reachable from nowhere in a fleet."*
+
+**Gates.** Three e2e arms, because the route makes three claims: it answers the
+verify verdict shape (proving the shared projection), it adds
+`fingerprints_backfilled`, and it refuses without an assertion like every
+write. Plus the two `/v1` route references, which are gated as SETS in both
+directions and named the omission immediately — *"docs/AGENTS.md does not
+document 1 live route(s): POST v1/vaults/id/repair"*, which is the gate paying
+for itself in the unit that added the route.
+
+**And the control plane has a SECOND gate, which caught the half-measure.**
+`every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias` requires
+every `OPS_ROUTES` entry to have a CLI alias, and it failed with *"POST repair
+is on the admin plane with no CLI alias — reachable by curl alone."* Adding the
+row to the proxy table alone would have made the capability forwardable and
+left the fleet operator without a command for it — the same shape as the
+absence this unit exists to close, one layer in. `undercroft-orchestrator ops
+<tenant> repair` exists now, and the subcommand's own help lists it.
+
+**And `HAND_PROJECTED` caught the consequence of the refactor, which is the
+best evidence that sharing the projection was the right move.** That inventory
+anchors the `(VerifyReport, tenant.rs)` row on a function, and the anchor was
+`fn verify(&mut self`. Moving the field reads into `verify_report_json` made
+the gate fail listing **seven** fields it could no longer see —
+`records_checked`, `bad_records`, `chain_ok`, `supersessions`,
+`orphan_labels`, `mirror_drift`, `receipts`. The fields had not stopped being
+projected; they had stopped being projected THERE, and only an anchor that
+follows them can tell those two apart. The row now points at the shared
+function.
+
+Worth recording about the failure itself: the battery's tail showed a
+figure-drift block reading *"cargo tests: CLAUDE.md publishes 762 run, this run
+measured 86"*, which is a SECONDARY symptom — a failing cargo test aborts the
+remaining targets, so 86 was a partial count. The real line was `test exit 101`
+in the exit-code table above it. *The exit code is the verdict* is this
+script's founding rule, and reading its tail first is the habit that rule
+exists to break.
+
+**Residual, stated rather than discovered later:** `repair --tokens`, the
+ColBERT late-interaction backfill, is CLI-only. It is an unbounded loop the CLI
+drives batch by batch while printing progress; a request handler is the wrong
+shape for it, and a half-finished one would be worse than its absence.
+
+**A defect of mine in this unit, and it is the one CLAUDE.md warns about most
+directly.** Removing the now-closed `Drift` row, I used a regex over the
+constant — and it ate the closing `];`, merging `SURFACE_ABSENCES` into
+`HAND_PROJECTED` and producing 21 compile errors. *"A SCRIPTED EDIT IS A CHANGE
+YOU HAVE NOT READ"*, walked into with the warning on the screen. Restored from
+the commit and removed by hand after reading the exact lines.
+
+**`Absence::Drift` now has no instances, and that is a result rather than dead
+vocabulary**: every absence on the CLI axis is argued, structural, or openly
+unruled — none is a gap nobody got to. The variant stays, because a vocabulary
+missing the word for the bad case cannot record the bad case.
+
+### M18 — CLOSED 2026-08-20: no CLI command could look at a vault without healing it, and `vault list` did it to all of them
+
+**Surfaced by M16's surface audit as a blind-spot note, and deliberately NOT
+treated as a finding until it was verified independently** — an agent's
+observation about a surface it did not enumerate is a hypothesis. Read from the
+code: `Posture::{ReadWrite, ReadOnly}` exists, `open_store` hard-codes
+`ReadWrite`, and `Posture::ReadOnly` had exactly **two** call sites in
+`main.rs`, both `serve-* --read-only`, against **32** `open_store(` sites.
+
+**A normal open is not passive, and R4 says exactly what it does**: the
+embedder migration, the manifest anchor fast-forward, the FTS rebuild, the
+A10/U12 at-rest migrations, and promoting or DELETING a writer's
+`vault.json.next` — *"the operation A32 called evidence destruction on the
+incident runbook's own path"*. That is right for ordinary use and exactly wrong
+when you are looking at a vault BECAUSE something went wrong with it. `serve-*`
+has been able to ask for the other posture since R4; **no CLI command could**,
+so the surface a responder reaches for first was the one that could not stay
+off the evidence.
+
+**`vault list` was worse than the general case, and it is the reason this is a
+unit rather than a flag.** It did not go through `open_store` at all — it
+called `mgr.unlock(&name)` and `PalaceStore::open(v)` directly, in a loop, so
+listing performed a full read-write unlock and open on **every vault on the
+host**, including the ones the operator was not asking about. The most natural
+first command in an incident touched everything.
+
+**Fix.** A global `--read-only`, resolved in ONE place (`Cli::posture`) on the
+same argument that makes `serve-http --read-only` a posture decided in front of
+dispatch rather than a guard per handler. `open_store` consults it, and
+`vault list` goes through the posture instead of around it.
+
+**A listing must LIST.** A read-only open legitimately REFUSES two conditions —
+an absent database, and a schema a read-only role would have had to migrate —
+and propagating either would abandon the remaining vaults over one bad entry.
+The loop names the vault, says it is unavailable, and continues.
+
+**Deliberately NOT done: a hand-maintained list of which subcommands write.**
+Under `--read-only` the store runs `PRAGMA query_only=ON`, so a write this flag
+did not anticipate fails loudly rather than happening quietly — which is R4's
+own design intent. A classifier listing "the mutating commands" is the drift
+this project keeps closing, and it would be a second answer to a question
+SQLite already answers correctly.
+
+**Gates — two e2e arms, and the second is what makes the first mean
+something.** Using the suite's existing staging-manifest recipe: with a torn
+`vault.json.next` planted, `--read-only stats` and `--read-only vault list`
+leave the vault **byte-identical** (md5 over `palace.db`, `vault.json`,
+`vault.json.next`). Then the counterfactual — the SAME `vault list` **without**
+the flag discards the staging manifest, which is the defect, executed. A premise
+arm fails if the read-only pass had already removed it, so the counterfactual
+cannot pass for the wrong reason.
+
+**Residual, stated:** read commands still default to read-write, and that is
+deliberate rather than unfinished — healing at open is the design, and making
+`stats` stop migrating would change what ordinary use does to fix an incident
+case. `--read-only` is the door for the incident; the default is unchanged.
+
+### M19 — CLOSED 2026-08-20: `repair` was not atomic, and M17 had just widened who could trigger it
+
+Round-four **#22**'s standing half. **Raised by the maintainer**, correcting me:
+I had proposed AMENDING M17's entry to note the interaction. An amendment is a
+doc change for a code defect, and the defect is that `repair` is not atomic.
+
+`repair()` ran every statement in autocommit. That is worse than "some work is
+lost", because the three statements that make the vault COHERENT again all sit
+BELOW both rewrite loops — `invalidate_embedding_space` (which drops the PQ/IVF
+tables), `record_embedder_identity`, and the chain record. So an abort part-way
+left:
+
+* fingerprints backfilled,
+* SOME drawers re-embedded with the new model and the rest with the old,
+* a codebook still quantizing vectors that no longer exist,
+* a vault still claiming the PREVIOUS embedder identity,
+* and no evidence any of it ran.
+
+**A mixed vector space that reports itself as pure**, which is the failure mode
+`invalidate_embedding_space`'s own comment describes: *"a stale codebook does
+not fail loudly, it returns the wrong candidates."*
+
+**The abort is reachable, not theoretical.** `self.get` returns `Err` on a
+drawer whose HMAC fails, so one tampered row part-way through a corpus is
+enough — and repair is precisely what an operator runs on a vault they already
+suspect.
+
+**M17 made it matter more, and that is mine.** It gave this operation a `/v1`
+route and an orchestrator alias, widening who can trigger it from one operator
+on one host to any fleet operator — and the M17 entry did not mention the
+interaction. The refuter had already narrowed `#22`'s trigger to *an embedder
+change AND a corrupt row*, which is exactly the model-embedder-swap path M17's
+own justification cites.
+
+**Fix — the bracket `write_drawer` already uses, and the inner audit form that
+already existed.** `repair` opens `BEGIN IMMEDIATE`, calls a new
+`repair_stmts` for the work, and commits; `VACUUM` stays outside (SQLite
+refuses it inside a transaction) and after the commit; `anchor_manifest` runs
+after the commit, in the order `audit_migration_standalone` uses, because the
+manifest is out-of-database evidence and must never run ahead of a commit that
+did not happen.
+
+**No new mechanism was needed, and that is the tell that the shape was already
+right.** `audit_migration_standalone` exists for callers that *"commit their own
+work first"* and its doc comment named `repair` as one of them — the defect,
+written down as a design choice. The INNER form, `audit_migration`, already took
+a caller-held transaction. It now takes `&Connection` rather than
+`&Transaction`, because a caller that opened with a raw `BEGIN IMMEDIATE` has no
+`Transaction` VALUE to pass — holding one borrows the connection and blocks
+every `&mut self` helper. Existing callers pass `&tx` unchanged; `Transaction`
+derefs to `Connection`. `chain_append` already took `&Connection`, so the whole
+change is one parameter type.
+
+**Gate + counterfactual, executed.**
+`a_failed_repair_leaves_the_vault_exactly_as_it_was` plants six drawers, nulls
+every fingerprint (so the backfill loop has real work — without it the test
+would pass on a tree that rolled nothing back), corrupts the LAST row by `seq`
+so five rewrites succeed before the sixth aborts, and asserts that afterwards
+all six fingerprints are still NULL and the audit height is unchanged. With the
+bracket removed, it fails: **"it left 5 of 6 rewritten", left: 1, right: 6.**
+
+**A defect of mine in this unit, and it is the one `CLAUDE.md` names in
+capitals.** My insertion anchor was `fn repair_records_itself_on_the_chain() {`
+— a `fn` line with `#[test]` and an eleven-line doc comment above it. The
+insertion took the attribute, so that test **silently became dead code**: it
+vanished from the run and only a `dead_code` warning said so. *"An anchor
+matched on a `fn` line with an attribute above it … no test could report it,
+because the test was the thing that stopped running."* Restoring the attribute
+then produced a DUPLICATE on my own test, because the original had been
+inherited too. Both fixed; the doc comment is reunited with the test it
+describes, and each function has exactly one `#[test]`, asserted by count.
+
+### M20 — CLOSED 2026-08-20: the control plane could not state its own tamper verdict, and one door swallowed it entirely
+
+Round-four **#30** and **#31**, taken together because they are one gap seen
+from two sides: the orchestrator READS the integrity vocabulary and did not
+SPEAK it for its own verdicts.
+
+`StateError::Unsealable` is the control plane's own tamper verdict — state.rs
+says so in as many words: *"a blob that will not open under the declared key is
+a tamper verdict or a wrong key, never a transient condition."*
+
+**`#30` — `instance-list` exited 0 on it.** The arm caught the error into
+`engine::Health::Refused(e.to_string())` and returned `Ok(())`. The reasoning
+behind that catch is RIGHT and is why the defect survived review: *"a refusal
+is not an outage, and printing it as one sent operators to look at an engine
+that was fine."* True of the DISPLAY, and it was the whole story — so the error
+was flattened to a string, never escaped `run()`, and the exit-2 hook in
+`main()` never fired. The fleet's own tamper verdict printed on stdout and
+exited **0**, which is what a compliance script reads as fine.
+
+**Fix:** remember the VERDICT before stringifying, and raise it after the walk.
+The listing still lists — M18's rule, and the reason this is not simply a `?` at
+the raise site: one unopenable blob must not hide the rest of the fleet. The
+error is returned as itself so `main`'s EXISTING hook classifies it — one
+classifier, not a second exit path spelled differently here.
+
+**`#31` — the HTTP surface could not emit `class` for its own verdict.**
+Measured: `"class"` appeared exactly twice in `proxy.rs`, both inside
+`engine_response`, relaying a class an ENGINE had already decided. Every other
+response went through `err_response`, which emits `{"error": msg}` and nothing
+else. So `Unsealable` reached the wire as a bare 409 on every admin route and
+the data plane.
+
+**And the status cannot substitute for it**, which is the whole reason the
+engine emits `class` at all: 409 is also `Conflict` here, and on the engine it
+is also a co-resident refusal and a wrong read-only posture — *"those must not
+page anyone"*, in this binary's own words, in the function that reads the
+marker out of engine replies. A caller keying on 409 would page on an ordinary
+conflict.
+
+**Fix:** `is_integrity()` on `StateError`, beside `status()` and for the reason
+`status()` gives — one place, so a new call site inherits the mapping instead
+of inventing one. `state_error_response` is already the single door; it now
+adds `"class": "integrity"` when the error is one.
+
+**Gates.**
+`state_failures_are_classified_by_the_error_not_the_call_site` gains the class
+assertion — **it asserted status and message and never the marker, which is how
+it passed for the whole time the defect existed** — plus the arm that makes it
+mean something: an ordinary state failure must NOT carry the marker, or `class`
+on everything would satisfy the first assertion while destroying the
+distinction it draws. Three e2e arms for `#30`: exit **2**, the listing still
+names every instance, and the message says the verdict is the control plane's
+own. Counterfactual executed — with the raise suppressed, *"FAIL a credential
+blob that will not open exits 2, not 0"*.
+
+**Placed deliberately beside the CA-pin arm**, because those two verdicts must
+stay distinguishable on the SAME command: a configuration refusal is exit 1, a
+tamper verdict is exit 2. Asserting them one after the other is what pins that,
+and neither arm proves it alone.
+
+### M21 — CLOSED 2026-08-21: the honest-exclusion count was computed under a different policy than the search
+
+Round-four **#51**. `unkinded_in_scope` counted `kind IS NULL` within the
+wing/room scope and **nothing else** — no trust floor, no quarantine fence —
+while `resolve_search_policy` removes below-floor wings and the reserved review
+wing BEFORE any candidate is drawn.
+
+So rows that were never in the kind filter's competition were counted as though
+the filter had passed over them, and reported to the caller as *"in-scope
+drawers that carry no declared kind and were not considered"*.
+
+**That is worse than an off-by-N.** The note exists for one reason, stated in
+docs/LABELS.md: a filter over a thinly-labeled corpus must say what it silently
+passed over, *"or an honest empty result is indistinguishable from a
+label-coverage gap"*. Inflating it with rows a DIFFERENT exclusion had already
+removed means it was quietly reporting a third thing, and a caller cannot tell
+the three apart from one number.
+
+**Fix — the one door, not a re-derivation.** `TrustClause::sql` is documented
+as *"One implementation for every read that narrows by trust"* and names three:
+`search`'s exact-scan arm, `recent`, and `list_drawers`. This was a **fourth**
+that did not use it — the exact shape that comment describes, since a declared
+`UNDERCROFT_TRUST_FLOOR` came to be enforced on one content read out of three
+because *"there was nothing to reuse"*.
+
+It takes the whole `SearchOptions` now rather than two strings, and that is the
+fix rather than a tidy-up: **the count cannot drift from the search it
+annotates if it is resolved from the same input by the same function.**
+
+**Gate + counterfactual, executed.** A vault with one ordinary unlabeled drawer
+and one unlabeled drawer in the reserved review wing: the count is **1**, with
+a premise arm asserting both rows really are on disk (so 1 is an exclusion
+rather than an empty corpus), and a second arm asserting a reviewer scoped INTO
+the review wing sees its row — because naming the reserved wing is how
+LABELS.md says a reviewer opts back in, and the policy returns the clause
+unchanged for it. With the policy clause removed: `left: 2, right: 1`.
+
+### M22 — CLOSED 2026-08-21: one shared model identity lived in four places, and the cause stays MAJOR
+
+Round-four **#27**, and it is **two defects wearing one row**.
+
+**The cause is MAJOR and stays filed.** `UNDERCROFT_ONNX_NAME` undeclared means
+a model records the shared identity `onnx-sentence`, so a DIFFERENT model
+loaded later records the SAME one and the store cannot tell the vector space
+changed — `EmbedderMismatch` is disarmed. Fixing that means DERIVING the
+identity from the model, which changes a value recorded in existing vaults:
+*"a documented value that stops being accepted"*, MAJOR by this file's own
+test, and `CLAUDE.md` forbids half-landing a change to an id recipe. It remains
+the 2.0.0 item, with that argument. O49 closed the SILENCE (every one of the
+six loader sites warns, naming the variable, the identity and the model file);
+this does not close the cause and says so rather than implying otherwise.
+
+**The duplication is fixable now and is its own hazard.** Measured: **twelve**
+literals — each of six loader sites wrote its identity twice, once in the
+warning and once as the value — across two crates that deliberately never link
+each other. Change one and not the others and the two backends record
+DIFFERENT identities for the SAME model, firing the mismatch guard on a vault
+whose vector space never changed. That is `#27` pointed the other way, and it
+would arrive by an ordinary edit.
+
+`SHARED_MODEL_IDENTITY`, `SHARED_RERANKER_IDENTITY` and
+`SHARED_COLBERT_IDENTITY` live in `undercroft-core::config`, beside the warning
+helper that already took the value as an argument. **The values are byte-
+identical**, deliberately: this is a de-duplication, not a rename.
+
+**Gate + counterfactual.** A source scan over all five loader files requiring
+none to write a bare identity literal, with its needles ASSEMBLED so it does
+not match its own source, and a per-file premise arm — a path that moved would
+read exactly like a crate with no duplicates. Counterfactual: one literal
+restored, and it fails naming the file and the string.
+
+**Round-four `#56`'s third sub-claim, corrected in the same unit.** O1's gate
+table said the GHCR manifest list holds three entries, *"the third, `unknown`,
+is the buildx attestation"*. It holds **four**: buildx writes an attestation
+per PLATFORM, so a two-platform index carries two `unknown/unknown` entries.
+Corrected by querying the live registry through the anonymous pull-token flow
+that entry's own gate uses, rather than by reasoning about buildx. O57 recorded
+this sub-claim as corrected while the row it names still said three — a closure
+claiming a fix it had not made.
+
+### M23 — CLOSED 2026-08-21: M18 introduced the defect M20 was fixing, and three units owed `UPGRADING.md` entries
+
+**Raised by the maintainer**, asking whether the doctrine, the tasks and the
+ROADMAP had been read in detail *including the code*. They had not been, and
+this entry is what the honest answer cost.
+
+**M18 introduced round-four `#30` in the CLI while M20 was closing it in the
+control plane.** M18 routed `vault list` through the posture and, for a vault
+that would not open, printed `unavailable:` and CONTINUED. That is right about
+the listing — one damaged vault must not hide the fleet — and it was the whole
+story, so the error never escaped `run()`, `integrity_verdict` never
+classified it, and **`vault list` exited 0 over a vault whose manifest fails
+its own MAC.**
+
+I applied *"a listing must list"* without *"the verdict must still be true"*,
+in the same session that wrote the second rule, one command over. Fixed with
+M20's shape: collect during the walk, raise after it, let the existing
+`integrity_verdict` hook classify.
+
+**No gate caught it, and `.handover/AUDIT_CONTINUATION.md` §1j predicted
+exactly that**: *"Both were found by looking at the machine, not by any check.
+**The gates in this tree are strong on mechanical drift and blind to
+consequences.**"* Ten green suites across three commits. §1j also records this
+as the session's own recurring pattern — *"two fixes that created the next
+defect"* — and this is the third instance, committed by someone who had not
+read the paragraph naming the first two.
+
+**The e2e arm's first version tested nothing, and the suite said so.** It
+reused the already-tampered `work` vault, which is damaged in a way that breaks
+a RECORD's HMAC — `verify` catches that and the vault still opens perfectly.
+The arm read exit 0 against a fixed tree. The second version tampered the
+manifest but matched `"id":"doomed"` while the manifest is PRETTY-PRINTED, so
+it changed nothing and the listing showed `doomed` opening fine. Both were
+caught by running it; neither would have been caught by reading it. §1j's third
+method note is this rule verbatim — *"an e2e arm belongs on data that actually
+exercises the case … on a fixture it would have passed against a number I
+chose"* — and it now carries a premise arm asserting the tampered manifest
+really does refuse to open.
+
+**Three units owed `UPGRADING.md` entries and none had one.** The doctrine is
+unqualified: *"anything that can stop a running deployment gets an
+`UPGRADING.md` entry in the same unit, with symptom, cause and fix."* M3 and M6
+have theirs; M20, M21 and M23 did not.
+
+* **M20** — `instance-list` exits **2** where it exited 0. A compliance cron
+  keyed on exit 0 starts failing, which is the check working, and nothing said
+  so.
+* **M21** — the `unlabeled` exclusion count can only go DOWN, and only on
+  vaults with quarantined drawers or a declared trust floor. A threshold tuned
+  to the old number moves.
+* **M23** — `vault list` both stops aborting at the first bad vault AND starts
+  exiting 2. The pair is the point: a caller sees MORE lines than before, never
+  fewer, and a non-zero code where it used to get one only sometimes.
+
+Each entry states which exit code means what, because the two are now
+load-bearing on both commands: **1 is a run failure, 2 is an integrity
+verdict.**
+
+**What was actually read, stated rather than implied.** `CLAUDE.md` in full
+(it is injected). `ROADMAP.md`'s `## 1.2.0`, the dependency map, and every
+entry a unit touched — but not its other ~6,000 lines. `AUDIT_CONTINUATION.md`
+§1a and its structure; **§1j not until now**, though the session prompt named
+it. `SESSION_START.md`'s first ~200 lines of 1,527. `NEXT_SESSION.md` and
+`UPGRADING.md` by grep only. The gap was real and it cost the three items
+above.
+
+### M24 — CLOSED 2026-08-21: four live instructions pointing at finished work, and a gate of mine that could pass on nothing
+
+**Raised by the maintainer**, asking whether the doctrine, the tasks and the
+ROADMAP had been read in detail *including the code*. M23 recorded what the
+honest answer had already cost. This is what actually reading them found.
+
+Four governance files read END TO END, every candidate put to an adversarial
+verifier told to default to refuted and to treat a dated or struck-through
+statement as correct-as-written. **48 candidates, 6 survived.**
+
+**Five in `.handover/NEXT_SESSION.md`, three of them LIVE INSTRUCTIONS.**
+
+* **§2 is titled "State — verified, not remembered" and holds a 2026-08-12
+  SNAPSHOT** — eight suites, five preflights, 711 cargo tests, 325 e2e, 12
+  crates, 79 variables, against a tree running ten, twelve, 765, 379, 13 and
+  81. It read as current because nothing said otherwise and §1's table beside
+  it IS maintained. An unmarked stale section and a maintained one must not
+  look alike — §1a's own rule, one file over.
+* **§4 closes *"What is left is one click in the GitHub web UI"***. True on
+  2026-08-13; O62–O67 were filed on this branch and O7, O23 and the 2.0.0 item
+  were open throughout.
+* ***"Pick the next unit by rank from `SWEEP4_SYNTHESIS.md`"*** — nothing left
+  to rank, and ranking work out of a GITIGNORED file is O37 in one sentence.
+* ***"Nothing in the repository runs that verifier … Run it in a container
+  until O10 lands"*** — every clause false since 2026-08-12, and a live
+  imperative pointing at the file §7 of the same document forbids trusting.
+* ***"By rank, Unit 1 is next: … `ok()` has five terms"*** — closed
+  2026-08-11. Counted: `ok()` has SIX terms. It stood as the standing "do this
+  next" for ten days after the work shipped.
+
+**One in tracked `UPGRADING.md`, and it is the one that could mislead a
+deployment.** *"FOUR entries are the exception"*, closing *"everything else in
+this section is a misconfiguration caught at start-up, and for those, `config
+check` exiting 0 … means none of them affect you."* Classified all sixteen
+1.1.0 entries: **eight** are start-up refusals and **eight** are not. The four
+missing are the ones a script notices — a cleartext engine URL refused at
+REGISTRATION, `instance-remove`'s exit code, an attestation refusal, and usage
+errors exiting 1 rather than 2 **on every command**. A reader who ran `config
+check`, saw 0 and trusted that sentence would have concluded those four could
+not affect them.
+
+**A weakness of mine, and it is the one that matters.** M18's e2e arm ran
+`"$BIN" --read-only stats >/dev/null 2>&1 || true` before comparing the vault
+byte for byte. Had that flag ever stopped PARSING, both commands would fail
+instantly, touch nothing, and the comparison would pass **having tested
+nothing** — `|| true` doing the swallowing. That is *"a counterfactual that
+fails to apply still prints a pass"*, written two units after quoting the rule.
+The arm asserts the flag runs before the comparison is believed.
+
+**One lead REFUTED by measurement, recorded because a false alarm costs the
+next reader as much as a miss.** The cross-check flagged that M18's global
+`--read-only` might collide with `serve-*`'s own flag and hand an operator a
+WRITABLE server. Measured on a real vault: no flag → writable, `serve-http
+--read-only` → read-only, `--read-only serve-http` → read-only. They compose.
+The first probe said the flag did not parse at all — the STALE BINARY hazard,
+caught by a freshness probe before anything was concluded from it.
+
+**And this entry exists because its own absence was the same defect.** The
+fixes shipped in `bd4e447` with the findings recorded in the commit message and
+in `.handover/`, which is gitignored — so four of the six lived nowhere a fresh
+clone could see them. That is O37, committed one commit after quoting O37. The
+handover is where state lives; the ROADMAP is where FINDINGS live, and a
+governance unit is not exempt from the rule it is about.
+
+### M25 — CLOSED 2026-08-21: M6 left five surfaces saying the opposite, and three filings were wrong about the tree
+
+**M6's own drift, and it is mine.** M6 ruled that wing and room names travel
+on every security level and updated two surfaces. **Five published claims
+still stated the reversed contract** — twice in `website/src/observability.md`
+(54 lines apart, so the file contradicted itself), twice on
+`website/landing/index.html`, which is a product promise that disagreed with
+the shipped binary, and once in `website/src/observability.md`'s event list
+("(for hmac-only vaults) wing/room"). A sixth was an orchestrator comment
+justifying a correct decision with the now-false premise; the reason is
+cardinality and always was, so the reason moved and the code did not.
+
+**Why a sweep missed them.** The surfaces disagree in WORDING, not in a
+shared token — "suppressed", "aggregate counts only", "(for hmac-only
+vaults)". A search for the sentence that WAS fixed finds none of the four
+that were not. This is the "a search cannot verify its own blind spot" rule
+applied to a doc claim rather than a name: the question has to be the
+CONTRACT, not the phrasing.
+
+**Three filings re-verified and corrected** — the "verify the filing, not
+just the fix" rule, run on filings this branch itself wrote:
+
+* **O65** called the house page's `99.4%` GONE on a live fetch. It is
+  present; the `%` sits in a nested `<span>`, so a `99.4%` search returns
+  zero on the page that publishes it. The sweep material had written that
+  trap down in advance. Half the row is therefore still open, and it is the
+  half that matters: the figure names its benchmark and not its
+  CONFIGURATION.
+* **O67**'s premise that "roughly half are DATA-plane reads" is measured
+  wrong — 3 of 11, with **8 reachable from neither plane**, including
+  `kg/authority`, an `OPERATOR_ONLY` capability with no operator door in a
+  fleet. That premise was an argument for not acting, which is the most
+  expensive place for an unverified one.
+* **O66**'s kg WRITE family was `Unruled` while `docs/AGENTS.md` had ruled it
+  in the present tense. Now `Absence::Boundary` (34/7/1/21).
+
+**And a stale count the gate was designed not to see.**
+`docs/remote-server.md` said "All 36 routes" while `route()` dispatches 37 —
+`repair` (M17) was added to the list and not the sentence. O45's gate
+compares SETS in both directions **because a count passes when one route is
+swapped for another**, so it was green over a wrong count, correctly.
+
+**Gate:** the `prose figures` preflight now checks that count against
+`route()`'s arm count, with a no-match failure so a reworded sentence cannot
+silence it. Counterfactual executed — restored to 36, it prints
+`publishes 36 routes; tenant.rs dispatches 37` and exits 1. Doctrine added to
+`CLAUDE.md`: **a number in prose beside a gated list is the un-gated part of
+a gated claim.**
+
+**Deliberately not done.** The 21 remaining `Unruled` rows, O67's
+third-category decision and O65's house-page choice are product rulings the
+maintainer holds. Inventing them is exactly what `Absence::Unruled` exists to
+prevent, and doing it here would have made this entry the defect it is about.
+
+---
+
+## Open — releasable work, filed and not yet scheduled
+
+**This section exists because of where these four were living.** Three of them
+were filed during `1.2.0` and recorded only INSIDE the body of an entry whose
+heading says `CLOSED`; the fourth was found by round four, recorded in a
+gitignored file, and never filed at all. Both are the same failure and this
+file names it: *"A newly OPENED item gets a heading here, so an open item is
+always resolvable"*, and, one paragraph later, *"an entry lives in this file
+only while the item is OPEN … when it closes, the entry leaves."* So at
+release the three would have left WITH the `M` entries that contained them —
+deleted as part of tidying away finished work, which is the most expensive
+place a live item can be.
+
+They are NOT in `## Unversioned` below: that section is for work a release
+cannot contain (a web-UI click, a naming decision). All four of these are
+ordinary releasable work with no target release yet.
+
+**The heading gate could not have caught this**, and that is worth stating
+rather than assuming someone will notice. Its three arms —
+`body-closed-heading-open`, `closure-without-evidence`,
+`closure-without-a-date` — all judge the entry's OWN status. None asks whether
+a `CLOSED` body files separate still-open work, and the evidence arm is
+actually *satisfied* by the word "gate", which every one of these gap
+paragraphs contains. Detecting "this closed entry contains an open item" needs
+a semantic reading, which this file has repeatedly refused to fake with a
+scanner (O33, O47). The mechanism here is a heading, not a gate.
+
+### O62 — no e2e arm drives a tamper through a live stream
+
+Filed inside M6 and given a heading here. M6 made a tamper frame carry the
+wing and room it concerns, so `monitor.html` can localize an integrity
+failure instead of flashing every wing red. The **wire shape is pinned by
+unit gates and was verified by hand**; what does not exist is an arm driving a
+real tamper through a live SSE stream end to end.
+
+**Why it was not done:** it needs a stop-edit-restart sequence to avoid SQLite
+page-cache flake, and a flaky integrity gate is worse than a stated gap — a
+gate that fails at random teaches the reader to re-run it, which is how a real
+failure gets waved through.
+
+**Shape of the fix:** stop the server, corrupt a drawer tag out of band,
+restart, subscribe, read one frame. **Gate:** the frame carries
+`unverified:true` plus the wing and room, and the banner names them.
+
+### O63 — nothing brings the observability stack up, so nothing proves it starts
+
+Filed inside M7 and given a heading here. M7 fixed a CA pin that made
+`deploy/observability` unstartable for two releases, and M10 added
+`tests/tls-pins.sh` for the cheap half — that the pin is READABLE by the
+engine uid. Neither proves the stack STARTS.
+
+**Why it was not done: cost, not principle**, and the exact command is
+recorded so the next person weighs it rather than assumes it was considered:
+`docker compose -f deploy/observability/docker-compose.observability.yml up -d
+undercroft prometheus` plus an assertion that the target reaches `up`. It
+needs the full engine image and four containers, and a ports-free override so
+it cannot collide with a developer's own stack.
+
+**It would have caught the original defect.** `obs-config` validates config
+FILES and starts no container, and a config can be flawless for a stack that
+cannot boot.
+
+**Note what changed since M7 filed this:** `arch-check` (M14) established that
+a suite needing no Rust build is nearly free in CI. This one is not in that
+class — it builds the engine image — so the cost argument stands, but it is
+now the only battery suite that would.
+
+### O64 — `/v1` answers a bare `unauthorized` body
+
+Filed inside M8 and given a heading here. M8 fixed the CONSOLE: `GET /ui` now
+names the credential it needs from page load, and a 401 explains the usual
+cause. The server still answers a bare `unauthorized` with no structure.
+
+**Why it was not done:** it is a `/v1` contract question affecting every
+client, not a console fix, and it was not what was reported. Changing a
+response body is the kind of thing this project files rather than folds in
+silently.
+
+**The decision it needs**, which is why this is a heading and not a patch:
+every other `/v1` error carries `class` (`integrity`, and 409/400 routing
+through `vault_err`). An `unauthorized` body that grew a `class` would be
+consistent — but 401 is answered BEFORE `Tenancy::authorize` returns a vault,
+so it has no vault-scoped context, and saying more about WHY a bearer failed
+is exactly what an unauthenticated caller must not learn. Those two pull in
+opposite directions and the resolution is a ruling, not a refactor.
+
+### O67 — CLOSED 2026-08-21: the universe is derived, the partition is three-way, and eight unreachable capabilities are reachable
+
+**Ruled by the maintainer**: widen the data plane, and put `kg/authority` on
+the ops plane. Implemented, gated, counterfactualled, and exercised end to end.
+
+**What shipped.**
+
+* **`data_subpath_ok` gained seven whole shapes** — `taxonomy`, `kg/stats`,
+  `kg/entities`, `kg/query`, `kg/timeline`, `kg/receipts`,
+  `kg/canonical/{key}`. Verified before widening rather than assumed: a fact
+  cannot come from a quarantined drawer, because `refine` reads through
+  `recent()` (which excludes the reserved wing) and refuses outright when
+  scoped to it — so this is not a door around admission control. The
+  `request_names_reserved_wing` fence still covers every widened route, pinned
+  by an e2e arm.
+* **`kg/authority` went to `OPS_ROUTES`.** It is in the engine's
+  `OPERATOR_ONLY`, so it belongs on an operator plane and nowhere else — and
+  it was on **neither**, which made the golden-values tier drivable from no
+  door at all in a fleet.
+* **The universe is DERIVED from `tenant.rs`'s dispatch**, read out of the
+  engine's source, which is the only route two crates that deliberately do not
+  link have. Measured: 28 subpaths, against the 17 the literal named.
+* **The partition is three-way** — ops-reachable / deliberately-absent /
+  data-plane — and the third list is derived by ASKING `data_subpath_ok`
+  rather than restating it, so the two cannot disagree. Measured: 11 / 7 / 14,
+  **0 unclassified**. The four rows in two parts (`drawers`, `search`,
+  `export`, `import`) are absent from the OPS plane and present on the DATA
+  plane, which is the intended relationship; the gate therefore forbids
+  `ops ∧ data`, not any overlap.
+* **A direction nothing checked**: a row in `OPS_ROUTES` naming a subpath the
+  engine no longer dispatches now fails, instead of relaying a 404 while
+  reading as a live capability.
+
+**Two premise arms**, because a broken extractor agrees with any inventory:
+the dispatch reader must find more than twenty subpaths, and the data-plane
+partition must be non-empty — without the second, a broken `data_subpath_ok`
+reclassifies every tenant read as unexamined and the gate reports exactly what
+a fully-classified tree reports.
+
+**Counterfactual executed**: remove `kg/authority` from `OPS_ROUTES` and the
+gate names it and fails. That is the defect that was live for as long as the
+hand-written literal existed, and which this gate could not see.
+
+**Verified through the surface**: `tests/e2e-orchestrator.sh` gained ten
+checks (113 → 123) driving all seven widened reads with a tenant token,
+asserting `kg/authority` is refused on the data plane **and that the refusal
+names the ops plane** rather than 404ing as though the capability did not
+exist, and re-pinning the quarantine fence on a widened route.
+
+**The corpus test found what the battery could not, and corrected me by
+400×** (2026-08-21, after the maintainer asked whether one had been run —
+it had not, which is a definition-of-done item 6 miss).
+
+Driving 3,482 real sealed drawers across five wings through a live
+`serve-http`, every widened route was timed. `taxonomy` is the largest at
+**102 KB** and is unpaged — O(rooms), 3,020 rooms here, and a caller cannot
+bound it the way `drawers?limit=` can. The instinct was that this put a new
+unbounded cost class on the tenant plane. **Measured, that is wrong**:
+`export` was already on that plane before this change and returned **19 MB in
+341 ms**, a full-corpus decrypt reachable with the same tenant token. It
+dominates everything O67 added by 188×. No new cost class was introduced.
+
+**`kg/receipts` was NOT tested by that run and nearly shipped as if it were.**
+It answered in 4 ms because the graph was empty — the empty-set answer, not a
+measurement. Its cost was then ESTIMATED at ~3.5 ms per fact from an HTTP
+`GET /drawers/{id}`, giving "35 s per 10,000 facts". That estimate used a
+request round-trip as the price of an in-process row read, which is a category
+error, and it was **wrong by roughly 400×**. Measured properly:
+
+| facts | full walk | tamper-only | full µs/fact | tamper µs/fact |
+|---|---|---|---|---|
+| 500 | 4.0 ms | 0.3 ms | 8.1 | 0.6 |
+| 2,000 | 16.6 ms | 1.3 ms | 8.3 | 0.6 |
+| 8,000 | 69.0 ms | 5.3 ms | 8.6 | 0.7 |
+
+So it is a **constant-factor optimisation, not an unbounded route**, and
+saying otherwise would have put a false severity into this file. *A wrong
+measurement dressed in a reason is the most expensive kind of wrong* — this
+file's own words about O38, earned again.
+
+**What shipped from it.** `undercroft-bench receiptscale`: deterministic, no
+dataset, no LLM, with a premise arm that FAILS on an empty graph — the exact
+way the route was mismeasured. It exists because `refine` and this harness are
+the only producers of receipted facts in the tree, so before it the route's
+cost could not be exercised by any test at any scale and a 1-drawer e2e was
+its entire coverage.
+
+And the split it makes visible: a **forged** receipt is one HMAC over
+`receipt_canonical` and reads no drawer; the drawer decrypt only separates
+`verified`/`source_changed`/`dangling`. `ok` is `tampered == 0`, so the field
+a scripted operator classifies a 200 on never needed the expensive half.
+`kg_any_receipt_forged()` is that answer and `?integrity_only=1` is the door
+— additive, default response unchanged, 13× cheaper for the poller that O67
+made possible by putting this route on the tenant plane.
+
+**`taxonomy` stays UNPAGED — settled by measurement, not deferred** (2026-08-21).
+It was filed above as a residual for O68; that was premature, and the evidence
+says leave it alone.
+
+* **It is not an outlier.** Of the `/v1` reads, `list_drawers`, `kg_entities`
+  and `history` take `limit`/`offset`; `taxonomy`, `kg_receipts`, `kg_query`
+  and `supersessions` do not. The unpaged four are the whole-set-verdict
+  shapes. Paging taxonomy alone would make it inconsistent with its three
+  siblings, including `supersessions`, which this tree calls the drawer-level
+  analogue of `kg/receipts`.
+* **Growth is measured, not extrapolated from a neighbouring domain** — the
+  error M27 records. Four scales through a live `serve-http`:
+
+  | rooms | drawers | bytes | ms | B/room |
+  |---|---|---|---|---|
+  | 1,000 | 2,000 | 32,037 | 4.3 | 32.0 |
+  | 4,000 | 8,000 | 128,037 | 8.7 | 32.0 |
+  | 12,000 | 24,000 | 384,037 | 21.8 | 32.0 |
+  | 24,000 | 48,000 | 768,037 | 37.4 | 32.0 |
+
+  Exactly 32.0 B/room across a 24× range, so this extrapolation is safe in a
+  way the earlier one was not.
+* **`export` is on the same plane and is ~340× heavier** at equal corpus.
+  Paging taxonomy while `export` streams the whole vault next door would be
+  bounding the wrong thing.
+* **It is O(wings) queries, not per-row**: `taxonomy()` loops `rooms(&wing)`
+  over wings, so it is not the unindexed-inner-scan shape that made a `verify`
+  leg O(N) on 2026-08-10.
+
+Residual kept honestly: a caller still cannot bound the response, and at
+24,000 rooms it is 768 KB. If a deployment ever wants that bounded, the
+additive shape is `?limit=`/`?offset=` matching `list_drawers`, and it should
+land across all four unpaged routes at once rather than one of them.
+
+**The cost instrument is NOT wired into the battery, and the gate is
+STRUCTURAL instead — also settled by measurement.** The obvious enforcement is
+a ratio assertion. Measured over nine runs at 2,000 facts the full:tamper
+ratio is **12.8–14.1×**, and under four-way CPU contention it *tightens* to
+13.3–13.9× because both halves scale together — so the ratio is
+load-invariant where absolute milliseconds are not (those moved ~20%).
+
+That would make a sound gate at scale. It does not survive at a size a unit
+test can afford: at 100/200/300/500 facts the integrity half runs in
+0.1–0.3 ms and the ratio reads 8.0 / 16.0 / 17.0 / 13.0 — timer resolution,
+not signal. A battery runs each test once, and once over a noisy measurement
+is not a measurement.
+
+So the property is pinned structurally by
+`the_cheap_receipt_door_reads_no_drawers`: corrupt every cited drawer, and the
+cheap door must still answer while the full walk cannot. Deterministic,
+machine-independent, and it fails for the RIGHT REASON if a drawer read is
+ever added to the cheap path — where a timing gate would report only "slower".
+Counterfactual executed: smuggle a `get` into the loop and the gate names it.
+Cost measurement stays in `undercroft-bench receiptscale`, on demand, like
+every other instrument here.
+
+**The original filing follows, including the premise of its own that was
+measured wrong.** ↓
+
+Round-four **#33**, re-verified 2026-08-20 and MEASURED rather than restated.
+
+`every_operator_capability_is_reachable_or_recorded_as_absent` compares two
+DERIVED inventories — `OPS_ROUTES` and `OPS_DELIBERATELY_ABSENT`, both real
+consts the proxy enforces — against a universe called `engine_ops` that is a
+**hand-written literal**. The literal's own comment states the consequence
+exactly: *"a new `/v1` operator route absent from it is counted in NEITHER
+direction — so the gate whose whole job is to force every capability into
+reachable or recorded-as-absent stays green over one nobody classified."*
+
+**Measured**: `tenant.rs`'s dispatch defines **28** distinct per-vault
+subpaths; the literal names **17**. Eleven are examined by nothing.
+(Filed as 16/12 on 2026-08-20 and re-counted 2026-08-21: the entry was one
+behind its OWN fix, having been written before `repair` was added to the
+literal three paragraphs above. A count in prose beside the thing it counts
+goes stale at the speed of the next edit — which is this file's own rule,
+missed on the entry that exists to close a counting gap.)
+
+**And it happened during this very session, which is the evidence the entry
+needed.** M17 added `POST /v1/vaults/{id}/repair` and put it in `OPS_ROUTES`.
+The gate passed — because `repair` was not in the literal, so it was never
+examined. The capability was classified by accident rather than by the
+mechanism. It is in the literal now, but adding a line per route is the defect
+restated, not the fix.
+
+**Why this is filed rather than closed, and it is a DESIGN question rather than
+effort.** The obvious fix — derive `engine_ops` from `tenant.rs`'s route table,
+using the cross-crate source-reading idiom `the_orchestrator_and_the_engine_agree_on_every_orch_variable`
+already uses — makes the gate demand a ruling for all 28. Some are DATA-plane
+reads that the ops plane correctly does not carry because the `/t/*` data
+plane does; recording each as "deliberately absent from the ops plane" would
+be true and useless, and would bury the entries that mean something.
+
+**But that sentence was written from taste and it is measured WRONG, which
+changes what this entry is asking for** (2026-08-21). It read *"roughly half
+are DATA-plane reads (`search`, `drawers/{id}`, `taxonomy`, `stats`,
+`kg/query`, `kg/entities`, …)"*. `data_subpath_ok` admits a closed vocabulary
+of **seven whole shapes** — `drawers`, `drawers/{id}`, `search`, `stats`,
+`stats/history`, `export`, `import` — and nothing else. So of the eleven
+subpaths no inventory examines, **three** are data-plane reachable
+(`stats`, `stats/history`, `drawers/{id}`) and **eight are reachable from
+NEITHER plane**:
+
+`taxonomy`, `kg/stats`, `kg/entities`, `kg/query`, `kg/timeline`,
+`kg/receipts`, `kg/canonical/{key}`, `kg/authority`.
+
+A tenant asking for their own taxonomy gets a bare `"unknown route"` — not
+even the *"operator route: not reachable with a tenant token"* message, since
+`ops_route_ok` is false for them too. That is precisely the failure
+`data_subpath_ok`'s own neighbouring comment describes: *"a bare 'unknown
+route' made an operator capability that exists one plane over look like a
+capability the product does not have."*
+
+**`kg/authority` is the sharp one.** It is in the engine's `OPERATOR_ONLY`,
+so it is an operator capability by the tree's own classification — and in a
+fleet it is reachable from nowhere at all. The golden-values tier cannot be
+driven through the only door a fleet operator has. That is a capability gap
+this gate exists to surface and could not, and it is the concrete evidence
+the entry was filed without.
+
+**The lesson, and it is the reason the correction is written out rather than
+silently applied:** the false sentence was an ARGUMENT FOR NOT ACTING —
+"recording each would be true and useless" — and an argument for not acting
+is exactly where an unverified premise costs the most, because nothing
+downstream ever tests it. It listed `taxonomy` and `kg/query` as data-plane
+reads from plausibility; reading `data_subpath_ok` takes one minute and says
+otherwise.
+
+So the fix needs a THIRD category — reached-via-the-data-plane — and that is a
+classification decision, not a refactor. Inventing it unasked is exactly what
+M16 refused to do for its own unruled rows.
+
+**Shape of the fix.** Derive the universe from `tenant.rs`. Partition it three
+ways: ops-reachable, deliberately-absent-from-ops, and data-plane — and the
+third list IS derivable, from `data_subpath_ok`, which is checked rather than
+assumed now. That closes 3 of the 11. **The remaining 8 are the actual
+question**, and they are not a classification chore:
+
+* **A — widen `data_subpath_ok`.** If `taxonomy` and the kg READS belong to
+  the tenant, add them; the third category then derives cleanly and only
+  `kg/authority` needs its own ruling. This treats the eight as the defect
+  the gate was built to find, which is what they look like. It is a
+  security-boundary change to a closed allowlist that has already been
+  exploited once (the `drawers/../admission` traversal its comment records),
+  so it is a maintainer decision, not a refactor.
+* **B — rule the eight as absent from both planes.** Honest, cheap, and
+  records "unreachable" for capabilities a tenant plausibly should have.
+* **C — a fourth verdict**, reachable-from-neither, which makes the gap
+  countable without deciding it. Weakest: it is `Unruled` under another name,
+  and this entry already has that.
+
+`kg/authority` needs an answer under any of them, since it is an
+`OPERATOR_ONLY` capability with no operator door in a fleet.
+
+**Gate:** the existing test, with the literal replaced by the derived set and
+a premise arm requiring it to find more than twenty subpaths, so a broken
+extractor cannot silently shrink the universe to nothing. Add a second premise
+arm asserting the data-plane list is non-empty, or a broken `data_subpath_ok`
+extractor reclassifies every data read as unexamined and the gate reports the
+same thing a clean tree reports.
+
+### O66 — CLOSED 2026-08-21: every surface absence is ruled; `SURFACE_ABSENCES` holds no `Unruled` row
+
+**All 21 remaining rows were ruled by the maintainer on 2026-08-21, and all 21
+came back `Drift`.** The inventory is now 34 `Boundary`, 22 `Drift`, 7
+`Structural`, **0 `Unruled`** — gate-verified in both directions.
+
+The three questions and their answers:
+
+1. **The agent-facing memory surface (14 rows).** Ruled: **`/v1` carries the
+   full agent surface.** Three readings were put — full surface,
+   operator-and-search plane, or reads-yes-writes-no — and the first was
+   taken. `docs/remote-server.md`'s *"for programmatic (non-MCP) callers and
+   for orchestration platforms"* therefore stands as written; the ruling makes
+   it true rather than aspirational, and it did not need narrowing.
+2. **The backup family (3 rows).** Ruled: **all three reach `/v1`**, including
+   `restore`, over the option of keeping the destructive half on the engine
+   host. Two consequences are carried into O68 rather than waved away: they
+   are palace-scoped filesystem operations that do not fit `/v1/vaults/{id}/`
+   and need a new path family, and `restore` calls `remove_dir_all` on a live
+   vault directory, which under an open SQLite handle leaves a server serving
+   unlinked inodes on Linux. That is a blocker on the route, not a caveat.
+3. **The four singletons.** All ruled `Drift`. `kg rel` is a read shape not
+   composable from the entity-shaped `kg_query` the agent surface has;
+   `index status` is a pure read that `index push`'s egress boundary does not
+   cover; and `kg receipts` / `verify-forgetting` are present on `/v1` and
+   absent from MCP, which is the **inverse** of the operator-only shape — so
+   the operator-only argument never explained them.
+
+**The scheduling is deliberately NOT here.** Ruling that something is a gap
+and deciding when it closes are two questions, and the maintainer took the
+option that separates them. **O68** holds the second. A `Drift` row now MUST
+name a target — the variant's own doc has always said *"with a target"* — and
+`every_cli_capability_is_reachable_or_ruled_absent` enforces it, so a gap
+cannot become `Unruled` under a different variant by having nowhere to point.
+That gate arm was added with these rulings, because the risk it closes was
+raised as an objection to the option chosen and taking the option does not
+make the objection go away; it makes it something to gate.
+
+Counterfactual executed: strip the target from one row and the gate names it.
+
+**The original filing follows, kept because it is the record of what was
+undecided and of the evidence each ruling was made against.** ↓
+
+Filed by **M16**, which built the inventory that makes them visible and
+countable. Every row below is carried in `SURFACE_ABSENCES` as
+`Absence::Unruled` with a citation to this entry, and the gate REQUIRES that
+citation — so these cannot quietly become boundaries by being forgotten.
+
+**Three rows left this entry on 2026-08-21 without needing a ruling, and how
+they got in is the lesson.** `kg add|invalidate|supersede` were filed here
+because `docs/AGENTS.md`'s boundary was read as covering the FAMILY rather
+than each capability. Read again, it does not leave room for that: *"`/v1`
+has no DIRECT KG write routes except `POST …/kg/authority` … That is a
+present-tense boundary, not a future item."* A family boundary that names its
+one exception has decided every member. They are `Absence::Boundary` now,
+carrying the provenance argument the doc implies — a REST-asserted fact would
+be attributable to a bearer rather than to the named extractor whose identity
+sits inside the fact's HMAC. **`Unruled` is for what nobody has decided, not
+for what nobody looked up**, and asking the maintainer to re-decide something
+a document already settled is the cost of the difference. The doc gained the
+word "direct" in the same pass, because `POST …/refine` does create facts on
+this plane.
+
+**What needs deciding, in three groups.**
+
+**1. The agent-facing memory surface on `/v1` (14 rows).** `dedup`, `wake-up`,
+`closets`, `hallways`, `diary write|read|agents`, `tunnel
+create|list|follow|delete|traverse`, `drawer check-dup`,
+`drawer delete-by-source`. All are on CLI **and** MCP and
+absent from `/v1` — the classic two-of-three shape. The question is one
+question, not fourteen: **does the remote plane carry the agent-facing memory
+surface, or is `/v1` deliberately the operator-and-search plane?** Either answer
+is defensible and the tree states neither — and the one document that speaks
+to the plane's PURPOSE cuts toward carrying it: `docs/remote-server.md` calls
+`/v1` a surface *"for programmatic (non-MCP) callers and for orchestration
+platforms"*, which reads as drift rather than boundary. If the answer is that
+`/v1` is the operator-and-search plane, that sentence has to be narrowed in
+the same unit, or the document keeps promising what the plane refuses.
+
+**2. The backup family on `/v1` (3 rows).** `backup create|list|restore`. A
+fleet operator whose only door is `/v1` has no snapshot path and must reach the
+engine host's filesystem; `backup create` is also the one caller that gates
+archiving on the verify verdict. Against that, `restore` is the most
+destructive operation in the tree — `remove_dir_all` on a live vault directory,
+replaced wholesale. `list` opens no vault at all, which makes ITS absence read
+as forgotten rather than fenced.
+
+**3. Four that fit no group and each need their own answer.**
+`kg rel` (CLI-only — the one kg READ shape neither agent surface has);
+`index status` (a pure READ, so `index push`'s egress boundary does not cover
+it); `kg receipts` (on CLI and `/v1`, absent from MCP — the INVERSE of the
+operator-only shape, so that reasoning does not explain it); and
+`verify-forgetting` (same inverse shape). For the last two, `docs/AGENTS.md`
+frames `kg/receipts`' `ok` field as *"the field a scripted operator
+classifies a 200 on"* — an operator framing that would make the MCP absence a
+boundary if it is meant as one. It is evidence, not a ruling: unlike the kg
+WRITE family above, no sentence anywhere says these are absent by design.
+
+**Also recorded here because the M16 gate cannot reach them.** Its universe is
+derived from `main.rs`, so it is both-directional over the CLI axis only. These
+are present on `/v1` and absent from the CLI, and no gate counts them:
+
+* **vault DELETE** — `VaultAction` has Create, List, Status, Rotate, Anchor and
+  no Delete. The destructive lifecycle operation exists only on the remote
+  plane, which is a strange asymmetry in the direction nobody expects.
+* the live SSE telemetry stream, the stats history ring, and paged kg ENTITY
+  browse.
+
+**Gate, when each is ruled:** flip the row's `Absence` and replace the
+citation with the argument. The existing `every_cli_capability_is_reachable_or_ruled_absent`
+already enforces that a non-`Unruled` row carries a reason of substance, so a
+ruling cannot land as a shrug.
+
+### O69 — CLOSED 2026-08-21: `backup restore` takes an exclusive hold, or refuses
+
+**Measured 2026-08-21, not reasoned about.** This was filed inside O68 as a
+blocker on a `/v1` route that does not exist yet. That was the wrong place and
+the wrong severity: it is reachable now, from the shipped CLI, with no `/v1`
+involved.
+
+**What was run.** An hmac-only vault with one drawer (`ALPHA`), backed up.
+`serve-http` started on it. A second drawer (`BETA`) written through the
+server. Then `undercroft backup restore <name> --force` from another process,
+while the server ran.
+
+**What happened, in order:**
+
+1. `restore` **succeeded** — `Restored … -> vault 'rr'`, exit 0, no warning.
+2. The server kept serving the **unlinked** database: `records: 2`, and a
+   search still returned `BETA`. On disk the vault held 1 record. The two
+   disagreed and nothing said so.
+3. A further write through the server was acknowledged `{"created":true}` and
+   landed in the unlinked database — a success reported for a write that no
+   longer had a file.
+4. The vault then became **permanently unopenable**: `vault manifest failed
+   integrity verification — possible tampering`, **exit 2**, on `vault list`
+   AND `verify`. The server's post-restore writes were gone on restart.
+
+**Mechanism.** `BackupAction::Restore` does `remove_dir_all(&dst)` then
+`copy_dir(&src, &dst)` and never asks whether anyone holds the vault. A
+running server's SQLite handles keep pointing at the unlinked inodes while the
+restored files occupy the path, so the manifest it later anchors describes a
+database that is no longer there. The rollback detector then fires — correctly
+— on evidence the restore manufactured.
+
+**Exit codes are RIGHT and that is worth recording**, because a first reading
+of this run said otherwise: `verify` and `vault list` both exit 2 on the
+broken vault. The earlier "exit 0" was a shell pipeline masking the code, not
+a defect.
+
+**The decision, and why it is not mine to take.** Three options were drafted
+and one does not survive inspection:
+
+* **Refuse while held** — probe for a live holder (exclusive open, or a hot
+  `-wal`) and exit rather than proceed. Costs the ability to restore without
+  stopping the server, which during an incident is arguably the correct
+  constraint. Detection is a heuristic: a stale `-wal` from a crashed process
+  could refuse a legitimate restore, and that false positive lands on the one
+  path an operator reaches for under pressure.
+* **Document only** — state in `UPGRADING.md` and the runbook that the server
+  must be down; gate nothing. No false positives. But the present behaviour is
+  not "unsupported", it is silently destructive **with a success exit code**,
+  and documentation does not make an exit-0 honest.
+* **Exclusive lock — REJECTED on inspection.** You cannot hold a SQLite lock
+  on a file you are about to unlink: the lock lives in the file,
+  `remove_dir_all` removes it, and the copied database has no lock while the
+  server's handle is unaffected. It would serialise two restores and do
+  nothing about the actual failure. Recorded because it looked plausible.
+
+It trades a CERTAIN silent unrecoverable failure against a POSSIBLE false
+refusal on an incident path. That is a product judgement about which failure
+to own, and the doctrine does not settle it.
+
+**RULED AND FIXED: refuse while held.** "Document only" was rejected — the
+behaviour was not merely unsupported, it was silently destructive *at exit 0*,
+and documentation does not make an exit-0 honest.
+
+**The stated cost of refusing did not materialise, and that decided it.** The
+standing objection was a false positive stranding an operator mid-incident.
+Measured on a real vault, three ways:
+
+| condition | exclusive hold |
+|---|---|
+| no server running | acquired |
+| **idle** `serve-http` holding the vault | busy — `database is locked` |
+| server **SIGKILLed**, stale `-wal`/`-shm` on disk | acquired |
+
+The second is the case that matters (the server holds no transaction and is
+still detected) and the third is why there is **no override flag**: SQLite's
+locks belong to the PROCESS, so a crashed server leaves files that hold
+nothing. An override would exist only to let an operator re-create the defect.
+
+**The lock is HELD ACROSS the destroy-and-copy**, not probed and released — a
+probe-then-act leaves a window in which a server opens the vault between the
+two. Once the directory is unlinked the hold refers to a dead inode, which is
+harmless: there is nothing left to protect.
+
+**Why it lives in `undercroft-store`.** The first attempt put it in the CLI,
+which fails to compile: `rusqlite` is a DEV-dependency there. Grepping the
+manifest for the string and not reading the section it sat under is the
+"read what is adjacent to the anchor" lesson, on a Cargo.toml. The store owns
+SQLite and the lock is SQLite's; `VaultHold` is opaque so a database driver
+stays out of the CLI's dependency list.
+
+**Gates.** Two unit tests — the hold refuses while a store is open, grants
+once dropped, excludes a second hold while alive, and releases on drop; and a
+vault directory with no database is refused rather than having one CREATED by
+the probe. Five e2e arms drive it through the real CLI against a real
+background server (383 → 388 checks), including the arm that matters most:
+restore still SUCCEEDS once nothing holds the vault, without which the guard
+would be indistinguishable from one that always refuses. The e2e also fails
+loudly if the holder process does not start, so the refusal arm cannot pass
+against nothing.
+
+`UPGRADING.md` carries it: a script that restored without stopping the server
+now gets exit 1 where it used to get exit 0 — and used to get a destroyed
+vault. Stated there is that `config check` cannot detect this, because it is a
+command's behaviour rather than a declaration.
+
+### O68 — nineteen ruled gaps need a release, and `restore` needs a protocol before it can have one
+
+**Created by O66's rulings on 2026-08-21**, and it exists because the
+maintainer took the option that separates *is this a gap* from *when does it
+close*. Every row below is `Absence::Drift` in `SURFACE_ABSENCES` with
+`target O68`, so none of them is undecided — what is undecided is the release.
+
+**19 `/v1` routes and 4 MCP tools**, over **21** `Drift` rows.
+
+**This paragraph said "17 `/v1` routes … 5 MCP additions … 22 `Drift` rows"
+and all three figures were wrong** — corrected 2026-08-21 by re-verifying the
+filing against the inventory, which is the fourth filing on this branch to
+turn out wrong about the tree. The rows partition by `absent_from`:
+
+| absent from | rows | needs |
+|---|---|---|
+| `v1` | 17 | a `/v1` route (14 agent-facing + 3 backup) |
+| `mcp` | 2 | an MCP tool (`kg receipts`, `verify-forgetting`) |
+| `mcp+v1` | 2 | **both** (`kg rel`, `index status`) |
+
+So `/v1` owes 17 + 2 = **19** and MCP owes 2 + 2 = **4**. The old figures
+undercounted `/v1` by forgetting that an `mcp+v1` row needs a route on each
+surface, and overcounted MCP by listing `kg rel`'s `/v1` half — a `/v1` item —
+inside the MCP total.
+
+**And "22" counted a COMMENT.** The extractor matched the string
+`Absence::Drift` anywhere in the block, and one match was a sentence in prose
+asserting that the variant had no instances. Two errors from one careless
+count: a wrong total, and a stale claim left standing because nothing read it.
+The real total is 21.
+
+**What each route owes, from the doctrine rather than invented here:**
+
+* A **`ReadOp` door** for every content-returning read (`wake-up`, `closets`,
+  `hallways`, `diary read`, `tunnel follow`), because `Read::Returned` is a
+  required witness — O50/O51's whole point is that a read that returns
+  verbatim content and records nothing is an exfiltration path.
+* **`Screen::Apply`** for every write (`diary write`, `tunnel create/delete`,
+  `delete-by-source`, `dedup --apply`), stated at the choke point. `tunnel
+  create`'s label is already in `admission::SCREENED_FIELDS` (O29), so the
+  screen exists; the route must reach it.
+* A **`mutates` classification**, which is automatic — the read-only gate
+  fails closed, so a new route is refused on a read-only server until someone
+  names it. That is the correct default and needs no work.
+* A row in `docs/AGENTS.md` §10 **and** `docs/remote-server.md`, since O45
+  gates both as sets in both directions, plus the route COUNT now gated
+  separately.
+* An e2e arm per route, per the definition of done.
+
+**The blocker is REAL and is filed as O69, because it is not a blocker on
+this entry's routes — it is a live defect on the shipped CLI.** `backup
+restore` calls `remove_dir_all` on a live vault directory and never asks who
+holds it. Measured against a running `serve-http`: the restore succeeds at
+exit 0, the server keeps serving the unlinked database, a later write is
+acknowledged `{"created":true}` into a file that no longer exists, and the
+vault ends **permanently unopenable** at exit 2. This entry originally
+described that as "leaves a server serving unlinked inodes", which understated
+it and put it in the wrong place. **Do not ship
+`POST …/backups/{name}/restore` until O69 is settled**; the ruling made the
+capability reachable, it did not make the hazard go away, and the hazard turns
+out to predate the route.
+
+Two smaller shape decisions the work owes: `backup list`/`create` are
+PALACE-scoped (list opens no vault at all), so they need a new
+`/v1/backups` family rather than a per-vault path; and `restore` currently
+derives the vault name by splitting the backup directory name on `-20`, the
+timestamp prefix, which is fragile enough that a route should not inherit it.
+
+**Gate:** the existing `every_cli_capability_is_reachable_or_ruled_absent`
+flips each row from `Drift` to `SURFACE_COMPLETE` as its route lands, and
+fails in both directions — so this entry cannot be declared done while a row
+still says `Drift`, and a row cannot be quietly moved without a route.
+
+### O65 — CLOSED 2026-08-21: the house page is correct, gated, and now a governance surface
+
+**Ruled 2026-08-21**: keep the figures, fix the values, qualify the benchmark.
+The gate that makes the ruling hold is BUILT and running
+(`tests/house-figures.sh`, wired as its own CI job). **The page edit itself is
+not made** — it is a different repository and a public site, so it waits on an
+explicit go.
+
+**Building the gate found two more claims this entry never asked about, and
+that is the entry's most useful finding.** O65 was scoped to *figures*, so it
+found figures. The same page announces a RELEASE in two places, and both had
+been two releases stale since 1.1.0 shipped on 2026-08-18:
+
+| claim | page says | truth |
+|---|---|---|
+| test count | `656` | **765** |
+| benchmark | `99.4%` labelled `LongMemEval R@5` | the `+MiniLM` column; shipped default is **95.0** |
+| release banner | `Undercroft 1.0 is out` | **v1.1.1** |
+| shipping badge | `Shipping · v1.0.0` | **v1.1.1** |
+| MCP tools | `34` | 34 — correct, and gated now so it cannot go stale silently |
+
+**A scoping phrase in a filed question decides what the answer can contain.**
+This project already writes that rule down for GATES — it is O29's lesson, and
+O32 was found by widening O29's own sibling sweep — and had never applied it to
+its own FILINGS. A filing is a question, and the version claims were outside
+the one this entry asked.
+
+**The gate.** `tests/house-figures.sh`: reads the `<div class="n">` ELEMENT and
+normalises, never the rendered value string (the `%` lives in a nested `<span>`,
+which is how a 2026-08-20 check concluded the benchmark figure had been
+removed); compares the test count and MCP-tool count to the tree; requires a
+benchmark tile to NAME its configuration without policing which number;
+compares both version claims to the latest PUBLISHED RELEASE via the public
+API, not to the workspace version, because the tree carries the next version
+during release prep. **Unreachable is a FAILURE, not a skip** — both premise
+arms executed against an invalid host and a page with no tiles.
+
+**It is a CI job rather than a preflight**, and that is the one design decision
+here: it is the only check in the tree needing the internet, and a network arm
+in `tests/battery.sh`'s preflights would fail for anyone working offline. The
+consequence is stated rather than discovered — it can go red on a pull request
+that touched nothing, because the house page is state this repo does not own.
+That is the signal. The alternative was eleven days.
+
+**Its first CI run was RED, and the cause was my ordering rather than the
+gate.** The branch carrying the gate was pushed at 11:47, the job read the
+house page at **11:47:42**, and the page fix landed at **11:48:12** — thirty
+seconds later. The job was racing my own deploy and reported the state that
+was true when it looked. Re-run against the corrected page: green, tree
+untouched.
+
+The rule that follows, and it generalises to any gate on state this repo does
+not own: **fix the external state FIRST, verify it, and land the gate after.**
+A gate introduced ahead of the fix has a first run that is guaranteed to be a
+false alarm, and a false alarm on a gate's debut is how people learn to
+re-run it without reading it — which is the failure this gate exists to
+prevent, one level up.
+
+Not written into `CLAUDE.md` deliberately: applied backwards it reclassifies
+nothing, because this is the **only** gate in the tree that reads external
+state, so it is a rule with exactly one instance and no history to test it
+against. That is the caveat this file requires be stated rather than implied.
+It belongs here, beside the gate it is about, until a second such gate exists.
+
+**CLOSED 2026-08-21.** The page was fixed and live-verified: `767 tests`,
+`34 MCP tools`, `99.4% LongMemEval R@5 · +MiniLM` (the maintainer took the
+qualified-headline option over dropping to the shipped 95.0), banner and badge
+both at `v1.1.1`.
+
+**Then it went stale twice in one session** — M27 and M28 each added a test —
+and each time its CI job went red until a commit in the other repository fixed
+it. That is the gate working, and it is also a recurring cost that lands on
+every unit adding a test.
+
+**Dropping the volatile tile was proposed and REJECTED.** The recommendation
+here was to keep `34 MCP tools`, the benchmark and `0 bytes phoned home` and
+drop `tests passing`, since it is the only figure that moves often. The
+maintainer's ruling: *the house page is important, it should not be stale at
+all, and updating it is part of the updates always.* So the friction is
+accepted deliberately and the answer is to make the obligation CHEAP rather
+than to remove it:
+
+* `tests/house-figures.sh --update` patches the derivable tiles (test count,
+  MCP tools) and pushes, then waits for Pages and re-checks the **live** page
+  — a commit is not a deploy. It uses the caller's `gh` auth and is **never
+  run by CI**: a gate that can rewrite what it measures cannot fail, and CI
+  holding a write credential for a second repository is a far larger blast
+  radius than a stale number.
+* It deliberately does NOT patch the benchmark tile — which configuration the
+  house publishes is a product decision, not a number this tree computes —
+  nor the two release claims, which follow the published tag.
+* `CLAUDE.md` now names the house page in the definition of done and in the
+  release flow, so it is a governance surface with the standing of CHANGELOG
+  rather than something remembered.
+
+Verified in both directions before shipping: a deliberately staled copy fails
+the gate, the patched output passes it, and only the two derivable tiles move.
+
+**The original filing follows.** ↓
+
+Round-four **#42**, never filed, and it is **still true and now worse**. The
+house page at `sealcroft.com` serves `<div class="n">656</div> tests passing`;
+the tree runs **765**. The gap has WIDENED since round four measured it at
+656-vs-689. It is quoted here without a fixed delta on purpose: the heading
+said *"stale by 105"* for one day and was wrong the next, because the
+subtrahend moves every unit.
+
+**The 2026-08-20 verification of the OTHER half was wrong, and the way it was
+wrong is the entry's most useful content.** It said: *"an unqualified 99.4%
+headline — is GONE; the only percentages the live page carries are CSS
+gradient stops."* Re-fetched 2026-08-21, the page serves:
+
+```html
+<div class="n">99.4<span style="font-size:.9rem">%</span></div>
+<div class="l">LongMemEval R@5</div>
+```
+
+The value and its `%` are split across a nested `<span>`, so a search for the
+string `99.4%` returns zero **on the page that publishes it** — and returning
+zero is indistinguishable from the figure being gone. This trap was written
+down before the mistake was made: `.handover/SWEEP4_FIX_PLAN.md` says *"The
+scraper MUST NOT match `99.4%` … Match the `<div class="n">` element and
+normalise."* A negative result is a claim about the method, not about the
+page.
+
+**And the substance did not close either.** The tile now carries a label
+(`LongMemEval R@5`) but still no CONFIGURATION: 99.4% is the `+MiniLM`
+column, and the zero-model hash embedder that actually ships measures
+**95.0%** — which is why this project's own landing page renders
+`95.0% (hash, zero model)`. The house's headline is 4.4 points above the
+product's own page and depends on an optional model download. That is the
+half of #42 that matters most and it is fully open.
+
+**Why nothing catches it.** The page lives in `sealcroft/sealcroft.github.io`,
+a different repository, so no gate here can reach it — and the `published
+figures` preflight reads `data-count="N"` markup that page does not use, so
+porting the gate is not a copy. Note the house page's OTHER figure, `34 MCP
+tools`, is currently CORRECT — which is worse than it sounds: it is a figure
+that happens to agree, and it will go stale silently the first time
+`MCP_TOOLS` moves.
+
+**Shape of the fix, and it is a decision rather than an edit.** Either the
+house page stops publishing figures it cannot gate — the cheapest honest
+option, since its job is to introduce the house rather than to report the
+engine — or the two repositories gain a shared source for them, which means a
+published artifact one can read and the other consumes. **Gate:** whichever is
+chosen, a check in this repo that fails when the house page's published
+figures disagree with the tree, or the figures are gone and there is nothing
+to check. That scraper must match the `<div class="n">` ELEMENT and normalise
+its text, never the rendered value string, and must fail when it finds no
+tiles at all — the premise-probe rule, on the reader that has already
+produced one false verdict here.
+
+**If the benchmark tile stays, it names its configuration**, matching what
+every in-repo surface already does: `95.0` labelled `LongMemEval R@5 · hash,
+zero model` (the shipped default), or `99.4` labelled `LongMemEval R@5 ·
++MiniLM`. Recommend the former — the house's headline must not be stronger
+than the product's own page, and must not depend on an optional model
+download. Its cost is stated rather than buried: the org's most visible
+number drops 4.4 points.
+
+**This is the O37 shape, and O37 is the entry this file calls "the most severe
+process failure".** Round four's D9 found the house site serving cleartext,
+recorded it in a gitignored handover file, never filed it, and it was still
+true nine days later. #42 came from the same dimension, in the same round, and
+went the same way — recorded in `SWEEP4_SYNTHESIS.md`, never given a heading,
+never moved. Filing it is the whole point of this section.
 
 ---
 
@@ -1439,10 +3899,20 @@ is the field that exists because a migration has to ask for it. Both are fixed.
 
 ## Unversioned — decisions and external actions, not code
 
-These are not releasable work: two are clicks in a web UI that no REST
-endpoint exposes, and one is a naming decision. Kept out of the version
-sections deliberately, so a release plan is not padded with things a
-release cannot contain.
+These are not releasable work. Kept out of the version sections deliberately,
+so a release plan is not padded with things a release cannot contain.
+
+**This paragraph used to say "two are clicks in a web UI … and one is a naming
+decision", and it described the section as it was, not as it is** (corrected
+2026-08-20). Half of O6 — the org avatar — was found already done in 2026-08-10,
+leaving ONE click; and **O23 is neither a click nor a naming decision**, it is
+real engine work (a deep `offset` pays a full scan) that was filed here because
+it is unscheduled rather than because a release cannot contain it. An
+enumeration in a section header goes stale every time the section changes,
+which is the same defect as a count in prose one level up. So: O6 is the click,
+O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
+with the argument for leaving it. Releasable work with no target release now
+has its own section above.
 
 ### O61 — CLOSED 2026-08-19: a release breaks pointers that were true when written
 
@@ -1835,9 +4305,25 @@ visibility.)
 |---|---|
 | `tags/list` with an anonymous pull token | **200** (was 403) |
 | Manifest fetch for `:latest` — what `docker pull` does | **200** |
-| Architectures in that manifest list | `linux/amd64`, `linux/arm64` (the third, `unknown`, is the buildx attestation) |
+| Architectures in that manifest list | **FOUR** entries: `linux/amd64`, `linux/arm64`, and **two** `unknown/unknown` — buildx writes one attestation PER PLATFORM, not one per index |
 | `v1.0.0-ort` manifest | **200** |
 | **Negative control** — a package that does not exist | **403** |
+
+**The architecture row said THREE until 2026-08-20** — *"`linux/amd64`,
+`linux/arm64` (the third, `unknown`, is the buildx attestation)"* — and
+round-four `#56` filed it as *"four manifests not three"*. It is four, and the
+reason matters more than the count: buildx writes an attestation **per
+platform**, so a two-platform index carries two `unknown/unknown` entries, not
+one. The row described an index nobody had listed.
+
+Corrected by QUERYING THE LIVE REGISTRY through the same anonymous pull-token
+flow this entry's own gate uses, rather than by reasoning about buildx —
+`entries: 4`, in the order `linux/amd64`, `unknown/unknown`, `linux/arm64`,
+`unknown/unknown`. This is the third `#56` sub-claim; the other two (Windows
+ships `.zip`, and the "byte-for-byte" avatar) were corrected under O57, and
+this one was recorded as corrected there while the row it names still said
+three — a closure claiming a fix it had not made, which is the shape this file
+records most often.
 
 The negative control is load-bearing: without it a 200 could mean the check
 was answering 200 to everything, which is this project's standing rule that a

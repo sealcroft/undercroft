@@ -242,11 +242,11 @@ pub fn colbert_from_env() -> Result<OrtColbert, OrtError> {
             "{}",
             undercroft_core::config::undeclared_model_identity(
                 "UNDERCROFT_COLBERT_NAME",
-                "colbert",
+                undercroft_core::config::SHARED_COLBERT_IDENTITY,
                 &format!("{doc} (doc) + {query} (query)"),
             )
         );
-        "colbert".into()
+        undercroft_core::config::SHARED_COLBERT_IDENTITY.into()
     });
     OrtColbert::load(
         std::path::Path::new(&doc),

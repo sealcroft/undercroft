@@ -52,6 +52,28 @@ Consequences that are binding, not advisory:
   introduces a hole and reports it as a finding is worse than the hole.
 - **Do the impact analysis first**: establish what a change touches and what
   could fail *silently*, plan it, prove it, then present the diff.
+- **GROUND THE DECISION BEFORE ACTING — the doctrine is the first place to
+  look, not the last.** The order is: read the architecture files and folders,
+  read this doctrine, read the code. If they answer the question, **follow
+  them** — that is not a decision to narrate, it is the standard, and asking
+  about it wastes the maintainer's attention. If they do NOT answer it, do not
+  fall back on your own judgement and report afterwards: **write the options
+  out with their trade-offs and ask.** The failure this forbids is acting from
+  taste and then informing — "I did X, here is why", which hands the
+  maintainer a fait accompli dressed as a status update, and which they have
+  had to correct.
+  The corollary is that "I asked first" is not automatically compliance
+  either: an option list assembled without reading the arch files and the code
+  is a guess wearing a question mark, and it pushes the grounding work onto
+  the person answering. Do the reading, THEN present options — and present
+  them only where the reading genuinely ran out.
+  Applied backwards, as a rule here must be: it CONFIRMS the drift-direction
+  doctrine (provenance decides, and provenance lives in those files), the
+  impact-analysis rule above, and O24, whose whole lesson was that reading the
+  inventory the command already iterates was all it took. It RECLASSIFIES the
+  M9/M10 scoping and the `tls-pins` repair, both of which were chosen and then
+  reported rather than grounded and stated. It does not reclassify M6, which
+  was put as an explicit option and ruled on — that one is the shape to copy.
 - **A gap is a gap** — never dressed up as a principled refusal.
 - **A RULE written into this file gets the same scrutiny as code, and the
   test is the same one: apply it backwards.** Before a doctrine lands here,
@@ -497,8 +519,14 @@ Consequences that are binding, not advisory:
   answered `VERIFY OK` on every surface, and `backup create` gates on this
   verdict, so it archived the forgery as clean. A detector nobody calls is
   not a check. `parity.rs::HAND_PROJECTED` lists `VerifyReport` × CLI × MCP ×
-  `/v1`, so a new leg fails the build until all three project it — note the
-  admin console at `ui.html` is a FOURTH renderer and outside that gate),
+  `/v1` **and the admin console at `ui.html`, a FOURTH renderer**, so a new
+  leg fails the build until all four project it. This sentence said the
+  console was *"outside that gate"* until 2026-08-19, and it had been inside
+  it since the entry that found `orphan_labels` and `mirror_drift` unrendered
+  — a doctrine line describing the tree before its own worked example, which
+  is the shape this file keeps recording. `PalaceStats` joined it the same
+  day (ROADMAP M5), with the same result: four fields the console had never
+  read),
   knowledge graph (kg.rs — incl. the golden-values authority
   tier: `authority_class`/`review_state`/`canonical_key` DECLARED on
   closed vocabulary, HMAC-covered via a canonical extension on the
@@ -877,9 +905,11 @@ Consequences that are binding, not advisory:
   `write_drawer` emits at the choke point, and `upsert_many` — which owns
   its transaction and cannot reach the choke point — runs the same
   classifier over its batch. The frame carries the intended wing/room and
-  the closed-vocabulary signal codes; codes ship even for a sealed vault
-  since they are not names (a sealed frame suppresses the names), and
-  offsets and content never travel. `monitor.html` dispatches on
+  the closed-vocabulary signal codes; **since M6 the names travel on every
+  level too** — a frame only ever reaches a subscriber that proved per-vault
+  authorization, and that same caller reads those names from `/v1/…/stats`,
+  so blanking them blinded the owner and withheld nothing from anyone else.
+  Offsets and content never travel, which is what the gates pin now. `monitor.html` dispatches on
   `drawer-quarantined`; `website/src/observability.md` documents it.
   **The counter travels with the frame since 2026-08-05 (C11/R5)**: both
   are emitted by ONE function (`PalaceStore::emit_write_event`) off ONE
@@ -1180,10 +1210,29 @@ Consequences that are binding, not advisory:
   **`diagrams/` is the only source; `pdf/` and
   the inlined copies are both DERIVED, and `build.sh` regenerates both
   — edit an SVG, re-run it, never hand-edit an inlined copy.** It also
-  re-derives every `<h3>` id and the whole sidebar from the sections,
-  and fails if a heading and a rail entry disagree: a hand-added
-  heading otherwise gets no id and no rail entry and nothing complains
-  (this happened once). librsvg
+  re-derives every `<h3>` id and the whole sidebar from the sections.
+  **This sentence used to end "and fails if a heading and a rail entry
+  disagree", and that was FALSE — measured, not argued (ROADMAP M14).**
+  The old check stamped a fresh id onto every `<h3>`, collected those same
+  ids, built the rail from them, substituted it in, and only THEN re-read
+  the ids and the rail refs out of that same rewritten document. Both sides
+  came from one list built in one pass, so it could not disagree; its
+  protection was the regeneration silently fixing the problem, never the
+  check. Proven by running the pre-M14 script's own bytes on a tree with a
+  hand-added `<h3>`: **exit 0**, index.html silently rewritten, the heading
+  stamped and given a manufactured rail entry. It also wrote the file
+  BEFORE comparing, so a firing gate left it already mutated, and it had no
+  premise probe — with zero sections both sets are empty and it passed
+  having examined nothing.
+  **`sh build.sh --check` is the verify half**: it derives everything in
+  memory and fails if what is on disk differs, writing nothing at all. It
+  runs as the `arch-check` compose service — a stock python image, no build,
+  and a READ-ONLY mount so "writes nothing" is enforced rather than claimed
+  — in the battery and as a CI matrix leg. Before M14 **nothing invoked this
+  script**: no suite, no CI job, no compose service, every mention in the
+  tree being prose telling a human to remember. Scope stated: `--check`
+  verifies `index.html` and PDF COVERAGE in both directions, never PDF
+  bytes, which are not a stable comparison target. librsvg
   has no CSS-variable support, so the PDF pass flattens each `var()` to
   its light fallback; it also needs `fonts-noto-core`/`-cjk` or Thai,
   Han, Kana and Devanagari render as tofu boxes — a defect the browser
@@ -1227,6 +1276,14 @@ Consequences that are binding, not advisory:
 - `tests/e2e.sh`, `tests/e2e-backends.sh`, `tests/e2e-telemetry.sh`,
   `tests/e2e-orchestrator.sh`, `tests/obs-config.sh` — end-to-end and
   config suites (run in Docker)
+- `tests/tls-pins.sh` — every shipped CA pin is READABLE by the identity
+  that pins it (ROADMAP M7/M9/M10). **Host-side, not in Docker**, because it
+  DRIVES docker: it brings the real Caddy terminators up under throwaway
+  compose projects and reads their volumes as the ENGINE's uid, taken from
+  the `Dockerfile` so the two cannot drift. Two things it learned the hard
+  way are encoded in it: a private project name does **not** scope a
+  published PORT (hence `--no-deps`), and its first version ran `down -v` on
+  the REAL projects and destroyed a live stack
 - `docs/AGENTS.md` — the scenario-driven agent implementation guide
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
@@ -1236,6 +1293,17 @@ Consequences that are binding, not advisory:
   routes, counted against `route()` … rather than remembered". Both are
   gated now, as SETS in both directions rather than counts, because a count
   passes when one route is swapped for another.
+  **The count is gated too, SEPARATELY, and the gap between those two
+  sentences was real for as long as only the first existed.** Comparing sets
+  is the right choice and its cost is that the SENTENCE introducing the list
+  — *"All N routes, counted against `route()` … rather than remembered"* — is
+  not part of what the set comparison examines. It said 36 while the list
+  under it held 37, from M17 (which added `POST …/repair` to the list and not
+  to the sentence) until 2026-08-21, and the gate was green throughout,
+  correctly. Generalise it: **a number in prose beside a gated list is the
+  un-gated part of a gated claim, and it is the part that rots** — when a
+  gate deliberately measures something other than a count, ask what the count
+  is doing while nobody watches it.
   **A full-name scan of any reference in this repo UNDERCOUNTS, and the
   undercount reads as a documentation gap.** Every reference here groups
   families into one row and abbreviates the siblings to a suffix —
@@ -1299,8 +1367,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (754 run,
-                                      # 4 #[ignore]d = 758 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (769 run,
+                                      # 4 #[ignore]d = 773 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1383,12 +1451,47 @@ docker compose run --rm test          # cargo unit + integration tests (754 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (364 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (110 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (42 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (390 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (123 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (43 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
+bash tests/tls-pins.sh                # CA pins readable by the engine (7 checks).
+                                      # Every shipped pin, read as the ENGINE's uid.
+                                      # Host-side
+                                      # because it DRIVES docker: it brings the real
+                                      # Caddy terminators up and reads their volumes
+                                      # as the ENGINE's uid, taken from the Dockerfile
+                                      # rather than hardcoded so the two cannot drift.
+                                      # It exists because `deploy/observability`
+                                      # shipped UNSTARTABLE for two releases — the
+                                      # engine pinned a path inside Caddy's PKI tree,
+                                      # which is root:0600 inside 0700 dirs because it
+                                      # holds the CA private key, and the engine runs
+                                      # as uid 10001. Nothing caught it because
+                                      # nothing ever brought a terminator up:
+                                      # `obs-config` validates CONFIG FILES and starts
+                                      # no container, and a config can be flawless for
+                                      # a stack that cannot boot. It also asserts the
+                                      # CA PRIVATE key stays unreadable, because the
+                                      # obvious wrong fix (chmod the tree) would
+                                      # otherwise pass. It does NOT prove the stack
+                                      # starts — that needs the full image and four
+                                      # containers, deferred on cost with the command
+                                      # written down in ROADMAP M7
+docker compose run --rm arch-check    # the architecture reference is what
+                                      # diagrams/ and its own headings derive
+                                      # to. No build, stock python, READ-ONLY
+                                      # mount — `--check` must write nothing,
+                                      # and the old gate's real defect was
+                                      # writing index.html BEFORE comparing.
+                                      # Publishes no check count deliberately,
+                                      # like `lint` and `onnx-build`: it has
+                                      # three verification stages rather than
+                                      # a countable population, and inventing
+                                      # a metric to satisfy a gate is how a
+                                      # figure stops meaning anything
 docker compose run --rm obs-config    # the observability CONFIG suite (10 checks):
                                       # promtool check/test rules + amtool
                                       # check-config at the versions the stack
@@ -1429,6 +1532,7 @@ docker build -t undercroft .           # runtime image
 # to any non-loopback host, no override. The client container mounts the
 # terminator's CA volume and PINS the root:
 docker compose up -d embeddings embeddings-tls
+docker compose run --rm embed-tls-export  # publish the PUBLIC CA root readably
 docker compose run --rm embed-pull    # one-time model fetch into a volume
 #   then run cli/bench with (project-prefixed volume name — a bare
 #   undercroft-embed-tls mounts a fresh empty volume silently. The
@@ -1439,7 +1543,13 @@ docker compose run --rm embed-pull    # one-time model fetch into a volume
 #   before it warns about):
 #     -v undercroft_undercroft-embed-tls:/tls:ro
 #     UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=https://embeddings-tls
-#     UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt
+#     UNDERCROFT_EMBED_CA=/tls/root.crt
+#   The pin is the EXPORTED root, not the path inside Caddy's PKI tree.
+#   Caddy writes that tree as root (cert 0600 inside 0700 dirs) because it
+#   holds the CA private key, so uid 10001 cannot read it — and `cli`/`mcp`
+#   build the RUNTIME stage, which runs as exactly that uid, while `bench`
+#   builds the builder stage and runs as root. This recipe therefore worked
+#   or failed depending on which service you picked (ROADMAP M9).
 #     UNDERCROFT_EMBED_MODEL=nomic-embed-text
 ```
 
@@ -1486,7 +1596,7 @@ one for code.** Applying it blindly across a 7-way merge spliced away closing
 braces in three `.rs` files. Resolve code conflicts on their merits; reserve
 union for additive prose.
 
-**Run the battery with `bash tests/battery.sh`** (all eight suites, or name a
+**Run the battery with `bash tests/battery.sh`** (all ten suites, or name a
 subset). It exists because two mistakes on 2026-08-06 were the same defect —
 a verdict taken from something other than the thing that decides it:
 a summary built by piping `cargo test` through `awk` reported `failed=0` from
@@ -1495,12 +1605,32 @@ green while the battery failed on a lint introduced after it. So the script
 never parses suite output to decide pass/fail — **the exit code is the
 verdict** — and it runs every suite in one pass over one tree, which makes "I
 ran it before the last edit" impossible rather than merely discouraged. It
-also handles the `backends-e2e` `down -v` and never pipes a suite (a
+also handles the `backends-e2e` reset and never pipes a suite (a
 pipeline's status is its LAST command's, which is how `| grep` turns a failing
-suite into a passing one). Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the ten host-side preflights
+suite into a passing one). **That reset is NARROW, and it was not always** —
+ROADMAP M12. It was a project-wide teardown carrying the volumes flag and no
+`-p`/`-f`, so it resolved to `docker-compose.yml`'s declared project,
+`undercroft`, which is the DEVELOPER'S OWN — and removed every named volume
+that file declares. Three were pure collateral: `undercroft-models` (the
+multi-GB weights of the four served embedders this project measures with),
+`undercroft-data` (the compose palace, i.e. any mined corpus) and
+`undercroft-embed-tls` (the embeddings CA that the pin recipe above mounts —
+destroying it makes that recipe mount a fresh empty volume silently, which is
+the failure the recipe's own warning describes). It needed none of them: the
+four HTTP backends declare no `volumes:` key at all and pgvector's only mount
+is a read-only cert, so their state is in ANONYMOUS volumes that
+`rm -sfv <service>` takes. **This is M10's lesson one file over** — a private
+compose project name does not scope a shared host resource — and the battery's
+own teardown was the place it had not been applied. Gated by the
+`destructive compose scope` preflight, which requires every compose teardown
+in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
+teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
+**`bash tests/battery.sh --preflight-only` runs the twelve host-side preflights
 and no suite**, which is what CI invokes. (This sentence said "seven" while
-the tree ran eight, and nothing could say so. **It is gated now** — ROADMAP
+the tree ran eight, and nothing could say so — and then "ten" while the tree
+ran eleven, which the gate caught inside the very unit that caused it.
+It caught the twelfth the same way, in the unit that added it.
+**It is gated now** — ROADMAP
 **O42** — by the `prose figures` preflight, which counts this number and
 seven other figures the doctrine states about the tree against what the tree
 actually measures. It caught its own arrival: adding that preflight made the
@@ -1511,6 +1641,22 @@ Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
 Everything a preflight cannot do with git, awk and grep belongs in a
 container it launches, not in a host interpreter: a gate that needs Python on
 the host is a gate that does not run on the next machine.
+
+**`--no-preflight` is the mirror image and it is what CI's SUITE legs use**
+(ROADMAP M13). Every matrix leg and the `tls-pins` job run
+`bash tests/battery.sh --no-preflight <suite>` rather than
+`docker compose run` directly, so CI and a local battery execute the SAME
+code — including the post-run comparison of each suite's MEASURED check count
+against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
+and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
+request and a leg dropping from 370 checks to 3 was green. The flag skips the
+twelve preflights because the dedicated `preflight` job already runs them
+once. **The shared readers — `test_summary`, `suite_summary`,
+`declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
+skipped block**, and that is not tidiness: with them inside, `--no-preflight`
+printed `command not found` twice and the battery still exited 0, the
+comparison examining nothing while reporting exactly what a clean tree
+reports.
 
 **A SCRIPTED EDIT IS A CHANGE YOU HAVE NOT READ.** Four defects in one
 session, all the same root — a `python`/`sed` edit that matched its anchor and
@@ -1653,7 +1799,25 @@ images either; mount the repo instead:
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
-**Seven compose suites run as a `fail-fast: false` MATRIX, one job each.** Two
+**Eight compose suites run as a `fail-fast: false` MATRIX** — eight since
+`arch-check` joined (M14), and `tls-pins` is host-side and gets its own job
+rather than a matrix leg, so CI runs TEN jobs of which the matrix is one.
+The tenth is **`house-figures`** (ROADMAP O65), and it is the ONLY check in
+the tree that needs the INTERNET — which is exactly why it is a CI job and
+not a `tests/battery.sh` preflight: the preflights run on every local battery
+and a network arm there fails for anyone working offline. It reads the house
+page's `<div class="n">` tiles and compares them to the tree, and it treats
+an unreachable page as a FAILURE rather than a skip, because an unreachable
+page and an accurate one must not produce the same verdict — this file's
+oldest lesson, and the reason the check exists at all is that the same figure
+sat stale for eleven days with nothing able to notice. Consequence, stated
+rather than discovered: it can go red on a pull request that touched nothing,
+because the house page is state this repo does not own. That is the signal,
+not a defect in the gate.
+This sentence said "one job each" while also saying the matrix is one job,
+which cannot both be true: a matrix expands to one check RUN per leg under a
+single job id, which is why adding a leg does not move `verdict`'s `needs:`
+and adding a job does. Corrected 2026-08-20; the count was stale too. Two
 properties are load-bearing: the legs are independent, so wall-clock is the
 slowest suite rather than their sum; and **every suite runs even when one
 fails**, where the old serial job stopped at the first failure and hid the
@@ -2095,6 +2259,21 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   on the queue that exists to contain it, nor assign the trust class that
   decides what it may retrieve), asserted by the same test as the parity,
   so the two can never disagree about what MCP is allowed to reach.
+  **The CLI axis had no such inventory at all until M16**, so every CLI-only
+  capability was an unrecorded gap by construction — measured, **74** CLI
+  operations of which `parity.rs` named **17**. `SURFACE_ABSENCES` +
+  `SURFACE_COMPLETE` now PARTITION it (63 rows over 59 anchors, plus 15
+  reachable everywhere = 74), keyed on the `main.rs` dispatch anchor and on
+  `(anchor, absent_from)` because a ruling differs per surface — `repair` is
+  a boundary on MCP and a drift on `/v1`. **`Absence::Unruled` is a real
+  verdict, not a smaller boundary**: where the absence is a PRODUCT decision
+  the code does not settle, the row says nobody has decided and must cite the
+  entry where it is filed, because an inventory whose reasons were guessed
+  reads as ruled while being fiction — worse than none, since it stops the
+  next reader looking. Scope, stated: the gate derives its universe from
+  `main.rs`, so it is both-directional over the CLI axis only; an absence FROM
+  the CLI of something present only on `/v1` (vault delete, the SSE stream) is
+  filed in O66 rather than caught.
 - **A drift has a DIRECTION, and it is decided by provenance — never by
   which side is cheaper to edit.** Finding that the code and the documents
   disagree is half the work; the other half is deciding which one is wrong,
@@ -2340,6 +2519,20 @@ had and was still bypassable on the surface most deployments use.
    cannot move. And when a test touches PQ, FDE, the codebook or any keyed
    draw, **run it in a loop before believing a green** — the battery runs
    each test once, which for a coin flip is not a measurement.
+   **And counterfactual the FIX, not only the defect.** A filing makes TWO
+   claims — what is broken, and what to do about it — and only the first ever
+   gets re-verified, because a remedy that matches an accurate description
+   reads as done. ROADMAP M3 is the instance: its description was exact, and
+   its prescribed fix ("report the same pair the CLI does") would have made a
+   server re-announce one healed anchor window on every later call, forever,
+   because the field it names is set at open and never cleared while a server
+   caches its handle for its lifetime. The arm that caught it asserts the
+   behaviour the FIX would break, which nothing in the filing asks for.
+   Stated as this file requires of a new rule: applied backwards it
+   reclassifies nothing and confirms nothing — the past fixes it could have
+   examined were structural (a required argument, an inventory row) and had
+   no alternative shape to get wrong. **One instance, untested by history,
+   and this is its first application.**
 3. **Drift check.** If the change touches a capability reachable from more
    than one of {CLI, MCP, `/v1`, orchestrator}, verify EVERY one of them —
    by reading the other surfaces' code, not by assuming symmetry. `cargo test`
@@ -2349,13 +2542,34 @@ had and was still bypassable on the surface most deployments use.
    drifts in behaviour. That half is yours.
 4. **Every governance surface updated in the same unit**: CHANGELOG, CLAUDE.md,
    ROADMAP, **the three `.handover/` files** (ignored by git, governance
-   nonetheless — see session-end hygiene), and whichever of docs/AGENTS.md,
-   docs/THREAT_MODEL.md, README, architecture/index.html, website/ carry the
-   claim you changed. A claim lives on every surface that states it, and an
-   UNCOMMITTED surface is the one nobody notices going stale.
+   nonetheless — see session-end hygiene), **the HOUSE PAGE at
+   `sealcroft.com` when a figure it publishes moves**, and whichever of
+   docs/AGENTS.md, docs/THREAT_MODEL.md, README, architecture/index.html,
+   website/ carry the claim you changed. A claim lives on every surface that
+   states it, and an UNCOMMITTED surface is the one nobody notices going
+   stale.
+   **The house page is the surface this rule keeps failing on, because it is
+   in ANOTHER REPOSITORY** (`sealcroft/sealcroft.github.io`, no CI of its
+   own) and so is invisible to every in-repo gate and to `git status`. It
+   published `656 tests` against a tree running 689, went unfixed for eleven
+   days, and had widened to 765 before anything noticed — its sibling defect,
+   the house serving cleartext, is what ROADMAP O37 calls "the most severe
+   process failure". **It is not optional and not a nice-to-have: it moves
+   with the unit that moves the number, exactly like CHANGELOG does.**
+   It publishes FOUR figures and only one of them moves often — the test
+   count, on nearly every unit that adds a test. The other three (MCP tools,
+   the benchmark headline, `0 bytes phoned home`) move rarely or never.
+   Dropping the volatile tile to remove that friction was PROPOSED and
+   REJECTED by the maintainer: the page is the org's front door, and a front
+   door that is quietly wrong is worse than one that costs a commit to keep
+   right.
+   **Do it with `bash tests/house-figures.sh --update`**, which reads the
+   truth from this tree, patches only the tiles that moved, and pushes. Run
+   it in the same unit, then verify the LIVE page rather than the commit —
+   Pages takes a minute or two, and `--update` waits for it.
 5. **The full Docker battery** at the final tree, with raw exit codes:
-   `test`, `lint`, `obs-config`, `e2e`, `orchestrator-e2e`, `e2e-telemetry`,
-   `backends-e2e`, `site`. `cargo build -p <crate>` does **not** compile
+   `test`, `lint`, `obs-config`, `arch-check`, `e2e`, `orchestrator-e2e`,
+   `e2e-telemetry`, `backends-e2e`, `site`, `tls-pins`. `cargo build -p <crate>` does **not** compile
    integration tests — `--tests` does. **Every time, never a subset** — and
    never piped: a pipeline's status is its LAST command's, so `| tail` reports
    success over a failing battery. Confirm it ran AFTER the last edit rather
@@ -2385,6 +2599,21 @@ had and was still bypassable on the surface most deployments use.
    found TWO legs it had never rendered (`orphan_labels`, `mirror_drift`),
    both of which drive the verdict tick it prints. Ask what else reads the
    struct before believing the gate covers it.
+   **It happened again, to the struct this rule names first** (ROADMAP M5,
+   2026-08-19). The `VerifyReport` row was added and the lesson stopped
+   there, so `PalaceStats` — the struct listed above as the FIRST one this
+   drift bit — still had no `ui.html` row, and adding one found FOUR fields
+   the console had never read, including `unhealed` and `read_only`, the two
+   an operator opens a console to find. So the rule is not "add the console
+   when you notice"; it is **one row per (struct, renderer) pair, and adding
+   a row for one struct says nothing about the next**.
+   Two things a gate cannot do for you here. It cannot tell you the page is
+   STALE: `ui.html` is compiled in, so a release binary built before the edit
+   serves the old console while every gate reads the new source — prove the
+   binary carries the markup, then LOOK at the page. And it cannot tell you a
+   renderer should be exempt: a fleet OVERVIEW is a summary by construction,
+   so demanding every field there would enforce the wrong shape. Write that
+   decision down; do not leave it as a missing row.
 
 ## Session-end hygiene — leave no debt, drift or stale
 
@@ -2645,7 +2874,13 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   fact about the tag, and the tag does not exist yet) → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
-  post-merge CI green → Pages live-verified. Version bumps touch
+  post-merge CI green → Pages live-verified → **the HOUSE PAGE
+  (`sealcroft.com`, a different repo) refreshed and live-verified**, which is
+  `bash tests/house-figures.sh --update` for the derivable tiles and a hand
+  edit for the two release claims, since those follow the published TAG
+  rather than this tree and so can only move after it exists. Its CI job goes
+  red until they do, which is the intended order rather than a nuisance.
+  Version bumps touch
   workspace `Cargo.toml` + `Cargo.lock` (via a Docker `cargo update
   --workspace` — battery images COPY source and never update the host
   lock), `.claude-plugin/plugin.json`, CHANGELOG, ROADMAP, `CLAUDE.md`'s

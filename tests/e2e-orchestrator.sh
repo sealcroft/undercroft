@@ -137,6 +137,30 @@ code_is  "tokenless is 401"        401 -- -X POST -d '{"query":"x"}' "$O/t/searc
 code_is  "vault root not routable" 404 -- -X DELETE "${AUTH_ACME[@]}" "$O/t/"
 code_is  "unknown subpath is 404"  404 -- -X POST "${AUTH_ACME[@]}" -d '{}' "$O/t/frobnicate"
 
+# ROADMAP O67. Eight of the engine's 28 per-vault subpaths were reachable from
+# NEITHER plane — not the ops plane, not here — so a tenant asking for their
+# own taxonomy or their own distilled facts got a bare "unknown route", which
+# reads as a capability the product does not have. These are the tenant's own
+# vault; `drawers` and `search` two blocks up already return its content.
+code_is  "taxonomy reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/taxonomy"
+body_has "taxonomy names the tenant's wing" 'eng' -- "${AUTH_ACME[@]}" "$O/t/taxonomy"
+code_is  "kg/stats reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/kg/stats"
+code_is  "kg/query reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/kg/query?entity=nobody"
+code_is  "kg/entities reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/entities"
+code_is  "kg/timeline reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/timeline?entity=nobody"
+code_is  "kg/receipts reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/receipts"
+# And the one that must NOT: `kg/authority` is a WRITE and is in the engine's
+# OPERATOR_ONLY — promotion closes the previous canonical holder's window, so
+# a tenant token must never carry it. It went to the ops plane instead, and
+# the refusal must SAY that rather than 404ing as though it did not exist.
+code_is  "kg/authority refused on the data plane" 404 -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"triple_id":"x","authority_class":"golden"}' "$O/t/kg/authority"
+body_has "kg/authority names the ops plane" 'operator route' -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"triple_id":"x","authority_class":"golden"}' "$O/t/kg/authority"
+# The quarantine fence still applies to every widened route.
+code_is  "fence still covers kg/query" 404 -- "${AUTH_ACME[@]}" \
+  "$O/t/kg/query?entity=quarantine-pending"
+
 echo "== Cross-tenant isolation through the proxy =="
 GX_SEARCH="$(curl -s -X POST "${AUTH_GLOBEX[@]}" -d '{"query":"flux capacitor power"}' "$O/t/search")"
 grep -qF 'gigawatts' <<<"$GX_SEARCH" \
@@ -298,6 +322,38 @@ else
   fail "a configuration refusal exits 1, not the integrity code"
 fi
 rm -f "$BADCA"
+
+# ── the control plane's OWN tamper verdict reaches the exit code (M20) ──────
+# `instance-list` resolves each instance's sealed credential blob. Under a
+# DIFFERENT (valid-shaped) key those blobs will not open — which state.rs
+# calls "a tamper verdict or a wrong key, never a transient condition" — and
+# the command caught that error into a `refused=` note, stringified it, and
+# returned Ok(()). So the fleet's own integrity verdict printed on stdout and
+# **exited 0**, which is what a compliance script reads as fine. The exit-2
+# hook in `main` never fired because the error never escaped `run()`.
+#
+# Note this is the SAME command as the CA-pin arm above, and the two verdicts
+# must stay distinguishable: a configuration refusal is exit 1, a tamper
+# verdict is exit 2. Asserting them one after the other is what pins that.
+WRONGKEY="ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+WK_OUT="$(UNDERCROFT_ORCH_KEY="$WRONGKEY" "$ORCH" --db "$UNDERCROFT_ORCH_DB" instance-list 2>&1)"
+WK_CODE=$?
+if [ $WK_CODE -eq 2 ]; then
+  ok "a credential blob that will not open exits 2, not 0"
+else
+  fail "a credential blob that will not open exits 2, not 0" "exit $WK_CODE: $WK_OUT"
+fi
+# A listing must still LIST — one unopenable blob must not hide the fleet.
+if grep -q 'engine-b' <<<"$WK_OUT"; then
+  ok "and the listing still names every instance"
+else
+  fail "and the listing still names every instance" "$WK_OUT"
+fi
+if grep -q 'INTEGRITY VERDICT' <<<"$WK_OUT"; then
+  ok "and it says the verdict is the control plane's own"
+else
+  fail "and it says the verdict is the control plane's own" "$WK_OUT"
+fi
 
 # **A usage error exits 1, not clap's default 2.** Exit 2 is reserved for an
 # integrity verdict on every command, so a typo reaching a compliance script

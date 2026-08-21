@@ -42,6 +42,32 @@ struct Cli {
     #[arg(long, global = true, env = "UNDERCROFT_HOME")]
     data_dir: Option<PathBuf>,
 
+    /// Open every vault READ-ONLY: heal nothing, migrate nothing, write
+    /// nothing. For inspecting a vault you do not want to touch.
+    ///
+    /// ROADMAP M18. A normal open is not passive — R4 records what it does:
+    /// it runs the embedder migration, fast-forwards the manifest anchor,
+    /// rebuilds the FTS index, performs the A10/U12 at-rest migrations, and
+    /// promotes or DELETES a writer's `vault.json.next`, which `CLAUDE.md`
+    /// calls "evidence destruction on the incident runbook's own path". That
+    /// is right for ordinary use and exactly wrong when you are looking at a
+    /// vault BECAUSE something went wrong with it.
+    ///
+    /// `serve-mcp` and `serve-http` have had `--read-only` since R4; no CLI
+    /// command had any way to ask for it, so the surface an operator reaches
+    /// for first during an incident was the one that could not stay off the
+    /// evidence.
+    ///
+    /// A read-only open DETECTS and REPORTS what it declined to heal
+    /// (`PalaceStats.unhealed`) instead of doing it, and runs under
+    /// `PRAGMA query_only=ON` — so a write this flag does not anticipate
+    /// fails loudly rather than happening quietly. A mutating subcommand
+    /// under this flag is therefore refused by SQLite rather than by a
+    /// classifier, which is deliberate: a list of "which commands write"
+    /// maintained by hand is the drift this project keeps closing.
+    #[arg(long, global = true)]
+    read_only: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -1090,8 +1116,29 @@ enum Posture {
     ReadOnly,
 }
 
+impl Cli {
+    /// What `--read-only` means for every open this process performs.
+    ///
+    /// One place, so a command cannot forget it — the same reason
+    /// `serve-http --read-only` decides its posture once in FRONT of dispatch
+    /// rather than per handler.
+    fn posture(&self) -> Posture {
+        if self.read_only {
+            Posture::ReadOnly
+        } else {
+            Posture::ReadWrite
+        }
+    }
+}
+
+/// The posture EVERY ordinary CLI command opens with.
+///
+/// `Posture::ReadWrite` unless `--read-only` was declared (ROADMAP M18). It
+/// was unconditionally read-write, and `Posture::ReadOnly` had exactly two
+/// call sites in this file — both `serve-* --read-only` — so no CLI command
+/// could inspect a vault without healing it.
 fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
-    open_store_as(cli, vault, Posture::ReadWrite)
+    open_store_as(cli, vault, cli.posture())
 }
 
 fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
@@ -1765,18 +1812,62 @@ fn run(cli: Cli) -> Result<()> {
             VaultAction::List => {
                 let mgr = manager(&cli)?;
                 let vaults = mgr.list()?;
+                // Vaults whose own stored evidence contradicts itself.
+                // Collected rather than raised inline so the listing
+                // completes, then raised so the exit code is true (M23).
+                let mut integrity: Vec<String> = Vec::new();
                 if vaults.is_empty() {
                     println!("No vaults. Run: undercroft init");
                 }
+                // **This loop BYPASSED the posture entirely** (ROADMAP M18).
+                // It called `mgr.unlock` and `PalaceStore::open` directly
+                // rather than going through `open_store_as`, so listing
+                // performed a full read-write unlock and open on EVERY vault
+                // on the host — including ones the operator was not asking
+                // about. R4 records what that does: promote or delete a
+                // writer's staging manifest, fast-forward the anchor, run the
+                // at-rest migrations. `undercroft vault list` is the most
+                // natural first command during an incident, and it was the
+                // one that touched everything.
                 for name in vaults {
-                    let v = mgr.unlock(&name)?;
-                    let store = PalaceStore::open(v)?;
+                    let store = match open_store_as(&cli, &name, cli.posture()) {
+                        Ok(s) => s,
+                        // A listing must LIST. A vault a read-only role would
+                        // have had to migrate refuses to open that way
+                        // (`ReadOnlyUnmigrated`), and an absent database
+                        // refuses outright — neither is a reason to abandon
+                        // the other vaults, which is what propagating here
+                        // would do. Named, and the walk continues.
+                        Err(e) => {
+                            // **The verdict outlives the loop** (ROADMAP
+                            // M23). Continuing here is right — a listing must
+                            // list, and one bad vault must not hide the rest
+                            // — but M18 shipped ONLY that half, so an
+                            // integrity failure was printed and then swallowed
+                            // and `vault list` exited 0. That is round-four
+                            // #30 verbatim, which M20 had just fixed in the
+                            // orchestrator: I applied "a listing must list"
+                            // and not "the verdict must still be true", in
+                            // the same session that wrote the second rule.
+                            if integrity_verdict(&e) {
+                                integrity.push(name.clone());
+                            }
+                            println!("{name:<20} unavailable: {e}");
+                            continue;
+                        }
+                    };
                     println!(
                         "{:<20} level={:<10} records={}",
                         name,
                         store.vault().level().to_string(),
                         store.count()?
                     );
+                }
+                if !integrity.is_empty() {
+                    anyhow::bail!(undercroft_store::StoreError::Integrity(format!(
+                        "vault(s) whose stored evidence contradicts itself: {}",
+                        integrity.join(", ")
+                    )));
                 }
             }
             VaultAction::Status { name } => {
@@ -3388,13 +3479,31 @@ fn run(cli: Cli) -> Result<()> {
             let st = store.stats()?;
             println!("vault:   {} (level: {})", store.vault().id(), st.level);
             println!("records: {}", st.records);
+            // M4: printed right under `records` and only when non-zero,
+            // because it exists to explain a discrepancy. `records` is the
+            // whole file; the wing list below excludes the review queue, so
+            // without this line the two disagree and nothing says why.
+            if st.quarantined > 0 {
+                println!(
+                    "  of which quarantined: {} (excluded from the wing list below)",
+                    st.quarantined
+                );
+            }
             println!("rooms:   {}", st.rooms);
             println!("tunnels: {}", st.tunnels);
             println!(
                 "kg:      {} triples ({} active)",
                 st.kg.triples, st.kg.active
             );
-            println!("writes:  {}", st.writes);
+            // **`writes` is the chain HEIGHT and has never counted writes
+            // alone** (M1): an export appends a record, and so does every
+            // content-returning read under `UNDERCROFT_READ_AUDIT=chain`.
+            // Both names are printed because both are on the wire and
+            // `writes` is not going away; the label says which is which so
+            // an operator reading this output does not have to know the
+            // history to interpret the number.
+            println!("writes:  {} (audit-chain height)", st.writes);
+            println!("chain records: {}", st.chain_records);
             // The committed audit-chain head. `/v1` and MCP have always
             // carried it and the CLI silently did not — the hand-projection
             // drift, on the struct CLAUDE.md names as the first one it bit.
@@ -3556,17 +3665,77 @@ fn run(cli: Cli) -> Result<()> {
                     if !src.join("vault.json").exists() {
                         bail!("no backup named {name}");
                     }
-                    let vault_name = name.rsplitn(2, "-20").last().unwrap_or(name).to_string();
+                    // **The vault name comes from the backup's OWN manifest,
+                    // never from parsing its directory name** (ROADMAP O69).
+                    //
+                    // It used to be `name.rsplitn(2, "-20").last()`, which
+                    // splits at the RIGHTMOST "-20" in the directory name.
+                    // For `default-2026-08-21T18-19-28-204777797Z` that is
+                    // inside the NANOSECONDS, so the vault name came out as
+                    // `default-2026-08-21T18-19-28`: the restore then targeted
+                    // a vault that does not exist, took no exclusive hold,
+                    // removed nothing, and created a junk directory — while
+                    // reporting success. The real vault was never restored and
+                    // the operator was told it had been.
+                    //
+                    // It fired whenever the sub-second field began with "20"
+                    // (~1% of restores) and ALWAYS for any vault whose own
+                    // name contains "-20", such as `proj-2024`. Caught by the
+                    // e2e arm added for the exclusive hold, which happened to
+                    // run at such a timestamp — luck, not coverage, which is
+                    // why the arm below now pins the shape instead.
+                    let vault_name = read_backup_vault_id(&src)?;
                     let dst = root.join("vaults").join(&vault_name);
                     if dst.exists() && !force {
                         bail!(
                             "vault '{vault_name}' exists; pass --force to overwrite it with the backup"
                         );
                     }
+                    // **ROADMAP O69.** Hold the vault EXCLUSIVELY across the
+                    // destroy-and-copy, or refuse. Without this, a restore
+                    // beneath a running `serve-http` succeeded at exit 0 and
+                    // destroyed the vault: `remove_dir_all` unlinks the
+                    // database while the server keeps its handles on the
+                    // unlinked inodes, so it serves and WRITES a file that no
+                    // longer has a name, and the manifest it later anchors
+                    // describes a database that is not there. The rollback
+                    // detector then fires — correctly — on evidence the
+                    // restore manufactured, and the vault is unopenable for
+                    // good: `possible tampering`, exit 2, on every later open.
+                    //
+                    // The lock is HELD ACROSS the whole operation rather than
+                    // probed and released, because a probe-then-act leaves a
+                    // window in which a server opens the vault between the
+                    // two. While this connection holds it, another opener
+                    // gets SQLITE_BUSY; once the directory is unlinked the
+                    // lock refers to a dead inode, which is harmless because
+                    // by then there is nothing left to protect.
+                    let _hold = if dst.exists() {
+                        Some(undercroft_store::hold_vault_exclusively(&dst).map_err(|e| {
+                            anyhow::anyhow!(
+                                concat!(
+                                    "vault '{}' is in use by another process — refusing to ",
+                                    "restore over it.
+
+Restoring beneath a running server DESTROYS ",
+                                    "the vault: the server keeps writing to the database file this ",
+                                    "would unlink, and the vault becomes unopenable. Stop the server, ",
+                                    "then retry.
+
+SQLite reported: {}"
+                                ),
+                                vault_name,
+                                e
+                            )
+                        })?)
+                    } else {
+                        None
+                    };
                     if dst.exists() {
                         std::fs::remove_dir_all(&dst)?;
                     }
                     copy_dir(&src, &dst)?;
+                    drop(_hold);
                     println!("Restored {} -> vault '{}'", name, vault_name);
                 }
             }
@@ -3880,6 +4049,33 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// The vault id a backup belongs to, read from the manifest INSIDE it.
+///
+/// ROADMAP O69. A backup directory is named `<vault>-<timestamp>`, and
+/// recovering `<vault>` by string-splitting that name is ambiguous in two
+/// ways at once: the timestamp contains the same separator the vault name
+/// does, and a vault name may itself contain it. `vault.json` states the id
+/// outright, so it is read rather than reconstructed — the manifest is the
+/// authority on which vault this is, exactly as it is for everything else.
+fn read_backup_vault_id(src: &Path) -> Result<String> {
+    let raw = std::fs::read_to_string(src.join("vault.json"))
+        .with_context(|| format!("reading {}", src.join("vault.json").display()))?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing {}", src.join("vault.json").display()))?;
+    let id = v
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if id.is_empty() {
+        bail!(
+            "backup at {} has no vault id in its manifest",
+            src.display()
+        );
+    }
+    undercroft_core::validate_name(id, "vault")?;
+    Ok(id.to_string())
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> Result<()> {

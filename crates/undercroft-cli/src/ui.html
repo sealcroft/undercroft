@@ -184,7 +184,13 @@
           <div class="gauges">
             <div class="g"><div class="k">DRAWERS</div><div class="v" id="sDrawers">—</div></div>
             <div class="g lvl"><div class="k">LEVEL</div><div class="v" id="sLevel">—</div></div>
-            <div class="g"><div class="k">WRITES</div><div class="v" id="sWrites">—</div></div>
+            <!-- Labelled for what it counts, not for what it was called: the
+                 audit chain holds exports and, under UNDERCROFT_READ_AUDIT,
+                 every content read. See M1 — the wire keeps `writes` for
+                 compatibility, but a console has no callers to break. -->
+            <div class="g"><div class="k">CHAIN RECORDS</div><div class="v" id="sWrites">—</div></div>
+            <div class="g"><div class="k">POSTURE</div><div class="v" id="sPosture">—</div></div>
+            <div class="g" id="sQuarGauge" style="display:none"><div class="k">QUARANTINED</div><div class="v" id="sQuar">—</div></div>
             <div class="g"><div class="k">ROOMS</div><div class="v" id="sRooms">—</div></div>
             <div class="g"><div class="k">KG TRIPLES</div><div class="v" id="sKgT">—</div></div>
             <div class="g"><div class="k">KG ENTITIES</div><div class="v" id="sKgE">—</div></div>
@@ -192,6 +198,19 @@
             <div class="g"><div class="k">TUNNELS</div><div class="v" id="sTun">—</div></div>
             <div class="g"><div class="k">STORE</div><div class="v" id="sBytes">—</div></div>
             <div class="g chain"><div class="k">CHAIN HEAD</div><div class="v" id="sChain">—</div></div>
+          </div>
+          <!-- M5. What an open FOUND and declined to repair, and it is shown
+               here for the reason `unhealed` exists at all: a long-lived
+               server's start-up was hours ago, and this console is where that
+               operator looks afterwards. Hidden when empty rather than
+               printing a reassuring "none" nobody reads. -->
+          <div class="sect" id="sUnhealedSect" style="display:none">
+            <div class="h">UNHEALED — WHAT THE OPEN FOUND AND DID NOT REPAIR</div>
+            <table><tbody id="sUnhealed"></tbody></table>
+          </div>
+          <div class="sect">
+            <div class="h">TRAINED INDEX ARTIFACTS</div>
+            <div class="kv" id="sCodebooks">—</div>
           </div>
           <div class="sect">
             <div class="h">WINGS — DRAWER DISTRIBUTION</div>
@@ -580,6 +599,14 @@ async function connect() {
       setStatus("ISOLATED", "live");
       renderVaults();
       toast("per-vault isolation is on — attach vaults by id");
+    } else if (String(e.message).startsWith("401")) {
+      // The server answers a bare `unauthorized`, which as a UI message says
+      // neither what was rejected nor what to do about it. Name the thing.
+      setStatus("DISCONNECTED", "alert");
+      $("connMsg").textContent =
+        "401 — the bearer was rejected. This is UNDERCROFT_MCP_HTTP_TOKEN as "
+        + "the server was started with; a trailing newline from $(cat …) is "
+        + "the usual cause, since HTTP strips it and the token can never match.";
     } else {
       setStatus("DISCONNECTED", "alert");
       $("connMsg").textContent = e.message;
@@ -963,9 +990,23 @@ async function loadOverview() {
   $("verifyMsg").textContent = "";
   try {
     const s = await api("GET", "/v1/vaults/" + encodeURIComponent(v) + "/stats", { vault: v });
-    $("sDrawers").textContent = s.drawers;
+    // Prefer the names the STRUCT uses, falling back to the keys this route
+    // shipped with so a console served by an older engine still renders
+    // (M1, M2). The fallbacks are `!== undefined` rather than `||` because
+    // both quantities are legitimately zero on a fresh vault.
+    $("sDrawers").textContent = (s.records !== undefined) ? s.records : s.drawers;
     $("sLevel").textContent = s.level + (s.external ? " · ext" : "");
-    $("sWrites").textContent = s.writes;
+    $("sWrites").textContent = (s.chain_records !== undefined) ? s.chain_records : s.writes;
+    // M5: the posture this handle was opened under. Silence here read as
+    // "writable", which is exactly what a read-only replica looked like.
+    $("sPosture").textContent = s.read_only ? "read-only" : "writable";
+    // M4: the wing table below excludes the review queue while DRAWERS
+    // counts it, so show the difference rather than leaving the operator to
+    // discover the two do not add up. Hidden at zero — which is every vault
+    // with screening off.
+    const q = s.quarantined || 0;
+    $("sQuar").textContent = q;
+    $("sQuarGauge").style.display = q ? "" : "none";
     $("sRooms").textContent = s.rooms;
     $("sKgT").textContent = (s.kg && s.kg.triples !== undefined) ? s.kg.triples : "—";
     $("sKgE").textContent = (s.kg && s.kg.entities !== undefined) ? s.kg.entities : "—";
@@ -980,6 +1021,28 @@ async function loadOverview() {
         "<td><div class='bar' style='width:" + pct.toFixed(1) + "%'></div><span class='kv'>" + pct.toFixed(0) + "%</span></td></tr>";
     });
     $("wingRows").innerHTML = rows.join("") || "<tr><td colspan=3 class='kv'>empty</td></tr>";
+    // M5: trained index artifacts, and only the ones that exist. A
+    // generation of 0 means this vault never trained that codebook; a
+    // generation that MOVED means every row encoded against its predecessor
+    // was silently re-quantized, which nothing else on this page can tell
+    // you — so listing five zeroes would bury the one line that matters.
+    // No `esc()` here and `esc()` two blocks down, deliberately: this one
+    // goes through `textContent`, which never parses markup, so escaping
+    // would print the entities literally. The `unhealed` list below builds
+    // `innerHTML`, where escaping is the whole point. My own defect on the
+    // first pass — `esc()` into `textContent` — caught by reading the diff.
+    const trained = (s.codebooks || [])
+      .filter(c => c.generation > 0)
+      .map(c => c.artifact + " gen " + c.generation);
+    $("sCodebooks").textContent = trained.length ? trained.join(" · ") : "none trained";
+    // M5: R4's report. A non-empty list means either "this replica is
+    // serving a vault its writer has not finished with" or "this vault still
+    // holds some graph words in clear at rest" — each note says which.
+    const notes = s.unhealed || [];
+    $("sUnhealedSect").style.display = notes.length ? "" : "none";
+    $("sUnhealed").innerHTML = notes
+      .map(n => "<tr><td>" + esc(n) + "</td></tr>")
+      .join("");
   } catch (e) { toast("stats failed — " + e.message, true); }
 }
 
@@ -1436,6 +1499,12 @@ async function verifyAttestation() {
   }
 }
 
+// **The empty state used to say nothing at all.** No vaults, no stats, no
+// message — a blank shell that reads as a broken page rather than as one
+// waiting for a credential. The monitor at `/monitor` at least announces
+// demo mode; this page announced nothing, and that is how it was reported.
+$("connMsg").textContent =
+  "paste the bearer (UNDERCROFT_MCP_HTTP_TOKEN) and press CONNECT";
 $("connectBtn").onclick = connect;
 $("attachBtn").onclick = attach;
 $("createBtn").onclick = createVault;

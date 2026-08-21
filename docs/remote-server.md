@@ -38,13 +38,21 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
-**All 36 routes**, counted against `route()` in
-`crates/undercroft-cli/src/tenant.rs` rather than remembered — and the count
-is GATED now (ROADMAP O45), because "rather than remembered" was exactly what
+**All 37 routes**, counted against `route()` in
+`crates/undercroft-cli/src/tenant.rs` rather than remembered — and the LIST is
+GATED now (ROADMAP O45), because "rather than remembered" was exactly what
 happened: this list said 35 and omitted
 `POST /v1/vaults/{id}/verify-forgetting` from the day O14 added it, while
 `docs/AGENTS.md` §10 carried it correctly. One route added, two route
-references, one updated. It also listed 18 of them until 2026-08-05,
+references, one updated.
+
+**And this number said 36 while the list beside it held 37**, from M17 until
+2026-08-21 — `POST …/repair` was added to the list and not to the sentence
+above it. The O45 gate compares the two references to `route()` as SETS in
+both directions, deliberately, *because a count passes when one route is
+swapped for another* — so it was green over a wrong count, correctly and by
+design. A number in prose next to a gated list is the un-gated part of a
+gated claim, and it is the part that rots. It also listed 18 of them until 2026-08-05,
 omitting the whole operator plane
 (trust, admission review, retention, forgetting) plus the golden-values
 tier. Everything under *operator plane* is deliberately absent from MCP:
@@ -58,9 +66,18 @@ GET    /v1/vaults                                                list vault ids
 DELETE /v1/vaults/{id}                                           delete vault
 
 ── read / write ─────────────────────────────────────────────────────────
-GET    /v1/vaults/{id}/stats            (records, level, writes, chain head,
+GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer
+                                         count under both names, from one
+                                         read; quarantined — the part of it
+                                         in the reserved review wing, which
+                                         wings/rooms exclude, so the three
+                                         reconcile; level; the chain height as
+                                         writes AND chain_records — same
+                                         number, `writes` deprecated since
+                                         it counts exports and audited
+                                         reads too; chain head,
                                          wings, rooms, kg, tunnels, db_bytes,
-                                         codebooks)
+                                         read_only, unhealed, codebooks)
 GET    /v1/vaults/{id}/stats/history    ?window=N   sample ring buffer
                                          (501 without --features telemetry)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}
@@ -78,7 +95,10 @@ GET    /v1/vaults/{id}/kg/entities      ?limit=&offset=              paged entit
 GET    /v1/vaults/{id}/kg/query         ?entity=&direction=&as_of=   facts about one entity
 GET    /v1/vaults/{id}/kg/timeline      ?entity=                     temporal fact timeline
 GET    /v1/vaults/{id}/kg/receipts      receipt verdicts per fact
-                                         (verified|source_changed|dangling|tampered)
+                                         (verified|source_changed|dangling|tampered);
+                                         ?integrity_only=1 answers {ok, checked}
+                                         alone — one HMAC per fact and no
+                                         drawer reads (8.6 us/fact -> 0.7)
 GET    /v1/vaults/{id}/kg/canonical/{key}   the one active approved fact
 POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
 GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
@@ -102,6 +122,7 @@ POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
 ── maintenance / portability ────────────────────────────────────────────
 POST   /v1/vaults/{id}/refine           LLM distillation → KG
 POST   /v1/vaults/{id}/verify           (HMAC + audit-chain report)
+POST   /v1/vaults/{id}/repair           (the REMEDIATION half of verify; a write)
 POST   /v1/vaults/{id}/anchor           (tighten the manifest rollback anchor; a write)
 POST   /v1/vaults/{id}/rotate           (re-key the vault; sole-writer contract)
 GET    /v1/vaults/{id}/export           (decrypted NDJSON: {drawer, vector} per line)

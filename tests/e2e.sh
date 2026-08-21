@@ -15,6 +15,11 @@ unset UNDERCROFT_PASSPHRASE 2>/dev/null || true
 PASS=0
 FAIL=0
 
+# Every grep below passes `--` before a caller-supplied needle. Without it a
+# substring starting with "-" is parsed as an OPTION: asserting on
+# "-> vault 'x'" made grep die with "invalid option" and the arm reported
+# "output missing" over output that contained it exactly. The assertion was
+# right and the harness was wrong, which is the worst way round.
 check() { # check <name> <expected-exit> <expected-substring> -- cmd...
   local name="$1" want_code="$2" want_sub="$3"; shift 3
   [ "$1" = "--" ] && shift
@@ -24,7 +29,7 @@ check() { # check <name> <expected-exit> <expected-substring> -- cmd...
     echo "FAIL  $name — exit $code (wanted $want_code)"; echo "$out" | sed 's/^/      /'
     FAIL=$((FAIL+1)); return
   fi
-  if [ -n "$want_sub" ] && ! grep -qF "$want_sub" <<<"$out"; then
+  if [ -n "$want_sub" ] && ! grep -qF -- "$want_sub" <<<"$out"; then
     echo "FAIL  $name — output missing: $want_sub"; echo "$out" | sed 's/^/      /'
     FAIL=$((FAIL+1)); return
   fi
@@ -560,6 +565,64 @@ check "the verdict counts rotations" 0 "records 2 key rotation(s)"   -- \
 echo "== Backups & repair =="
 check "backup create"             0 "Backup created"                 -- "$BIN" backup create
 check "backup list"               0 "default-"                       -- "$BIN" backup list
+# ROADMAP O69. `backup restore` used to unlink a vault directory without ever
+# asking who held it. Beneath a running `serve-http` that succeeded at EXIT 0
+# and destroyed the vault: the server kept its handles on the unlinked inodes,
+# wrote into a file with no name, and the vault was unopenable afterwards
+# (`possible tampering`, exit 2, on every later open). The restore now takes an
+# EXCLUSIVE hold across the destroy-and-copy, or refuses.
+#
+# Driven through the CLI, with a real holder: a background process keeps the
+# vault open while the restore runs. Without the holder arm this proves
+# nothing, and without the SECOND arm the guard is indistinguishable from one
+# that always refuses — which would make restore useless rather than safe.
+# ROADMAP O69, and this arm exists because the one below FOUND the defect by
+# accident. `restore` used to recover the vault name by splitting the backup
+# directory at the rightmost "-20" — which lands inside the NANOSECONDS for a
+# stamp like `-204777797Z`, and inside the vault's OWN name for anything like
+# `proj-2024`. The restore then targeted a vault that does not exist, took no
+# exclusive hold, removed nothing, created a junk directory, and reported
+# success. The name now comes from the backup's manifest.
+#
+# Pinned with a vault whose name CONTAINS the separator, so it fails 100% of
+# the time rather than ~1% of the time on an unlucky clock.
+"$BIN" vault create proj-2024 >/dev/null 2>&1
+"$BIN" remember "the -20 vault name must survive a round trip" --vault proj-2024 >/dev/null 2>&1
+"$BIN" backup create --vault proj-2024 >/dev/null 2>&1
+BK_2024="$("$BIN" backup list | grep '^proj-2024-' | head -1)"
+if [ -n "$BK_2024" ]; then
+  check "restore resolves a vault name containing -20" 0 "-> vault 'proj-2024'" -- \
+    "$BIN" backup restore "$BK_2024" --force
+  check "and creates no stray vault"                  1 "not found"            -- \
+    "$BIN" vault status "proj-2024-2026"
+else
+  echo "FAIL  the -20 backup was not created, so its restore arm proves nothing"
+  FAIL=$((FAIL+1))
+fi
+
+BK_NAME="$("$BIN" backup list | grep '^default-' | head -1)"
+"$BIN" serve-http --port 18899 >/dev/null 2>&1 &
+E2E_HOLDER=$!
+sleep 2
+if kill -0 "$E2E_HOLDER" 2>/dev/null; then
+  check "restore refuses while the vault is held" 1 "in use by another process" -- \
+    "$BIN" backup restore "$BK_NAME" --force
+  check "the refusal says what would happen"      1 "DESTROYS the vault"         -- \
+    "$BIN" backup restore "$BK_NAME" --force
+  check "the held vault is untouched"             0 "hmac failures:   0"         -- \
+    "$BIN" verify
+  kill "$E2E_HOLDER" 2>/dev/null || true
+  wait "$E2E_HOLDER" 2>/dev/null || true
+  sleep 1
+  check "restore succeeds once nothing holds it"  0 "Restored"                   -- \
+    "$BIN" backup restore "$BK_NAME" --force
+  check "the restored vault verifies"             0 "hmac failures:   0"         -- \
+    "$BIN" verify
+else
+  echo "FAIL  restore-under-holder: the holder process did not start, so the"
+  echo "      refusal arm would have passed against nothing"
+  FAIL=$((FAIL+1))
+fi
 check "repair passes"             0 "integrity: ok"                  -- "$BIN" repair
 check "hooks prints settings"     0 "PreCompact"                     -- "$BIN" hooks claude-code
 
@@ -575,6 +638,50 @@ if [ "$code" -eq 2 ] && grep -q "VERIFY FAILED" <<<"$out"; then
 else
   echo "FAIL  tamper detection — exit $code"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ── a LISTING must list, and its verdict must still be true (M23) ───────────
+# M18 routed `vault list` through the posture and, for a vault that will not
+# open, printed `unavailable:` and CONTINUED — right about the listing, and
+# it was the whole story, so an integrity failure was swallowed and the
+# command exited 0. That is round-four #30 verbatim, which M20 had just fixed
+# in the orchestrator: "a listing must list" applied without "the verdict must
+# still be true", in the session that wrote the second rule.
+#
+# It needs a vault that will not OPEN, which is not the same damage as the
+# lines above: forging `added_by` breaks a RECORD's HMAC, and `verify` catches
+# that while the vault still opens perfectly. The first version of this arm
+# reused `work` for convenience and read exit 0 — the test reporting that its
+# own premise was wrong, which is the only reason this distinction is written
+# down here. A tampered MANIFEST is what refuses at the door.
+"$BIN" vault create doomed >/dev/null 2>&1
+DOOMED="$UNDERCROFT_HOME/vaults/doomed/vault.json"
+# Flip one hex digit of the manifest MAC. The manifest is PRETTY-PRINTED, so
+# the first version of this line matched `"id":"doomed"` with no space and
+# silently changed nothing — the listing then showed `doomed` opening fine and
+# the arm read exit 0. A tamper with no premise assertion is a test of nothing,
+# which is this suite's own oldest rule turned on itself.
+perl -0777 -pi -e 's/("manifest_mac_hex": ")([0-9a-f])/$1 . ($2 eq "0" ? "1" : "0")/e' "$DOOMED"
+if "$BIN" vault status doomed >/dev/null 2>&1; then
+  echo "FAIL  premise: the manifest tamper did not take — doomed still opens"
+  FAIL=$((FAIL+1))
+else
+  echo "ok    premise: the tampered manifest refuses to open"; PASS=$((PASS+1))
+fi
+VL_OUT="$("$BIN" vault list 2>&1)"; VL_CODE=$?
+if [ "$VL_CODE" -eq 2 ]; then
+  echo "ok    vault list exits 2 when a vault will not open"; PASS=$((PASS+1))
+else
+  echo "FAIL  vault list exits 2 when a vault will not open — exit $VL_CODE"
+  echo "$VL_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# ...and the OTHER vaults are still listed. Both halves, because either alone
+# is a different command: propagating would hide the fleet, swallowing would
+# hide the verdict.
+if grep -q 'default' <<<"$VL_OUT"; then
+  echo "ok    and it still lists the vaults that DO open"; PASS=$((PASS+1))
+else
+  echo "FAIL  and it still lists the vaults that DO open"; echo "$VL_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$UNDERCROFT_HOME/vaults/doomed"
 # **The same verdict where a MACHINE can see it, on MCP.** The tool built
 # text ending `VERIFY FAILED` and returned it inside `"isError": false` —
 # the one machine-readable field in an MCP tool result — so an agent keying
@@ -1220,6 +1327,50 @@ else
 fi
 rm -f "$RO_VAULT/vault.json.next"
 
+# ── the CLI can ask for the same posture (ROADMAP M18) ─────────────────────
+# `serve-*` has had `--read-only` since R4; no CLI COMMAND had any way to ask
+# for it, so the surface an operator reaches for first during an incident was
+# the one that could not stay off the evidence. Same staging-manifest recipe
+# as above, driven through the binary a responder actually types.
+printf '{"half-written":' > "$RO_VAULT/vault.json.next"
+CLI_RO_BEFORE="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next | sort)"
+# PREMISE, and it is the reason this is not two bare `|| true` lines. If the
+# global `--read-only` ever stopped PARSING, both commands would fail
+# instantly, touch nothing, and the byte-comparison below would pass having
+# tested nothing — "a counterfactual that fails to apply still prints a pass",
+# with `|| true` doing the swallowing. The flag must WORK for the comparison
+# to mean anything, so assert that first.
+if "$BIN" --read-only stats >/dev/null 2>&1; then
+  echo "ok    premise: the global --read-only flag parses and runs"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: --read-only was rejected, so the arm below tests nothing"
+  "$BIN" --read-only stats 2>&1 | head -2 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+"$BIN" --read-only vault list >/dev/null 2>&1 || true
+CLI_RO_AFTER="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next 2>&1 | sort)"
+if [ "$CLI_RO_BEFORE" = "$CLI_RO_AFTER" ]; then
+  echo "ok    --read-only CLI leaves the vault byte-identical"; PASS=$((PASS+1))
+else
+  echo "FAIL  --read-only CLI leaves the vault byte-identical"
+  diff <(echo "$CLI_RO_BEFORE") <(echo "$CLI_RO_AFTER") | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# THE COUNTERFACTUAL, and it is what makes the arm above mean something: the
+# SAME command without the flag destroys the staging manifest. `vault list`
+# specifically, because it bypassed the posture entirely and did this to
+# EVERY vault on the host — the most natural first command in an incident,
+# touching everything it was asked about and everything it was not.
+if [ -f "$RO_VAULT/vault.json.next" ]; then
+  "$BIN" vault list >/dev/null 2>&1 || true
+  if [ ! -f "$RO_VAULT/vault.json.next" ]; then
+    echo "ok    a writable vault list discards it (the defect M18 closed)"; PASS=$((PASS+1))
+  else
+    echo "FAIL  a writable vault list discards it (the defect M18 closed)"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "FAIL  premise: --read-only already removed the staging manifest"; FAIL=$((FAIL+1))
+fi
+rm -f "$RO_VAULT/vault.json.next"
+
 echo "== Scripted attacker over /v1 (C3.3 gate) =="
 # The gate's last clause: an attacker with legitimate write access to the
 # REST surface tries every route to make poison retrievable, and every one
@@ -1284,6 +1435,16 @@ atk_check "poisoned update leaves content intact" 'release train' "$out"
 #    chain covering the whole episode verifies.
 out="$(atk GET /v1/vaults/default/admission)"
 atk_check "review queue lists the attempts" 'fixture-similarity' "$out"
+# ROADMAP M4, on the one vault in this suite that actually HAS a review
+# queue. `records` counts every row; `wings` and `rooms` exclude the reserved
+# wing — so without `quarantined` the struct contradicts itself, and this is
+# the only place a real diversion exists to catch it.
+out="$(atk GET /v1/vaults/default/stats)"
+atk_check "stats reports the review queue depth" '"quarantined":4' "$out"
+# The identity this unit exists for, visible in that same payload:
+#   records 6 = wings (ops 2) + quarantined 4
+# If a future edit changes how many writes this section diverts, the number
+# above moves with it — the arithmetic is what must stay true.
 kill $ATK_PID 2>/dev/null
 sleep 1
 check "chain green after the attack" 0 "audit chain:     ok"          -- \
@@ -1330,7 +1491,7 @@ MCP_OUT="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   | "$BIN" serve-mcp 2>/dev/null)"
 mcp_check() {
   local name="$1" sub="$2"
-  if grep -qF "$sub" <<<"$MCP_OUT"; then
+  if grep -qF -- "$sub" <<<"$MCP_OUT"; then
     echo "ok    $name"; PASS=$((PASS+1))
   else
     echo "FAIL  $name — missing: $sub"; echo "$MCP_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
@@ -1387,6 +1548,17 @@ REST_HOME="$(mktemp -d)"
 PORT=8791
 SECRET="e2e-assertion-secret-key-material"
 UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_ASSERTION_SECRET="$SECRET" "$BIN" init >/dev/null 2>&1
+# ROADMAP M3. A vault this server has NEVER served, carrying a real anchor
+# lag: the write anchors, then a read-audit record advances the committed
+# chain without moving the manifest (A31). Built here, BEFORE the server
+# starts, because the whole case is `store_for` opening a vault for the first
+# time and healing the window itself — a vault the server has already touched
+# takes the other arm and cannot see this defect.
+UNDERCROFT_HOME="$REST_HOME" "$BIN" vault create lagvault --level hmac-only >/dev/null 2>&1
+UNDERCROFT_HOME="$REST_HOME" "$BIN" remember "the anchor lag subject" \
+  --vault lagvault >/dev/null 2>&1
+UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_READ_AUDIT=chain \
+  "$BIN" search "anchor lag" --vault lagvault >/dev/null 2>&1
 UNDERCROFT_HOME="$REST_HOME" UNDERCROFT_ASSERTION_SECRET="$SECRET" \
   "$BIN" serve-http --host 127.0.0.1 --port "$PORT" >/tmp/serve.log 2>&1 &
 SRV=$!
@@ -1400,7 +1572,7 @@ sign() { UNDERCROFT_ASSERTION_SECRET="$SECRET" "$BIN" assert-header "$1"; }
 rest_body() { # <name> <expected-substr> -- <curl args...>
   local name="$1" sub="$2"; shift 2; [ "$1" = "--" ] && shift
   local out; out="$(curl -s "$@" 2>&1)"
-  if grep -qF "$sub" <<<"$out"; then echo "ok    $name"; PASS=$((PASS+1))
+  if grep -qF -- "$sub" <<<"$out"; then echo "ok    $name"; PASS=$((PASS+1))
   else echo "FAIL  $name — missing: $sub"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1)); fi
 }
 rest_code() { # <name> <expected-code> -- <curl args...>
@@ -1409,6 +1581,37 @@ rest_code() { # <name> <expected-code> -- <curl args...>
   if [ "$code" = "$want" ]; then echo "ok    $name"; PASS=$((PASS+1))
   else echo "FAIL  $name — code $code (wanted $want)"; FAIL=$((FAIL+1)); fi
 }
+rest_body_lacks() { # <name> <forbidden-substr> -- <curl args...>
+  # The negative half of `rest_body`. It carries a PREMISE: an empty body
+  # lacks every substring, so a request that failed outright would "pass" a
+  # bare absence check — the "a checker that cannot run reports the same
+  # thing as a clean tree" trap, in assertion form.
+  local name="$1" sub="$2"; shift 2; [ "$1" = "--" ] && shift
+  local out; out="$(curl -s "$@" 2>&1)"
+  if [ -z "$out" ]; then
+    echo "FAIL  $name — empty response; an absence proved nothing"
+    FAIL=$((FAIL+1))
+  elif grep -qF -- "$sub" <<<"$out"; then
+    echo "FAIL  $name — present but must not be: $sub"
+    echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+  else
+    echo "ok    $name"; PASS=$((PASS+1))
+  fi
+}
+
+# ROADMAP M3, and it must be the FIRST request that touches this vault.
+# `store_for` opens it, that open fast-forwards the anchor, and until this
+# release `tighten_anchor()` was then the only thing asked — so the route
+# answered "behind_by": 0 about a window that was real a millisecond earlier,
+# while `undercroft vault anchor` reported it correctly on the same vault.
+# Two doors, one lag, two answers.
+rest_body "anchor reports a lag its own open closed" '"behind_by":1' \
+  -- -X POST "$API/vaults/lagvault/anchor" -H "X-Vault-Assertion: $(sign lagvault)"
+# And exactly once: the handle is cached now, so this is the long-lived-server
+# case. `anchor_at_open` is set at open and never cleared, so reporting it
+# unconditionally would re-announce one healed window on every later call.
+rest_body "and does not re-announce it" '"behind_by":0' \
+  -- -X POST "$API/vaults/lagvault/anchor" -H "X-Vault-Assertion: $(sign lagvault)"
 
 rest_body "create vault"        '"created":true'  -- -X POST "$API/vaults" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"id":"acme","level":"sealed"}'
@@ -1436,6 +1639,22 @@ rest_body "save drawer"         '"created":true'  -- -X POST "$API/vaults/acme/d
 rest_body "search finds it"     'postgres'        -- -X POST "$API/vaults/acme/search" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"which database for billing"}'
 rest_body "stats"               '"drawers":1'     -- "$API/vaults/acme/stats" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# The console's empty state tells you what it is waiting for. It rendered a
+# blank shell with no message at all, which reads as a broken page rather than
+# an unauthenticated one — reported exactly that way.
+rest_body "the console names the credential it needs" 'paste the bearer' -- "http://127.0.0.1:$PORT/ui"
+# M2: the same count under the name `PalaceStats`, the CLI, MCP and BOTH
+# `/v1` reference documents give it. `drawers` above stays — renaming a
+# documented key in place is MAJOR — so this asserts the pair, not a
+# replacement.
+rest_body "stats names the count both ways" '"records":1' -- "$API/vaults/acme/stats" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# M1: `writes` is the audit-chain HEIGHT — it counts exports, and every
+# content read under UNDERCROFT_READ_AUDIT=chain. `chain_records` is the same
+# number under a name that says so; `writes` stays because renaming it is
+# MAJOR.
+rest_body "stats names the chain height truthfully" '"chain_records":' -- "$API/vaults/acme/stats" \
   -H "X-Vault-Assertion: $(sign acme)"
 
 # The core multi-tenant guarantee: an assertion minted for one vault must
@@ -1510,10 +1729,50 @@ rest_body "kg receipts summary complete" '"unreceipted"' -- \
 # this one did not, in the same file.
 rest_body "kg receipts carries a verdict" '"ok":true' -- \
   "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
+# ROADMAP O67 — the cheap integrity door. `ok` is `tampered == 0`, and a
+# forged receipt is decided by one HMAC over the receipt canonical, reading no
+# drawer; the full walk additionally decrypts every cited source to separate
+# verified / source_changed / dangling, which no integrity decision reads.
+# Measured by `undercroft-bench receiptscale`: 8.6 us/fact against 0.7.
+# It matters because O67 made this route reachable with a TENANT token, and
+# monitoring is its most frequent caller.
+rest_body "kg receipts integrity_only answers ok" '"ok":true' -- \
+  "$API/vaults/acme/kg/receipts?integrity_only=1" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "kg receipts integrity_only names what it checked" '"checked":"receipt_tags"' -- \
+  "$API/vaults/acme/kg/receipts?integrity_only=1" -H "X-Vault-Assertion: $(sign acme)"
+# It must NOT smuggle the expensive payload back: a caller that asked for the
+# cheap door and got the full list would pay the corpus scan anyway, which is
+# the whole defect wearing a query parameter.
+rest_body_lacks "kg receipts integrity_only omits the walk" '"receipts"' -- \
+  "$API/vaults/acme/kg/receipts?integrity_only=1" -H "X-Vault-Assertion: $(sign acme)"
+# ADDITIVE: without the parameter the response is what shipped, so 1.2.0
+# stays MINOR. Asserted rather than assumed.
+rest_body "kg receipts default still carries the full walk" '"receipts"' -- \
+  "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
 # The verify route reports the sixth leg too, so a caller can see WHY a
 # vault failed rather than only that it did.
 rest_body "verify reports the receipts leg" '"receipts"' -- \
   -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
+
+# ROADMAP M17. `verify` has been on all three surfaces since it existed and
+# `repair` was on the CLI alone, so this plane could DIAGNOSE and not
+# REMEDIATE — while `PalaceStats.unhealed` reports what needs healing on all
+# three. Three arms, because the route makes three separate claims.
+#
+# One: it answers the SAME verdict shape as `verify`, which is what proves the
+# projection is SHARED rather than a second hand-written copy — the drift
+# `HAND_PROJECTED` exists to count.
+rest_body "repair answers the verify verdict shape" '"records_checked"' -- \
+  -X POST "$API/vaults/acme/repair" -H "X-Vault-Assertion: $(sign acme)"
+# Two: it adds the one field `verify` does not have.
+rest_body "repair reports what it backfilled" '"fingerprints_backfilled"' -- \
+  -X POST "$API/vaults/acme/repair" -H "X-Vault-Assertion: $(sign acme)"
+# Three: it is a WRITE. `mutates` fails closed — anything not GET is a write
+# unless NAMED as a read — so a read-only server must refuse it while still
+# serving `verify`, which IS named. Asserting both halves in one place is what
+# makes this a test of the classifier rather than of one route.
+rest_code "repair needs an assertion like every write" 401 -- \
+  -X POST "$API/vaults/acme/repair"
 
 # Deployment-assigned wing trust (C3.3): assigned by the operator surface,
 # a floored search excludes below-floor wings BEFORE candidates, and the

@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Order matters: the cheap suites that fail fastest come first, so a broken
 # tree is reported in a minute instead of forty.
-ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
+ALL=(lint obs-config arch-check test e2e orchestrator-e2e e2e-telemetry backends-e2e site tls-pins)
 
 # `--preflight-only` exists so CI can run the host-side preflights without
 # Docker. They are host-side because no image carries `ROADMAP.md`, the
@@ -38,10 +38,19 @@ ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
 # script only inside comments. A gate that runs only where its author
 # remembers to run it is a gate the next person does not have.
 PREFLIGHT_ONLY=0
+NO_PREFLIGHT=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
     --preflight-only) PREFLIGHT_ONLY=1 ;;
+    # `--no-preflight` is the mirror image, and it exists for CI. Each matrix
+    # leg runs ONE suite through this script rather than calling `docker
+    # compose run` itself, so that the post-run check-count comparison — which
+    # only a RUN can perform, and which therefore cannot be a preflight —
+    # happens on a pull request instead of only on the maintainer's machine.
+    # Without this flag every leg would re-run all twelve preflights, which
+    # the dedicated `preflight` job already does once. ROADMAP M13.
+    --no-preflight) NO_PREFLIGHT=1 ;;
     # Exit 1, never 2. Exit 2 is this project's integrity verdict on every
     # command; a mistyped flag borrowing it is the defect T11 closed in the
     # binaries, and it would be no less wrong here.
@@ -54,6 +63,27 @@ if [ -z "${SUITES[0]:-}" ]; then SUITES=("${ALL[@]}"); fi
 
 declare -a NAMES=() CODES=()
 OVERALL=0
+
+# Suites that legitimately print no `<suite> results: N passed, M failed` line,
+# so the O27 reader's "this reader examined nothing" is the WRONG message for
+# them rather than a finding. `lint` is silent on success by construction;
+# `arch-check` has three verification stages rather than a countable
+# population, and inventing a metric so it could satisfy a reader is how a
+# figure stops meaning anything. Both also publish no check count, which is
+# consistent: nothing to compare, so nothing skipped silently.
+NO_SUMMARY_SUITES=(lint arch-check)
+
+if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
+  echo "--preflight-only and --no-preflight are contradictory" >&2
+  exit 1
+fi
+
+# Everything between here and the `--preflight-only` exit is the host-side
+# preflight block. It is wrapped rather than re-indented DELIBERATELY: shell
+# does not care about indentation, and re-indenting ~1,300 lines to add one
+# condition would bury this change in a diff nobody could read — which is the
+# hazard CLAUDE.md records about a 100-line edit showing as 1,415 lines.
+if [ "$NO_PREFLIGHT" -eq 0 ]; then
 
 # ── preflight: line endings over the WHOLE tree ─────────────────────────────
 # `.gitattributes` declares `* text=auto eol=lf` and says why: a CRLF shell
@@ -145,6 +175,16 @@ echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 # `ROADMAP.md`, so a `cargo test` cannot read it. Cheap, and it makes "do not
 # forget" mechanical instead of remembered — which is this project's whole
 # position on inventories versus prose.
+fi  # pause the preflight block: the readers below are shared with the RUN
+
+# ---------------------------------------------------------------------------
+# THE SHARED READERS. Everything from here to `suite_count` is used by BOTH
+# the preflights above and the post-run comparison at the bottom, so it is
+# defined OUTSIDE the `--no-preflight` wrap. Leaving them inside was my own
+# defect and the run said so rather than the reading: `--no-preflight` printed
+# `suite_summary: command not found` and `suite_count: command not found`, and
+# the battery still exited 0 — the comparison silently examined nothing while
+# reporting exactly what a clean tree reports. ROADMAP M13.
 # ---------------------------------------------------------------------------
 # The `test` suite's count, read by PAIRING rather than by summing (ROADMAP
 # O15).
@@ -219,6 +259,33 @@ suite_summary() { # suite_summary <log>
         printf "  ** PREMISE FAILURE: %d summary lines in one log — it holds more than one run, so this count is not trustworthy (ROADMAP O27) **", n
     }' "$1" 2>/dev/null
 }
+
+# What a suite's check count is PUBLISHED as. Defined here, beside the reader
+# that measures it, because TWO phases ask the question and they used to ask
+# it with two different implementations: the `published figures` preflight
+# (do the surfaces agree with each other?) and the post-run comparison (does
+# the run agree with the surfaces?). The second grew its own compose-shaped
+# copy, so a host-side suite — `tls-pins`, published as
+# `bash tests/tls-pins.sh … (N checks)` — resolved to an empty string there
+# and was skipped: published, measured, and never compared. ROADMAP M13.
+#
+# `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
+# that is a GNU extension and Ubuntu's default awk is mawk, which lacks it.
+# CI runs this on ubuntu-latest, so the gawk form would read empty there.
+declare_suite_counts() {
+  # Compose-invoked suites, as CLAUDE.md publishes them.
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
+  # Host-side suites publish the same figure and are INVOKED differently, so
+  # the reader above cannot see them. Both shapes or the gate is notation-
+  # shaped rather than coverage-shaped.
+  grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#'
+}
+SUITE_COUNTS=$(declare_suite_counts)
+suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
+
+if [ "$NO_PREFLIGHT" -eq 0 ]; then  # resume the preflight block
 
 # The gate for it, run host-side because no image carries this script. Both
 # arms come from the filed shape: a log reports the same figure with and
@@ -425,6 +492,23 @@ ROADMAP_DRIFT=$(awk '
     }
   }
   /^### [A-Z][0-9]+/ { flush(); sec = $0; body = ""; next }
+  # ANY other heading at this level ENDS the current entry (ROADMAP M15). It
+  # used to fall through to the accumulator below, so the 15 non-id headings
+  # in this file were ABSORBED into whichever entry preceded them, along with
+  # everything under them until the next id or the next level-2 heading.
+  # Measured: the round-four accounting section was swallowed by O47, the
+  # entry whose whole subject is the limits of this very gate.
+  #
+  # That inflates a body, and closure-without-evidence searches the body for
+  # the words gate, counterfactual and test — so an entry could satisfy the
+  # evidence arm with words belonging to a section it merely sat above. The
+  # arm was weaker than it read, in a way no count of it could show.
+  #
+  # NOTE for the next editor: this awk program is inside a single-quoted
+  # shell string, so an apostrophe anywhere in these comments ends it and the
+  # script dies with a syntax error. That is how the first version of this
+  # comment broke the file.
+  /^### /             { flush(); sec = "";  body = ""; next }
   /^## /              { flush(); sec = "";  body = ""; next }
   { if (sec != "") body = body " " $0 }
   END {
@@ -550,13 +634,166 @@ echo "ok    all $COMPOSE_N compose files declare a project name"
 # (IRREGULAR pairs, paradigm counts). Those are a different question, and
 # widening a gate past what it can actually verify is how a check starts
 # reading as though it covered more than it does.
+# ── preflight: a declared CA pin must be READABLE by the engine ────────────
+# The shipped observability stack could not start. Caddy writes its whole PKI
+# as root — the CA cert 0600 inside directories at 0700, correctly, since that
+# tree also holds the CA PRIVATE key — and the engine image runs as
+# `USER undercroft` (uid 10001). So the declared pin was unreadable and the
+# engine REFUSED to start, forever:
+#
+#   Error: the OTLP collector: the declared trust root
+#   /tls/caddy/pki/authorities/local/root.crt could not be read:
+#   Permission denied (os error 13)
+#
+# The refusal is right — `undercroft-net` never falls back to the public roots
+# — so the defect is the PATH. Only the certificate needs sharing; the private
+# key must not move. The fix exports the public root to a readable path, and
+# this stops the deep path coming back.
+#
+# Host-side with its siblings: no image carries the compose files.
+#
+# **Scope, stated rather than implied.** This catches one class — a pin aimed
+# inside a root-only PKI tree — for services running the ENGINE image, which
+# is the only consumer with a non-root uid. The same deep path appears in
+# dev/test recipes that run as root and are fine; narrowing on the image is
+# what keeps this from failing them. It does NOT prove the stack starts; that
+# needs a real bring-up, which is filed (ROADMAP M7) with its argument rather
+# than pretended here.
+echo "═══ preflight: CA pins are readable by the engine ═══"
+CA_FAIL=0
+CA_SEEN=0
+for f in $(git ls-files '*docker-compose*.yml' 'deploy/**/*.yml' 2>/dev/null); do
+  [ -f "$f" ] || continue
+  # Only services that BUILD the engine image from this repo run as uid 10001.
+  grep -q 'context: \.\./\.\.' "$f" || continue
+  while IFS= read -r line; do
+    case "$line" in *"#"*) continue ;; esac
+    CA_SEEN=$((CA_SEEN + 1))
+    case "$line" in
+      *caddy/pki/*)
+        echo "FAIL  $f declares a CA pin inside Caddy's root-only PKI tree:"
+        echo "        $(echo "$line" | sed 's/^ *//')"
+        echo "      The engine runs as uid 10001; that tree is root:0600 inside"
+        echo "      0700 dirs, so the pin is unreadable and the engine refuses"
+        echo "      to start. Export the PUBLIC root to a readable path instead"
+        echo "      — the CA private key must not move."
+        CA_FAIL=1 ;;
+    esac
+  done <<EOF
+$(grep -nE 'UNDERCROFT_[A-Z0-9_]*_CA:' "$f" || true)
+EOF
+done
+# PREMISE. A scanner that matched no declaration at all reports exactly what a
+# correct tree reports, which is the failure this whole family is about.
+if [ "$CA_SEEN" -eq 0 ]; then
+  echo "FAIL  found no UNDERCROFT_*_CA declaration in any engine-building"
+  echo "      compose file. This scanner examined nothing, which is not the"
+  echo "      same as a tree with no pins."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$CA_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
+echo "      root-only PKI tree"
+
+# ── preflight: a destructive compose teardown names the project it destroys ─
+# ROADMAP M12. A compose teardown carrying the volumes flag removes every
+# NAMED volume in the project it resolves to. With no `-p` and no `-f` that
+# project is whatever `./docker-compose.yml` declares — here, `undercroft`,
+# which is the developer's own — so the command reaches state that has nothing
+# to do with the suite asking for it. The battery's own backends reset did
+# exactly that: it destroyed the embedding model cache, the compose palace and
+# the embeddings CA on every run, none of which any backend needs fresh.
+#
+# This is ROADMAP M10's lesson generalised. M10 fixed `tests/tls-pins.sh` by
+# giving each stack a throwaway project after its first version destroyed a
+# live observability stack an hour after it was committed; the same file's
+# teardowns are the shape this gate ACCEPTS, and the battery's was the shape
+# it rejects. A scoped teardown is fine at any blast radius, because the
+# project name says what the radius is.
+#
+# SCOPE, stated rather than implied: `tests/*.sh` only. That is where this
+# repo drives docker from — no image carries these scripts, so no `cargo test`
+# can read them. It deliberately does NOT scan `deploy/` (those compose files
+# are declarations, not drivers) or the workflows (CI runs compose services,
+# never a teardown). A driver added anywhere else is outside this gate, and
+# that is a real limit rather than an oversight.
+echo "═══ preflight: destructive compose scope ═══"
+# The needle is ASSEMBLED so this gate does not match its own source. That is
+# the "a gate whose own text is part of what it measures" trap, this tree's
+# most-repeated gate defect — ROADMAP M1 is the most recent instance and
+# records four earlier ones for gates reading their own inventory FILE, M1
+# itself being the first for a gate reading the function it guards. No count
+# is asserted here beyond what M1 counted: the figure is in M1, and repeating
+# it in a second place is how a number in prose goes stale.
+# Written contiguously, the pattern below would match the line that defines it.
+TD_VERB="do""wn"
+# The arguments between `compose` and the verb are OPTIONAL, and getting that
+# wrong is how the first version of this gate passed on the very line it was
+# written to catch. Requiring a token there (`compose[[:space:]].*[[:space:]]`)
+# means the unscoped form — where the verb follows `compose` directly — never
+# matches, while every SCOPED form does, because `-p <proj> -f <file>` fills
+# the gap. The gate then reported "every teardown is scoped" having examined
+# only the teardowns that were already scoped. Caught by the counterfactual,
+# not by reading it: this is the tree's own "ask what a gate can SEE, not what
+# it asserts" rule landing on a gate written to enforce that rule.
+TD_SCAN=$(grep -nE "docker[[:space:]]+compose[[:space:]]+(.*[[:space:]]+)?${TD_VERB}([[:space:]]|\$)" \
+            tests/*.sh 2>/dev/null || true)
+# Only the ones that carry the volumes flag destroy named volumes; a plain
+# teardown removes containers and networks and is not this defect.
+TD_HITS=$(printf '%s\n' "$TD_SCAN" | grep -E '[[:space:]](-v|--volumes)([[:space:]]|$)' || true)
+TD_TOTAL=$(printf '%s\n' "$TD_HITS" | grep -c . || true)
+# PREMISE. A scanner that matched nothing reports exactly what a clean tree
+# reports — the failure this whole family is about, and the reason M7's CA
+# gate refuses to pass on zero declarations. `tests/tls-pins.sh` has carried
+# two scoped teardowns since M10, so zero here means the pattern broke, not
+# that the tree is clean.
+if [ "${TD_TOTAL:-0}" -lt 1 ]; then
+  echo "FAIL  the teardown scan matched no compose teardown anywhere in tests/."
+  echo "      tests/tls-pins.sh has carried two since ROADMAP M10, so this is a"
+  echo "      broken scanner rather than a clean tree — and a broken scanner"
+  echo "      reports what a clean tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+TD_FAIL=0
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  # An explicit project scope is the whole discriminator: it is what makes the
+  # blast radius a stated one instead of an inherited one.
+  if ! printf '%s\n' "$hit" | grep -qE '[[:space:]](-p|--project-name)[[:space:]]'; then
+    echo "FAIL  this teardown destroys every named volume of whatever project it"
+    echo "      resolves to, and it names no project — so it inherits the one"
+    echo "      ./docker-compose.yml declares, which is the developer's own:"
+    printf '        %s\n' "$hit"
+    TD_FAIL=1
+  fi
+done <<< "$TD_HITS"
+if [ "$TD_FAIL" -ne 0 ]; then
+  echo ""
+  echo "      Scope it with -p <throwaway-project> as tests/tls-pins.sh does,"
+  echo "      or narrow it to the services you mean with 'rm -sfv <service>...',"
+  echo "      which takes their anonymous volumes and leaves named ones alone."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $TD_TOTAL destructive compose teardown(s) in tests/, every one"
+echo "      scoped to a project it names"
+
 echo "═══ preflight: published figures ═══"
 
 LANDING="website/landing/index.html"
 # label|class|source
 PUBLISHED_FIGURES=(
   "cargo tests|measured|test"
-  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e"
+  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e,tls-pins"
   "live backends|derived|BACKENDS"
   "mcp tools|derived|MCP_TOOLS"
   "bytes phoned home|claim|the local-first invariant — a promise, not a count"
@@ -641,17 +878,16 @@ fi
 # a confusing failure on a clean tree rather than as the portability bug it
 # is. A gate that only runs on its author's machine is the shape this whole
 # file exists to remove.
-declare_suite_counts() {
-  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
-    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
-}
-SUITE_COUNTS=$(declare_suite_counts)
+# The reader itself is DEFINED ABOVE, beside `suite_summary`, because two
+# phases need it: this preflight (do the surfaces agree with each other?) and
+# the post-run comparison (does the run agree with the surfaces?). It lived
+# here, inside the preflight, and the post-run block therefore grew its own
+# second, compose-only copy — which could not see `tls-pins`. ROADMAP M13.
 if [ -z "$SUITE_COUNTS" ]; then
   echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
   echo "      and a broken reader agrees with every page it cannot read"
   FIG_FAIL=1
 fi
-suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
 
 # Any OTHER doc republishing a suite's count must match CLAUDE.md's.
 while IFS= read -r hit; do
@@ -749,6 +985,14 @@ else
   fi
   # The prompt records the commit it describes. A clean tree whose handover
   # names a different commit is a handover that has already gone stale.
+  # `head -1` and the convention it depends on, stated rather than assumed
+  # (ROADMAP M15). SESSION_START.md keeps a marker per session section and
+  # those sections run NEWEST FIRST, so the first marker is the current one.
+  # Nothing enforces that ordering — but nothing needs to, and this is worth
+  # writing down because it reads like a latent bug and is not: a section
+  # appended at the BOTTOM leaves a stale first marker, which fails the
+  # comparison below loudly. The gate fails closed on the ordering it assumes.
+  ALL_MARKERS=$(grep -cE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null || true)
   RECORDED=$(grep -oE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null | awk '{print $2}' | head -1)
   HEAD_SHA=$(git rev-parse --short HEAD 2>/dev/null)
   if [ -z "$RECORDED" ]; then
@@ -763,11 +1007,17 @@ else
     echo "FAIL  the handover describes $RECORDED; HEAD is $HEAD_SHA."
     echo "      The tree is clean, so this is the moment it should be current."
     echo "      Update the three files under $HANDOVER_DIR/ and re-run."
+    if [ "${ALL_MARKERS:-1}" -gt 1 ]; then
+      echo "      NOTE: SESSION_START.md holds $ALL_MARKERS handover-head markers and"
+      echo "      this reads the FIRST. Sections run newest-first — if you added"
+      echo "      yours at the BOTTOM, move it to the top rather than editing the"
+      echo "      historical marker, which is a record of what HEAD was then."
+    fi
     echo ""
     echo "BATTERY FAILED — preflight"
     exit 1
   fi
-  echo "ok    handover is current with HEAD ($HEAD_SHA)"
+  echo "ok    handover is current with HEAD ($HEAD_SHA), first of $ALL_MARKERS marker(s)"
 fi
 
 # ── preflight: the CI verdict job depends on EVERY job ─────────────────────
@@ -1111,6 +1361,12 @@ while IFS= read -r v; do
 done <<< "$PF_VARS"
 
 PF_PREFLIGHTS=$(grep -c '^echo "═══ preflight:' tests/battery.sh || true)
+# The ROADMAP heading gate's own coverage, which O47 stated in prose and which
+# had drifted by thirty-one entries by the time anyone re-counted (M15). Both
+# halves, because "78 of 93" is two claims: how many entries the gate examines,
+# and how many headings exist for it to have skipped.
+PF_RM_IDS=$(grep -cE '^### [A-Z][0-9]+' ROADMAP.md || true)
+PF_RM_H3=$(grep -cE '^### ' ROADMAP.md || true)
 PF_CRATES=$(find crates -mindepth 1 -maxdepth 1 -type d | grep -c . || true)
 PF_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
          | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
@@ -1148,6 +1404,8 @@ PROSE_FIGURES=(
   "env vars written in full|CLAUDE.md|s/.*— \\*\\*([0-9]+)\\*\\* written out in.*/\\1/p|$PF_ENV_FULL"
   "env vars abbreviated|CLAUDE.md|s/.*plus \\*\\*([0-9]+)\\*\\* siblings abbreviated.*/\\1/p|$PF_ENV_ABBREV"
   "IRREGULAR pairs|CLAUDE.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
+  "ROADMAP entries the heading gate examines|ROADMAP.md|s/.*\\*\\*([0-9]+)\\*\\* of the \\*\\*[0-9]+\\*\\*.*/\\1/p|$PF_RM_IDS"
+  "ROADMAP level-3 headings total|ROADMAP.md|s/.*\\*\\*[0-9]+\\*\\* of the \\*\\*([0-9]+)\\*\\*.*/\\1/p|$PF_RM_H3"
 )
 
 PROSE_FAIL=0
@@ -1267,6 +1525,32 @@ if [ "$V1_FAIL" -ne 0 ]; then
 fi
 echo "ok    both /v1 route references match the dispatch exactly ($V1_N routes)"
 
+# The route COUNT in prose, which the set comparison above deliberately does
+# not check — "a count passes when one route is swapped for another" is why it
+# compares sets, and the cost of that correct choice is that the sentence
+# introducing the list is un-gated. It said 36 while the list beside it held
+# 37, from M17 (which added `POST …/repair` to the list and not to the
+# sentence) until 2026-08-21. A number in prose next to a gated list is the
+# un-gated part of a gated claim.
+V1_DOC_N=$(sed -nE 's/.*\*\*All ([0-9]+) routes\*\*.*/\1/p' docs/remote-server.md | head -1)
+if [ -z "$V1_DOC_N" ]; then
+  echo "FAIL  docs/remote-server.md: no '**All N routes**' sentence found."
+  echo "      Either it was reworded (update this reader) or deleted — a"
+  echo "      reader that matches nothing checks nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$V1_DOC_N" != "$V1_N" ]; then
+  echo "FAIL  docs/remote-server.md publishes $V1_DOC_N routes; tenant.rs dispatches $V1_N"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    the published /v1 route count ($V1_DOC_N) is the dispatch's own"
+
+fi  # end of the host-side preflight block (`--no-preflight` skips it)
+
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   echo ""
   echo "preflights only — no suite was run, by request (--preflight-only)"
@@ -1277,12 +1561,55 @@ for suite in "${SUITES[@]}"; do
   # `tests/e2e-backends.sh` asserts exact record counts and therefore assumes
   # FRESH backends; a second run against warm volumes flakes. Documented in
   # CLAUDE.md, mechanised here so nobody has to remember it.
+  #
+  # The reset is NARROW, and that is the whole of ROADMAP M12. It used to be a
+  # project-wide teardown with the volumes flag and no `-p`/`-f`, so it
+  # resolved to ./docker-compose.yml — whose declared project is `undercroft`,
+  # i.e. the DEVELOPER'S OWN project — and removed every named volume that file
+  # declares. Three of the five were pure collateral: `undercroft-models` (the
+  # multi-GB weights of the four served embedders this project measures with),
+  # `undercroft-data` (the compose palace, i.e. any mined corpus), and
+  # `undercroft-embed-tls` (the embeddings CA that CLAUDE.md's own published
+  # pin recipe mounts — destroying it makes that recipe mount a fresh empty
+  # volume silently, which is the failure the recipe's own warning describes).
+  #
+  # None of that is state this suite needs fresh, and none of the five backends
+  # declares a named volume at all: qdrant, chroma, milvus and weaviate have no
+  # `volumes:` key, and pgvector's only mount is a read-only cert. Their data
+  # lives in ANONYMOUS volumes, which `rm -v` removes — so the narrow form
+  # delivers everything the wide one did for this suite, and nothing else.
+  #
+  # The terminator is recreated too, so it cannot serve a cached upstream
+  # address for a container that has just been replaced; its CA is a NAMED
+  # volume, which `rm -v` deliberately does not touch, so the pin the suite
+  # mounts survives and Caddy reuses it.
+  #
+  # ROADMAP M10 learned this for `tests/tls-pins.sh` — a private compose
+  # project name does not scope a shared host resource — and the lesson was
+  # not carried one file over to the battery's own teardown. Not silenced:
+  # a reset that fails leaves warm backends, and this suite's failure mode is
+  # then an unexplainable count assertion.
   if [ "$suite" = "backends-e2e" ]; then
-    docker compose down -v >/dev/null 2>&1 || true
+    docker compose rm -sfv \
+      qdrant chroma pgvector milvus weaviate backends-tls || true
   fi
 
   echo ""
   echo "═══ $suite ═══"
+  # `tls-pins` brings real Caddy terminators up and reads their volumes as
+  # the engine uid, so it DRIVES docker rather than running inside a
+  # container — the same reason this script is the one thing that runs on
+  # the host. As a compose service it would need docker-in-docker to check
+  # a permission question that needs no build at all.
+  if [ "$suite" = "tls-pins" ]; then
+    mkdir -p .battery
+    bash tests/tls-pins.sh 2>&1 | tee ".battery/$suite.log"
+    code=${PIPESTATUS[0]}
+    NAMES+=("$suite")
+    CODES+=("$code")
+    [ "$code" -eq 0 ] || OVERALL=1
+    continue
+  fi
   # No pipe. A pipeline's exit status is its LAST command's, which is how a
   # `| grep` or `| tail` silently turns a failing suite into a passing one —
   # the hazard CLAUDE.md records as "never let a pipeline's tail mask an exit
@@ -1312,16 +1639,19 @@ for i in "${!NAMES[@]}"; do
   # "0 passed" under a green battery. Harmless, and still a number that does
   # not measure what it appears to, which is the habit this file exists to
   # break. Summed instead.
-  if [ "$n" = "lint" ]; then
-    # **The one suite with no summary line, named rather than complained
-    # about.** `cargo fmt --check` and `clippy` are silent on success, so
-    # `lint` has never printed one — and the O27 reader below correctly
-    # answered "this reader examined nothing", beside a green run, every
-    # time. That is a message which misdescribes its own situation, and
-    # worse: it is the SAME string that is a real signal for the other seven
-    # suites, so printing it routinely here teaches the reader to skip it.
-    # An alarm nobody can distinguish from a real failure is the thing this
-    # project exists to remove.
+  if printf '%s\n' "${NO_SUMMARY_SUITES[@]}" | grep -qx "$n"; then
+    # **The suites with no summary line, NAMED rather than complained about.**
+    # `cargo fmt --check` and `clippy` are silent on success, so `lint` has
+    # never printed one — and the O27 reader below correctly answered "this
+    # reader examined nothing", beside a green run, every time. That is a
+    # message which misdescribes its own situation, and worse: it is the SAME
+    # string that is a real signal for every other suite, so printing it
+    # routinely teaches the reader to skip it. An alarm nobody can distinguish
+    # from a real failure is the thing this project exists to remove.
+    #
+    # A SET rather than a second `elif`, because `arch-check` joining the
+    # battery (ROADMAP M14) made this a class of two, and a class of two
+    # written as two special cases becomes a class of three written as three.
     detail=""
   elif [ "$n" = "test" ]; then
     detail=$(test_summary ".battery/$n.log")
@@ -1358,8 +1688,18 @@ echo "════════════════════════�
 FIGURE_DRIFT=""
 for i in "${!NAMES[@]}"; do
   n="${NAMES[$i]}"
-  published=$(grep -oE "docker compose run --rm $n .*\([0-9]+ checks" CLAUDE.md 2>/dev/null \
-              | sed -E 's/.*\(([0-9]+) checks/\1/' | head -1)
+  # ONE reader, shared with the preflight. This used to be a second,
+  # compose-shaped grep written out here — `docker compose run --rm $n` — so
+  # it could not see a suite INVOKED any other way. `tls-pins` is published as
+  # `bash tests/tls-pins.sh … (7 checks)`, so `published` came back empty and
+  # the `continue` below skipped it: published, measured, and never compared.
+  # M10's own entry claims "the published-count reader was widened to see
+  # host-side suites, or the figure would have been published, measured and
+  # never compared" — true of the PREFLIGHT reader it widened, and false of
+  # this one, which is the arm that catches the case the preflight cannot
+  # (every surface stale TOGETHER). Two implementations of one lookup, and
+  # only one of them got the fix. ROADMAP M13.
+  published=$(suite_count "$n")
   [ -z "$published" ] && continue
   line=$(suite_summary ".battery/$n.log")
   measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
@@ -1374,7 +1714,18 @@ for i in "${!NAMES[@]}"; do
     *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
     *)     continue ;;
   esac
-  [ "$measured" -eq 0 ] && continue
+  # A suite that printed a summary and counted ZERO is the LOUDEST case, not
+  # the quietest, and this skipped it. Reaching here means the summary parsed
+  # as two numbers (the `case` above diverts every other shape), so
+  # `0 passed, 0 failed` is a suite that ran and executed nothing — a checker
+  # that cannot run reporting exactly what a clean tree reports, which is the
+  # failure this whole file is about. It is reported as its own drift line
+  # rather than folded into the mismatch below, because "measured 0 against a
+  # published 370" is a different fact from "measured 369". ROADMAP M13.
+  if [ "$measured" -eq 0 ]; then
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: published $published, this run measured ZERO — the suite printed a summary having executed nothing\n"
+    continue
+  fi
   if [ "$measured" != "$published" ]; then
     FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published, this run measured $measured\n"
   fi
@@ -1418,7 +1769,8 @@ if [ -n "$FIGURE_DRIFT" ]; then
   echo "them did not. This is a doc-drift verdict, NOT a suite failure:"
   printf "$FIGURE_DRIFT"
   echo "      Update CLAUDE.md, then the landing page tile (its e2e figure is the"
-  echo "      SUM of the four e2e suites) and any doc republishing the count."
+  echo "      SUM of the FIVE e2e suites named in PUBLISHED_FIGURES) and any doc"
+  printf '%s\n' "      republishing the count."
   OVERALL=1
 fi
 

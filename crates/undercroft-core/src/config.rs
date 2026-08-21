@@ -235,6 +235,32 @@ pub fn one_of(
 ///
 /// So the defect's SILENCE is what gets fixed here: 67 of round four's 70
 /// findings produced no signal at all, and that is the property being closed.
+/// The identity an ONNX-family embedder records when nobody declares one.
+///
+/// **One constant, because it was two** (ROADMAP M22, round-four `#27`).
+/// `undercroft-embed-onnx` and `undercroft-embed-ort` each wrote
+/// `"onnx-sentence"` out twice — once in the warning and once as the value —
+/// so the same decision lived in four places across two crates that never
+/// link each other. Changing one and not the others would make two backends
+/// record DIFFERENT identities for the SAME model, which is the mismatch
+/// guard firing on a vault that never changed vector space: the defect
+/// `#27` describes, pointed the other way.
+///
+/// **The value is deliberately unchanged.** It is recorded in existing
+/// vaults and gates `EmbedderMismatch`, so moving it is *"a documented value
+/// that stops being accepted"* — MAJOR by this file's own test. What `#27`
+/// actually asks for — an identity DERIVED from the model rather than from a
+/// constant — is filed for 2.0.0 with that argument, and `CLAUDE.md` forbids
+/// half-landing a change to an id recipe. This closes the duplication and
+/// says plainly that it does not close the cause.
+pub const SHARED_MODEL_IDENTITY: &str = "onnx-sentence";
+
+/// Likewise for the reranker and the ColBERT encoder, which share the same
+/// shape and the same hazard one role over.
+pub const SHARED_RERANKER_IDENTITY: &str = "onnx-reranker";
+/// The ColBERT late-interaction encoder's undeclared identity.
+pub const SHARED_COLBERT_IDENTITY: &str = "colbert";
+
 pub fn undeclared_model_identity(var: &str, shared_default: &str, model_path: &str) -> String {
     format!(
         "{var} is not set, so this model records the shared identity \
@@ -300,6 +326,66 @@ mod tests {
         ] {
             assert!(w.contains(needle), "warning must name {needle}: {w}");
         }
+    }
+
+    /// ROADMAP M22 (round-four `#27`). The shared identities live in ONE
+    /// place, and the two embedder crates must not write them out again.
+    ///
+    /// They each carried the literal twice — once in the warning, once as the
+    /// value — so one decision sat in four places across two crates that
+    /// deliberately never link. Changing one and not the others makes two
+    /// backends record DIFFERENT identities for the SAME model, which fires
+    /// the mismatch guard on a vault whose vector space never changed: `#27`
+    /// pointed the other way.
+    ///
+    /// Reads the other crates' SOURCE, which is the only route two crates
+    /// that do not link have — the same idiom
+    /// `the_orchestrator_and_the_engine_agree_on_every_orch_variable` uses.
+    #[test]
+    fn no_embedder_crate_writes_a_shared_identity_out_again() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+        let files = [
+            "undercroft-embed-onnx/src/lib.rs",
+            "undercroft-embed-onnx/src/rerank.rs",
+            "undercroft-embed-onnx/src/late.rs",
+            "undercroft-embed-ort/src/lib.rs",
+            "undercroft-embed-ort/src/late.rs",
+        ];
+        // The needles are ASSEMBLED so this test does not match its own
+        // source — the "a gate whose own text is part of what it measures"
+        // trap, which this tree records more often than any other.
+        let needles = [
+            format!("\"{}-{}\"", "onnx", "sentence"),
+            format!("\"{}-{}\"", "onnx", "reranker"),
+            format!("\"{}\"", "colbert"),
+        ];
+        let mut scanned = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for f in files {
+            let path = format!("{root}/{f}");
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+            // PREMISE, per file. A path that moved would read as a crate with
+            // no duplicated literals, which is exactly what a clean crate
+            // reads as — the failure this whole family is about.
+            assert!(
+                src.contains("SHARED_") && src.len() > 500,
+                "premise: {f} does not look like a loader that uses the shared \
+                 identities — this scan examined the wrong file"
+            );
+            scanned += 1;
+            for n in &needles {
+                if src.contains(n.as_str()) {
+                    offenders.push(format!("{f} still writes {n}"));
+                }
+            }
+        }
+        assert_eq!(scanned, 5, "premise: every loader source was read");
+        assert!(
+            offenders.is_empty(),
+            "a shared model identity is written out again instead of using the \
+             constant in undercroft_core::config: {offenders:#?}"
+        );
     }
 
     #[test]

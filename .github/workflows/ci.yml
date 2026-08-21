@@ -94,8 +94,13 @@ jobs:
         #                    every check green
         #   backends-e2e     five live vector DBs over TLS
         #   onnx-build       ONNX embedder + reranker compile check
+        #   arch-check       the architecture reference is what diagrams/ and
+        #                    its own headings derive to — no build, a stock
+        #                    python image, and a read-only mount because the
+        #                    check must write nothing (ROADMAP M14)
         suite:
           - obs-config
+          - arch-check
           - test
           - e2e
           - orchestrator-e2e
@@ -104,8 +109,20 @@ jobs:
           - onnx-build
     steps:
       - uses: actions/checkout@v5
+      # Through `battery.sh`, not `docker compose run` directly. The script
+      # runs the suite, captures its exit code WITHOUT a pipe, and then
+      # compares the suite's MEASURED check count against the figure CLAUDE.md
+      # publishes for it — a comparison only a RUN can perform, which is why
+      # it cannot be a preflight and why, until ROADMAP M13, it happened
+      # nowhere on a pull request. A leg dropping from 370 checks to 3 was
+      # green. `--no-preflight` skips the twelve host-side preflights, which
+      # the dedicated `preflight` job above already runs once.
+      #
+      # It also gets `--build` (the script always passes it) and the narrowed
+      # backends reset for free, so CI and a local battery run the same code
+      # rather than two implementations that agree until they do not.
       - name: ${{ matrix.suite }}
-        run: docker compose run --rm ${{ matrix.suite }}
+        run: bash tests/battery.sh --no-preflight ${{ matrix.suite }}
 
   # THE VERDICT. This is the one context a required status check should be
   # configured against, and everything about its old shape was wrong:
@@ -125,10 +142,53 @@ jobs:
   #
   # Named `CI verdict` now: a context no leg can collide with, and one that
   # says what requiring it means.
+  tls-pins:
+    name: TLS pins are readable by the engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # No cargo, no image build: three small public images and a permission
+      # question. `deploy/observability` shipped UNSTARTABLE for two releases
+      # because the engine pinned a path inside Caddy's root-only PKI tree,
+      # and nothing here ever brought a terminator up to notice — `obs-config`
+      # validates config FILES and starts no container.
+      #
+      # Driven through `battery.sh` for the same reason as the matrix legs
+      # above: this suite is HOST-SIDE, and the post-run figure comparison used
+      # to be compose-shaped, so `tls-pins` was the one suite whose published
+      # count was never compared to anything on a pull request OR locally.
+      # ROADMAP M13.
+      - run: bash tests/battery.sh --no-preflight tls-pins
+
+  house-figures:
+    name: House page figures match the tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # ROADMAP O65. The house page publishes figures about THIS engine from a
+      # repository with no CI that nothing here reads, so the drift is
+      # invisible on both sides: round four filed "656 tests" against a tree
+      # running 689, and eleven days later it was 765. Its sibling — the house
+      # serving cleartext — went the same way and is what O37 calls "the most
+      # severe process failure".
+      #
+      # **This is the only check in the tree that needs the INTERNET**, which
+      # is why it is a CI job rather than a `tests/battery.sh` preflight: the
+      # preflights run on every local battery and a network arm there would
+      # fail for anyone working offline. Unreachable is a FAILURE inside the
+      # script, never a skip — an unreachable page and an accurate one must
+      # not produce the same verdict.
+      #
+      # It can therefore go red on a pull request that touched nothing: the
+      # house page is state this repo does not own. That is the point. A red
+      # tick naming a stale published figure is the signal; the alternative is
+      # the eleven days.
+      - run: bash tests/house-figures.sh
+
   verdict:
     name: CI verdict
     runs-on: ubuntu-latest
-    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image]
+    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image, tls-pins, house-figures]
     if: always()
     steps:
       - name: Every job must have passed
@@ -144,8 +204,8 @@ jobs:
           # to `needs:`) is unreachable from here, because a workflow cannot
           # enumerate its own jobs; `tests/battery.sh`'s CI-inventory preflight
           # reads the file and closes it.
-          if [ "$n" -lt 7 ]; then
-            echo "the verdict covers only $n job(s) and must cover 7 —"
+          if [ "$n" -lt 9 ]; then
+            echo "the verdict covers only $n job(s) and must cover 9 —"
             echo "someone narrowed needs:, which is how a green tick stops meaning anything"
             exit 1
           fi
